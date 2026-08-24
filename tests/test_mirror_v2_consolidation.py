@@ -8,6 +8,8 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+import threading
+import traceback
 import unittest
 from unittest import mock
 
@@ -20,6 +22,7 @@ from app.mirror import ingress_v2_independent as ingress_independent
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import recovery_v2 as recovery
 from app.mirror import recovery_v2_independent as recovery_independent
+from app.mirror import restore_publication
 
 
 def _hex(seed: str) -> str:
@@ -2028,6 +2031,505 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             if os.path.lexists(symlink):
                 symlink.unlink()
+
+    def test_restore_publication_pair_create_only_and_exact_retry_adopt(self) -> None:
+        ingress_image = b"synthetic-ingress-image"
+        core_image = b"synthetic-core-image"
+        ingress_target = self.root / "pair-ingress.db"
+        core_target = self.root / "pair-core.db"
+        ingress_expected = {"database_id": "ingress", "head_root": "a" * 128}
+        core_expected = {"database_id": "core", "head_root": "b" * 128}
+
+        def verify_ingress(raw: bytes) -> dict[str, object]:
+            self.assertEqual(ingress_image, raw)
+            return {**ingress_expected, "accepted": True}
+
+        def verify_core(raw: bytes, exact_ingress: bytes) -> dict[str, object]:
+            self.assertEqual(core_image, raw)
+            self.assertEqual(ingress_image, exact_ingress)
+            return {**core_expected, "accepted": True}
+
+        operation = _hex("pair-publication-retry")
+        first = restore_publication.publish_pair_create_only(
+            ingress_target=ingress_target,
+            core_target=core_target,
+            ingress_image=ingress_image,
+            core_image=core_image,
+            pair_operation_id=operation,
+            ingress_expected=ingress_expected,
+            core_expected=core_expected,
+            verify_ingress=verify_ingress,
+            verify_core=verify_core,
+        )
+        first_inodes = (os.stat(ingress_target).st_ino, os.stat(core_target).st_ino)
+        self.assertEqual("CREATED_THIS_CALL", first.ingress.kind)
+        self.assertEqual("CREATED_THIS_CALL", first.core.kind)
+        self.assertTrue(first.ingress.created_by_this_call and first.core.created_by_this_call)
+        second = restore_publication.publish_pair_create_only(
+            ingress_target=ingress_target,
+            core_target=core_target,
+            ingress_image=ingress_image,
+            core_image=core_image,
+            pair_operation_id=operation,
+            ingress_expected=ingress_expected,
+            core_expected=core_expected,
+            verify_ingress=verify_ingress,
+            verify_core=verify_core,
+        )
+        self.assertEqual("ADOPTED_EXISTING", second.ingress.kind)
+        self.assertEqual("ADOPTED_EXISTING", second.core.kind)
+        self.assertFalse(second.ingress.created_by_this_call or second.core.created_by_this_call)
+        self.assertEqual(first_inodes, (os.stat(ingress_target).st_ino, os.stat(core_target).st_ino))
+        self.assertEqual(ingress_image, ingress_target.read_bytes())
+        self.assertEqual(core_image, core_target.read_bytes())
+        self.assertEqual([], list(self.root.glob(".mirror-restore-pair-v1-*")))
+
+    def test_restore_publication_pair_preflights_both_and_never_rolls_back_first_target(self) -> None:
+        ingress_image = b"ingress-preflight"
+        core_image = b"core-preflight"
+        ingress_target = self.root / "preflight-ingress.db"
+        core_target = self.root / "preflight-core.db"
+        core_target.write_bytes(b"different-existing-core")
+        ingress_expected = {"database_id": "ingress", "head_root": "c" * 128}
+        core_expected = {"database_id": "core", "head_root": "d" * 128}
+
+        with self.assertRaises(restore_publication.RestorePublicationConflict):
+            restore_publication.publish_pair_create_only(
+                ingress_target=ingress_target,
+                core_target=core_target,
+                ingress_image=ingress_image,
+                core_image=core_image,
+                pair_operation_id=_hex("pair-preflight-conflict"),
+                ingress_expected=ingress_expected,
+                core_expected=core_expected,
+                verify_ingress=lambda raw: dict(ingress_expected),
+                verify_core=lambda raw, exact_ingress: dict(core_expected),
+            )
+        self.assertFalse(ingress_target.exists())
+        self.assertEqual(b"different-existing-core", core_target.read_bytes())
+
+    def test_restore_publication_pair_after_first_link_keeps_target_and_retries(self) -> None:
+        ingress_image = b"ingress-link-fault"
+        core_image = b"core-link-fault"
+        ingress_target = self.root / "fault-ingress.db"
+        core_target = self.root / "fault-core.db"
+        ingress_expected = {"database_id": "ingress", "head_root": "e" * 128}
+        core_expected = {"database_id": "core", "head_root": "f" * 128}
+
+        def fault(point: str) -> None:
+            if point == "after_ingress_link":
+                raise RuntimeError("host path and credential canary")
+
+        operation = _hex("pair-link-fault")
+        with self.assertRaises(restore_publication.RestorePublicationError) as caught:
+            with mock.patch.object(restore_publication, "_FAULT_HOOK", fault):
+                restore_publication.publish_pair_create_only(
+                    ingress_target=ingress_target,
+                    core_target=core_target,
+                    ingress_image=ingress_image,
+                    core_image=core_image,
+                    pair_operation_id=operation,
+                    ingress_expected=ingress_expected,
+                    core_expected=core_expected,
+                    verify_ingress=lambda raw: dict(ingress_expected),
+                    verify_core=lambda raw, exact_ingress: dict(core_expected),
+                )
+        self.assertEqual("restore-publication:fault", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertTrue(ingress_target.exists())
+        self.assertFalse(core_target.exists())
+        receipt = restore_publication._namespace(ingress_target, operation) / "publication.json"
+        receipt.write_bytes(receipt.read_bytes()[:17])
+        retry = restore_publication.publish_pair_create_only(
+            ingress_target=ingress_target,
+            core_target=core_target,
+            ingress_image=ingress_image,
+            core_image=core_image,
+            pair_operation_id=operation,
+            ingress_expected=ingress_expected,
+            core_expected=core_expected,
+            verify_ingress=lambda raw: dict(ingress_expected),
+            verify_core=lambda raw, exact_ingress: dict(core_expected),
+        )
+        self.assertEqual("ADOPTED_EXISTING", retry.ingress.kind)
+        self.assertEqual("CREATED_THIS_CALL", retry.core.kind)
+        self.assertEqual([], list(self.root.glob(".mirror-restore-pair-v1-*")))
+
+    def test_restore_publication_rejects_all_target_sidecars_and_verifier_canary(self) -> None:
+        ingress_image = b"ingress-sidecar"
+        core_image = b"core-sidecar"
+        ingress_target = self.root / "sidecar-ingress.db"
+        core_target = self.root / "sidecar-core.db"
+        expected_i = {"database_id": "ingress", "head_root": "1" * 128}
+        expected_c = {"database_id": "core", "head_root": "2" * 128}
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = Path(os.fspath(ingress_target) + suffix)
+            sidecar.write_bytes(b"caller-owned sidecar")
+            try:
+                with self.assertRaises(restore_publication.RestorePublicationConflict):
+                    restore_publication.publish_pair_create_only(
+                        ingress_target=ingress_target,
+                        core_target=core_target,
+                        ingress_image=ingress_image,
+                        core_image=core_image,
+                        pair_operation_id=_hex("pair-sidecar-" + suffix),
+                        ingress_expected=expected_i,
+                        core_expected=expected_c,
+                        verify_ingress=lambda raw: dict(expected_i),
+                        verify_core=lambda raw, exact_ingress: dict(expected_c),
+                    )
+                self.assertFalse(ingress_target.exists())
+                self.assertFalse(core_target.exists())
+            finally:
+                sidecar.unlink()
+
+        def bad_verifier(raw: bytes) -> object:
+            raise OSError("Bearer SECRET C:\\Users\\private\\raw")
+
+        with self.assertRaises(restore_publication.RestorePublicationVerification) as caught:
+            restore_publication.publish_pair_create_only(
+                ingress_target=ingress_target,
+                core_target=core_target,
+                ingress_image=ingress_image,
+                core_image=core_image,
+                pair_operation_id=_hex("pair-verifier-canary"),
+                ingress_expected=expected_i,
+                core_expected=expected_c,
+                verify_ingress=bad_verifier,
+                verify_core=lambda raw, exact_ingress: dict(expected_c),
+            )
+        self.assertEqual("restore-publication:independent-verify", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("Bearer", repr(caught.exception))
+        formatted = "".join(traceback.format_exception(caught.exception))
+        self.assertNotIn("Bearer", formatted)
+        self.assertNotIn("C:\\Users\\private", formatted)
+
+    def test_restore_publication_marker_only_requires_and_can_reconcile_receipt(self) -> None:
+        image = b"marker-only-image"
+        target = self.root / "marker-only-target.db"
+        core_target = self.root / "marker-only-core.db"
+        expected_i = {"database_id": "ingress", "head_root": "9" * 128}
+        expected_c = {"database_id": "core", "head_root": "a" * 128}
+        operation = _hex("pair-marker-only")
+        target.write_bytes(image)
+        semantic = restore_publication._semantic_digest({**expected_i, "accepted": True})
+        binding = restore_publication._binding_digest(expected_i)
+        namespace = restore_publication._prepare_namespace(target, operation, role="ingress", image=image, semantic=semantic, binding=binding)
+        verifier_i = lambda raw: {**expected_i, "accepted": True}
+        verifier_c = lambda raw, exact_ingress: {**expected_c, "accepted": True}
+        with self.assertRaises(restore_publication.RestorePublicationConflict):
+            restore_publication.publish_pair_create_only(
+                ingress_target=target,
+                core_target=core_target,
+                ingress_image=image,
+                core_image=b"marker-only-core",
+                pair_operation_id=operation,
+                ingress_expected=expected_i,
+                core_expected=expected_c,
+                verify_ingress=verifier_i,
+                verify_core=verifier_c,
+            )
+        identity = restore_publication._regular(target, allow_empty=False, nlinks=(1,))
+        body = restore_publication._receipt_body(target, role="ingress", pair_operation_id=operation, semantic=semantic, binding=binding, image=image, identity=identity)
+        restore_publication._persist_receipt(namespace, body)
+        result = restore_publication.publish_pair_create_only(
+            ingress_target=target,
+            core_target=core_target,
+            ingress_image=image,
+            core_image=b"marker-only-core",
+            pair_operation_id=operation,
+            ingress_expected=expected_i,
+            core_expected=expected_c,
+            verify_ingress=verifier_i,
+            verify_core=verifier_c,
+        )
+        self.assertEqual("ADOPTED_EXISTING", result.ingress.kind)
+        self.assertEqual("CREATED_THIS_CALL", result.core.kind)
+        self.assertFalse(namespace.exists())
+
+    def test_restore_publication_after_cleanup_response_loss_adopts_without_rewrite(self) -> None:
+        image_i = b"cleanup-loss-ingress"
+        image_c = b"cleanup-loss-core"
+        target_i = self.root / "cleanup-loss-ingress.db"
+        target_c = self.root / "cleanup-loss-core.db"
+        expected_i = {"database_id": "ingress", "head_root": "b" * 128}
+        expected_c = {"database_id": "core", "head_root": "c" * 128}
+        operation = _hex("pair-cleanup-loss")
+
+        def fault(point: str) -> None:
+            if point == "after_pair_cleanup":
+                raise RuntimeError("response lost after cleanup")
+
+        with self.assertRaises(restore_publication.RestorePublicationError):
+            with mock.patch.object(restore_publication, "_FAULT_HOOK", fault):
+                restore_publication.publish_pair_create_only(
+                    ingress_target=target_i,
+                    core_target=target_c,
+                    ingress_image=image_i,
+                    core_image=image_c,
+                    pair_operation_id=operation,
+                    ingress_expected=expected_i,
+                    core_expected=expected_c,
+                    verify_ingress=lambda raw: dict(expected_i),
+                    verify_core=lambda raw, exact_ingress: dict(expected_c),
+                )
+        inodes = (os.stat(target_i).st_ino, os.stat(target_c).st_ino)
+        self.assertEqual([], list(self.root.glob(".mirror-restore-pair-v1-*")))
+        retry = restore_publication.publish_pair_create_only(
+            ingress_target=target_i,
+            core_target=target_c,
+            ingress_image=image_i,
+            core_image=image_c,
+            pair_operation_id=operation,
+            ingress_expected=expected_i,
+            core_expected=expected_c,
+            verify_ingress=lambda raw: dict(expected_i),
+            verify_core=lambda raw, exact_ingress: dict(expected_c),
+        )
+        self.assertEqual("ADOPTED_EXISTING", retry.ingress.kind)
+        self.assertEqual("ADOPTED_EXISTING", retry.core.kind)
+        self.assertEqual(inodes, (os.stat(target_i).st_ino, os.stat(target_c).st_ino))
+
+    def test_restore_publication_adopts_one_existing_and_rejects_aliases(self) -> None:
+        ingress_image = b"one-existing-ingress"
+        core_image = b"one-existing-core"
+        ingress_target = self.root / "one-existing-ingress.db"
+        core_target = self.root / "one-existing-core.db"
+        expected_i = {"database_id": "ingress", "head_root": "3" * 128}
+        expected_c = {"database_id": "core", "head_root": "4" * 128}
+        ingress_target.write_bytes(ingress_image)
+        result = restore_publication.publish_pair_create_only(
+            ingress_target=ingress_target,
+            core_target=core_target,
+            ingress_image=ingress_image,
+            core_image=core_image,
+            pair_operation_id=_hex("pair-one-existing"),
+            ingress_expected=expected_i,
+            core_expected=expected_c,
+            verify_ingress=lambda raw: dict(expected_i),
+            verify_core=lambda raw, exact_ingress: dict(expected_c),
+        )
+        self.assertEqual("ADOPTED_EXISTING", result.ingress.kind)
+        self.assertEqual("CREATED_THIS_CALL", result.core.kind)
+        self.assertEqual(ingress_image, ingress_target.read_bytes())
+        self.assertEqual(core_image, core_target.read_bytes())
+
+        alias_source = self.root / "alias-source.db"
+        alias_target = self.root / "alias-target.db"
+        alias_image = b"same-hardlink-image"
+        alias_source.write_bytes(alias_image)
+        os.link(alias_source, alias_target)
+        before_inode = os.stat(alias_source).st_ino
+        with self.assertRaises(restore_publication.RestorePublicationConflict):
+            restore_publication.publish_pair_create_only(
+                ingress_target=alias_source,
+                core_target=alias_target,
+                ingress_image=alias_image,
+                core_image=alias_image,
+                pair_operation_id=_hex("pair-hardlink-alias"),
+                ingress_expected=expected_i,
+                core_expected=expected_c,
+                verify_ingress=lambda raw: dict(expected_i),
+                verify_core=lambda raw, exact_ingress: dict(expected_c),
+            )
+        self.assertEqual(before_inode, os.stat(alias_source).st_ino)
+        self.assertEqual(before_inode, os.stat(alias_target).st_ino)
+
+        with self.assertRaises(restore_publication.RestorePublicationConflict):
+            restore_publication.publish_pair_create_only(
+                ingress_target=alias_source,
+                core_target=alias_source,
+                ingress_image=alias_image,
+                core_image=alias_image,
+                pair_operation_id=_hex("pair-same-target"),
+                ingress_expected=expected_i,
+                core_expected=expected_c,
+                verify_ingress=lambda raw: dict(expected_i),
+                verify_core=lambda raw, exact_ingress: dict(expected_c),
+            )
+
+    def test_restore_publication_resumes_owned_remnants_and_rejects_foreign_stage(self) -> None:
+        expected_i = {"database_id": "ingress", "head_root": "5" * 128}
+        expected_c = {"database_id": "core", "head_root": "6" * 128}
+        cases = ("namespace", "marker", "stage-prefix", "stage-complete")
+        for index, case in enumerate(cases):
+            with self.subTest(case=case):
+                image_i = ("remnant-ingress-" + case).encode("ascii")
+                image_c = ("remnant-core-" + case).encode("ascii")
+                target_i = self.root / ("remnant-ingress-" + str(index) + ".db")
+                target_c = self.root / ("remnant-core-" + str(index) + ".db")
+                operation = _hex("pair-remnant-" + case)
+                namespace = restore_publication._namespace(target_i, operation)
+                namespace.mkdir()
+                if case != "namespace":
+                    semantic = restore_publication._semantic_digest({**expected_i, "accepted": True})
+                    binding = restore_publication._binding_digest(expected_i)
+                    restore_publication._prepare_namespace(target_i, operation, role="ingress", image=image_i, semantic=semantic, binding=binding)
+                if case == "marker":
+                    marker = namespace / "marker.json"
+                    marker.write_bytes(marker.read_bytes()[:13])
+                elif case in {"stage-prefix", "stage-complete"}:
+                    stage = namespace / "stage.db"
+                    stage.write_bytes(image_i if case == "stage-complete" else image_i[:7])
+                result = restore_publication.publish_pair_create_only(
+                    ingress_target=target_i,
+                    core_target=target_c,
+                    ingress_image=image_i,
+                    core_image=image_c,
+                    pair_operation_id=operation,
+                    ingress_expected=expected_i,
+                    core_expected=expected_c,
+                    verify_ingress=lambda raw, expected=expected_i: {**expected, "accepted": True},
+                    verify_core=lambda raw, exact_ingress, expected=expected_c: {**expected, "accepted": True},
+                )
+                self.assertEqual("CREATED_THIS_CALL", result.ingress.kind)
+                self.assertEqual("CREATED_THIS_CALL", result.core.kind)
+                self.assertFalse(namespace.exists())
+        sidecar_target = self.root / "stage-sidecar-ingress.db"
+        sidecar_core = self.root / "stage-sidecar-core.db"
+        sidecar_operation = _hex("pair-stage-sidecar")
+        sidecar_namespace = restore_publication._prepare_namespace(
+            sidecar_target,
+            sidecar_operation,
+            role="ingress",
+            image=b"stage-sidecar-ingress",
+            semantic=restore_publication._semantic_digest({**expected_i, "accepted": True}),
+            binding=restore_publication._binding_digest(expected_i),
+        )
+        stage_sidecar = sidecar_namespace / "stage.db-wal"
+        stage_sidecar.write_bytes(b"caller-owned stage sidecar")
+        try:
+            with self.assertRaises(restore_publication.RestorePublicationVerification):
+                restore_publication.publish_pair_create_only(
+                    ingress_target=sidecar_target,
+                    core_target=sidecar_core,
+                    ingress_image=b"stage-sidecar-ingress",
+                    core_image=b"stage-sidecar-core",
+                    pair_operation_id=sidecar_operation,
+                    ingress_expected=expected_i,
+                    core_expected=expected_c,
+                    verify_ingress=lambda raw: {**expected_i, "accepted": True},
+                    verify_core=lambda raw, exact_ingress: {**expected_c, "accepted": True},
+                )
+            self.assertFalse(sidecar_target.exists())
+            self.assertEqual(b"caller-owned stage sidecar", stage_sidecar.read_bytes())
+        finally:
+            shutil.rmtree(sidecar_namespace)
+
+        mismatch_target = self.root / "mismatched-remnant-ingress.db"
+        mismatch_core = self.root / "mismatched-remnant-core.db"
+        mismatch_operation = _hex("pair-mismatched-remnant")
+        mismatch_namespace = restore_publication._namespace(mismatch_target, mismatch_operation)
+        mismatch_namespace.mkdir()
+        (mismatch_namespace / "marker.json").write_bytes(b"foreign marker bytes")
+        try:
+            with self.assertRaises(restore_publication.RestorePublicationVerification):
+                restore_publication.publish_pair_create_only(
+                    ingress_target=mismatch_target,
+                    core_target=mismatch_core,
+                    ingress_image=b"mismatched-ingress",
+                    core_image=b"mismatched-core",
+                    pair_operation_id=mismatch_operation,
+                    ingress_expected=expected_i,
+                    core_expected=expected_c,
+                    verify_ingress=lambda raw: {**expected_i, "accepted": True},
+                    verify_core=lambda raw, exact_ingress: {**expected_c, "accepted": True},
+                )
+            self.assertFalse(mismatch_target.exists())
+            self.assertFalse(mismatch_core.exists())
+        finally:
+            shutil.rmtree(mismatch_namespace)
+        foreign_target = self.root / "foreign-remnant-ingress.db"
+        foreign_core = self.root / "foreign-remnant-core.db"
+        foreign_operation = _hex("pair-foreign-remnant")
+        foreign_namespace = restore_publication._namespace(foreign_target, foreign_operation)
+        foreign_namespace.mkdir()
+        try:
+            with self.assertRaises(restore_publication.RestorePublicationConflict):
+                restore_publication.publish_pair_create_only(
+                    ingress_target=foreign_target,
+                    core_target=foreign_core,
+                    ingress_image=b"foreign-ingress",
+                    core_image=b"foreign-core",
+                    pair_operation_id=_hex("pair-other-remnant"),
+                    ingress_expected=expected_i,
+                    core_expected=expected_c,
+                    verify_ingress=lambda raw: dict(expected_i),
+                    verify_core=lambda raw, exact_ingress: dict(expected_c),
+                )
+            self.assertFalse(foreign_target.exists())
+            self.assertFalse(foreign_core.exists())
+        finally:
+            foreign_namespace.rmdir()
+
+    def test_restore_publication_reversed_lock_order_converges(self) -> None:
+        target_a = self.root / "concurrent-a.db"
+        target_b = self.root / "concurrent-b.db"
+        image_a = b"concurrent-image-a"
+        image_b = b"concurrent-image-b"
+        expected_a = {"database_id": "a", "head_root": "7" * 128}
+        expected_b = {"database_id": "b", "head_root": "8" * 128}
+        operation = _hex("pair-reversed-order")
+        barrier = threading.Barrier(2)
+        results: list[restore_publication.PublicationPairResultV1] = []
+        errors: list[BaseException] = []
+
+        def publish(first: Path, second: Path, first_image: bytes, second_image: bytes, first_expected: dict[str, object], second_expected: dict[str, object]) -> None:
+            try:
+                barrier.wait(timeout=5)
+                result = restore_publication.publish_pair_create_only(
+                    ingress_target=first,
+                    core_target=second,
+                    ingress_image=first_image,
+                    core_image=second_image,
+                    pair_operation_id=operation,
+                    ingress_expected=first_expected,
+                    core_expected=second_expected,
+                    verify_ingress=lambda raw, expected=first_expected: dict(expected),
+                    verify_core=lambda raw, exact_ingress, expected=second_expected: dict(expected),
+                )
+                results.append(result)
+            except BaseException as error:
+                errors.append(error)
+
+        first = threading.Thread(target=publish, args=(target_a, target_b, image_a, image_b, expected_a, expected_b))
+        second = threading.Thread(target=publish, args=(target_b, target_a, image_b, image_a, expected_b, expected_a))
+        first.start()
+        second.start()
+        first.join(timeout=10)
+        second.join(timeout=10)
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertEqual([], errors)
+        self.assertEqual(2, len(results))
+        self.assertEqual(image_a, target_a.read_bytes())
+        self.assertEqual(image_b, target_b.read_bytes())
+        self.assertEqual([], list(self.root.glob(".mirror-restore-pair-v1-*")))
+
+    def test_recovery_fault_after_first_publish_keeps_target_and_revocation_closes_retry(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        target_i = self.root / "revoked-after-link-ingress.db"
+        target_c = self.root / "revoked-after-link-core.db"
+        original = restore_publication.publish_pair_create_only
+
+        def publish_with_revocation(**kwargs: object) -> object:
+            def fault(point_name: str) -> None:
+                if point_name == "after_ingress_link":
+                    self.custody.revoked.add(("synthetic-key", 1))
+                    raise RuntimeError("revocation path credential canary")
+            with mock.patch.object(restore_publication, "_FAULT_HOOK", fault):
+                return original(**kwargs)
+
+        with mock.patch.object(restore_publication, "publish_pair_create_only", publish_with_revocation):
+            with self.assertRaises(recovery.RecoveryError):
+                self.recovery_service.restore_point(point.point_id, target_i, target_c)
+        self.assertTrue(target_i.exists())
+        self.assertFalse(target_c.exists())
+        self.assertEqual("VERIFIED", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
+        with self.assertRaises(recovery.RecoveryConflictError):
+            self.recovery_service.restore_point(point.point_id, target_i, target_c)
 
 
 if __name__ == "__main__":

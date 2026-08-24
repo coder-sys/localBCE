@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
-from typing import Callable, Mapping, Protocol
+from typing import Mapping, Protocol
 
 from app.mirror import core_v2_independent as core
 from app.mirror import ingress_v2_independent as ingress
@@ -696,19 +696,6 @@ class RecoveryServiceV2:
         self._bounded_bytes(sealed, self.config.max_bundle_bytes + MAX_CUSTODY_OVERHEAD_BYTES, "recovery:sealed-size")
         return self._complete_storage(point, bundle, sealed)
 
-    @staticmethod
-    def _publish_database(target: Path, image: bytes, *, export_root: str, expected_evidence: Mapping[str, object], verify_database: Callable[[Path], Mapping[str, object]]) -> tuple[bool, dict[str, object]]:
-        publication: dict[str, object] = {}
-        try:
-            restore_publication.publish_create_only(target, export_root=export_root, expected_evidence=expected_evidence, build_stage=lambda stage: stage.write_bytes(image), verify_database=verify_database, result_factory=lambda published: published, publication_receipt_sink=publication.update)
-        except restore_publication.RestorePublicationConflict:
-            raise_redacted(RecoveryConflictError, "recovery:publication-conflict")
-        except restore_publication.RestorePublicationError:
-            raise_redacted(RecoveryError, "recovery:publication")
-        if publication.get("publication_kind") not in {"CREATED", "ADOPTED_EXISTING"}:
-            raise RecoveryError("recovery:publication-receipt")
-        return publication.get("publication_kind") == "CREATED", publication
-
     def _require_active_key(self, point: Mapping[str, object]) -> None:
         try:
             state = self.custody.state(str(point["key_id"]), int(point["key_epoch"]))
@@ -748,42 +735,47 @@ class RecoveryServiceV2:
             raise_redacted(RecoveryConflictError, "recovery:catalog")
         point = selected["point"]
         selected_receipt = bytes(selected["receipt"])
-        _bundle, ing_raw, core_raw = self._bundle_images(point)
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix="mirror-recovery-v2-") as temp:
-            temp_path = Path(temp)
-            ing_stage = temp_path / "ingress.db"
-            core_stage = temp_path / "core.db"
-            ing_stage.write_bytes(ing_raw)
-            core_stage.write_bytes(core_raw)
-            ing_check = ingress.verify_database(ing_stage, expected_database_id=self.config.ingress_database_id, expected_config_digest=self.config.ingress_config_digest)
-            core_check = core.verify_database(core_stage, expected_database_id=self.config.core_database_id, expected_config_digest=self.config.core_config_digest, ingress_path=ing_stage)
-            if ing_check["head_root"] != point["ingress_head_root"] or core_check["head_root"] != point["core_head_root"] or core_check["ingress_watermark"] > ing_check["sequence"]:
-                raise RecoveryConflictError("recovery:pair-root")
-            self._require_active_key(point)
-            made_ing, ingress_publication = self._publish_database(Path(ingress_target), ing_raw, export_root=str(point["ingress_head_root"]), expected_evidence=ing_check, verify_database=lambda path: ingress.verify_database(path, expected_database_id=self.config.ingress_database_id, expected_config_digest=self.config.ingress_config_digest))
-            made_core = False
-            core_publication: dict[str, object] = {}
-            try:
-                self._require_active_key(point)
-                made_core, core_publication = self._publish_database(Path(core_target), core_raw, export_root=str(point["core_head_root"]), expected_evidence=core_check, verify_database=lambda path: core.verify_database(path, expected_database_id=self.config.core_database_id, expected_config_digest=self.config.core_config_digest, ingress_path=ingress_target))
-                self._require_active_key(point)
-            except Exception:
-                if made_core:
-                    try:
-                        storage = core_publication["storage_identity"]
-                        restore_publication._delete_exact_file(Path(core_target), expected_inode=(int(storage["dev"]), int(storage["ino"])), allow_empty=False, label="recovery-pair-rollback")
-                    except Exception:
-                        raise_redacted(RecoveryError, "recovery:pair-rollback")
-                if made_ing:
-                    try:
-                        storage = ingress_publication["storage_identity"]
-                        restore_publication._delete_exact_file(Path(ingress_target), expected_inode=(int(storage["dev"]), int(storage["ino"])), allow_empty=False, label="recovery-pair-rollback")
-                    except Exception:
-                        raise_redacted(RecoveryError, "recovery:pair-rollback")
-                raise
+        self._require_active_key(point)
         if point["state"] == "PUBLISHED":
             return self._receipt(selected_receipt)
+        _bundle, ing_raw, core_raw = self._bundle_images(point)
+        pair_operation_id = _digest("pair-publication-operation", {
+            "point_id": point["point_id"], "object_id": point["object_id"],
+            "ingress_database_id": point["ingress_database_id"], "ingress_config_digest": point["ingress_config_digest"],
+            "ingress_head_root": point["ingress_head_root"], "ingress_watermark": point["ingress_watermark"],
+            "core_database_id": point["core_database_id"], "core_config_digest": point["core_config_digest"],
+            "core_head_root": point["core_head_root"], "core_watermark": point["core_watermark"],
+            "ingress_image_digest": _raw_digest("ingress-image", ing_raw), "ingress_image_length": len(ing_raw),
+            "core_image_digest": _raw_digest("core-image", core_raw), "core_image_length": len(core_raw),
+        })
+        try:
+            restore_publication.publish_pair_create_only(
+                ingress_target=ingress_target,
+                core_target=core_target,
+                ingress_image=ing_raw,
+                core_image=core_raw,
+                pair_operation_id=pair_operation_id,
+                ingress_expected={
+                    "database_id": point["ingress_database_id"],
+                    "config_digest": point["ingress_config_digest"],
+                    "head_root": point["ingress_head_root"],
+                    "sequence": point["ingress_watermark"],
+                },
+                core_expected={
+                    "database_id": point["core_database_id"],
+                    "config_digest": point["core_config_digest"],
+                    "head_root": point["core_head_root"],
+                    "ingress_database_id": point["ingress_database_id"],
+                    "ingress_watermark": point["core_watermark"],
+                },
+                verify_ingress=lambda image: ingress.verify_bytes(image, expected_database_id=self.config.ingress_database_id, expected_config_digest=self.config.ingress_config_digest),
+                verify_core=lambda image, ingress_image: core.verify_bytes(image, expected_database_id=self.config.core_database_id, expected_config_digest=self.config.core_config_digest, ingress_bytes=ingress_image),
+            )
+        except restore_publication.RestorePublicationConflict:
+            raise_redacted(RecoveryConflictError, "recovery:publication-conflict")
+        except restore_publication.RestorePublicationError:
+            raise_redacted(RecoveryError, "recovery:publication")
+        self._require_active_key(point)
         connection = _connection(self.path)
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -793,11 +785,10 @@ class RecoveryServiceV2:
             if current["state"] == "VERIFIED" and dict(current) != dict(point):
                 raise RecoveryConflictError("recovery:point-conflict")
             if current["state"] == "PUBLISHED":
-                row = connection.execute("SELECT event_raw FROM recovery_events WHERE point_id=? AND next_state='PUBLISHED' ORDER BY sequence DESC LIMIT 1", (point_id,)).fetchone()
-                if row is None:
-                    raise RecoveryError("recovery:receipt")
-                connection.commit()
-                return self._receipt(bytes(row[0]))
+                connection.rollback()
+                connection.close()
+                current_selected = independent.select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("PUBLISHED",))
+                return self._receipt(bytes(current_selected["receipt"]))
             if current["state"] != "VERIFIED":
                 raise RecoveryConflictError("recovery:point-state")
             material = {"point_id": point_id, "object_id": current["object_id"], "ingress_target": "opaque", "core_target": "opaque"}
