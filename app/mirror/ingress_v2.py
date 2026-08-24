@@ -227,14 +227,6 @@ class EligibleSlotV1:
     attempt: int
     state: str
 
-    @property
-    def prior_attempt(self) -> int:
-        return self.attempt
-
-
-EligibleSlotProjectionV1 = EligibleSlotV1
-
-
 def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
@@ -1703,19 +1695,66 @@ class IngressServiceV2:
     def current(self, *, include_raw: bool = False) -> dict[str, object]:
         return self.verify(include_raw=include_raw)
 
+    def _operational_quarantined_artifact_ids(self, limit: int) -> tuple[str, ...]:
+        """Return the bounded raw-free terminal quarantine projection for composition."""
+
+        if type(limit) is not int or not 1 <= limit <= self.config.max_slots or limit > 4096:
+            raise IngressConflictError("ingress:projection-limit")
+        self._assert_database_identity()
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = independent._open(self.path)
+            rows = connection.execute(
+                """
+                SELECT a.artifact_id, a.event_sequence
+                FROM ingress_slots AS s
+                JOIN ingress_artifacts AS a ON a.artifact_id = s.artifact_id
+                WHERE s.state='QUARANTINED' AND s.artifact_id IS NOT NULL
+                ORDER BY a.event_sequence, a.artifact_id
+                LIMIT ?
+                """,
+                (limit + 1,),
+            ).fetchall()
+            if len(rows) > limit:
+                raise IngressConflictError("ingress:projection-capacity")
+            result: list[str] = []
+            seen: set[str] = set()
+            prior_sequence = 0
+            for row in rows:
+                artifact_id = _bounded_digest_string(row["artifact_id"], "ingress:projection")
+                event_sequence = row["event_sequence"]
+                if type(event_sequence) is not int or event_sequence <= prior_sequence or artifact_id in seen:
+                    raise IngressError("ingress:projection")
+                prior_sequence = event_sequence
+                seen.add(artifact_id)
+                result.append(artifact_id)
+            return tuple(result)
+        except (IngressConflictError, IngressError):
+            raise
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            raise_redacted(IngressError, "ingress:projection")
+        finally:
+            if connection is not None:
+                try:
+                    connection.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                connection.close()
+            self._assert_database_identity()
+
     def eligible_slots(self, limit: int) -> tuple[EligibleSlotV1, ...]:
         """Return due or expired slots from one identity-checked read snapshot."""
 
         if type(limit) is not int or not 1 <= limit <= 16:
             raise IngressConflictError("ingress:eligible-limit")
         self._assert_database_identity()
-        try:
-            owner_now = self._owner_now()
-        except IngressError:
-            raise
         connection: sqlite3.Connection | None = None
         try:
             connection = independent._open(self.path)
+            owner_now = self._owner_now()
+            last_observed_at = self._last_observed_at(connection)
+            if last_observed_at is not None and owner_now < last_observed_at:
+                raise IngressConflictError("ingress:clock-rewind")
             rows = connection.execute(
                 """
                 SELECT slot_id, scheduled_at, attempt, state
@@ -1776,7 +1815,7 @@ class IngressServiceV2:
 
 
 __all__ = [
-    "IngressConfigV2", "IngressReceipt", "EligibleSlotV1", "EligibleSlotProjectionV1", "IngressError",
+    "IngressConfigV2", "IngressReceipt", "EligibleSlotV1", "IngressError",
     "IngressConflictError", "IngressBusyError", "IngressServiceV2",
     "SCHEMA", "SCHEMA_VERSION", "TABLES", "STATES", "FIXED_FLAGS",
     "MAX_IDENTIFIER_BYTES",

@@ -335,6 +335,146 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
         finally:
             owner.close()
 
+    def test_core_failure_after_ingress_commit_is_recovered_without_acquisition(self) -> None:
+        owner, first_port = self._owner()
+        try:
+            with mock.patch.object(owner.core, "ingest_sources", side_effect=RuntimeError("CANARY_CORE_FAILURE")):
+                with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$") as context:
+                    owner.run((self.time,))
+            self.assertIsNone(context.exception.__cause__)
+            self.assertNotIn("CANARY_CORE_FAILURE", str(context.exception))
+            self.assertEqual(1, len(first_port.calls))
+            self.assertEqual(1, owner.ingress.verify()["artifact_count"])
+            self.assertEqual(0, owner.core.verify()["artifact_count"])
+        finally:
+            owner.close()
+
+        owner, restart_port = self._owner()
+        try:
+            with mock.patch.object(owner.core, "ingest_sources", wraps=owner.core.ingest_sources) as ingest:
+                result = owner.run()
+            self.assertEqual([], restart_port.calls)
+            self.assertEqual(1, ingest.call_count)
+            self.assertEqual(1, result.counts["core_recovered"])
+            self.assertEqual(0, result.counts["core_ingested"])
+            self.assertEqual(0, result.counts["core_pending"])
+            self.assertEqual(3, owner.core.verify()["artifact_count"])
+        finally:
+            owner.close()
+
+    def test_core_commit_then_raise_converges_without_duplicate_representation(self) -> None:
+        owner, _port = self._owner()
+        original = owner.core.ingest_sources
+
+        def commit_then_raise(*args: object, **kwargs: object) -> object:
+            result = original(*args, **kwargs)
+            raise RuntimeError("CANARY_AFTER_CORE_COMMIT")
+
+        try:
+            with mock.patch.object(owner.core, "ingest_sources", side_effect=commit_then_raise):
+                with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                    owner.run((self.time,))
+            self.assertEqual(3, owner.core.verify()["artifact_count"])
+        finally:
+            owner.close()
+
+        owner, restart_port = self._owner()
+        try:
+            with mock.patch.object(owner.core, "ingest_sources", wraps=owner.core.ingest_sources) as ingest:
+                result = owner.run()
+            self.assertEqual([], restart_port.calls)
+            self.assertEqual(0, ingest.call_count)
+            self.assertEqual(0, result.counts["core_recovered"])
+            self.assertEqual(0, result.counts["core_ingested"])
+            self.assertEqual(0, result.counts["core_pending"])
+            self.assertEqual(3, owner.core.verify()["artifact_count"])
+        finally:
+            owner.close()
+
+    def test_recovery_backlog_is_bounded_and_prioritized_before_acquisition(self) -> None:
+        owner, _port = self._owner(port=_ScheduledPort(self.ingress_config), max_due=4)
+        try:
+            self.clock.value = self.time + 120
+            with mock.patch.object(owner.core, "ingest_sources", side_effect=RuntimeError("CANARY_CORE_BACKLOG")):
+                with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                    owner.run((self.time, self.time + 60, self.time + 120))
+            self.assertEqual(3, owner.ingress.verify()["artifact_count"])
+        finally:
+            owner.close()
+
+        owner, restart_port = self._owner(max_due=2)
+        try:
+            result = owner.run()
+            self.assertEqual([], restart_port.calls)
+            self.assertEqual(2, result.counts["core_recovered"])
+            self.assertEqual(0, result.counts["core_ingested"])
+            self.assertEqual(1, result.counts["core_pending"])
+        finally:
+            owner.close()
+
+        owner, final_port = self._owner(max_due=2)
+        try:
+            result = owner.run()
+            self.assertEqual([], final_port.calls)
+            self.assertEqual(1, result.counts["core_recovered"])
+            self.assertEqual(0, result.counts["core_pending"])
+        finally:
+            owner.close()
+
+    def test_projection_drift_and_clock_rewind_fail_before_mutation(self) -> None:
+        owner, port = self._owner()
+        try:
+            with mock.patch.object(owner.core, "_operational_represented_ingress_artifact_ids", return_value=("0" * 128, "0" * 128)):
+                with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                    owner.run((self.time,))
+            self.assertEqual([], port.calls)
+            self.assertEqual(0, owner.ingress.verify()["slot_count"])
+        finally:
+            owner.close()
+
+        owner, port = self._owner()
+        try:
+            owner.run((self.time,))
+            self.clock.value = self.time - 1
+            with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                owner.run()
+            self.assertEqual(1, len(port.calls))
+        finally:
+            owner.close()
+
+    def test_entropy_and_payload_caps_are_fixed_and_sanitized(self) -> None:
+        with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-acquisition$"):
+            operational.AcquisitionPayloadV1(b"x" * (operational._MAX_ENVELOPE_BYTES + 1), b"x")
+
+        owner, _port = self._owner()
+        try:
+            with mock.patch.object(operational.secrets, "token_hex", side_effect=RuntimeError("CANARY_ENTROPY")):
+                with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$") as context:
+                    owner.run((self.time,))
+            self.assertIsNone(context.exception.__cause__)
+            self.assertNotIn("CANARY_ENTROPY", str(context.exception))
+            self.assertEqual({"DUE": 1}, {key: value for key, value in owner.ingress.verify()["state_counts"].items() if value})
+        finally:
+            owner.close()
+
+    def test_store_replacement_is_fixed_without_sentinel_mutation(self) -> None:
+        for name in ("ingress.sqlite", "core.sqlite", "recovery.sqlite"):
+            owner, _port = self._owner()
+            path = self.root / name
+            original = path.read_bytes()
+            sentinel = b"SENTINEL_STORE_REPLACEMENT"
+            replacement = self.root / (name + ".replacement")
+            replacement.write_bytes(sentinel)
+            try:
+                replacement.replace(path)
+                with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                    owner.run()
+                self.assertEqual(sentinel, path.read_bytes())
+            finally:
+                owner.close()
+                path.unlink(missing_ok=True)
+                path.write_bytes(original)
+
     def test_failed_port_leaves_lease_for_expiry_and_max_attempts_hold(self) -> None:
         owner, port = self._owner(port=_Port(self.ingress_config, fail=True))
         try:

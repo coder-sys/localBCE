@@ -1,4 +1,4 @@
-"""The single six-table durable Mirror Core V3 owner.
+"""The single six-table durable Mirror Core V2 owner.
 
 Core is a read-only evidence, reconciliation, and observation owner.  It has
 no delivery, payment, clearance, settlement, adjudication, or source-truth
@@ -318,6 +318,57 @@ class CoreServiceV2:
 
     def _open(self) -> sqlite3.Connection:
         return _connection(self.path, expected_identity=self._database_identity)
+
+    def _assert_database_identity(self) -> None:
+        current = _path_identity(self.path, allow_missing=False)
+        if current is None or current != self._database_identity:
+            raise CoreError("core:database-open")
+
+    def _operational_represented_ingress_artifact_ids(self, limit: int) -> tuple[str, ...]:
+        """Return the bounded raw-free source representation projection."""
+
+        if type(limit) is not int or not 1 <= limit <= 4096:
+            raise CoreConflictError("core:projection-limit")
+        self._assert_database_identity()
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = self._open()
+            rows = connection.execute(
+                """
+                SELECT source_artifact_id, created_event_sequence
+                FROM core_artifacts
+                WHERE kind='SOURCE_OBSERVATION' AND source_artifact_id IS NOT NULL
+                ORDER BY created_event_sequence, source_artifact_id
+                LIMIT ?
+                """,
+                (limit + 1,),
+            ).fetchall()
+            if len(rows) > limit:
+                raise CoreConflictError("core:projection-capacity")
+            result: list[str] = []
+            seen: set[str] = set()
+            prior_sequence = 0
+            for row in rows:
+                source_artifact_id = _require_digest(row["source_artifact_id"], "core:projection")
+                event_sequence = row["created_event_sequence"]
+                if type(event_sequence) is not int or event_sequence <= prior_sequence or source_artifact_id in seen:
+                    raise CoreError("core:projection")
+                prior_sequence = event_sequence
+                seen.add(source_artifact_id)
+                result.append(source_artifact_id)
+            return tuple(result)
+        except (CoreConflictError, CoreError):
+            raise
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            raise_redacted(CoreError, "core:projection")
+        finally:
+            if connection is not None:
+                try:
+                    connection.rollback()
+                except sqlite3.Error:
+                    pass
+                connection.close()
+            self._assert_database_identity()
 
     def verify(self, *, ingress_path: str | Path | None = None) -> dict[str, object]:
         return independent.verify_database(self.path, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, ingress_path=ingress_path)

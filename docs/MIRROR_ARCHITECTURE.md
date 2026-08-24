@@ -33,14 +33,18 @@ events, heads, reconciliation, and case progression. Recovery owns encrypted bun
 key/storage binding, restore, and explicit publication recovery. No layer may create a second raw
 capture owner or mutate another layer's tables.
 
-The operational owner is a composition boundary, not a new data owner. It pins one ordinary local
-root, the three existing stores, one nonblocking operational lock, one verifier-owned clock, one
-acquisition identity/policy/profile, and a fixed run bound of at most sixteen eligible slots. It
-processes expired leases before new due work, lets Ingress perform all lease recovery and admission,
-calls Core once for a nonempty admitted batch, and creates a Recovery point only for an explicitly
+The operational owner is the exact `mirror-operational-owner-v1` composition boundary, not a new
+data owner. It pins one ordinary local root, the three existing stores, one nonblocking operational
+lock, one verifier-owned clock, one acquisition identity/policy/profile, and a fixed run bound of at
+most sixteen eligible slots. Before acquisition it independently reconciles Ingress terminal
+`QUARANTINED` artifact projections with Core's represented source projection, recovers verified
+pending artifacts first through Core's idempotent batch seam, and reports `core_recovered`,
+`core_ingested`, and residual `core_pending` counts without exposing identifiers. It processes
+expired leases before new due work, lets Ingress perform all lease recovery and admission, calls
+Core once for a nonempty new-admission batch, and creates a Recovery point only for an explicitly
 supplied generation. It has no daemon, scheduler, network, raw capture, orchestration database,
-automatic restore, or automatic publication path; ambiguous path, lock, store, or verifier state
-fails closed with a fixed operational result.
+automatic restore, or automatic publication path; ambiguous path, lock, store, projection, or
+verifier state fails closed with a fixed operational result.
 
 The current consolidated stores have exactly five Ingress tables, six Core tables, and three
 Recovery tables. These counts are current executable grammar, not a permanent product metric;
@@ -68,10 +72,13 @@ attempt/lease chronology, and exact retry are checked before a derived claim is 
 Corruption, omission, reorder, duplication, stale authority, ambiguous publication, or recovery
 identity drift fails closed.
 
-Recovery precedes throughput optimization. Publication has one owner, preserves the last known
-good target on uncertainty, and resolves uncertain outcomes only through independently verified
-state. Synthetic success does not qualify production storage, HA, backup/DR, monitoring, RPO/RTO,
-HSM/FIPS custody, or state operations.
+Recovery reconciliation precedes throughput optimization. Publication has one owner, preserves the
+last known good target on uncertainty, and resolves uncertain outcomes only through independently
+verified state. The owner and its lock/path checks cover the supported local filesystem primitives
+only; hostile local administrators, filesystem ACL enforcement, remote/distributed filesystem
+semantics, production storage durability/HA, backup/DR, monitoring, RPO/RTO, HSM/FIPS custody, and
+state operations remain external qualification dependencies. Synthetic success does not qualify
+any of those dependencies.
 
 ## External qualification dependencies
 
