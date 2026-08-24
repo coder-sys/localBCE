@@ -231,7 +231,7 @@ def _schema(connection: sqlite3.Connection) -> None:
 def _event_expected(kind: str, event: Any) -> None:
     if kind == "ADMIT": keys = {"at_ms", "status", "admission_seq", "attempt", "created_ms", "next_eligible_ms", "material_digest"}
     elif kind == "CLAIM": keys = {"at_ms", "status", "attempt", "worker_id", "leased_ms", "expires_ms", "claim_sequence", "token_digest"}
-    elif kind in {"LEASE_EXPIRE_QUEUED", "LEASE_EXPIRE_HELD", "RETRY_QUEUED"}: keys = {"at_ms", "status", "attempt", "error_code", "claim_sequence", "worker_id", "leased_ms", "expires_ms", "token_digest"}
+    elif kind in {"LEASE_EXPIRE_QUEUED", "LEASE_EXPIRE_HELD", "LEASE_RECOVER_QUEUED", "LEASE_RECOVER_HELD", "RETRY_QUEUED"}: keys = {"at_ms", "status", "attempt", "error_code", "claim_sequence", "worker_id", "leased_ms", "expires_ms", "token_digest"}
     elif kind.startswith("COMPLETE_"): keys = {"at_ms", "status", "attempt", "error_code", "receipt_digest", "claim_sequence", "worker_id", "leased_ms", "expires_ms", "token_digest"}
     else: _fail("transition_kind")
     if type(event) is not dict or set(event) != keys: _fail("transition_event_keys")
@@ -250,6 +250,8 @@ def _event_expected(kind: str, event: Any) -> None:
         if kind == "RETRY_QUEUED" and event["status"] != "QUEUED": _fail("transition_retry_status")
         if kind == "LEASE_EXPIRE_QUEUED" and (event["status"] != "QUEUED" or event["error_code"] != "lease_expired"): _fail("transition_expire_status")
         if kind == "LEASE_EXPIRE_HELD" and (event["status"] != "HELD" or event["error_code"] != "lease_expired"): _fail("transition_expire_status")
+        if kind == "LEASE_RECOVER_QUEUED" and (event["status"] != "QUEUED" or event["error_code"] != "runtime_restart"): _fail("transition_recover_status")
+        if kind == "LEASE_RECOVER_HELD" and (event["status"] != "HELD" or event["error_code"] != "runtime_restart"): _fail("transition_recover_status")
         if kind.startswith("COMPLETE_"):
             expected = kind.removeprefix("COMPLETE_")
             if expected not in _TERMINAL or event["status"] != expected: _fail("transition_complete_status")
@@ -389,12 +391,14 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         elif kind == "CLAIM":
             if current is None or current["status"] != "QUEUED" or event["attempt"] != current["attempt"] + 1 or event["claim_sequence"] != index or event["expires_ms"] - event["leased_ms"] != int(config["lease_seconds"]) * 1000: _fail("transition_claim_replay")
             current.update(status="LEASED", attempt=int(event["attempt"]), updated=int(event["at_ms"]), error=None, claim=dict(event)); claim_count += 1; distinct_workers.add(str(event["worker_id"]))
-        elif kind in {"RETRY_QUEUED", "LEASE_EXPIRE_QUEUED", "LEASE_EXPIRE_HELD"} or kind.startswith("COMPLETE_"):
+        elif kind in {"RETRY_QUEUED", "LEASE_EXPIRE_QUEUED", "LEASE_EXPIRE_HELD", "LEASE_RECOVER_QUEUED", "LEASE_RECOVER_HELD"} or kind.startswith("COMPLETE_"):
             if current is None or current["status"] != "LEASED" or current.get("claim") is None: _fail("transition_replay")
             claim = current["claim"]
             if any(event[key] != claim[key] for key in ("claim_sequence", "worker_id", "leased_ms", "expires_ms", "token_digest", "attempt")): _fail("transition_claim_binding")
             if kind.startswith("LEASE_EXPIRE_"):
                 if event["at_ms"] < claim["expires_ms"] or (kind.endswith("HELD") != (event["attempt"] >= 3)): _fail("transition_expiry")
+            elif kind.startswith("LEASE_RECOVER_"):
+                if event["error_code"] != "runtime_restart" or (kind.endswith("HELD") != (event["attempt"] >= 3)): _fail("transition_recover")
             else:
                 if event["at_ms"] >= claim["expires_ms"]: _fail("transition_before_expiry")
             if kind == "RETRY_QUEUED":
@@ -402,6 +406,8 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
                 current.update(status="QUEUED", next=int(event["at_ms"]), updated=int(event["at_ms"]), error=str(event["error_code"]), claim=None)
             elif kind == "LEASE_EXPIRE_QUEUED":
                 current.update(status="QUEUED", next=int(event["at_ms"]), updated=int(event["at_ms"]), error="lease_expired", claim=None)
+            elif kind == "LEASE_RECOVER_QUEUED":
+                current.update(status="QUEUED", next=int(event["at_ms"]), updated=int(event["at_ms"]), error="runtime_restart", claim=None)
             else:
                 result = result_map.get(bytes(job[1]))
                 if result is None or result[6] != claim["claim_sequence"] or result[7] != claim["worker_id"] or result[8] != claim["leased_ms"] or result[9] != claim["expires_ms"] or result[10] != _blob(claim["token_digest"], 64, "transition_digest") or result[2] != event["status"] or result[4] != event["error_code"]: _fail("transition_result_binding")
@@ -411,7 +417,8 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
                     try: receipt_value = json.loads(bytes(result[3]).decode("ascii")); receipt = _parse_receipt(receipt_value, config)
                     except (UnicodeDecodeError, json.JSONDecodeError): _fail("verified_receipt")
                     if bytes(result[3]) != _json_bytes(receipt_value) or receipt["job_id"] != str(job[0]) or receipt["operation_id"] != bytes(job[1]) or receipt["attempt"] != job[9] or receipt["evidence"]["artifact_bytes"] != job[4] or receipt["evidence"]["artifact_sha256"] != job[5] or receipt["evidence"]["artifact_sha3_512"] != job[6]: _fail("verified_receipt_binding")
-                completion_count += 1; current.update(status=str(event["status"]), updated=int(event["at_ms"]), error=None if event["status"] == "VERIFIED" else str(event["error_code"]), claim=None)
+                if kind.startswith("COMPLETE_"): completion_count += 1
+                current.update(status=str(event["status"]), updated=int(event["at_ms"]), error=None if event["status"] == "VERIFIED" else str(event["error_code"]), claim=None)
         else:
             _fail("transition_kind")
         expected_head = bytes(row[5])

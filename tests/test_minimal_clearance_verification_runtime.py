@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from app.minimal_clearance_proof_primitives import MinimalClearanceProofStateError, NativeMinimalClearanceVerifier
-from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig, VerificationQueueStore
+from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig, _VerificationQueueStore
 from app.minimal_clearance_verification_runtime import (
     MinimalClearanceVerificationRuntime,
     RuntimeRunResult,
@@ -73,6 +73,33 @@ class VerificationRuntimeTests(unittest.TestCase):
         self.assertEqual(second.run(max_jobs=1).processed, 0)
         second.close()
 
+    def test_workspace_parent_is_a_process_owner_across_distinct_databases(self) -> None:
+        first = self._runtime(self.root / "first.sqlite")
+        try:
+            with self.assertRaises(VerificationRuntimeError) as raised:
+                self._runtime(self.root / "second.sqlite")
+            self.assertEqual(str(raised.exception), "runtime_owner")
+        finally:
+            first.close()
+
+    def test_same_database_cannot_switch_workspace_parent(self) -> None:
+        database = self.root / "switched.sqlite"
+        first = self._runtime(database)
+        alternate = self.root / "alternate-workspace"
+        alternate.mkdir()
+        try:
+            with self.assertRaises(VerificationRuntimeError) as raised:
+                MinimalClearanceVerificationRuntime(
+                    database=database,
+                    config=self.config,
+                    executable=self.executable,
+                    source_root=self.source_root,
+                    workspace_parent=alternate,
+                )
+            self.assertEqual(str(raised.exception), "runtime_owner")
+        finally:
+            first.close()
+
     def test_startup_scavenges_only_marked_v3_workspace_and_reports_count(self) -> None:
         orphan = self.workspace / "BLV3-WORKSPACE-orphan"
         orphan.mkdir()
@@ -98,10 +125,10 @@ class VerificationRuntimeTests(unittest.TestCase):
 
     def test_sequential_runtime_processing_has_bounded_aggregate_result(self) -> None:
         database = self.root / "process.sqlite"
-        store = VerificationQueueStore(path=database, config=self.config)
+        store = _VerificationQueueStore(path=database, config=self.config)
         metadata = ArtifactMetadata("opaque-ref", len(self.raw), hashlib.sha256(self.raw).digest(), hashlib.sha3_512(self.raw).digest())
-        store.admit(job_id="job-1", metadata=metadata)
-        store.admit(job_id="job-2", metadata=metadata)
+        store._admit(job_id="job-1", metadata=metadata)
+        store._admit(job_id="job-2", metadata=metadata)
         runtime = self._runtime(database)
         try:
             result = runtime.run(max_jobs=2)
@@ -123,6 +150,21 @@ class VerificationRuntimeTests(unittest.TestCase):
         with self.assertRaises(VerificationRuntimeError) as raised:
             runtime.run(max_jobs=1)
         self.assertEqual(str(raised.exception), "runtime_closed")
+
+    def test_startup_recovers_unexpired_lease_before_preflight(self) -> None:
+        database = self.root / "restart.sqlite"
+        store = _VerificationQueueStore(path=database, config=self.config)
+        metadata = ArtifactMetadata("opaque-ref", len(self.raw), hashlib.sha256(self.raw).digest(), hashlib.sha3_512(self.raw).digest())
+        store._admit(job_id="restart-job", metadata=metadata)
+        store._claim_next()
+        runtime = self._runtime(database)
+        try:
+            self.assertEqual(runtime._recovered_leases, 1)
+        finally:
+            runtime.close()
+        reopened = _VerificationQueueStore(path=database, config=self.config)
+        self.assertEqual(reopened._get_job("restart-job").status, "QUEUED")
+        self.assertEqual(reopened._get_job("restart-job").last_error_code, "runtime_restart")
 
     def test_runtime_source_has_no_legacy_multiworker_surface(self) -> None:
         source = Path(__import__("app.minimal_clearance_verification_runtime").minimal_clearance_verification_runtime.__file__).read_text(encoding="utf-8")

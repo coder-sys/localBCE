@@ -20,11 +20,12 @@ from app.minimal_clearance_proof_primitives import (
     _workspace_parent_ok,
 )
 from app.minimal_clearance_verification_queue import (
-    FilesystemArtifactCustody,
+    ArtifactMetadata,
+    _FilesystemArtifactCustody,
     QueueConfig,
     QueueIndeterminateError,
     QueueResult,
-    VerificationQueueStore,
+    _VerificationQueueStore,
     _directory_identity,
     _is_reparse,
     _owned_directory,
@@ -110,7 +111,20 @@ def _remove_owned_workspace(directory: Path, expected_identity: tuple[int, int, 
                 continue
             if not stat.S_ISREG(item.st_mode) or int(item.st_nlink) != 1 or _is_reparse(item):
                 raise OSError
+            current = os.lstat(entry)
+            if (int(current.st_dev), int(current.st_ino), int(current.st_nlink)) != (int(item.st_dev), int(item.st_ino), int(item.st_nlink)):
+                raise OSError
+            os.chmod(entry, stat.S_IRUSR | stat.S_IWUSR)
             entry.unlink()
+        marker_dev2, marker_ino2, marker_nlink2, marker_bytes2 = _marker_bytes(marker)
+        current_directory = os.lstat(directory)
+        if (
+            (int(current_directory.st_dev), int(current_directory.st_ino), int(current_directory.st_nlink)) != expected_identity
+            or (marker_dev2, marker_ino2, marker_nlink2) != (marker_dev, marker_ino, marker_nlink)
+            or marker_bytes2 != _WORKSPACE_MARKER
+        ):
+            raise OSError
+        os.chmod(marker, stat.S_IRUSR | stat.S_IWUSR)
         marker.unlink()
         directory.rmdir()
     except (OSError, ValueError):
@@ -146,13 +160,13 @@ def _scavenge_workspaces(parent: Path) -> int:
 
 
 class _RuntimeOwnership:
-    """OS-released process ownership for one queue path."""
+    """OS-released process ownership for one exact lock path and parent."""
 
-    def __init__(self, database: Path) -> None:
-        if not isinstance(database, Path) or not _owned_directory(database.parent):
+    def __init__(self, *, lock_path: Path, parent: Path) -> None:
+        if not isinstance(lock_path, Path) or not isinstance(parent, Path) or lock_path.parent != parent or not _owned_directory(parent):
             _raise_fixed("runtime_owner")
-        self._parent_identity = _directory_identity(database.parent)
-        self._path = database.with_name(database.name + ".runtime-lock")
+        self._parent_identity = _directory_identity(parent)
+        self._path = lock_path
         self._descriptor: int | None = None
         self._locked = False
         try:
@@ -163,9 +177,12 @@ class _RuntimeOwnership:
                 pass
             except (OSError, ValueError):
                 _raise_fixed("runtime_owner")
+            if before is not None and (not stat.S_ISREG(before.st_mode) or int(before.st_nlink) != 1 or _is_reparse(before)):
+                _raise_fixed("runtime_owner")
             flags = int(os.O_RDWR) | int(os.O_CREAT) | int(getattr(os, "O_BINARY", 0))
             if before is None:
                 flags |= int(getattr(os, "O_EXCL", 0))
+            flags |= int(getattr(os, "O_NOFOLLOW", 0))
             descriptor = os.open(str(self._path), flags, 0o600)
             self._descriptor = descriptor
             opened = os.fstat(descriptor)
@@ -173,7 +190,13 @@ class _RuntimeOwnership:
                 _raise_fixed("runtime_owner")
             if before is not None and (int(before.st_dev), int(before.st_ino), int(before.st_nlink)) != (int(opened.st_dev), int(opened.st_ino), int(opened.st_nlink)):
                 _raise_fixed("runtime_owner")
-            if os.fstat(descriptor).st_size == 0:
+            if int(opened.st_size) > 1:
+                _raise_fixed("runtime_owner")
+            if int(opened.st_size) == 1:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if os.read(descriptor, 1) != b"\x00":
+                    _raise_fixed("runtime_owner")
+            else:
                 os.write(descriptor, b"\x00")
                 os.fsync(descriptor)
             os.lseek(descriptor, 0, os.SEEK_SET)
@@ -186,7 +209,10 @@ class _RuntimeOwnership:
 
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._locked = True
-            if _directory_identity(database.parent) != self._parent_identity:
+            current = os.lstat(self._path)
+            if (int(current.st_dev), int(current.st_ino), int(current.st_nlink)) != (int(opened.st_dev), int(opened.st_ino), int(opened.st_nlink)):
+                _raise_fixed("runtime_owner")
+            if _directory_identity(parent) != self._parent_identity:
                 _raise_fixed("runtime_owner")
         except VerificationRuntimeError:
             self.close()
@@ -200,6 +226,7 @@ class _RuntimeOwnership:
         self._descriptor = None
         if descriptor is None:
             return
+        failed = False
         try:
             if self._locked:
                 if os.name == "nt":
@@ -211,11 +238,16 @@ class _RuntimeOwnership:
                     import fcntl
 
                     fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
         except (OSError, ValueError):
-            _raise_fixed("runtime_owner_close")
+            failed = True
         finally:
             self._locked = False
+            try:
+                os.close(descriptor)
+            except (OSError, ValueError):
+                failed = True
+        if failed:
+            _raise_fixed("runtime_owner_close")
 
 
 class MinimalClearanceVerificationRuntime:
@@ -237,15 +269,24 @@ class MinimalClearanceVerificationRuntime:
         if not _owned_directory(source_root) or not _workspace_parent_ok(workspace_parent):
             _raise_fixed("runtime_workspace_parent")
         self._closed = False
-        self._owner: _RuntimeOwnership | None = None
-        self._store: VerificationQueueStore | None = None
-        self._custody: FilesystemArtifactCustody | None = None
+        self._database_owner: _RuntimeOwnership | None = None
+        self._workspace_owner: _RuntimeOwnership | None = None
+        self._store: _VerificationQueueStore | None = None
+        self._custody: _FilesystemArtifactCustody | None = None
         self._verifier: NativeMinimalClearanceVerifier | None = None
         try:
-            self._owner = _RuntimeOwnership(database)
+            self._database_owner = _RuntimeOwnership(
+                lock_path=database.with_name(database.name + ".runtime-lock"),
+                parent=database.parent,
+            )
+            self._workspace_owner = _RuntimeOwnership(
+                lock_path=workspace_parent / ".BLV3-WORKSPACE-PARENT-LOCK",
+                parent=workspace_parent,
+            )
             scavenged = _scavenge_workspaces(workspace_parent)
-            self._store = VerificationQueueStore(path=database, config=config)
-            self._custody = FilesystemArtifactCustody(source_root=source_root, workspace_parent=workspace_parent)
+            self._store = _VerificationQueueStore(path=database, config=config)
+            self._recovered_leases = self._store._recover_startup_leases()
+            self._custody = _FilesystemArtifactCustody(source_root=source_root, workspace_parent=workspace_parent)
             self._verifier = NativeMinimalClearanceVerifier(
                 executable,
                 executable_sha256=config.verifier_sha256.hex(),
@@ -253,7 +294,6 @@ class MinimalClearanceVerificationRuntime:
                 timeout_seconds=30.0 * 60.0,
             )
             self._verifier.preflight()
-            self._recovered_leases = self._store.recover_expired()
             self._scavenged_workspaces = scavenged
         except VerificationRuntimeError:
             self.close()
@@ -300,6 +340,31 @@ class MinimalClearanceVerificationRuntime:
             scavenged_workspaces=self._scavenged_workspaces,
         )
 
+    def admit(self, *, job_id: str, metadata: ArtifactMetadata) -> None:
+        if self._closed or self._store is None:
+            _raise_fixed("runtime_closed")
+        self._store._admit(job_id=job_id, metadata=metadata)
+
+    def verify_integrity(self) -> None:
+        if self._closed or self._store is None:
+            _raise_fixed("runtime_closed")
+        self._store._verify_integrity()
+
+    def export_bytes(self) -> bytes:
+        if self._closed or self._store is None:
+            _raise_fixed("runtime_closed")
+        return self._store._export_bytes()
+
+    def snapshot(self) -> dict[str, object]:
+        if self._closed or self._store is None:
+            _raise_fixed("runtime_closed")
+        return self._store._snapshot()
+
+    def support_summary(self) -> dict[str, object]:
+        if self._closed or self._store is None:
+            _raise_fixed("runtime_closed")
+        return self._store._support_summary()
+
     def close(self) -> None:
         if self._closed:
             return
@@ -308,10 +373,19 @@ class MinimalClearanceVerificationRuntime:
         self._custody = None
         self._verifier = None
         if store is not None:
-            store.close()
-        owner, self._owner = self._owner, None
-        if owner is not None:
-            owner.close()
+            store._close()
+        first_error: VerificationRuntimeError | None = None
+        for attribute in ("_workspace_owner", "_database_owner"):
+            owner = getattr(self, attribute)
+            setattr(self, attribute, None)
+            if owner is not None:
+                try:
+                    owner.close()
+                except VerificationRuntimeError as error:
+                    if first_error is None:
+                        first_error = error
+        if first_error is not None:
+            raise first_error
 
     def __enter__(self) -> "MinimalClearanceVerificationRuntime":
         if self._closed:

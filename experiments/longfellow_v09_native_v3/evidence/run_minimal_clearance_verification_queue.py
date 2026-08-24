@@ -20,7 +20,7 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
-from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig, VerificationQueueStore
+from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig
 from app.minimal_clearance_verification_queue_independent import (
     read_verified_jobs,
     restore_export_to_fresh_database,
@@ -69,10 +69,7 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
     artifact_ref = artifact.name
     metadata = ArtifactMetadata(artifact_ref, ARTIFACT_BYTES, bytes.fromhex(ARTIFACT_SHA256), bytes.fromhex(ARTIFACT_SHA3_512))
     config = QueueConfig("minimal-clearance-queue-exercise-v3", 4, bytes.fromhex(VERIFIER_SHA256), 512 * 1024 * 1024)
-    store = VerificationQueueStore(path=database, config=config)
     job_ids = tuple(f"queue-job-{index}" for index in range(4))
-    for job_id in job_ids:
-        store.admit(job_id=job_id, metadata=metadata)
     started = time.perf_counter()
     with MinimalClearanceVerificationRuntime(
         database=database,
@@ -81,13 +78,15 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
         source_root=artifact.parent,
         workspace_parent=workspace,
     ) as runtime:
+        for job_id in job_ids:
+            runtime.admit(job_id=job_id, metadata=metadata)
         runtime_result = runtime.run(max_jobs=4)
+        runtime.verify_integrity()
+        exported = runtime.export_bytes()
     wave_wall_ms = max(1, int(round((time.perf_counter() - started) * 1000)))
     if runtime_result.indeterminate or runtime_result.verified != 4:
         raise RuntimeError("queue_verification_not_verified")
 
-    store.verify_integrity()
-    exported = store.export_bytes()
     producer_summary = verify_database(database, expected_config=config.as_json())
     export_summary = verify_export_bytes(exported, expected_config=config.as_json())
     restored_summary = restore_export_to_fresh_database(restore_database, exported)

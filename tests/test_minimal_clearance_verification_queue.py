@@ -10,6 +10,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 from unittest import TestCase
+import app.minimal_clearance_verification_queue as queue_module
 
 from app.minimal_clearance_proof_primitives import (
     MinimalClearanceProofStateError,
@@ -23,7 +24,7 @@ from app.minimal_clearance_proof_primitives import (
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
 from app.minimal_clearance_verification_queue import (
     ArtifactMetadata,
-    FilesystemArtifactCustody,
+    _FilesystemArtifactCustody,
     QueueBackpressureError,
     QueueConflictError,
     QueueConfig,
@@ -31,7 +32,7 @@ from app.minimal_clearance_verification_queue import (
     QueueLeaseError,
     QueueRetryableError,
     VerificationQueueError,
-    VerificationQueueStore,
+    _VerificationQueueStore,
 )
 from app.minimal_clearance_verification_queue_independent import (
     IndependentQueueError,
@@ -138,9 +139,9 @@ class VerificationQueueTests(TestCase):
         clock: _Clock | None = None,
         after_commit_fault=None,
         name: str | None = None,
-    ) -> VerificationQueueStore:
+    ) -> _VerificationQueueStore:
         path = self.root / (name or f"queue-{len(list(self.root.glob('queue-*.sqlite')))}.sqlite")
-        return VerificationQueueStore(
+        return _VerificationQueueStore(
             path=path,
             config=self._config(capacity=capacity),
             clock=clock,
@@ -151,10 +152,10 @@ class VerificationQueueTests(TestCase):
     def _metadata(ref: str = "opaque-ref") -> ArtifactMetadata:
         return ArtifactMetadata(ref, len(_RAW), _SHA256, _SHA3)
 
-    def _admit(self, store: VerificationQueueStore, job_id: str = "job-1", ref: str = "opaque-ref"):
-        return store.admit(job_id=job_id, metadata=self._metadata(ref))
+    def _admit(self, store: _VerificationQueueStore, job_id: str = "job-1", ref: str = "opaque-ref"):
+        return store._admit(job_id=job_id, metadata=self._metadata(ref))
 
-    def _verify_one(self, store: VerificationQueueStore, job_id: str = "job-1", *, factory: _Factory | None = None):
+    def _verify_one(self, store: _VerificationQueueStore, job_id: str = "job-1", *, factory: _Factory | None = None):
         self._admit(store, job_id)
         verifier = (factory or _Factory())()
         return store._process_one(verifier=verifier, custody=self._custody())
@@ -164,8 +165,8 @@ class VerificationQueueTests(TestCase):
         verifier._test_failure = failure  # type: ignore[attr-defined]
         return verifier
 
-    def _custody(self) -> FilesystemArtifactCustody:
-        return FilesystemArtifactCustody(source_root=self.source_root, workspace_parent=self.workspace_parent)
+    def _custody(self) -> _FilesystemArtifactCustody:
+        return _FilesystemArtifactCustody(source_root=self.source_root, workspace_parent=self.workspace_parent)
 
     def test_v3_config_and_capacity_are_fixed(self) -> None:
         config = self._config(capacity=512)
@@ -185,21 +186,21 @@ class VerificationQueueTests(TestCase):
             self._admit(store, "job-1", "other-ref")
         with self.assertRaises(QueueBackpressureError):
             self._admit(store, "job-2")
-        self.assertEqual(store.snapshot()["counts"]["QUEUED"], 1)
+        self.assertEqual(store._snapshot()["counts"]["QUEUED"], 1)
 
     def test_random_bearer_is_memory_only_and_wrong_token_is_fenced(self) -> None:
         store = self._store(capacity=1)
         self._admit(store)
-        work = store.claim_next()
+        work = store._claim_next()
         self.assertIsNotNone(work)
         self.assertEqual(len(work.lease_token), 32)
-        exported = store.export_bytes()
+        exported = store._export_bytes()
         self.assertNotIn(work.lease_token, exported)
         with self.assertRaises(QueueLeaseError):
-            store.complete_rejected(replace(work, lease_token=b"x" * 32), "proof_rejected")
-        self.assertEqual(exported, store.export_bytes())
-        self.assertEqual(store.complete_rejected(work, "proof_rejected").status, "REJECTED")
-        self.assertIsNone(store.retry_result(work.operation_id).receipt_bytes)
+            store._complete_rejected(replace(work, lease_token=b"x" * 32), "proof_rejected")
+        self.assertEqual(exported, store._export_bytes())
+        self.assertEqual(store._complete_rejected(work, "proof_rejected").status, "REJECTED")
+        self.assertIsNone(store._retry_result(work.operation_id).receipt_bytes)
 
     def test_claim_after_commit_fault_reconciles_only_while_bearer_is_live(self) -> None:
         faults = {"claim": 0}
@@ -211,31 +212,44 @@ class VerificationQueueTests(TestCase):
 
         store = self._store(after_commit_fault=fault)
         self._admit(store)
-        work = store.claim_next()
+        work = store._claim_next()
         self.assertEqual(work.job_id, "job-1")
-        self.assertEqual(store.snapshot()["leases"], 1)
+        self.assertEqual(store._snapshot()["leases"], 1)
         with self.assertRaises(QueueBackpressureError):
-            store.claim_next()
+            store._claim_next()
 
     def test_one_live_lease_and_expiry_requeue_hold_at_attempt_three(self) -> None:
         clock = _Clock()
         store = self._store(clock=clock, capacity=3)
         self._admit(store)
         for attempt in (1, 2):
-            work = store.claim_next()
+            work = store._claim_next()
             self.assertEqual(work.attempt, attempt)
             with self.assertRaises(QueueBackpressureError):
-                store.claim_next()
+                store._claim_next()
             clock.advance(3_600_001)
-            self.assertEqual(store.recover_expired(), 1)
-            self.assertEqual(store.get_job("job-1").status, "QUEUED")
-        work = store.claim_next()
+            self.assertEqual(store._recover_expired(), 1)
+            self.assertEqual(store._get_job("job-1").status, "QUEUED")
+        work = store._claim_next()
         self.assertEqual(work.attempt, 3)
         clock.advance(3_600_001)
-        self.assertEqual(store.recover_expired(), 1)
-        self.assertEqual(store.get_job("job-1").status, "HELD")
-        self.assertIsNone(store.claim_next())
+        self.assertEqual(store._recover_expired(), 1)
+        self.assertEqual(store._get_job("job-1").status, "HELD")
+        self.assertIsNone(store._claim_next())
         verify_database(store.path, expected_config=store.config.as_json())
+
+    def test_startup_recovery_requeues_unexpired_lease_without_bearer(self) -> None:
+        store = self._store(capacity=2)
+        self._admit(store)
+        work = store._claim_next()
+        self.assertEqual(store._get_job("job-1").status, "LEASED")
+        self.assertEqual(store._recover_startup_leases(), 1)
+        self.assertEqual(store._get_job("job-1").status, "QUEUED")
+        self.assertEqual(store._get_job("job-1").last_error_code, "runtime_restart")
+        exported = store._export_bytes()
+        self.assertNotIn(work.lease_token, exported)
+        summary = verify_database(store.path, expected_config=store.config.as_json())
+        self.assertEqual(summary["lease_count"], 0)
 
     def test_real_custody_is_direct_child_and_rejects_escape(self) -> None:
         custody = self._custody()
@@ -256,12 +270,12 @@ class VerificationQueueTests(TestCase):
         )
         self.assertEqual(result.status, "QUEUED")
         self.assertEqual(result.error_code, "verifier_timeout")
-        self.assertEqual(store.snapshot()["counts"]["VERIFIED"], 0)
+        self.assertEqual(store._snapshot()["counts"]["VERIFIED"], 0)
 
     def test_export_restore_and_independent_binary_parity(self) -> None:
         store = self._store()
         self._admit(store)
-        exported = store.export_bytes()
+        exported = store._export_bytes()
         self.assertIsInstance(exported, bytes)
         self.assertLessEqual(len(exported), 64 * 1024 * 1024)
         summary = verify_export_bytes(exported, expected_config=store.config.as_json())
@@ -283,7 +297,7 @@ class VerificationQueueTests(TestCase):
     def test_independent_verification_rejects_claim_event_row_drift(self) -> None:
         store = self._store()
         self._admit(store)
-        work = store.claim_next()
+        work = store._claim_next()
         with closing(sqlite3.connect(store.path)) as connection:
             connection.execute("DROP TRIGGER queue_leases_no_update")
             connection.execute("UPDATE queue_leases SET worker_id=? WHERE job_id=?", ("tampered", work.job_id))
@@ -301,10 +315,20 @@ class VerificationQueueTests(TestCase):
     def test_public_queue_objects_redact_bearer_and_paths(self) -> None:
         store = self._store()
         self._admit(store)
-        work = store.claim_next()
-        rendered = repr(work) + json.dumps(store.support_summary(), sort_keys=True)
+        work = store._claim_next()
+        rendered = repr(work) + json.dumps(store._support_summary(), sort_keys=True)
         self.assertNotIn(str(self.root), rendered)
         self.assertNotIn(work.lease_token.hex(), rendered)
+
+    def test_application_surface_has_no_direct_lifecycle_or_evidence_exports(self) -> None:
+        exported = set(queue_module.__all__)
+        self.assertNotIn("_VerificationQueueStore", exported)
+        self.assertNotIn("_QueueWorkItem", exported)
+        self.assertNotIn("_VerificationEvidence", exported)
+        self.assertNotIn("_build_verification_evidence", exported)
+        self.assertFalse(hasattr(queue_module, "VerificationQueueStore"))
+        self.assertFalse(hasattr(queue_module, "QueueWorkItem"))
+        self.assertFalse(hasattr(queue_module, "VerificationEvidence"))
 
     def test_database_sidecars_are_rejected_before_read(self) -> None:
         store = self._store()
@@ -313,7 +337,7 @@ class VerificationQueueTests(TestCase):
             sidecar.write_bytes(b"sidecar-canary")
             before = sidecar.read_bytes()
             with self.assertRaises(VerificationQueueError):
-                VerificationQueueStore(path=store.path, config=store.config)
+                _VerificationQueueStore(path=store.path, config=store.config)
             self.assertEqual(sidecar.read_bytes(), before)
             sidecar.unlink()
 
