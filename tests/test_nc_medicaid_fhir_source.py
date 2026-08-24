@@ -4,18 +4,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-from pathlib import Path
-import tempfile
 import unittest
 
-from app.governance import provider_continuity_control_pack_v2 as governance
-from app.mirror import continuity_export as export
-from app.mirror import continuity_store as store
 from app.mirror import nc_medicaid_fhir as fhir
 from app.mirror import nc_medicaid_fhir_independent as independent
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import provider_trust_graph_independent as graph_independent
-from app.mirror import support_boundary as support
 from app.mirror.source_admission import SourceAdmissionService
 
 
@@ -27,13 +21,13 @@ def _role() -> dict[str, object]:
     return profile.synthetic_resource("PractitionerRole")
 
 
-def _location() -> dict[str, object]:
-    return profile.synthetic_resource("Location")
+def _location(variant: str = "baseline") -> dict[str, object]:
+    return profile.synthetic_resource("Location", variant=variant)
 
 
-def _bundle(page: int = 0, *, resources: list[dict[str, object]] | None = None, next_page: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED) -> dict[str, object]:
+def _bundle(page: int = 0, *, resources: list[dict[str, object]] | None = None, next_page: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED, location_variant: str = "baseline") -> dict[str, object]:
     if resources is None:
-        resources = [_practitioner(), _role(), _location()]
+        resources = [_practitioner(), _role(), _location(location_variant)]
     request_url = profile.NC_MEDICAID_PROFILE.page_url(page)
     links: list[dict[str, str]] = [{"relation": "self", "url": request_url}]
     if next_page:
@@ -68,11 +62,11 @@ def _transport(*bundles: dict[str, object], retries: dict[tuple[str, int], fhir.
     return fhir.SyntheticFhirTransport(responses)
 
 
-def _envelope(*, two_pages: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED) -> bytes:
+def _envelope(*, two_pages: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED, location_variant: str = "baseline") -> bytes:
     if not two_pages:
-        return fhir.build_fixture_envelope(_transport(_bundle(total=total, last_updated=last_updated)))
+        return fhir.build_fixture_envelope(_transport(_bundle(total=total, last_updated=last_updated, location_variant=location_variant)))
     first = _bundle(0, resources=[_practitioner(), _role()], next_page=True, total=total, last_updated=last_updated)
-    second = _bundle(1, resources=[_location()], total=total, last_updated=last_updated)
+    second = _bundle(1, resources=[_location(location_variant)], total=total, last_updated=last_updated)
     return fhir.build_fixture_envelope(_transport(first, second))
 
 
@@ -406,44 +400,6 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         self.assertIn(partial_result["source_status"], {"PARTIAL", "FAILED"})
         with self.assertRaises(independent.IndependentNcMedicaidFhirError):
             independent.NcMedicaidFhirVerifier().verify(partial)
-
-    def test_observation_only_governance_store_export_restore_and_support(self) -> None:
-        envelope = _envelope()
-        admission = SourceAdmissionService(profile.NC_MEDICAID_GRAPH_PROFILE, independent.NcMedicaidFhirVerifier()).admit(envelope)
-        graph_raw = admission.graph_artifact
-        candidate, _ = governance.build_candidate(graph_raw, profile.NC_MEDICAID_GRAPH_PROFILE)
-        tested, _ = governance.build_tested(candidate, profile.NC_MEDICAID_GRAPH_PROFILE)
-        approval_record = governance.build_approval_record(tested, profile.NC_MEDICAID_GRAPH_PROFILE, approval_time=7_300)
-        approved, _ = governance.build_approved(tested, approval_record, profile.NC_MEDICAID_GRAPH_PROFILE)
-        registry = dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY)
-        with tempfile.TemporaryDirectory(prefix="nc-medicaid-fhir-store-") as directory:
-            root = Path(directory)
-            database = root / "state.db"
-            instance = store.ContinuityStore(database, graph_profile_registry=registry)
-            before = instance._snapshot_rows()
-            with self.assertRaisesRegex(store.StoreConflictError, "governance:not-approved"):
-                instance.admit(store.ARTIFACT_GRAPH, graph_raw)
-            self.assertEqual(before, instance._snapshot_rows())
-            for artifact in (candidate, tested, approved):
-                instance.admit(store.ARTIFACT_GOVERNANCE, artifact)
-            first = instance.admit(store.ARTIFACT_GRAPH, graph_raw)
-            self.assertEqual(first.raw, instance.admit(store.ARTIFACT_GRAPH, graph_raw).raw)
-            withdrawal_authorization = governance.build_withdrawal_authorization(approved, profile.NC_MEDICAID_GRAPH_PROFILE, withdrawal_time=7_400)
-            withdrawal, _ = governance.build_withdrawal(approved, withdrawal_authorization, profile.NC_MEDICAID_GRAPH_PROFILE)
-            instance.admit(store.ARTIFACT_GOVERNANCE, withdrawal)
-            self.assertEqual(first.raw, instance.admit(store.ARTIFACT_GRAPH, graph_raw).raw)
-            exported = export.export_database(database, registry)
-            restored = root / "restored.db"
-            export.import_export(exported, restored, registry)
-            self.assertEqual(exported, export.export_database(restored, registry))
-            bundle = support.build_support_bundle(database, graph_profile_registry=registry)
-            self.assertNotIn(profile.SYNTHETIC_SUBJECT, bundle.decode("ascii"))
-            self.assertNotIn("NCPROV-001", bundle.decode("ascii"))
-            self.assertTrue(support.verify_support_bytes(bundle)["accepted"])
-        safe = independent.build_support_evidence(envelope)
-        self.assertNotIn(profile.SYNTHETIC_PRACTITIONER_ID, safe.decode("ascii"))
-        self.assertTrue(independent.verify_support_evidence(safe)["accepted"])
-
 
 if __name__ == "__main__":
     unittest.main()

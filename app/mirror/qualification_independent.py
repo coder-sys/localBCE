@@ -116,13 +116,12 @@ DEPENDENCY_OWNERS = {
 
 COMPONENT_CONTRACTS = [
     {"component_id": "SOURCE_ADMISSION", "owner": "MIRROR_SOURCE_ADMISSION", "contract_version": 1, "verification_boundary": "INDEPENDENT_SOURCE_VERIFIER"},
-    {"component_id": "SOURCE_CUSTODY", "owner": "MIRROR_SOURCE_CUSTODY", "contract_version": 1, "verification_boundary": "INDEPENDENT_CUSTODY_VERIFIER"},
-    {"component_id": "SOURCE_RECONCILIATION", "owner": "MIRROR_SOURCE_RECONCILIATION", "contract_version": 1, "verification_boundary": "INDEPENDENT_RECONCILIATION_VERIFIER"},
     {"component_id": "PROVIDER_TRUST_GRAPH", "owner": "MIRROR_PROVIDER_TRUST_GRAPH", "contract_version": 2, "verification_boundary": "INDEPENDENT_GRAPH_VERIFIER"},
-    {"component_id": "DISCREPANCY_RESPONSIBILITY_REMEDIATION", "owner": "MIRROR_CASE_LIFECYCLE", "contract_version": 1, "verification_boundary": "INDEPENDENT_CASE_VERIFIER"},
-    {"component_id": "CONTINUITY_STORE", "owner": "MIRROR_CONTINUITY_STORE", "contract_version": 3, "verification_boundary": "INDEPENDENT_DATABASE_VERIFIER"},
-    {"component_id": "EXPORT_RESTORE_SUPPORT", "owner": "MIRROR_OPERATIONS", "contract_version": 3, "verification_boundary": "INDEPENDENT_EXPORT_SUPPORT_VERIFIER"},
-    {"component_id": "MIRROR_QUALIFICATION", "owner": "MIRROR_QUALIFICATION_SERVICE", "contract_version": 3, "verification_boundary": "INDEPENDENT_QUALIFICATION_VERIFIER"},
+    {"component_id": "EXTERNAL_SOURCE_ADAPTER", "owner": "MIRROR_EXTERNAL_SOURCE_ADAPTER", "contract_version": 1, "verification_boundary": "INDEPENDENT_EXTERNAL_SOURCE_VERIFIER"},
+    {"component_id": "INGRESS_V2", "owner": "MIRROR_INGRESS_V2", "contract_version": 2, "verification_boundary": "INDEPENDENT_INGRESS_VERIFIER"},
+    {"component_id": "CORE_V2", "owner": "MIRROR_CORE_V2", "contract_version": 2, "verification_boundary": "INDEPENDENT_CORE_VERIFIER"},
+    {"component_id": "RECOVERY_CATALOG_V2", "owner": "MIRROR_RECOVERY_CATALOG_V2", "contract_version": 2, "verification_boundary": "INDEPENDENT_RECOVERY_VERIFIER"},
+    {"component_id": "GOVERNANCE_PRIVACY_APPROVAL", "owner": "MIRROR_EXTERNAL_APPROVAL_OBSERVATION", "contract_version": 1, "verification_boundary": "INDEPENDENT_APPROVAL_VERIFIER"},
 ]
 OPERATION_IDS = (
     "ATOMIC_PERSISTENCE",
@@ -219,12 +218,11 @@ GAP_LEDGER = {
     "implemented_software_seams": [
         {"gap_id": item["component_id"], "status": "REHEARSAL_SOFTWARE_ONLY", "claim": "bounded local contract and independent checks; no external authority"}
         for item in COMPONENT_CONTRACTS
+        if item["component_id"] not in {"INGRESS_V2", "CORE_V2", "RECOVERY_CATALOG_V2"}
     ] + [
-        {
-            "gap_id": "EXTERNAL_SOURCE_QUARANTINE",
-            "status": "SOFTWARE_ONLY",
-            "claim": "durable state-owned quarantine and independent recovery checks only; no approval, downstream bridge, source truth, or production qualification",
-        },
+        {"gap_id": "INGRESS_V2", "status": "SOFTWARE_ONLY", "claim": "one five-table synthetic ingress owner with event-owned authenticated-page evidence, raw envelope custody, and quarantine state; no live source authority or source truth"},
+        {"gap_id": "CORE_V2", "status": "SOFTWARE_ONLY", "claim": "one six-table raw-free PTG/governance/reconciliation/case/shadow observation owner with read-only delivery receipts; no payment, adjudication, or production authority"},
+        {"gap_id": "RECOVERY_CATALOG_V2", "status": "SOFTWARE_ONLY", "claim": "one three-table catalog with sealed synthetic pair recovery and create-only restore mechanics; no live custody, HSM/FIPS, HA/DR, or production qualification"},
     ],
     "software_gaps": [
         {"gap_id": "EXTERNAL_SOURCE_EVIDENCE_ADAPTER", "status": "SOFTWARE_CONTRACT_ONLY", "claim": "bounded transport-neutral contract and independent checks only; live authorization/authentication, legal terms, completeness/cadence qualification, and operational failure evidence remain external"},

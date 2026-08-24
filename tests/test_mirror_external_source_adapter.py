@@ -275,7 +275,8 @@ class ExternalSourceAdapterTests(unittest.TestCase):
         text = artifact.raw.decode("ascii")
         for marker in ("http", "token", "bearer", "password", "secret", "patient_id", "member_id", "claim_id"):
             self.assertNotIn(marker, text.lower())
-        self.assertFalse(hasattr(__import__("app.mirror.continuity_store", fromlist=["x"]), "admit_external_source_evidence"))
+        import importlib.util
+        self.assertIsNone(importlib.util.find_spec("app.mirror.continuity_store"))
         self.assertEqual(independent.verify_artifact(artifact.raw, policy=self.policy.material())["external_authorization_qualified"], False)
 
     def test_independent_module_does_not_import_producer(self) -> None:
