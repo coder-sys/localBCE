@@ -572,7 +572,7 @@ class RecoveryServiceV2:
             key_state = self.custody.state(key_id, key_epoch)
         except Exception:
             raise_redacted(RecoveryIndeterminateError, "recovery:custody-indeterminate")
-        if state in {"VERIFIED", "PUBLISHED"}:
+        if state in {"VERIFIED", "PUBLICATION_PENDING", "PUBLISHED"}:
             if key_state != "ACTIVE":
                 raise RecoveryConflictError("recovery:key-revoked")
             return self._receipt(bytes(selected["receipt"]))
@@ -728,44 +728,125 @@ class RecoveryServiceV2:
         except Exception:
             raise_redacted(RecoveryIndeterminateError, "recovery:restore-indeterminate")
 
-    def restore_point(self, point_id: str, ingress_target: str | Path, core_target: str | Path) -> RecoveryReceipt:
-        try:
-            selected = independent.select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("VERIFIED", "PUBLISHED"))
-        except independent.RecoveryVerificationError:
-            raise_redacted(RecoveryConflictError, "recovery:catalog")
-        point = selected["point"]
-        selected_receipt = bytes(selected["receipt"])
-        self._require_active_key(point)
-        if point["state"] == "PUBLISHED":
-            return self._receipt(selected_receipt)
-        _bundle, ing_raw, core_raw = self._bundle_images(point)
-        pair_operation_id = _digest("pair-publication-operation", {
+    @staticmethod
+    def _publication_target(value: str | Path, point_id: str, role: str) -> tuple[Path, str]:
+        path = restore_publication._target(value)
+        target_identity = restore_publication._target_identity(path)
+        binding = _digest("publication-target-binding", {
+            "point_id": point_id,
+            "role": role,
+            "target_identity": target_identity,
+        })
+        return path, binding
+
+    @staticmethod
+    def _publication_claim(point: Mapping[str, object], ingress_raw: bytes, core_raw: bytes, ingress_binding: str, core_binding: str) -> dict[str, object]:
+        material: dict[str, object] = {
             "point_id": point["point_id"], "object_id": point["object_id"],
+            "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"],
+            "storage_id": point["storage_id"], "key_id": point["key_id"], "key_epoch": point["key_epoch"],
             "ingress_database_id": point["ingress_database_id"], "ingress_config_digest": point["ingress_config_digest"],
             "ingress_head_root": point["ingress_head_root"], "ingress_watermark": point["ingress_watermark"],
             "core_database_id": point["core_database_id"], "core_config_digest": point["core_config_digest"],
             "core_head_root": point["core_head_root"], "core_watermark": point["core_watermark"],
-            "ingress_image_digest": _raw_digest("ingress-image", ing_raw), "ingress_image_length": len(ing_raw),
+            "ingress_image_digest": _raw_digest("ingress-image", ingress_raw), "ingress_image_length": len(ingress_raw),
             "core_image_digest": _raw_digest("core-image", core_raw), "core_image_length": len(core_raw),
-        })
+            "ingress_target_binding": ingress_binding, "core_target_binding": core_binding,
+        }
+        material["pair_operation_id"] = _digest("pair-publication-operation", material)
+        return material
+
+    @staticmethod
+    def _require_publication_targets(event: Mapping[str, object], ingress_binding: str, core_binding: str) -> None:
+        material = event.get("material")
+        if not isinstance(material, dict) or material.get("ingress_target_binding") != ingress_binding or material.get("core_target_binding") != core_binding:
+            raise RecoveryConflictError("recovery:publication-claim")
+
+    def restore_point(self, point_id: str, ingress_target: str | Path, core_target: str | Path) -> RecoveryReceipt:
+        try:
+            selected = independent.select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("VERIFIED", "PUBLICATION_PENDING", "PUBLISHED"))
+        except independent.RecoveryVerificationError:
+            raise_redacted(RecoveryConflictError, "recovery:catalog")
+        point = selected["point"]
+        selected_receipt = bytes(selected["receipt"])
+        ingress_path, ingress_binding = self._publication_target(ingress_target, str(point["point_id"]), "ingress")
+        core_path, core_binding = self._publication_target(core_target, str(point["point_id"]), "core")
+        if point["state"] in {"PUBLICATION_PENDING", "PUBLISHED"}:
+            self._require_publication_targets(selected["event"], ingress_binding, core_binding)
+        self._require_active_key(point)
+        _bundle, ing_raw, core_raw = self._bundle_images(point)
+        claim = self._publication_claim(point, ing_raw, core_raw, ingress_binding, core_binding)
+        if point["state"] == "PUBLISHED":
+            selected_material = selected["event"].get("material")
+            if not isinstance(selected_material, dict) or any(selected_material.get(key) != claim[key] for key in claim):
+                raise RecoveryConflictError("recovery:publication-claim")
+            return self._receipt(selected_receipt)
+        if point["state"] == "PUBLICATION_PENDING":
+            pending_material = selected["event"].get("material")
+            if pending_material != claim:
+                raise RecoveryConflictError("recovery:publication-claim")
+
+        pending_event: dict[str, object]
+        connection: sqlite3.Connection | None = _connection(self.path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (point_id,)).fetchone()
+            if current is None or not self._same_point_immutable(point, current):
+                raise RecoveryConflictError("recovery:point-conflict")
+            if current["state"] == "PUBLISHED":
+                connection.rollback()
+                connection.close()
+                connection = None
+                current_selected = independent.select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("PUBLISHED",))
+                current_material = current_selected["event"].get("material")
+                if not isinstance(current_material, dict) or any(current_material.get(key) != claim[key] for key in claim):
+                    raise RecoveryConflictError("recovery:publication-claim")
+                return self._receipt(bytes(current_selected["receipt"]))
+            if current["state"] not in {"VERIFIED", "PUBLICATION_PENDING"}:
+                raise RecoveryConflictError("recovery:point-state")
+            pending_row = connection.execute("SELECT event_raw FROM recovery_events WHERE sequence=?", (current["updated_sequence"],)).fetchone()
+            if current["state"] == "PUBLICATION_PENDING":
+                if pending_row is None:
+                    raise RecoveryConflictError("recovery:publication-claim")
+                pending_event = independent._parse(bytes(pending_row[0]), "recovery:publication")
+                if pending_event.get("event_kind") != "PUBLICATION_PENDING" or pending_event.get("material") != claim:
+                    raise RecoveryConflictError("recovery:publication-claim")
+            else:
+                pending_raw = self._append(connection, kind="PUBLICATION_PENDING", point_id=point_id, operation_id=str(current["operation_id"]), request_digest=str(current["request_digest"]), prior_state="VERIFIED", next_state="PUBLICATION_PENDING", material=claim, payload_digest=str(current["object_id"]), payload_length=0)
+                pending_event = independent._parse(pending_raw, "recovery:publication")
+                pending_sequence = int(pending_event["sequence"])
+                connection.execute("UPDATE recovery_points SET state='PUBLICATION_PENDING',updated_sequence=? WHERE point_id=?", (pending_sequence, point_id))
+                connection.commit()
+                connection.close()
+                connection = None
+        except (RecoveryError, RecoveryConflictError):
+            if connection is not None:
+                connection.rollback()
+            raise
+        except sqlite3.Error as error:
+            if connection is not None:
+                connection.rollback()
+            if _sqlite_is_capacity(error):
+                _capacity()
+            raise_redacted(RecoveryError, "recovery:database")
+        finally:
+            if connection is not None:
+                connection.close()
+
         try:
             restore_publication.publish_pair_create_only(
-                ingress_target=ingress_target,
-                core_target=core_target,
+                ingress_target=ingress_path,
+                core_target=core_path,
                 ingress_image=ing_raw,
                 core_image=core_raw,
-                pair_operation_id=pair_operation_id,
+                pair_operation_id=str(claim["pair_operation_id"]),
                 ingress_expected={
-                    "database_id": point["ingress_database_id"],
-                    "config_digest": point["ingress_config_digest"],
-                    "head_root": point["ingress_head_root"],
-                    "sequence": point["ingress_watermark"],
+                    "database_id": point["ingress_database_id"], "config_digest": point["ingress_config_digest"],
+                    "head_root": point["ingress_head_root"], "sequence": point["ingress_watermark"],
                 },
                 core_expected={
-                    "database_id": point["core_database_id"],
-                    "config_digest": point["core_config_digest"],
-                    "head_root": point["core_head_root"],
-                    "ingress_database_id": point["ingress_database_id"],
+                    "database_id": point["core_database_id"], "config_digest": point["core_config_digest"],
+                    "head_root": point["core_head_root"], "ingress_database_id": point["ingress_database_id"],
                     "ingress_watermark": point["core_watermark"],
                 },
                 verify_ingress=lambda image: ingress.verify_bytes(image, expected_database_id=self.config.ingress_database_id, expected_config_digest=self.config.ingress_config_digest),
@@ -782,31 +863,43 @@ class RecoveryServiceV2:
             current = connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (point_id,)).fetchone()
             if current is None or not self._same_point_immutable(point, current):
                 raise RecoveryConflictError("recovery:point-conflict")
-            if current["state"] == "VERIFIED" and dict(current) != dict(point):
-                raise RecoveryConflictError("recovery:point-conflict")
             if current["state"] == "PUBLISHED":
                 connection.rollback()
                 connection.close()
+                connection = None
                 current_selected = independent.select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("PUBLISHED",))
+                current_material = current_selected["event"].get("material")
+                if not isinstance(current_material, dict) or any(current_material.get(key) != claim[key] for key in claim):
+                    raise RecoveryConflictError("recovery:publication-claim")
                 return self._receipt(bytes(current_selected["receipt"]))
-            if current["state"] != "VERIFIED":
+            if current["state"] != "PUBLICATION_PENDING":
                 raise RecoveryConflictError("recovery:point-state")
-            material = {"point_id": point_id, "object_id": current["object_id"], "ingress_target": "opaque", "core_target": "opaque"}
-            raw = self._append(connection, kind="PUBLISHED", point_id=point_id, operation_id=str(current["operation_id"]), request_digest=str(current["request_digest"]), prior_state="VERIFIED", next_state="PUBLISHED", material=material, payload_digest=str(current["object_id"]), payload_length=0)
+            pending_row = connection.execute("SELECT event_raw FROM recovery_events WHERE sequence=?", (current["updated_sequence"],)).fetchone()
+            if pending_row is None:
+                raise RecoveryConflictError("recovery:publication-claim")
+            pending_event = independent._parse(bytes(pending_row[0]), "recovery:publication")
+            if pending_event.get("event_kind") != "PUBLICATION_PENDING" or pending_event.get("material") != claim:
+                raise RecoveryConflictError("recovery:publication-claim")
+            published_material = dict(claim)
+            published_material.update({"pending_event_id": pending_event["event_id"], "pending_sequence": pending_event["sequence"], "pending_after_root": pending_event["after_root"]})
+            raw = self._append(connection, kind="PUBLISHED", point_id=point_id, operation_id=str(current["operation_id"]), request_digest=str(current["request_digest"]), prior_state="PUBLICATION_PENDING", next_state="PUBLISHED", material=published_material, payload_digest=str(current["object_id"]), payload_length=0)
             sequence = independent._parse(raw, "recovery:receipt")["sequence"]
             connection.execute("UPDATE recovery_points SET state='PUBLISHED',updated_sequence=? WHERE point_id=?", (sequence, point_id))
             connection.commit()
             return self._receipt(raw)
         except (RecoveryError, RecoveryConflictError):
-            connection.rollback()
+            if connection is not None:
+                connection.rollback()
             raise
         except sqlite3.Error as error:
-            connection.rollback()
+            if connection is not None:
+                connection.rollback()
             if _sqlite_is_capacity(error):
                 _capacity()
             raise_redacted(RecoveryError, "recovery:database")
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     def bootstrap(self, point_id: str) -> bytes:
         try:
@@ -820,7 +913,7 @@ class RecoveryServiceV2:
             raise_redacted(RecoveryIndeterminateError, "recovery:custody-indeterminate")
         if key_state != "ACTIVE":
             raise RecoveryConflictError("recovery:key-revoked")
-        body = {"schema": "mirror-recovery-bootstrap-v2", "schema_version": 2, "catalog_id": _digest("catalog-id", self.config.database_id), "point_id": point["point_id"], "generation": point["generation"], "object_id": point["object_id"], "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"], "key_id": point["key_id"], "key_epoch": point["key_epoch"], "storage_id": point["storage_id"], "ingress_database_id": point["ingress_database_id"], "core_database_id": point["core_database_id"], "ingress_head_root": point["ingress_head_root"], "core_head_root": point["core_head_root"], "ingress_watermark": point["ingress_watermark"], "core_watermark": point["core_watermark"], "publication_receipt_digest": _raw_digest("receipt", bytes(selected["receipt"])), "flags": dict(FIXED_FLAGS)}
+        body = {"schema": "mirror-recovery-bootstrap-v3", "schema_version": 3, "verifier_id": independent.VERIFIER_ID, "catalog_id": _digest("catalog-id", self.config.database_id), "point_id": point["point_id"], "generation": point["generation"], "object_id": point["object_id"], "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"], "key_id": point["key_id"], "key_epoch": point["key_epoch"], "storage_id": point["storage_id"], "ingress_database_id": point["ingress_database_id"], "core_database_id": point["core_database_id"], "ingress_head_root": point["ingress_head_root"], "core_head_root": point["core_head_root"], "ingress_watermark": point["ingress_watermark"], "core_watermark": point["core_watermark"], "publication_receipt_digest": _raw_digest("receipt", bytes(selected["receipt"])), "flags": dict(FIXED_FLAGS)}
         body["bootstrap_id"] = _digest("bootstrap-id", {key: body[key] for key in body if key not in {"bootstrap_id", "flags"}})
         raw = _canonical(body)
         if len(raw) > independent.MAX_BOOTSTRAP_BYTES:
@@ -832,7 +925,7 @@ class RecoveryServiceV2:
 
     def support(self) -> dict[str, object]:
         result = self.verify()
-        return {"schema": "mirror-recovery-support-v2", "states": result["states"], "point_count": result["point_count"], "event_count": result["event_count"], "sequence": result["sequence"], "flags": dict(FIXED_FLAGS)}
+        return {"schema": "mirror-recovery-support-v3", "states": result["states"], "point_count": result["point_count"], "event_count": result["event_count"], "sequence": result["sequence"], "flags": dict(FIXED_FLAGS)}
 
 
 __all__ = ["RecoveryConfigV2", "RecoveryServiceV2", "RecoveryReceipt", "RecoveryKey", "StorageReceipt", "KeyCustodyPort", "RecoveryStoragePort", "StorageNotFound", "RecoveryError", "RecoveryConflictError", "RecoveryIndeterminateError", "SCHEMA", "SCHEMA_VERSION", "TABLES", "FIXED_FLAGS", "MAX_DATABASE_BYTES", "MAX_EVENT_BYTES", "MAX_CUSTODY_OVERHEAD_BYTES", "MAX_RECOVERY_POINTS"]

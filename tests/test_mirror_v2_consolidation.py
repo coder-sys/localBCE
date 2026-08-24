@@ -2527,9 +2527,176 @@ class MirrorV2Fixture(unittest.TestCase):
                 self.recovery_service.restore_point(point.point_id, target_i, target_c)
         self.assertTrue(target_i.exists())
         self.assertFalse(target_c.exists())
-        self.assertEqual("VERIFIED", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
+        self.assertEqual("PUBLICATION_PENDING", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
         with self.assertRaises(recovery.RecoveryConflictError):
             self.recovery_service.restore_point(point.point_id, target_i, target_c)
+
+    def test_recovery_publication_pending_fences_destination_pair_before_links(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        first_i = self.root / "pending-first-ingress.db"
+        first_c = self.root / "pending-first-core.db"
+        other_i = self.root / "pending-other-ingress.db"
+        other_c = self.root / "pending-other-core.db"
+
+        def fault(point_name: str) -> None:
+            if point_name == "before_ingress_link":
+                raise RuntimeError("response lost before first link")
+
+        with self.assertRaises(recovery.RecoveryError):
+            with mock.patch.object(restore_publication, "_FAULT_HOOK", fault):
+                self.recovery_service.restore_point(point.point_id, first_i, first_c)
+        self.assertEqual("PUBLICATION_PENDING", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
+        self.assertFalse(first_i.exists())
+        self.assertFalse(first_c.exists())
+        with self.assertRaises(recovery.RecoveryConflictError):
+            self.recovery_service.restore_point(point.point_id, other_i, other_c)
+        self.assertFalse(other_i.exists())
+        self.assertFalse(other_c.exists())
+        resumed = self.recovery_service.restore_point(point.point_id, first_i, first_c)
+        self.assertEqual("PUBLISHED", resumed.state)
+        self.assertEqual("PUBLISHED", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
+
+    def test_recovery_publication_pending_after_first_link_preserves_target_and_fences_other_pair(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        first_i = self.root / "linked-first-ingress.db"
+        first_c = self.root / "linked-first-core.db"
+        other_i = self.root / "linked-other-ingress.db"
+        other_c = self.root / "linked-other-core.db"
+
+        def fault(point_name: str) -> None:
+            if point_name == "after_ingress_link":
+                raise RuntimeError("response lost after first link")
+
+        with self.assertRaises(recovery.RecoveryError):
+            with mock.patch.object(restore_publication, "_FAULT_HOOK", fault):
+                self.recovery_service.restore_point(point.point_id, first_i, first_c)
+        first_inode = os.stat(first_i).st_ino
+        self.assertFalse(first_c.exists())
+        self.assertEqual("PUBLICATION_PENDING", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
+        with self.assertRaises(recovery.RecoveryConflictError):
+            self.recovery_service.restore_point(point.point_id, other_i, other_c)
+        self.assertFalse(other_i.exists())
+        self.assertFalse(other_c.exists())
+        resumed = self.recovery_service.restore_point(point.point_id, first_i, first_c)
+        self.assertEqual("PUBLISHED", resumed.state)
+        self.assertEqual(first_inode, os.stat(first_i).st_ino)
+        self.assertEqual("PUBLISHED", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
+
+    def test_recovery_published_retry_is_destination_bound_and_path_free(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        ingress_target = self.root / "published-ingress-path-canary.db"
+        core_target = self.root / "published-core-path-canary.db"
+        first = self.recovery_service.restore_point(point.point_id, ingress_target, core_target)
+        retry = self.recovery_service.restore_point(point.point_id, ingress_target, core_target)
+        self.assertEqual(first.raw, retry.raw)
+        other_i = self.root / "published-other-ingress-path-canary.db"
+        other_c = self.root / "published-other-core-path-canary.db"
+        with self.assertRaises(recovery.RecoveryConflictError) as caught:
+            self.recovery_service.restore_point(point.point_id, other_i, other_c)
+        self.assertEqual("recovery:publication-claim", str(caught.exception))
+        self.assertFalse(other_i.exists())
+        self.assertFalse(other_c.exists())
+        database_bytes = self.recovery_path.read_bytes()
+        logical_export = self.recovery_service.logical_export()
+        support = json.dumps(self.recovery_service.support(), sort_keys=True).encode("ascii")
+        for value in (database_bytes, logical_export, first.raw, support, str(caught.exception).encode("ascii")):
+            self.assertNotIn(b"published-ingress-path-canary", value)
+            self.assertNotIn(b"published-core-path-canary", value)
+            self.assertNotIn(b"published-other-ingress-path-canary", value)
+            self.assertNotIn(b"published-other-core-path-canary", value)
+
+    def test_recovery_publication_different_pair_concurrency_has_one_durable_claim(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        pairs = (
+            (self.root / "concurrent-claim-a-ingress.db", self.root / "concurrent-claim-a-core.db"),
+            (self.root / "concurrent-claim-b-ingress.db", self.root / "concurrent-claim-b-core.db"),
+        )
+        barrier = threading.Barrier(2)
+        results: list[recovery.RecoveryReceipt] = []
+        errors: list[BaseException] = []
+
+        def restore(pair: tuple[Path, Path]) -> None:
+            try:
+                barrier.wait(timeout=5)
+                results.append(self.recovery_service.restore_point(point.point_id, pair[0], pair[1]))
+            except BaseException as error:
+                errors.append(error)
+
+        threads = [threading.Thread(target=restore, args=(pair,)) for pair in pairs]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(1, len(results))
+        self.assertEqual(1, len(errors))
+        self.assertIsInstance(errors[0], recovery.RecoveryError)
+        self.assertEqual(2, sum(int(ingress_path.exists()) + int(core_path.exists()) for ingress_path, core_path in pairs))
+        self.assertEqual("PUBLISHED", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
+
+    def _rebind_recovery_tail(self, path: Path, mutate: object) -> None:
+        connection = sqlite3.connect(path)
+        try:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute("SELECT * FROM recovery_events ORDER BY sequence DESC LIMIT 1").fetchone()
+            value = recovery_independent._parse(bytes(row["event_raw"]), "recovery:test-event")
+            value["material"] = mutate(value["material"])
+            value["material_digest"] = recovery_independent._digest("material", value["material"])
+            value["event_id"] = recovery_independent._digest("event-id", {key: value[key] for key in recovery_independent._EVENT_RAW_KEYS if key not in {"event_id", "after_root"}})
+            value["after_root"] = recovery_independent._event_root(value["sequence"], value["before_root"], value["event_id"], value["event_kind"], value["point_id"], value["next_state"], value["material_digest"], value["stream_kind"], value["stream_id"])
+            raw = recovery_independent._canonical(value)
+            connection.execute("UPDATE recovery_events SET event_id=?,after_root=?,material_digest=?,event_raw=?,receipt_digest=? WHERE sequence=?", (value["event_id"], value["after_root"], value["material_digest"], raw, recovery_independent._raw_digest("receipt", raw), value["sequence"]))
+            connection.execute("UPDATE recovery_meta SET head_root=? WHERE meta_id=1", (value["after_root"],))
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_recovery_publication_claim_replay_rejects_rebound_pending_and_published(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        pending_i = self.root / "rebound-pending-ingress.db"
+        pending_c = self.root / "rebound-pending-core.db"
+
+        def fault(point_name: str) -> None:
+            if point_name == "before_ingress_link":
+                raise RuntimeError("pending claim fault")
+
+        with self.assertRaises(recovery.RecoveryError):
+            with mock.patch.object(restore_publication, "_FAULT_HOOK", fault):
+                self.recovery_service.restore_point(point.point_id, pending_i, pending_c)
+        bad_pending = self.root / "bad-pending-claim.db"
+        shutil.copy2(self.recovery_path, bad_pending)
+        self._rebind_recovery_tail(bad_pending, lambda material: {**material, "ingress_target_binding": "f" * 128})
+        with self.assertRaises(recovery_independent.RecoveryVerificationError):
+            recovery_independent.verify_database(bad_pending, expected_database_id=self.recovery_config.database_id, expected_config_digest=self.recovery_config.digest)
+
+        self.recovery_service.restore_point(point.point_id, pending_i, pending_c)
+        bad_published = self.root / "bad-published-claim.db"
+        shutil.copy2(self.recovery_path, bad_published)
+        self._rebind_recovery_tail(bad_published, lambda material: {**material, "core_target_binding": "e" * 128})
+        with self.assertRaises(recovery_independent.RecoveryVerificationError):
+            recovery_independent.verify_database(bad_published, expected_database_id=self.recovery_config.database_id, expected_config_digest=self.recovery_config.digest)
+
+    def test_restore_publication_rejects_absent_case_alias_before_link(self) -> None:
+        if os.name != "nt":
+            self.skipTest("case-insensitive absent parent/leaf alias capability unavailable")
+        parent = self.root / "case-alias-parent"
+        parent.mkdir()
+        first = parent / "AliasTarget.db"
+        second = parent / "aliastarget.db"
+        with self.assertRaises(restore_publication.RestorePublicationConflict):
+            restore_publication.publish_pair_create_only(
+                ingress_target=first,
+                core_target=second,
+                ingress_image=b"case-alias-ingress",
+                core_image=b"case-alias-core",
+                pair_operation_id=_hex("case-alias-pair"),
+                ingress_expected={"database_id": "ingress", "head_root": "1" * 128},
+                core_expected={"database_id": "core", "head_root": "2" * 128},
+                verify_ingress=lambda raw: {"database_id": "ingress", "head_root": "1" * 128},
+                verify_core=lambda raw, exact_ingress: {"database_id": "core", "head_root": "2" * 128},
+            )
+        self.assertFalse(first.exists())
+        self.assertFalse(second.exists())
 
 
 if __name__ == "__main__":

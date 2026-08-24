@@ -19,9 +19,10 @@ from app.mirror import core_v2_independent as core
 from app.mirror import ingress_v2_independent as ingress
 
 
-SCHEMA = "mirror-recovery-v2"
-SCHEMA_VERSION = 2
-DOMAIN = "BL/MIRROR/RECOVERY/V2/"
+SCHEMA = "mirror-recovery-v3"
+SCHEMA_VERSION = 3
+VERIFIER_ID = "MIRROR_RECOVERY_INDEPENDENT_V3"
+DOMAIN = "BL/MIRROR/RECOVERY/V3/"
 GENESIS_ROOT = "0" * 128
 MAX_DATABASE_BYTES = 32 * 1024 * 1024
 MAX_EVENT_BYTES = 64 * 1024
@@ -29,8 +30,8 @@ MAX_BOOTSTRAP_BYTES = 32 * 1024
 MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 MAX_CUSTODY_OVERHEAD_BYTES = 65_536
 MAX_RECOVERY_POINTS = 512
-STATES = ("PREPARED", "OBJECT_PENDING", "VERIFIED", "PUBLISHED", "INVALIDATED")
-EVENT_KINDS = ("PREPARE", "OBJECT_PENDING", "VERIFIED", "PUBLISHED", "INVALIDATED")
+STATES = ("PREPARED", "OBJECT_PENDING", "VERIFIED", "PUBLICATION_PENDING", "PUBLISHED", "INVALIDATED")
+EVENT_KINDS = ("PREPARE", "OBJECT_PENDING", "VERIFIED", "PUBLICATION_PENDING", "PUBLISHED", "INVALIDATED")
 FIXED_FLAGS = {
     "read_only": True,
     "observation_only": True,
@@ -85,7 +86,18 @@ _COMPONENT_KEYS = {
 _PENDING_KEYS = {"point_id", "object_id", "storage_id", "key_id", "key_epoch"}
 _VERIFIED_KEYS = {"point_id", "object_id", "bundle_digest", "bundle_length", "storage_id", "key_id", "key_epoch"}
 _INVALIDATED_KEYS = {"point_id", "object_id", "key_id", "key_epoch", "reason"}
-_PUBLISHED_KEYS = {"point_id", "object_id", "ingress_target", "core_target"}
+_PUBLICATION_BASE_KEYS = {
+    "point_id", "object_id", "bundle_digest", "bundle_length", "storage_id",
+    "key_id", "key_epoch", "ingress_database_id", "ingress_config_digest",
+    "ingress_head_root", "ingress_watermark", "core_database_id",
+    "core_config_digest", "core_head_root", "core_watermark",
+    "ingress_image_digest", "ingress_image_length", "core_image_digest",
+    "core_image_length", "ingress_target_binding", "core_target_binding",
+    "pair_operation_id",
+}
+_PUBLISHED_KEYS = _PUBLICATION_BASE_KEYS | {
+    "pending_event_id", "pending_sequence", "pending_after_root",
+}
 
 
 class RecoveryVerificationError(ValueError):
@@ -247,6 +259,45 @@ def _component(value: object, label: str) -> dict[str, object]:
     return value
 
 
+def _publication_operation(material: Mapping[str, object]) -> str:
+    try:
+        value = {key: material[key] for key in _PUBLICATION_BASE_KEYS if key != "pair_operation_id"}
+    except (KeyError, TypeError):
+        raise RecoveryVerificationError("recovery:publication-material") from None
+    return _digest("pair-publication-operation", value)
+
+
+def _publication_base(point: Mapping[str, object], image_claim: Mapping[str, object], material: object) -> dict[str, object]:
+    if not isinstance(material, dict) or set(material) != _PUBLICATION_BASE_KEYS:
+        raise RecoveryVerificationError("recovery:publication-material")
+    expected = {
+        "point_id": point["point_id"], "object_id": point["object_id"],
+        "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"],
+        "storage_id": point["storage_id"], "key_id": point["key_id"], "key_epoch": point["key_epoch"],
+        "ingress_database_id": point["ingress_database_id"], "ingress_config_digest": point["ingress_config_digest"],
+        "ingress_head_root": point["ingress_head_root"], "ingress_watermark": point["ingress_watermark"],
+        "core_database_id": point["core_database_id"], "core_config_digest": point["core_config_digest"],
+        "core_head_root": point["core_head_root"], "core_watermark": point["core_watermark"],
+        "ingress_image_digest": image_claim["ingress_image_digest"],
+        "ingress_image_length": image_claim["ingress_image_length"],
+        "core_image_digest": image_claim["core_image_digest"],
+        "core_image_length": image_claim["core_image_length"],
+        "ingress_target_binding": material["ingress_target_binding"],
+        "core_target_binding": material["core_target_binding"],
+    }
+    for key in ("ingress_target_binding", "core_target_binding", "pair_operation_id"):
+        _hex(material[key], "recovery:publication-identity")
+    for key in ("ingress_image_digest", "core_image_digest"):
+        _hex(material[key], "recovery:publication-image")
+    if any(material[key] != expected[key] for key in expected) or material["pair_operation_id"] != _publication_operation(material):
+        raise RecoveryVerificationError("recovery:publication-binding")
+    if any(type(material[key]) is not int or material[key] <= 0 for key in ("ingress_image_length", "core_image_length")):
+        raise RecoveryVerificationError("recovery:publication-image")
+    if material["ingress_image_length"] > ingress.MAX_DATABASE_BYTES or material["core_image_length"] > core.MAX_DATABASE_BYTES:
+        raise RecoveryVerificationError("recovery:publication-image")
+    return dict(material)
+
+
 def parse_bundle(
     raw: bytes,
     *,
@@ -335,7 +386,16 @@ def _prepare_point(material: Mapping[str, object], event: Mapping[str, object], 
     }
 
 
-def _transition_material(kind: str, material: object, point: Mapping[str, object], payload_digest: str, payload_length: int) -> None:
+def _transition_material(
+    kind: str,
+    material: object,
+    point: Mapping[str, object],
+    image_claim: Mapping[str, object],
+    publication_claims: dict[str, dict[str, object]],
+    event: Mapping[str, object],
+    payload_digest: str,
+    payload_length: int,
+) -> None:
     if not isinstance(material, dict):
         raise RecoveryVerificationError("recovery:transition-material")
     if kind == "OBJECT_PENDING":
@@ -348,14 +408,42 @@ def _transition_material(kind: str, material: object, point: Mapping[str, object
     elif kind == "INVALIDATED":
         if material != {"point_id": point["point_id"], "object_id": point["object_id"], "key_id": point["key_id"], "key_epoch": point["key_epoch"], "reason": "key-revoked"} or payload_digest != point["object_id"] or payload_length != 0:
             raise RecoveryVerificationError("recovery:invalidated-material")
+    elif kind == "PUBLICATION_PENDING":
+        if payload_digest != point["object_id"] or payload_length != 0:
+            raise RecoveryVerificationError("recovery:publication-material")
+        claim = _publication_base(point, image_claim, material)
+        publication_claims[point["point_id"]] = {
+            "material": claim,
+            "event_id": event["event_id"],
+            "sequence": event["sequence"],
+            "after_root": event["after_root"],
+        }
     elif kind == "PUBLISHED":
-        if material != {"point_id": point["point_id"], "object_id": point["object_id"], "ingress_target": "opaque", "core_target": "opaque"} or payload_digest != point["object_id"] or payload_length != 0:
+        if not isinstance(material, dict) or set(material) != _PUBLISHED_KEYS or payload_digest != point["object_id"] or payload_length != 0:
             raise RecoveryVerificationError("recovery:published-material")
+        pending = publication_claims.get(point["point_id"])
+        if pending is None:
+            raise RecoveryVerificationError("recovery:published-material")
+        base = {key: material[key] for key in _PUBLICATION_BASE_KEYS}
+        if _publication_base(point, image_claim, base) != pending["material"] or material["pending_event_id"] != pending["event_id"] or material["pending_sequence"] != pending["sequence"] or material["pending_after_root"] != pending["after_root"]:
+            raise RecoveryVerificationError("recovery:published-binding")
+        _hex(material["pending_event_id"], "recovery:published-identity")
+        if type(material["pending_sequence"]) is not int or material["pending_sequence"] <= 0:
+            raise RecoveryVerificationError("recovery:published-sequence")
+        _hex(material["pending_after_root"], "recovery:published-root")
     else:
         raise RecoveryVerificationError("recovery:event-kind")
 
 
-def _verify_event(row: sqlite3.Row, meta: sqlite3.Row, previous: str, points: dict[str, dict[str, object]], receipts: dict[str, bytes]) -> str:
+def _verify_event(
+    row: sqlite3.Row,
+    meta: sqlite3.Row,
+    previous: str,
+    points: dict[str, dict[str, object]],
+    receipts: dict[str, bytes],
+    image_claims: dict[str, dict[str, object]],
+    publication_claims: dict[str, dict[str, object]],
+) -> str:
     raw_value = row["event_raw"]
     if type(raw_value) is not bytes or not raw_value or len(raw_value) > MAX_EVENT_BYTES:
         raise RecoveryVerificationError("recovery:event")
@@ -382,15 +470,24 @@ def _verify_event(row: sqlite3.Row, meta: sqlite3.Row, previous: str, points: di
         point = _prepare_point(value["material"], value, meta)
         if value["operation_id"] != point["operation_id"] or value["request_digest"] != point["request_digest"] or value["payload_digest"] != point["bundle_digest"] or value["payload_length"] != point["bundle_length"]:
             raise RecoveryVerificationError("recovery:prepare-binding")
+        prepare_material = value["material"]
+        image_claims[value["point_id"]] = {
+            "ingress_image_digest": prepare_material["ingress"]["image_digest"],
+            "ingress_image_length": prepare_material["ingress"]["image_length"],
+            "core_image_digest": prepare_material["core"]["image_digest"],
+            "core_image_length": prepare_material["core"]["image_length"],
+        }
         points[value["point_id"]] = point
     else:
         point = points.get(value["point_id"])
         if point is None or value["operation_id"] != point["operation_id"] or value["request_digest"] != point["request_digest"]:
             raise RecoveryVerificationError("recovery:event-point")
-        allowed = {"OBJECT_PENDING": ("PREPARED", "OBJECT_PENDING"), "VERIFIED": ("OBJECT_PENDING", "VERIFIED"), "PUBLISHED": ("VERIFIED", "PUBLISHED"), "INVALIDATED": ("OBJECT_PENDING", "INVALIDATED")}
+        allowed = {"OBJECT_PENDING": ("PREPARED", "OBJECT_PENDING"), "VERIFIED": ("OBJECT_PENDING", "VERIFIED"), "PUBLICATION_PENDING": ("VERIFIED", "PUBLICATION_PENDING"), "PUBLISHED": ("PUBLICATION_PENDING", "PUBLISHED"), "INVALIDATED": ("OBJECT_PENDING", "INVALIDATED")}
         if (value["prior_state"], value["next_state"]) != allowed[kind] or point["state"] != value["prior_state"]:
             raise RecoveryVerificationError("recovery:event-transition")
-        _transition_material(kind, value["material"], point, value["payload_digest"], value["payload_length"])
+        if value["point_id"] not in image_claims:
+            raise RecoveryVerificationError("recovery:publication-image")
+        _transition_material(kind, value["material"], point, image_claims[value["point_id"]], publication_claims, value, value["payload_digest"], value["payload_length"])
         point["state"] = value["next_state"]
         point["updated_sequence"] = value["sequence"]
     receipts[value["point_id"]] = raw
@@ -419,12 +516,14 @@ def _verify_snapshot(connection: sqlite3.Connection, *, expected_database_id: st
         _validate_point_shape(row, meta)
     points: dict[str, dict[str, object]] = {}
     receipts: dict[str, bytes] = {}
+    image_claims: dict[str, dict[str, object]] = {}
+    publication_claims: dict[str, dict[str, object]] = {}
     events = connection.execute("SELECT * FROM recovery_events ORDER BY sequence").fetchall()
     previous = GENESIS_ROOT
     for expected_sequence, row in enumerate(events, start=1):
         if row["sequence"] != expected_sequence:
             raise RecoveryVerificationError("recovery:event-sequence")
-        previous = _verify_event(row, meta, previous, points, receipts)
+        previous = _verify_event(row, meta, previous, points, receipts, image_claims, publication_claims)
     if len(points) != len(persisted):
         raise RecoveryVerificationError("recovery:point-missing")
     for point_id, point in points.items():
@@ -448,7 +547,7 @@ def _verify_snapshot(connection: sqlite3.Connection, *, expected_database_id: st
     if meta["current_generation"] != max((int(point["generation"]) for point in points.values()), default=0) or meta["sequence"] != len(events) or meta["head_root"] != previous:
         raise RecoveryVerificationError("recovery:meta-root")
     summary = {
-        "accepted": True, "schema": SCHEMA, "schema_version": SCHEMA_VERSION,
+        "accepted": True, "schema": SCHEMA, "schema_version": SCHEMA_VERSION, "verifier_id": VERIFIER_ID,
         "database_id": meta["database_id"], "chain_id": meta["chain_id"], "config_digest": meta["config_digest"], "profile_digest": meta["profile_digest"],
         "key_custody_id_digest": meta["key_custody_id_digest"], "storage_id_digest": meta["storage_id_digest"], "sequence": meta["sequence"], "head_root": meta["head_root"],
         "point_count": len(points), "event_count": len(events), "current_generation": meta["current_generation"],
@@ -495,7 +594,8 @@ def select_point(path: str | Path, *, point_id: str | None = None, generation: i
         point = points.get(selected_id)
         if point is None or point["state"] not in allowed_states:
             raise RecoveryVerificationError("recovery:point-state")
-        return {"summary": dict(summary), "point": dict(point), "receipt": bytes(receipts[selected_id])}
+        receipt = bytes(receipts[selected_id])
+        return {"summary": dict(summary), "point": dict(point), "receipt": receipt, "event": dict(_parse(receipt, "recovery:receipt"))}
     except RecoveryVerificationError:
         raise
     except (OSError, sqlite3.Error, TypeError, ValueError):
@@ -510,8 +610,8 @@ def select_point(path: str | Path, *, point_id: str | None = None, generation: i
 
 def parse_bootstrap(raw: bytes) -> dict[str, object]:
     value = _parse(raw, "recovery:bootstrap", max_bytes=MAX_BOOTSTRAP_BYTES)
-    required = {"schema", "schema_version", "bootstrap_id", "catalog_id", "point_id", "generation", "object_id", "bundle_digest", "bundle_length", "key_id", "key_epoch", "storage_id", "ingress_database_id", "core_database_id", "ingress_head_root", "core_head_root", "ingress_watermark", "core_watermark", "publication_receipt_digest", "flags"}
-    if set(value) != required or value["schema"] != "mirror-recovery-bootstrap-v2" or value["schema_version"] != 2 or value["flags"] != FIXED_FLAGS:
+    required = {"schema", "schema_version", "verifier_id", "bootstrap_id", "catalog_id", "point_id", "generation", "object_id", "bundle_digest", "bundle_length", "key_id", "key_epoch", "storage_id", "ingress_database_id", "core_database_id", "ingress_head_root", "core_head_root", "ingress_watermark", "core_watermark", "publication_receipt_digest", "flags"}
+    if set(value) != required or value["schema"] != "mirror-recovery-bootstrap-v3" or value["schema_version"] != 3 or value["verifier_id"] != VERIFIER_ID or value["flags"] != FIXED_FLAGS:
         raise RecoveryVerificationError("recovery:bootstrap")
     for key in ("bootstrap_id", "catalog_id", "point_id", "object_id", "bundle_digest", "ingress_head_root", "core_head_root", "publication_receipt_digest"):
         _hex(value[key], "recovery:bootstrap-id")
@@ -526,10 +626,10 @@ def parse_bootstrap(raw: bytes) -> dict[str, object]:
 
 def logical_export(result: Mapping[str, object]) -> bytes:
     return _canonical({
-        "schema": "mirror-recovery-logical-export-v2", "schema_version": 2,
+        "schema": "mirror-recovery-logical-export-v3", "schema_version": 3, "verifier_id": VERIFIER_ID,
         "database_id": result["database_id"], "chain_id": result["chain_id"], "config_digest": result["config_digest"], "profile_digest": result["profile_digest"],
         "sequence": result["sequence"], "head_root": result["head_root"], "point_count": result["point_count"], "event_count": result["event_count"], "states": result["states"], "flags": dict(FIXED_FLAGS),
     })
 
 
-__all__ = ["SCHEMA", "SCHEMA_VERSION", "STATES", "EVENT_KINDS", "FIXED_FLAGS", "GENESIS_ROOT", "MAX_DATABASE_BYTES", "MAX_EVENT_BYTES", "MAX_BOOTSTRAP_BYTES", "MAX_BUNDLE_BYTES", "MAX_CUSTODY_OVERHEAD_BYTES", "MAX_RECOVERY_POINTS", "RecoveryVerificationError", "verify_database", "select_point", "parse_bundle", "logical_export", "parse_bootstrap", "_canonical", "_digest", "_raw_digest", "_event_root", "_parse"]
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "VERIFIER_ID", "STATES", "EVENT_KINDS", "FIXED_FLAGS", "GENESIS_ROOT", "MAX_DATABASE_BYTES", "MAX_EVENT_BYTES", "MAX_BOOTSTRAP_BYTES", "MAX_BUNDLE_BYTES", "MAX_CUSTODY_OVERHEAD_BYTES", "MAX_RECOVERY_POINTS", "RecoveryVerificationError", "verify_database", "select_point", "parse_bundle", "logical_export", "parse_bootstrap", "_canonical", "_digest", "_raw_digest", "_event_root", "_parse"]

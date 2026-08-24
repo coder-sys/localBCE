@@ -822,6 +822,8 @@ def publish_pair_create_only(
     core_path = _target(core_target)
     if os.path.normcase(os.path.abspath(os.fspath(ingress_path))) == os.path.normcase(os.path.abspath(os.fspath(core_path))):
         _fail(RestorePublicationConflict, "restore-publication:target-alias")
+    if _safe_parent(ingress_path.parent) == _safe_parent(core_path.parent) and os.path.normcase(ingress_path.name) == os.path.normcase(core_path.name):
+        _fail(RestorePublicationConflict, "restore-publication:target-alias")
     with _pair_locks(ingress_path, core_path):
         parent_ingress = _safe_parent(ingress_path.parent)
         parent_core = _safe_parent(core_path.parent)
