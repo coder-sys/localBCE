@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from dataclasses import dataclass
+from functools import wraps
 import hashlib
 import inspect
 import json
@@ -18,7 +19,7 @@ import re
 import secrets
 import sqlite3
 import time
-from typing import Any, Callable, Final, Mapping, Protocol
+from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
 
 from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 from app.minimal_clearance_verification_queue_independent import (
@@ -50,6 +51,32 @@ class CompositionIntegrityError(CompositionError):
 
 class CompositionIndeterminateError(CompositionError):
     pass
+
+
+def _raise_fixed(error_type: type[CompositionError], code: str) -> NoReturn:
+    """Raise a fixed public error with no retained exception context."""
+    error = error_type(code)
+    try:
+        raise error from None
+    except CompositionError as clean:
+        clean.__cause__ = None
+        clean.__context__ = None
+        raise
+
+
+def _public_v2_api(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Redact producer/receiver/storage failures at every V2 public seam."""
+    @wraps(method)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(*args, **kwargs)
+        except CompositionError as exc:
+            exc.__cause__ = None
+            exc.__context__ = None
+            raise
+        except Exception:
+            _raise_fixed(CompositionIntegrityError, "composition_internal_error")
+    return wrapped
 
 
 _SCHEMA_VERSION: Final[int] = 2
@@ -96,6 +123,7 @@ _ACK_PROFILE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-PROFILE/v
 _ACK_RECEIPT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-RECEIPT/v2\x00"
 _OUTBOX_OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-OPERATION/v2\x00"
 _IDEMPOTENCY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-IDEMPOTENCY/v2\x00"
+_QUEUE_VIEW_SCHEMA = "BL/NATIVE-V3/MINIMAL-CLEARANCE/QUEUE-VIEW/v1"
 
 
 def _sha(domain: bytes, *parts: bytes) -> bytes:
@@ -111,8 +139,8 @@ def _sha(domain: bytes, *parts: bytes) -> bytes:
 def _json_bytes(value: Mapping[str, Any]) -> bytes:
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-    except (TypeError, ValueError, UnicodeError) as exc:
-        raise CompositionIntegrityError("json") from exc
+    except (TypeError, ValueError, UnicodeError):
+        _raise_fixed(CompositionIntegrityError, "json")
 
 
 def _hex(value: bytes) -> str:
@@ -121,7 +149,7 @@ def _hex(value: bytes) -> str:
 
 def _blob(value: object, size: int, label: str) -> bytes:
     if type(value) is not bytes or len(value) != size:
-        raise CompositionIntegrityError(f"{label}_width")
+        _raise_fixed(CompositionIntegrityError, f"{label}_width")
     return bytes(value)
 
 
@@ -130,8 +158,8 @@ def _hex_blob(value: object, size: int, label: str) -> bytes:
         raise CompositionIntegrityError(label)
     try:
         raw = bytes.fromhex(value)
-    except ValueError as exc:
-        raise CompositionIntegrityError(label) from exc
+    except ValueError:
+        _raise_fixed(CompositionIntegrityError, label)
     if len(raw) != size:
         raise CompositionIntegrityError(label)
     return raw
@@ -189,8 +217,8 @@ def _state_store_identity(statement: Any, verifier_sha256: bytes) -> bytes:
 def _fixed_ascii(value: str, label: str) -> bytes:
     try:
         encoded = value.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise CompositionIntegrityError(label) from exc
+    except UnicodeEncodeError:
+        _raise_fixed(CompositionIntegrityError, label)
     if len(encoded) > _MAX_ID:
         raise CompositionIntegrityError(label)
     return len(encoded).to_bytes(2, "big") + encoded + bytes(_MAX_ID - len(encoded))
@@ -427,8 +455,8 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
         raise CompositionIntegrityError("receipt_bounds")
     try:
         value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise CompositionIntegrityError("receipt_encoding") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _raise_fixed(CompositionIntegrityError, "receipt_encoding")
     if type(value) is not dict or raw != _json_bytes(value):
         raise CompositionIntegrityError("receipt_canonical")
     required = {
@@ -456,8 +484,8 @@ def _parse_envelope(raw: bytes) -> dict[str, Any]:
         raise CompositionIntegrityError("envelope_bounds")
     try:
         value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise CompositionIntegrityError("envelope_encoding") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _raise_fixed(CompositionIntegrityError, "envelope_encoding")
     required = {"schema", "composition_config_digest", "composition_id_digest", "receiver_identity", "receiver_epoch", "verifier_epoch", "ack_evidence_profile_digest", "job_id_digest", "operation_id", "disposition_digest", "state_store_identity", "state_receipt_digest", "request_id", "attempt_id", "decision_id", "receipt_id", "state_after_id", "state_binding_after", "audit_head_after", "policy_result", "effective_directive", "proof_session_accepted", "proof_acceptance_is_clear", "payment_root_unchanged", "settled_batch_count_unchanged", "economic_mutation", "proof_suite_id"}
     if type(value) is not dict or set(value) != required or raw != _json_bytes(value):
         raise CompositionIntegrityError("envelope_canonical")
@@ -478,8 +506,8 @@ def _parse_ack(raw: bytes) -> dict[str, Any]:
         raise CompositionIntegrityError("ack_bounds")
     try:
         value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise CompositionIntegrityError("ack_encoding") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _raise_fixed(CompositionIntegrityError, "ack_encoding")
     keys = {"schema", "receiver_identity", "receiver_epoch", "idempotency_key", "envelope_digest", "effective_directive", "accepted_ms", "acknowledgment_id"}
     keys_with_policy = keys | {"policy_result"}
     if type(value) is not dict or set(value) not in (keys, keys_with_policy) or raw != _json_bytes(value):
@@ -500,24 +528,29 @@ def _parse_ack(raw: bytes) -> dict[str, Any]:
     return value
 
 
+@_public_v2_api
 def parse_envelope_bytes(raw: bytes) -> dict[str, Any]:
     return _parse_envelope(raw)
 
 
+@_public_v2_api
 def parse_acknowledgment_bytes(raw: bytes) -> dict[str, Any]:
     return _parse_ack(raw)
 
 
+@_public_v2_api
 def envelope_digest(raw: bytes) -> bytes:
     _parse_envelope(raw)
     return _sha(_ENVELOPE, raw)
 
 
+@_public_v2_api
 def acknowledgment_digest(raw: bytes) -> bytes:
     _parse_ack(raw)
     return _sha(_ACK, raw)
 
 
+@_public_v2_api
 def build_synthetic_acknowledgment(
     envelope_bytes: bytes, *, config: CompositionConfigV2, job_id: str | None = None,
     idempotency_key: bytes | None = None, accepted_ms: int = 0,
@@ -543,6 +576,7 @@ def build_synthetic_acknowledgment(
     return _json_bytes(value)
 
 
+@_public_v2_api
 def build_directive_envelope(
     *, config: CompositionConfigV2, job_id: str, operation_id: bytes,
     disposition_digest: bytes, state_store_identity: bytes, receipt: Mapping[str, Any],
@@ -604,6 +638,7 @@ def _state_receipt(
 class ClearanceCompositionStoreV2:
     """The only SQLite writer for proof state, application, and handoff V2."""
 
+    @_public_v2_api
     def __init__(
         self, *, path: Path, config: CompositionConfigV2,
         clock: CompositionClock | None = None,
@@ -669,7 +704,7 @@ class ClearanceCompositionStoreV2:
                 );
                 CREATE TABLE IF NOT EXISTS proof_requests (
                     operation_digest BLOB PRIMARY KEY, queue_job_id TEXT NOT NULL UNIQUE, queue_operation_id BLOB NOT NULL UNIQUE,
-                    queue_receipt_bytes BLOB NOT NULL, queue_receipt_digest BLOB NOT NULL, acceptance_bytes BLOB NOT NULL,
+                    queue_view_bytes BLOB NOT NULL, queue_view_digest BLOB NOT NULL, acceptance_bytes BLOB NOT NULL,
                     acceptance_digest BLOB NOT NULL, receipt_bytes BLOB NOT NULL, artifact_digest BLOB NOT NULL UNIQUE,
                     request_id BLOB NOT NULL, attempt_id BLOB NOT NULL, decision_id BLOB NOT NULL,
                     sequence_before INTEGER NOT NULL, sequence_after INTEGER NOT NULL, state_before_id BLOB NOT NULL,
@@ -851,8 +886,8 @@ class ClearanceCompositionStoreV2:
             raise CompositionIntegrityError("queue_binding")
         try:
             acceptance = parse_acceptance_bytes(verified.acceptance_bytes)
-        except Exception as exc:
-            raise CompositionIntegrityError("acceptance_parse") from exc
+        except Exception:
+            _raise_fixed(CompositionIntegrityError, "acceptance_parse")
         if (
             acceptance.canonical_bytes() != verified.acceptance_bytes
             or acceptance.artifact_bytes != verified.artifact_bytes
@@ -862,6 +897,23 @@ class ClearanceCompositionStoreV2:
         ):
             raise CompositionIntegrityError("acceptance_binding")
         return acceptance
+
+    @staticmethod
+    def _queue_view_bytes(verified: IndependentVerifiedQueueJob) -> bytes:
+        # The queue receipt contains stable stdout/stderr digests used only by
+        # queue custody.  They are deliberately not copied across the
+        # clearance boundary; retain only typed identities and containment
+        # facts that this composition contract actually consumes.
+        return _json_bytes({
+            "schema": _QUEUE_VIEW_SCHEMA, "queue_id": verified.queue_id,
+            "config_digest": _hex(verified.config_digest), "verifier_sha256": _hex(verified.verifier_sha256),
+            "job_id": verified.job_id, "operation_id": _hex(verified.operation_id), "attempt": verified.attempt,
+            "artifact_bytes": verified.artifact_bytes, "artifact_sha256": _hex(verified.artifact_sha256),
+            "artifact_sha3_512": _hex(verified.artifact_sha3_512), "circuit_id": _hex(verified.circuit_id),
+            "peak_job_commit_bytes": verified.peak_job_commit_bytes, "cap_bytes": verified.cap_bytes,
+            "cap_enforced": verified.cap_enforced, "active_process_limit": verified.active_process_limit,
+            "timed_out": verified.timed_out, "exit_code": verified.exit_code,
+        })
 
     def _result_from_disposition(self, row: tuple[Any, ...], *, duplicate: bool | None = None) -> CompositionProcessResultV2:
         raw = None if row[6] is None else bytes(row[6])
@@ -877,17 +929,19 @@ class ClearanceCompositionStoreV2:
             out_operation = None
         return CompositionProcessResultV2(str(row[1]), bytes(row[2]), str(row[5]), bytes(row[0]), raw, digest, outbox, out_operation, bool(row[8]) if duplicate is None else duplicate, None if row[9] is None else str(row[9]))
 
+    @_public_v2_api
     def process_verified_job(self, queue_database: Path, job_id: str) -> CompositionProcessResultV2:
         """Read VERIFIED queue state independently, then commit composition once."""
         _token(job_id, "job_id")
         try:
             verified = read_verified_job(queue_database, job_id)
-        except (IndependentQueueError, OSError, sqlite3.Error) as exc:
-            raise CompositionIntegrityError("queue_verification_failed") from exc
+        except (IndependentQueueError, OSError, sqlite3.Error):
+            _raise_fixed(CompositionIntegrityError, "queue_verification_failed")
         acceptance = self._validate_queue_result(verified)
         encoded = bytes(verified.acceptance_bytes)
+        queue_view = self._queue_view_bytes(verified)
+        queue_view_digest = _sha(_MATERIAL, b"queue-view", queue_view)
         acceptance_digest = _sha(_MATERIAL, b"acceptance", encoded)
-        queue_receipt_digest = _sha(_MATERIAL, b"queue-receipt", verified.receipt_bytes)
         now = int(self.clock.now_ms())
         with closing(self._connect()) as connection:
             began = False
@@ -899,6 +953,15 @@ class ClearanceCompositionStoreV2:
                 if existing is not None:
                     if bytes(existing[2]) != verified.operation_id or bytes(existing[4]) != acceptance_digest:
                         raise CompositionConflictError("composition_conflicting_retry")
+                    proof = connection.execute(
+                        "SELECT operation_digest,queue_view_digest,queue_view_bytes,acceptance_bytes FROM proof_requests WHERE queue_job_id=?",
+                        (job_id,),
+                    ).fetchone()
+                    if str(existing[5]) == "APPLIED":
+                        if proof is None or bytes(proof[0]) != bytes(existing[3]) or bytes(proof[1]) != queue_view_digest or bytes(proof[2]) != queue_view or bytes(proof[3]) != encoded:
+                            raise CompositionIntegrityError("composition_retry_history")
+                    elif proof is not None:
+                        raise CompositionIntegrityError("composition_retry_history")
                     connection.execute("COMMIT")
                     began = False
                     return self._result_from_disposition(tuple(existing), duplicate=True)
@@ -949,7 +1012,7 @@ class ClearanceCompositionStoreV2:
                     "event_kind": "MINIMAL_COMPOSITION_PROOF_CLEARANCE_V2", "version": 2,
                     "sequence_before": sequence_before, "sequence_after": sequence_after,
                     "operation_digest": _hex(operation_digest), "queue_job_id": job_id,
-                    "queue_operation_id": _hex(verified.operation_id), "queue_receipt_digest": _hex(queue_receipt_digest),
+                    "queue_operation_id": _hex(verified.operation_id), "queue_view_digest": _hex(queue_view_digest),
                     "acceptance_digest": _hex(acceptance_digest), "artifact_digest": _hex(acceptance.artifact_digest),
                     "receipt_id": _hex(statement.receipt_id), "request_id": _hex(statement.request_id),
                     "attempt_id": _hex(statement.attempt_id), "decision_id": _hex(statement.decision_id),
@@ -972,7 +1035,7 @@ class ClearanceCompositionStoreV2:
                 env_digest = _sha(_ENVELOPE, envelope)
                 outbox_operation = _operation_identity(self.config, job_id, env_digest)
                 idem = _idempotency_key(self.config, job_id, env_digest)
-                connection.execute("INSERT INTO proof_requests VALUES (" + ",".join("?" for _ in range(27)) + ")", (operation_digest, job_id, verified.operation_id, verified.receipt_bytes, queue_receipt_digest, encoded, acceptance_digest, receipt_raw, acceptance.artifact_digest, statement.request_id, statement.attempt_id, statement.decision_id, sequence_before, sequence_after, bytes(state[3]), statement.state_after_id, bytes(state[7]), clearance_after, int(state[8]), count_after, bytes(state[12]), binding_after, bytes(state[13]), audit_after, acceptance.policy_result, statement.directive, now))
+                connection.execute("INSERT INTO proof_requests VALUES (" + ",".join("?" for _ in range(27)) + ")", (operation_digest, job_id, verified.operation_id, queue_view, queue_view_digest, encoded, acceptance_digest, receipt_raw, acceptance.artifact_digest, statement.request_id, statement.attempt_id, statement.decision_id, sequence_before, sequence_after, bytes(state[3]), statement.state_after_id, bytes(state[7]), clearance_after, int(state[8]), count_after, bytes(state[12]), binding_after, bytes(state[13]), audit_after, acceptance.policy_result, statement.directive, now))
                 connection.execute("UPDATE composition_state SET state_id=?,sequence=?,continuity_root=?,clearance_root=?,clearance_count=?,replay_root=?,state_binding=?,audit_head=?,last_operation_digest=? WHERE id=1", (statement.state_after_id, sequence_after, bytes(statement.state("after_continuity_root")), clearance_after, count_after, replay_after, binding_after, audit_after, operation_digest))
                 connection.execute("INSERT INTO proof_audit VALUES (?,?,?,?,?)", (sequence_after, bytes(state[13]), event_commitment, audit_after, payload))
                 connection.execute("INSERT INTO proof_transitions VALUES (" + ",".join("?" for _ in range(8)) + ")", (sequence_after, operation_digest, bytes(state[12]), binding_after, bytes(state[10]), bytes(state[10]), 0, 0))
@@ -988,8 +1051,8 @@ class ClearanceCompositionStoreV2:
                 raise
         try:
             self._after_fault("after_composition_commit")
-        except Exception as exc:
-            raise CompositionIndeterminateError("composition_commit_indeterminate") from exc
+        except Exception:
+            _raise_fixed(CompositionIndeterminateError, "composition_commit_indeterminate")
         return CompositionProcessResultV2(job_id, verified.operation_id, "APPLIED", disposition_id, receipt_raw, receipt_digest, job_id, outbox_operation, False, None)
 
     process = process_verified_job
@@ -1004,6 +1067,7 @@ class ClearanceCompositionStoreV2:
             if status == "DELIVERY_UNCONFIRMED":
                 self._ensure_reconciliation_locked(connection, str(job_id), now, "lease_expired")
 
+    @_public_v2_api
     def claim_next_outbox(self, worker_id: str) -> CompositionOutboxWorkV2 | None:
         _token(worker_id, "worker_id")
         now = int(self.clock.now_ms())
@@ -1045,9 +1109,23 @@ class ClearanceCompositionStoreV2:
         connection.execute("INSERT INTO outbox_transitions VALUES (?,?,?,?,?,?,?)", (seq, kind, job_id, before, after, event_bytes, digest))
 
     def _live_outbox_lease(self, connection: sqlite3.Connection, work: CompositionOutboxWorkV2) -> tuple[Any, ...]:
-        row = connection.execute("SELECT * FROM outbox_leases WHERE job_id=?", (work.job_id,)).fetchone()
+        row = connection.execute(
+            "SELECT l.*,o.operation_id,o.envelope_bytes,o.idempotency_key FROM outbox_leases l JOIN outbox_jobs o ON o.job_id=l.job_id WHERE l.job_id=?",
+            (work.job_id,),
+        ).fetchone()
         now = int(self.clock.now_ms())
-        if row is None or str(row[1]) != work.worker_id or bytes(row[2]) != work.lease_token or int(row[3]) != work.attempt or int(row[5]) != work.lease_expires_ms or now >= int(row[5]):
+        if (
+            work.composition_id != self.config.composition_id
+            or row is None
+            or str(row[1]) != work.worker_id
+            or bytes(row[2]) != work.lease_token
+            or int(row[3]) != work.attempt
+            or int(row[5]) != work.lease_expires_ms
+            or bytes(row[6]) != work.operation_id
+            or bytes(row[7]) != work.envelope_bytes
+            or bytes(row[8]) != work.idempotency_key
+            or now >= int(row[5])
+        ):
             raise CompositionLeaseError("outbox_lease_stale")
         return tuple(row)
 
@@ -1182,10 +1260,11 @@ class ClearanceCompositionStoreV2:
                 raise
         try:
             self._after_fault("after_reconciliation_commit" if reconciliation_work is not None else "after_ack_commit")
-        except Exception as exc:
-            raise CompositionIndeterminateError("ack_commit_indeterminate") from exc
+        except Exception:
+            _raise_fixed(CompositionIndeterminateError, "ack_commit_indeterminate")
         return CompositionDeliveryResultV2(job_id, operation_id, "ACKNOWLEDGED", ack_raw, ack_digest, None, qualification, self.config.profile_digest, str(ack["acknowledgment_id"]))
 
+    @_public_v2_api
     def dispatch(self, work: CompositionOutboxWorkV2, *, receiver: OfficialStateReceiverPort) -> CompositionDeliveryResultV2:
         existing = self._existing_ack(work.job_id)
         if existing is not None:
@@ -1223,14 +1302,26 @@ class ClearanceCompositionStoreV2:
                 existing = self._existing_ack(work.job_id)
                 if existing is not None:
                     return existing
-                raise CompositionIndeterminateError("delivery_indeterminate") from None
+                _raise_fixed(CompositionIndeterminateError, "delivery_indeterminate")
 
     send = dispatch
 
     def _live_reconciliation_lease(self, connection: sqlite3.Connection, work: CompositionReconciliationWorkV2) -> tuple[Any, ...]:
         row = connection.execute("SELECT * FROM reconciliation_records WHERE job_id=?", (work.job_id,)).fetchone()
         now = int(self.clock.now_ms())
-        if row is None or str(row[4]) != "LEASED" or str(row[6]) != work.worker_id or bytes(row[7]) != work.lease_token or int(row[5]) != work.attempt or int(row[9]) != work.lease_expires_ms or bytes(row[1]) != work.operation_id or bytes(row[2]) != work.envelope_digest or bytes(row[3]) != work.idempotency_key or now >= int(row[9]):
+        if (
+            work.composition_id != self.config.composition_id
+            or row is None
+            or str(row[4]) != "LEASED"
+            or str(row[6]) != work.worker_id
+            or bytes(row[7]) != work.lease_token
+            or int(row[5]) != work.attempt
+            or int(row[9]) != work.lease_expires_ms
+            or bytes(row[1]) != work.operation_id
+            or bytes(row[2]) != work.envelope_digest
+            or bytes(row[3]) != work.idempotency_key
+            or now >= int(row[9])
+        ):
             raise CompositionLeaseError("reconciliation_lease_stale")
         return tuple(row)
 
@@ -1240,6 +1331,7 @@ class ClearanceCompositionStoreV2:
             next_status = "DISCOVERED" if int(attempt) < self.config.max_attempts else "EXHAUSTED"
             connection.execute("UPDATE reconciliation_records SET status=?,worker_id=NULL,token=NULL,leased_ms=NULL,expires_ms=NULL,next_eligible_ms=?,updated_ms=?,last_error_code=? WHERE job_id=? AND status='LEASED'", (next_status, now, now, "reconciliation_lease_expired", job_id))
 
+    @_public_v2_api
     def claim_reconciliation_next(self, worker_id: str) -> CompositionReconciliationWorkV2 | None:
         _token(worker_id, "worker_id")
         now = int(self.clock.now_ms())
@@ -1303,6 +1395,7 @@ class ClearanceCompositionStoreV2:
                 raise
         return CompositionDeliveryResultV2(work.job_id, work.operation_id, "DELIVERY_UNCONFIRMED", None, None, _code(code))
 
+    @_public_v2_api
     def reconcile(self, work: CompositionReconciliationWorkV2, *, lookup: OfficialStateReceiverLookupPort | None = None, lookup_port: OfficialStateReceiverLookupPort | None = None, evidence_profile: SyntheticAckEvidenceProfileV2 | None = None) -> CompositionDeliveryResultV2:
         existing = self._existing_ack(work.job_id)
         if existing is not None:
@@ -1344,6 +1437,7 @@ class ClearanceCompositionStoreV2:
     reconcile_delivery = reconcile
     reconcile_unconfirmed = reconcile
 
+    @_public_v2_api
     def reconcile_next(self, worker_id: str, *, lookup: OfficialStateReceiverLookupPort | None = None, lookup_port: OfficialStateReceiverLookupPort | None = None, evidence_profile: SyntheticAckEvidenceProfileV2 | None = None) -> CompositionDeliveryResultV2 | None:
         work = self.claim_reconciliation_next(worker_id)
         if work is None:
@@ -1352,6 +1446,7 @@ class ClearanceCompositionStoreV2:
 
     reconcile_next_delivery = reconcile_next
 
+    @_public_v2_api
     def snapshot(self) -> dict[str, Any]:
         with closing(self._connect()) as connection:
             meta = self._meta(connection)
@@ -1362,6 +1457,7 @@ class ClearanceCompositionStoreV2:
 
     support_summary = snapshot
 
+    @_public_v2_api
     def export_bytes(self) -> bytes:
         self.verify_integrity()
         with closing(self._connect()) as connection:
@@ -1376,14 +1472,17 @@ class ClearanceCompositionStoreV2:
             raise CompositionIntegrityError("export_bounds")
         return raw
 
+    @_public_v2_api
     def verify_integrity(self) -> None:
         from app.minimal_clearance_composition_independent import verify_database
         verify_database(self.path, expected_config=self.config.as_json)
 
+    @_public_v2_api
     def restore_from_export(self, path: Path, raw: bytes) -> dict[str, Any]:
         from app.minimal_clearance_composition_independent import restore_export_to_fresh_database
         return restore_export_to_fresh_database(path, raw, expected_config=self.config.as_json)
 
+    @_public_v2_api
     def create_backup(self, destination: Path) -> None:
         if not isinstance(destination, Path) or destination.exists() or not destination.parent.is_dir() or destination == self.path:
             raise CompositionError("backup_destination")
@@ -1394,6 +1493,7 @@ class ClearanceCompositionStoreV2:
         from app.minimal_clearance_composition_independent import verify_database
         verify_database(destination, expected_config=self.config.as_json)
 
+    @_public_v2_api
     def recover_from_backup(self, *, backup_path: Path, recovered_path: Path) -> "ClearanceCompositionStoreV2":
         if (
             not isinstance(backup_path, Path) or not backup_path.is_file() or

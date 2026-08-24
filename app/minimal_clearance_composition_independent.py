@@ -9,15 +9,40 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import wraps
 from pathlib import Path
 import sqlite3
-from typing import Any, Final, Mapping
+from typing import Any, Callable, Final, Mapping, NoReturn
 
 from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 
 
 class IndependentCompositionError(RuntimeError):
     """Bounded independent reconstruction failure."""
+
+
+def _raise_fixed(code: str) -> NoReturn:
+    error = IndependentCompositionError(code)
+    try:
+        raise error from None
+    except IndependentCompositionError as clean:
+        clean.__cause__ = None
+        clean.__context__ = None
+        raise
+
+
+def _public_independent_api(function: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(function)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return function(*args, **kwargs)
+        except IndependentCompositionError as exc:
+            exc.__cause__ = None
+            exc.__context__ = None
+            raise
+        except Exception:
+            _raise_fixed("independent_composition_error")
+    return wrapped
 
 
 _SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v2"
@@ -53,12 +78,14 @@ _ACK_PROFILE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-PROFILE/v
 _ACK_RECEIPT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-RECEIPT/v2\x00"
 _OUTBOX_OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-OPERATION/v2\x00"
 _IDEMPOTENCY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-IDEMPOTENCY/v2\x00"
+_QUEUE_VIEW_SCHEMA = "BL/NATIVE-V3/MINIMAL-CLEARANCE/QUEUE-VIEW/v1"
+_QUEUE_VIEW_MAX = 4096
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "composition_metadata": ("id", "schema_version", "composition_id", "config_json", "config_digest", "queue_id", "queue_config_digest", "verifier_sha256", "state_profile_identity", "receiver_identity", "receiver_epoch", "verifier_epoch", "ack_profile_digest", "expected_statement", "proof_suite_id", "production_usable", "activation", "head_root", "next_sequence"),
     "composition_state": ("id", "expected_statement", "circuit_id", "state_id", "epoch", "sequence", "continuity_root", "clearance_root", "clearance_count", "replay_root", "payment_root", "settled_batch_count", "state_binding", "audit_head", "last_operation_digest", "verifier_sha256", "profile_digest"),
     "composition_transitions": ("sequence", "transition_kind", "job_id", "before_root", "after_root", "event_bytes", "event_digest"),
-    "proof_requests": ("operation_digest", "queue_job_id", "queue_operation_id", "queue_receipt_bytes", "queue_receipt_digest", "acceptance_bytes", "acceptance_digest", "receipt_bytes", "artifact_digest", "request_id", "attempt_id", "decision_id", "sequence_before", "sequence_after", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "clearance_count_before", "clearance_count_after", "state_binding_before", "state_binding_after", "audit_head_before", "audit_head_after", "policy_result", "effective_directive", "created_ms"),
+    "proof_requests": ("operation_digest", "queue_job_id", "queue_operation_id", "queue_view_bytes", "queue_view_digest", "acceptance_bytes", "acceptance_digest", "receipt_bytes", "artifact_digest", "request_id", "attempt_id", "decision_id", "sequence_before", "sequence_after", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "clearance_count_before", "clearance_count_after", "state_binding_before", "state_binding_after", "audit_head_before", "audit_head_after", "policy_result", "effective_directive", "created_ms"),
     "proof_audit": ("sequence", "previous_head", "event_commitment", "current_head", "payload"),
     "proof_transitions": ("sequence_after", "operation_digest", "state_binding_before", "state_binding_after", "payment_root_before", "payment_root_after", "settled_batch_count_before", "settled_batch_count_after"),
     "application_dispositions": ("disposition_id", "queue_job_id", "queue_operation_id", "operation_digest", "acceptance_digest", "status", "receipt_bytes", "receipt_digest", "duplicate_convergence", "error_code", "created_ms"),
@@ -103,8 +130,8 @@ def _sha(domain: bytes, *parts: bytes) -> bytes:
 def _json_bytes(value: Mapping[str, Any]) -> bytes:
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-    except (TypeError, ValueError, UnicodeError) as exc:
-        raise IndependentCompositionError("json") from exc
+    except (TypeError, ValueError, UnicodeError):
+        _raise_fixed("json")
 
 
 def _hex(raw: bytes) -> str:
@@ -118,8 +145,8 @@ def _blob(value: Any, size: int, label: str, *, nullable: bool = False) -> bytes
         _fail(label)
     try:
         raw = bytes.fromhex(value)
-    except ValueError as exc:
-        raise IndependentCompositionError(label) from exc
+    except ValueError:
+        _raise_fixed(label)
     if len(raw) != size:
         _fail(label)
     return raw
@@ -136,8 +163,8 @@ def _fixed_ascii(value: str) -> bytes:
         _fail("identifier")
     try:
         encoded = value.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise IndependentCompositionError("identifier_ascii") from exc
+    except UnicodeEncodeError:
+        _raise_fixed("identifier_ascii")
     if len(encoded) > _MAX_ID:
         _fail("identifier_width")
     return len(encoded).to_bytes(2, "big") + encoded + bytes(_MAX_ID - len(encoded))
@@ -168,8 +195,8 @@ def _decode_export(raw: bytes) -> dict[str, Any]:
         _fail("export_bounds")
     try:
         value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentCompositionError("export_encoding") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _raise_fixed("export_encoding")
     if type(value) is not dict or set(value) != {"schema", "config", "metadata", "tables"} or raw != _json_bytes(value):
         _fail("export_canonical")
     if value["schema"] != _SCHEMA or type(value["config"]) is not dict or type(value["metadata"]) is not list or type(value["tables"]) is not dict:
@@ -193,8 +220,8 @@ def _decode_row(table: str, row: Any) -> list[Any]:
             _fail(table + "_blob")
         try:
             result[index] = bytes.fromhex(value)
-        except ValueError as exc:
-            raise IndependentCompositionError(table + "_blob") from exc
+        except ValueError:
+            _raise_fixed(table + "_blob")
     return result
 
 
@@ -207,8 +234,8 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
         _fail("receipt_bounds")
     try:
         value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentCompositionError("receipt_encoding") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _raise_fixed("receipt_encoding")
     if type(value) is not dict or raw != _json_bytes(value):
         _fail("receipt_canonical")
     required = {"operation_digest", "artifact_sha256", "artifact_digest", "statement_digest", "circuit_id", "bundle_id", "receipt_id", "join_id", "settlement_id", "request_id", "attempt_id", "decision_id", "sequence_before", "sequence_after", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "clearance_count_before", "clearance_count_after", "payment_root_before", "payment_root_after", "settled_batch_count_before", "settled_batch_count_after", "state_binding_after", "audit_head_after", "policy_result", "effective_directive", "proof_session_accepted", "economic_mutation", "proof_suite_id"}
@@ -234,8 +261,8 @@ def _parse_envelope(raw: bytes) -> dict[str, Any]:
         _fail("envelope_bounds")
     try:
         value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentCompositionError("envelope_encoding") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _raise_fixed("envelope_encoding")
     keys = {"schema", "composition_config_digest", "composition_id_digest", "receiver_identity", "receiver_epoch", "verifier_epoch", "ack_evidence_profile_digest", "job_id_digest", "operation_id", "disposition_digest", "state_store_identity", "state_receipt_digest", "request_id", "attempt_id", "decision_id", "receipt_id", "state_after_id", "state_binding_after", "audit_head_after", "policy_result", "effective_directive", "proof_session_accepted", "proof_acceptance_is_clear", "payment_root_unchanged", "settled_batch_count_unchanged", "economic_mutation", "proof_suite_id"}
     if type(value) is not dict or set(value) != keys or raw != _json_bytes(value) or value["schema"] != _HANDOFF_SCHEMA:
         _fail("envelope_canonical")
@@ -254,8 +281,8 @@ def _parse_ack(raw: bytes) -> dict[str, Any]:
         _fail("ack_bounds")
     try:
         value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentCompositionError("ack_encoding") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _raise_fixed("ack_encoding")
     keys = {"schema", "receiver_identity", "receiver_epoch", "idempotency_key", "envelope_digest", "effective_directive", "accepted_ms", "acknowledgment_id"}
     if type(value) is not dict or set(value) not in (keys, keys | {"policy_result"}) or raw != _json_bytes(value) or value["schema"] != _HANDOFF_SCHEMA:
         _fail("ack_canonical")
@@ -275,8 +302,8 @@ def _parse_qualification_receipt(raw: bytes) -> dict[str, Any]:
         _fail("qualification_bounds")
     try:
         value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentCompositionError("qualification_encoding") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _raise_fixed("qualification_encoding")
     required = {
         "schema_version", "mode", "profile_digest", "verifier_identity", "verifier_epoch",
         "receiver_identity", "receiver_epoch", "operation_id", "job_id_digest", "idempotency_key",
@@ -299,6 +326,42 @@ def _parse_qualification_receipt(raw: bytes) -> dict[str, Any]:
     return value
 
 
+def _parse_queue_view(raw: bytes) -> dict[str, Any]:
+    if type(raw) is not bytes or not 0 < len(raw) <= _QUEUE_VIEW_MAX:
+        _fail("queue_view_bounds")
+    try:
+        value = json.loads(raw.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _raise_fixed("queue_view_encoding")
+    required = {
+        "schema", "queue_id", "config_digest", "verifier_sha256", "job_id", "operation_id", "attempt",
+        "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "circuit_id", "peak_job_commit_bytes",
+        "cap_bytes", "cap_enforced", "active_process_limit", "timed_out", "exit_code",
+    }
+    if type(value) is not dict or set(value) != required or raw != _json_bytes(value) or value["schema"] != _QUEUE_VIEW_SCHEMA:
+        _fail("queue_view_schema")
+    for name, size in (
+        ("config_digest", 64), ("verifier_sha256", 32), ("operation_id", 64),
+        ("artifact_sha256", 32), ("artifact_sha3_512", 64), ("circuit_id", 32),
+    ):
+        _blob(value[name], size, "queue_view_" + name)
+    for name in ("queue_id", "job_id"):
+        if type(value[name]) is not str or not value[name] or len(value[name]) > _MAX_ID:
+            _fail("queue_view_identifier")
+    if (
+        type(value["attempt"]) is not int or value["attempt"] < 1
+        or type(value["artifact_bytes"]) is not int or value["artifact_bytes"] <= 0
+        or type(value["peak_job_commit_bytes"]) is not int or value["peak_job_commit_bytes"] < 0
+        or type(value["cap_bytes"]) is not int or value["cap_bytes"] != _CAP_BYTES
+        or type(value["cap_enforced"]) is not bool or value["cap_enforced"] is not True
+        or type(value["active_process_limit"]) is not int or value["active_process_limit"] != _ACTIVE_PROCESS_LIMIT
+        or type(value["timed_out"]) is not bool or value["timed_out"] is not False
+        or type(value["exit_code"]) is not int or value["exit_code"] != 0
+    ):
+        _fail("queue_view_containment")
+    return value
+
+
 def _verify_config(config: Mapping[str, Any]) -> tuple[bytes, bytes]:
     if type(config) is not dict or config.get("schema_version") != _SCHEMA_VERSION or config.get("proof_suite_id") is not None or config.get("production_usable") is not False or config.get("activation") is not False or tuple(config.get("directives", ())) != _DIRECTIVES:
         _fail("config")
@@ -317,8 +380,8 @@ def _verify_config(config: Mapping[str, Any]) -> tuple[bytes, bytes]:
         expected_statement = config.get("expected_statement")
         if expected_statement is not None and len(bytes.fromhex(str(expected_statement))) != 3340:
             _fail("config_expected_statement")
-    except (KeyError, ValueError) as exc:
-        raise IndependentCompositionError("config_fields") from exc
+    except (KeyError, ValueError):
+        _raise_fixed("config_fields")
     if len(queue_digest) != 64 or len(verifier) != 32 or len(receiver) != 32 or len(profile) != 64:
         _fail("config_width")
     for name, maximum in (("receiver_epoch", 2**63), ("verifier_epoch", 2**63), ("capacity", 10_000), ("reconciliation_capacity", 10_000), ("lease_seconds", 3_600), ("reconciliation_lease_seconds", 3_600)):
@@ -375,7 +438,7 @@ def _verify_rows(value: dict[str, Any], *, expected_config: Mapping[str, Any] | 
         try:
             event = json.loads(bytes(transition[5]).decode("ascii"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise IndependentCompositionError("composition_transition_event") from exc
+            _raise_fixed("composition_transition_event")
         if int(transition[0]) != number or bytes(transition[3]) != expected_head or bytes(transition[5]) != _json_bytes(event) or bytes(transition[6]) != _sha(_EVENT, str(transition[1]).encode("ascii"), str(transition[2]).encode("ascii"), bytes(transition[5])) or bytes(transition[4]) != _sha(_HEAD, expected_head, _u64(number), bytes(transition[6])):
             _fail("composition_head_chain")
         expected_head = bytes(transition[4])
@@ -433,7 +496,25 @@ def _verify_rows(value: dict[str, Any], *, expected_config: Mapping[str, Any] | 
         if state is None:
             _fail("request_without_state")
         acceptance = parse_acceptance_bytes(bytes(row[5]))
-        if acceptance.canonical_bytes() != bytes(row[5]) or bytes(row[6]) != _sha(_MATERIAL, b"acceptance", bytes(row[5])) or bytes(row[4]) != _sha(_MATERIAL, b"queue-receipt", bytes(row[3])):
+        queue_view = _parse_queue_view(bytes(row[3]))
+        if (
+            acceptance.canonical_bytes() != bytes(row[5])
+            or bytes(row[4]) != _sha(_MATERIAL, b"queue-view", bytes(row[3]))
+            or queue_view["queue_id"] != config["queue_id"]
+            or bytes.fromhex(queue_view["config_digest"]) != bytes.fromhex(str(config["queue_config_digest"]))
+            or bytes.fromhex(queue_view["verifier_sha256"]) != bytes.fromhex(str(config["verifier_sha256"]))
+            or queue_view["job_id"] != str(row[1])
+            or bytes.fromhex(queue_view["operation_id"]) != bytes(row[2])
+            or queue_view["artifact_bytes"] != acceptance.artifact_bytes
+            or bytes.fromhex(queue_view["artifact_sha256"]) != acceptance.artifact_sha256
+            or bytes.fromhex(queue_view["artifact_sha3_512"]) != acceptance.artifact_digest
+            or bytes.fromhex(queue_view["circuit_id"]) != acceptance.circuit_id
+            or queue_view["cap_bytes"] != _CAP_BYTES
+            or queue_view["cap_enforced"] is not True
+            or queue_view["active_process_limit"] != _ACTIVE_PROCESS_LIMIT
+            or queue_view["timed_out"] is not False
+            or queue_view["exit_code"] != 0
+        ):
             _fail("request_binding")
         operation = _sha(_STATE_OPERATION, bytes(row[5]), bytes(previous_binding), bytes(previous_head), _INITIAL_PAYMENT, verifier)
         if bytes(row[0]) != operation or bytes(row[8]) != acceptance.artifact_digest or bytes(row[9]) != acceptance.statement.request_id or bytes(row[10]) != acceptance.statement.attempt_id or bytes(row[11]) != acceptance.statement.decision_id or int(row[24]) != int(acceptance.policy_result) or int(row[25]) != int(acceptance.statement.directive):
@@ -645,12 +726,13 @@ def _verify_rows(value: dict[str, Any], *, expected_config: Mapping[str, Any] | 
         try:
             event = json.loads(bytes(transition[5]).decode("ascii"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise IndependentCompositionError("outbox_transition_event") from exc
+            _raise_fixed("outbox_transition_event")
         if bytes(transition[5]) != _json_bytes(event) or bytes(transition[6]) != _sha(_EVENT, str(transition[1]).encode("ascii"), str(transition[2]).encode("ascii"), bytes(transition[5])) or bytes(transition[4]) != _sha(_HEAD, bytes(transition[3]), _u64(number), bytes(transition[6])):
             _fail("outbox_transition_chain")
     return {"schema": _SCHEMA, "composition_id": config["composition_id"], "config_digest": _hex(config_digest), "table_counts": {"composition_metadata": 1, **{name: len(rows[name]) for name in _TABLE_DATA_ORDER}}, "proof_suite_id": None, "production_usable": False, "activation": False}
 
 
+@_public_independent_api
 def verify_export_bytes(raw: bytes, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return _verify_rows(_decode_export(raw), expected_config=expected_config)
 
@@ -669,11 +751,12 @@ def _db_export(connection: sqlite3.Connection) -> bytes:
     try:
         config = json.loads(config_raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentCompositionError("database_config") from exc
+        _raise_fixed("database_config")
     value = {"schema": _SCHEMA, "config": config, "metadata": [_hex(x) if isinstance(x, bytes) else x for x in metadata], "tables": tables}
     return _json_bytes(value)
 
 
+@_public_independent_api
 def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(path, Path) or not path.is_file() or path.is_symlink():
         _fail("database_path")
@@ -690,12 +773,13 @@ def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = N
         connection.execute("ROLLBACK")
         return result
     except sqlite3.Error as exc:
-        raise IndependentCompositionError("database_read") from exc
+        _raise_fixed("database_read")
     finally:
         if connection is not None:
             connection.close()
 
 
+@_public_independent_api
 def verify_database_connection(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(connection, sqlite3.Connection):
         _fail("connection")
@@ -708,7 +792,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE composition_metadata (id INTEGER PRIMARY KEY CHECK(id=1),schema_version INTEGER NOT NULL,composition_id TEXT NOT NULL,config_json BLOB NOT NULL,config_digest BLOB NOT NULL,queue_id TEXT NOT NULL,queue_config_digest BLOB NOT NULL,verifier_sha256 BLOB NOT NULL,state_profile_identity BLOB,receiver_identity BLOB NOT NULL,receiver_epoch INTEGER NOT NULL,verifier_epoch INTEGER NOT NULL,ack_profile_digest BLOB NOT NULL,expected_statement BLOB,proof_suite_id BLOB,production_usable INTEGER NOT NULL,activation INTEGER NOT NULL,head_root BLOB NOT NULL,next_sequence INTEGER NOT NULL);
         CREATE TABLE composition_state (id INTEGER PRIMARY KEY CHECK(id=1),expected_statement BLOB NOT NULL,circuit_id BLOB NOT NULL,state_id BLOB NOT NULL,epoch INTEGER NOT NULL,sequence INTEGER NOT NULL,continuity_root BLOB NOT NULL,clearance_root BLOB NOT NULL,clearance_count INTEGER NOT NULL,replay_root BLOB NOT NULL,payment_root BLOB NOT NULL,settled_batch_count INTEGER NOT NULL,state_binding BLOB NOT NULL,audit_head BLOB NOT NULL,last_operation_digest BLOB,verifier_sha256 BLOB NOT NULL,profile_digest BLOB NOT NULL);
         CREATE TABLE composition_transitions (sequence INTEGER PRIMARY KEY,transition_kind TEXT NOT NULL,job_id TEXT NOT NULL,before_root BLOB NOT NULL,after_root BLOB NOT NULL,event_bytes BLOB NOT NULL,event_digest BLOB NOT NULL UNIQUE);
-        CREATE TABLE proof_requests (operation_digest BLOB PRIMARY KEY,queue_job_id TEXT NOT NULL UNIQUE,queue_operation_id BLOB NOT NULL UNIQUE,queue_receipt_bytes BLOB NOT NULL,queue_receipt_digest BLOB NOT NULL,acceptance_bytes BLOB NOT NULL,acceptance_digest BLOB NOT NULL,receipt_bytes BLOB NOT NULL,artifact_digest BLOB NOT NULL UNIQUE,request_id BLOB NOT NULL,attempt_id BLOB NOT NULL,decision_id BLOB NOT NULL,sequence_before INTEGER NOT NULL,sequence_after INTEGER NOT NULL,state_before_id BLOB NOT NULL,state_after_id BLOB NOT NULL,clearance_root_before BLOB NOT NULL,clearance_root_after BLOB NOT NULL,clearance_count_before INTEGER NOT NULL,clearance_count_after INTEGER NOT NULL,state_binding_before BLOB NOT NULL,state_binding_after BLOB NOT NULL,audit_head_before BLOB NOT NULL,audit_head_after BLOB NOT NULL,policy_result INTEGER NOT NULL,effective_directive INTEGER NOT NULL,created_ms INTEGER NOT NULL);
+        CREATE TABLE proof_requests (operation_digest BLOB PRIMARY KEY,queue_job_id TEXT NOT NULL UNIQUE,queue_operation_id BLOB NOT NULL UNIQUE,queue_view_bytes BLOB NOT NULL,queue_view_digest BLOB NOT NULL,acceptance_bytes BLOB NOT NULL,acceptance_digest BLOB NOT NULL,receipt_bytes BLOB NOT NULL,artifact_digest BLOB NOT NULL UNIQUE,request_id BLOB NOT NULL,attempt_id BLOB NOT NULL,decision_id BLOB NOT NULL,sequence_before INTEGER NOT NULL,sequence_after INTEGER NOT NULL,state_before_id BLOB NOT NULL,state_after_id BLOB NOT NULL,clearance_root_before BLOB NOT NULL,clearance_root_after BLOB NOT NULL,clearance_count_before INTEGER NOT NULL,clearance_count_after INTEGER NOT NULL,state_binding_before BLOB NOT NULL,state_binding_after BLOB NOT NULL,audit_head_before BLOB NOT NULL,audit_head_after BLOB NOT NULL,policy_result INTEGER NOT NULL,effective_directive INTEGER NOT NULL,created_ms INTEGER NOT NULL);
         CREATE TABLE proof_audit (sequence INTEGER PRIMARY KEY,previous_head BLOB NOT NULL,event_commitment BLOB NOT NULL UNIQUE,current_head BLOB NOT NULL,payload BLOB NOT NULL);
         CREATE TABLE proof_transitions (sequence_after INTEGER PRIMARY KEY,operation_digest BLOB NOT NULL UNIQUE,state_binding_before BLOB NOT NULL,state_binding_after BLOB NOT NULL,payment_root_before BLOB NOT NULL,payment_root_after BLOB NOT NULL,settled_batch_count_before INTEGER NOT NULL,settled_batch_count_after INTEGER NOT NULL);
         CREATE TABLE application_dispositions (disposition_id BLOB PRIMARY KEY,queue_job_id TEXT NOT NULL UNIQUE,queue_operation_id BLOB NOT NULL UNIQUE,operation_digest BLOB NOT NULL UNIQUE,acceptance_digest BLOB NOT NULL,status TEXT NOT NULL,receipt_bytes BLOB,receipt_digest BLOB,duplicate_convergence INTEGER NOT NULL,error_code TEXT,created_ms INTEGER NOT NULL);
@@ -721,6 +805,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
     )
 
 
+@_public_independent_api
 def restore_export_to_fresh_database(path: Path, raw: bytes, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(path, Path) or path.exists() or not path.parent.is_dir():
         _fail("restore_target")

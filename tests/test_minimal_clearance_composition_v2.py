@@ -4,10 +4,12 @@ from pathlib import Path
 import json
 import sqlite3
 import tempfile
+import traceback
 import unittest
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 import inspect
+from unittest.mock import patch
 
 import tests.test_minimal_clearance_verification_queue as queue_fixtures
 from app.minimal_clearance_composition import (
@@ -159,6 +161,61 @@ class CompositionV2Tests(unittest.TestCase):
         self.assertEqual(result.status, "DELIVERY_UNCONFIRMED")
         self.assertEqual(receiver.calls, 0)
         self.assertEqual(store.snapshot()["outbox_counts"]["DELIVERY_UNCONFIRMED"], 1)
+
+    def test_hostile_queue_receiver_and_storage_failures_are_redacted(self) -> None:
+        canaries = (
+            "PHI_CANARY_MEMBER_0001",
+            "credential CANARY_SECRET_ABC123",
+            r"C:\CANARY\private-clearance.sqlite3",
+        )
+
+        def assert_redacted(error: BaseException) -> None:
+            rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            self.assertIsNone(error.__cause__)
+            self.assertIsNone(error.__context__)
+            for canary in canaries:
+                self.assertNotIn(canary, str(error))
+                self.assertNotIn(canary, repr(error))
+                self.assertNotIn(canary, rendered)
+
+        config = self._config()
+        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
+
+        def hostile_reader(*_args, **_kwargs):
+            raise RuntimeError("; ".join(canaries))
+
+        with patch.object(composition_module, "read_verified_job", hostile_reader):
+            with self.assertRaises(Exception) as caught:
+                store.process_verified_job(self.root / "missing-queue.sqlite3", "job-1")
+        assert_redacted(caught.exception)
+
+        queue = self._verified_queue()
+        store.process_verified_job(queue.path, "job-1")
+        work = store.claim_next_outbox("dispatch-worker")
+        self.assertIsNotNone(work)
+        assert work is not None
+
+        class HostileReceiver(_Receiver):
+            def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes:
+                raise RuntimeError("; ".join(canaries))
+
+        receiver = HostileReceiver(config)
+        with patch.object(store, "_mark_delivery_unconfirmed", side_effect=RuntimeError("; ".join(canaries))):
+            with self.assertRaises(Exception) as caught:
+                store.dispatch(work, receiver=receiver)
+        assert_redacted(caught.exception)
+
+        support = json.dumps(store.support_summary(), sort_keys=True)
+        exported = store.export_bytes()
+        persisted = store.path.read_bytes()
+        self.assertNotIn(b"stdout_sha3_512", exported)
+        self.assertNotIn(b"stderr_sha3_512", exported)
+        self.assertNotIn(b"stdout_sha3_512", persisted)
+        self.assertNotIn(b"stderr_sha3_512", persisted)
+        for canary in canaries:
+            self.assertNotIn(canary, support)
+            self.assertNotIn(canary.encode("ascii"), exported)
+            self.assertNotIn(canary.encode("ascii"), persisted)
 
     def test_export_restore_and_exact_fresh_table_boundary(self) -> None:
         config = self._config()
