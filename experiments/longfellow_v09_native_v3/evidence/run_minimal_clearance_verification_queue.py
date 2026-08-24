@@ -58,10 +58,16 @@ class _Factory:
 
 
 def _read_identity(path: Path) -> tuple[bytes, str, bool]:
-    if not path.is_file() or path.is_symlink():
-        raise RuntimeError("identity_source_not_regular")
-    raw = path.read_bytes()
-    return raw, hashlib.sha256(raw).hexdigest().upper(), not bool(path.stat().st_mode & stat.S_IWRITE)
+    try:
+        if not path.is_file() or path.is_symlink():
+            raise RuntimeError("identity_source_not_regular")
+        raw = path.read_bytes()
+        readonly = not bool(path.stat().st_mode & stat.S_IWRITE)
+    except RuntimeError:
+        raise
+    except (OSError, ValueError):
+        raise RuntimeError("identity_source_not_regular") from None
+    return raw, hashlib.sha256(raw).hexdigest().upper(), readonly
 
 
 def _json_bytes(value: dict[str, Any]) -> bytes:
@@ -122,10 +128,8 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
     _, verifier_hash_after, _ = _read_identity(verifier)
     if artifact_hash_after != ARTIFACT_SHA256 or artifact_readonly_after is not True or verifier_hash_after != VERIFIER_SHA256:
         raise RuntimeError("source_identity_changed")
-    transition_value = json.loads(exported.decode("ascii"))
-    claims = [item for item in transition_value["transitions"] if item["transition_kind"] == "CLAIM"]
-    completes = [item for item in transition_value["transitions"] if item["transition_kind"] == "COMPLETE_VERIFIED"]
-    workers_seen = {item["event_bytes"] for item in claims}
+    claims = range(int(export_summary["claim_count"]))
+    completes = range(int(export_summary["completion_count"]))
     receipts = []
     for result in results:
         receipt = json.loads(result.receipt_bytes.decode("ascii"))
@@ -141,7 +145,7 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
         "queue_schema": config.as_json()["schema_version"], "queue_id": config.queue_id,
         "verification_count": 4, "verified_count": 4, "retry_count": 0, "rejected_count": 0, "held_count": 0,
         "distinct_job_count": len({item["job_id"] for item in receipts}), "distinct_lease_count": len(claims),
-        "distinct_worker_count": len(workers_seen), "distinct_verifier_instance_count": len(factory.instances),
+        "distinct_worker_count": int(export_summary["distinct_worker_count"]), "distinct_verifier_instance_count": len(factory.instances),
         "distinct_custody_snapshot_count": len(claims), "verification_overlap": True,
         "artifact_bytes": ARTIFACT_BYTES, "artifact_sha256": ARTIFACT_SHA256, "artifact_sha3_512": ARTIFACT_SHA3_512,
         "artifact_readonly_before": artifact_readonly, "artifact_readonly_after": artifact_readonly_after,

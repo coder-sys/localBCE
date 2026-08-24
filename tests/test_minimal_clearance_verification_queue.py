@@ -230,6 +230,10 @@ class VerificationQueueTests(TestCase):
     def _metadata(ref: str = "opaque-ref") -> ArtifactMetadata:
         return ArtifactMetadata(ref, len(_RAW), _SHA256, _SHA3)
 
+    @staticmethod
+    def _lease_token(worker_id: str) -> bytes:
+        return hashlib.sha3_256(worker_id.encode("ascii")).digest()
+
     def _admit(self, store: VerificationQueueStore, job_id: str = "job-1", ref: str = "opaque-ref"):
         return store.admit(job_id=job_id, metadata=self._metadata(ref))
 
@@ -247,7 +251,7 @@ class VerificationQueueTests(TestCase):
             store.admit(job_id="job-1", metadata=self._metadata("different-ref"))
         with self.assertRaises(QueueBackpressureError):
             self._admit(store, "job-2")
-        work = store.claim_next(worker_id="worker-1")
+        work = store.claim_next(worker_id="worker-1", lease_token=self._lease_token("worker-1"))
         self.assertIsNotNone(work)
         with self.assertRaises(QueueBackpressureError):
             self._admit(store, "job-2")
@@ -269,11 +273,11 @@ class VerificationQueueTests(TestCase):
         store = self._store(capacity=1)
         self._admit(store)
         with ThreadPoolExecutor(max_workers=2) as executor:
-            claims = list(executor.map(lambda worker: store.claim_next(worker_id=worker), ("w1", "w2")))
+            claims = list(executor.map(lambda worker: store.claim_next(worker_id=worker, lease_token=self._lease_token(worker)), ("w1", "w2")))
         work = next(item for item in claims if item is not None)
         self.assertEqual(sum(item is not None for item in claims), 1)
         before = store.export_bytes()
-        bad = type(work)(work.queue_id, work.job_id, work.operation_id, work.metadata, work.attempt, "other", work.lease_token, work.lease_expires_ms, work.expected_verifier_sha256)
+        bad = replace(work, worker_id="other")
         with self.assertRaises(QueueLeaseError):
             store.complete_rejected(bad, "proof_rejected")
         self.assertEqual(store.export_bytes(), before)
@@ -285,19 +289,19 @@ class VerificationQueueTests(TestCase):
     def test_lease_bearer_is_memory_only_and_digest_fences_completion(self) -> None:
         store = self._store(capacity=1)
         self._admit(store)
-        work = store.claim_next(worker_id="digest-worker")
+        work = store.claim_next(worker_id="digest-worker", lease_token=self._lease_token("digest-worker"))
         self.assertIsNotNone(work)
         exported = store.export_bytes()
         self.assertNotIn(work.lease_token, exported)
         with self.assertRaises(QueueLeaseError) as caught:
-            store.complete_rejected(replace(work, lease_token=b"wrong-token-bytes-000000"), "proof_rejected")
+            store.complete_rejected(replace(work, lease_token=b"z" * 32), "proof_rejected")
         self.assertEqual(str(caught.exception), "completion_lease_fence")
         self.assertIsNone(caught.exception.__cause__)
         self.assertIsNone(caught.exception.__context__)
         self.assertEqual(exported, store.export_bytes())
         self.assertEqual(store.complete_rejected(work, "proof_rejected").status, "REJECTED")
         with self.assertRaises(QueueLeaseError):
-            store.complete_rejected(replace(work, lease_token=b"wrong-token-bytes-000000"), "proof_rejected")
+            store.complete_rejected(replace(work, lease_token=b"z" * 32), "proof_rejected")
         verify_export_bytes(store.export_bytes())
 
     def test_expiry_requeues_then_holds_at_max_attempt(self) -> None:
@@ -305,12 +309,12 @@ class VerificationQueueTests(TestCase):
         store = self._store(clock=clock, capacity=1,)
         self._admit(store)
         for attempt in (1, 2):
-            work = store.claim_next(worker_id=f"w{attempt}")
+            work = store.claim_next(worker_id=f"w{attempt}", lease_token=self._lease_token(f"w{attempt}"))
             self.assertEqual(work.attempt, attempt)
             clock.advance(31_000)
             self.assertEqual(store.recover_expired(), 1)
             self.assertEqual(store.get_job("job-1").status, "QUEUED")
-        work = store.claim_next(worker_id="w3")
+        work = store.claim_next(worker_id="w3", lease_token=self._lease_token("w3"))
         self.assertEqual(work.attempt, 3)
         clock.advance(31_000)
         self.assertEqual(store.recover_expired(), 1)
@@ -321,12 +325,12 @@ class VerificationQueueTests(TestCase):
         store = self._store(capacity=5)
         for index in range(5):
             self._admit(store, f"job-{index}", f"opaque-{index}")
-        claims = [store.claim_next(worker_id=f"worker-{index}") for index in range(4)]
+        claims = [store.claim_next(worker_id=f"worker-{index}", lease_token=self._lease_token(f"worker-{index}")) for index in range(4)]
         self.assertTrue(all(claim is not None for claim in claims))
-        recovered = store.claim_next(worker_id="worker-0")
+        recovered = store.claim_next(worker_id="worker-0", lease_token=self._lease_token("worker-0"))
         self.assertEqual(recovered, claims[0])
         with self.assertRaises(QueueBackpressureError) as caught:
-            store.claim_next(worker_id="worker-4")
+            store.claim_next(worker_id="worker-4", lease_token=self._lease_token("worker-4"))
         self.assertEqual(str(caught.exception), "queue_worker_capacity")
         store.verify_integrity()
 
@@ -470,7 +474,7 @@ class VerificationQueueTests(TestCase):
 
         store = self._store(before_fault=retry_fault)
         self._admit(store)
-        work = store.claim_next(worker_id="retry-worker")
+        work = store.claim_next(worker_id="retry-worker", lease_token=self._lease_token("retry-worker"))
         before = store.export_bytes()
         armed["value"] = True
         with self.assertRaises(RuntimeError):
@@ -487,7 +491,7 @@ class VerificationQueueTests(TestCase):
 
             store = self._store(before_fault=fault)
             self._admit(store)
-            work = store.claim_next(worker_id="worker")
+            work = store.claim_next(worker_id="worker", lease_token=self._lease_token("worker"))
             before = store.export_bytes()
             armed["value"] = True
             with self.assertRaises(RuntimeError):
@@ -510,7 +514,7 @@ class VerificationQueueTests(TestCase):
         self.assertEqual(exact.status, "QUEUED")
 
         raised["value"] = False
-        work = store.claim_next(worker_id="worker")
+        work = store.claim_next(worker_id="worker", lease_token=self._lease_token("worker"))
 
         def after_complete(label: str) -> None:
             if label == "complete" and not raised["value"]:
@@ -604,7 +608,7 @@ class VerificationQueueTests(TestCase):
             connection.execute("BEGIN IMMEDIATE")
             started = time.monotonic()
             with self.assertRaises(Exception) as caught:
-                store.claim_next(worker_id="blocked-worker")
+                store.claim_next(worker_id="blocked-worker", lease_token=self._lease_token("blocked-worker"))
             elapsed = time.monotonic() - started
             self.assertLess(elapsed, 8.0)
             self.assertIn("queue_busy", str(caught.exception))
@@ -621,6 +625,71 @@ class VerificationQueueTests(TestCase):
             self.assertNotIn("subprocess", text)
             self.assertNotIn("prover", text.lower())
         self.assertIn("MinimalProofAcceptanceV1", source)
+
+    def test_random_bearer_requires_exact_memory_token_across_reopen(self) -> None:
+        clock = _Clock()
+        store = self._store(clock=clock, capacity=1)
+        self._admit(store)
+        token = b"r" * 32
+        work = store.claim_next(worker_id="random-worker", lease_token=token)
+        self.assertIsNotNone(work)
+        self.assertNotIn(token.hex(), repr(work))
+        exported = store.export_bytes()
+        self.assertNotIn(token, exported)
+        self.assertNotIn(token.hex().encode("ascii"), exported)
+        self.assertNotIn(token, json.dumps(store.support_summary(), sort_keys=True).encode("ascii"))
+        with self.assertRaises(QueueLeaseError) as caught:
+            store.claim_next(worker_id="random-worker", lease_token=b"n" * 32)
+        self.assertNotIn(token.hex(), str(caught.exception))
+        reopened = VerificationQueueStore(path=store.path, config=store.config, clock=clock)
+        self.assertEqual(reopened.claim_next(worker_id="random-worker", lease_token=token), work)
+        with self.assertRaises(QueueLeaseError):
+            reopened.complete_rejected(replace(work, lease_token=b"n" * 32), "proof_rejected")
+        self.assertEqual(reopened.complete_rejected(work, "proof_rejected").status, "REJECTED")
+
+    def test_exact_schema_manifest_has_no_redundant_operation_table(self) -> None:
+        store = self._store()
+        with closing(sqlite3.connect(store.path)) as connection:
+            names = {name for (kind, name) in connection.execute("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")}
+        self.assertNotIn("queue_operations", names)
+        self.assertIn("queue_results", names)
+        with self.assertRaises(IndependentQueueError):
+            with closing(sqlite3.connect(store.path)) as connection:
+                connection.execute("PRAGMA writable_schema=ON")
+                connection.execute("UPDATE sqlite_master SET sql=replace(sql,'queue_jobs_status_eligible','queue_jobs_status_wrong') WHERE type='index' AND name='queue_jobs_status_eligible'")
+                connection.commit()
+            verify_database(store.path)
+
+    def test_independent_rejects_live_lease_row_drift_against_claim_event(self) -> None:
+        store = self._store()
+        self._admit(store)
+        work = store.claim_next(worker_id="history-worker", lease_token=b"h" * 32)
+        self.assertIsNotNone(work)
+        with closing(sqlite3.connect(store.path)) as connection:
+            connection.execute("DROP TRIGGER queue_leases_no_update")
+            connection.execute("UPDATE queue_leases SET worker_id=? WHERE job_id=?", ("tampered-worker", work.job_id))
+            connection.execute("CREATE TRIGGER queue_leases_no_update BEFORE UPDATE ON queue_leases BEGIN SELECT RAISE(ABORT,'queue_leases_insert_delete_only'); END")
+            connection.commit()
+        with self.assertRaises(IndependentQueueError):
+            verify_database(store.path)
+        with self.assertRaises((QueueIntegrityError, IndependentQueueError)):
+            VerificationQueueStore(path=store.path, config=store.config)
+
+    def test_expiry_completion_race_reconciles_without_second_terminal_write(self) -> None:
+        clock = _Clock()
+        store = self._store(clock=clock, capacity=1)
+        self._admit(store)
+        token = b"e" * 32
+        work = store.claim_next(worker_id="expiry-worker", lease_token=token)
+        clock.advance(31_000)
+        worker = QueueWorker(store=store, worker_id="expiry-worker", custody=_Custody(self.root / "expiry-custody"), verifier_factory=_Factory())
+        reconciled = worker._terminal(work, status="REJECTED", error_code="proof_rejected")
+        self.assertEqual(reconciled.status, "QUEUED")
+        self.assertEqual(store.get_job("job-1").status, "QUEUED")
+        self.assertIsNone(store.retry_result(work.operation_id))
+        with self.assertRaises(QueueLeaseError):
+            store.complete_rejected(work, "proof_rejected")
+        verify_database(store.path)
 
 
 if __name__ == "__main__":
