@@ -532,6 +532,11 @@ class MirrorV2Fixture(unittest.TestCase):
             service.claim_slot(slot_id, lease_token="short-secret")
         self.assertEqual(before, self._state_fingerprint(service))
 
+    def test_ingress_public_export_has_no_undefined_independent_symbol(self) -> None:
+        namespace: dict[str, object] = {}
+        exec("from app.mirror.ingress_v2 import *", namespace)
+        self.assertNotIn("INDEX_DEFINITIONS", namespace)
+
     def test_ingress_constructor_replays_before_use_and_pins_file_identity(self) -> None:
         tampered = self.root / "constructor-tampered.db"
         shutil.copy2(self.ingress_path, tampered)
@@ -544,8 +549,12 @@ class MirrorV2Fixture(unittest.TestCase):
             connection.commit()
         finally:
             connection.close()
+        tampered_bytes = tampered.read_bytes()
+        tampered_hash = hashlib.sha256(tampered_bytes).digest()
         with self.assertRaisesRegex(ingress.IngressError, "ingress:database"):
             ingress.IngressServiceV2(tampered, self.ingress_config, clock=self.clock)
+        self.assertEqual(tampered_bytes, tampered.read_bytes())
+        self.assertEqual(tampered_hash, hashlib.sha256(tampered.read_bytes()).digest())
 
         replacement = self.root / "replacement.db"
         shutil.copy2(self.ingress_path, replacement)
@@ -553,6 +562,56 @@ class MirrorV2Fixture(unittest.TestCase):
         shutil.copy2(replacement, self.ingress_path)
         with self.assertRaisesRegex(ingress.IngressError, "ingress:database-open"):
             self.ingress.ensure_slot(profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.cadence_seconds)
+
+    def test_ingress_pinned_missing_path_is_never_recreated(self) -> None:
+        service, _slot_id = self._fresh_ingress("pinned-missing.db")
+        service.path.unlink()
+        with self.assertRaisesRegex(ingress.IngressError, "ingress:database-open"):
+            service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.cadence_seconds)
+        self.assertFalse(service.path.exists())
+
+    def test_ingress_identity_swap_is_rejected_before_sql_setup(self) -> None:
+        service, _slot_id = self._fresh_ingress("preopen-swap.db")
+        replacement = self.root / "preopen-swap-source.db"
+        shutil.copy2(service.path, replacement)
+        replacement_hash = hashlib.sha256(replacement.read_bytes()).digest()
+        real_connect = ingress.sqlite3.connect
+        holder: dict[str, object] = {}
+
+        class RecordingConnection:
+            def __init__(self, inner: sqlite3.Connection) -> None:
+                self.inner = inner
+                self.execute_calls: list[object] = []
+
+            def __setattr__(self, name: str, value: object) -> None:
+                if name in {"inner", "execute_calls"}:
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self.inner, name, value)
+
+            def execute(self, *args: object, **kwargs: object) -> object:
+                self.execute_calls.append((args, kwargs))
+                return self.inner.execute(*args, **kwargs)
+
+            def close(self) -> None:
+                self.inner.close()
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self.inner, name)
+
+        def swap_then_connect(*args: object, **kwargs: object) -> RecordingConnection:
+            service.path.unlink()
+            shutil.copy2(replacement, service.path)
+            wrapped = RecordingConnection(real_connect(*args, **kwargs))
+            holder["connection"] = wrapped
+            return wrapped
+
+        with mock.patch.object(ingress.sqlite3, "connect", side_effect=swap_then_connect):
+            with self.assertRaisesRegex(ingress.IngressError, "ingress:database-open"):
+                service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.cadence_seconds)
+        wrapped = holder["connection"]
+        self.assertEqual([], wrapped.execute_calls)  # type: ignore[union-attr]
+        self.assertEqual(replacement_hash, hashlib.sha256(service.path.read_bytes()).digest())
 
     def test_ingress_sqlite_full_rolls_back_capture_and_records_capacity_hold(self) -> None:
         service, slot_id = self._fresh_ingress("capacity-fallback.db")

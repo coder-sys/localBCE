@@ -273,16 +273,36 @@ def _connection(
     timeout: float = 0.25,
     configure_cap: bool = True,
     expected_identity: tuple[int, int] | None = None,
+    create: bool = False,
 ) -> sqlite3.Connection:
     database = Path(path)
-    before = _path_identity(database, allow_missing=True)
+    if create and expected_identity is not None:
+        raise IngressError("ingress:database-open")
+    before = _path_identity(database, allow_missing=create)
+    if not create and before is None:
+        raise IngressError("ingress:database-open")
     if expected_identity is not None and (
         before is None or (before[0], before[1]) != expected_identity
     ):
         raise IngressError("ingress:database-open")
     connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(database, timeout=timeout, isolation_level=None)
+        if create:
+            connection = sqlite3.connect(database, timeout=timeout, isolation_level=None)
+        else:
+            connection = sqlite3.connect(
+                database.absolute().as_uri() + "?mode=rw",
+                uri=True,
+                timeout=timeout,
+                isolation_level=None,
+            )
+        after_connect = _path_identity(database, allow_missing=False)
+        if (
+            after_connect is None
+            or (before is not None and (after_connect[0], after_connect[1]) != (before[0], before[1]))
+            or (expected_identity is not None and (after_connect[0], after_connect[1]) != expected_identity)
+        ):
+            raise IngressError("ingress:database-open")
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=250")
@@ -300,7 +320,7 @@ def _connection(
             if page_size <= 0 or page_count < 0 or page_count * page_size > MAX_DATABASE_BYTES:
                 raise IngressError("ingress:capacity")
         after = _path_identity(database, allow_missing=False)
-        if after is None or (before is not None and after != before):
+        if after is None or (before is not None and (after[0], after[1]) != (before[0], before[1])):
             raise IngressError("ingress:database-open")
         if expected_identity is not None and (after[0], after[1]) != expected_identity:
             raise IngressError("ingress:database-open")
@@ -357,6 +377,24 @@ def _schema_matches(connection: sqlite3.Connection) -> bool:
         return independent._index_definitions(connection) == independent.INDEX_DEFINITIONS
     except (independent.IngressVerificationError, sqlite3.Error, TypeError, ValueError):
         return False
+
+
+def _is_uninitialized_database(path: Path) -> bool:
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = independent._open(path)
+        return connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
+        ).fetchone() is None
+    except (independent.IngressVerificationError, OSError, sqlite3.Error, TypeError, ValueError):
+        return False
+    finally:
+        if connection is not None:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            connection.close()
 
 
 _SCHEMA_DDL = (
@@ -453,7 +491,23 @@ _SCHEMA_DDL = (
 
 
 def _init(path: Path, config: IngressConfigV2) -> None:
-    connection = _connection(path, configure_cap=False)
+    existing = _path_identity(path, allow_missing=True)
+    creating = existing is None or _is_uninitialized_database(path)
+    if not creating:
+        try:
+            independent.verify_database(
+                path,
+                expected_database_id=config.database_id,
+                expected_config_digest=config.digest,
+            )
+        except independent.IngressVerificationError:
+            raise IngressError("ingress:database") from None
+    connection = _connection(
+        path,
+        configure_cap=False,
+        expected_identity=None if existing is None else (existing[0], existing[1]),
+        create=existing is None,
+    )
     try:
         current = _table_names(connection)
         if current and current != tuple(sorted(TABLES)):
@@ -1449,5 +1503,5 @@ __all__ = [
     "IngressConfigV2", "IngressReceipt", "IngressError",
     "IngressConflictError", "IngressBusyError", "IngressServiceV2",
     "SCHEMA", "SCHEMA_VERSION", "TABLES", "STATES", "FIXED_FLAGS",
-    "MAX_IDENTIFIER_BYTES", "INDEX_DEFINITIONS",
+    "MAX_IDENTIFIER_BYTES",
 ]
