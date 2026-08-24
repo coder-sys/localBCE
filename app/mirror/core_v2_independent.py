@@ -24,6 +24,7 @@ SCHEMA_VERSION = 2
 DOMAIN = "BL/MIRROR/CORE/V2/"
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 262_144
+MAX_EVENT_BYTES = 786_432
 GENESIS_ROOT = "0" * 128
 TABLES = (
     "core_meta", "core_artifacts", "core_heads", "core_sessions", "core_slots", "core_events",
@@ -91,7 +92,8 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 
 def _parse(raw: bytes, label: str = "core:parse") -> dict[str, object]:
-    if type(raw) is not bytes or not raw or len(raw) > MAX_ARTIFACT_BYTES:
+    limit = MAX_EVENT_BYTES if "event" in label or "receipt" in label else MAX_ARTIFACT_BYTES
+    if type(raw) is not bytes or not raw or len(raw) > limit:
         raise CoreVerificationError(label)
     try:
         value = json.loads(raw.decode("ascii"), object_pairs_hook=_reject_duplicate_keys, parse_constant=lambda _value: (_ for _ in ()).throw(CoreVerificationError("core:constant")))
@@ -415,7 +417,7 @@ def verify_database(path: str | Path, *, expected_database_id: str | None = None
             kind = str(value["event_kind"])
 
             if kind == "ARTIFACT":
-                if value["prior_state"] != "NONE" or value["next_state"] not in ARTIFACT_KINDS or value["stream_kind"] != "ARTIFACT" or value["stream_id"] != value["next_state"]:
+                if value["prior_state"] != "NONE" or value["next_state"] not in ARTIFACT_KINDS or value["stream_kind"] != "ARTIFACT":
                     raise CoreVerificationError("core:event-artifact")
                 if type(material["raw_hex"]) is not str or material["raw_hex"] != material["raw_hex"].lower() or len(material["raw_hex"]) % 2:
                     raise CoreVerificationError("core:event-artifact")
@@ -428,6 +430,9 @@ def verify_database(path: str | Path, *, expected_database_id: str | None = None
                 _hex(material["profile_digest"], "core:event-artifact")
                 synthetic = {"artifact_id": material["artifact_id"], "kind": material["kind"], "raw": raw_artifact, "profile_digest": material["profile_digest"], "source_artifact_id": material["source_artifact_id"], "predecessor_id": material["predecessor_id"], "current_state": material["current_state"], "created_event_sequence": value["sequence"]}
                 parsed_artifact = _verify_artifact_value(synthetic)
+                expected_stream_id = str(parsed_artifact["case_id"]) if material["kind"] == "CASE" else str(value["next_state"])
+                if value["stream_id"] != expected_stream_id:
+                    raise CoreVerificationError("core:case-stream")
                 if material["artifact_id"] != value["subject_id"] or material["artifact_id"] != value["payload_digest"] or material["kind"] != value["next_state"] or value["payload_length"] != len(raw_artifact) or type(material["ingress_watermark"]) is not int or material["ingress_watermark"] < 0:
                     raise CoreVerificationError("core:event-artifact")
                 if material["kind"] == "GRAPH":
@@ -656,4 +661,4 @@ def logical_export(result: Mapping[str, object]) -> bytes:
     })
 
 
-__all__ = ["SCHEMA", "SCHEMA_VERSION", "TABLES", "TABLE_COLUMNS", "EXPLICIT_INDEX", "ARTIFACT_KINDS", "SESSION_STATES", "DELIVERY_STATES", "OBSERVATION_RESULTS", "FIXED_FLAGS", "EVENT_KINDS", "CoreVerificationError", "verify_database", "logical_export", "_canonical", "_digest", "_raw_digest", "_parse", "_event_root", "_stream_root", "GENESIS_ROOT"]
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "DOMAIN", "MAX_DATABASE_BYTES", "MAX_ARTIFACT_BYTES", "MAX_EVENT_BYTES", "TABLES", "TABLE_COLUMNS", "EXPLICIT_INDEX", "ARTIFACT_KINDS", "SESSION_STATES", "DELIVERY_STATES", "OBSERVATION_RESULTS", "FIXED_FLAGS", "EVENT_KINDS", "CoreVerificationError", "verify_database", "logical_export", "_canonical", "_digest", "_raw_digest", "_parse", "_event_root", "_stream_root", "GENESIS_ROOT"]

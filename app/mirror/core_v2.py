@@ -37,6 +37,9 @@ CASE_EDGES = {
     "PERSISTENCE": {"RESOLVED", "SUPERSEDED"},
 }
 TOKEN_RE = re.compile(r"^[0-9a-f]{128}$")
+MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
+MAX_ARTIFACT_BYTES = independent.MAX_ARTIFACT_BYTES
+MAX_EVENT_BYTES = independent.MAX_EVENT_BYTES
 
 
 class CoreError(ValueError):
@@ -115,7 +118,27 @@ def _raw_digest(label: str, raw: bytes) -> str:
     return independent._raw_digest(label, raw)
 
 
+def _is_capacity_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in ("database or disk is full", "max_page_count", "page count", "too big"))
+
+
+def _raise_sqlite_error(exc: sqlite3.Error, *, busy: bool = False) -> None:
+    if _is_capacity_error(exc):
+        raise_redacted(CoreError, "core:capacity")
+    if busy and ("locked" in str(exc).lower() or "busy" in str(exc).lower()):
+        raise_redacted(CoreBusyError, "core:busy")
+    raise_redacted(CoreError, "core:database")
+
+
 def _connection(path: Path) -> sqlite3.Connection:
+    try:
+        if path.is_file() and path.stat().st_size > MAX_DATABASE_BYTES:
+            raise_redacted(CoreError, "core:capacity")
+    except CoreError:
+        raise
+    except OSError:
+        raise_redacted(CoreError, "core:database-open")
     try:
         connection = sqlite3.connect(path, timeout=0.25, isolation_level=None)
         connection.row_factory = sqlite3.Row
@@ -123,8 +146,23 @@ def _connection(path: Path) -> sqlite3.Connection:
         connection.execute("PRAGMA busy_timeout=250")
         connection.execute("PRAGMA journal_mode=DELETE")
         connection.execute("PRAGMA synchronous=FULL")
+        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        max_pages = MAX_DATABASE_BYTES // page_size
+        if page_size <= 0 or max_pages <= 0:
+            raise_redacted(CoreError, "core:capacity")
+        configured_pages = int(connection.execute(f"PRAGMA max_page_count={max_pages}").fetchone()[0])
+        if configured_pages <= 0 or configured_pages * page_size > MAX_DATABASE_BYTES:
+            raise_redacted(CoreError, "core:capacity")
+        if path.is_file() and path.stat().st_size > MAX_DATABASE_BYTES:
+            raise_redacted(CoreError, "core:capacity")
         return connection
-    except (OSError, sqlite3.Error):
+    except CoreError:
+        raise
+    except OSError:
+        raise_redacted(CoreError, "core:database-open")
+    except sqlite3.Error as exc:
+        if _is_capacity_error(exc):
+            raise_redacted(CoreError, "core:capacity")
         raise_redacted(CoreError, "core:database-open")
 
 
@@ -227,8 +265,8 @@ def _init(path: Path, config: CoreConfigV2) -> None:
                 raise CoreError("core:identity")
     except CoreError:
         raise
-    except sqlite3.Error:
-        raise_redacted(CoreError, "core:database-initialize")
+    except sqlite3.Error as exc:
+        _raise_sqlite_error(exc)
     finally:
         connection.close()
 
@@ -256,7 +294,7 @@ class CoreServiceV2:
         latest = None
         if row is not None:
             try:
-                latest = independent._parse(bytes(row[0]))["observed_at"]
+                latest = independent._parse(bytes(row[0]), "core:event-raw")["observed_at"]
             except Exception:
                 raise CoreError("core:event")
         if latest is not None and value < int(latest):
@@ -270,7 +308,10 @@ class CoreServiceV2:
 
     @staticmethod
     def _receipt(raw: bytes) -> CoreReceipt:
-        value = json.loads(raw.decode("ascii"))
+        try:
+            value = independent._parse(raw, "core:receipt")
+        except independent.CoreVerificationError:
+            raise_redacted(CoreError, "core:receipt")
         return CoreReceipt(raw=raw, operation_id=str(value["operation_id"]), event_id=str(value["event_id"]), subject_id=str(value["subject_id"]), next_state=str(value["next_state"]), sequence=int(value["sequence"]), after_root=str(value["after_root"]))
 
     @staticmethod
@@ -296,18 +337,22 @@ class CoreServiceV2:
         body["after_root"] = independent._event_root(body)
         body["stream_after_root"] = independent._stream_root(body)
         raw = _canonical(body)
+        if len(raw) > MAX_EVENT_BYTES:
+            raise CoreConflictError("core:capacity")
         connection.execute("INSERT INTO core_events(sequence,event_id,event_kind,operation_id,subject_id,event_raw,receipt_digest) VALUES(?,?,?,?,?,?,?)", (sequence, body["event_id"], kind, operation_id, subject_id, raw, _raw_digest("receipt", raw)))
         connection.execute("UPDATE core_meta SET sequence=?,head_root=?,ingress_watermark=MAX(ingress_watermark,?) WHERE meta_id=1", (sequence, body["after_root"], ingress_watermark))
         connection.execute("INSERT INTO core_heads(stream_kind,stream_id,head_ref,head_root,event_sequence) VALUES(?,?,?,?,?) ON CONFLICT(stream_kind,stream_id) DO UPDATE SET head_ref=excluded.head_ref,head_root=excluded.head_root,event_sequence=excluded.event_sequence", (stream_kind, stream_id, head_ref, body["stream_after_root"], sequence))
         return raw
 
     def _admit_artifact(self, connection: sqlite3.Connection, *, kind: str, raw: bytes, profile_digest: str, predecessor_id: str | None, source_artifact_id: str | None, operation_id: str, request_digest: str, state: str, observed_at: int, ingress_watermark: int = 0) -> tuple[str, bytes]:
+        if type(raw) is not bytes or not raw or len(raw) > MAX_ARTIFACT_BYTES:
+            raise CoreConflictError("core:capacity")
         if kind not in ARTIFACT_KINDS:
             raise CoreConflictError("core:artifact-kind")
         artifact_id = _digest("artifact-row-id", {"kind": kind, "raw": _raw_digest("artifact-bytes", raw), "profile_digest": profile_digest, "source_artifact_id": source_artifact_id, "predecessor_id": predecessor_id})
         existing_event = self._event(connection, operation_id)
         if existing_event is not None:
-            value = independent._parse(existing_event)
+            value = independent._parse(existing_event, "core:event-raw")
             material = value.get("material")
             if value.get("event_kind") != "ARTIFACT" or not isinstance(material, dict) or material.get("artifact_id") != artifact_id or material.get("raw_digest") != _raw_digest("artifact-bytes", raw):
                 raise CoreConflictError("core:operation-conflict")
@@ -319,7 +364,14 @@ class CoreServiceV2:
             raise CoreError("core:artifact-receipt")
         connection.execute("INSERT INTO core_artifacts(artifact_id,kind,raw,profile_digest,source_artifact_id,predecessor_id,current_state,created_event_sequence) VALUES(?,?,?,?,?,?,?,0)", (artifact_id, kind, raw, profile_digest, source_artifact_id, predecessor_id, state))
         material = {"artifact_id": artifact_id, "kind": kind, "raw_hex": raw.hex(), "raw_digest": _raw_digest("artifact-bytes", raw), "raw_length": len(raw), "profile_digest": profile_digest, "source_artifact_id": source_artifact_id, "predecessor_id": predecessor_id, "current_state": state, "ingress_watermark": ingress_watermark}
-        event_raw = self._append(connection, kind="ARTIFACT", operation_id=operation_id, subject_id=artifact_id, request_digest=request_digest, prior_state="NONE", next_state=kind, attempt=0, observed_at=observed_at, material=material, payload_digest=artifact_id, payload_length=len(raw), stream_kind="ARTIFACT", stream_id=kind, head_ref=artifact_id, ingress_watermark=ingress_watermark)
+        stream_id = kind
+        if kind == "CASE":
+            try:
+                case_value = independent._parse(raw, "core:artifact")
+                stream_id = str(case_value["case_id"])
+            except (independent.CoreVerificationError, KeyError, TypeError):
+                raise_redacted(CoreConflictError, "core:case")
+        event_raw = self._append(connection, kind="ARTIFACT", operation_id=operation_id, subject_id=artifact_id, request_digest=request_digest, prior_state="NONE", next_state=kind, attempt=0, observed_at=observed_at, material=material, payload_digest=artifact_id, payload_length=len(raw), stream_kind="ARTIFACT", stream_id=stream_id, head_ref=artifact_id, ingress_watermark=ingress_watermark)
         sequence = json.loads(event_raw.decode("ascii"))["sequence"]
         connection.execute("UPDATE core_artifacts SET created_event_sequence=? WHERE artifact_id=?", (sequence, artifact_id))
         return artifact_id, event_raw
@@ -346,7 +398,7 @@ class CoreServiceV2:
             connection.execute("BEGIN IMMEDIATE")
             existing_event = self._event(connection, source_operation)
             if existing_event is not None:
-                parsed = independent._parse(existing_event)
+                parsed = independent._parse(existing_event, "core:event-raw")
                 material = parsed.get("material")
                 if not isinstance(material, dict) or material.get("artifact_id") != parsed.get("subject_id"):
                     raise CoreError("core:source-receipt")
@@ -385,12 +437,10 @@ class CoreServiceV2:
             raise
         except sqlite3.OperationalError as exc:
             connection.rollback()
-            if "locked" in str(exc).lower() or "busy" in str(exc).lower():
-                raise_redacted(CoreBusyError, "core:busy")
-            raise_redacted(CoreError, "core:database")
-        except sqlite3.Error:
+            _raise_sqlite_error(exc, busy=True)
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 
@@ -412,7 +462,7 @@ class CoreServiceV2:
             existing = self._event(connection, operation_id)
             if existing is not None:
                 connection.commit()
-                return str(independent._parse(existing)["material"]["artifact_id"])
+                return str(independent._parse(existing, "core:event-raw")["material"]["artifact_id"])
             head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (kind,)).fetchone()
             predecessor = str(head[0]) if head else None
             now = self._owner_now(connection)
@@ -422,9 +472,9 @@ class CoreServiceV2:
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 
@@ -473,8 +523,18 @@ class CoreServiceV2:
             existing_event = self._event(connection, operation_id)
             if existing_event is not None:
                 connection.commit()
-                head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='CASE'").fetchone()
-                return str(head[0]) if head is not None else str(independent._parse(existing_event)["material"]["artifact_id"])
+                existing_value = independent._parse(existing_event, "core:event-raw")
+                existing_case = None
+                material = existing_value.get("material")
+                if isinstance(material, dict) and isinstance(material.get("raw_hex"), str):
+                    try:
+                        existing_case = independent._parse(bytes.fromhex(material["raw_hex"]), "core:artifact").get("case_id")
+                    except (ValueError, independent.CoreVerificationError):
+                        raise_redacted(CoreConflictError, "core:case")
+                if existing_case != case_id or existing_value.get("stream_id") != case_id:
+                    raise CoreConflictError("core:case-stream")
+                head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (existing_case,)).fetchone()
+                return str(head[0]) if head is not None else str(existing_value["material"]["artifact_id"])
             body = {"schema": "mirror-core-case-v2", "schema_version": 2, "kind": "CASE", "artifact_id": "", "case_id": case_id, "reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": reconciliation["current_source_artifact_id"], "state": "OPEN", "responsibility": "UNKNOWN", "remediation": "UNOBSERVED", "retest": "UNREQUESTED", "parity": parity, "reason": reason, "flags": dict(FIXED_FLAGS)}
             body["artifact_id"] = _digest("case-artifact", {key: body[key] for key in body if key != "artifact_id"})
             now = self._owner_now(connection)
@@ -484,9 +544,9 @@ class CoreServiceV2:
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 
@@ -500,15 +560,26 @@ class CoreServiceV2:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
+                existing_value = independent._parse(existing, "core:event-raw")
+                material = existing_value.get("material")
+                try:
+                    existing_case = independent._parse(bytes.fromhex(material["raw_hex"]), "core:artifact").get("case_id") if isinstance(material, dict) and isinstance(material.get("raw_hex"), str) else None
+                except (ValueError, independent.CoreVerificationError):
+                    raise_redacted(CoreConflictError, "core:case")
+                if existing_case is None or existing_value.get("stream_id") != existing_case:
+                    raise CoreConflictError("core:case-stream")
                 connection.commit()
                 return self._receipt(existing)
-            head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='CASE'").fetchone()
-            if head is None or head[0] != case_artifact_id:
-                raise CoreConflictError("core:case-head")
             prior_row = connection.execute("SELECT * FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (case_artifact_id,)).fetchone()
             if prior_row is None:
                 raise CoreConflictError("core:case-missing")
             prior = independent._parse(bytes(prior_row["raw"]))
+            case_id = prior.get("case_id")
+            if type(case_id) is not str or not case_id:
+                raise CoreConflictError("core:case")
+            head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (case_id,)).fetchone()
+            if head is None or head[0] != case_artifact_id:
+                raise CoreConflictError("core:case-head")
             if next_state not in CASE_EDGES.get(str(prior["state"]), set()):
                 raise CoreConflictError("core:case-transition")
             allowed = {"responsibility": {"UNKNOWN", "SHARED", "STATE_SOURCE", "PLAN_OR_PROVIDER", "RIGHTRAIL_PROCESSING"}, "remediation": {"UNOBSERVED", "PROPOSED", "ASSERTED", "VERIFIED"}, "retest": {"UNREQUESTED", "REQUESTED", "EXECUTED"}, "parity": {"UNKNOWN", "PARTIAL", "MATCHED", "DIVERGENT"}}
@@ -539,9 +610,9 @@ class CoreServiceV2:
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 
@@ -559,14 +630,26 @@ class CoreServiceV2:
                 head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (kind,)).fetchone()
                 if head is None or head[0] != expected:
                     raise CoreConflictError("core:authority-head")
-            gov = independent._parse(bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (governance_artifact_id,)).fetchone()[0]))
-            pval = independent._parse(bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (privacy_artifact_id,)).fetchone()[0]))
+            gov_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='GOVERNANCE'", (governance_artifact_id,)).fetchone()
+            privacy_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='PRIVACY'", (privacy_artifact_id,)).fetchone()
+            if gov_row is None or privacy_row is None:
+                raise CoreConflictError("core:authority-missing")
+            try:
+                gov = independent._parse(bytes(gov_row[0]), "core:artifact")
+                pval = independent._parse(bytes(privacy_row[0]), "core:artifact")
+            except (independent.CoreVerificationError, TypeError, ValueError, KeyError):
+                raise_redacted(CoreConflictError, "core:authority")
+            now = self._owner_now(connection)
             if gov.get("decision") != "GRANTED" or pval.get("privacy_decision") != "GRANTED" or pval.get("support_decision") != "GRANTED":
                 raise CoreConflictError("core:authority-negative")
+            for authority in (gov, pval):
+                valid_from = authority.get("valid_from")
+                valid_until = authority.get("valid_until")
+                if type(valid_from) is not int or type(valid_until) is not int or valid_from < 0 or valid_until < valid_from or valid_from > now or now > valid_until:
+                    raise CoreConflictError("core:authority-window")
             count = int(connection.execute("SELECT COUNT(*) FROM core_sessions").fetchone()[0])
             if count >= self.config.max_sessions:
                 raise CoreConflictError("core:capacity")
-            now = self._owner_now(connection)
             row = {"session_id": session_id, "state": "OPEN", "source_artifact_id": source_artifact_id, "governance_artifact_id": governance_artifact_id, "privacy_artifact_id": privacy_artifact_id, "head_root": "", "last_slot": -1, "delivery_state": "DUE", "delivery_job_id": None, "delivery_attempt": 0, "delivery_lease_token_digest": None, "delivery_lease_until": None, "delivery_response_digest": None, "delivery_error_code": None}
             connection.execute("INSERT INTO core_sessions(session_id,state,source_artifact_id,governance_artifact_id,privacy_artifact_id,head_root,last_slot,delivery_state,delivery_job_id,delivery_attempt,delivery_lease_token_digest,delivery_lease_until,delivery_response_digest,delivery_error_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(row[key] for key in independent.TABLE_COLUMNS["core_sessions"]))
             material = {key: row[key] for key in independent.SESSION_FIELDS}
@@ -577,9 +660,9 @@ class CoreServiceV2:
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 
@@ -612,9 +695,9 @@ class CoreServiceV2:
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 
@@ -633,7 +716,7 @@ class CoreServiceV2:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
-                parsed = independent._parse(existing)
+                parsed = independent._parse(existing, "core:event-raw")
                 if not isinstance(parsed.get("material"), dict) or parsed["material"].get("observation") != observation:
                     raise CoreConflictError("core:observation-conflict")
                 connection.commit()
@@ -660,9 +743,9 @@ class CoreServiceV2:
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 
@@ -692,9 +775,9 @@ class CoreServiceV2:
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 
@@ -771,9 +854,9 @@ class CoreServiceV2:
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 
@@ -824,9 +907,9 @@ class CoreServiceV2:
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
             connection.rollback()
-            raise_redacted(CoreError, "core:database")
+            _raise_sqlite_error(exc)
         finally:
             connection.close()
 

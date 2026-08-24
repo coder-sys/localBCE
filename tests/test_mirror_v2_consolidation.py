@@ -352,6 +352,137 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_case_heads_are_lineage_scoped_and_interleaved_retries_converge(self) -> None:
+        case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        case_b = self._changed_case()
+        a_responsibility = self.core.advance_case(case_a, next_state="RESPONSIBILITY", responsibility="UNKNOWN")
+        b_responsibility = self.core.advance_case(case_b, next_state="RESPONSIBILITY", responsibility="STATE_SOURCE")
+        a_remediation = self.core.advance_case(a_responsibility.subject_id, next_state="REMEDIATION", remediation="PROPOSED")
+        b_remediation = self.core.advance_case(b_responsibility.subject_id, next_state="REMEDIATION", remediation="ASSERTED")
+        self.assertEqual(a_remediation.raw, self.core.advance_case(a_responsibility.subject_id, next_state="REMEDIATION", remediation="PROPOSED").raw)
+        self.assertEqual(b_remediation.raw, self.core.advance_case(b_responsibility.subject_id, next_state="REMEDIATION", remediation="ASSERTED").raw)
+        verified = self.core.verify()
+        self.assertGreaterEqual(verified["artifact_count"], 11)
+        connection = sqlite3.connect(self.core_path)
+        try:
+            case_ids = []
+            for artifact_id in (case_a, case_b):
+                raw = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()[0]
+                case_ids.append(json.loads(bytes(raw).decode("ascii"))["case_id"])
+            heads = connection.execute("SELECT stream_id,head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id NOT IN ('GRAPH','SOURCE_OBSERVATION','RECONCILIATION','GOVERNANCE','PRIVACY') ORDER BY stream_id").fetchall()
+        finally:
+            connection.close()
+        self.assertEqual({row[0] for row in heads}, set(case_ids))
+        self.assertEqual({row[1] for row in heads}, {a_remediation.subject_id, b_remediation.subject_id})
+
+    def test_independent_rejects_cross_case_stream_rebinding_after_root_rebinding(self) -> None:
+        case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        case_b = self._changed_case()
+        self.core.advance_case(case_a, next_state="RESPONSIBILITY", responsibility="UNKNOWN")
+        b_responsibility = self.core.advance_case(case_b, next_state="RESPONSIBILITY", responsibility="STATE_SOURCE")
+        tampered = self.root / "core-cross-case-stream.db"
+        shutil.copy2(self.core_path, tampered)
+        connection = sqlite3.connect(tampered)
+        try:
+            event_row = connection.execute("SELECT sequence,event_raw FROM core_events WHERE event_kind='ARTIFACT' ORDER BY sequence DESC LIMIT 1").fetchone()
+            event = json.loads(bytes(event_row[1]).decode("ascii"))
+            self.assertEqual(event["material"]["artifact_id"], b_responsibility.subject_id)
+            a_head = connection.execute("SELECT head_root FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (json.loads(bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (case_a,)).fetchone()[0]).decode("ascii"))["case_id"],)).fetchone()[0]
+            event["stream_id"] = json.loads(bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (case_a,)).fetchone()[0]).decode("ascii"))["case_id"]
+            event["stream_before_root"] = a_head
+            event["event_id"] = core_independent._digest("event-id", {key: event[key] for key in core_independent.EVENT_RAW_KEYS if key not in {"event_id", "after_root", "stream_after_root"}})
+            event["after_root"] = core_independent._event_root(event)
+            event["stream_after_root"] = core_independent._stream_root(event)
+            raw = core_independent._canonical(event)
+            connection.execute("UPDATE core_events SET event_id=?,event_raw=?,receipt_digest=? WHERE sequence=?", (event["event_id"], raw, core_independent._raw_digest("receipt", raw), event_row[0]))
+            connection.execute("UPDATE core_meta SET head_root=? WHERE meta_id=1", (event["after_root"],))
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:case-stream"):
+            core_independent.verify_database(tampered, expected_database_id=self.core_config.database_id, expected_config_digest=self.core_config.digest)
+
+    def test_core_capacity_limits_are_executable_and_existing_oversize_refuses_service(self) -> None:
+        self.assertEqual(core.MAX_DATABASE_BYTES, 64 * 1024 * 1024)
+        self.assertEqual(core.MAX_ARTIFACT_BYTES, 262144)
+        self.assertEqual(core.MAX_EVENT_BYTES, 786432)
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:event-raw"):
+            core_independent._parse(b"x" * (core.MAX_EVENT_BYTES + 1), "core:event-raw")
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:artifact"):
+            core_independent._parse(b"x" * (core.MAX_ARTIFACT_BYTES + 1), "core:artifact")
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:receipt"):
+            core_independent._parse(b"x" * (core.MAX_EVENT_BYTES + 1), "core:receipt")
+        before = self.core.verify()
+        connection = core._connection(self.core_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            with self.assertRaisesRegex(core.CoreConflictError, "core:capacity"):
+                self.core._admit_artifact(connection, kind="CASE", raw=b"x" * (core.MAX_ARTIFACT_BYTES + 1), profile_digest=self.core_config.runtime_profile_digest, predecessor_id=None, source_artifact_id=None, operation_id=core._digest("oversize-artifact-operation", {"case": 1}), request_digest=core._digest("oversize-artifact-request", {"case": 1}), state="OPEN", observed_at=self.core_clock.value)
+            with self.assertRaisesRegex(core.CoreConflictError, "core:capacity"):
+                self.core._append(connection, kind="SESSION_OPEN", operation_id=core._digest("oversize-event-operation", {"event": 1}), subject_id="0" * 128, request_digest=core._digest("oversize-event-request", {"event": 1}), prior_state="NONE", next_state="OPEN", attempt=0, observed_at=self.core_clock.value, material={"oversize": "x" * core.MAX_EVENT_BYTES}, payload_digest="0" * 128, payload_length=0, stream_kind="SESSION", stream_id="0" * 128, head_ref="0" * 128)
+            maximum_artifact_material = {
+                "artifact_id": "0" * 128, "kind": "CASE", "raw_hex": "00" * core.MAX_ARTIFACT_BYTES,
+                "raw_digest": core._raw_digest("artifact-bytes", b"\0" * core.MAX_ARTIFACT_BYTES),
+                "raw_length": core.MAX_ARTIFACT_BYTES, "profile_digest": self.core_config.runtime_profile_digest,
+                "source_artifact_id": None, "predecessor_id": None, "current_state": "OPEN", "ingress_watermark": 0,
+            }
+            maximum_event = self.core._append(connection, kind="ARTIFACT", operation_id=core._digest("maximum-artifact-event", {"case": 1}), subject_id="0" * 128, request_digest=core._digest("maximum-artifact-request", {"case": 1}), prior_state="NONE", next_state="CASE", attempt=0, observed_at=self.core_clock.value, material=maximum_artifact_material, payload_digest="0" * 128, payload_length=core.MAX_ARTIFACT_BYTES, stream_kind="ARTIFACT", stream_id="0" * 128, head_ref="0" * 128)
+            self.assertLessEqual(len(maximum_event), core.MAX_EVENT_BYTES)
+        finally:
+            connection.rollback()
+            connection.close()
+        self.assertEqual(before, self.core.verify())
+        oversized = self.root / "core-over-cap.db"
+        shutil.copy2(self.core_path, oversized)
+        with oversized.open("r+b") as stream:
+            stream.seek(core.MAX_DATABASE_BYTES)
+            stream.write(b"\0")
+        before_bytes = oversized.read_bytes()
+        with self.assertRaisesRegex(core.CoreError, "core:capacity"):
+            core.CoreServiceV2(oversized, self.core_config, clock=self.core_clock)
+        self.assertEqual(before_bytes, oversized.read_bytes())
+
+    def test_open_session_enforces_inclusive_authority_windows_and_clock_free_retry(self) -> None:
+        now = profile.FIXTURE_OBSERVATION_TIME + 100
+        cases = (
+            ("before-valid-from", now + 1, now + 10, False),
+            ("at-valid-from", now, now + 10, True),
+            ("at-valid-until", now - 10, now, True),
+            ("after-valid-until", now - 10, now - 1, False),
+        )
+        for name, valid_from, valid_until, accepted in cases:
+            service, _clock, source_id, governance_id, privacy_id = self._authority_only_service(name + ".db", now, valid_from, valid_until)
+            if accepted:
+                receipt = service.open_session(source_artifact_id=source_id, governance_artifact_id=governance_id, privacy_artifact_id=privacy_id)
+                self.assertEqual("OPEN", receipt.next_state)
+            else:
+                with self.assertRaisesRegex(core.CoreConflictError, "core:authority-window"):
+                    service.open_session(source_artifact_id=source_id, governance_artifact_id=governance_id, privacy_artifact_id=privacy_id)
+        service, clock, source_id, governance_id, privacy_id = self._authority_only_service("expired-retry.db", now, now, now + 1)
+        first = service.open_session(source_artifact_id=source_id, governance_artifact_id=governance_id, privacy_artifact_id=privacy_id)
+        clock.value = now + 2
+        clock.raise_on_read = True
+        retry = service.open_session(source_artifact_id=source_id, governance_artifact_id=governance_id, privacy_artifact_id=privacy_id)
+        self.assertEqual(first.raw, retry.raw)
+        missing_service, _missing_clock, missing_source, missing_governance, missing_privacy = self._authority_only_service("missing-head.db", now, now, now + 10)
+        connection = sqlite3.connect(missing_service.path)
+        try:
+            connection.execute("DELETE FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='GOVERNANCE'")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(core.CoreConflictError, "core:authority-head"):
+            missing_service.open_session(source_artifact_id=missing_source, governance_artifact_id=missing_governance, privacy_artifact_id=missing_privacy)
+        malformed_service, _malformed_clock, malformed_source, malformed_governance, malformed_privacy = self._authority_only_service("malformed-head.db", now, now, now + 10)
+        connection = sqlite3.connect(malformed_service.path)
+        try:
+            connection.execute("UPDATE core_artifacts SET raw=? WHERE artifact_id=?", (b"{}", malformed_governance))
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(core.CoreConflictError, "core:authority"):
+            malformed_service.open_session(source_artifact_id=malformed_source, governance_artifact_id=malformed_governance, privacy_artifact_id=malformed_privacy)
+
     def test_core_event_raw_reconstructs_material_and_rejects_rebound_session(self) -> None:
         tampered = self.root / "core-rebound-session.db"
         shutil.copy2(self.core_path, tampered)
@@ -738,6 +869,39 @@ class MirrorV2Fixture(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def _authority_only_service(self, name: str, now: int, valid_from: int, valid_until: int) -> tuple[core.CoreServiceV2, _ManualClock, str, str, str]:
+        path = self.root / name
+        clock = _ManualClock(now)
+        service = core.CoreServiceV2(path, self.core_config, clock=clock)
+        connection = core._connection(path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            source_raw = core._canonical({"schema": "mirror-core-source-observation-v2", "schema_version": 2, "kind": "SOURCE_OBSERVATION", "artifact_id": "0" * 128})
+            governance_raw = core._canonical({"schema": "mirror-core-governance-v2", "schema_version": 2, "kind": "GOVERNANCE", "artifact_id": "0" * 128, "decision": "GRANTED", "valid_from": valid_from, "valid_until": valid_until, "flags": dict(core.FIXED_FLAGS)})
+            privacy_raw = core._canonical({"schema": "mirror-core-privacy-v2", "schema_version": 2, "kind": "PRIVACY", "artifact_id": "0" * 128, "privacy_decision": "GRANTED", "support_decision": "GRANTED", "valid_from": valid_from, "valid_until": valid_until, "flags": dict(core.FIXED_FLAGS)})
+            source_id, _ = service._admit_artifact(connection, kind="SOURCE_OBSERVATION", raw=source_raw, profile_digest=self.core_config.runtime_profile_digest, predecessor_id=None, source_artifact_id=None, operation_id=core._digest("test-source-operation", {"name": name}), request_digest=core._digest("test-source-request", {"name": name}), state="OBSERVED_NEW", observed_at=now)
+            governance_id, _ = service._admit_artifact(connection, kind="GOVERNANCE", raw=governance_raw, profile_digest=self.core_config.governance_policy_digest, predecessor_id=None, source_artifact_id=None, operation_id=core._digest("test-governance-operation", {"name": name}), request_digest=core._digest("test-governance-request", {"name": name}), state="GRANTED", observed_at=now)
+            privacy_id, _ = service._admit_artifact(connection, kind="PRIVACY", raw=privacy_raw, profile_digest=self.core_config.privacy_policy_digest, predecessor_id=None, source_artifact_id=None, operation_id=core._digest("test-privacy-operation", {"name": name}), request_digest=core._digest("test-privacy-request", {"name": name}), state="GRANTED", observed_at=now)
+            connection.commit()
+            return service, clock, source_id, governance_id, privacy_id
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _changed_case(self) -> str:
+        from tests.test_nc_medicaid_fhir_source import _envelope
+        changed_path = self.root / "interleaved-changed-ingress.db"
+        changed_clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME)
+        changed_ingress = ingress.IngressServiceV2(changed_path, self.ingress_config, clock=changed_clock)
+        created = changed_ingress.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
+        slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
+        changed_ingress.claim_slot(slot_id, lease_token="lease-interleaved-changed")
+        changed_receipt = changed_ingress.admit_capture(_envelope(location_variant="changed"), scheduled_at=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-interleaved-changed")
+        result = self.core.ingest_source(changed_path, changed_receipt.artifact_id or "")
+        return self.core.admit_case(result["reconciliation_artifact_id"] or "")
 
     def test_exact_three_owner_tables_and_full_chain(self) -> None:
         point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1, now=profile.FIXTURE_OBSERVATION_TIME + 10)
