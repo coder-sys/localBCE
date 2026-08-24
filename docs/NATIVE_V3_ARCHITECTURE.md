@@ -1,6 +1,6 @@
 # Native-v3 proof architecture
 
-Updated: 2026-08-14
+Updated: 2026-08-24
 Status: production-shaped target architecture; current qualification status is authoritative in
 `STATE.md` and `CURRENT_TASK.md`, and no backend is selected.
 Owner: private-proof, security, state, privacy, and CPU qualification authority. The commercial
@@ -25,6 +25,22 @@ ceremony around evidence the verifier already owns.
 
 No L2, rollup, sequencer, bridge, Solidity ABI, or public data-availability layer is part of this
 boundary. Ethereum is not a dependency.
+
+## Current experimental engineering boundary
+
+The current native-v3 minimal-clearance artifact, verifier, acceptance parser, durable verification
+queue, and application composition are experimental engineering only. The verifier executable is
+held and rehashed by verifier-owned custody, the queue independently replays completed candidates
+before promotion, and uncertain publication or database commit outcomes fail closed. These controls
+do not close the theorem, malicious-verifier/QROM, grinding, SHA3-512, Lean, deployment, or
+production-custody gates.
+
+The current statement grammar still lacks the complete proposed/authorized payment-amount binding
+required by the typed receipt contract below, and its before/after state identifiers are not yet the
+single canonical state-layout formula required for sequential production authority. A breaking,
+versioned native statement revision must bind one hiding proposed-amount commitment, derive the
+authorized commitment from the effective directive, and prove exact state continuity before this
+lane can advance. Until then proof acceptance cannot authorize `CLEAR` or any economic action.
 
 ## Production-shaped patch-in contract
 

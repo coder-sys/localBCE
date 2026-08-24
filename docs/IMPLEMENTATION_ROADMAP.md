@@ -90,10 +90,10 @@ Provider Trust Graph is its current narrow first wedge. The ladder below qualifi
 boundary at a time and does not make every later Mirror capability a prerequisite for the first
 controlled use:
 
-1. **Current synthetic Provider Trust Graph foundation.** Preserve the configured source-admission
-   contract, independent graph verification, findings, authoritative coverage/nonmembership,
-   remediation/retest, parity, continuity, export/restore, support sanitization, and narrow V1
-   governance evidence. This is a synthetic candidate, not full Mirror.
+1. **Current synthetic Provider Trust Graph foundation.** Preserve the exact registered synthetic
+   FHIR source contract, one raw Ingress owner, independently reconstructed Core state, explicit
+   Recovery publication ownership, graph identity binding, support sanitization, and fail-closed
+   export/restore. This is a synthetic candidate, not authenticated source or full Mirror.
 2. **Finish V2 and governance composition.** Compose the multi-subject/profile graph with an
    equivalent multi-profile Control Pack approval and withdrawal lifecycle, preserving exact retry,
    lifecycle heads, independent verification, and read-only/nonpayment authority.

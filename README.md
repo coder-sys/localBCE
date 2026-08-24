@@ -35,10 +35,11 @@ rewrite.
 2. [`CURRENT_TASK.md`](CURRENT_TASK.md) — the current bounded objective and blockers.
 3. [`STATE.md`](STATE.md) — verified implementation evidence and nonclaims.
 4. [`ARCHITECTURE.md`](ARCHITECTURE.md) — whole-system ownership and component map.
-5. [`docs/DATABASE_ZK_ARCHITECTURE.md`](docs/DATABASE_ZK_ARCHITECTURE.md) — transaction boundary.
-6. [`docs/NATIVE_V3_ARCHITECTURE.md`](docs/NATIVE_V3_ARCHITECTURE.md) — private-proof target.
-7. [`docs/LEAN_FORMAL_KERNEL.md`](docs/LEAN_FORMAL_KERNEL.md) — later mandatory formal gate.
-8. [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — dependency order.
+5. [`docs/MIRROR_ARCHITECTURE.md`](docs/MIRROR_ARCHITECTURE.md) — Mirror source, custody, reconciliation, and recovery boundary.
+6. [`docs/DATABASE_ZK_ARCHITECTURE.md`](docs/DATABASE_ZK_ARCHITECTURE.md) — transaction boundary.
+7. [`docs/NATIVE_V3_ARCHITECTURE.md`](docs/NATIVE_V3_ARCHITECTURE.md) — private-proof target.
+8. [`docs/LEAN_FORMAL_KERNEL.md`](docs/LEAN_FORMAL_KERNEL.md) — later mandatory formal gate.
+9. [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — dependency order.
 
 Supporting authorities are [`docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md`](docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md),
 [`docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md`](docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md),

@@ -8,6 +8,7 @@ signature, custody, clearance-transition, and downstream payment-interface code 
 1. Work from this repository root.
 2. Read `docs/DATABASE_ZK_ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
    `docs/LEAN_FORMAL_KERNEL.md`, and `docs/IMPLEMENTATION_ROADMAP.md`.
+   For Mirror work, also read `docs/MIRROR_ARCHITECTURE.md`.
 3. After context loss, re-read this file, `CURRENT_TASK.md`, and `STATE.md`. A published source
    archive may omit workspace-only authority records; in that archive, use the current root
    documents and `RELEASE_FILE_MANIFEST.json`.

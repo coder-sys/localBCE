@@ -1,6 +1,6 @@
 # Blind Ledger current state
 
-Updated: 2026-08-21
+Updated: 2026-08-24
 
 ## Product boundary
 
@@ -287,6 +287,31 @@ qualification seam, not production theorem qualification, backend selection, dep
 payment movement, PHI authority, or formal-kernel qualification. The controlled integration
 itself did not consume the retained proof or invoke a prover.
 
+## Combined Blind Ledger and Mirror integration candidate
+
+On 2026-08-24 a fresh detached worktree replayed the accepted Blind Ledger head
+`a5870965122fc5b4f7312b6723b3ac9e5e2454a5` (36 commits) and Mirror head
+`5b91f03db089445588526d533a9069bddf56ce92` (41 commits) from their exact common base
+`b74356a0659360223c9b5007f33cb57d4e8f1fd9`. The histories had zero touched-path overlap and
+replayed without conflict. Before authority synthesis, every final Blind path matched its source
+head and every final Mirror path matched its source head.
+
+Blind Ledger now has an experimental chain from held native verifier bytes through durable Queue V4
+candidate replay, single-owner processing/recovery, atomic composition, and idempotent official
+handoff/acknowledgment. The last inspected correction makes promotion cleanup/close uncertainty
+return one fixed indeterminate classification rather than leaking a lower-level database error.
+This remains nonactivating and cannot move money.
+
+Mirror now has consolidated Ingress/Core/Recovery ownership and a bounded synthetic NC FHIR intake
+profile. The last inspected correction requires exact registered fixture resources before Ingress
+mutation and binds graph credential/enrollment identity to verified resource bytes. The sole raw
+intake frame remains in Ingress; Core and Recovery retain derived or encrypted governed state.
+This is synthetic, unauthenticated source evidence, not a live or production source claim.
+
+Worker-reported focused suites for the source branches were green; those totals are not reclassified
+as personal verification here. The combined candidate must pass its own focused integration gates
+before promotion. No archive was inspected, rebuilt, or published.
+
 ## Private-proof status
 
 No production proof backend is selected. DP24 remains an ideal-vector-oracle formula record only.
@@ -333,10 +358,11 @@ Current authority is `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `ARCHITECTURE.m
 `docs/LEAN_FORMAL_KERNEL.md`, and the named component authorities linked from `README.md`.
 Retained compatibility references are not design authority.
 
-The next safe dependency is Sol review of the verifier-custody/state-admission controlled
-integration. Separately, the six unresolved private-proof theorem/composition terms listed in
-`CURRENT_TASK.md` remain open; no backend is selected and the safe implementation boundary remains
-synthetic, state-owned, and nonactivating.
+The next safe dependency is focused verification of the combined controlled integration candidate.
+After acceptance, the next Blind Ledger architecture seam is the versioned Native amount and
+canonical-state binding described in `CURRENT_TASK.md`; Mirror's next seam is the bounded
+operational acquisition owner. The private-proof theorem/composition terms remain open, no backend
+is selected, and both products remain synthetic and nonactivating.
 
 Current archive authority is the external publication receipt plus independent physical readback
 of exactly the three retained roles: one Downloads copy, one Desktop-root copy, and one nested

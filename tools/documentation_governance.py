@@ -61,6 +61,9 @@ MARKDOWN_REGISTRY = {
     "docs/LEAN_FORMAL_KERNEL.md": _registration(
         "README.md", "lean-target", "later mandatory formal semantic/state gate"
     ),
+    "docs/MIRROR_ARCHITECTURE.md": _registration(
+        "README.md", "mirror-architecture", "read-only source trust, custody, reconciliation, and recovery boundary"
+    ),
     "docs/NATIVE_V3_ARCHITECTURE.md": _registration(
         "README.md", "native-v3", "private-proof, security, state, and CPU target"
     ),

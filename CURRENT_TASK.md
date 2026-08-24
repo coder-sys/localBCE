@@ -1,73 +1,59 @@
-# Blind Ledger current task
+# Blind Ledger and Mirror current task
+
+Updated: 2026-08-24
 
 SOURCE WORKSPACE: C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26
-CONTROLLED INTEGRATION WORKTREE: C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-workhorse-clean\work\controlled-integration-qual-f2db-20260821
-ROLLBACK WORKTREE: C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-workhorse-clean\work\rollback-controlled-integration-qual-f2db-20260821
-PHASE: Controlled Blind Ledger qualification integration candidate; authoritative main remains read-only; no archive action.
+CONTROLLED INTEGRATION WORKTREE: C:\Users\neers\Documents\Codex\2026-08-23\blind-ledger-mirror-sol-driver-v2\work\controlled-integration-both-20260824
+PHASE: Combined controlled integration candidate; authoritative main remains read-only; no archive action.
 
-OBJECTIVE: Integrate the accepted test-owned eight-line qualification correction and record its
-experimental engineering evidence. This candidate is synthetic, nonactivating state-side
-clearance evidence, not production proof, payment, settlement, or deployment authority.
+## Objective
 
-AUTHORITY: AGENTS.md owns execution and precedence; this file owns only this bounded candidate and
-blockers; STATE.md owns verified evidence and nonclaims; ARCHITECTURE.md owns system boundaries;
-the named docs/ authorities own their technical interfaces. The authoritative checkout, archives,
-Mirror checkout, and external systems are out of scope and unchanged.
+Verify and integrate the accepted Blind Ledger and Mirror candidate histories from the common clean
+base `b74356a0659360223c9b5007f33cb57d4e8f1fd9`, synthesize the authority records once, and leave
+one clean candidate for explicit promotion review. Do not start the breaking Native amount/state
+revision from stale product branches.
 
-BASELINE: Authoritative main was clean at b74356a0659360223c9b5007f33cb57d4e8f1fd9 with tree
-eb7ba90feb2affc99dc9f6bc6b8f1dfbeb32c754. The accepted source commit
-f2db22d340aafc9b96b3a70eaebc0a3d84b092a5 was clean. Its exact two-path change was cherry-picked
-as 524efaa1055ae18c1fe53c6a2d65584cca6a9ce7.
+## Exact integrated inputs
 
-## Accepted qualification evidence
+Blind Ledger source head: `a5870965122fc5b4f7312b6723b3ac9e5e2454a5` (36 linear commits).
+Its current boundary is verifier custody, durable independent Queue V4 promotion, single-owner
+runtime/recovery, atomic composition, and official-system handoff/acknowledgment. The final
+promotion cleanup correction was personally diff-reviewed; broader test totals remain worker-run
+evidence unless separately identified.
 
-The test-owned qualification runner and focused tests enforce the exact eight-line ASCII success
-trace, cross-check its positive dimensions against the single acceptance line, and record only
-the trace line count and SHA3-512 digest. The accepted retained synthetic proof evidence records:
+Mirror source head: `5b91f03db089445588526d533a9069bddf56ce92` (41 linear commits). Its
+current boundary is consolidated Ingress/Core/Recovery ownership plus the synthetic NC FHIR
+source contract. The final correction was personally inspected: exact registered fixture bytes are
+required before Ingress mutation, and graph credential/enrollment identities bind the verified
+resource bytes. Its suite totals remain worker-run evidence.
 
-- artifact: 411,672 bytes; SHA-256
-  69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB38E;
-- verifier executable: SHA-256
-  E2BD096389E7D9CB3F8D83314747CA3D493DF6C30D86A57041F74B84F0023F3E;
-- complete-process Job Object peak commit: 1,042,202,624 bytes, below the
-  5,000,000,000-byte cap, with cap enforcement and active-process limit 1;
-- one request, one audit row, one DIRECT_CLEARANCE transition, schema 2;
-- integrity, restart, exact retry, backup/recovery, and payment-root/settled-count invariants
-  passed; and
-- zero prover invocations.
+The two histories have zero path overlap across all 77 commits. Both were replayed in source order
+onto the common base without conflict. At replay tip `78084d5dc1290ad9cf906186bc06838a6a530ebb`,
+all 55 final Blind paths were byte-equal to the Blind source head and all 71 final Mirror paths were
+byte-equal to the Mirror source head.
 
-The bounded native success trace is exactly:
+## Current integration gate
 
-    MINIMAL_CLEARANCE_BUILD phase=public
-    MINIMAL_CLEARANCE_BUILD phase=private
-    MINIMAL_CLEARANCE_BUILD phase=assertions
-    MINIMAL_CLEARANCE_BUILD phase=mkcircuit
-    MINIMAL_CLEARANCE_BUILD phase=complete inputs=N public_inputs=N layers=N terms=N
-    MINIMAL_CLEARANCE_VERIFIER_STAGE proof.read=accept remaining=0
-    MINIMAL_CLEARANCE_VERIFIER_STAGE commitment=received
-    MINIMAL_CLEARANCE_VERIFIER_STAGE verify=accept
+The candidate must pass documentation governance, release/path classification, zero-PHI/privacy
+scans, focused Blind queue/composition/runtime checks, and focused Mirror source/Ingress/Core/
+Recovery checks. Failures must be classified causally; no gate, warning, or skip may be hidden.
+After a clean synthesis commit, promotion to authoritative main remains a separate explicit Git
+operation.
 
-The N values must equal the positive dimensions in the one stdout
-MINIMAL_CLEARANCE_VERIFIER_ACCEPT line. The accepted run's trace digest is
-46A9D1FE953DBEC581D0445442BC5CFC3C807AAEFB2C5EA4DFC3B79396418754963BEDD3708D81795D67655E652D64799E3E1FF7E3E30A2C5FB668E83AA5F53D.
+## Next product dependency
 
-## Verification boundary
+After this candidate is accepted, Blind Ledger's next breaking seam is Native statement/state
+revision: bind one private proposed amount through a public hiding commitment, derive the authorized
+commitment from the effective directive, and use one canonical sequential state identity. The old
+composition must reject that grammar until its own reviewed versioned upgrade.
 
-This controlled integration performs no retained-proof verification and invokes no prover.
-The focused qualification, directly implicated native-v3/database, governance, release,
-active-core/readiness, and privacy checks are the accepted evidence for this candidate. The
-retained artifact remains external audit evidence and must remain byte-identical and read-only.
+Mirror's next seam is a single operational owner around authenticated acquisition scheduling,
+leases, bounded due work, retry eligibility, and recovery. It may not add a daemon framework,
+second raw owner, payment authority, or synthetic production claim.
 
-Proof/session acceptance never equals CLEAR. The state transaction owns policyResult versus
-effectiveDirective, replay/idempotency, state transition, recovery, and payment separation.
-Mirror remains read-only evidence and continuity; official state/payment systems remain the
-money-moving authority.
+## Fixed nonclaims
 
-## Nonclaims and blocker
-
-proofSuiteId=null, production_usable=false, and activation=false remain fixed. No production
-backend is selected. The approximately 115-to-128-bit theorem gap, malicious-verifier/QROM
-composition, retry/grinding, SHA3-512 assurance, independent audit, Lean production
-qualification, custody/deployment, live-source, PHI, payment, Ethereum, and archive claims
-remain open or false. This candidate is ready for separate Sol review; it does not choose a
-next phase.
+`proofSuiteId=null`, `production_usable=false`, and activation remain false. No production proof
+backend, Lean clearance authority, live source authorization, PHI approval, official receiver,
+payment movement, settlement, HSM/FIPS custody, production persistence, HA/DR, monitoring, or state
+operational approval is claimed. The incumbent adjudicates and official state systems move money.

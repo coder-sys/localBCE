@@ -1,6 +1,6 @@
 # Blind Ledger architecture
 
-Updated: 2026-08-15
+Updated: 2026-08-24
 
 Blind Ledger is RightRail's state-side payment-clearance product. It answers one narrow question:
 may this proposed payment proceed under the deterministic rules the state has approved for
@@ -292,6 +292,9 @@ The root authorities are `AGENTS.md` (execution), `CURRENT_TASK.md` (bounded wor
 (verified evidence), this file (system ownership), and `README.md` (entry route). The independent
 design authority is `docs/DESIGN_IDEOLOGY.md`; the private-proof, database, Lean, Native-v3,
 roadmap, dependency, rejection, and pending-domain-decision owners are linked from `README.md`.
+Mirror's internal source-trust, custody, reconciliation, and recovery owner is
+`docs/MIRROR_ARCHITECTURE.md`; this file retains only the whole-product role and cross-product
+separation.
 
 The following local documents have one component owner and one narrow purpose:
 

@@ -1,7 +1,7 @@
 # Clearance database + conditional mandatory-ZK architecture
 
 Status: authoritative transaction boundary; proof boundary is `NATIVE_V3_ARCHITECTURE.md`
-Updated: 2026-08-14
+Updated: 2026-08-24
 Owner: this document defines the verifier-to-database, retry, recovery, migration, and
 anti-rollback boundary. It does not select a backend or claim production persistence.
 
@@ -72,6 +72,21 @@ For each batch, the service:
 Verifier acceptance alone is never interpreted as `CLEAR` and never proves that funds moved. A
 private-path database write without verifier acceptance is forbidden. The official state payment
 system consumes an accepted clearance directive and later returns the actual outcome to Mirror.
+
+## Current experimental application chain
+
+The current nonactivating implementation separates four owners: native verifier custody and
+acceptance; a durable verification queue with independent candidate replay; one atomic clearance
+composition store; and an idempotent official-system handoff/acknowledgment boundary. Queue
+promotion uses at-least-once recovery and classifies any uncertain commit or cleanup outcome as
+indeterminate. Composition preserves `policyResult` separately from `effectiveDirective`, and the
+handoff cannot mutate payment, settlement, or official-system state.
+
+This chain is not yet the production transaction described above. Its current native statement
+does not carry the complete proposed/authorized amount contract, Lean is not linked, and the
+official receiver is synthetic. The next breaking native revision must fail closed at the current
+composition boundary; a separately reviewed composition version must then bind the new authorized
+amount and canonical state identifiers rather than silently accepting the old grammar.
 
 ## Directive transition rules
 
