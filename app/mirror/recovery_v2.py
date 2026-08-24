@@ -1,8 +1,8 @@
 """Three-table, catalog-only recovery owner for the Mirror V2 stores.
 
-The coordinator persists identities, lifecycle events, and recovery receipts.
-Component images exist only as bounded process-memory bytes and opaque sealed
-objects owned by the injected custody/storage ports.
+The catalog owns only bounded identities, event-derived lifecycle state, and
+opaque recovery receipts.  Component images exist only in bounded process
+memory, fresh restore targets, and opaque storage/custody ports.
 """
 
 from __future__ import annotations
@@ -10,9 +10,11 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import sqlite3
-from typing import Mapping, Protocol
+import stat
+from typing import Callable, Mapping, Protocol
 
 from app.mirror import core_v2_independent as core
 from app.mirror import ingress_v2_independent as ingress
@@ -25,6 +27,10 @@ SCHEMA = independent.SCHEMA
 SCHEMA_VERSION = independent.SCHEMA_VERSION
 TABLES = ("recovery_meta", "recovery_points", "recovery_events")
 FIXED_FLAGS = dict(independent.FIXED_FLAGS)
+MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
+MAX_EVENT_BYTES = independent.MAX_EVENT_BYTES
+MAX_CUSTODY_OVERHEAD_BYTES = independent.MAX_CUSTODY_OVERHEAD_BYTES
+MAX_RECOVERY_POINTS = independent.MAX_RECOVERY_POINTS
 
 
 class RecoveryError(ValueError):
@@ -91,12 +97,12 @@ class RecoveryConfigV2:
     max_bundle_bytes: int = 16 * 1024 * 1024
 
     def __post_init__(self) -> None:
-        if any(type(value) is not str or not value for value in (self.database_id, self.chain_id, self.custody_id, self.storage_id, self.ingress_database_id, self.core_database_id)):
+        if any(type(value) is not str or not value or len(value) > 256 for value in (self.database_id, self.chain_id, self.custody_id, self.storage_id, self.ingress_database_id, self.core_database_id)):
             raise RecoveryError("recovery:config")
         for value in (self.profile_digest, self.ingress_config_digest, self.core_config_digest):
             if type(value) is not str or len(value) != 128 or any(char not in "0123456789abcdef" for char in value):
                 raise RecoveryError("recovery:config")
-        if type(self.max_bundle_bytes) is not int or not 1024 <= self.max_bundle_bytes <= 32 * 1024 * 1024:
+        if type(self.max_bundle_bytes) is not int or not 1024 <= self.max_bundle_bytes <= independent.MAX_BUNDLE_BYTES:
             raise RecoveryError("recovery:config")
 
     def material(self) -> dict[str, object]:
@@ -139,21 +145,51 @@ def _raw_digest(label: str, raw: bytes) -> str:
     return independent._raw_digest(label, raw)
 
 
+def _capacity() -> None:
+    raise_redacted(RecoveryError, "recovery:capacity")
+
+
+def _sqlite_is_capacity(error: sqlite3.Error) -> bool:
+    return getattr(error, "sqlite_errorname", "") in {"SQLITE_FULL", "SQLITE_TOOBIG"}
+
+
 def _connection(path: Path) -> sqlite3.Connection:
     try:
+        if path.exists():
+            info = os.stat(path)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_DATABASE_BYTES:
+                _capacity()
         connection = sqlite3.connect(path, timeout=0.25, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=250")
+        connection.execute("PRAGMA page_size=4096")
+        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        if page_size <= 0:
+            _capacity()
+        page_limit = MAX_DATABASE_BYTES // page_size
+        page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+        if page_count * page_size > MAX_DATABASE_BYTES:
+            _capacity()
+        configured = int(connection.execute(f"PRAGMA max_page_count={page_limit}").fetchone()[0])
+        if configured != page_limit:
+            _capacity()
         connection.execute("PRAGMA journal_mode=DELETE")
         connection.execute("PRAGMA synchronous=FULL")
         return connection
-    except (OSError, sqlite3.Error):
+    except RecoveryError:
+        raise
+    except sqlite3.Error as error:
+        if _sqlite_is_capacity(error):
+            _capacity()
+        raise_redacted(RecoveryError, "recovery:database-open")
+    except (OSError, TypeError, ValueError):
         raise_redacted(RecoveryError, "recovery:database-open")
 
 
 def _init(path: Path, config: RecoveryConfigV2) -> None:
     connection = _connection(path)
+    verify_existing = False
     try:
         existing = tuple(row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall())
         if existing and existing != TABLES:
@@ -179,9 +215,9 @@ def _init(path: Path, config: RecoveryConfigV2) -> None:
                     core_database_id TEXT NOT NULL, core_config_digest TEXT NOT NULL,
                     core_head_root TEXT NOT NULL, core_watermark INTEGER NOT NULL,
                     key_id TEXT NOT NULL, key_epoch INTEGER NOT NULL, key_state TEXT NOT NULL,
-                    storage_id TEXT NOT NULL, prior_point_id TEXT, prior_root TEXT NOT NULL, operation_id TEXT NOT NULL UNIQUE,
-                    request_digest TEXT NOT NULL, sequence INTEGER NOT NULL,
-                    updated_sequence INTEGER NOT NULL
+                    storage_id TEXT NOT NULL, prior_point_id TEXT, prior_root TEXT NOT NULL,
+                    operation_id TEXT NOT NULL UNIQUE, request_digest TEXT NOT NULL,
+                    sequence INTEGER NOT NULL, updated_sequence INTEGER NOT NULL
                 );
                 CREATE TABLE recovery_events(
                     sequence INTEGER PRIMARY KEY, event_id TEXT NOT NULL UNIQUE,
@@ -206,15 +242,73 @@ def _init(path: Path, config: RecoveryConfigV2) -> None:
                 (SCHEMA, SCHEMA_VERSION, config.database_id, config.chain_id, config.digest, 0, independent.GENESIS_ROOT, config.profile_digest, _digest("custody-id", config.custody_id), _digest("storage-id", config.storage_id), config.ingress_database_id, config.core_database_id, 0),
             )
         else:
+            verify_existing = True
             row = connection.execute("SELECT * FROM recovery_meta WHERE meta_id=1").fetchone()
-            if row is None or row["database_id"] != config.database_id or row["chain_id"] != config.chain_id or row["config_digest"] != config.digest or row["profile_digest"] != config.profile_digest or row["ingress_database_id"] != config.ingress_database_id or row["core_database_id"] != config.core_database_id:
+            if row is None or row["database_id"] != config.database_id or row["chain_id"] != config.chain_id or row["config_digest"] != config.digest or row["profile_digest"] != config.profile_digest or row["key_custody_id_digest"] != _digest("custody-id", config.custody_id) or row["storage_id_digest"] != _digest("storage-id", config.storage_id) or row["ingress_database_id"] != config.ingress_database_id or row["core_database_id"] != config.core_database_id:
                 raise RecoveryError("recovery:identity")
     except RecoveryError:
         raise
-    except sqlite3.Error:
+    except sqlite3.Error as error:
+        if _sqlite_is_capacity(error):
+            _capacity()
         raise_redacted(RecoveryError, "recovery:database-initialize")
     finally:
         connection.close()
+    if verify_existing:
+        try:
+            independent.verify_database(path, expected_database_id=config.database_id, expected_config_digest=config.digest)
+        except independent.RecoveryVerificationError:
+            raise RecoveryError("recovery:existing-invalid") from None
+
+
+def _same_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    return (first.st_dev, first.st_ino, first.st_size) == (second.st_dev, second.st_ino, second.st_size)
+
+
+def _has_sidecar(path: Path) -> bool:
+    return any(path.with_name(path.name + suffix).exists() for suffix in ("-wal", "-shm"))
+
+
+def _bounded_image(path: Path, cap: int, label: str) -> bytes:
+    descriptor: int | None = None
+    try:
+        if _has_sidecar(path):
+            raise RecoveryError("recovery:sidecar")
+        before = os.lstat(path)
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode) or before.st_size > cap:
+            raise RecoveryError(label)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if stat.S_ISLNK(opened.st_mode) or not stat.S_ISREG(opened.st_mode) or not _same_identity(before, opened):
+            raise RecoveryError(label)
+        data = bytearray()
+        while len(data) <= cap:
+            chunk = os.read(descriptor, cap + 1 - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > cap:
+                raise RecoveryError(label)
+        after = os.fstat(descriptor)
+        if not _same_identity(opened, after) or len(data) != after.st_size:
+            raise RecoveryError(label)
+        os.close(descriptor)
+        descriptor = None
+        final = os.lstat(path)
+        if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode) or not _same_identity(before, final) or _has_sidecar(path):
+            raise RecoveryError(label)
+        return bytes(data)
+    except RecoveryError:
+        raise
+    except (OSError, ValueError, TypeError):
+        raise_redacted(RecoveryError, label)
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 class RecoveryServiceV2:
@@ -230,7 +324,20 @@ class RecoveryServiceV2:
     def verify(self) -> dict[str, object]:
         return independent.verify_database(self.path, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest)
 
+    @staticmethod
+    def _receipt(raw: bytes) -> RecoveryReceipt:
+        value = independent._parse(raw, "recovery:receipt")
+        return RecoveryReceipt(raw=raw, point_id=str(value["point_id"]), operation_id=str(value["operation_id"]), event_id=str(value["event_id"]), state=str(value["next_state"]), sequence=int(value["sequence"]), after_root=str(value["after_root"]))
+
     def _append(self, connection: sqlite3.Connection, *, kind: str, point_id: str, operation_id: str, request_digest: str, prior_state: str, next_state: str, material: Mapping[str, object], payload_digest: str, payload_length: int) -> bytes:
+        if type(payload_length) is not int or not 0 <= payload_length <= independent.MAX_BUNDLE_BYTES + MAX_CUSTODY_OVERHEAD_BYTES:
+            raise RecoveryError("recovery:event-range")
+        try:
+            material_raw = _canonical(material)
+        except Exception:
+            raise RecoveryError("recovery:event-material") from None
+        if len(material_raw) > MAX_EVENT_BYTES:
+            raise RecoveryError("recovery:event-cap")
         meta = connection.execute("SELECT * FROM recovery_meta WHERE meta_id=1").fetchone()
         if meta is None:
             raise RecoveryError("recovery:meta")
@@ -244,45 +351,30 @@ class RecoveryServiceV2:
             "request_digest": request_digest, "prior_state": prior_state,
             "next_state": next_state, "attempt": 0,
             "before_root": meta["head_root"], "after_root": "",
-            "material_digest": _digest("material", material),
+            "material": material, "material_digest": _digest("material", material),
             "payload_digest": payload_digest, "payload_length": payload_length,
         }
         body["event_id"] = _digest("event-id", {key: body[key] for key in body if key not in {"event_id", "after_root"}})
         body["after_root"] = independent._event_root(sequence, str(meta["head_root"]), str(body["event_id"]), kind, point_id, next_state, str(body["material_digest"]), str(body["stream_kind"]), str(body["stream_id"]))
         raw = _canonical(body)
+        if len(raw) > MAX_EVENT_BYTES:
+            raise RecoveryError("recovery:event-cap")
         connection.execute("INSERT INTO recovery_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (sequence, body["event_id"], kind, self.config.database_id, self.config.chain_id, body["stream_kind"], body["stream_id"], point_id, operation_id, request_digest, prior_state, next_state, 0, body["before_root"], body["after_root"], body["material_digest"], payload_digest, payload_length, raw, _raw_digest("receipt", raw)))
         connection.execute("UPDATE recovery_meta SET sequence=?,head_root=? WHERE meta_id=1", (sequence, body["after_root"]))
         return raw
 
-    @staticmethod
-    def _receipt(raw: bytes) -> RecoveryReceipt:
-        value = json.loads(raw.decode("ascii"))
-        return RecoveryReceipt(raw=raw, point_id=str(value["point_id"]), operation_id=str(value["operation_id"]), event_id=str(value["event_id"]), state=str(value["next_state"]), sequence=int(value["sequence"]), after_root=str(value["after_root"]))
-
     def _read_pair(self, ingress_path: Path, core_path: Path) -> tuple[dict[str, object], dict[str, object], bytes, bytes]:
         try:
-            core_before = core.verify_database(
-                core_path,
-                expected_database_id=self.config.core_database_id,
-                expected_config_digest=self.config.core_config_digest,
-            )
+            core_before = core.verify_database(core_path, expected_database_id=self.config.core_database_id, expected_config_digest=self.config.core_config_digest)
             ing = ingress.verify_database(ingress_path, expected_database_id=self.config.ingress_database_id, expected_config_digest=self.config.ingress_config_digest)
             if core_before["ingress_database_id"] != ing["database_id"] or core_before["ingress_watermark"] > ing["sequence"]:
                 raise RecoveryConflictError("recovery:watermark")
             cor = core.verify_database(core_path, expected_database_id=self.config.core_database_id, expected_config_digest=self.config.core_config_digest, ingress_path=ingress_path)
-            if (
-                cor["ingress_database_id"] != ing["database_id"]
-                or cor["ingress_watermark"] > ing["sequence"]
-                or cor["sequence"] != core_before["sequence"]
-                or cor["head_root"] != core_before["head_root"]
-                or cor["ingress_watermark"] != core_before["ingress_watermark"]
-            ):
+            if cor["ingress_database_id"] != ing["database_id"] or cor["ingress_watermark"] > ing["sequence"] or cor["sequence"] != core_before["sequence"] or cor["head_root"] != core_before["head_root"] or cor["ingress_watermark"] != core_before["ingress_watermark"]:
                 raise RecoveryConflictError("recovery:watermark")
-            if any(path.with_name(path.name + suffix).exists() for path in (Path(ingress_path), Path(core_path)) for suffix in ("-wal", "-shm")):
-                raise RecoveryError("recovery:sidecar")
-            ing_raw = Path(ingress_path).read_bytes()
-            core_raw = Path(core_path).read_bytes()
-            if len(ing_raw) > independent.MAX_DATABASE_BYTES or len(core_raw) > independent.MAX_DATABASE_BYTES:
+            ing_raw = _bounded_image(ingress_path, ingress.MAX_DATABASE_BYTES, "recovery:ingress-image")
+            core_raw = _bounded_image(core_path, core.MAX_DATABASE_BYTES, "recovery:core-image")
+            if len(ing_raw) > ingress.MAX_DATABASE_BYTES or len(core_raw) > core.MAX_DATABASE_BYTES:
                 raise RecoveryError("recovery:image-cap")
             return ing, cor, ing_raw, core_raw
         except (RecoveryError, ingress.IngressVerificationError, core.CoreVerificationError):
@@ -291,26 +383,25 @@ class RecoveryServiceV2:
             raise_redacted(RecoveryError, "recovery:source")
 
     def _bundle(self, ing: Mapping[str, object], cor: Mapping[str, object], ing_raw: bytes, cor_raw: bytes, generation: int, prior_root: str) -> bytes:
-        value = {
-            "schema": "mirror-recovery-bundle-v2", "schema_version": 2,
-            "generation": generation, "prior_recovery_root": prior_root,
-            "ingress": {"database_id": ing["database_id"], "chain_id": ing["chain_id"], "config_digest": ing["config_digest"], "head_root": ing["head_root"], "watermark": ing["sequence"], "image_digest": _raw_digest("ingress-image", ing_raw), "image_length": len(ing_raw)},
-            "core": {"database_id": cor["database_id"], "chain_id": cor["chain_id"], "config_digest": cor["config_digest"], "head_root": cor["head_root"], "watermark": cor["ingress_watermark"], "image_digest": _raw_digest("core-image", cor_raw), "image_length": len(cor_raw)},
-            "ingress_image": base64.b64encode(ing_raw).decode("ascii"),
-            "core_image": base64.b64encode(cor_raw).decode("ascii"),
-            "flags": dict(FIXED_FLAGS),
-        }
+        ingress_component = {"database_id": ing["database_id"], "chain_id": ing["chain_id"], "config_digest": ing["config_digest"], "head_root": ing["head_root"], "watermark": ing["sequence"], "image_digest": _raw_digest("ingress-image", ing_raw), "image_length": len(ing_raw)}
+        core_component = {"database_id": cor["database_id"], "chain_id": cor["chain_id"], "config_digest": cor["config_digest"], "head_root": cor["head_root"], "watermark": cor["ingress_watermark"], "image_digest": _raw_digest("core-image", cor_raw), "image_length": len(cor_raw)}
+        value = {"schema": "mirror-recovery-bundle-v2", "schema_version": 2, "generation": generation, "prior_recovery_root": prior_root, "ingress": ingress_component, "core": core_component, "ingress_image": base64.b64encode(ing_raw).decode("ascii"), "core_image": base64.b64encode(cor_raw).decode("ascii"), "flags": dict(FIXED_FLAGS)}
         raw = _canonical(value)
         if len(raw) > self.config.max_bundle_bytes:
             raise RecoveryError("recovery:bundle-cap")
+        try:
+            independent.parse_bundle(raw, max_bundle_bytes=self.config.max_bundle_bytes, expected_generation=generation, expected_prior_root=prior_root, expected_ingress=ingress_component, expected_core=core_component)
+        except independent.RecoveryVerificationError:
+            raise RecoveryError("recovery:bundle") from None
         return raw
 
-    def _find(self, connection: sqlite3.Connection, *, generation: int | None = None, point_id: str | None = None) -> sqlite3.Row | None:
-        if point_id is not None:
-            return connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (point_id,)).fetchone()
-        return connection.execute("SELECT * FROM recovery_points WHERE generation=?", (generation,)).fetchone()
+    def _prepare_material(self, point: Mapping[str, object], ing: Mapping[str, object], cor: Mapping[str, object], ing_raw: bytes, core_raw: bytes) -> dict[str, object]:
+        material = {"point_id": point["point_id"], "generation": point["generation"], "object_id": point["object_id"], "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"], "ingress": {"database_id": ing["database_id"], "chain_id": ing["chain_id"], "config_digest": ing["config_digest"], "head_root": ing["head_root"], "watermark": ing["sequence"], "image_digest": _raw_digest("ingress-image", ing_raw), "image_length": len(ing_raw)}, "core": {"database_id": cor["database_id"], "chain_id": cor["chain_id"], "config_digest": cor["config_digest"], "head_root": cor["head_root"], "watermark": cor["ingress_watermark"], "image_digest": _raw_digest("core-image", core_raw), "image_length": len(core_raw)}, "key_id": point["key_id"], "key_epoch": point["key_epoch"], "key_state": point["key_state"], "storage_id": point["storage_id"], "prior_point_id": point["prior_point_id"], "prior_root": point["prior_root"], "operation_id": point["operation_id"], "request_digest": point["request_digest"]}
+        return material
 
     def _invalidate(self, point_id: str, reason: str) -> None:
+        if reason != "key-revoked":
+            raise RecoveryConflictError("recovery:invalidation")
         connection = _connection(self.path)
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -318,44 +409,94 @@ class RecoveryServiceV2:
             if row is None or row["state"] != "OBJECT_PENDING":
                 connection.rollback()
                 return
-            raw = self._append(connection, kind="INVALIDATED", point_id=point_id, operation_id=row["operation_id"], request_digest=row["request_digest"], prior_state="OBJECT_PENDING", next_state="INVALIDATED", material={"point_id": point_id, "reason": reason}, payload_digest=row["object_id"], payload_length=0)
-            connection.execute("UPDATE recovery_points SET state='INVALIDATED',updated_sequence=? WHERE point_id=?", (json.loads(raw.decode("ascii"))["sequence"], point_id))
+            material = {"point_id": row["point_id"], "object_id": row["object_id"], "key_id": row["key_id"], "key_epoch": row["key_epoch"], "reason": "key-revoked"}
+            raw = self._append(connection, kind="INVALIDATED", point_id=str(row["point_id"]), operation_id=str(row["operation_id"]), request_digest=str(row["request_digest"]), prior_state="OBJECT_PENDING", next_state="INVALIDATED", material=material, payload_digest=str(row["object_id"]), payload_length=0)
+            sequence = independent._parse(raw, "recovery:receipt")["sequence"]
+            connection.execute("UPDATE recovery_points SET state='INVALIDATED',updated_sequence=? WHERE point_id=?", (sequence, point_id))
             connection.commit()
-        except sqlite3.Error:
+        except RecoveryError:
             connection.rollback()
+            raise
+        except sqlite3.Error as error:
+            connection.rollback()
+            if _sqlite_is_capacity(error):
+                _capacity()
             raise_redacted(RecoveryError, "recovery:invalidate")
         finally:
             connection.close()
 
-    def _complete_storage(self, point: sqlite3.Row, bundle: bytes, sealed: bytes) -> RecoveryReceipt:
-        key_id, key_epoch = str(point["key_id"]), int(point["key_epoch"])
+    @staticmethod
+    def _bounded_bytes(value: object, maximum: int, label: str) -> bytes:
+        if type(value) is not bytes or not value or len(value) > maximum:
+            raise RecoveryConflictError(label)
+        return value
+
+    def _verify_stored_bundle(self, stored: bytes, point: Mapping[str, object], expected_bundle: bytes) -> None:
+        self._bounded_bytes(stored, self.config.max_bundle_bytes + MAX_CUSTODY_OVERHEAD_BYTES, "recovery:storage-size")
+        if self.custody.state(str(point["key_id"]), int(point["key_epoch"])) != "ACTIVE":
+            raise RecoveryConflictError("recovery:key-revoked")
+        opened = self.custody.open(stored, str(point["key_id"]), int(point["key_epoch"]))
+        self._bounded_bytes(opened, self.config.max_bundle_bytes, "recovery:bundle-size")
+        if opened != expected_bundle or _raw_digest("bundle", opened) != point["bundle_digest"]:
+            raise RecoveryConflictError("recovery:bundle-conflict")
+        try:
+            parsed, _ing_raw, _core_raw = independent.parse_bundle(opened, max_bundle_bytes=self.config.max_bundle_bytes, expected_generation=int(point["generation"]), expected_prior_root=str(point["prior_root"]))
+        except independent.RecoveryVerificationError:
+            raise RecoveryConflictError("recovery:bundle") from None
+        if parsed["ingress"]["database_id"] != point["ingress_database_id"] or parsed["ingress"]["config_digest"] != point["ingress_config_digest"] or parsed["ingress"]["head_root"] != point["ingress_head_root"] or parsed["ingress"]["watermark"] != point["ingress_watermark"] or parsed["core"]["database_id"] != point["core_database_id"] or parsed["core"]["config_digest"] != point["core_config_digest"] or parsed["core"]["head_root"] != point["core_head_root"] or parsed["core"]["watermark"] != point["core_watermark"]:
+            raise RecoveryConflictError("recovery:bundle-binding")
+        if self.custody.state(str(point["key_id"]), int(point["key_epoch"])) != "ACTIVE":
+            raise RecoveryConflictError("recovery:key-revoked")
+
+    def _same_point_immutable(self, first: Mapping[str, object], second: Mapping[str, object]) -> bool:
+        columns = ("point_id", "generation", "object_id", "bundle_digest", "bundle_length", "ingress_database_id", "ingress_config_digest", "ingress_head_root", "ingress_watermark", "core_database_id", "core_config_digest", "core_head_root", "core_watermark", "key_id", "key_epoch", "key_state", "storage_id", "prior_point_id", "prior_root", "operation_id", "request_digest")
+        return all(first[key] == second[key] for key in columns)
+
+    def _complete_storage(self, point: Mapping[str, object], bundle: bytes, sealed: bytes) -> RecoveryReceipt:
+        key_id, key_epoch, object_id = str(point["key_id"]), int(point["key_epoch"]), str(point["object_id"])
+        expected_object = _digest("object-id", {"bundle_digest": point["bundle_digest"], "profile_digest": self.config.profile_digest, "key_id": key_id, "key_epoch": key_epoch})
+        if expected_object != object_id:
+            raise RecoveryConflictError("recovery:object-rebound")
+        self._bounded_bytes(sealed, self.config.max_bundle_bytes + MAX_CUSTODY_OVERHEAD_BYTES, "recovery:sealed-size")
         if self.custody.state(key_id, key_epoch) != "ACTIVE":
             self._invalidate(str(point["point_id"]), "key-revoked")
             raise RecoveryConflictError("recovery:key-revoked")
-        object_id = str(point["object_id"])
+        receipt: StorageReceipt | None = None
         try:
             try:
-                existing = self.storage.get(object_id)
+                stored = self.storage.get(object_id)
+                self._bounded_bytes(stored, self.config.max_bundle_bytes + MAX_CUSTODY_OVERHEAD_BYTES, "recovery:storage-size")
             except StorageNotFound:
+                if self.custody.state(key_id, key_epoch) != "ACTIVE":
+                    self._invalidate(str(point["point_id"]), "key-revoked")
+                    raise RecoveryConflictError("recovery:key-revoked")
                 receipt = self.storage.put_if_absent(object_id, sealed, key_id=key_id, key_epoch=key_epoch)
-                if receipt.result not in {"CREATED", "EXISTING_SAME"} or receipt.object_id != object_id or receipt.storage_id != self.config.storage_id or receipt.key_id != key_id or receipt.key_epoch != key_epoch or receipt.byte_length != len(sealed) or receipt.sealed_digest != _raw_digest("sealed", sealed):
+                if not isinstance(receipt, StorageReceipt) or receipt.result not in {"CREATED", "EXISTING_SAME"} or receipt.object_id != object_id or receipt.storage_id != self.config.storage_id or receipt.key_id != key_id or receipt.key_epoch != key_epoch:
+                    if isinstance(receipt, StorageReceipt) and receipt.result == "EXISTING_DIFFERENT":
+                        raise RecoveryConflictError("recovery:storage-conflict")
                     raise RecoveryConflictError("recovery:storage-receipt")
-                existing = self.storage.get(object_id)
-            if type(existing) is not bytes or existing != sealed:
-                raise RecoveryConflictError("recovery:storage-conflict")
-            opened = self.custody.open(existing, key_id, key_epoch)
-            if opened != bundle or _raw_digest("bundle", opened) != point["bundle_digest"]:
-                raise RecoveryConflictError("recovery:bundle-conflict")
-        except (StorageNotFound, RecoveryConflictError):
+                try:
+                    stored = self.storage.get(object_id)
+                except StorageNotFound:
+                    raise RecoveryIndeterminateError("recovery:storage-indeterminate")
+                self._bounded_bytes(stored, self.config.max_bundle_bytes + MAX_CUSTODY_OVERHEAD_BYTES, "recovery:storage-size")
+            self._verify_stored_bundle(stored, point, bundle)
+            if receipt is not None and (receipt.byte_length != len(stored) or receipt.sealed_digest != _raw_digest("sealed", stored)):
+                raise RecoveryConflictError("recovery:storage-receipt")
+        except (RecoveryConflictError, RecoveryIndeterminateError):
             raise
+        except StorageNotFound:
+            raise RecoveryIndeterminateError("recovery:storage-indeterminate") from None
         except Exception:
             raise_redacted(RecoveryIndeterminateError, "recovery:storage-indeterminate")
         connection = _connection(self.path)
         try:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (point["point_id"],)).fetchone()
-            if current is None:
-                raise RecoveryError("recovery:point-missing")
+            if current is None or not self._same_point_immutable(point, current):
+                raise RecoveryConflictError("recovery:point-conflict")
+            if current["state"] == "OBJECT_PENDING" and dict(current) != dict(point):
+                raise RecoveryConflictError("recovery:point-conflict")
             if current["state"] in {"VERIFIED", "PUBLISHED"}:
                 event = connection.execute("SELECT event_raw FROM recovery_events WHERE point_id=? AND next_state=? ORDER BY sequence DESC LIMIT 1", (point["point_id"], current["state"])).fetchone()
                 if event is None:
@@ -364,121 +505,144 @@ class RecoveryServiceV2:
                 return self._receipt(bytes(event[0]))
             if current["state"] != "OBJECT_PENDING":
                 raise RecoveryConflictError("recovery:state")
-            raw = self._append(connection, kind="VERIFIED", point_id=str(point["point_id"]), operation_id=str(point["operation_id"]), request_digest=str(point["request_digest"]), prior_state="OBJECT_PENDING", next_state="VERIFIED", material={"point_id": point["point_id"], "object_id": point["object_id"], "bundle_digest": point["bundle_digest"]}, payload_digest=point["object_id"], payload_length=len(sealed))
-            sequence = json.loads(raw.decode("ascii"))["sequence"]
+            material = {"point_id": point["point_id"], "object_id": point["object_id"], "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"], "storage_id": point["storage_id"], "key_id": point["key_id"], "key_epoch": point["key_epoch"]}
+            raw = self._append(connection, kind="VERIFIED", point_id=str(point["point_id"]), operation_id=str(point["operation_id"]), request_digest=str(point["request_digest"]), prior_state="OBJECT_PENDING", next_state="VERIFIED", material=material, payload_digest=str(point["object_id"]), payload_length=0)
+            sequence = independent._parse(raw, "recovery:receipt")["sequence"]
             connection.execute("UPDATE recovery_points SET state='VERIFIED',updated_sequence=? WHERE point_id=?", (sequence, point["point_id"]))
             connection.commit()
             return self._receipt(raw)
         except (RecoveryError, RecoveryConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             connection.rollback()
+            if _sqlite_is_capacity(error):
+                _capacity()
             raise_redacted(RecoveryError, "recovery:database")
         finally:
             connection.close()
 
-    def create_point(self, ingress_path: str | Path, core_path: str | Path, *, generation: int, now: int) -> RecoveryReceipt:
-        if type(generation) is not int or generation <= 0 or type(now) is not int or now < 0:
-            raise RecoveryError("recovery:input")
-        ing, cor, ing_raw, cor_raw = self._read_pair(Path(ingress_path), Path(core_path))
+    def _capacity_and_existing(self, generation: int) -> dict[str, object] | None:
         connection = _connection(self.path)
         try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM recovery_points WHERE generation=?", (generation,)).fetchone()
+            if row is None and connection.execute("SELECT point_id FROM recovery_points ORDER BY generation,point_id LIMIT 1 OFFSET ?", (MAX_RECOVERY_POINTS - 1,)).fetchone() is not None:
+                raise RecoveryError("recovery:capacity")
+            result = dict(row) if row is not None else None
+            connection.commit()
+            return result
+        except RecoveryError:
+            connection.rollback()
+            raise
+        except sqlite3.Error as error:
+            connection.rollback()
+            if _sqlite_is_capacity(error):
+                _capacity()
+            raise_redacted(RecoveryError, "recovery:database")
+        finally:
+            connection.close()
+
+    def _finish_existing(self, generation: int, ing: Mapping[str, object], cor: Mapping[str, object], ing_raw: bytes, core_raw: bytes, existing: Mapping[str, object]) -> RecoveryReceipt:
+        selected = independent.select_point(self.path, generation=generation, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest)
+        point = selected["point"]
+        bundle = self._bundle(ing, cor, ing_raw, core_raw, generation, str(point["prior_root"]))
+        if _raw_digest("bundle", bundle) != point["bundle_digest"]:
+            raise RecoveryConflictError("recovery:source-drift")
+        if point["state"] in {"VERIFIED", "PUBLISHED"}:
+            return self._receipt(bytes(selected["receipt"]))
+        key_id, key_epoch = str(point["key_id"]), int(point["key_epoch"])
+        if self.custody.state(key_id, key_epoch) != "ACTIVE":
+            self._invalidate(str(point["point_id"]), "key-revoked")
+            raise RecoveryConflictError("recovery:key-revoked")
+        try:
+            sealed = self.custody.seal(bundle, key_id, key_epoch)
+        except Exception:
+            raise_redacted(RecoveryIndeterminateError, "recovery:custody-indeterminate")
+        self._bounded_bytes(sealed, self.config.max_bundle_bytes + MAX_CUSTODY_OVERHEAD_BYTES, "recovery:sealed-size")
+        return self._complete_storage(point, bundle, sealed)
+
+    def create_point(self, ingress_path: str | Path, core_path: str | Path, *, generation: int) -> RecoveryReceipt:
+        if type(generation) is not int or not 1 <= generation <= MAX_RECOVERY_POINTS:
+            raise RecoveryError("recovery:input")
+        existing = self._capacity_and_existing(generation)
+        if existing is not None:
+            ing, cor, ing_raw, core_raw = self._read_pair(Path(ingress_path), Path(core_path))
+            return self._finish_existing(generation, ing, cor, ing_raw, core_raw, existing)
+        ing, cor, ing_raw, core_raw = self._read_pair(Path(ingress_path), Path(core_path))
+        key = self.custody.current_key()
+        if not isinstance(key, RecoveryKey) or type(key.key_id) is not str or not key.key_id or type(key.key_epoch) is not int or key.key_epoch < 0 or key.state != "ACTIVE" or self.custody.state(key.key_id, key.key_epoch) != "ACTIVE":
+            raise RecoveryConflictError("recovery:key-unavailable")
+        connection = _connection(self.path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
             meta = connection.execute("SELECT * FROM recovery_meta WHERE meta_id=1").fetchone()
+            if meta is None:
+                raise RecoveryError("recovery:meta")
+            existing_row = connection.execute("SELECT * FROM recovery_points WHERE generation=?", (generation,)).fetchone()
+            if existing_row is not None:
+                connection.rollback()
+                connection.close()
+                return self._finish_existing(generation, ing, cor, ing_raw, core_raw, dict(existing_row))
+            if connection.execute("SELECT point_id FROM recovery_points ORDER BY generation,point_id LIMIT 1 OFFSET ?", (MAX_RECOVERY_POINTS - 1,)).fetchone() is not None:
+                raise RecoveryError("recovery:capacity")
             prior_point = connection.execute("SELECT * FROM recovery_points ORDER BY generation DESC LIMIT 1").fetchone()
-            prior_root = str(meta["head_root"] if meta else independent.GENESIS_ROOT)
-            bundle = self._bundle(ing, cor, ing_raw, cor_raw, generation, prior_root)
+            prior_root = str(meta["head_root"])
+            bundle = self._bundle(ing, cor, ing_raw, core_raw, generation, prior_root)
             bundle_digest = _raw_digest("bundle", bundle)
             point_id = _digest("point-id", {"config_digest": self.config.digest, "generation": generation})
-            existing = self._find(connection, generation=generation)
-            if existing is not None:
-                if existing["point_id"] != point_id:
-                    raise RecoveryConflictError("recovery:generation-conflict")
-                if existing["state"] in {"VERIFIED", "PUBLISHED"}:
-                    if existing["ingress_head_root"] != ing["head_root"] or existing["core_head_root"] != cor["head_root"] or existing["ingress_watermark"] != ing["sequence"] or existing["core_watermark"] != cor["ingress_watermark"]:
-                        raise RecoveryConflictError("recovery:source-drift")
-                    event = connection.execute("SELECT event_raw FROM recovery_events WHERE point_id=? AND next_state=? ORDER BY sequence DESC LIMIT 1", (existing["point_id"], existing["state"])).fetchone()
-                    if event is None:
-                        raise RecoveryError("recovery:receipt")
-                    connection.close()
-                    if self.custody.state(existing["key_id"], int(existing["key_epoch"])) != "ACTIVE":
-                        raise RecoveryConflictError("recovery:key-revoked")
-                    return self._receipt(bytes(event[0]))
-                if existing["bundle_digest"] != bundle_digest:
-                    raise RecoveryConflictError("recovery:generation-conflict")
-                key = RecoveryKey(str(existing["key_id"]), int(existing["key_epoch"]), str(existing["key_state"]))
-                connection.close()
-                retry_bundle = self._bundle(ing, cor, ing_raw, cor_raw, generation, str(existing["prior_root"]))
-                if _raw_digest("bundle", retry_bundle) != existing["bundle_digest"]:
-                    raise RecoveryConflictError("recovery:bundle-conflict")
-                sealed = self.custody.seal(retry_bundle, key.key_id, key.key_epoch)
-                if _digest("object-id", {"sealed_digest": _raw_digest("sealed", sealed), "profile_digest": self.config.profile_digest, "key_id": key.key_id, "key_epoch": key.key_epoch}) != existing["object_id"]:
-                    raise RecoveryConflictError("recovery:object-rebound")
-                return self._complete_storage(existing, retry_bundle, sealed)
-            key = self.custody.current_key()
-            if not isinstance(key, RecoveryKey) or key.state != "ACTIVE" or not key.key_id or type(key.key_epoch) is not int or key.key_epoch < 0:
-                raise RecoveryConflictError("recovery:key-unavailable")
-            sealed = self.custody.seal(bundle, key.key_id, key.key_epoch)
-            object_id = _digest("object-id", {"sealed_digest": _raw_digest("sealed", sealed), "profile_digest": self.config.profile_digest, "key_id": key.key_id, "key_epoch": key.key_epoch})
-            if self.custody.state(key.key_id, key.key_epoch) != "ACTIVE":
-                raise RecoveryConflictError("recovery:key-revoked")
+            object_id = _digest("object-id", {"bundle_digest": bundle_digest, "profile_digest": self.config.profile_digest, "key_id": key.key_id, "key_epoch": key.key_epoch})
             operation_id = _digest("operation-id", {"point_id": point_id})
             request_digest = _digest("request", {"point_id": point_id, "bundle_digest": bundle_digest, "object_id": object_id})
-            connection.execute("BEGIN IMMEDIATE")
-            if connection.execute("SELECT 1 FROM recovery_points WHERE generation=?", (generation,)).fetchone() is not None:
-                raise RecoveryConflictError("recovery:generation-conflict")
-            connection.execute("INSERT INTO recovery_points VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (point_id, generation, "PREPARED", object_id, bundle_digest, len(bundle), ing["database_id"], ing["config_digest"], ing["head_root"], ing["sequence"], cor["database_id"], cor["config_digest"], cor["head_root"], cor["ingress_watermark"], key.key_id, key.key_epoch, key.state, self.config.storage_id, prior_point["point_id"] if prior_point else None, prior_root, operation_id, request_digest, 0, 0))
-            prepare_raw = self._append(connection, kind="PREPARE", point_id=point_id, operation_id=operation_id, request_digest=request_digest, prior_state="NONE", next_state="PREPARED", material={"point_id": point_id, "bundle_digest": bundle_digest, "object_id": object_id, "key_id": key.key_id, "key_epoch": key.key_epoch}, payload_digest=bundle_digest, payload_length=len(bundle))
-            sequence = json.loads(prepare_raw.decode("ascii"))["sequence"]
-            connection.execute("UPDATE recovery_points SET sequence=?,updated_sequence=? WHERE point_id=?", (sequence, sequence, point_id))
-            pending_raw = self._append(connection, kind="OBJECT_PENDING", point_id=point_id, operation_id=operation_id, request_digest=request_digest, prior_state="PREPARED", next_state="OBJECT_PENDING", material={"point_id": point_id, "object_id": object_id, "storage_id": self.config.storage_id}, payload_digest=object_id, payload_length=len(sealed))
-            pending_sequence = json.loads(pending_raw.decode("ascii"))["sequence"]
+            point = {"point_id": point_id, "generation": generation, "state": "PREPARED", "object_id": object_id, "bundle_digest": bundle_digest, "bundle_length": len(bundle), "ingress_database_id": ing["database_id"], "ingress_config_digest": ing["config_digest"], "ingress_head_root": ing["head_root"], "ingress_watermark": ing["sequence"], "core_database_id": cor["database_id"], "core_config_digest": cor["config_digest"], "core_head_root": cor["head_root"], "core_watermark": cor["ingress_watermark"], "key_id": key.key_id, "key_epoch": key.key_epoch, "key_state": key.state, "storage_id": self.config.storage_id, "prior_point_id": prior_point["point_id"] if prior_point is not None else None, "prior_root": prior_root, "operation_id": operation_id, "request_digest": request_digest, "sequence": 0, "updated_sequence": 0}
+            connection.execute("INSERT INTO recovery_points VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(point[column] for column in independent._POINT_COLUMNS))
+            prepare = self._append(connection, kind="PREPARE", point_id=point_id, operation_id=operation_id, request_digest=request_digest, prior_state="NONE", next_state="PREPARED", material=self._prepare_material(point, ing, cor, ing_raw, core_raw), payload_digest=bundle_digest, payload_length=len(bundle))
+            prepare_sequence = int(independent._parse(prepare, "recovery:receipt")["sequence"])
+            connection.execute("UPDATE recovery_points SET sequence=?,updated_sequence=? WHERE point_id=?", (prepare_sequence, prepare_sequence, point_id))
+            pending_material = {"point_id": point_id, "object_id": object_id, "storage_id": self.config.storage_id, "key_id": key.key_id, "key_epoch": key.key_epoch}
+            pending = self._append(connection, kind="OBJECT_PENDING", point_id=point_id, operation_id=operation_id, request_digest=request_digest, prior_state="PREPARED", next_state="OBJECT_PENDING", material=pending_material, payload_digest=object_id, payload_length=0)
+            pending_sequence = int(independent._parse(pending, "recovery:receipt")["sequence"])
             connection.execute("UPDATE recovery_points SET state='OBJECT_PENDING',updated_sequence=? WHERE point_id=?", (pending_sequence, point_id))
             connection.execute("UPDATE recovery_meta SET current_generation=? WHERE meta_id=1", (generation,))
             connection.commit()
-            point = connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (point_id,)).fetchone()
-        except (RecoveryError, RecoveryConflictError):
+            point["state"] = "OBJECT_PENDING"
+            point["sequence"] = prepare_sequence
+            point["updated_sequence"] = pending_sequence
+        except RecoveryError:
             connection.rollback()
-            connection.close()
             raise
         except sqlite3.IntegrityError:
             connection.rollback()
-            connection.close()
             raise RecoveryConflictError("recovery:conflict")
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             connection.rollback()
-            connection.close()
+            if _sqlite_is_capacity(error):
+                _capacity()
             raise_redacted(RecoveryError, "recovery:database")
         finally:
-            if connection is not None:
-                try:
-                    connection.close()
-                except Exception:
-                    pass
-        if point is None:
-            raise RecoveryError("recovery:point")
+            try:
+                connection.close()
+            except Exception:
+                pass
+        if self.custody.state(key.key_id, key.key_epoch) != "ACTIVE":
+            self._invalidate(point_id, "key-revoked")
+            raise RecoveryConflictError("recovery:key-revoked")
+        try:
+            point = independent.select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("OBJECT_PENDING",))["point"]
+        except independent.RecoveryVerificationError:
+            raise RecoveryConflictError("recovery:point") from None
+        try:
+            sealed = self.custody.seal(bundle, key.key_id, key.key_epoch)
+        except Exception:
+            raise_redacted(RecoveryIndeterminateError, "recovery:custody-indeterminate")
+        self._bounded_bytes(sealed, self.config.max_bundle_bytes + MAX_CUSTODY_OVERHEAD_BYTES, "recovery:sealed-size")
         return self._complete_storage(point, bundle, sealed)
 
     @staticmethod
-    def _publish_database(
-        target: Path,
-        image: bytes,
-        *,
-        export_root: str,
-        expected_evidence: Mapping[str, object],
-        verify_database: callable,
-    ) -> tuple[bool, dict[str, object]]:
+    def _publish_database(target: Path, image: bytes, *, export_root: str, expected_evidence: Mapping[str, object], verify_database: Callable[[Path], Mapping[str, object]]) -> tuple[bool, dict[str, object]]:
         publication: dict[str, object] = {}
         try:
-            restore_publication.publish_create_only(
-                target,
-                export_root=export_root,
-                expected_evidence=expected_evidence,
-                build_stage=lambda stage: stage.write_bytes(image),
-                verify_database=verify_database,
-                result_factory=lambda published: published,
-                publication_receipt_sink=publication.update,
-            )
+            restore_publication.publish_create_only(target, export_root=export_root, expected_evidence=expected_evidence, build_stage=lambda stage: stage.write_bytes(image), verify_database=verify_database, result_factory=lambda published: published, publication_receipt_sink=publication.update)
         except restore_publication.RestorePublicationConflict:
             raise_redacted(RecoveryConflictError, "recovery:publication-conflict")
         except restore_publication.RestorePublicationError:
@@ -487,25 +651,23 @@ class RecoveryServiceV2:
             raise RecoveryError("recovery:publication-receipt")
         return publication.get("publication_kind") == "CREATED", publication
 
-    def _bundle_images(self, point: sqlite3.Row) -> tuple[dict[str, object], bytes, bytes]:
+    def _bundle_images(self, point: Mapping[str, object]) -> tuple[dict[str, object], bytes, bytes]:
         try:
             sealed = self.storage.get(str(point["object_id"]))
-            if type(sealed) is not bytes:
-                raise RecoveryIndeterminateError("recovery:storage-type")
-            expected_object = _digest("object-id", {"sealed_digest": _raw_digest("sealed", sealed), "profile_digest": self.config.profile_digest, "key_id": point["key_id"], "key_epoch": point["key_epoch"]})
-            if expected_object != point["object_id"] or self.custody.state(point["key_id"], int(point["key_epoch"])) != "ACTIVE":
+            self._bounded_bytes(sealed, self.config.max_bundle_bytes + MAX_CUSTODY_OVERHEAD_BYTES, "recovery:storage-size")
+            expected_object = _digest("object-id", {"bundle_digest": point["bundle_digest"], "profile_digest": self.config.profile_digest, "key_id": point["key_id"], "key_epoch": point["key_epoch"]})
+            if expected_object != point["object_id"] or self.custody.state(str(point["key_id"]), int(point["key_epoch"])) != "ACTIVE":
                 raise RecoveryConflictError("recovery:key-or-object")
             bundle = self.custody.open(sealed, str(point["key_id"]), int(point["key_epoch"]))
-            if _raw_digest("bundle", bundle) != point["bundle_digest"]:
+            self._bounded_bytes(bundle, self.config.max_bundle_bytes, "recovery:bundle-size")
+            if _raw_digest("bundle", bundle) != point["bundle_digest"] or len(bundle) != point["bundle_length"]:
                 raise RecoveryConflictError("recovery:bundle")
-            value = json.loads(bundle.decode("ascii"))
-            if not isinstance(value, dict) or value.get("schema") != "mirror-recovery-bundle-v2" or value.get("flags") != FIXED_FLAGS:
-                raise RecoveryConflictError("recovery:bundle")
-            ing_raw = base64.b64decode(value["ingress_image"], validate=True)
-            core_raw = base64.b64decode(value["core_image"], validate=True)
-            if _raw_digest("ingress-image", ing_raw) != value["ingress"]["image_digest"] or _raw_digest("core-image", core_raw) != value["core"]["image_digest"]:
-                raise RecoveryConflictError("recovery:image")
-            return value, ing_raw, core_raw
+            parsed, ing_raw, core_raw = independent.parse_bundle(bundle, max_bundle_bytes=self.config.max_bundle_bytes, expected_generation=int(point["generation"]), expected_prior_root=str(point["prior_root"]))
+            if parsed["ingress"]["database_id"] != point["ingress_database_id"] or parsed["ingress"]["config_digest"] != point["ingress_config_digest"] or parsed["ingress"]["head_root"] != point["ingress_head_root"] or parsed["ingress"]["watermark"] != point["ingress_watermark"] or parsed["core"]["database_id"] != point["core_database_id"] or parsed["core"]["config_digest"] != point["core_config_digest"] or parsed["core"]["head_root"] != point["core_head_root"] or parsed["core"]["watermark"] != point["core_watermark"]:
+                raise RecoveryConflictError("recovery:bundle-binding")
+            if self.custody.state(str(point["key_id"]), int(point["key_epoch"])) != "ACTIVE":
+                raise RecoveryConflictError("recovery:key-revoked")
+            return parsed, ing_raw, core_raw
         except (RecoveryError, RecoveryConflictError):
             raise
         except StorageNotFound:
@@ -514,17 +676,13 @@ class RecoveryServiceV2:
             raise_redacted(RecoveryIndeterminateError, "recovery:restore-indeterminate")
 
     def restore_point(self, point_id: str, ingress_target: str | Path, core_target: str | Path) -> RecoveryReceipt:
-        verification = self.verify()
-        connection = _connection(self.path)
         try:
-            point = connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (point_id,)).fetchone()
-        finally:
-            connection.close()
-        if point is None or point["state"] not in {"VERIFIED", "PUBLISHED"}:
-            raise RecoveryConflictError("recovery:point-state")
-        bundle, ing_raw, core_raw = self._bundle_images(point)
-        if bundle["ingress"]["database_id"] != self.config.ingress_database_id or bundle["core"]["database_id"] != self.config.core_database_id:
-            raise RecoveryConflictError("recovery:pair")
+            selected = independent.select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("VERIFIED", "PUBLISHED"))
+        except independent.RecoveryVerificationError:
+            raise_redacted(RecoveryConflictError, "recovery:catalog")
+        point = selected["point"]
+        selected_receipt = bytes(selected["receipt"])
+        _bundle, ing_raw, core_raw = self._bundle_images(point)
         import tempfile
         with tempfile.TemporaryDirectory(prefix="mirror-recovery-v2-") as temp:
             temp_path = Path(temp)
@@ -536,85 +694,59 @@ class RecoveryServiceV2:
             core_check = core.verify_database(core_stage, expected_database_id=self.config.core_database_id, expected_config_digest=self.config.core_config_digest, ingress_path=ing_stage)
             if ing_check["head_root"] != point["ingress_head_root"] or core_check["head_root"] != point["core_head_root"] or core_check["ingress_watermark"] > ing_check["sequence"]:
                 raise RecoveryConflictError("recovery:pair-root")
-            made_ing, ingress_publication = self._publish_database(
-                Path(ingress_target),
-                ing_raw,
-                export_root=str(point["ingress_head_root"]),
-                expected_evidence=ing_check,
-                verify_database=lambda path: ingress.verify_database(
-                    path,
-                    expected_database_id=self.config.ingress_database_id,
-                    expected_config_digest=self.config.ingress_config_digest,
-                ),
-            )
+            made_ing, ingress_publication = self._publish_database(Path(ingress_target), ing_raw, export_root=str(point["ingress_head_root"]), expected_evidence=ing_check, verify_database=lambda path: ingress.verify_database(path, expected_database_id=self.config.ingress_database_id, expected_config_digest=self.config.ingress_config_digest))
             try:
-                self._publish_database(
-                    Path(core_target),
-                    core_raw,
-                    export_root=str(point["core_head_root"]),
-                    expected_evidence=core_check,
-                    verify_database=lambda path: core.verify_database(
-                        path,
-                        expected_database_id=self.config.core_database_id,
-                        expected_config_digest=self.config.core_config_digest,
-                        ingress_path=ingress_target,
-                    ),
-                )
+                self._publish_database(Path(core_target), core_raw, export_root=str(point["core_head_root"]), expected_evidence=core_check, verify_database=lambda path: core.verify_database(path, expected_database_id=self.config.core_database_id, expected_config_digest=self.config.core_config_digest, ingress_path=ingress_target))
             except Exception:
                 if made_ing:
                     try:
                         storage = ingress_publication["storage_identity"]
-                        restore_publication._delete_exact_file(
-                            Path(ingress_target),
-                            expected_inode=(int(storage["dev"]), int(storage["ino"])),
-                            allow_empty=False,
-                            label="recovery-pair-rollback",
-                        )
+                        restore_publication._delete_exact_file(Path(ingress_target), expected_inode=(int(storage["dev"]), int(storage["ino"])), allow_empty=False, label="recovery-pair-rollback")
                     except Exception:
                         raise_redacted(RecoveryError, "recovery:pair-rollback")
                 raise
         if point["state"] == "PUBLISHED":
-            connection = _connection(self.path)
-            try:
-                row = connection.execute("SELECT event_raw FROM recovery_events WHERE point_id=? AND next_state='PUBLISHED' ORDER BY sequence DESC LIMIT 1", (point_id,)).fetchone()
-                if row is None:
-                    raise RecoveryError("recovery:receipt")
-                return self._receipt(bytes(row[0]))
-            finally:
-                connection.close()
+            return self._receipt(selected_receipt)
         connection = _connection(self.path)
         try:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (point_id,)).fetchone()
-            if current is None or current["state"] != "VERIFIED":
+            if current is None or not self._same_point_immutable(point, current):
+                raise RecoveryConflictError("recovery:point-conflict")
+            if current["state"] == "VERIFIED" and dict(current) != dict(point):
+                raise RecoveryConflictError("recovery:point-conflict")
+            if current["state"] == "PUBLISHED":
+                row = connection.execute("SELECT event_raw FROM recovery_events WHERE point_id=? AND next_state='PUBLISHED' ORDER BY sequence DESC LIMIT 1", (point_id,)).fetchone()
+                if row is None:
+                    raise RecoveryError("recovery:receipt")
+                connection.commit()
+                return self._receipt(bytes(row[0]))
+            if current["state"] != "VERIFIED":
                 raise RecoveryConflictError("recovery:point-state")
-            raw = self._append(connection, kind="PUBLISHED", point_id=point_id, operation_id=current["operation_id"], request_digest=current["request_digest"], prior_state="VERIFIED", next_state="PUBLISHED", material={"point_id": point_id, "ingress_target": "opaque", "core_target": "opaque"}, payload_digest=current["object_id"], payload_length=0)
-            sequence = json.loads(raw.decode("ascii"))["sequence"]
+            material = {"point_id": point_id, "object_id": current["object_id"], "ingress_target": "opaque", "core_target": "opaque"}
+            raw = self._append(connection, kind="PUBLISHED", point_id=point_id, operation_id=str(current["operation_id"]), request_digest=str(current["request_digest"]), prior_state="VERIFIED", next_state="PUBLISHED", material=material, payload_digest=str(current["object_id"]), payload_length=0)
+            sequence = independent._parse(raw, "recovery:receipt")["sequence"]
             connection.execute("UPDATE recovery_points SET state='PUBLISHED',updated_sequence=? WHERE point_id=?", (sequence, point_id))
             connection.commit()
             return self._receipt(raw)
         except (RecoveryError, RecoveryConflictError):
             connection.rollback()
             raise
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             connection.rollback()
+            if _sqlite_is_capacity(error):
+                _capacity()
             raise_redacted(RecoveryError, "recovery:database")
         finally:
             connection.close()
 
     def bootstrap(self, point_id: str) -> bytes:
-        self.verify()
-        connection = _connection(self.path)
         try:
-            point = connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (point_id,)).fetchone()
-        finally:
-            connection.close()
-        if point is None:
-            raise RecoveryConflictError("recovery:point-missing")
-        body = {
-            "schema": "mirror-recovery-bootstrap-v2", "schema_version": 2,
-            "catalog_id": _digest("catalog-id", self.config.database_id), "point_id": point["point_id"], "generation": point["generation"], "object_id": point["object_id"], "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"], "key_id": point["key_id"], "key_epoch": point["key_epoch"], "storage_id": point["storage_id"], "ingress_database_id": point["ingress_database_id"], "core_database_id": point["core_database_id"], "ingress_head_root": point["ingress_head_root"], "core_head_root": point["core_head_root"], "ingress_watermark": point["ingress_watermark"], "core_watermark": point["core_watermark"], "publication_receipt_digest": _digest("publication-receipt", {"point_id": point["point_id"], "object_id": point["object_id"], "state": point["state"]}), "flags": dict(FIXED_FLAGS),
-        }
+            selected = independent.select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest)
+        except independent.RecoveryVerificationError:
+            raise_redacted(RecoveryConflictError, "recovery:catalog")
+        point = selected["point"]
+        body = {"schema": "mirror-recovery-bootstrap-v2", "schema_version": 2, "catalog_id": _digest("catalog-id", self.config.database_id), "point_id": point["point_id"], "generation": point["generation"], "object_id": point["object_id"], "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"], "key_id": point["key_id"], "key_epoch": point["key_epoch"], "storage_id": point["storage_id"], "ingress_database_id": point["ingress_database_id"], "core_database_id": point["core_database_id"], "ingress_head_root": point["ingress_head_root"], "core_head_root": point["core_head_root"], "ingress_watermark": point["ingress_watermark"], "core_watermark": point["core_watermark"], "publication_receipt_digest": _raw_digest("receipt", bytes(selected["receipt"])), "flags": dict(FIXED_FLAGS)}
         body["bootstrap_id"] = _digest("bootstrap-id", {key: body[key] for key in body if key not in {"bootstrap_id", "flags"}})
         raw = _canonical(body)
         if len(raw) > independent.MAX_BOOTSTRAP_BYTES:
@@ -629,4 +761,4 @@ class RecoveryServiceV2:
         return {"schema": "mirror-recovery-support-v2", "states": result["states"], "point_count": result["point_count"], "event_count": result["event_count"], "sequence": result["sequence"], "flags": dict(FIXED_FLAGS)}
 
 
-__all__ = ["RecoveryConfigV2", "RecoveryServiceV2", "RecoveryReceipt", "RecoveryKey", "StorageReceipt", "KeyCustodyPort", "RecoveryStoragePort", "StorageNotFound", "RecoveryError", "RecoveryConflictError", "RecoveryIndeterminateError", "SCHEMA", "SCHEMA_VERSION", "TABLES", "FIXED_FLAGS"]
+__all__ = ["RecoveryConfigV2", "RecoveryServiceV2", "RecoveryReceipt", "RecoveryKey", "StorageReceipt", "KeyCustodyPort", "RecoveryStoragePort", "StorageNotFound", "RecoveryError", "RecoveryConflictError", "RecoveryIndeterminateError", "SCHEMA", "SCHEMA_VERSION", "TABLES", "FIXED_FLAGS", "MAX_DATABASE_BYTES", "MAX_EVENT_BYTES", "MAX_CUSTODY_OVERHEAD_BYTES", "MAX_RECOVERY_POINTS"]

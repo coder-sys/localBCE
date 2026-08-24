@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -17,6 +18,7 @@ from app.mirror import ingress_v2 as ingress
 from app.mirror import ingress_v2_independent as ingress_independent
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import recovery_v2 as recovery
+from app.mirror import recovery_v2_independent as recovery_independent
 
 
 def _hex(seed: str) -> str:
@@ -88,6 +90,55 @@ class _Storage:
             key_id=key_id,
             key_epoch=key_epoch,
         )
+
+
+class _FailOnceStorage(_Storage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_once = True
+
+    def put_if_absent(self, object_id: str, sealed: bytes, *, key_id: str, key_epoch: int) -> recovery.StorageReceipt:
+        if self.fail_once:
+            self.fail_once = False
+            raise RuntimeError("indeterminate storage response")
+        return super().put_if_absent(object_id, sealed, key_id=key_id, key_epoch=key_epoch)
+
+
+class _RandomizedCustody(_Custody):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seal_count = 0
+
+    def seal(self, plaintext: bytes, key_id: str, key_epoch: int) -> bytes:
+        self.seal_count += 1
+        return b"R" + self.seal_count.to_bytes(4, "big") + super().seal(plaintext, key_id, key_epoch)
+
+    def open(self, sealed: bytes, key_id: str, key_epoch: int) -> bytes:
+        if not sealed.startswith(b"R") or len(sealed) < 5:
+            raise RuntimeError("invalid randomized fixture object")
+        return super().open(sealed[5:], key_id, key_epoch)
+
+
+class _OversizeStorage(_Storage):
+    def __init__(self, size: int) -> None:
+        super().__init__()
+        self.size = size
+
+    def get(self, object_id: str) -> bytes:
+        return b"x" * self.size
+
+
+class _NoOpenCustody(_Custody):
+    def __init__(self, *, oversized_plaintext: bool = False) -> None:
+        super().__init__()
+        self.opened = False
+        self.oversized_plaintext = oversized_plaintext
+
+    def open(self, sealed: bytes, key_id: str, key_epoch: int) -> bytes:
+        self.opened = True
+        if self.oversized_plaintext:
+            return b"x" * (16 * 1024 * 1024 + 1)
+        raise AssertionError("custody.open was reached")
 
 
 class _GovernanceVerifier:
@@ -904,9 +955,9 @@ class MirrorV2Fixture(unittest.TestCase):
         return self.core.admit_case(result["reconciliation_artifact_id"] or "")
 
     def test_exact_three_owner_tables_and_full_chain(self) -> None:
-        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1, now=profile.FIXTURE_OBSERVATION_TIME + 10)
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
         self.assertEqual(point.state, "VERIFIED")
-        self.assertEqual(self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1, now=profile.FIXTURE_OBSERVATION_TIME + 10).raw, point.raw)
+        self.assertEqual(self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1).raw, point.raw)
         restored_ingress = self.root / "restored-ingress.db"
         restored_core = self.root / "restored-core.db"
         restored = self.recovery_service.restore_point(point.point_id, restored_ingress, restored_core)
@@ -1136,12 +1187,209 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertEqual(self.core.verify(ingress_path=self.ingress_path)["flags"]["payment_authority"], False)
 
     def test_key_revocation_blocks_restore_and_storage_corruption(self) -> None:
-        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1, now=1)
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
         object_id = json.loads(point.raw.decode("ascii"))["payload_digest"]
         self.custody.revoked.add(("synthetic-key", 1))
         with self.assertRaises(recovery.RecoveryConflictError):
             self.recovery_service.restore_point(point.point_id, self.root / "bad-i.db", self.root / "bad-c.db")
         self.assertNotEqual(object_id, "")
+
+    def test_recovery_event_material_and_selected_snapshot_bind_current_receipt(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        selected = recovery_independent.select_point(
+            self.recovery_path,
+            point_id=point.point_id,
+            expected_database_id=self.recovery_config.database_id,
+            expected_config_digest=self.recovery_config.digest,
+            allowed_states=("VERIFIED",),
+        )
+        self.assertEqual(point.raw, selected["receipt"])
+        self.assertEqual(point.point_id, selected["point"]["point_id"])
+        connection = sqlite3.connect(self.recovery_path)
+        try:
+            names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+            self.assertEqual(names, {"recovery_meta", "recovery_points", "recovery_events"})
+            columns = {
+                table: tuple(row[1] for row in connection.execute("SELECT * FROM pragma_table_info(?) ORDER BY cid", (table,)))
+                for table in names
+            }
+            self.assertEqual(columns["recovery_meta"], recovery_independent._META_COLUMNS)
+            self.assertEqual(columns["recovery_points"], recovery_independent._POINT_COLUMNS)
+            self.assertEqual(columns["recovery_events"], recovery_independent._EVENT_COLUMNS)
+            indexes = tuple(sorted(row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_autoindex_%'")))
+            self.assertEqual(indexes, ("recovery_events_chain_idx", "recovery_events_operation_idx", "recovery_points_state_idx"))
+            events = [json.loads(bytes(row[0]).decode("ascii")) for row in connection.execute("SELECT event_raw FROM recovery_events ORDER BY sequence")]
+        finally:
+            connection.close()
+        self.assertEqual({value["event_kind"] for value in events}, {"PREPARE", "OBJECT_PENDING", "VERIFIED"})
+        self.assertTrue(all("material" in value and value["material_digest"] == recovery_independent._digest("material", value["material"]) for value in events))
+
+    def test_recovery_point_row_authority_fields_are_reconstructed(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        row = recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]
+        changes: dict[str, object] = {
+            "point_id": "f" * 128,
+            "generation": 2,
+            "state": "PREPARED",
+            "object_id": "e" * 128,
+            "bundle_digest": "d" * 128,
+            "bundle_length": int(row["bundle_length"]) + 1,
+            "ingress_database_id": "other-ingress",
+            "ingress_config_digest": "c" * 128,
+            "ingress_head_root": "b" * 128,
+            "ingress_watermark": int(row["ingress_watermark"]) + 1,
+            "core_database_id": "other-core",
+            "core_config_digest": "a" * 128,
+            "core_head_root": "9" * 128,
+            "core_watermark": int(row["core_watermark"]) + 1,
+            "key_id": "other-key",
+            "key_epoch": int(row["key_epoch"]) + 1,
+            "key_state": "REVOKED",
+            "storage_id": "other-storage",
+            "prior_point_id": "8" * 128,
+            "prior_root": "7" * 128,
+            "operation_id": "6" * 128,
+            "request_digest": "5" * 128,
+            "sequence": int(row["sequence"]) + 1,
+            "updated_sequence": int(row["updated_sequence"]) + 1,
+        }
+        for field, value in changes.items():
+            bad = self.root / ("recovery-row-" + field + ".db")
+            shutil.copy2(self.recovery_path, bad)
+            connection = sqlite3.connect(bad)
+            try:
+                connection.execute("UPDATE recovery_points SET " + field + "=?", (value,))
+                connection.commit()
+            finally:
+                connection.close()
+            with self.subTest(field=field):
+                with self.assertRaises(recovery_independent.RecoveryVerificationError):
+                    recovery_independent.verify_database(bad, expected_database_id=self.recovery_config.database_id, expected_config_digest=self.recovery_config.digest)
+
+    def test_recovery_last_event_material_rebind_fails_after_root_rehash(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        bad = self.root / "recovery-material-rebound.db"
+        shutil.copy2(self.recovery_path, bad)
+        connection = sqlite3.connect(bad)
+        try:
+            row = connection.execute("SELECT sequence,event_raw FROM recovery_events ORDER BY sequence DESC LIMIT 1").fetchone()
+            event = json.loads(bytes(row[1]).decode("ascii"))
+            event["material"]["bundle_digest"] = "f" * 128
+            event["material_digest"] = recovery_independent._digest("material", event["material"])
+            event["event_id"] = recovery_independent._digest("event-id", {key: event[key] for key in recovery_independent._EVENT_RAW_KEYS if key not in {"event_id", "after_root"}})
+            event["after_root"] = recovery_independent._event_root(event["sequence"], event["before_root"], event["event_id"], event["event_kind"], event["point_id"], event["next_state"], event["material_digest"], event["stream_kind"], event["stream_id"])
+            raw = recovery_independent._canonical(event)
+            connection.execute("UPDATE recovery_events SET event_id=?,after_root=?,material_digest=?,event_raw=?,receipt_digest=? WHERE sequence=?", (event["event_id"], event["after_root"], event["material_digest"], raw, recovery_independent._raw_digest("receipt", raw), row[0]))
+            connection.execute("UPDATE recovery_meta SET head_root=? WHERE meta_id=1", (event["after_root"],))
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(recovery_independent.RecoveryVerificationError):
+            recovery_independent.verify_database(bad, expected_database_id=self.recovery_config.database_id, expected_config_digest=self.recovery_config.digest)
+
+    def test_recovery_randomized_seal_retries_keep_one_logical_object(self) -> None:
+        custody = _RandomizedCustody()
+        storage = _FailOnceStorage()
+        service = recovery.RecoveryServiceV2(self.root / "randomized-recovery.db", self.recovery_config, custody, storage)
+        with self.assertRaises(recovery.RecoveryIndeterminateError):
+            service.create_point(self.ingress_path, self.core_path, generation=1)
+        pending = recovery_independent.select_point(service.path, generation=1)
+        object_id = pending["point"]["object_id"]
+        receipt = service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual(receipt.state, "VERIFIED")
+        self.assertEqual(len(storage.objects), 1)
+        self.assertIn(object_id, storage.objects)
+        self.assertGreaterEqual(custody.seal_count, 2)
+        self.assertEqual(receipt.raw, service.create_point(self.ingress_path, self.core_path, generation=1).raw)
+
+    def test_recovery_pending_key_revocation_records_invalidated_state(self) -> None:
+        custody = _Custody()
+        storage = _FailOnceStorage()
+        service = recovery.RecoveryServiceV2(self.root / "pending-revoked-recovery.db", self.recovery_config, custody, storage)
+        with self.assertRaises(recovery.RecoveryIndeterminateError):
+            service.create_point(self.ingress_path, self.core_path, generation=1)
+        selected = recovery_independent.select_point(service.path, generation=1)
+        point = selected["point"]
+        ing, cor, ing_raw, core_raw = service._read_pair(self.ingress_path, self.core_path)
+        bundle = service._bundle(ing, cor, ing_raw, core_raw, 1, str(point["prior_root"]))
+        sealed = custody.seal(bundle, str(point["key_id"]), int(point["key_epoch"]))
+        custody.revoked.add(("synthetic-key", 1))
+        with self.assertRaises(recovery.RecoveryConflictError):
+            service._complete_storage(point, bundle, sealed)
+        selected = recovery_independent.select_point(service.path, generation=1)
+        self.assertEqual("INVALIDATED", selected["point"]["state"])
+        self.assertEqual(1, selected["summary"]["states"]["INVALIDATED"])
+
+    def test_recovery_custody_and_storage_caps_fail_before_unbounded_work(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        oversized_storage = _OversizeStorage(self.recovery_config.max_bundle_bytes + recovery.MAX_CUSTODY_OVERHEAD_BYTES + 1)
+        no_open = _NoOpenCustody()
+        service = recovery.RecoveryServiceV2(self.root / "oversized-storage-recovery.db", self.recovery_config, no_open, oversized_storage)
+        shutil.copy2(self.recovery_path, service.path)
+        with self.assertRaises(recovery.RecoveryConflictError):
+            service.restore_point(point.point_id, self.root / "oversized-i.db", self.root / "oversized-c.db")
+        self.assertFalse(no_open.opened)
+        plain_storage = _Storage()
+        plain_storage.objects.update(self.storage.objects)
+        oversized_plaintext = _NoOpenCustody(oversized_plaintext=True)
+        plain_service = recovery.RecoveryServiceV2(self.root / "oversized-plaintext-recovery.db", self.recovery_config, oversized_plaintext, plain_storage)
+        shutil.copy2(self.recovery_path, plain_service.path)
+        with self.assertRaises(recovery.RecoveryConflictError):
+            plain_service.restore_point(point.point_id, self.root / "oversized-plain-i.db", self.root / "oversized-plain-c.db")
+        self.assertTrue(oversized_plaintext.opened)
+
+    def test_recovery_image_event_and_generation_caps_are_executable(self) -> None:
+        overcap = self.root / "over-cap-image.db"
+        overcap.write_bytes(b"xx")
+        with self.assertRaises(recovery.RecoveryError):
+            recovery._bounded_image(overcap, 1, "recovery:test-image-cap")
+        with self.assertRaises(recovery.RecoveryError):
+            self.recovery_service.create_point(self.ingress_path, self.core_path, generation=recovery.MAX_RECOVERY_POINTS + 1)
+        before = self.recovery_service.verify()["event_count"]
+        connection = recovery._connection(self.recovery_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            with self.assertRaises(recovery.RecoveryError):
+                self.recovery_service._append(connection, kind="PUBLISHED", point_id="0" * 128, operation_id="1" * 128, request_digest="2" * 128, prior_state="VERIFIED", next_state="PUBLISHED", material={"oversized": "x" * recovery.MAX_EVENT_BYTES}, payload_digest="3" * 128, payload_length=0)
+            connection.rollback()
+        finally:
+            connection.close()
+        self.assertEqual(before, self.recovery_service.verify()["event_count"])
+
+    def test_recovery_bundle_parser_and_catalog_capacity_fail_closed(self) -> None:
+        ing, cor, ing_raw, core_raw = self.recovery_service._read_pair(self.ingress_path, self.core_path)
+        bundle = self.recovery_service._bundle(ing, cor, ing_raw, core_raw, 1, recovery_independent.GENESIS_ROOT)
+        value = json.loads(bundle.decode("ascii"))
+        mutations: list[bytes] = [
+            b'{"schema":"mirror-recovery-bundle-v2","schema":"duplicate"}',
+            bundle + b" ",
+        ]
+        unknown = dict(value)
+        unknown["unknown"] = True
+        mutations.append(recovery._canonical(unknown))
+        declared = dict(value)
+        declared["ingress"] = dict(value["ingress"])
+        declared["ingress"]["image_length"] += 1
+        mutations.append(recovery._canonical(declared))
+        malformed = dict(value)
+        malformed["ingress_image"] = value["ingress_image"][:-1]
+        mutations.append(recovery._canonical(malformed))
+        for raw in mutations:
+            with self.subTest(mutation=len(raw)):
+                with self.assertRaises(recovery_independent.RecoveryVerificationError):
+                    recovery_independent.parse_bundle(
+                        raw,
+                        max_bundle_bytes=self.recovery_config.max_bundle_bytes,
+                        expected_generation=1,
+                        expected_prior_root=recovery_independent.GENESIS_ROOT,
+                    )
+        oversized = self.root / "oversized-recovery-catalog.db"
+        with oversized.open("wb") as handle:
+            handle.truncate(recovery.MAX_DATABASE_BYTES + 1)
+        before = oversized.stat().st_size
+        with self.assertRaises(recovery.RecoveryError):
+            recovery.RecoveryServiceV2(oversized, self.recovery_config, self.custody, self.storage)
+        self.assertEqual(before, oversized.stat().st_size)
 
 
 if __name__ == "__main__":
