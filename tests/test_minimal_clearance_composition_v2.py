@@ -1,63 +1,56 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from contextlib import closing
+from pathlib import Path
+import shutil
 import sqlite3
 import tempfile
 import traceback
 import unittest
-from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
-import inspect
-from unittest.mock import patch
 
 import tests.test_minimal_clearance_verification_queue as queue_fixtures
 from app.minimal_clearance_composition import (
-    CompositionBackpressureError,
     CompositionConfigV2,
+    CompositionConflictError,
+    CompositionIntegrityError,
+    CompositionLeaseError,
+    CompositionOutboxWorkV2,
     ClearanceCompositionStoreV2,
     build_synthetic_acknowledgment,
 )
-from app.minimal_clearance_composition_independent import (
-    IndependentCompositionError,
-    restore_export_to_fresh_database,
-    verify_database,
-)
+from app.minimal_clearance_composition_independent import IndependentCompositionError, verify_database
 import app.minimal_clearance_composition as composition_module
 
 
 class _Receiver:
-    def __init__(self, config: CompositionConfigV2) -> None:
-        self.config = config
+    def __init__(self, config: CompositionConfigV2, *, identity: bytes | None = None) -> None:
+        self.config, self.identity = config, identity or config.receiver_identity
         self.calls = 0
         self.ack: bytes | None = None
 
-    def identity_sha256(self) -> bytes:
-        return self.config.receiver_identity
-
-    def epoch(self) -> int:
-        return self.config.receiver_epoch
-
+    def identity_sha256(self) -> bytes: return self.identity
+    def epoch(self) -> int: return self.config.receiver_epoch
     def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes:
         self.calls += 1
-        self.ack = build_synthetic_acknowledgment(
-            envelope_bytes, config=self.config, idempotency_key=idempotency_key, accepted_ms=1,
-        )
+        self.ack = build_synthetic_acknowledgment(envelope_bytes, config=self.config, idempotency_key=idempotency_key, accepted_ms=self.calls)
         return self.ack
 
 
 class _Lookup:
     def __init__(self, receiver: _Receiver, config: CompositionConfigV2) -> None:
-        self.receiver = receiver
-        self.config = config
-        self.calls = 0
-
-    def acknowledgment_profile(self):
-        return self.config.acknowledgment_profile
-
+        self.receiver, self.config, self.calls = receiver, config, 0
+    def acknowledgment_profile(self): return self.config.acknowledgment_profile
     def lookup_acknowledgment(self, **_query):
         self.calls += 1
         return self.receiver.ack
+
+
+class _NoneLookup:
+    def acknowledgment_profile(self): return self.config.acknowledgment_profile  # type: ignore[attr-defined]
+    def __init__(self, config: CompositionConfigV2) -> None: self.config = config
+    def lookup_acknowledgment(self, **_query): return None
 
 
 class CompositionV2Tests(unittest.TestCase):
@@ -71,323 +64,361 @@ class CompositionV2Tests(unittest.TestCase):
         self.temp.cleanup()
         self.queue_tests.tearDown()
 
-    def _config(self, *, capacity: int = 16) -> CompositionConfigV2:
+    def _config(self, *, capacity: int = 16, lease_seconds: int = 300) -> CompositionConfigV2:
         queue_config = self.queue_tests._config()
-        return CompositionConfigV2(
-            queue_id=queue_config.queue_id,
-            queue_config_digest=queue_config.digest,
-            verifier_sha256=queue_fixtures._VERIFIER,
-            receiver_identity=bytes(range(32)),
-            capacity=capacity,
-        )
+        return CompositionConfigV2(queue_id=queue_config.queue_id, queue_config_digest=queue_config.digest, verifier_sha256=queue_fixtures._VERIFIER, receiver_identity=bytes(range(32)), capacity=capacity, lease_seconds=lease_seconds)
 
-    def _verified_queue(self, job_id: str = "job-1", factory=None):
+    def _verified(self, job_id: str = "job-1", *, factory=None):
         queue = self.queue_tests._store()
         self.queue_tests._verify_one(queue, job_id, factory=factory or queue_fixtures._Factory())
         return queue
 
-    def test_one_native_queue_verification_and_zero_composition_retry_calls(self) -> None:
+    def _store(self, config: CompositionConfigV2 | None = None, **kwargs):
+        return ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config or self._config(), **kwargs)
+
+    def test_three_table_schema_inventory_and_old_schema_rejection(self) -> None:
+        store = self._store()
+        with closing(sqlite3.connect(store.path)) as connection:
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+            indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'")}
+            triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        self.assertEqual(tables, {"composition_meta", "composition_transactions", "composition_events"})
+        self.assertEqual(indexes, {"composition_ready_idx", "composition_reconcile_idx", "composition_lease_expiry_idx"})
+        self.assertEqual(triggers, {"composition_meta_no_delete", "composition_meta_guard", "composition_transactions_no_delete", "composition_transactions_guard", "composition_events_no_update", "composition_events_no_delete"})
+        legacy = self.root / "legacy.sqlite3"
+        with closing(sqlite3.connect(legacy)) as connection:
+            connection.execute("CREATE TABLE composition_metadata (id INTEGER)")
+            connection.commit()
+        with self.assertRaises(CompositionIntegrityError):
+            ClearanceCompositionStoreV2(path=legacy, config=self._config())
+        tampered = self.root / "unknown-config.sqlite3"
+        shutil.copy2(store.path, tampered)
+        with closing(sqlite3.connect(tampered)) as connection:
+            connection.execute("DROP TRIGGER composition_meta_guard")
+            raw = json.loads(bytes(connection.execute("SELECT config_json FROM composition_meta WHERE id=1").fetchone()[0]).decode("ascii"))
+            raw["unexpected_config_field"] = True
+            config_bytes = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode("ascii")
+            config_digest = composition_module._sha(composition_module._MATERIAL, config_bytes)
+            head = composition_module._sha(composition_module._GENESIS, raw["composition_id"].encode("ascii"), config_digest)
+            connection.execute("UPDATE composition_meta SET config_json=?,config_digest=?,event_head=? WHERE id=1", (config_bytes, config_digest, head))
+            connection.commit()
+        with self.assertRaises(IndependentCompositionError):
+            verify_database(tampered, expected_config=store.config.as_json)
+
+    def test_one_queue_verification_and_exact_retry_no_native_second_call(self) -> None:
         factory = queue_fixtures._Factory()
-        queue = self._verified_queue(factory=factory)
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=self._config())
+        queue = self._verified("job-1", factory=factory)
+        store = self._store()
         first = store.process_verified_job(queue.path, "job-1")
         retry = store.process_verified_job(queue.path, "job-1")
         self.assertEqual(first.status, "APPLIED")
         self.assertTrue(retry.duplicate_convergence)
         self.assertEqual(len(factory.instances), 1)
-        self.assertEqual(store.snapshot()["outbox_counts"]["DISCOVERED"], 1)
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events").fetchone()[0], 1)
+        verify_database(store.path, expected_config=store.config.as_json)
 
-    def test_send_before_record_response_loss_positive_reconciliation(self) -> None:
-        queue = self._verified_queue()
-        failed = {"done": False}
-
-        def fault(label: str) -> None:
-            if label == "after_dispatch_before_ack_commit" and not failed["done"]:
-                failed["done"] = True
-                raise RuntimeError("response_lost")
-
+    def test_one_lease_and_positive_only_reconciliation(self) -> None:
+        queue = self._verified()
         config = self._config()
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config, before_fault=fault)
+        store = self._store(config)
         store.process_verified_job(queue.path, "job-1")
         receiver = _Receiver(config)
-        work = store.claim_next_outbox("dispatch-worker")
-        self.assertIsNotNone(work)
-        uncertain = store.dispatch(work, receiver=receiver)
-        self.assertEqual(uncertain.status, "DELIVERY_UNCONFIRMED")
-        self.assertEqual(receiver.calls, 1)
-        reconciliation = store.claim_reconciliation_next("reconcile-worker")
-        self.assertIsNotNone(reconciliation)
-        lookup = _Lookup(receiver, config)
-        acknowledged = store.reconcile(reconciliation, lookup=lookup)
-        self.assertEqual(acknowledged.status, "ACKNOWLEDGED")
-        self.assertEqual(lookup.calls, 1)
-        self.assertEqual(store.snapshot()["outbox_counts"]["ACKNOWLEDGED"], 1)
-        verify_database(store.path, expected_config=config.as_json)
-        restored = self.root / "acknowledged-restored.sqlite3"
-        restore_export_to_fresh_database(restored, store.export_bytes(), expected_config=config.as_json)
-        verify_database(restored, expected_config=config.as_json)
-
-    def test_dispatch_ack_converges_existing_reconciliation_record(self) -> None:
-        queue = self._verified_queue()
-        config = self._config()
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
-        store.process_verified_job(queue.path, "job-1")
-        work = store.claim_next_outbox("dispatch-worker")
-        self.assertIsNotNone(work)
-        store._mark_delivery_unconfirmed(work, "response_loss")
-        retry = store.claim_next_outbox("retry-worker")
-        self.assertIsNotNone(retry)
-        receiver = _Receiver(config)
-        acknowledged = store.dispatch(retry, receiver=receiver)
-        self.assertEqual(acknowledged.status, "ACKNOWLEDGED")
-        self.assertIsNone(store.claim_reconciliation_next("reconcile-worker"))
-        verify_database(store.path, expected_config=config.as_json)
-
-    def test_negative_reconciliation_does_not_redispatch_or_change_delivery(self) -> None:
-        queue = self._verified_queue()
-        config = self._config()
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
-        store.process_verified_job(queue.path, "job-1")
-        work = store.claim_next_outbox("dispatch-worker")
-        receiver = _Receiver(config)
-        store._mark_delivery_unconfirmed(work, "response_loss")
-        reconciliation = store.claim_reconciliation_next("reconcile-worker")
-
-        class NoneLookup:
-            def lookup_acknowledgment(self, **_query):
-                return None
-
-        result = store.reconcile(reconciliation, lookup=NoneLookup())
-        self.assertEqual(result.status, "DELIVERY_UNCONFIRMED")
-        self.assertEqual(receiver.calls, 0)
-        self.assertEqual(store.snapshot()["outbox_counts"]["DELIVERY_UNCONFIRMED"], 1)
-
-    def test_hostile_queue_receiver_and_storage_failures_are_redacted(self) -> None:
-        canaries = (
-            "PHI_CANARY_MEMBER_0001",
-            "credential CANARY_SECRET_ABC123",
-            r"C:\CANARY\private-clearance.sqlite3",
-        )
-
-        def assert_redacted(error: BaseException) -> None:
-            rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-            self.assertIsNone(error.__cause__)
-            self.assertIsNone(error.__context__)
-            for canary in canaries:
-                self.assertNotIn(canary, str(error))
-                self.assertNotIn(canary, repr(error))
-                self.assertNotIn(canary, rendered)
-
-        config = self._config()
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
-
-        def hostile_reader(*_args, **_kwargs):
-            raise RuntimeError("; ".join(canaries))
-
-        with patch.object(composition_module, "read_verified_job", hostile_reader):
-            with self.assertRaises(Exception) as caught:
-                store.process_verified_job(self.root / "missing-queue.sqlite3", "job-1")
-        assert_redacted(caught.exception)
-
-        queue = self._verified_queue()
-        store.process_verified_job(queue.path, "job-1")
         work = store.claim_next_outbox("dispatch-worker")
         self.assertIsNotNone(work)
         assert work is not None
-
-        class HostileReceiver(_Receiver):
-            def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes:
-                raise RuntimeError("; ".join(canaries))
-
-        receiver = HostileReceiver(config)
-        with patch.object(store, "_mark_delivery_unconfirmed", side_effect=RuntimeError("; ".join(canaries))):
-            with self.assertRaises(Exception) as caught:
-                store.dispatch(work, receiver=receiver)
-        assert_redacted(caught.exception)
-
-        support = json.dumps(store.support_summary(), sort_keys=True)
-        exported = store.export_bytes()
-        persisted = store.path.read_bytes()
-        self.assertNotIn(b"stdout_sha3_512", exported)
-        self.assertNotIn(b"stderr_sha3_512", exported)
-        self.assertNotIn(b"stdout_sha3_512", persisted)
-        self.assertNotIn(b"stderr_sha3_512", persisted)
-        for canary in canaries:
-            self.assertNotIn(canary, support)
-            self.assertNotIn(canary.encode("ascii"), exported)
-            self.assertNotIn(canary.encode("ascii"), persisted)
-
-    def test_export_restore_and_exact_fresh_table_boundary(self) -> None:
-        config = self._config()
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
-        with closing(sqlite3.connect(store.path)) as connection:
-            tables = {
-                row[0] for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                )
-            }
-        self.assertEqual(
-            tables,
-            {
-                "composition_metadata", "composition_state", "composition_transitions", "proof_requests",
-                "proof_audit", "proof_transitions", "application_dispositions", "outbox_jobs", "outbox_leases",
-                "outbox_acks", "outbox_transitions", "reconciliation_records",
-            },
-        )
-        self.assertNotIn("metadata", tables)
-        self.assertNotIn("settlement_requests", tables)
-        self.assertNotIn("migration_requests", tables)
-        self.assertIn("composition_metadata", tables)
-        self.assertIn("reconciliation_records", tables)
-        raw = store.export_bytes()
-        verify_database(store.path, expected_config=config.as_json)
-        restore_export_to_fresh_database(self.root / "restored.sqlite3", raw, expected_config=config.as_json)
-        verify_database(self.root / "restored.sqlite3", expected_config=config.as_json)
-
-    def test_outbox_capacity_rolls_back_empty_composition(self) -> None:
-        queue = self._verified_queue()
-        config = self._config(capacity=1)
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
-        with closing(sqlite3.connect(store.path)) as connection:
-            connection.execute(
-                "INSERT INTO outbox_jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                ("sentinel", b"S" * 64, b"D" * 64, b"E", b"G" * 64, b"I" * 64, "DISCOVERED", 0, 0, 0, 0, None),
-            )
-            connection.commit()
-        before = store.snapshot()
-        with self.assertRaises(CompositionBackpressureError):
-            store.process_verified_job(queue.path, "job-1")
-        after = store.snapshot()
-        self.assertEqual(before["disposition_counts"], after["disposition_counts"])
-        self.assertEqual(before["outbox_counts"], after["outbox_counts"])
-
-    def test_independent_rejects_legacy_table_and_config_substitution(self) -> None:
-        config = self._config()
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
-        raw = store.export_bytes()
-        value = json.loads(raw.decode("ascii"))
-        value["config"]["queue_id"] = "wrong-queue"
-        tampered = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
-        with self.assertRaises(IndependentCompositionError):
-            from app.minimal_clearance_composition_independent import verify_export_bytes
-            verify_export_bytes(tampered, expected_config=config.as_json)
-        with closing(sqlite3.connect(store.path)) as connection:
-            connection.execute("CREATE TABLE legacy_settlement_requests (id INTEGER)")
-            connection.commit()
-        with self.assertRaises(IndependentCompositionError):
-            verify_database(store.path, expected_config=config.as_json)
-
-    def test_composition_runtime_has_no_settlement_owner_dependency(self) -> None:
-        paths = (
-            "app/minimal_clearance_composition.py",
-            "app/minimal_clearance_composition_independent.py",
-            "app/minimal_clearance_proof_primitives.py",
-            "app/minimal_clearance_verification_queue.py",
-            "app/minimal_clearance_verification_queue_independent.py",
-        )
-        forbidden = (
-            "transactional_database_boundary", "production_boundary", "governance_authority_v2",
-            "app.batch", "privacy_v2", "experiments.bl_pq512_crypto_foundation",
-        )
-        for path in paths:
-            source = Path(path).read_text(encoding="utf-8")
-            for prefix in forbidden:
-                self.assertNotIn(prefix, source, f"{path}: forbidden active dependency {prefix}")
-        source = inspect.getsource(composition_module)
-        self.assertNotIn("SQLiteSettlementStoreV2", source)
-
-    def test_direct_backup_restore_and_v1_database_rejection(self) -> None:
-        config = self._config()
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
-        backup = self.root / "backup.sqlite3"
-        recovered = self.root / "recovered.sqlite3"
-        store.create_backup(backup)
-        restored = store.recover_from_backup(backup_path=backup, recovered_path=recovered)
-        self.assertEqual(restored.snapshot()["schema"], "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v2")
-        legacy = self.root / "legacy.sqlite3"
-        with closing(sqlite3.connect(legacy)) as connection:
-            connection.execute("CREATE TABLE settlement_requests (id INTEGER)")
-            connection.commit()
-        with self.assertRaises(Exception) as caught:
-            ClearanceCompositionStoreV2(path=legacy, config=config)
-        self.assertIn("wrong_schema", str(caught.exception))
-
-    def test_composition_commit_faults_have_no_partial_state_and_exact_retry(self) -> None:
-        queue = self._verified_queue()
-        config = self._config()
-        before = {"fired": False}
-
-        def before_fault(label: str) -> None:
-            if label == "before_composition_commit" and not before["fired"]:
-                before["fired"] = True
-                raise RuntimeError("commit_not_started")
-
-        path = self.root / "composition.sqlite3"
-        store = ClearanceCompositionStoreV2(path=path, config=config, before_fault=before_fault)
-        with self.assertRaises(RuntimeError):
-            store.process_verified_job(queue.path, "job-1")
-        with closing(sqlite3.connect(path)) as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_state").fetchone()[0], 0)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM application_dispositions").fetchone()[0], 0)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM outbox_jobs").fetchone()[0], 0)
-        restarted = ClearanceCompositionStoreV2(path=path, config=config)
-        committed = restarted.process_verified_job(queue.path, "job-1")
-        self.assertEqual(committed.status, "APPLIED")
-
-        after = {"fired": False}
-
-        def after_fault(label: str) -> None:
-            if label == "after_composition_commit" and not after["fired"]:
-                after["fired"] = True
-                raise RuntimeError("commit_response_lost")
-
-        uncertain_store = ClearanceCompositionStoreV2(path=self.root / "after.sqlite3", config=config, after_commit_fault=after_fault)
-        with self.assertRaises(Exception):
-            uncertain_store.process_verified_job(queue.path, "job-1")
-        retry = uncertain_store.process_verified_job(queue.path, "job-1")
-        self.assertTrue(retry.duplicate_convergence)
-        verify_database(uncertain_store.path, expected_config=config.as_json)
-
-    def test_concurrent_duplicate_composition_converges_once(self) -> None:
-        queue = self._verified_queue()
-        config = self._config()
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
-
-        def process() -> object:
-            return store.process_verified_job(queue.path, "job-1")
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            results = list(pool.map(lambda _unused: process(), (0, 1)))
-        self.assertEqual(sorted(result.status for result in results), ["APPLIED", "APPLIED"])
-        self.assertEqual(sum(result.duplicate_convergence for result in results), 1)
-        with closing(sqlite3.connect(store.path)) as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM application_dispositions").fetchone()[0], 1)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM outbox_jobs").fetchone()[0], 1)
-        verify_database(store.path, expected_config=config.as_json)
-
-    def test_expired_outbox_lease_rejects_stale_token_and_recovers(self) -> None:
-        queue = self._verified_queue()
-        clock = queue_fixtures._Clock(1_000)
-        config = CompositionConfigV2(
-            queue_id=self.queue_tests._config().queue_id,
-            queue_config_digest=self.queue_tests._config().digest,
-            verifier_sha256=queue_fixtures._VERIFIER,
-            receiver_identity=bytes(range(32)),
-            lease_seconds=1,
-        )
-        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config, clock=clock)
-        store.process_verified_job(queue.path, "job-1")
-        work = store.claim_next_outbox("worker-1")
-        self.assertIsNotNone(work)
-        clock.advance(1_001)
-        receiver = _Receiver(config)
-        with self.assertRaises(Exception):
-            store.dispatch(work, receiver=receiver)
+        uncertain = store._mark_delivery_unconfirmed(work, "response_loss")
+        self.assertEqual(uncertain.status, "DELIVERY_UNCONFIRMED")
+        self.assertIsNone(store.claim_next_outbox("second-dispatch"))
+        recon = store.claim_reconciliation_next("reconcile-worker")
+        self.assertIsNotNone(recon)
+        assert recon is not None
+        acknowledged = store.reconcile(recon, lookup=_Lookup(receiver, config))
+        self.assertEqual(acknowledged.status, "DELIVERY_UNCONFIRMED")
         self.assertEqual(receiver.calls, 0)
-        recovered = store.claim_next_outbox("worker-2")
-        self.assertIsNotNone(recovered)
-        self.assertEqual(recovered.attempt, 2)
+        recon = store.claim_reconciliation_next("reconcile-worker-2")
+        self.assertIsNotNone(recon)
+        receiver.dispatch = lambda envelope_bytes, idempotency_key: build_synthetic_acknowledgment(envelope_bytes, config=config, idempotency_key=idempotency_key, accepted_ms=1)  # type: ignore[method-assign]
+        assert recon is not None
+        receiver.ack = receiver.dispatch(work.envelope_bytes, work.idempotency_key)
+        self.assertEqual(store.reconcile(recon, lookup=_Lookup(receiver, config)).status, "ACKNOWLEDGED")
+        self.assertIsNone(store.claim_reconciliation_next("later"))
         verify_database(store.path, expected_config=config.as_json)
+
+    def test_missing_profile_ack_is_indeterminate(self) -> None:
+        queue = self._verified()
+        config = self._config()
+        store = self._store(config)
+        store.process_verified_job(queue.path, "job-1")
+        work = store.claim_next_outbox("worker")
+        assert work is not None
+        store._mark_delivery_unconfirmed(work, "response_loss")
+        recon = store.claim_reconciliation_next("reconciler")
+        assert recon is not None
+        receiver = _Receiver(config)
+        raw = build_synthetic_acknowledgment(work.envelope_bytes, config=config, idempotency_key=work.idempotency_key)
+        value = json.loads(raw.decode("ascii"))
+        for key in ("profile_digest", "verifier_identity", "verifier_epoch"):
+            value.pop(key)
+        receiver.ack = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+        result = store.reconcile(recon, lookup=_Lookup(receiver, config))
+        self.assertEqual(result.status, "DELIVERY_UNCONFIRMED")
+        self.assertIsNone(store.claim_next_outbox("no-resend"))
+        verify_database(store.path, expected_config=config.as_json)
+
+    def test_exception_authority_fields_are_explicit_and_nonexception_sentinels_bind(self) -> None:
+        queue = self._verified()
+        store = self._store()
+        result = store.process_verified_job(queue.path, "job-1")
+        self.assertIsNotNone(result.state_receipt_bytes)
+        assert result.state_receipt_bytes is not None
+        receipt = json.loads(result.state_receipt_bytes.decode("ascii"))
+        self.assertEqual(receipt["exception_authorization_id"], "E0" + "00" * 63)
+        self.assertEqual(receipt["exception_scope_id"], "E0" + "00" * 63)
+        self.assertEqual(receipt["exception_valid_from"], 0)
+        self.assertEqual(receipt["exception_valid_until"], 0)
+        self.assertNotIn("exception_amount_commitment", receipt)
+        self.assertEqual(len(receipt["settlement_id"]), 128)
+        self.assertEqual(len(receipt["settlement_domain"]), 128)
+        expected_settlement = composition_module._sha(composition_module._SETTLEMENT_REFERENCE, bytes.fromhex(receipt["settlement_domain"]), bytes((receipt["effective_directive"],)), bytes.fromhex(receipt["decision_id"]), bytes.fromhex(receipt["state_after_id"]))
+        self.assertEqual(receipt["settlement_id"], expected_settlement.hex().upper())
+        with closing(sqlite3.connect(store.path)) as connection:
+            envelope = json.loads(bytes(connection.execute("SELECT envelope_bytes FROM composition_transactions WHERE queue_job_id='job-1'").fetchone()[0]).decode("ascii"))
+        self.assertEqual(envelope["exception_authorization_id"], receipt["exception_authorization_id"])
+        self.assertNotIn("exception_amount_commitment", envelope)
+        self.assertEqual(envelope["settlement_id"], receipt["settlement_id"])
+        self.assertEqual(envelope["settlement_domain"], receipt["settlement_domain"])
+        verify_database(store.path, expected_config=store.config.as_json)
+
+    def test_different_valid_ack_is_conflict_event_and_ack_fast_path_checks_work_identity(self) -> None:
+        queue = self._verified()
+        config = self._config()
+        store = self._store(config)
+        store.process_verified_job(queue.path, "job-1")
+        receiver = _Receiver(config)
+        work = store.claim_next_outbox("worker")
+        assert work is not None
+        first = store.dispatch(work, receiver=receiver)
+        self.assertEqual(first.status, "ACKNOWLEDGED")
+        second = build_synthetic_acknowledgment(work.envelope_bytes, config=config, idempotency_key=work.idempotency_key, accepted_ms=999)
+        with self.assertRaises(CompositionConflictError):
+            store._commit_ack(work, second, "ACKNOWLEDGED")
+        bad_work = CompositionOutboxWorkV2(config.composition_id, work.job_id, b"X" * 64, work.attempt, work.worker_id, work.lease_token, work.lease_expires_ms, work.envelope_bytes, work.idempotency_key)
+        with self.assertRaises(CompositionLeaseError):
+            store.dispatch(bad_work, receiver=receiver)
+        bad_token = CompositionOutboxWorkV2(config.composition_id, work.job_id, work.operation_id, work.attempt, work.worker_id, b"X" * 24, work.lease_expires_ms, work.envelope_bytes, work.idempotency_key)
+        with self.assertRaises(CompositionLeaseError):
+            store.dispatch(bad_token, receiver=receiver)
+        with closing(sqlite3.connect(store.path)) as connection:
+            kinds = [row[0] for row in connection.execute("SELECT event_kind FROM composition_events ORDER BY global_sequence")]
+        self.assertIn("ACK_CONFLICT", kinds)
+        verify_database(store.path, expected_config=config.as_json)
+
+    def test_ack_event_policy_result_is_bound_to_receipt(self) -> None:
+        queue = self._verified()
+        config = self._config()
+        store = self._store(config)
+        store.process_verified_job(queue.path, "job-1")
+        work = store.claim_next_outbox("worker")
+        assert work is not None
+        store.dispatch(work, receiver=_Receiver(config))
+        target = self.root / "ack-policy-tampered.sqlite3"
+        shutil.copy2(store.path, target)
+        with closing(sqlite3.connect(target)) as connection:
+            connection.execute("DROP TRIGGER composition_events_no_update")
+            row = tuple(connection.execute("SELECT * FROM composition_events WHERE event_kind='ACKNOWLEDGED'").fetchone())
+            value = json.loads(bytes(row[11]).decode("ascii"))
+            value["payload"]["policy_result"] = (int(value["payload"]["policy_result"]) % 5) + 1
+            event_bytes = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+            event_digest = composition_module._sha(composition_module._EVENT, composition_module._u64(int(row[0])), composition_module._u64(int(row[2])), str(row[3]).encode("ascii"), composition_module._fixed_ascii(str(row[1]), "job_id"), bytes(row[4]), bytes(row[5]), bytes(row[6]), str(row[7]).encode("ascii"), str(row[8]).encode("ascii"), bytes(row[9]), event_bytes, bytes(row[13]))
+            event_root = composition_module._sha(composition_module._HEAD, bytes(row[9]), composition_module._u64(int(row[0])), event_digest)
+            connection.execute("UPDATE composition_events SET event_bytes=?,event_digest=?,event_root=? WHERE global_sequence=?", (event_bytes, event_digest, event_root, row[0]))
+            connection.execute("UPDATE composition_meta SET event_head=? WHERE id=1", (event_root,))
+            connection.commit()
+        with self.assertRaises(IndependentCompositionError):
+            verify_database(target, expected_config=config.as_json)
+
+    def test_queue_view_telemetry_and_local_digest_cannot_bypass_event_binding(self) -> None:
+        queue = self._verified()
+        store = self._store()
+        store.process_verified_job(queue.path, "job-1")
+        target = self.root / "queue-view-tampered.sqlite3"
+        shutil.copy2(store.path, target)
+        with closing(sqlite3.connect(target)) as connection:
+            connection.execute("DROP TRIGGER IF EXISTS composition_transactions_guard")
+            raw = json.loads(bytes(connection.execute("SELECT queue_view_bytes FROM composition_transactions WHERE queue_job_id='job-1'").fetchone()[0]).decode("ascii"))
+            raw["peak_job_commit_bytes"] = 4_999_999_999
+            changed = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode("ascii")
+            local_digest = composition_module._sha(composition_module._MATERIAL, b"queue-view", changed)
+            connection.execute("UPDATE composition_transactions SET queue_view_bytes=?,queue_view_digest=? WHERE queue_job_id='job-1'", (changed, local_digest))
+            connection.commit()
+        with self.assertRaises(IndependentCompositionError):
+            verify_database(target, expected_config=store.config.as_json)
+
+    def test_bounded_dispatch_and_reconciliation_exhaustion_is_terminal(self) -> None:
+        queue = self._verified()
+        config = self._config()
+        store = self._store(config)
+        store.process_verified_job(queue.path, "job-1")
+        wrong = _Receiver(config, identity=b"Z" * 32)
+        for attempt in range(3):
+            work = store.claim_next_outbox(f"worker-{attempt}")
+            self.assertIsNotNone(work)
+            assert work is not None
+            result = store.dispatch(work, receiver=wrong)
+            self.assertEqual(result.status, "DISPATCH_EXHAUSTED" if attempt == 2 else "READY")
+        self.assertIsNone(store.claim_next_outbox("after-exhaustion"))
+        store2 = ClearanceCompositionStoreV2(path=self.root / "composition2.sqlite3", config=config)
+        store2.process_verified_job(queue.path, "job-1")
+        work = store2.claim_next_outbox("dispatch-2")
+        assert work is not None
+        store2._mark_delivery_unconfirmed(work, "response_loss")
+        for attempt in range(3):
+            recon = store2.claim_reconciliation_next(f"recon-{attempt}")
+            self.assertIsNotNone(recon)
+            assert recon is not None
+            result = store2.reconcile(recon, lookup=_NoneLookup(config))
+            self.assertEqual(result.status, "RECONCILIATION_EXHAUSTED" if attempt == 2 else "DELIVERY_UNCONFIRMED")
+        self.assertIsNone(store2.claim_reconciliation_next("after-recon-exhaustion"))
+        verify_database(store.path, expected_config=config.as_json)
+        verify_database(store2.path, expected_config=config.as_json)
+
+    def test_expired_dispatch_becomes_unknown_and_only_reconciliation_claims(self) -> None:
+        clock = queue_fixtures._Clock(1_000)
+        config = self._config(lease_seconds=1)
+        queue = self._verified()
+        store = self._store(config, clock=clock)
+        store.process_verified_job(queue.path, "job-1")
+        work = store.claim_next_outbox("worker")
+        assert work is not None
+        clock.advance(2_000)
+        recon = store.claim_reconciliation_next("reconciler")
+        self.assertIsNone(store.claim_next_outbox("dispatch-after-expiry"))
+        self.assertIsNotNone(recon)
+        verify_database(store.path, expected_config=config.as_json)
+
+    def test_event_tampering_tail_middle_root_payload_and_head_reject(self) -> None:
+        queue = self._verified()
+        store = self._store()
+        store.process_verified_job(queue.path, "job-1")
+        store._mark_delivery_unconfirmed(store.claim_next_outbox("worker"), "response_loss")  # type: ignore[arg-type]
+        store.claim_reconciliation_next("reconciler")
+        verify_database(store.path, expected_config=store.config.as_json)
+        mutations = (
+            ("tail", "DELETE FROM composition_events WHERE global_sequence=(SELECT MAX(global_sequence) FROM composition_events)"),
+            ("root", "UPDATE composition_events SET previous_root=zeroblob(64) WHERE global_sequence=2"),
+            ("payload", "UPDATE composition_events SET event_bytes=? WHERE global_sequence=1"),
+            ("head", "UPDATE composition_meta SET event_head=zeroblob(64)"),
+        )
+        for label, statement in mutations:
+            target = self.root / f"{label}.sqlite3"
+            shutil.copy2(store.path, target)
+            connection = sqlite3.connect(target)
+            try:
+                connection.execute("PRAGMA foreign_keys=OFF")
+                connection.execute("DROP TRIGGER IF EXISTS composition_events_no_delete")
+                connection.execute("DROP TRIGGER IF EXISTS composition_events_no_update")
+                if label == "payload":
+                    raw = connection.execute("SELECT event_bytes FROM composition_events WHERE global_sequence=1").fetchone()[0]
+                    connection.execute(statement, (bytes(raw) + b" ",))
+                else:
+                    connection.execute(statement)
+                connection.commit()
+            finally:
+                connection.close()
+            with self.assertRaises(IndependentCompositionError, msg=label):
+                verify_database(target, expected_config=store.config.as_json)
+        reheaded = self.root / "reheaded-tail.sqlite3"
+        shutil.copy2(store.path, reheaded)
+        with closing(sqlite3.connect(reheaded)) as connection:
+            connection.execute("PRAGMA foreign_keys=OFF")
+            connection.execute("DROP TRIGGER IF EXISTS composition_events_no_delete")
+            connection.execute("DELETE FROM composition_events WHERE global_sequence=(SELECT MAX(global_sequence) FROM composition_events)")
+            prior = connection.execute("SELECT event_root,global_sequence FROM composition_events ORDER BY global_sequence DESC LIMIT 1").fetchone()
+            connection.execute("UPDATE composition_meta SET event_head=?,next_event_sequence=? WHERE id=1", (prior[0], prior[1]))
+            connection.commit()
+        with self.assertRaises(IndependentCompositionError, msg="reheaded-tail"):
+            verify_database(reheaded, expected_config=store.config.as_json)
+
+    def test_backup_restore_and_import_graph_gate(self) -> None:
+        store = self._store()
+        backup, restored = self.root / "backup.sqlite3", self.root / "restored.sqlite3"
+        store.create_backup(backup)
+        recovered = store.recover_from_backup(backup_path=backup, recovered_path=restored)
+        self.assertEqual(recovered.snapshot()["schema"], "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v2")
+        verify_database(restored, expected_config=store.config.as_json)
+        broken = self.root / "broken-backup.sqlite3"
+        shutil.copy2(backup, broken)
+        with closing(sqlite3.connect(broken)) as connection:
+            connection.execute("DROP TRIGGER composition_events_no_delete")
+            connection.commit()
+        with self.assertRaises(IndependentCompositionError):
+            verify_database(broken, expected_config=store.config.as_json)
+        source = Path("app/minimal_clearance_composition.py").read_text(encoding="utf-8") + Path("app/minimal_clearance_composition_independent.py").read_text(encoding="utf-8")
+        for forbidden in ("transactional_database_boundary", "production_boundary", "governance_authority_v2", "app.batch", "privacy_v2", "experiments.bl_pq512_crypto_foundation", "stdout_sha3_512", "stderr_sha3_512"):
+            self.assertNotIn(forbidden, source)
+
+    def test_query_plan_uses_indexes_and_no_history_count_capacity_scan(self) -> None:
+        store = self._store()
+        with closing(sqlite3.connect(store.path)) as connection:
+            ready = connection.execute("EXPLAIN QUERY PLAN SELECT * FROM composition_transactions WHERE delivery_status='READY' AND lease_kind IS NULL AND next_eligible_ms<=0 ORDER BY created_ms,queue_job_id LIMIT 1").fetchall()
+            recon = connection.execute("EXPLAIN QUERY PLAN SELECT * FROM composition_transactions WHERE delivery_status='DELIVERY_UNCONFIRMED' AND lease_kind IS NULL AND next_eligible_ms<=0 ORDER BY created_ms,queue_job_id LIMIT 1").fetchall()
+        self.assertTrue(any("composition_ready_idx" in str(row) for row in ready))
+        self.assertTrue(any("composition_reconcile_idx" in str(row) for row in recon))
+        source = Path("app/minimal_clearance_composition.py").read_text(encoding="utf-8")
+        self.assertNotIn("SELECT COUNT(*) FROM outbox", source)
+
+    def test_concurrent_duplicate_processing_converges_once(self) -> None:
+        queue = self._verified()
+        store = self._store()
+        def process(): return store.process_verified_job(queue.path, "job-1")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: process(), (0, 1)))
+        self.assertEqual([result.status for result in results], ["APPLIED", "APPLIED"])
+        self.assertEqual(sum(result.duplicate_convergence for result in results), 1)
+        verify_database(store.path, expected_config=store.config.as_json)
+
+    def test_hostile_public_errors_are_fixed_and_support_has_no_canary(self) -> None:
+        canaries = ("PHI_CANARY_MEMBER_0001", "credential CANARY_SECRET_ABC123", r"C:\CANARY\private-clearance.sqlite3")
+        store = self._store()
+        original_reader = composition_module.read_verified_job
+        def hostile(*_args, **_kwargs): raise RuntimeError("; ".join(canaries))
+        composition_module.read_verified_job = hostile  # type: ignore[assignment]
+        try:
+            with self.assertRaises(CompositionIntegrityError) as caught:
+                store.process_verified_job(self.root / "missing.sqlite3", "job-1")
+            rendered = "".join(traceback.format_exception(type(caught.exception), caught.exception, caught.exception.__traceback__))
+            for canary in canaries:
+                self.assertNotIn(canary, str(caught.exception)); self.assertNotIn(canary, repr(caught.exception)); self.assertNotIn(canary, rendered)
+        finally:
+            composition_module.read_verified_job = original_reader  # type: ignore[assignment]
+        queue = self._verified("receiver-job")
+        store = ClearanceCompositionStoreV2(path=self.root / "receiver.sqlite3", config=self._config())
+        store.process_verified_job(queue.path, "receiver-job")
+        work = store.claim_next_outbox("receiver-worker")
+        assert work is not None
+        class HostileReceiver:
+            def identity_sha256(self): return store.config.receiver_identity
+            def epoch(self): return store.config.receiver_epoch
+            def dispatch(self, *_args, **_kwargs): raise RuntimeError("; ".join(canaries))
+        result = store.dispatch(work, receiver=HostileReceiver())
+        self.assertEqual(result.status, "DELIVERY_UNCONFIRMED")
+        with open(store.path, "rb") as database:
+            persistent = database.read()
+        for canary in canaries:
+            self.assertNotIn(canary.encode("ascii"), persistent)
+        verify_database(store.path, expected_config=store.config.as_json)
+        original_connect = store._connect
+        store._connect = lambda: (_ for _ in ()).throw(RuntimeError("; ".join(canaries)))  # type: ignore[method-assign]
+        try:
+            with self.assertRaises(CompositionIntegrityError) as caught_storage:
+                store.snapshot()
+            rendered = "".join(traceback.format_exception(type(caught_storage.exception), caught_storage.exception, caught_storage.exception.__traceback__))
+            for canary in canaries:
+                self.assertNotIn(canary, rendered)
+        finally:
+            store._connect = original_connect  # type: ignore[method-assign]
 
 
 if __name__ == "__main__":
