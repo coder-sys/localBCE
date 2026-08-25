@@ -18,6 +18,17 @@ source-bound assertion/predicate. The proof relation does not own the ordered st
 directive, exception, outbox, or ACK. Proof acceptance is only one input to the state owner, and the
 state-owned result and database mutation must commit in one fail-closed atomic transaction.
 
+The smallest initial qualified `PRIVATE_ZK` profile is one authoritative source producing one ordered
+100-operation batch proof. The private proof owns only the exact undisclosed assertion relation, its
+operation/batch binding, hiding commitment/opening, qualified source-bound root, and minimal assertion
+result. The independent verifier returns only an opaque assertion-verification receipt/outcome. An exact
+typed binding carries that receipt into the state transaction and later Lean semantics; the state
+evaluator/transaction alone owns `policyResult`, `effectiveDirective`, chronology, exception/disposition,
+and state mutation. A historical design requiring every private proof to recursively prove the entire
+clearance policy/database transition is not part of this contract. Later multi-source composition may
+verify `N` independent source proofs or use optional recursive aggregation, but either must satisfy the
+complete product gates; replacing the proof backend does not require clearance-state migration.
+
 ZK is not required merely because data is sensitive. If the state clearance service already
 lawfully holds every required fact in plaintext, the smallest correct mechanism is inspectable
 deterministic evaluation over signed governed records. Native v3 is the mandatory path when an
@@ -367,19 +378,25 @@ the complete path.
   and the composed system's relevant computational primitives, must meet at least the NIST
   post-quantum Category 1 baseline for its attack model. NIST categories are broad comparison floors,
   not an exact proof-security claim or generic proof-soundness theorem.
-- Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` theorem-
-  relevant acceptance opportunities, not merely process invocations, across all operations, retries,
-  batches, hosts, tenants, instances, and verifier sessions sharing that profile/epoch. A batch or
-  aggregate containing `n` independently false-able member statements conservatively consumes `n`
-  member occurrences plus any separate aggregation event unless the exact selected theorem proves a
-  smaller accounting unit. The state owner reserves each opportunity atomically before cryptographic
-  acceptance work. Retries, aborts after challenge or verification begins, malformed candidate
-  verifications, crashes after reservation, and other consumed reservations are never refunded.
-  Exceeding the ceiling, overflow, cap exhaustion, ambiguous batch cardinality, or loss of trustworthy
-  global coordination/counter state fails closed and requires key/profile rotation and
-  requalification; this is an assurance accounting bound, not a throughput target.
+- One qualified security-profile deployment/authorization lifetime has a hard global budget of at most
+  `2^32` theorem-relevant acceptance opportunities, not merely process invocations, across all hosts,
+  tenants, members, batches, retries, aborts, crashes, and every key epoch or rotation under that
+  profile. A batch or aggregate containing `n` independently false-able member statements conservatively
+  consumes `n` member occurrences plus any separate aggregation event unless the exact selected theorem
+  proves a smaller accounting unit. The state owner reserves each opportunity atomically before
+  cryptographic acceptance work. Key rotation does not refund or reset this global budget. Per-key and
+  per-epoch signature, message, and query caps are nested operational limits, not fresh statistical
+  soundness budgets. Retries, aborts after challenge or verification begins, malformed candidate
+  verifications, crashes after reservation, and other consumed reservations are never refunded. A
+  genuinely new security profile with separate requalification has a separately scoped claim; any
+  cross-profile or system-lifetime claim must explicitly bound and union all such profiles and does not
+  inherit the finite `2^-128` bound automatically. Exceeding the budget, overflow, cap exhaustion,
+  ambiguous batch cardinality, reservation loss, or loss of trustworthy global coordination/counter
+  state fails closed. Rotation or requalification under the same profile cannot restore consumed budget;
+  only a genuinely new security profile may establish a separately scoped claim. This is an assurance
+  accounting bound, not a throughput target.
 - The exact theorem ledger must prove the union of all statistical bad events over the full globally
-  reserved opportunity ceiling, apply the conservative member-plus-aggregation charge unless its
+  reserved lifetime budget, apply the conservative member-plus-aggregation charge unless its
   exact theorem justifies less, and include proof soundness/knowledge, commitment binding where
   statistical, transcript/challenge collisions, enabled aggregation, operation-reference
   collisions, abort/retry/reset, and every other union factor. The total must be at most `2^-128`.
@@ -392,7 +409,8 @@ the complete path.
   proof, and no unbounded deployment-lifetime `2^-128` probability is claimed.
 - Computational PQ claims are a separate ledger. Each suite declares its adversary work/query model,
   signature/oracle counts, key lifetime, reduction loss, and whether the selected NIST category
-  preserves the intended 128-bit product claim under that finite profile/epoch ceiling; a stronger category is used
+  preserves the intended 128-bit product claim under that finite deployment/authorization-lifetime
+  budget; a stronger category is used
   when the exact reduction or usage evidence requires it, without a global Category 3 mandate.
 - SHA3-512 remains the authoritative external identifier and provides margin; digest width alone is
   not proof-system security.
