@@ -428,6 +428,8 @@ def _verify_rows(connection: sqlite3.Connection, *, expected_config: Mapping[str
     for composition_batch_id, entries in batch_groups.items():
         first_view = entries[0][2]
         member_count = int(first_view["queue_batch_member_count"])
+        if len({str(tx[13]) for _index, _operation_id, _view, tx in entries}) > 1:
+            _fail("composition_batch_partial")
         if len(entries) != member_count or sorted(index for index, _operation_id, _view, _tx in entries) != list(range(member_count)): _fail("composition_batch_completeness")
         for _index, _operation_id, view, _tx in entries:
             if any(view[name] != first_view[name] for name in ("queue_batch_id", "queue_batch_member_set_digest", "queue_batch_pre_head_root", "queue_batch_post_head_root", "queue_batch_pre_transition_count", "queue_batch_member_count")): _fail("composition_batch_binding")

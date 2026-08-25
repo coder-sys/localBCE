@@ -663,6 +663,68 @@ class ClearanceCompositionStoreV2:
         connection.execute("UPDATE composition_meta SET state_profile_identity=?,state_bytes=?,state_id=?,state_epoch=?,state_sequence=?,state_continuity_root=?,state_clearance_root=?,state_clearance_count=?,state_replay_root=?,payment_root=?,settled_batch_count=?,state_binding=?,audit_head=?,last_operation_digest=? WHERE id=1", (identity, predecessor, *state))
         return self._state(connection)
 
+    def _preflight_state_chain(self, connection: sqlite3.Connection, prepared: list[tuple[Any, ...]]) -> None:
+        meta = self._meta(connection)
+        state: tuple[Any, ...] | None = None if meta[11] is None else tuple(meta[11:23])
+        expected_profile = None if meta[5] is None else bytes(meta[5])
+        expected_predecessor = None if meta[6] is None else bytes(meta[6])
+        expected_marker = 0 if state is None else int(int(state[5]) > 0)
+        if state is None and (expected_profile is not None or expected_predecessor is not None):
+            _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
+        if state is not None and (expected_profile is None or expected_predecessor is None):
+            _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
+        for item in prepared:
+            verified, acceptance, encoded, _queue_view, _queue_view_digest, acceptance_digest, _batch, _composition_batch_identity, _member_index = item
+            statement = acceptance.statement
+            profile = _state_store_identity(statement, self.config.verifier_sha256)
+            predecessor = bytes(statement.get("predecessor_state_bytes"))
+            if acceptance.proof_accepted is not True or int(statement.state("economic_mutation")) != 0:
+                _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
+            if expected_profile is not None and profile != expected_profile:
+                _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
+            if expected_predecessor is not None and predecessor != expected_predecessor:
+                _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
+            if state is None:
+                if int(statement.sequence_before) != 0 or int(statement.state("clearance_count_before")) != 0 or int(statement.state("clearance_marker_before")) != 0:
+                    _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
+                continuity = bytes(statement.state("before_continuity_root"))
+                audit = bytes(statement.state("before_audit_head"))
+                clearance = _sha(_STATE_GENESIS, statement.state_before_id, _INITIAL_CLEARANCE)
+                replay = _sha(_STATE_GENESIS, statement.attempt_id, statement.request_id)
+                binding = _sha(_STATE_BINDING, predecessor, statement.state_before_id, _u64(statement.epoch), _u64(statement.sequence_before), continuity, clearance, replay, _INITIAL_PAYMENT, _u64(0), self.config.verifier_sha256, profile)
+                state = (bytes(statement.state_before_id), int(statement.epoch), int(statement.sequence_before), continuity, clearance, int(statement.state("clearance_count_before")), replay, _INITIAL_PAYMENT, 0, binding, audit, None)
+                expected_profile = profile
+                expected_predecessor = predecessor
+                expected_marker = int(statement.state("clearance_marker_before"))
+            if (
+                state[0] != statement.state_before_id
+                or int(state[1]) != int(statement.epoch)
+                or int(state[2]) != int(statement.sequence_before)
+                or bytes(state[3]) != bytes(statement.state("before_continuity_root"))
+                or bytes(state[10]) != bytes(statement.state("before_audit_head"))
+                or int(state[5]) != int(statement.state("clearance_count_before"))
+                or int(statement.state("clearance_marker_before")) != expected_marker
+                or bytes(state[7]) != _INITIAL_PAYMENT
+                or int(state[8]) != 0
+            ):
+                _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
+            operation_digest = _sha(_STATE_OPERATION, encoded, bytes(statement.state_before_id), bytes(statement.attempt_id), self.config.verifier_sha256)
+            sequence_after = int(state[2]) + 1
+            if int(statement.state("sequence_after")) != sequence_after:
+                _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
+            advanced = int(statement.directive) in (1, 5)
+            clearance_after = _sha(_STATE_CLEARANCE, bytes(state[4]), statement.state_after_id, statement.decision_id, bytes((int(statement.directive),))) if advanced else bytes(state[4])
+            count_after = int(state[5]) + int(advanced)
+            marker_after = int(bool(expected_marker or advanced))
+            if int(statement.state("clearance_marker_after")) != marker_after or int(statement.state("clearance_count_after")) != count_after:
+                _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
+            replay_after = _sha(_STATE_REPLAY, bytes(state[6]), statement.attempt_id, statement.request_id, statement.receipt_id)
+            binding_after = _sha(_STATE_BINDING, bytes(state[9]), operation_digest, statement.state_after_id, replay_after, clearance_after, _u64(count_after), bytes(state[7]), _u64(0), _u64(int(state[1])), _u64(sequence_after), self.config.verifier_sha256, profile)
+            audit_after = _sha(b"BL/NATIVE-V3/MINIMAL-AUDIT-HEAD/v1\x00", bytes(state[10]), bytes(statement.decision_id), bytes((int(statement.directive),)))
+            state = (bytes(statement.state_after_id), int(state[1]), sequence_after, bytes(statement.state("after_continuity_root")), clearance_after, count_after, replay_after, _INITIAL_PAYMENT, 0, binding_after, audit_after, operation_digest)
+            expected_predecessor = bytes(statement.get("state_commitment_bytes"))
+            expected_marker = marker_after
+
     def _validate_queue_result(self, verified: IndependentVerifiedQueueJob) -> Any:
         if verified.queue_id != self.config.queue_id or verified.config_digest != self.config.queue_config_digest or verified.verifier_sha256 != self.config.verifier_sha256 or verified.cap_bytes != _CAP_BYTES or verified.cap_enforced is not True or verified.active_process_limit != _ACTIVE_PROCESS_LIMIT or verified.timed_out is not False or verified.exit_code != 0 or verified.peak_job_commit_bytes > _CAP_BYTES: _raise_fixed(CompositionIntegrityError, "queue_binding")
         try: acceptance = parse_acceptance_bytes(verified.acceptance_bytes)
@@ -790,11 +852,19 @@ class ClearanceCompositionStoreV2:
                     material = (bytes(acceptance.artifact_digest), bytes(acceptance.statement.request_id), bytes(acceptance.statement.attempt_id), operation_digest)
                     if any(value in new_material for value in material) or connection.execute("SELECT 1 FROM composition_transactions WHERE artifact_digest=? OR request_id=? OR attempt_id=? OR operation_digest=?", material).fetchone() is not None: _raise_fixed(CompositionConflictError, "composition_conflicting_retry")
                     new_material.update(material); existing_rows.append(None); new_count += 1
+                if new_count and any(existing is not None for existing in existing_rows):
+                    _raise_fixed(CompositionConflictError, "composition_conflicting_retry")
+                if not new_count and len({str(existing[13]) for existing in existing_rows if existing is not None}) > 1:
+                    _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
                 if int(self._meta(connection)[9]) + new_count > self.config.capacity: _raise_fixed(CompositionBackpressureError, "outbox_capacity")
+                if new_count:
+                    self._preflight_state_chain(connection, prepared)
                 for item, existing in zip(prepared, existing_rows):
                     if existing is not None:
                         results.append(self._result_from_tx(existing, True)); continue
                     result, applied = self._apply_verified_job_in_transaction(connection, item, now)
+                    if result.status != "APPLIED" or not applied:
+                        _raise_fixed(CompositionIntegrityError, "composition_batch_state_chain")
                     results.append(result); applied_any = applied_any or applied
                 if new_count: self._fault("before_composition_commit")
                 connection.execute("COMMIT"); began = False

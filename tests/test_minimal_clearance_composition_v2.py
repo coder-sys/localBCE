@@ -11,6 +11,11 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 import tests.test_minimal_clearance_verification_queue as queue_fixtures
+from experiments.longfellow_v09_native_v3.evidence.measure_minimal_clearance_software_pipeline import (
+    _digest as _synthetic_digest,
+    _synthetic_acceptances,
+    _u32 as _synthetic_u32,
+)
 from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 from app.minimal_clearance_composition import (
     CompositionConfigV2,
@@ -55,6 +60,19 @@ class _NoneLookup:
     def lookup_acknowledgment(self, **_query): return None
 
 
+class _AcceptanceFactory:
+    def __init__(self, acceptances) -> None:
+        self.acceptances = tuple(acceptances)
+        self.index = 0
+
+    def __call__(self):
+        acceptance = self.acceptances[self.index]
+        self.index += 1
+        verifier = object.__new__(queue_fixtures.NativeMinimalClearanceVerifier)
+        verifier._test_acceptance = acceptance  # type: ignore[attr-defined]
+        return verifier
+
+
 class CompositionV2Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.queue_tests = queue_fixtures.VerificationQueueTests(methodName="runTest")
@@ -78,6 +96,46 @@ class CompositionV2Tests(unittest.TestCase):
 
     def _store(self, config: CompositionConfigV2 | None = None, **kwargs):
         return ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config or self._config(), **kwargs)
+
+    def _synthetic_chain(self, ordinals: tuple[int, ...]):
+        template = self._verified("chain-template")
+        acceptances = _synthetic_acceptances(template.path, count=max(ordinals))
+        queue = self.queue_tests._store(capacity=4, name="chain.sqlite")
+        factory = _AcceptanceFactory(tuple(acceptances[ordinal - 1] for ordinal in ordinals))
+        for ordinal, acceptance in zip(ordinals, factory.acceptances):
+            artifact = b"BL-SYNTHETIC-QUEUE-V6-" + _synthetic_u32(ordinal) + _synthetic_digest("artifact", ordinal)
+            ref = f"composition-chain-{ordinal:03d}"
+            source = self.queue_tests.source_root / ref
+            source.write_bytes(artifact)
+            source.chmod(0o400)
+            metadata = queue_fixtures.ArtifactMetadata(
+                ref,
+                len(artifact),
+                acceptance.artifact_sha256,
+                acceptance.artifact_digest,
+                bytes(acceptance.statement.state("proposed_payment_commitment")),
+                acceptance.statement.state_before_id,
+                bytes(acceptance.statement.get("private_batch_commitment")),
+            )
+            queue._admit(job_id=f"chain-{ordinal:03d}", metadata=metadata)
+            result = queue._process_one(verifier=factory(), custody=self.queue_tests._custody())
+            self.assertIsNotNone(result)
+            self.assertEqual(result.status, "CANDIDATE")
+        self.assertEqual(len(queue._promote_candidates()), 1)
+        return queue
+
+    def _prepared_batch(self, store: ClearanceCompositionStoreV2, queue):
+        batch = composition_module.read_verified_batch(queue.path)
+        composition_batch_id = composition_module._composition_batch_id(store.config, batch)
+        prepared = []
+        for member_index, verified in enumerate(batch.jobs):
+            acceptance = store._validate_queue_result(verified)
+            encoded = bytes(verified.acceptance_bytes)
+            queue_view = store._queue_view_bytes(verified, batch, member_index, composition_batch_id)
+            queue_view_digest = composition_module._sha(composition_module._MATERIAL, b"queue-view", queue_view)
+            acceptance_digest = composition_module._sha(composition_module._MATERIAL, b"acceptance", encoded)
+            prepared.append((verified, acceptance, encoded, queue_view, queue_view_digest, acceptance_digest, batch, composition_batch_id, member_index))
+        return batch, prepared
 
     def test_three_table_schema_inventory_and_old_schema_rejection(self) -> None:
         store = self._store()
@@ -145,6 +203,71 @@ class CompositionV2Tests(unittest.TestCase):
         self.assertEqual(len(retry), 1)
         self.assertTrue(retry[0].duplicate_convergence)
         self.assertEqual(retry[0].state_receipt_digest, results[0].state_receipt_digest)
+
+    def test_process_verified_jobs_applies_ordered_sequential_chain(self) -> None:
+        queue = self._synthetic_chain((1, 2))
+        store = self._store()
+        results = store.process_verified_jobs(queue.path, ("chain-001", "chain-002"))
+        self.assertEqual([result.status for result in results], ["APPLIED", "APPLIED"])
+        with closing(sqlite3.connect(store.path)) as connection:
+            rows = connection.execute("SELECT queue_job_id,status,applied_sequence FROM composition_transactions ORDER BY applied_sequence").fetchall()
+        self.assertEqual(rows, [("chain-001", "APPLIED", 1), ("chain-002", "APPLIED", 2)])
+        retry = store.process_verified_jobs(queue.path, ("chain-001", "chain-002"))
+        self.assertTrue(all(result.duplicate_convergence for result in retry))
+        summary = verify_database(store.path, expected_config=store.config.as_json)
+        self.assertEqual(summary["table_counts"]["composition_transactions"], 2)
+        self.assertEqual(summary["table_counts"]["composition_events"], 2)
+
+    def test_process_verified_jobs_rejects_invalid_state_chain_without_mutation(self) -> None:
+        queue = self._synthetic_chain((1, 3))
+        store = self._store()
+        before = store.snapshot()
+        with self.assertRaises(CompositionIntegrityError) as caught:
+            store.process_verified_jobs(queue.path, ("chain-001", "chain-003"))
+        self.assertEqual(str(caught.exception), "composition_batch_state_chain")
+        self.assertEqual(store.snapshot(), before)
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events").fetchone()[0], 0)
+            meta = connection.execute("SELECT state_id,state_profile_identity,state_bytes,state_sequence,active_dispatch_count FROM composition_meta WHERE id=1").fetchone()
+        self.assertEqual(meta, (None, None, None, None, 0))
+        summary = verify_database(store.path, expected_config=store.config.as_json)
+        self.assertEqual(summary["table_counts"], {"composition_meta": 1, "composition_transactions": 0, "composition_events": 0})
+        self.assertEqual(summary["delivery_counts"], {status: 0 for status in sorted(composition_module._DELIVERY_STATES)})
+
+    def test_independent_reconstruction_rejects_persisted_mixed_batch(self) -> None:
+        queue = self._synthetic_chain((1, 3))
+        store = self._store()
+        _batch, prepared = self._prepared_batch(store, queue)
+        with closing(store._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            results = [store._apply_verified_job_in_transaction(connection, item, int(store.clock.now_ms())) for item in prepared]
+            connection.execute("COMMIT")
+        self.assertEqual([result.status for result, _applied in results], ["APPLIED", "HELD"])
+        with self.assertRaises(IndependentCompositionError) as caught:
+            verify_database(store.path, expected_config=store.config.as_json)
+        self.assertEqual(str(caught.exception), "composition_batch_partial")
+
+    def test_process_verified_jobs_rejects_partially_persisted_batch_without_mutation(self) -> None:
+        queue = self._synthetic_chain((1, 2))
+        store = self._store()
+        _batch, prepared = self._prepared_batch(store, queue)
+        with closing(store._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            result, applied = store._apply_verified_job_in_transaction(connection, prepared[0], int(store.clock.now_ms()))
+            self.assertEqual((result.status, applied), ("APPLIED", True))
+            connection.execute("COMMIT")
+        before = store.snapshot()
+        with self.assertRaises(CompositionConflictError) as caught:
+            store.process_verified_jobs(queue.path, ("chain-001", "chain-002"))
+        self.assertEqual(str(caught.exception), "composition_conflicting_retry")
+        self.assertEqual(store.snapshot(), before)
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events").fetchone()[0], 1)
+        with self.assertRaises(IndependentCompositionError) as independent:
+            verify_database(store.path, expected_config=store.config.as_json)
+        self.assertEqual(str(independent.exception), "composition_batch_completeness")
 
     def test_process_verified_jobs_preflights_conflict_before_any_new_mutation(self) -> None:
         queue = self.queue_tests._store(capacity=4)

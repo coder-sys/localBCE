@@ -28,6 +28,7 @@ from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 from app.minimal_clearance_composition import (
     ClearanceCompositionStoreV2,
     CompositionConfigV2,
+    CompositionIntegrityError,
     build_synthetic_acknowledgment,
 )
 from app.minimal_clearance_composition_independent import verify_database as verify_composition_database
@@ -418,6 +419,7 @@ def _run_campaign(root: Path, *, profile: ExperimentalPrivateZkProfile, template
     ends: list[float] = []
     queue_start: float | None = None
     promotion_batches = 0
+    invalid_queue_path: Path | None = None
     try:
         acceptances = _synthetic_acceptances(template_queue)
         NativeMinimalClearanceVerifier.identity_sha256 = lambda _self: profile.verifier_sha256  # type: ignore[assignment]
@@ -466,6 +468,39 @@ def _run_campaign(root: Path, *, profile: ExperimentalPrivateZkProfile, template
         queue_restore_path = root / "queue-restore.sqlite"
         restore_export_to_fresh_database(queue_restore_path, queue_export)
         verify_queue_database(queue_restore_path, expected_config=config.as_json())
+
+        invalid_root = root / "invalid-chain"
+        invalid_source_root, invalid_workspace_parent = invalid_root / "source", invalid_root / "workspaces"
+        invalid_source_root.mkdir(parents=True); invalid_workspace_parent.mkdir()
+        invalid_queue_path = invalid_root / "queue.sqlite"
+        invalid_owner = _QueueRuntimeOwnership(lock_path=invalid_queue_path.with_name(invalid_queue_path.name + ".runtime-lock"), parent=invalid_queue_path.parent)
+        invalid_store = _VerificationQueueStore(path=invalid_queue_path, config=config, owner=invalid_owner)
+        invalid_custody = _FilesystemArtifactCustody(source_root=invalid_source_root, workspace_parent=invalid_workspace_parent)
+        try:
+            invalid_acceptances = _synthetic_acceptances(template_queue, count=3)
+            for ordinal in (1, 3):
+                acceptance = invalid_acceptances[ordinal - 1]
+                job_id = f"v6-invalid-{ordinal:03d}"
+                artifact = b"BL-SYNTHETIC-QUEUE-V6-" + _u32(ordinal) + _digest("artifact", ordinal)
+                ref = f"v6-invalid-artifact-{ordinal:03d}"
+                source = invalid_source_root / ref
+                with source.open("xb") as handle:
+                    handle.write(artifact); handle.flush(); os.fsync(handle.fileno())
+                source.chmod(stat.S_IREAD)
+                metadata = ArtifactMetadata(ref, len(artifact), hashlib.sha256(artifact).digest(), hashlib.sha3_512(artifact).digest(), bytes(acceptance.statement.state("proposed_payment_commitment")), acceptance.statement.state_before_id, bytes(acceptance.statement.get("private_batch_commitment")))
+                invalid_store._admit(job_id=job_id, metadata=metadata)
+                verifier = object.__new__(NativeMinimalClearanceVerifier)
+                verifier._synthetic_acceptance = acceptance  # type: ignore[attr-defined]
+                result = invalid_store._process_one(verifier=verifier, custody=invalid_custody)
+                if result is None or result.status != "CANDIDATE":
+                    raise _CampaignError("synthetic_invalid_chain_candidate")
+            if len(invalid_store._promote_candidates()) != 1:
+                raise _CampaignError("synthetic_invalid_chain_promotion")
+            invalid_batch = read_verified_batch(invalid_queue_path)
+            if tuple(job.job_id for job in invalid_batch.jobs) != ("v6-invalid-001", "v6-invalid-003"):
+                raise _CampaignError("synthetic_invalid_chain_order")
+        finally:
+            invalid_owner.close()
     finally:
         NativeMinimalClearanceVerifier.identity_sha256 = original_identity
         NativeMinimalClearanceVerifier.verify = original_verify
@@ -501,14 +536,20 @@ def _run_campaign(root: Path, *, profile: ExperimentalPrivateZkProfile, template
     duplicate = composition.process_verified_jobs(queue_path, batch)
     if len(duplicate) != _COUNT or not all(result.duplicate_convergence for result in duplicate):
         raise _CampaignError("composition_duplicate_retry")
-    before_mixed = composition.snapshot()
-    mixed_rejected = False
+    if invalid_queue_path is None:
+        raise _CampaignError("composition_invalid_chain_queue")
+    invalid_composition_path = root / "invalid-composition.sqlite"
+    invalid_composition = ClearanceCompositionStoreV2(path=invalid_composition_path, config=composition_config, clock=clock)
+    invalid_before = invalid_composition.snapshot()
+    invalid_chain_rejected = False
     try:
-        composition.process_verified_jobs(queue_path, tuple(job.job_id for job in batch.jobs[:-1]))
-    except Exception:
-        mixed_rejected = composition.snapshot() == before_mixed
-    if not mixed_rejected:
-        raise _CampaignError("composition_mixed_batch")
+        invalid_composition.process_verified_jobs(invalid_queue_path, read_verified_batch(invalid_queue_path))
+    except CompositionIntegrityError as exc:
+        invalid_chain_rejected = str(exc) == "composition_batch_state_chain"
+    invalid_after = invalid_composition.snapshot()
+    invalid_summary = verify_composition_database(invalid_composition_path, expected_config=composition_config.as_json)
+    if not invalid_chain_rejected or invalid_after != invalid_before or invalid_summary["table_counts"]["composition_transactions"] != 0 or invalid_summary["table_counts"]["composition_events"] != 0 or any(invalid_summary["delivery_counts"].values()):
+        raise _CampaignError("composition_invalid_chain")
     verify_composition_database(composition_path, expected_config=composition_config.as_json)
     receiver = _SyntheticReceiver(composition_config)
     delivery_start = time.perf_counter()
@@ -588,7 +629,8 @@ def _run_campaign(root: Path, *, profile: ExperimentalPrivateZkProfile, template
         "lease_expiry_recovery_count": 1,
         "reconciliation_ack_count": 1,
         "rollback_verified": rollback_verified,
-        "mixed_batch_rejected_without_mutation": mixed_rejected,
+        "mixed_batch_rejected_without_mutation": invalid_chain_rejected,
+        "invalid_chain_rejected_without_mutation": invalid_chain_rejected,
         "queue_depth_peak": queue_depth,
         "outbox_depth_peak": _COUNT,
         "retry_count": 0,
