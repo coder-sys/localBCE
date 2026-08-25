@@ -1066,6 +1066,7 @@ class MirrorV2Fixture(unittest.TestCase):
     def test_core_v4_identity_is_explicit_and_v3_state_is_rejected(self) -> None:
         self.assertEqual("mirror-core-v4", core_independent.SCHEMA)
         self.assertEqual(4, core_independent.SCHEMA_VERSION)
+        self.assertEqual("BL/MIRROR/CORE/V4/", core_independent.DOMAIN)
         self.assertEqual(core_independent.SCHEMA, core.SCHEMA)
         self.assertEqual(core_independent.SCHEMA_VERSION, core.SCHEMA_VERSION)
         connection = sqlite3.connect(self.core_path)
@@ -1078,6 +1079,31 @@ class MirrorV2Fixture(unittest.TestCase):
         config = json.loads(bytes(meta["config_raw"]).decode("ascii"))
         event = json.loads(event_raw.decode("ascii"))
         logical = json.loads(self.core.logical_export().decode("ascii"))
+        verified = core_independent.verify_database(
+            self.core_path,
+            expected_database_id=self.core_config.database_id,
+            expected_config_digest=self.core_config.digest,
+        )
+        self.assertTrue(verified["structural_valid"])
+        self.assertEqual(core_independent._digest("config", config), meta["config_digest"])
+        self.assertEqual(
+            event["event_id"],
+            core_independent._digest(
+                "event-id",
+                {key: event[key] for key in core_independent.EVENT_RAW_KEYS if key not in {"event_id", "after_root", "stream_after_root"}},
+            ),
+        )
+        self.assertEqual(event["after_root"], core_independent._event_root(event))
+        head_connection = sqlite3.connect(self.core_path)
+        head_connection.row_factory = sqlite3.Row
+        try:
+            head = head_connection.execute("SELECT * FROM core_heads ORDER BY stream_kind,stream_id LIMIT 1").fetchone()
+            head_event_raw = head_connection.execute("SELECT event_raw FROM core_events WHERE sequence=?", (head["event_sequence"],)).fetchone()[0]
+        finally:
+            head_connection.close()
+        head_event = json.loads(bytes(head_event_raw).decode("ascii"))
+        self.assertEqual(head["head_root"], head_event["stream_after_root"])
+        self.assertEqual(head["head_root"], core_independent._stream_root(head_event))
         for value in (meta, config, event):
             self.assertEqual(core_independent.SCHEMA, value["schema"])
             self.assertEqual(core_independent.SCHEMA_VERSION, value["schema_version"])
@@ -1114,6 +1140,26 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:meta"):
             core.CoreServiceV2(v3_path, self.core_config)
         self.assertEqual(before, v3_path.read_bytes())
+
+        old_domain_path = self.root / "core-old-domain-rejected.db"
+        shutil.copy2(self.core_path, old_domain_path)
+        connection = sqlite3.connect(old_domain_path)
+        try:
+            old_domain_digest = hashlib.sha3_512()
+            old_domain_digest.update(b"BL/MIRROR/CORE/V3/config\0")
+            old_domain_digest.update(core_independent._canonical(config))
+            connection.execute("UPDATE core_meta SET config_digest=? WHERE meta_id=1", (old_domain_digest.hexdigest(),))
+            connection.commit()
+        finally:
+            connection.close()
+        old_domain_before = old_domain_path.read_bytes()
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:config"):
+            core_independent.verify_database(
+                old_domain_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=old_domain_digest.hexdigest(),
+            )
+        self.assertEqual(old_domain_before, old_domain_path.read_bytes())
 
     def test_case_heads_are_lineage_scoped_and_interleaved_retries_converge(self) -> None:
         case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")

@@ -26,7 +26,7 @@ from app.mirror.error_boundary import raise_redacted
 
 SCHEMA = "mirror-core-v4"
 SCHEMA_VERSION = 4
-DOMAIN = "BL/MIRROR/CORE/V3/"
+DOMAIN = "BL/MIRROR/CORE/V4/"
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 262_144
 MAX_EVENT_BYTES = 786_432
