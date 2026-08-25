@@ -182,6 +182,38 @@ class CompositionV7Tests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "composition_schema")
         store.close()
 
+    def test_queue_authority_rejects_trusted_config_digest_mismatch_before_mutation(self) -> None:
+        jobs, batch = self._admit_verified(2)
+        bad_config = CompositionConfigV2(queue_id=self.queue_config.queue_id, queue_config_digest=b"x" * 64)
+        store = ClearanceCompositionStoreV2(path=self.root / "wrong-queue-digest-composition.sqlite", config=bad_config)
+        before = store.snapshot()
+        with self.assertRaises(CompositionIntegrityError) as raised:
+            store.process_verified_jobs(self.queue.path, batch, state_controls=self._controls(jobs))
+        self.assertEqual(str(raised.exception), "queue_authority_binding")
+        self.assertEqual(store.snapshot(), before)
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT active_dispatch_count FROM composition_meta WHERE id=1").fetchone()[0], 0)
+        self.assertEqual(verify_database(store.path, expected_config=bad_config.as_json)["transaction_counts"], {"APPLIED": 0, "HELD": 0})
+        store.close()
+
+    def test_queue_authority_rejects_trusted_queue_id_mismatch_before_mutation(self) -> None:
+        jobs, batch = self._admit_verified(2)
+        bad_config = CompositionConfigV2(queue_id="attacker-queue", queue_config_digest=self.queue_config.digest)
+        store = ClearanceCompositionStoreV2(path=self.root / "wrong-queue-id-composition.sqlite", config=bad_config)
+        before = store.snapshot()
+        with self.assertRaises(CompositionIntegrityError) as raised:
+            store.process_verified_jobs(self.queue.path, batch, state_controls=self._controls(jobs))
+        self.assertEqual(str(raised.exception), "queue_authority_binding")
+        self.assertEqual(store.snapshot(), before)
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT active_dispatch_count FROM composition_meta WHERE id=1").fetchone()[0], 0)
+        self.assertEqual(verify_database(store.path, expected_config=bad_config.as_json)["transaction_counts"], {"APPLIED": 0, "HELD": 0})
+        store.close()
+
     def test_invalid_second_predecessor_fails_before_any_composition_mutation(self) -> None:
         jobs, batch = self._admit_verified(2)
         store = self._store()

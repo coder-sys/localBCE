@@ -546,6 +546,8 @@ class ClearanceCompositionStoreV2:
             batch = read_verified_batch(queue_database, selector)
         except (IndependentQueueError, OSError, sqlite3.Error):
             _fail(CompositionIntegrityError, "queue_verification_failed")
+        if not batch.jobs or any(job.queue_id != self.config.queue_id or job.config_digest != self.config.queue_config_digest for job in batch.jobs):
+            _fail(CompositionIntegrityError, "queue_authority_binding")
         if requested.batch != batch.batch or requested.jobs != batch.jobs:
             _fail(CompositionIntegrityError, "queue_batch_binding")
         prepared = [(job, self._control_for(job, state_controls)) for job in batch.jobs]
