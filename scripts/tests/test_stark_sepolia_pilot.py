@@ -88,6 +88,7 @@ class StarkSepoliaPilotTests(unittest.TestCase):
                 pilot.PilotConfig.load(path)
 
     def test_release_profile_rejects_early_stark_activation(self) -> None:
+        config = pilot.PilotConfig.load(self.example_path, allow_example=True)
         gates = {name: False for name in pilot.RELEASE_GATES}
         profile = {
             "schema_version": pilot.RELEASE_SCHEMA,
@@ -98,6 +99,9 @@ class StarkSepoliaPilotTests(unittest.TestCase):
             "automatic_fallback": False,
             "rollback_mode": "manual_governed",
             "native_verifier_active": False,
+            "approved_attestor": "0x3456789012345678901234567890123456789012",
+            "approved_attestor_key_id": "approved-mpc-key-v1",
+            "policy_manifest_hash": config.policy_manifest_hash,
             "activation_gates": gates,
         }
         with self.assertRaisesRegex(pilot.PilotError, "requires every gate"):
@@ -328,8 +332,34 @@ class StarkSepoliaPilotTests(unittest.TestCase):
             profile = pilot.release_profile(config, {"completed_actions": completed})
             self.assertEqual(profile["current_backend"], "groth16")
             self.assertFalse(profile["production_usable"])
+            self.assertEqual(profile["approved_attestor"], config.attestor)
+            self.assertEqual(profile["approved_attestor_key_id"], config.signer_key_id)
+            self.assertEqual(profile["policy_manifest_hash"], config.policy_manifest_hash)
             self.assertFalse(profile["activation_gates"]["legal_approval_recorded"])
             self.assertFalse(profile["activation_gates"]["independent_audits_complete"])
+
+    def test_canary_runtime_uses_explicit_fail_closed_pilot_mode(self) -> None:
+        config = pilot.PilotConfig.load(self.example_path, allow_example=True)
+        deployment = {
+            "starkAttestationVerifierV2": "0x5678901234567890123456789012345678901234",
+            "starkClaimsRegistryV2": "0x6789012345678901234567890123456789012345",
+        }
+        with patch.dict(os.environ, {"SEPOLIA_RPC_URL": "https://rpc.example.invalid"}):
+            runtime = pilot.runtime_config(config, config.artifact_directory, deployment)
+
+        self.assertEqual(runtime["proof_backend"], "stark_attested")
+        self.assertEqual(runtime["stark_runtime_mode"], "pilot_canary")
+        self.assertEqual(
+            Path(runtime["stark_release_profile_path"]),
+            config.release_profile_path.resolve(),
+        )
+        self.assertEqual(
+            Path(runtime["stark_deployment_pin_path"]),
+            config.deployment_pin_path.resolve(),
+        )
+        self.assertEqual(runtime["stark_attestor_mode"], "external_command")
+        self.assertEqual(runtime["stark_finality_mode"], "finalized")
+        self.assertFalse(runtime["stark_allow_test_mined_finality"])
 
     def test_state_updates_are_atomic_and_idempotent_by_action_name(self) -> None:
         base = pilot.PilotConfig.load(self.example_path, allow_example=True)

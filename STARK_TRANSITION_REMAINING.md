@@ -16,7 +16,8 @@ Completed phases:
 7. versioned proof artifact, verifier handoff, and Solidity ABI alignment
 8. persistent concurrency-safe nullifier state and atomic settlement executor
 9. controlled-attestation Solidity verifier and STARK ClaimsRegistry
-10. opt-in `rust-engine` runtime routing with Groth16 preserved as default
+10. fail-closed `rust-engine` production routing with `stark_attested` selected
+    explicitly and Groth16 preserved as the checked-in default
 
 The selected profile verifies a secp256k1 attestation on-chain over the exact
 public inputs and a commitment to the locally verified Winterfell proof. It
@@ -53,7 +54,7 @@ The STARK runtime validator must continue to prove that:
 - chain and local state roots agree
 - replay is rejected
 - Groth16 is not invoked by the STARK backend
-- Groth16 remains green as the default backend
+- Groth16 remains green as the checked-in default and manual rollback backend
 
 ## Next Workstream
 

@@ -477,12 +477,24 @@ def validate_live_release_profile(profile: dict[str, Any]) -> None:
         raise PilotError("release profile must use manual governed rollback")
     if profile.get("native_verifier_active") is not False:
         raise PilotError("native verifier must remain inactive")
+    approved_attestor = require_text(
+        profile.get("approved_attestor"), "release profile approved attestor"
+    )
+    if not ADDRESS_RE.fullmatch(approved_attestor):
+        raise PilotError("release profile approved attestor must be an address")
+    approved_key_id = require_text(
+        profile.get("approved_attestor_key_id"), "release profile approved attestor key ID"
+    )
+    require_bytes32(profile.get("policy_manifest_hash"), "release profile policy manifest hash")
     gates = profile.get("activation_gates")
     if not isinstance(gates, dict) or set(gates) != set(RELEASE_GATES):
         raise PilotError("release profile activation gates are incomplete")
     if not all(isinstance(value, bool) for value in gates.values()):
         raise PilotError("release profile activation gates must be boolean")
     if profile.get("current_backend") == "stark_attested":
+        require_address(approved_attestor, "release profile approved attestor")
+        if "replace" in approved_key_id.lower() or "placeholder" in approved_key_id.lower():
+            raise PilotError("release profile approved attestor key ID is not approved")
         if profile.get("production_usable") is not True or not all(gates.values()):
             raise PilotError("stark_attested activation requires every gate and production_usable=true")
     elif profile.get("current_backend") != "groth16":
@@ -804,6 +816,9 @@ def release_profile(config: PilotConfig, state: dict[str, Any]) -> dict[str, Any
         "automatic_fallback": False,
         "rollback_mode": "manual_governed",
         "native_verifier_active": False,
+        "approved_attestor": config.attestor,
+        "approved_attestor_key_id": config.signer_key_id,
+        "policy_manifest_hash": config.policy_manifest_hash,
         "activation_gates": gates,
         "release_action": (
             "A human-approved release may switch current_backend only after every activation gate is true."
@@ -1116,6 +1131,9 @@ def runtime_config(config: PilotConfig, artifact_dir: Path, deployment: dict[str
         "transaction_value": config.value["transaction_value"],
         "enable_stark_sidecar_artifacts": False,
         "proof_backend": "stark_attested",
+        "stark_runtime_mode": "pilot_canary",
+        "stark_release_profile_path": str(config.release_profile_path.resolve()),
+        "stark_deployment_pin_path": str(config.deployment_pin_path.resolve()),
         "stark_engine_binary": str(
             (ROOT / "stark-engine" / "target" / "debug" / "execute_production_stark_settlement").resolve()
         ),
@@ -1297,6 +1315,7 @@ def run_canary(config: PilotConfig, state: dict[str, Any], kind: str) -> dict[st
     shutil.copy2(claim_path, work / "claim_input.json")
     write_json_atomic(work / "config.json", runtime_config(config, artifacts, deployment))
     environment = signer_environment(config)
+    environment["SEPOLIA_RPC_URL"] = config.rpc_url
     environment["STARK_SUBMITTER_PRIVATE_KEY"] = config.environment_value("submitter_private_key_env")
     result = command(
         [str((ROOT / "rust-engine" / "target" / "debug" / "rust-engine").resolve())],

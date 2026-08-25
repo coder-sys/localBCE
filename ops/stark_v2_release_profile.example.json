@@ -8,6 +8,9 @@
   "automatic_fallback": false,
   "rollback_mode": "manual_governed",
   "native_verifier_active": false,
+  "approved_attestor": "0x3333333333333333333333333333333333333333",
+  "approved_attestor_key_id": "REPLACE_APPROVED_MPC_KEY_ID",
+  "policy_manifest_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "activation_gates": {
     "local_v2_validation_passed": false,
     "safe_and_timelock_deployed": false,

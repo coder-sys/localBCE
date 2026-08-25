@@ -53,7 +53,8 @@ Implemented and tested:
 - canonical 129-byte secp256k1 attestation envelope bound to registry and amount
 - controlled-attestation Solidity verifier and STARK ClaimsRegistry
 - approved and denied runtime settlement through `rust-engine`
-- opt-in backend routing while Groth16 remains the default
+- fail-closed, explicit `stark_attested` routing with Groth16 retained as the
+  checked-in default until governed production activation
 - disposable-Anvil end-to-end validation
 - external-command signer validation with request/key/address/low-s checks
 - parallel non-proxy V2 contracts with a 72-hour timelock and emergency pause

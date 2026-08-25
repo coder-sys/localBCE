@@ -60,9 +60,12 @@ Keccak-256 commitment of the serialized Winterfell proof. It binds:
 
 ## Safety Properties
 
-- Groth16 remains the default when `proof_backend` is absent or set to
-  `groth16`.
-- STARK settlement is enabled only by `proof_backend = "stark_attested"`.
+- Groth16 remains the default when `proof_backend` is absent and in the
+  checked-in active selection.
+- `stark_attested` requires explicit `proof_backend = "stark_attested"`
+  selection. It fails closed until the governed release profile, deployment
+  pin, external signer, Sepolia RPC, submitter key, and finality requirements
+  all validate.
 - `STARK_ATTESTOR_PRIVATE_KEY` is restricted to the legacy/local path.
 - Governed V2 uses `external_command`: canonical JSON is sent over stdin and a
   request-bound, allowlisted, low-s 65-byte signature is accepted over stdout.
@@ -71,8 +74,8 @@ Keccak-256 commitment of the serialized Winterfell proof. It binds:
   registry allowlist, verifier, unpause, and treasury-transfer proposals.
 - V2 local state is committed only after the transaction block is covered by
   the RPC `finalized` block. There is no automatic STARK-to-Groth16 fallback.
-- The submitter key remains the runtime key in `config.json`; production use
-  requires it to be distinct from the attestor key.
+- Production reads the submitter key only from
+  `STARK_SUBMITTER_PRIVATE_KEY`; it must be distinct from the attestor key.
 - Attestations are bound to one verifier, one registry, and one claim amount,
   preventing cross-registry replay and amount substitution.
 - Approved claims insert a claim-derived nullifier into persistent indexed

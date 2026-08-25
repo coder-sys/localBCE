@@ -136,6 +136,7 @@ config = {
   "stark_engine_binary": sys.argv[2], "stark_claims_registry_address": sys.argv[3],
   "stark_attestation_verifier_address": sys.argv[4], "stark_nullifier_state_path": sys.argv[5],
   "stark_artifacts_directory": sys.argv[6], "stark_chain_id": 31337,
+  "stark_runtime_mode": "local_test",
   "stark_attestor_mode": "external_command", "stark_attestor_signer_program": "/usr/bin/python3",
   "stark_attestor_signer_args": [sys.argv[11] + "/scripts/mock_mpc_attestation_signer.py", "--key-id", "anvil-mock-attestor-v1"],
   "stark_attestor_allowed_key_ids": ["anvil-mock-attestor-v1"], "stark_attestor_address": sys.argv[10],

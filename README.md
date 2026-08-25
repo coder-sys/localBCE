@@ -11,10 +11,13 @@ Blind Ledger is a local prototype for privacy-preserving healthcare claims adjud
 
 The system validates claims off-chain, generates zero-knowledge proofs for approved claims, and records approved adjudications on-chain.
 
-Groth16 remains the default compatibility path. An opt-in `stark_attested`
-backend now generates and locally verifies a real Winterfell proof and settles
-through controlled-attestation Solidity contracts. See `STARK_RUNTIME.md` for
-the exact trust boundary and operating commands.
+Groth16 remains the checked-in production backend selection. Governed
+`stark_attested` is an explicit candidate that generates and locally verifies a
+real Winterfell proof and settles through controlled-attestation Solidity
+contracts. It fails closed until an externally supplied release profile and
+deployment pin satisfy every activation gate. STARK failures never trigger an
+automatic Groth16 fallback. See `STARK_RUNTIME.md` for the exact trust boundary
+and operating commands.
 
 A parallel governed V2 Sepolia pilot candidate adds external MPC signing,
 72-hour timelocked administration, emergency pause, policy-hash binding,
@@ -558,7 +561,7 @@ REDEPLOY_WORKFLOW.md
 
 Near-term next steps:
 
-- Keep Groth16 green as the default backend.
+- Keep Groth16 green as the default and manual rollback backend.
 - Independently audit the controlled-attestation STARK path and formalize key
   custody, root governance, monitoring, and recovery.
 - Consider native or recursively wrapped on-chain STARK verification as a
