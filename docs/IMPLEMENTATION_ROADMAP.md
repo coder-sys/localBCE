@@ -58,8 +58,11 @@ generated vector alone is not deployed formal-verification credit.
 ## Current private-proof blocker
 
 The active Queue/Proof Handoff V7 boundary is a clean-break state-owned handoff, not a
-qualified private-proof backend. State issues a one-time opaque operation reference and
-allowlisted statement; an explicit verifier-owned volatile stream is consumed once within the
+qualified private-proof backend. State first issues a one-time opaque operation reference and
+allowlisted statement in `AWAITING_HANDOFF`; for a batch it assigns the exact positions and
+computes the ordered batch root from the issued references and canonical templates. Only then may
+an explicit verifier-owned volatile stream be submitted for that exact issued statement and
+consumed once within the
 4,500,000,000-byte admission cap and no proof workspace or raw proof/source material is
 durable. The verifier returns only a bounded proof-acceptance receipt, while the state owner
 maps PASS/MISSING/AMBIGUOUS/FAIL plus state exception approval to CLEAR/HOLD/HUMAN_REVIEW/

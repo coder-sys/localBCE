@@ -61,7 +61,13 @@ and qualification flags. Caller job IDs, artifact/source paths, patient/provider
 raw-data digests, acceptance bytes, and process-output hashes are not queue fields.
 
 The V7 ownership chain is source-local prover -> optional aggregator -> independent verifier ->
-state owner -> opaque-reference/directive outbox and ACK -> audit/recovery. The verifier receives a
+state owner -> opaque-reference/directive outbox and ACK -> audit/recovery. Admission is two phase:
+the state first issues an immutable allowlisted statement and fresh random 32-byte operation
+reference in `AWAITING_HANDOFF`; for a batch it assigns positions and computes one domain-separated
+ordered root from the exact issued references and canonical templates. Only after issuance may a
+caller submit the single-use readable binary stream for that exact reference (or exact ordered
+batch), transitioning it to `QUEUED`. The verifier receives that stream and the complete issued
+statement, never an unrelated caller/reference argument. The verifier receives a
 readable binary stream through one volatile single-use handoff, with the exact 4,500,000,000-byte
 admission cap and a complete process-tree peak requirement below 5,000,000,000 bytes. No proof,
 source, signature, commitment, or verifier output bytes are written to a proof workspace, DB,

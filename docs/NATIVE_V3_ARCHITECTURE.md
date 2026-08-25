@@ -30,8 +30,10 @@ boundary. Ethereum is not a dependency.
 ## Current experimental engineering boundary
 
 The current native-v3 proof and application code are experimental engineering only. The V7 queue
-clean break uses a state-generated random 32-byte operation reference and one verifier-owned
-volatile readable stream; it does not create a proof workspace or persist proof/source/signature/
+clean break first issues a state-generated random 32-byte operation reference and immutable
+allowlisted statement, then accepts one verifier-owned volatile readable stream only for that
+issued reference; batch positions and the ordered batch root are state-computed before handoff.
+It does not create a proof workspace or persist proof/source/signature/
 commitment bytes, artifact digests, acceptance bytes, or process-output hashes. The exact
 4,500,000,000-byte admission cap and complete process-tree peak below 5,000,000,000 bytes remain
 required. A consumed, failed, expired, restarted, or ambiguous handoff becomes HELD and requires

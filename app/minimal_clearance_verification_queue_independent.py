@@ -41,6 +41,9 @@ _EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v7\x00"
 _HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v7\x00"
 _MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v7\x00"
 _BATCH = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH/v7\x00"
+_BATCH_LEAF = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v7\x00"
+_BATCH_ROOT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v7\x00"
+_HANDOFF_PROTOCOL = "ISSUE_THEN_HANDOFF_V1"
 _FORBIDDEN = ("artifact", "source_path", "patient", "provider", "case_id", "stdout", "stderr", "acceptance_bytes", "policy_result", "effective_directive")
 
 
@@ -115,6 +118,7 @@ class IndependentVerifiedQueueJob:
     valid_until_ms: int
     batch_position: int
     batch_root: bytes | None
+    approved_source_registry_root: bytes | None
     verifier_profile_version: str
     outcome_code: str
     qualification_flags: tuple[str, ...]
@@ -146,8 +150,8 @@ def _parse_config(raw: bytes, expected_config: Mapping[str, Any] | None = None) 
         value = json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         _fail("config_encoding")
-    required = {"schema_version", "queue_id", "capacity", "admission_cap_bytes", "process_tree_peak_cap_bytes", "active_process_limit", "profile_version", "profile_digest", "profile_epoch", "directives", "proof_suite_id", "production_usable", "activation"}
-    if type(value) is not dict or set(value) != required or value["schema_version"] != SCHEMA_VERSION or value["admission_cap_bytes"] != _ADMISSION_CAP or type(value["process_tree_peak_cap_bytes"]) is not int or value["process_tree_peak_cap_bytes"] >= 5_000_000_000 or value["active_process_limit"] != 1 or value["proof_suite_id"] is not None or type(value["production_usable"]) is not bool or value["production_usable"] is not False or type(value["activation"]) is not bool or value["activation"] is not False:
+    required = {"schema_version", "handoff_protocol", "queue_id", "capacity", "admission_cap_bytes", "process_tree_peak_cap_bytes", "active_process_limit", "profile_version", "profile_digest", "profile_epoch", "directives", "proof_suite_id", "production_usable", "activation"}
+    if type(value) is not dict or set(value) != required or value["schema_version"] != SCHEMA_VERSION or value["handoff_protocol"] != _HANDOFF_PROTOCOL or value["admission_cap_bytes"] != _ADMISSION_CAP or type(value["process_tree_peak_cap_bytes"]) is not int or value["process_tree_peak_cap_bytes"] >= 5_000_000_000 or value["active_process_limit"] != 1 or value["proof_suite_id"] is not None or type(value["production_usable"]) is not bool or value["production_usable"] is not False or type(value["activation"]) is not bool or value["activation"] is not False:
         _fail("config_shape")
     _token(value["queue_id"], "config_queue_id", 96)
     _token(value["profile_version"], "config_profile_version", 96)
@@ -174,6 +178,26 @@ def _parse_flags(raw: bytes) -> tuple[str, ...]:
     return flags
 
 
+def _template_bytes(row: tuple[Any, ...]) -> bytes:
+    return _json_bytes({
+        "assertion_identifier": str(row[1]),
+        "assertion_version": int(row[2]),
+        "state_profile_version": str(row[3]),
+        "valid_from_ms": int(row[4]),
+        "valid_until_ms": int(row[5]),
+        "approved_source_registry_root": None if row[8] is None else _hex(bytes(row[8])),
+        "qualification_flags": list(_parse_flags(bytes(row[9]))),
+    })
+
+
+def _expected_batch_root(rows: list[tuple[Any, ...]] | tuple[tuple[Any, ...], ...]) -> bytes:
+    ordered = tuple(sorted(rows, key=lambda row: int(row[6])))
+    if not ordered or tuple(int(row[6]) for row in ordered) != tuple(range(len(ordered))):
+        _fail("batch_positions")
+    leaves = tuple(_sha(_BATCH_LEAF, _u64(int(row[6])), bytes(row[0]), _template_bytes(row)) for row in ordered)
+    return _sha(_BATCH_ROOT, _u64(len(leaves)), b"".join(leaves))
+
+
 def _parse_receipt(raw: bytes) -> dict[str, Any]:
     if type(raw) is not bytes or not 0 < len(raw) <= 16 * 1024:
         _fail("receipt_bounds")
@@ -181,7 +205,7 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
         value = json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         _fail("receipt_encoding")
-    required = {"schema", "proof_accepted", "operation_ref", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "batch_position", "batch_root", "verifier_profile_version", "outcome_code", "error_code", "resource_code", "qualification_flags", "proof_suite_id", "production_usable", "activation"}
+    required = {"schema", "proof_accepted", "operation_ref", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "batch_position", "batch_root", "approved_source_registry_root", "verifier_profile_version", "outcome_code", "error_code", "resource_code", "qualification_flags", "proof_suite_id", "production_usable", "activation"}
     if type(value) is not dict or set(value) != required or raw != _json_bytes(value) or value["schema"] != _SCHEMA or value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False:
         _fail("receipt_keys")
     if type(value["proof_accepted"]) is not bool:
@@ -199,6 +223,8 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
         _fail("receipt_position")
     if value["batch_root"] is not None:
         _blob(value["batch_root"], 64, "receipt_batch_root")
+    if value["approved_source_registry_root"] is not None:
+        _blob(value["approved_source_registry_root"], 64, "receipt_source_registry_root")
     _token(value["verifier_profile_version"], "receipt_verifier_profile")
     _code(value["outcome_code"], "receipt_outcome")
     for name in ("error_code", "resource_code"):
@@ -231,10 +257,12 @@ def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = 
         leases = {bytes(row[0]): tuple(row) for row in connection.execute("SELECT * FROM queue_leases").fetchall()}
         if len(leases) > 1:
             _fail("lease_count")
-        status_counts = {status: 0 for status in ("QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD")}
-        for row in jobs:
+        status_counts = {status: 0 for status in ("AWAITING_HANDOFF", "QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD")}
+        refs = {bytes(job[0]) for job in jobs}
+        batch_groups: dict[bytes, list[tuple[Any, ...]]] = {}
+        for index, row in enumerate(jobs, start=1):
             ref = bytes(row[0])
-            if len(ref) != 32:
+            if len(ref) != 32 or int(row[11]) != index:
                 _fail("operation_ref")
             _token(row[1], "assertion_identifier", 96)
             if type(row[2]) is not int or int(row[2]) < 1:
@@ -251,11 +279,18 @@ def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = 
             if status not in status_counts or int(row[12]) < 0 or int(row[12]) > 3:
                 _fail("job_status")
             status_counts[status] += 1
+            if row[7] is None:
+                if int(row[6]) != 0:
+                    _fail("single_position")
+            else:
+                batch_groups.setdefault(bytes(row[7]), []).append(row)
             if any(word in bytes(row[9]).decode("ascii", errors="ignore").lower() for word in _FORBIDDEN):
                 _fail("forbidden_metadata")
             result = results.get(ref)
             if status in {"VERIFIED", "REJECTED", "HELD"}:
                 if result is None or str(result[1]) != status or int(result[5]) != int(row[12]) or (status == "VERIFIED") != (result[2] is not None):
+                    _fail("result_binding")
+                if status != "VERIFIED" and (result[2] is not None or result[3] is None):
                     _fail("result_binding")
                 if status == "VERIFIED":
                     receipt = _parse_receipt(bytes(result[2]))
@@ -263,7 +298,8 @@ def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = 
                         _fail("receipt_acceptance")
                     expected_batch_root = None if row[7] is None else bytes(row[7]).hex().upper()
                     expected_flags = tuple(_parse_flags(bytes(row[9])))
-                    if bytes.fromhex(str(receipt["operation_ref"])) != ref or receipt["assertion_identifier"] != str(row[1]) or int(receipt["assertion_version"]) != int(row[2]) or receipt["state_profile_version"] != str(row[3]) or int(receipt["valid_from_ms"]) != int(row[4]) or int(receipt["valid_until_ms"]) != int(row[5]) or int(receipt["batch_position"]) != int(row[6]) or receipt["batch_root"] != expected_batch_root or receipt["qualification_flags"] != list(expected_flags) or receipt["verifier_profile_version"] != str(config["profile_version"]):
+                    expected_registry_root = None if row[8] is None else bytes(row[8]).hex().upper()
+                    if bytes.fromhex(str(receipt["operation_ref"])) != ref or receipt["assertion_identifier"] != str(row[1]) or int(receipt["assertion_version"]) != int(row[2]) or receipt["state_profile_version"] != str(row[3]) or int(receipt["valid_from_ms"]) != int(row[4]) or int(receipt["valid_until_ms"]) != int(row[5]) or int(receipt["batch_position"]) != int(row[6]) or receipt["batch_root"] != expected_batch_root or receipt["approved_source_registry_root"] != expected_registry_root or receipt["qualification_flags"] != list(expected_flags) or receipt["verifier_profile_version"] != str(config["profile_version"]):
                         _fail("receipt_binding")
             elif result is not None:
                 _fail("result_status")
@@ -272,27 +308,30 @@ def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = 
                     _fail("lease_binding")
             elif ref in leases:
                 _fail("lease_status")
+        for root, group in batch_groups.items():
+            if _expected_batch_root(group) != root:
+                _fail("batch_root_binding")
         expected_results = {bytes(row[0]) for row in jobs if str(row[10]) in {"VERIFIED", "REJECTED", "HELD"}}
         if set(results) != expected_results:
             _fail("result_set")
         expected_leases = {bytes(row[0]) for row in jobs if str(row[10]) == "LEASED"}
         if set(leases) != expected_leases:
             _fail("lease_set")
-        if int(meta[13]) != sum(status_counts[s] for s in ("QUEUED", "LEASED")) or int(meta[14]) != len(leases):
+        if int(meta[13]) != sum(status_counts[s] for s in ("AWAITING_HANDOFF", "QUEUED", "LEASED")) or int(meta[14]) != len(leases):
             _fail("metadata_counts")
         expected_head = _sha(_GENESIS, str(config["queue_id"]).encode("ascii"), config_digest)
         transitions = [tuple(row) for row in connection.execute("SELECT * FROM queue_transitions ORDER BY sequence").fetchall()]
         events_by_ref: dict[bytes, list[dict[str, Any]]] = {}
         for index, row in enumerate(transitions, start=1):
             ref = bytes(row[2]) if row[2] is not None else None
-            if int(row[0]) != index or ref is None or ref not in {bytes(job[0]) for job in jobs} or bytes(row[3]) != expected_head or len(bytes(row[5])) > 4096:
+            if int(row[0]) != index or ref is None or ref not in refs or bytes(row[3]) != expected_head or len(bytes(row[5])) > 4096:
                 _fail("transition_chain")
             try:
                 event = json.loads(bytes(row[5]).decode("ascii"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 _fail("transition_encoding")
             keys = {"schema", "sequence", "kind", "operation_ref", "status", "error_code", "attempt", "at_ms"}
-            if type(event) is not dict or set(event) != keys or bytes(row[5]) != _json_bytes(event) or event["schema"] != _SCHEMA or int(event["sequence"]) != index or event["operation_ref"] != ref.hex().upper() or event["kind"] != str(row[1]) or event["status"] not in {"QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD"} or type(event["attempt"]) is not int or event["attempt"] < 0:
+            if type(event) is not dict or set(event) != keys or bytes(row[5]) != _json_bytes(event) or event["schema"] != _SCHEMA or int(event["sequence"]) != index or event["operation_ref"] != ref.hex().upper() or event["kind"] != str(row[1]) or event["status"] not in {"AWAITING_HANDOFF", "QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD"} or type(event["attempt"]) is not int or event["attempt"] < 0:
                 _fail("transition_binding")
             digest = _sha(_EVENT, _u64(index), bytes(row[5]))
             after = _sha(_HEAD, expected_head, _u64(index), digest)
@@ -306,24 +345,38 @@ def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = 
             ref = bytes(job[0])
             events = events_by_ref.get(ref, [])
             status = str(job[10])
-            if not events or events[0]["kind"] != "ADMITTED" or events[0]["status"] != "QUEUED" or events[0]["attempt"] != 0 or events[0]["error_code"] is not None:
-                _fail("lifecycle_admission")
-            if status == "QUEUED":
+            if not events or events[0]["kind"] != "ISSUED" or events[0]["status"] != "AWAITING_HANDOFF" or events[0]["attempt"] != 0 or events[0]["error_code"] is not None:
+                _fail("lifecycle_issue")
+            if status == "AWAITING_HANDOFF":
                 if len(events) != 1:
+                    _fail("lifecycle_awaiting")
+                continue
+            if status == "HELD" and len(events) == 2 and events[1]["kind"] == "HELD":
+                if events[1]["status"] != "HELD" or events[1]["error_code"] != "fresh_handoff_required":
+                    _fail("lifecycle_held")
+                continue
+            if len(events) < 2 or events[1]["kind"] != "HANDOFF_SUBMITTED" or events[1]["status"] != "QUEUED" or events[1]["attempt"] != 0 or events[1]["error_code"] is not None:
+                _fail("lifecycle_handoff")
+            if status == "QUEUED":
+                if len(events) != 2:
                     _fail("lifecycle_queue")
                 continue
-            if len(events) < 2 or events[1]["kind"] != "LEASED" or events[1]["status"] != "LEASED" or events[1]["attempt"] != int(job[12]) or events[1]["error_code"] is not None:
+            if status == "HELD" and len(events) == 3 and events[2]["kind"] == "HELD":
+                if events[2]["status"] != "HELD" or events[2]["error_code"] != "fresh_handoff_required":
+                    _fail("lifecycle_held")
+                continue
+            if len(events) < 3 or events[2]["kind"] != "LEASED" or events[2]["status"] != "LEASED" or events[2]["attempt"] != int(job[12]) or events[2]["error_code"] is not None:
                 _fail("lifecycle_lease")
             if status == "LEASED":
-                if len(events) != 2:
+                if len(events) != 3:
                     _fail("lifecycle_leased")
                 continue
             result = results[ref]
-            if len(events) != 3:
+            if len(events) != 4:
                 _fail("lifecycle_terminal")
-            terminal = events[2]
-            if terminal["kind"] == "LEASE_EXPIRED":
-                if status != "HELD" or str(result[3]) != "fresh_handoff_required" or terminal["status"] != "HELD" or terminal["error_code"] != "fresh_handoff_required":
+            terminal = events[3]
+            if terminal["kind"] in {"HELD", "LEASE_EXPIRED"}:
+                if status != "HELD" or str(result[3]) != "fresh_handoff_required" or terminal["status"] != "HELD" or terminal["error_code"] != "fresh_handoff_required" or terminal["attempt"] != int(result[5]):
                     _fail("lifecycle_expiry")
             elif terminal["kind"] == "COMPLETED":
                 if terminal["status"] != str(result[1]) or terminal["error_code"] != (None if result[3] is None else str(result[3])) or terminal["attempt"] != int(result[5]):
@@ -352,7 +405,7 @@ def _job_from_rows(config: Mapping[str, Any], config_digest: bytes, row: tuple[A
     receipt_raw = bytes(result[2])
     receipt = _parse_receipt(receipt_raw)
     ref = bytes(row[0])
-    return IndependentVerifiedQueueJob(str(config["queue_id"]), config_digest, ref, str(row[10]), bool(receipt["proof_accepted"]), int(result[5]), receipt_raw, _sha(_MATERIAL, receipt_raw), str(row[1]), int(row[2]), str(row[3]), int(row[4]), int(row[5]), int(row[6]), None if row[7] is None else bytes(row[7]), str(receipt["verifier_profile_version"]), str(receipt["outcome_code"]), tuple(receipt["qualification_flags"]))
+    return IndependentVerifiedQueueJob(str(config["queue_id"]), config_digest, ref, str(row[10]), bool(receipt["proof_accepted"]), int(result[5]), receipt_raw, _sha(_MATERIAL, receipt_raw), str(row[1]), int(row[2]), str(row[3]), int(row[4]), int(row[5]), int(row[6]), None if row[7] is None else bytes(row[7]), None if row[8] is None else bytes(row[8]), str(receipt["verifier_profile_version"]), str(receipt["outcome_code"]), tuple(receipt["qualification_flags"]))
 
 
 def read_verified_batch(path: Path, selector: bytes | None = None) -> IndependentVerifiedQueueBatch:

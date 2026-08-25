@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import replace
 import io
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -24,7 +25,8 @@ from app.minimal_clearance_composition_independent import (
     verify_database,
 )
 from app.minimal_clearance_verification_queue import (
-    OperationStatement,
+    IssuedOperationStatement,
+    OperationTemplate,
     QueueConfig,
     VerifierResult,
     _QueueRuntimeOwnership,
@@ -34,10 +36,20 @@ from app.minimal_clearance_verification_queue_independent import read_verified_b
 
 
 class _Verifier:
-    def verify(self, stream, statement, operation_ref):
+    def verify(self, stream, statement):
+        raw = stream.read()
         stream.read()
-        stream.read()
-        return VerifierResult(True, operation_ref, statement.assertion_identifier, statement.assertion_version, statement.state_profile_version, statement.valid_from_ms, statement.valid_until_ms, statement.batch_position, statement.batch_root, "synthetic-v7-unqualified", "ok", qualification_flags=statement.qualification_flags)
+        value = json.loads(raw[len(_PROOF_MAGIC) + 4:].decode("ascii"))
+        embedded = IssuedOperationStatement(bytes.fromhex(value["operation_ref"]), value["assertion_identifier"], value["assertion_version"], value["state_profile_version"], value["valid_from_ms"], value["valid_until_ms"], value["batch_position"], None if value["batch_root"] is None else bytes.fromhex(value["batch_root"]), None if value["approved_source_registry_root"] is None else bytes.fromhex(value["approved_source_registry_root"]), tuple(value["qualification_flags"]))
+        return VerifierResult(True, embedded.operation_ref, embedded.assertion_identifier, embedded.assertion_version, embedded.state_profile_version, embedded.valid_from_ms, embedded.valid_until_ms, embedded.batch_position, embedded.batch_root, embedded.approved_source_registry_root, "synthetic-v7-unqualified", "ok", qualification_flags=embedded.qualification_flags)
+
+
+_PROOF_MAGIC = b"BL/SYNTHETIC-QUEUE-PROOF/v7\x00"
+
+
+def _proof(statement: IssuedOperationStatement) -> bytes:
+    raw = statement.canonical_bytes
+    return _PROOF_MAGIC + len(raw).to_bytes(4, "big") + raw
 
 
 class _Receiver:
@@ -88,9 +100,9 @@ class CompositionV7Tests(unittest.TestCase):
         self.temp.cleanup()
 
     def _admit_verified(self, count: int = 2):
-        root = b"r" * 64
-        statements = tuple(OperationStatement(f"assertion-{index}", 1, "state-profile-v7", 0, 100_000, index, root, None, ()) for index in range(count))
-        jobs = self.queue.admit_batch(statements=statements, proof_streams=tuple(io.BytesIO(f"proof-{index}".encode("ascii")) for index in range(count)))
+        templates = tuple(OperationTemplate(f"assertion-{index}", 1, "state-profile-v7", 0, 10**15, None, ()) for index in range(count))
+        statements = self.queue.issue_batch(templates=templates)
+        jobs = self.queue.submit_batch_handoffs(statements=statements, proof_streams=tuple(io.BytesIO(_proof(statement)) for statement in statements))
         verifier = _Verifier()
         for _ in jobs:
             self.assertEqual(self.queue._process_one(verifier=verifier).status, "VERIFIED")

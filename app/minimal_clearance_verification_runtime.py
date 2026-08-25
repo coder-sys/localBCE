@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from app.minimal_clearance_verification_queue import (
-    OperationStatement,
+    IssuedOperationStatement,
+    OperationTemplate,
     QueueConfig,
     QueueResult,
     VerificationQueueError,
@@ -60,7 +61,6 @@ class RuntimeRunResult:
         return int(self.held_count or 0)
 
     @property
-    @property
     def indeterminate(self) -> bool:
         return self.outcome == "INDETERMINATE"
 
@@ -88,7 +88,7 @@ class MinimalClearanceVerificationRuntime:
         self._database_path = database
         self._database_owner = owner
         self._verifier = verifier
-        self._recovered_leases = self._store._recover_startup_leases()
+        self._recovered_leases = self._store._startup_recovered_count
 
     def _assert_open(self) -> None:
         if self._closed:
@@ -119,13 +119,21 @@ class MinimalClearanceVerificationRuntime:
             return RuntimeRunResult("EMPTY", None, None, None, None, self._recovered_leases)
         return RuntimeRunResult("PROCESSED", None, accepted, rejected, held, self._recovered_leases)
 
-    def admit(self, *, statement: OperationStatement, proof_stream: BinaryIO | VolatileProofHandoff, declared_length: int | None = None) -> None:
+    def issue_operation(self, *, template: OperationTemplate) -> IssuedOperationStatement:
         self._assert_open()
-        self._store.admit(statement=statement, proof_stream=proof_stream, declared_length=declared_length)
+        return self._store.issue_operation(template=template)
 
-    def admit_batch(self, *, statements: tuple[OperationStatement, ...], proof_streams: tuple[BinaryIO | VolatileProofHandoff, ...], declared_lengths: tuple[int | None, ...] | None = None) -> tuple[Any, ...]:
+    def issue_batch(self, *, templates: tuple[OperationTemplate, ...]) -> tuple[IssuedOperationStatement, ...]:
         self._assert_open()
-        return self._store.admit_batch(statements=statements, proof_streams=proof_streams, declared_lengths=declared_lengths)
+        return self._store.issue_batch(templates=templates)
+
+    def submit_handoff(self, *, operation_ref: bytes, proof_stream: BinaryIO | VolatileProofHandoff, declared_length: int | None = None) -> None:
+        self._assert_open()
+        self._store.submit_handoff(operation_ref=operation_ref, proof_stream=proof_stream, declared_length=declared_length)
+
+    def submit_batch_handoffs(self, *, statements: tuple[IssuedOperationStatement, ...], proof_streams: tuple[BinaryIO | VolatileProofHandoff, ...], declared_lengths: tuple[int | None, ...] | None = None) -> tuple[Any, ...]:
+        self._assert_open()
+        return self._store.submit_batch_handoffs(statements=statements, proof_streams=proof_streams, declared_lengths=declared_lengths)
 
     def _verify_integrity(self) -> None:
         self._assert_open()
