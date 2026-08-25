@@ -178,19 +178,19 @@ def _validate_aggregate_consistency(
     if discrepancy_count > 1:
         _fail("export:discrepancy-count")
     if outcome == "SOURCE_CONFLICT":
-        if discrepancy_count != 1 or record_count < 2:
+        if discrepancy_count != 1 or complete_source_count != MAX_SOURCE_COUNT or record_count < 3:
             _fail("export:aggregate-consistency")
-    elif discrepancy_count != 0:
-        _fail("export:aggregate-consistency")
-    if outcome == "AUTHORITATIVE_RECORD_ABSENT":
-        if record_count != 0 or complete_source_count != source_count:
+    elif outcome == "AUTHORITATIVE_RECORD_ABSENT":
+        if discrepancy_count != 0 or record_count != 0 or complete_source_count != MAX_SOURCE_COUNT:
             _fail("export:aggregate-consistency")
     elif outcome == "EVIDENCE_INCOMPLETE":
-        if complete_source_count >= source_count:
+        if discrepancy_count != 0 or complete_source_count >= MAX_SOURCE_COUNT:
             _fail("export:aggregate-consistency")
-    elif outcome != "COVERAGE_STALE":
-        if complete_source_count != source_count or record_count != 2:
+    elif outcome == "COVERAGE_STALE":
+        if discrepancy_count != 0:
             _fail("export:aggregate-consistency")
+    elif discrepancy_count != 0 or complete_source_count != MAX_SOURCE_COUNT or record_count != 2:
+        _fail("export:aggregate-consistency")
 
 
 def _verify_export_inner(
@@ -224,7 +224,7 @@ def _verify_export_inner(
         _fail("export:time-window")
     if type(value["outcome"]) is not str or value["outcome"] not in OUTCOME_KINDS:
         _fail("export:outcome")
-    source_count = _integer(value["source_count"], "export:source-count", minimum=1, maximum=MAX_SOURCE_COUNT)
+    source_count = _integer(value["source_count"], "export:source-count", minimum=MAX_SOURCE_COUNT, maximum=MAX_SOURCE_COUNT)
     complete_source_count = _integer(
         value["complete_source_count"],
         "export:complete-source-count",

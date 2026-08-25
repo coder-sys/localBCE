@@ -16,6 +16,7 @@ from app.mirror import nc_medicaid_fhir_independent as fhir_independent
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import provider_evidence_export_v1 as producer
 from app.mirror import provider_evidence_export_v1_independent as independent
+from app.mirror import provider_trust_graph as graph_producer
 from app.mirror.source_admission import SourceAdmissionService
 from tests.test_nc_medicaid_fhir_source import _envelope
 
@@ -39,11 +40,16 @@ def _request(operation_ref: str, *, now: int = 7_000, not_before: int = 6_990, e
     )
 
 
-def _selection() -> producer.ProviderEvidenceSelectionV1:
+def _admission():
     admission = SourceAdmissionService(
         profile.NC_MEDICAID_GRAPH_PROFILE,
         fhir_independent.NcMedicaidFhirVerifier(),
     ).admit(_envelope())
+    return admission
+
+
+def _selection() -> producer.ProviderEvidenceSelectionV1:
+    admission = _admission()
     return producer.ProviderEvidenceSelectionV1(
         graph_artifact=admission.graph_artifact,
         profile_registry=dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY),
@@ -60,6 +66,31 @@ class _RaisingRegistry(Mapping[str, object]):
 
     def __len__(self) -> int:
         return 1
+
+
+def _conflict_selection() -> producer.ProviderEvidenceSelectionV1:
+    admission = _admission()
+    value = json.loads(admission.graph_input.decode("ascii"))
+    for source in value["sources"]:
+        source["coverage_complete"] = True
+    extra = dict(value["sources"][0]["records"][0])
+    extra["record_id"] = "f" * 128
+    value["sources"][0]["records"].append(extra)
+    value["sources"][0]["records"].sort(key=lambda record: record["record_id"])
+    for source in value["sources"]:
+        source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
+            source,
+            profile=profile.NC_MEDICAID_GRAPH_PROFILE,
+        )
+    graph_artifact, _telemetry = graph_producer.build_report(
+        graph_producer.canonical_input(value),
+        profile=profile.NC_MEDICAID_GRAPH_PROFILE,
+    )
+    return producer.ProviderEvidenceSelectionV1(
+        graph_artifact=graph_artifact,
+        profile_registry=dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY),
+        authorization_evidence=producer.SYNTHETIC_SELECTION_AUTHORIZATION,
+    )
 
 
 class ProviderEvidenceExportV1Tests(unittest.TestCase):
@@ -187,6 +218,7 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
             "profile-version-bool": ("evidence_profile_version", True),
             "outcome": ("outcome", "CLEAR"),
             "count": ("source_count", 99),
+            "one-source": ("source_count", 1),
             "ref": ("operation_ref", secrets.token_hex(32)),
         }
         for label, (key, value) in mutations.items():
@@ -199,6 +231,34 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
                         expected_operation_ref=operation_ref,
                         now=7_000,
                     )
+
+    def test_real_graph_conflict_shape_is_accepted_and_unreachable_mutations_reject(self) -> None:
+        operation_ref = secrets.token_hex(32)
+        raw = producer.build_export(_request(operation_ref), _conflict_selection(), now=7_000)
+        original = json.loads(raw.decode("ascii"))
+        self.assertEqual(
+            (2, 2, 3, 1, 1),
+            (
+                original["source_count"],
+                original["complete_source_count"],
+                original["record_count"],
+                original["finding_count"],
+                original["discrepancy_count"],
+            ),
+        )
+        self.assertEqual("SOURCE_CONFLICT", original["outcome"])
+        verified = independent.verify_export(raw, expected_operation_ref=operation_ref, now=7_000)
+        self.assertEqual("SOURCE_CONFLICT", verified.outcome)
+        for label, changes in (
+            ("record-count", {"record_count": 2}),
+            ("discrepancy-count", {"discrepancy_count": 0}),
+            ("incomplete-source-count", {"complete_source_count": 1}),
+        ):
+            with self.subTest(label=label):
+                mutated = dict(original)
+                mutated.update(changes)
+                with self.assertRaises(independent.IndependentProviderEvidenceExportError):
+                    independent.verify_export(_canonical(mutated), expected_operation_ref=operation_ref, now=7_000)
 
     def test_expiry_and_replay_under_another_operation_reference_reject(self) -> None:
         operation_ref = secrets.token_hex(32)

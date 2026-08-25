@@ -261,7 +261,7 @@ def _derive_aggregate(value: Mapping[str, object]) -> dict[str, object]:
     discrepancies = value.get("discrepancies")
     if (
         not isinstance(sources, list)
-        or not 1 <= len(sources) <= MAX_SOURCE_COUNT
+        or len(sources) != MAX_SOURCE_COUNT
         or not isinstance(findings, list)
         or not 1 <= len(findings) <= MAX_FINDING_COUNT
         or not isinstance(discrepancies, list)
