@@ -173,15 +173,14 @@ def _validate_aggregate_consistency(
     finding_count: int,
     discrepancy_count: int,
 ) -> None:
+    if outcome == "AUTHORITATIVE_RECORD_ABSENT":
+        _fail("export:outcome-unreachable")
     if finding_count != 1:
         _fail("export:finding-count")
     if discrepancy_count > 1:
         _fail("export:discrepancy-count")
     if outcome == "SOURCE_CONFLICT":
         if discrepancy_count != 1 or complete_source_count != MAX_SOURCE_COUNT or record_count < 3:
-            _fail("export:aggregate-consistency")
-    elif outcome == "AUTHORITATIVE_RECORD_ABSENT":
-        if discrepancy_count != 0 or record_count != 0 or complete_source_count != MAX_SOURCE_COUNT:
             _fail("export:aggregate-consistency")
     elif outcome == "EVIDENCE_INCOMPLETE":
         if discrepancy_count != 0 or complete_source_count >= MAX_SOURCE_COUNT:

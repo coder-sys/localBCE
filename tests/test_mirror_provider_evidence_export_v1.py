@@ -260,6 +260,38 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
                 with self.assertRaises(independent.IndependentProviderEvidenceExportError):
                     independent.verify_export(_canonical(mutated), expected_operation_ref=operation_ref, now=7_000)
 
+    def test_unreachable_absence_relabel_from_real_producer_response_rejects(self) -> None:
+        operation_ref = secrets.token_hex(32)
+        raw = producer.build_export(_request(operation_ref), _selection(), now=7_000)
+        response = json.loads(raw.decode("ascii"))
+        response.update({
+            "source_count": 2,
+            "complete_source_count": 2,
+            "record_count": 0,
+            "finding_count": 1,
+            "discrepancy_count": 0,
+            "outcome": "AUTHORITATIVE_RECORD_ABSENT",
+        })
+        self.assertEqual(
+            (2, 2, 0, 1, 0),
+            (
+                response["source_count"],
+                response["complete_source_count"],
+                response["record_count"],
+                response["finding_count"],
+                response["discrepancy_count"],
+            ),
+        )
+        with self.assertRaisesRegex(
+            independent.IndependentProviderEvidenceExportError,
+            "export:outcome-unreachable",
+        ):
+            independent.verify_export(
+                _canonical(response),
+                expected_operation_ref=operation_ref,
+                now=7_000,
+            )
+
     def test_expiry_and_replay_under_another_operation_reference_reject(self) -> None:
         operation_ref = secrets.token_hex(32)
         raw = producer.build_export(_request(operation_ref), _selection(), now=7_000)
