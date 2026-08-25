@@ -3,20 +3,20 @@
 Updated: 2026-08-25
 Status: production-shaped target architecture; current qualification status is authoritative in
 `STATE.md` and `CURRENT_TASK.md`, and no backend is selected.
-Owner: private-proof, security, state, privacy, and CPU qualification authority. The commercial
+Owner: private-proof, security, state, privacy, and resource qualification authority. The commercial
 Mirror wedge is governed by its own read-only boundary and does not inherit private-proof claims.
 
-This document is the active proof, security, state, and CPU qualification authority. The former
-Privacy V2, BL-PQ512/H4, binary-field, Binius64, and decisive-composition narratives have been
-retired; Git history and retained archives preserve their exact evidence.
+This document is the active proof, security, state, and resource qualification authority. The former
+Privacy V2, binary-field, Binius64, and decisive-composition narratives have been retired; Git
+history and retained archives preserve their exact evidence.
 
 ## Product invariant
 
 When evidence must remain hidden across the state clearance trust boundary and affects an automated
-payment directive, a future qualified native verifier may accept one proof of the exact hidden
-assertion and ordered state relation. Proof acceptance is only one input to the state owner: it does
-not choose policy or directive. The state-owned result and database mutation must commit in one
-fail-closed atomic transaction.
+payment directive, a future qualified `PRIVATE_ZK` verifier may accept one proof of the exact hidden
+source-bound assertion/predicate. The proof relation does not own the ordered state relation, policy,
+directive, exception, outbox, or ACK. Proof acceptance is only one input to the state owner, and the
+state-owned result and database mutation must commit in one fail-closed atomic transaction.
 
 ZK is not required merely because data is sensitive. If the state clearance service already
 lawfully holds every required fact in plaintext, the smallest correct mechanism is inspectable
@@ -29,26 +29,63 @@ boundary. Ethereum is not a dependency.
 
 ## Current experimental engineering boundary
 
-The current native-v3 proof and application code are experimental engineering only. The V7 queue
-clean break first issues a state-generated random 32-byte operation reference and immutable
-allowlisted statement, then accepts one verifier-owned volatile readable stream only for that
-issued reference; batch positions and the ordered batch root are state-computed before handoff.
-It does not create a proof workspace or persist proof/source/signature/
-commitment bytes, artifact digests, acceptance bytes, or process-output hashes. The exact
-4,500,000,000-byte admission cap and complete process-tree peak below 5,000,000,000 bytes remain
-required. A consumed, failed, expired, restarted, or ambiguous handoff becomes HELD and requires
-a fresh state operation and fresh handoff. These controls do not close the theorem,
-malicious-verifier/QROM, grinding, SHA3-512, Lean, deployment, or production-custody gates.
-A future qualified contract may additionally bind a fresh source-attested `P`/signature and a
-hiding commitment to the state challenge; that possibility is unimplemented and cannot supply a
-current verifier receipt or state disposition.
+The current native-v3 proof and application code are experimental engineering only. Exactly three
+pre-admission modes exist: `DIRECT_STATE_OWNED` for state-owned canonical non-PHI facts,
+`AUTHORITATIVE_ASSERTION` for an operation-scoped minimally disclosed derived assertion with a
+qualified PQ source signature, and `PRIVATE_ZK` for a proof over a hidden source-bound assertion.
+The verifier-owned control set selects one mode before admission; no runtime fallback or downgrade
+exists. The V7 queue issues a state-generated random 32-byte operation reference and immutable
+allowlisted statement before a volatile handoff; batch positions and the ordered batch root are
+state-computed before handoff.
+
+The inactive handoff boundary does not create a proof workspace or persist proof/source/signature/
+commitment bytes, artifact digests, acceptance bytes, or process-output hashes. An activated profile
+owns its own exact small envelope cap; there is no universal input-admission allowance. The complete
+process-tree hard peak remains strictly below 5,000,000,000 bytes. A consumed, failed, expired,
+restarted, or ambiguous handoff becomes `HELD` and requires a fresh state operation and fresh
+handoff. These controls do not close the profile theorem, malicious-verifier/QROM, grinding, SHA3,
+Lean, deployment, custody, or source-authorization gates.
+
+For `PRIVATE_ZK`, the source may bind a fresh operation-scoped hiding commitment and a qualified PQ
+signature over that exact commitment. Exact raw-data SHA3-512 recomputation inside the proof may be
+omitted only when the proof opens the signed commitment. This source-attested commitment possibility
+is unimplemented and cannot supply a current verifier receipt or state disposition. `proofSuiteId`
+belongs only to `PRIVATE_ZK` and remains null/unactivated until the complete profile qualifies;
+`DIRECT_STATE_OWNED` and `AUTHORITATIVE_ASSERTION` do not wait on a private-proof backend.
+
+The smallest current standardized, nonactivating `AUTHORITATIVE_ASSERTION` candidate is
+`sourceAuthProfileId=ML-DSA-44-PURE-HEDGED-V1`: FIPS 204 ML-DSA-44, pure rather than HashML-DSA,
+hedged signing, and fixed context/domain `BL/SOURCE-AUTH/ASSERTION/v1`. Approved key-generation RBG
+strength is at least 192 bits so the selected set retains its Category 2 claim. Its body is fixed-
+length-delimited and canonical, never JSON, with no classical or algorithm fallback. It contains
+only the exact state-issued 256-bit `operation_ref`, source authority/key/epoch, source profile/rule/
+version, bounded delegated-assertion enum/value, and bounded validity interval. It never contains a
+Blind directive, `policyResult`, `effectiveDirective`, exception, chronology, state transition,
+payment amount, claimant/provider identity, raw-data digest, or stable fingerprint. This is a
+nonactivating candidate requirement, not module validation, HSM/FIPS custody evidence, source truth,
+or production qualification.
+
+Blind verifies the canonical body/signature ephemerally and destroys/discards those bytes after verification;
+only an opaque operation-scoped verification receipt/outcome plus qualified source-auth profile/
+version/key epoch is durable. Blind does not claim OS or crash-dump zeroization. The authoritative
+source owns lawful original retention. State recovery proves only that Blind recorded a valid
+verification at the time; it cannot reverify the original source signature from Blind storage alone.
+A source-assisted later re-verification is a separate reacquisition event, not guaranteed recovery.
+State audit/checkpoint PQ signatures may authenticate opaque receipt history but do not recreate or
+prove the original source signature.
+
+The strict public handoff allowlist is the one-time random operation reference/challenge, assertion
+and profile versions, bounded validity window, ordered batch position/root when needed, and approved-
+source registry root when needed. Names, claim numbers, provider fingerprints, raw-data hashes,
+source paths, and stable cross-batch identifiers are excluded.
 
 The current statement grammar still lacks the complete proposed/authorized payment-amount binding
 required by the typed receipt contract below, and its before/after state identifiers are not yet the
 single canonical state-layout formula required for sequential production authority. A breaking,
 versioned native statement revision must bind one hiding proposed-amount commitment, derive the
-authorized commitment from the effective directive, and prove exact state continuity before this
-lane can advance. Until then proof acceptance cannot authorize `CLEAR` or any economic action.
+authorized commitment from the state-owned effective directive, and have the state transaction and
+Lean relation prove exact continuity before this lane can advance. Until then proof acceptance
+cannot authorize `CLEAR` or any economic action.
 
 ## Production-shaped patch-in contract
 
@@ -66,31 +103,35 @@ this private-payment plug-in.
 
 ## Smallest complete system
 
-1. Governed ingestion verifies each source signature over exact canonical bytes and inserts the
-   resulting typed record commitment into an immutable authenticated registry.
-2. The prover receives private registered records and constructs one fixed-profile ordered operation
-   table. Padding and every clearance outcome have the same observable proof shape.
-3. A future qualified proof binds the state-issued challenge and hidden assertion; it does not
-   own state disposition or choose a policy/directive.
-4. The independent verifier consumes the volatile stream and returns only proof acceptance, the
-   opaque operation reference, bounded assertion/profile/version/order/resource fields, and
-   qualification flags. Producers, transports, logs, and caller booleans have no acceptance
-   authority, and the stream is never refetched.
-5. The state owner separately resolves `PASS`/`MISSING`/`AMBIGUOUS`/`FAIL` plus state exception
+1. The verifier-owned control set selects exactly one of the three evidence modes before admission.
+2. `DIRECT_STATE_OWNED` evaluates state-owned canonical non-PHI facts without a re-proving wrapper.
+   `AUTHORITATIVE_ASSERTION` consumes an operation-scoped derived assertion whose qualified PQ
+   signature authenticates authority, provenance, and scope but not truth. `PRIVATE_ZK` receives a
+   source-bound hiding commitment and proves only the narrow hidden assertion/predicate.
+3. The evidence owner returns only a mode-specific, non-dispositive evidence result:
+   `DIRECT_STATE_OWNED` returns the state-owned evaluation, `AUTHORITATIVE_ASSERTION` returns the
+   qualified source-signature/assertion result, and `PRIVATE_ZK` returns proof acceptance plus the
+   opaque operation reference and bounded assertion/profile/version/order/resource fields. For the
+   active V7 private handoff, the independent verifier consumes the volatile stream once; producers,
+   transports, logs, and caller booleans have no acceptance authority, and the stream is never
+   refetched. None of these results contains policyResult or effectiveDirective.
+4. The state owner separately resolves `PASS`/`MISSING`/`AMBIGUOUS`/`FAIL` plus state exception
    approval into exactly the five directives, then atomically applies the ordered state chain and
    opaque reference/directive outbox. The official state payment system, not the proof or Blind
    Ledger database, moves money.
 
-Public signature verification is not repeated inside every proof when the proof instead establishes
-membership in the verifier-owned immutable registry whose ingestion rule verified those exact signed
-bytes. This moves repeat work to its natural owner; it does not trust a prover-supplied root.
+Public signature verification need not be repeated inside every private proof when the proof instead
+opens a source-attested operation-scoped commitment whose qualified PQ signature was verified by the
+source-authority owner. This moves repeat work to its natural owner; it does not trust a
+prover-supplied root. The signature establishes authority, provenance, and scope, not independent
+truth or source honesty.
 
 ## Clearance semantics and typed receipt
 
 Native v3 preserves five fixed state directives: `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and
-`EXCEPTION_APPROVED`. A future qualified proof binds the hidden assertion and ordered state
-relation, while the verifier returns proof acceptance only; proof acceptance is not itself a
-directive and must never default to `CLEAR`.
+`EXCEPTION_APPROVED`. A future qualified proof binds only the hidden assertion; the state owner and
+Lean/database relation bind the ordered state relation. The verifier returns proof acceptance only;
+proof acceptance is not itself a directive and must never default to `CLEAR`.
 
 - `CLEAR` means every selected deterministic automatic check passed.
 - `HOLD` means a fixable deterministic requirement is missing.
@@ -106,8 +147,10 @@ exception to `BLOCK`, and `FAIL` with state exception approval to `EXCEPTION_APP
 preserves no disposition authority, so a verifier or witness cannot erase or rewrite the state
 decision trail.
 
-The future public contract remains commitment-only and fixed-shape. The independent verifier
-returns no directive, policy result, raw proof, source identity, or exact artifact fingerprint.
+The future `PRIVATE_ZK` public contract remains commitment-only and fixed-shape. Its independent
+verifier returns no directive, policy result, raw proof, source identity, or exact artifact
+fingerprint. `DIRECT_STATE_OWNED` and `AUTHORITATIVE_ASSERTION` have separate mode-specific
+evidence results; they do not use a private-proof receipt or wait on a private-proof backend.
 The state owner emits the separate state receipt and may release only the state-owned directive to
 the official payment system. `HOLD`, `HUMAN_REVIEW`, and `BLOCK` do not advance economic clearance
 state.
@@ -141,10 +184,11 @@ Behavioral Twin extraction or Mirror finding is a candidate input to governance,
 control merely because it describes incumbent behavior.
 
 Mirror may supply evidence references and responsibility-boundary observations, but a Mirror label
-is not truth by itself. Every fact used for automatic clearance must resolve to a verifier-owned
-typed registry and the proof must establish the required record kind, authority, scope, validity
-interval, and private membership. Missing or ambiguous authority yields `HUMAN_REVIEW`, never a
-prover-invented fact.
+is not truth by itself. Every fact used for automatic clearance must resolve to the selected
+verifier-owned mode: state-owned canonical facts for `DIRECT_STATE_OWNED`, a qualified operation-
+scoped PQ-signed derived assertion for `AUTHORITATIVE_ASSERTION`, or a source-bound commitment and
+private predicate proof for `PRIVATE_ZK`. Missing or ambiguous authority yields `HUMAN_REVIEW`, never
+a prover-invented fact.
 
 Each evidence reference retains its authoritative source identity, record kind, exact subject and
 scope, observation time, validity interval, population/completeness authority, provenance, and
@@ -162,28 +206,31 @@ retries cannot change the bound rule or source snapshot.
 ## Native-v3 public statement
 
 Native v3 uses a fixed, typed, canonical binary record. It is not the old 12-field `bytes32` ABI and
-does not carry felt or Poseidon compatibility projections.
+does not carry felt or Poseidon compatibility projections. The verifier-facing source/proof handoff
+contains only the following strict public allowlist:
 
 ```text
-protocolVersion
-proofSuiteId                 // null until qualification and activation review
-executionContextId           // SHA3-512 of profile, schema, program, verifier, candidate backend, and PRIVATE_ZK mode
-settlementDomainId           // full-width typed identifier
-epoch
-sequenceBefore
-sequenceAfter
-stateBeforeId                // SHA3-512
-stateAfterId                 // SHA3-512
-governanceSnapshotId         // SHA3-512
-automaticControlSetId        // SHA3-512 of ordered active rules, conflict policy, scope, directives, and effective interval
-privateBatchCommitment       // SHA3-512
-settlementCommitment         // SHA3-512 of the exact downstream clearance instruction; not proof of funds movement
+operationReference            // one-time state-issued random challenge/reference
+assertionIdentifier
+assertionVersion
+statePolicyVersion
+proofProfileVersion           // PRIVATE_ZK profile metadata when selected
+validFrom
+validUntil                    // bounded validity window
+orderedBatchPosition          // present only for an ordered batch
+orderedBatchRoot              // present only for an ordered batch
+approvedSourceRegistryRoot    // present only when the selected source contract requires it
 ```
 
-The context registry retains the exact constituent identities for audit and upgrade. The proof
-transcript absorbs the complete canonical statement before any challenge. Unknown versions,
-contexts, suites, lengths, orderings, duplicates, alternate encodings, and trailing bytes fail
-before untrusted-size allocation.
+The state-side context, governance, control-set, chronology, before/after roots, economic
+commitments, and audit identities are retained only in the state-owned receipt/transaction; they
+are not source/proof handoff fields. `proofSuiteId` belongs only to `PRIVATE_ZK`, remains null until
+that complete profile qualifies, and is not caller-selected. A selected `PRIVATE_ZK` transcript
+absorbs the exact allowlisted statement before any challenge.
+Unknown versions, contexts, suites, lengths, orderings, duplicates, alternate encodings, and
+trailing bytes fail before untrusted-size allocation. State sequence, chronology, policy, directive,
+exception, outbox, and ACK semantics remain state-owned receipt/transaction fields; the private
+proof relation does not establish them.
 
 ## Logical private tables
 
@@ -209,11 +256,13 @@ StateAccessRow
   accessMode
 ```
 
-The proof joins every state access to exactly one decision, proves chronological ordering, and
-rejects orphaned, duplicated, reordered, or omitted rows. `decisionPathCommitment` is private and
-selectively auditable; it gives every automatic directive a stable link to its source rule,
-evidence, tests, and decision path without putting PHI in the public statement. A physical fusion
-is an optimization only and cannot erase these logical bindings or their independent mutation tests.
+The state owner and later Lean/database relation join every state access to exactly one decision,
+enforce chronological ordering, and reject orphaned, duplicated, reordered, or omitted rows. A
+`PRIVATE_ZK` proof may establish only the hidden source-bound assertion/predicate that supplies one
+input to this state-owned evaluation. `decisionPathCommitment` is state-owned and selectively
+auditable; it gives every automatic directive a stable link to its source rule, evidence, tests, and
+decision path without putting PHI in the public statement. A physical fusion is an optimization only
+and cannot erase these logical bindings or their independent mutation tests.
 
 ## Lean semantic and transition authority
 
@@ -237,7 +286,7 @@ Native v3 separates three jobs:
 
 - the semantic relation owns the exact fixed-capacity ordered operation table, five-directive
   clearance semantics, exception-authorization checks, and money/policy rules;
-- a transparent post-quantum memory/state relation proves chronological reads, writes, uniqueness,
+- the state owner and later Lean/database relation establish chronological reads, writes, uniqueness,
   replay rejection, and the before-to-after transition; and
 - SHA3-512 authenticates stable endpoint identifiers instead of being recomputed at every internal
   state access.
@@ -252,42 +301,76 @@ stateId = SHA3-512(
 ```
 
 `stateCommitmentBytes` must be deterministic, canonically encoded, transparently constructed,
-post-quantum binding, incrementally maintainable, and verified by the proof relation. No felt,
-truncated digest, host comparison, or prover-supplied unchecked root may authorize state. The exact
-commitment/memory theorem remains an implementation choice and must earn its claim with a small
-complete proof before scale work.
+post-quantum binding, incrementally maintainable, and verified by the state owner and later
+Lean/database relation. No felt, truncated digest, host comparison, or prover-supplied unchecked
+root may authorize state. The exact commitment/memory theorem remains an implementation choice and
+must earn its claim with a small complete proof before scale work; a private proof does not
+authorize the state relation.
 
 ## Proof-backend contract
 
 The backend is replaceable behind one narrow interface. It must provide:
 
 - a canonical fixed-profile statement and witness grammar;
-- one complete clearance-semantic, source-membership, exception-authorization, memory, and
-  state-transition theorem;
+- one complete source-bound assertion/predicate, commitment-opening, hiding, and verification
+  theorem; state semantics and transition theorems remain separate Lean/database gates;
 - native witness hiding for every committed/opened oracle and proof message;
-- transparent setup with no trusted ceremony and no elliptic-curve dependency;
-- a transcript construction covered by the backend's exact post-quantum theorem;
+- deterministic, transparent, versioned public parameters derived from reviewed standards or
+  constants, with no secret or trusted setup and no elliptic-curve dependency; any activation
+  profile whose soundness or privacy depends on an unverified ceremony, toxic-waste destruction,
+  or hidden parameter custody is rejected;
+- a transcript construction covered by the selected profile's exact post-quantum theorem, if that
+  profile selects Fiat-Shamir or an interactive coin;
 - an independent verifier returning typed outputs only after full verification;
 - deterministic verification, bounded parsing, mutation/reorder/omission rejection, and exact
   resource telemetry; and
-- streaming or bounded-frontier proving suitable for CPU-only execution.
+- streaming or bounded-frontier proving with exact source-local prover and optional-aggregator
+  hardware requirements declared by the selected profile; those components have no state authority.
 
-Fiat-Shamir is allowed only when the exact construction has an applicable quantum-random-oracle
-reduction and the implementation accounts for domain separation, oracle queries, retries, aborts,
-and composition. An authenticated interactive coin is allowed only when its extra actor, custody,
-round-trip, denial-of-service, and retry risks are justified by the deployment threat model. Neither
-mode is a universal invariant; the leanest theorem-backed mode wins.
+Every `PRIVATE_ZK` profile requires an exact zero-knowledge/privacy theorem for its actual adversary
+and transcript model; profile-conditional means selecting the applicable theorem, never omitting
+one. For an interactive protocol, malicious-verifier privacy plus reset, abort, retry, and session
+composition is mandatory. For a noninteractive protocol, the exact NIZK or Fiat-Shamir/QROM privacy
+and soundness model is mandatory instead; a separate interactive malicious-verifier property is not
+required when it is inapplicable. Fiat-Shamir/QROM, grinding, separate cryptographic nullifiers,
+and recursion/aggregation remain profile-conditional. If selected, each is covered by that profile's
+exact finite theorem and composition ledger, including bounded attempts, fan-in, retries, aborts,
+batching, recursion, and all bad events. A state-issued fresh 256-bit operation reference/challenge
+plus database uniqueness is the default cross-operation replay/binding defense; it does not replace
+proof soundness. Aggregation is optional and receives no product credit unless measured as part of
+the complete path.
 
 ## Security target
 
-- Every computational primitive and the composed system must meet at least the NIST post-quantum
-  Category 1 baseline for its relevant attack model.
-- Total per-proof statistical false-acceptance probability must be at most `2^-128` after all
-  queries, repetitions, shards, components, bad events, and union bounds. Deployment-lifetime risk
-  is calculated and reported separately.
+- Every computational primitive used by an activated external-authority or private-proof profile,
+  and the composed system's relevant computational primitives, must meet at least the NIST
+  post-quantum Category 1 baseline for its attack model. NIST categories are broad comparison floors,
+  not an exact proof-security claim or generic proof-soundness theorem.
+- Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` cryptographic
+  acceptance attempts across all operations, retries, batches, instances, and verifier sessions
+  sharing that profile/epoch. Exceeding the ceiling or losing the trustworthy counter fails closed
+  and requires key/profile rotation and requalification; this is an assurance accounting bound,
+  not a throughput target.
+- The exact theorem ledger must prove the union of all statistical bad events over that full ceiling
+  is at most `2^-128`, including proof soundness/knowledge, commitment binding where statistical,
+  transcript/challenge collisions, enabled aggregation, operation-reference collisions,
+  abort/retry/reset, and every other union factor. Equal allocation across eight per-attempt
+  classes requires at least 164 bits per event; use a 192-bit per-proof/statistical engineering
+  target unless a tighter exact ledger proves the complete bound.
+- The complete finite proof/aggregate false-acceptance ledger is distinct from the NIST Category 1
+  floor and must cover bounded attempts, fan-in, queries, repetitions, batching, recursion/
+  aggregation, all bad events, and complete composition. Category 1 alone is not an exact 128-bit
+  proof, and no unbounded deployment-lifetime `2^-128` probability is claimed.
+- Computational PQ claims are a separate ledger. Each suite declares its adversary work/query model,
+  signature/oracle counts, key lifetime, reduction loss, and whether the selected NIST category
+  preserves the intended 128-bit product claim under the `2^32` ceiling; a stronger category is used
+  when the exact reduction or usage evidence requires it, without a global Category 3 mandate.
 - SHA3-512 remains the authoritative external identifier and provides margin; digest width alone is
   not proof-system security.
-- Signatures are algorithm-agile and must use a NIST-approved PQ profile of at least Category 1.
+- Signatures for activated external-authority profiles are algorithm-agile and must use a NIST-
+  approved PQ profile of at least Category 1. Source, authorization, configuration, and audit
+  signatures are qualified PQ trust-boundary inputs; classical-only failure never downgrades to
+  plaintext or synthetic acceptance.
   Two independent Category-5 signatures are required only by a documented custody/governance threat
   model or an actual National Security System profile, not by default inside every proof.
 - No production claim is allowed without executable parameter accounting, exact theorem mapping,
@@ -298,19 +381,27 @@ mode is a universal invariant; the leanest theorem-backed mode wins.
 - Proof, trace, operation count, errors, and externally visible schedule are fixed per selected
   deployment profile and independent of all five directives, exception presence, padding, and
   other private values.
-- Exact proof bytes need not be 64 MiB. Choose the smallest fixed per-profile envelope that passes
-  parser, leakage, and capacity tests.
+- Each selected verification profile owns the smallest exact envelope cap that passes parser,
+  leakage, and capacity tests. There is no universal input-admission allowance; an unselected
+  private-proof profile remains inactive.
 - Fresh secret randomness is OS-CSPRNG-owned, domain-separated, never reused or logged, and zeroized
   after proving.
-- Complete prover process-tree peak resident memory is at most 5,000,000,000 decimal bytes; scratch
-  is strictly below that value; proving causes no swap or pagefile growth.
-- A CPU-only implementation on a 16 GB consumer laptop is mandatory. A discrete GPU may accelerate
-  the identical proof bytes but is optional, untrusted, and receives no correctness authority.
-- Measurements begin at admitted canonical input and end after independent verification and the
-  atomic receipt. Component or cached timings receive no complete-proof credit.
+- Complete prover process-tree peak resident memory is strictly below 5,000,000,000 decimal bytes;
+  scratch is strictly below that value; proving causes no swap or pagefile growth.
+- The independent state-side verifier and complete declared reference profile must meet the
+  laptop-class 100/35 and below-5-GB gates. A source-local prover or optional aggregator may declare
+  exact accelerator or hardware requirements; its wall time and resources remain part of complete-
+  profile evidence, and component-only numbers receive no product credit.
+- Report source-prover, optional-aggregator, independent-verifier, state-transaction, and outbox/ACK
+  stages separately, with external official-source and official-ACK latency measured and disclosed
+  separately when applicable. A complete-profile measurement begins at admitted canonical input and
+  ends after independent verification, the atomic state transaction, and outbox/ACK; component or
+  cached timings receive only component credit.
 
-The first scale admission floor is 100 live operations in a fixed profile within 35 seconds p95 on
-the pinned CPU-only reference host, with the complete resource and negative-test boundary. This is
+The first scale admission floor is 100 complete operations in a fixed declared reference profile
+within 35 seconds p95 on a laptop-class state-side verifier host, with the complete resource and
+negative-test boundary. Source-local prover/aggregator hardware may differ only when its exact
+requirements are declared and measured as part of the same complete profile. This is
 an engineering floor inherited from the earlier campaign, not the final product SLA. Sustained
 claims/second, p95 time-to-first decision, thermal throttling, energy, queue/cadence leakage, and
 recovery are reported. A larger profile is forbidden until this boundary accepts and product volume
@@ -323,7 +414,8 @@ nonpayment commercial wedge and operational foundations come first, and Lean wor
 explicit phase authorization. It still must close before production clearance or payment authority.
 
 1. Freeze the canonical native-v3 statement, typed receipt, five-directive operation table,
-   source/exception-registry contract, privacy adversary, and exact CPU reference host.
+   source/exception-registry contract, privacy adversary, and declared laptop-class state-side
+   reference profile.
 2. The five cross-language KATs cover `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and governed
    `EXCEPTION_APPROVED`, with wrong-directive, exception, chronology, corruption, root, statement,
    and state-mutation negatives. The exception seal is synthetic-KAT-only.
@@ -337,16 +429,17 @@ explicit phase authorization. It still must close before production clearance or
    measured dominant complete-process stage.
 7. Bind the typed receipt to the existing atomic database boundary and test retry, concurrency,
    rollback, crash, and recovery.
-8. Meet the 100-live CPU floor, then freeze the machine-verifiable security ledger and proof-package
-   grammar. Only then consider a larger profile, accelerator, aggregation, or production candidate.
+8. Meet the 100-complete-operation/35-second-p95 state-side floor, then freeze the
+   machine-verifiable security ledger and proof-package grammar. Only then consider a larger
+   profile, accelerator, aggregation, or production candidate.
 
 ## Retirement and deletion boundary
 
-The old Privacy V2, fixed-shape, binary-field, H4/CUDA, L2/Starknet/Solidity, exact-package, and
-unconditional dual-signature lanes are outside the active core. They remain read-only evidence until
-their current property has a smaller replacement. Deletion requires an enumerated producer/consumer
-and manifest scan, replacement tests, and one bounded change; historical performance is never
-production credit. Do not begin another synthetic exact-K128 hash bakeoff, K512 campaign, or H4 repair before the replacement boundary is accepted.
+The old Privacy V2, fixed-shape, binary-field, L2/Starknet/Solidity, exact-package, and
+unconditional dual-signature lanes are outside the active core. Their historical proof-layout and
+monolithic-launch-gate rejections are recorded once in `REJECTED_ARCHITECTURES.md`; they are not
+current capability or profile gates. Deletion requires an enumerated producer/consumer and manifest
+scan, replacement tests, and one bounded change; historical performance is never production credit.
 
 ## Current claim boundary
 

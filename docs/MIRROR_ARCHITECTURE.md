@@ -85,8 +85,10 @@ any of those dependencies.
 Live source authorization, legal terms, authentication, completeness, cadence, failure behavior,
 state privacy/support approval, production persistence/custody, monitoring, disaster recovery, and
 controlled shadow-pilot authority remain external evidence dependencies. Until they are closed,
-`proofSuiteId=null`, `production_usable=false`, activation is false, and all payment, clearance,
-settlement, adjudication, and production claims remain false.
+`production_usable=false`, activation is false, and all payment, clearance, settlement,
+adjudication, and production claims remain false. Mirror has no `proofSuiteId` field and no
+private-proof backend dependency; a private-proof profile belongs to Blind Ledger's separate
+clearance authority.
 
 `ARCHITECTURE.md` owns Mirror's product role and separation from Blind Ledger. This document owns
 Mirror's internal technical boundary. `STATE.md` owns accepted evidence and nonclaims;
