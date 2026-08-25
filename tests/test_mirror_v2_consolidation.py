@@ -1063,6 +1063,58 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_core_v4_identity_is_explicit_and_v3_state_is_rejected(self) -> None:
+        self.assertEqual("mirror-core-v4", core_independent.SCHEMA)
+        self.assertEqual(4, core_independent.SCHEMA_VERSION)
+        self.assertEqual(core_independent.SCHEMA, core.SCHEMA)
+        self.assertEqual(core_independent.SCHEMA_VERSION, core.SCHEMA_VERSION)
+        connection = sqlite3.connect(self.core_path)
+        connection.row_factory = sqlite3.Row
+        try:
+            meta = connection.execute("SELECT * FROM core_meta WHERE meta_id=1").fetchone()
+            event_raw = bytes(connection.execute("SELECT event_raw FROM core_events ORDER BY sequence LIMIT 1").fetchone()[0])
+        finally:
+            connection.close()
+        config = json.loads(bytes(meta["config_raw"]).decode("ascii"))
+        event = json.loads(event_raw.decode("ascii"))
+        logical = json.loads(self.core.logical_export().decode("ascii"))
+        for value in (meta, config, event):
+            self.assertEqual(core_independent.SCHEMA, value["schema"])
+            self.assertEqual(core_independent.SCHEMA_VERSION, value["schema_version"])
+        self.assertEqual(f"mirror-core-logical-export-v{core_independent.SCHEMA_VERSION}", logical["schema"])
+        self.assertEqual(core_independent.SCHEMA_VERSION, logical["schema_version"])
+
+        v3_config = dict(config)
+        v3_config["schema"] = "mirror-core-v3"
+        v3_config["schema_version"] = 3
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:config"):
+            core_independent._verify_config(v3_config)
+
+        v3_path = self.root / "core-v3-rejected.db"
+        shutil.copy2(self.core_path, v3_path)
+        connection = sqlite3.connect(v3_path)
+        try:
+            v3_raw = core_independent._canonical(v3_config)
+            v3_digest = core_independent._digest("config", v3_config)
+            connection.execute(
+                "UPDATE core_meta SET schema=?,schema_version=?,config_raw=?,config_digest=? WHERE meta_id=1",
+                ("mirror-core-v3", 3, v3_raw, v3_digest),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        before = v3_path.read_bytes()
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:meta"):
+            core_independent.verify_database(
+                v3_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+            )
+        self.assertEqual(before, v3_path.read_bytes())
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:meta"):
+            core.CoreServiceV2(v3_path, self.core_config)
+        self.assertEqual(before, v3_path.read_bytes())
+
     def test_case_heads_are_lineage_scoped_and_interleaved_retries_converge(self) -> None:
         case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
         later = self._admit_later_source()

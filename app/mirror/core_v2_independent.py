@@ -24,8 +24,8 @@ from app.mirror import external_corrective_action_independent as corrective_acti
 from app.mirror.error_boundary import raise_redacted
 
 
-SCHEMA = "mirror-core-v3"
-SCHEMA_VERSION = 3
+SCHEMA = "mirror-core-v4"
+SCHEMA_VERSION = 4
 DOMAIN = "BL/MIRROR/CORE/V3/"
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 262_144
@@ -1605,7 +1605,7 @@ def logical_export(result: Mapping[str, object]) -> bytes:
         raise CoreVerificationError("core:export")
     config = _parse(config_raw, "core:config")
     return _canonical({
-        "schema": "mirror-core-logical-export-v3", "schema_version": 3,
+        "schema": f"mirror-core-logical-export-v{SCHEMA_VERSION}", "schema_version": SCHEMA_VERSION,
         "database_id": result["database_id"], "chain_id": result["chain_id"],
         "config_digest": result["config_digest"], "config": config, "sequence": result["sequence"],
         "head_root": result["head_root"], "ingress_database_id": result["ingress_database_id"],
