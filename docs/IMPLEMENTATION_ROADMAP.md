@@ -75,60 +75,24 @@ generated vector alone is not deployed formal-verification credit.
 ## Current private-proof blocker
 
 The active Queue/Proof Handoff V7 boundary is a clean-break state-owned handoff, not a
-qualified private-proof backend. State first issues a fresh one-time opaque 256-bit operation
-reference and allowlisted statement in `AWAITING_HANDOFF`; for a batch it assigns the exact positions and
-computes the ordered batch root from the issued references and canonical templates. Only then may
-an explicit verifier-owned volatile stream be submitted for that exact issued statement and
-consumed once within the selected profile's exact small envelope cap and no proof workspace or raw
-proof/source material is durable. There is no universal input-admission allowance; the unselected
-private profile remains inactive, and the complete process-tree peak must remain strictly below
-5,000,000,000 bytes. The verifier returns only a bounded proof-acceptance receipt, while the state owner
-maps PASS/MISSING/AMBIGUOUS/FAIL plus state exception approval to CLEAR/HOLD/HUMAN_REVIEW/
-BLOCK/EXCEPTION_APPROVED. Ordered batches are preflighted against one state snapshot and
+qualified private-proof backend. State first issues a fresh one-time opaque operation reference and
+allowlisted statement in `AWAITING_HANDOFF`; for a batch it assigns exact positions and computes the
+ordered batch root from issued references and canonical templates. Only then may an explicit
+verifier-owned volatile stream be submitted for that exact issued statement and consumed once. No
+proof workspace or raw proof/source material is durable. The verifier returns only a bounded,
+non-dispositive evidence result, while the state owner maps its disposition control and exception
+approval to the five directives. Ordered batches are preflighted against one state snapshot and
 applied atomically, with independent reconstruction and fail-closed retry/recovery. Old V6
-databases are unsupported; no migration, compatibility reader, active backend, PQ qualification,
-Lean completion, or product-throughput claim follows from this seam. The co-equal PQ, zero-PHI,
-recovery, 100 complete operations within 35 seconds p95, and complete-process-tree-under-5GB gates
-remain open.
+databases are unsupported; no migration, compatibility reader, active backend, qualification,
+Lean completion, or product-throughput claim follows from this seam. The exact cryptographic,
+zero-PHI deployment, resource, and complete-profile measurement gates remain open under the
+Native-v3 authority.
 
-Before selecting or implementing a private backend, close and review one complete profile theorem
-and composition ledger covering:
-
-1. vector-commitment collapse and position binding;
-2. concrete salted SHA3-512 leaf hiding and binding;
-3. exact zero-knowledge/privacy for the actual adversary and transcript model: malicious-verifier
-   privacy plus reset/abort/retry/session composition for interactive protocols, or the exact
-   NIZK/Fiat-Shamir/QROM privacy and soundness model for noninteractive protocols;
-4. semantic and state-relation composition;
-5. abort, retry, replay, reset, and union accounting over the finite profile/key-epoch attempt
-   ceiling; and
-6. authenticated challenge generation and transcript composition.
-
-Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` theorem-relevant
-acceptance opportunities, not merely process invocations, across all operations, retries, batches,
-hosts, tenants, instances, and verifier sessions sharing that profile/epoch. A batch or aggregate
-containing `n` independently false-able member statements conservatively consumes `n` member
-occurrences plus any separate aggregation event unless the exact selected theorem proves a smaller
-accounting unit. The state owner reserves each opportunity atomically before cryptographic acceptance
-work. Retries, aborts after challenge or verification begins, malformed candidate verifications,
-crashes after reservation, and other consumed reservations are never refunded. Exceeding the ceiling,
-overflow, cap exhaustion, ambiguous batch cardinality, or loss of trustworthy global
-coordination/counter state fails closed and requires rotation and requalification; this is assurance
-accounting, not throughput. The exact theorem ledger must prove the union of proof soundness/knowledge,
-commitment binding where statistical, transcript/challenge collisions, enabled aggregation,
-operation-reference collisions, abort/retry/reset, and every union factor over the full globally
-reserved opportunity ceiling, applying the conservative member-plus-aggregation charge unless its
-exact theorem justifies less, is at most `2^-128`. Equal allocation across eight per-attempt classes
-requires at least 164 bits per event; use a 192-bit per-proof/statistical engineering target unless
-an exact tighter ledger proves the complete bound.
-The selected PQ primitive parameter sets must meet at least the declared NIST Category 1 comparison
-floor; that floor is a broad reference-resource floor, not an exact proof-soundness theorem or a
-`2^-128` forgery probability. Each suite declares its adversary work/query model, signature/oracle
-counts, key lifetime, reduction loss, and whether its selected NIST category preserves the intended
-128-bit product claim under the finite ceiling; a stronger category is used only when exact evidence
-requires it. Fresh state-issued 256-bit operation references prevent cross-operation replay/binding
-failures but do not replace proof soundness. No unbounded deployment-lifetime `2^-128` probability is
-claimed. Promising components or ideal-model calculators do not close this gate.
+Before selecting or implementing a private backend, the complete profile must close the exact
+source-binding, privacy/setup, PQ, acceptance-accounting, theorem-composition, zero-PHI deployment,
+resource, and measurement gates defined normatively in `docs/NATIVE_V3_ARCHITECTURE.md`. This roadmap
+owns their applicability and dependency order, not a second copy of their arithmetic or profile
+requirements.
 
 ## Next implementation after theorem closure
 
@@ -138,11 +102,9 @@ claimed. Promising components or ideal-model calculators do not close this gate.
 3. Prove the business semantics and ordered state transition atomically, including exact SHA3-512
    roots, completeness/nonmembership, replay, exception, chronology, retry, and after-state
    mutation behavior.
-4. Measure source-prover, optional-aggregator, independent-verifier, state-transaction, and
-   outbox/ACK stages separately, plus complete process-tree peak memory, scratch, pagefile,
-   throughput, and complete-profile latency from admitted canonical input through independent
-   verification, atomic state transaction, and outbox/ACK. Any external official-source/ACK latency
-   is measured and disclosed separately; component-only numbers receive no product credit.
+4. Measure the complete profile at the Native-v3 qualification boundary, retaining separately
+   attributable stage evidence for source-prover, optional aggregator, independent verifier,
+   state transaction, and outbox/ACK. Component-only numbers receive no complete-profile credit.
 5. Run focused positives, adversarial negatives, corruption/reorder/omission/duplicate cases, and
    cross-language KATs.
 6. Only then consider a selected profile's independent audit, production database/key custody, PHI

@@ -46,6 +46,8 @@ restarted, or ambiguous handoff becomes `HELD` and requires a fresh state operat
 handoff. These controls do not close the profile theorem, malicious-verifier/QROM, grinding, SHA3,
 Lean, deployment, custody, or source-authorization gates.
 
+## Source-auth and private representation contract
+
 `AUTHORITATIVE_ASSERTION` signs the narrow operation-scoped assertion directly when the genuine source
 contract delegates canonicalization or derivation to that source; it requires no raw digest, dual
 commitment, or ZK wrapper. The signature establishes source authority, provenance, and scope, not
@@ -79,12 +81,20 @@ or production qualification.
 
 Blind verifies the canonical body/signature ephemerally and destroys/discards those bytes after verification;
 only an opaque operation-scoped verification receipt/outcome plus qualified source-auth profile/
-version/key epoch is durable. Blind does not claim OS or crash-dump zeroization. The authoritative
-source owns lawful original retention. State recovery proves only that Blind recorded a valid
-verification at the time; it cannot reverify the original source signature from Blind storage alone.
-A source-assisted later re-verification is a separate reacquisition event, not guaranteed recovery.
-State audit/checkpoint PQ signatures may authenticate opaque receipt history but do not recreate or
-prove the original source signature.
+version/key epoch is durable. The authoritative source owns lawful original retention. State recovery
+proves only that Blind recorded a valid verification at the time; it cannot reverify the original
+source signature from Blind storage alone. A source-assisted later re-verification is a separate
+reacquisition event, not guaranteed recovery. State audit/checkpoint PQ signatures may authenticate
+opaque receipt history but do not recreate or prove the original source signature.
+
+### Zero-PHI deployed recoverability gate
+
+Current experimental Python/OS handling does not establish destruction. Activation is blocked until
+the deployed process/module/OS configuration and adversarial evidence show that raw proof,
+signature/body, source material, credentials, paths, stdout/stderr, and linkable fingerprints cannot
+enter or remain recoverable from crash dumps, swap/pagefile, temp files, backups, telemetry, support
+captures, or AI. Mutable staging wipes are best effort; this does not falsely claim byte-zeroization
+that Python can prove.
 
 The strict public handoff allowlist is the one-time random operation reference/challenge, assertion
 and profile versions, bounded validity window, ordered batch position/root when needed, and approved-
@@ -132,13 +142,10 @@ this private-payment plug-in.
    opaque reference/directive outbox. The official state payment system, not the proof or Blind
    Ledger database, moves money.
 
-Public signature verification need not be repeated inside every private proof when the proof binds its
-witness and predicate exactly to one fresh source-attested operation-scoped commitment `P` and the
-current operation reference whose qualified PQ signature was verified by the source-authority owner.
-This establishes source-attested witness provenance plus predicate correctness, not independent
-raw-record correctness. It moves repeat work to its natural owner; it does not trust a prover-supplied
-root. A signature over two unrelated commitments is not an equality bridge, and signature acceptance
-establishes authority, provenance, and scope, not source truth or honesty.
+The source-auth and private-representation contract above is normative for this composition sequence.
+A qualified implementation may avoid repeating source signature verification inside every private
+proof only under that exact contract; this moves repeat work to its natural owner and never trusts a
+prover-supplied root. The resulting evidence still establishes no source truth or state disposition.
 
 ## Clearance semantics and typed receipt
 
@@ -385,7 +392,7 @@ the complete path.
   proof, and no unbounded deployment-lifetime `2^-128` probability is claimed.
 - Computational PQ claims are a separate ledger. Each suite declares its adversary work/query model,
   signature/oracle counts, key lifetime, reduction loss, and whether the selected NIST category
-  preserves the intended 128-bit product claim under the `2^32` ceiling; a stronger category is used
+  preserves the intended 128-bit product claim under that finite profile/epoch ceiling; a stronger category is used
   when the exact reduction or usage evidence requires it, without a global Category 3 mandate.
 - SHA3-512 remains the authoritative external identifier and provides margin; digest width alone is
   not proof-system security.

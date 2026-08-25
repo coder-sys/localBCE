@@ -167,7 +167,7 @@ runtime fallback, caller-selected downgrade, or failed-proof conversion between 
 | --- | --- | --- |
 | `DIRECT_STATE_OWNED` | The state owner evaluates canonical, non-PHI facts that it already lawfully holds. | No signature or ZK wrapper is required merely to re-prove the state's own facts. |
 | `AUTHORITATIVE_ASSERTION` | A government-delegated authoritative source emits an operation-scoped, minimally disclosed derived assertion. | A qualified NIST-PQ signature authenticates source authority, provenance, and scope; it does not establish independent truth or source honesty and never selects disposition. |
-| `PRIVATE_ZK` | The state independently verifies a predicate over hidden source-bound data. The source may sign one fresh randomized operation-scoped proof-native hiding commitment `P`; the proof binds its witness and predicate exactly to `P` and the current operation reference. | Proof acceptance establishes only the hidden assertion/predicate. It does not establish policy, state transition, chronology, directive, exception authority, outbox, or ACK. |
+| `PRIVATE_ZK` | The state independently verifies a predicate over hidden source-bound data under a source-attested proof-native representation and a fresh operation reference. | Proof acceptance establishes only the hidden assertion/predicate. It does not establish policy, state transition, chronology, directive, exception authority, outbox, or ACK. |
 
 The state-approved control set fixes the mode, evaluator identity, profile, and source boundary before
 a request is admitted. `policyResult` and `effectiveDirective` remain state-owned and distinct in all
@@ -176,55 +176,14 @@ three modes. Proof or signature acceptance never equals `CLEAR`. `proofSuiteId` 
 
 An undisclosed payment-relevant assertion affecting automation cannot receive authority from a
 caller Boolean, host comparison, commitment alone, or a classical-only fallback. In
-`AUTHORITATIVE_ASSERTION`, when the genuine source contract delegates canonicalization or derivation
-to that source, the source signs the narrow operation-scoped assertion directly; that mode needs no
-raw digest, dual commitment, or ZK wrapper. The signature establishes source authority, provenance,
-and scope, not source truth or honesty. In `PRIVATE_ZK` with a source-attested witness, the source may
-sign one fresh randomized operation-scoped proof-native hiding commitment `P`; the proof must bind its
-witness and predicate to exactly `P` and the current `operation_ref`. That establishes source-attested
-witness provenance plus predicate correctness, not independent raw-record correctness. If the state
-requires independent raw-record-to-assertion verification, the proof must include the exact
-canonicalization/link relation to the authoritative source representation. A signature over two
-unrelated commitments only proves that the authorized key signed both bytes; it is not an equality
-bridge. Exact in-circuit SHA3-512 is required only when the authoritative contract makes SHA3 the
-representation that must be independently linked; otherwise a qualified proof-native representation
-may be contracted. `P`, the canonical body, signature, and proof remain volatile and unlinkable, with
-no stable digest. Blind Ledger never persists raw-data digests, deterministic claimant/provider hashes,
-source capture, proof, signature, path, stdout/stderr, credentials, or stable cross-context
-fingerprints. Blind rejects any claim that signed unrelated dual commitments bridge equality or that
-destroyed artifacts remain independently recoverable. Official source custody and authorization remain
-external audit dependencies.
-
-### Current nonactivating authoritative-assertion candidate
-
-The smallest current standardized source-auth candidate is
-`sourceAuthProfileId=ML-DSA-44-PURE-HEDGED-V1`: FIPS 204 ML-DSA-44, pure rather than HashML-DSA,
-with hedged signing and fixed context/domain `BL/SOURCE-AUTH/ASSERTION/v1`. Approved key-generation
-RBG strength is at least 192 bits so the selected set retains its Category 2 claim. The signed body
-is fixed-length-delimited and canonical, never JSON, and has no classical or algorithm fallback. It
-contains only the exact state-issued 256-bit `operation_ref`, source authority/key/epoch, source
-profile/rule/version, a bounded delegated-assertion enum/value, and a bounded validity interval.
-It never contains a Blind directive, `policyResult`, `effectiveDirective`, exception, chronology,
-state transition, payment amount, claimant/provider identity, raw-data digest, or other stable
-fingerprint. This is a nonactivating candidate requirement, not module validation, HSM/FIPS custody
-evidence, source truth, or production qualification.
-
-Blind verifies the canonical body/signature ephemerally, destroys/discards those bytes after verification,
-and persists only an opaque operation-scoped verification receipt/outcome plus qualified source-auth
-profile/version/key epoch. Blind does not claim OS or crash-dump zeroization. The authoritative
-source owns any lawful original retention. State recovery can prove only that Blind recorded a valid
-verification at the time; it cannot reverify the original source signature from Blind storage alone.
-A source-assisted later re-verification is a separate reacquisition event, not guaranteed recovery.
-State audit/checkpoint PQ signatures may authenticate Blind's opaque receipt history, but do not
-recreate or prove the original source signature. `proofSuiteId` remains `PRIVATE_ZK`-only and null.
-
-`PRIVATE_ZK` preserves a no-secret/trusted-setup invariant. Deterministic, transparent, versioned
-public parameters derived from reviewed standards or constants are allowed, but an activation
-profile whose soundness or privacy depends on an unverified ceremony, toxic-waste destruction, or
-hidden parameter custody is rejected. Every private profile requires an exact zero-knowledge/privacy
-theorem for the actual adversary and transcript model: interactive protocols require
-malicious-verifier privacy plus reset, abort, retry, and session composition; noninteractive
-protocols require the exact NIZK or Fiat-Shamir/QROM privacy and soundness model instead.
+`AUTHORITATIVE_ASSERTION`, the genuine source signs the narrow operation-scoped assertion when its
+contract delegates canonicalization or derivation to that source; the signature establishes
+authority, provenance, and scope, not source truth. In `PRIVATE_ZK`, a source-attested proof-native
+representation is linked to the hidden predicate under the current operation reference; an
+independent raw-record link, if required by the source contract, remains part of the proof relation.
+Signed unrelated dual commitments are not an equality bridge. The exact source-binding, custody,
+zero-PHI recoverability, and cryptographic qualification rules are normative in
+`docs/NATIVE_V3_ARCHITECTURE.md`; this system-boundary document does not restate them.
 
 ## Clearance contract
 
@@ -272,10 +231,9 @@ one atomic clearance-state transaction and opaque outbox/ACK
 
 The private proof relation does not own or emit policy result, effective directive, the five-directive
 mapping, exception approval, state transition, chronology, outbox, or ACK. Lean and the clearance-state
-transaction own those semantics. The public handoff contains only the one-time random operation
-reference/challenge, assertion and profile versions, bounded validity window, ordered batch fields
-when needed, and approved-source registry root when needed; it contains no names, claim numbers,
-provider fingerprints, raw-data hashes, source paths, or stable cross-batch identifiers.
+transaction own those semantics. The exact strict public handoff allowlist and its zero-PHI exclusions
+are normative in `docs/NATIVE_V3_ARCHITECTURE.md`; state-side context and audit identities remain
+outside that handoff.
 
 ## Executable formal kernel
 
@@ -365,42 +323,10 @@ experiment or protected-proof lanes is forbidden; current prohibitions live only
 - `app/production_boundary.py` and `app/transactional_database_boundary.py` are retained local,
   synthetic transaction references; they are not production selections.
 - Full-width SHA3-512 identifiers remain externally authoritative.
-- The proof backend must be transparent, post-quantum, non-ECC, independently verifiable, natively
-  witness-hiding, and fixed-profile. Deterministic public parameters from reviewed standards or
-  constants are allowed, but no secret/trusted setup, unverified ceremony, toxic-waste assumption,
-  or hidden parameter custody may support activation. The independent state-side verifier and
-  complete declared reference profile must meet the laptop-class 100/35 and strictly-below-
-  5,000,000,000-byte gates. Source-local prover and optional-aggregator hardware may be declared
-  separately, but their wall time/resources remain complete-profile evidence and component-only
-  numbers receive no product credit.
-- Activated external-authority and private-proof profiles require selected PQ primitive parameter
-  sets at or above the declared NIST Category 1 comparison floor. That broad floor is not a generic
-  proof-soundness theorem or an exact 128-bit proof; the complete proof/aggregate false-acceptance
-  ledger must separately be at most `2^-128` after bounded attempts, fan-in, repetitions, batching,
-  recursion/aggregation, and all composition. Source, authorization, configuration, and audit
-  signatures are qualified PQ trust-boundary inputs; classical-only failure never downgrades.
-- Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` theorem-
-  relevant acceptance opportunities, not merely process invocations, across all operations, retries,
-  batches, hosts, tenants, instances, and verifier sessions sharing that profile/epoch. A batch or
-  aggregate containing `n` independently false-able member statements conservatively consumes `n`
-  member occurrences plus any separate aggregation event unless the exact selected theorem proves a
-  smaller accounting unit. The state owner reserves each opportunity atomically before cryptographic
-  acceptance work. Retries, aborts after challenge or verification begins, malformed candidate
-  verifications, crashes after reservation, and other consumed reservations are never refunded.
-  Exceeding the ceiling, overflow, cap exhaustion, ambiguous batch cardinality, or loss of trustworthy
-  global coordination/counter state fails closed and requires rotation and requalification; this is
-  assurance accounting, not throughput. The exact theorem ledger must cover the full globally reserved
-  ceiling, apply the conservative member-plus-aggregation charge unless its exact theorem justifies
-  less, and union proof soundness/knowledge, statistical commitment binding where applicable,
-  transcript/challenge collisions, enabled aggregation, operation-reference collisions,
-  abort/retry/reset, and every union factor to at most `2^-128`. Equal allocation across eight
-  per-attempt classes requires at least 164 bits per event; use a 192-bit per-proof/statistical
-  engineering target unless a tighter exact ledger proves the complete bound. Fresh state-issued
-  256-bit operation references do not replace proof soundness, and no unbounded deployment-lifetime
-  `2^-128` probability is claimed. Each suite's separate computational PQ ledger declares its
-  adversary work/query model, signature/oracle counts, key lifetime, reduction loss, and whether the
-  selected NIST category preserves the intended 128-bit product claim under the `2^32` ceiling;
-  stronger categories are selected only when exact evidence requires them.
+- `docs/NATIVE_V3_ARCHITECTURE.md` is the sole authority for the exact source-auth profile, private
+  representation and link relation, cryptographic theorem/accounting, PQ/privacy/setup, zero-PHI
+  deployment, resource, and complete-profile measurement gates. This system boundary remains
+  nonactivating until those Native-v3 gates are closed; no component or profile is selected here.
 - RightRail corporate, routine support, monitoring, analytics, and AI systems receive zero PHI.
 
 The rejected directions and their governing reasons are recorded once in
