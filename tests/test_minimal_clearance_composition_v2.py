@@ -122,6 +122,57 @@ class CompositionV2Tests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events").fetchone()[0], 1)
         verify_database(store.path, expected_config=store.config.as_json)
 
+    def test_process_verified_jobs_reads_once_and_returns_ordered_tuple(self) -> None:
+        queue = self._verified("batch-one")
+        store = self._store()
+        original_reader = composition_module.read_verified_jobs
+        observed: list[tuple[str, ...]] = []
+
+        def reader(path, job_ids):
+            observed.append(tuple(job_ids))
+            return original_reader(path, job_ids)
+
+        composition_module.read_verified_jobs = reader  # type: ignore[assignment]
+        try:
+            results = store.process_verified_jobs(queue.path, ("batch-one",))
+        finally:
+            composition_module.read_verified_jobs = original_reader  # type: ignore[assignment]
+        self.assertEqual(observed, [("batch-one",)])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, "APPLIED")
+        self.assertFalse(results[0].duplicate_convergence)
+        retry = store.process_verified_jobs(queue.path, ["batch-one"])
+        self.assertEqual(len(retry), 1)
+        self.assertTrue(retry[0].duplicate_convergence)
+        self.assertEqual(retry[0].state_receipt_digest, results[0].state_receipt_digest)
+
+    def test_process_verified_jobs_preflights_conflict_before_any_new_mutation(self) -> None:
+        queue = self.queue_tests._store(capacity=4)
+        self.queue_tests._verify_one(queue, "batch-a")
+        self.queue_tests._verify_one(queue, "batch-b")
+        queue._promote_candidates()
+        store = self._store()
+        with self.assertRaises(CompositionConflictError):
+            store.process_verified_jobs(queue.path, ("batch-a", "batch-b"))
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events").fetchone()[0], 0)
+        verify_database(store.path, expected_config=store.config.as_json)
+
+    def test_process_verified_jobs_fault_rolls_back_the_batch(self) -> None:
+        queue = self._verified("batch-fault")
+
+        def fail(_label: str) -> None:
+            raise RuntimeError("test fault")
+
+        store = self._store(before_fault=fail)
+        with self.assertRaises(CompositionIntegrityError):
+            store.process_verified_jobs(queue.path, ("batch-fault",))
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events").fetchone()[0], 0)
+        verify_database(store.path, expected_config=store.config.as_json)
+
     def test_one_lease_and_positive_only_reconciliation(self) -> None:
         queue = self._verified()
         config = self._config()
@@ -453,9 +504,9 @@ class CompositionV2Tests(unittest.TestCase):
     def test_hostile_public_errors_are_fixed_and_support_has_no_canary(self) -> None:
         canaries = ("PHI_CANARY_MEMBER_0001", "credential CANARY_SECRET_ABC123", r"C:\CANARY\private-clearance.sqlite3")
         store = self._store()
-        original_reader = composition_module.read_verified_job
+        original_reader = composition_module.read_verified_jobs
         def hostile(*_args, **_kwargs): raise RuntimeError("; ".join(canaries))
-        composition_module.read_verified_job = hostile  # type: ignore[assignment]
+        composition_module.read_verified_jobs = hostile  # type: ignore[assignment]
         try:
             with self.assertRaises(CompositionIntegrityError) as caught:
                 store.process_verified_job(self.root / "missing.sqlite3", "job-1")
@@ -463,7 +514,7 @@ class CompositionV2Tests(unittest.TestCase):
             for canary in canaries:
                 self.assertNotIn(canary, str(caught.exception)); self.assertNotIn(canary, repr(caught.exception)); self.assertNotIn(canary, rendered)
         finally:
-            composition_module.read_verified_job = original_reader  # type: ignore[assignment]
+            composition_module.read_verified_jobs = original_reader  # type: ignore[assignment]
         queue = self._verified("receiver-job")
         store = ClearanceCompositionStoreV2(path=self.root / "receiver.sqlite3", config=self._config())
         store.process_verified_job(queue.path, "receiver-job")

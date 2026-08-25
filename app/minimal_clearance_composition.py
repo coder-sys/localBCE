@@ -16,7 +16,7 @@ from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
 
 from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 from app.minimal_clearance_verification_queue_independent import (
-    IndependentQueueError, IndependentVerifiedQueueJob, read_verified_job,
+    IndependentQueueError, IndependentVerifiedQueueJob, read_verified_jobs,
 )
 
 
@@ -628,65 +628,92 @@ class ClearanceCompositionStoreV2:
     def _result_from_tx(self, row: tuple[Any, ...], duplicate: bool) -> CompositionProcessResultV2:
         return CompositionProcessResultV2(str(row[1]), bytes(row[2]), str(row[13]), bytes(row[12]), None if row[14] is None else bytes(row[14]), None if row[15] is None else bytes(row[15]), str(row[1]) if row[17] is not None else None, None if row[19] is None else bytes(row[19]), duplicate, None if row[36] is None else str(row[36]))
 
+    def _apply_verified_job_in_transaction(self, connection: sqlite3.Connection, prepared: tuple[Any, ...], now: int) -> tuple[CompositionProcessResultV2, bool]:
+        verified, acceptance, encoded, queue_view, queue_view_digest, acceptance_digest = prepared
+        job_id = verified.job_id
+        operation_digest = _sha(_STATE_OPERATION, encoded, bytes(acceptance.statement.state_before_id), bytes(acceptance.statement.attempt_id), self.config.verifier_sha256)
+        if connection.execute("SELECT 1 FROM composition_transactions WHERE artifact_digest=? OR request_id=? OR attempt_id=? OR operation_digest=?", (acceptance.artifact_digest, acceptance.statement.request_id, acceptance.statement.attempt_id, operation_digest)).fetchone() is not None: _raise_fixed(CompositionConflictError, "composition_conflicting_retry")
+        state = self._ensure_state(connection, acceptance)
+        disposition_id = _sha(_MATERIAL, b"disposition", job_id.encode("ascii"), verified.operation_id, acceptance_digest)
+        transaction_id = _sha(_MATERIAL, b"transaction", disposition_id)
+        if state is None:
+            tx = (transaction_id, job_id, verified.operation_id, queue_view, queue_view_digest, encoded, acceptance_digest, acceptance.artifact_digest, acceptance.statement.request_id, acceptance.statement.attempt_id, acceptance.statement.decision_id, operation_digest, disposition_id, "HELD", None, None, None, None, None, None, None, None, 0, 0, None, None, None, None, None, now, None, None, None, None, None, None, "state_profile_mismatch", now, now)
+            connection.execute("INSERT INTO composition_transactions VALUES (" + ",".join("?" for _ in tx) + ")", tx)
+            self._append_event(connection, kind="HELD", tx=tx, before_state="NONE", after_state="NONE", payload={"acceptance_digest": _hex(acceptance_digest), "error_code": "state_profile_mismatch"}, receipt_digest=None, now=now)
+            return CompositionProcessResultV2(job_id, verified.operation_id, "HELD", disposition_id, None, None, None, None, False, "state_profile_mismatch"), False
+        if bytes(state[0]) != acceptance.statement.state_before_id or int(state[1]) != acceptance.statement.epoch or int(state[2]) != acceptance.statement.sequence_before or bytes(state[3]) != bytes(acceptance.statement.state("before_continuity_root")) or bytes(state[10]) != bytes(acceptance.statement.state("before_audit_head")) or int(state[5]) != int(acceptance.statement.state("clearance_count_before")) or bytes(state[7]) != _INITIAL_PAYMENT or int(state[8]) != 0:
+            tx = (transaction_id, job_id, verified.operation_id, queue_view, queue_view_digest, encoded, acceptance_digest, acceptance.artifact_digest, acceptance.statement.request_id, acceptance.statement.attempt_id, acceptance.statement.decision_id, operation_digest, disposition_id, "HELD", None, None, None, None, None, None, None, None, 0, 0, None, None, None, None, None, now, None, None, None, None, None, None, "stale_or_conflicting_state", now, now)
+            connection.execute("INSERT INTO composition_transactions VALUES (" + ",".join("?" for _ in tx) + ")", tx)
+            self._append_event(connection, kind="HELD", tx=tx, before_state="NONE", after_state="NONE", payload={"acceptance_digest": _hex(acceptance_digest), "error_code": "stale_or_conflicting_state"}, receipt_digest=None, now=now)
+            return CompositionProcessResultV2(job_id, verified.operation_id, "HELD", disposition_id, None, None, None, None, False, "stale_or_conflicting_state"), False
+        meta = self._meta(connection)
+        if int(meta[9]) >= self.config.capacity: _raise_fixed(CompositionBackpressureError, "outbox_capacity")
+        statement, sequence_before = acceptance.statement, int(state[2]); sequence_after = sequence_before + 1
+        replay_after = _sha(_STATE_REPLAY, bytes(state[6]), statement.attempt_id, statement.request_id, statement.receipt_id)
+        advanced = int(statement.directive) in (1, 5)
+        clearance_after = _sha(_STATE_CLEARANCE, bytes(state[4]), statement.state_after_id, statement.decision_id, bytes((int(statement.directive),))) if advanced else bytes(state[4])
+        count_after = int(state[5]) + int(advanced)
+        binding_after = _sha(_STATE_BINDING, bytes(meta[20]), operation_digest, statement.state_after_id, replay_after, clearance_after, _u64(count_after), bytes(state[7]), _u64(0), _u64(int(state[1])), _u64(sequence_after), self.config.verifier_sha256, _profile_digest(statement, self.config.verifier_sha256))
+        audit_after = _sha(_STATE_AUDIT_HEAD, bytes(state[10]), _sha(_STATE_AUDIT_EVENT, bytes(state[10]), _json_bytes({"operation_digest": _hex(operation_digest), "request_id": _hex(statement.request_id), "policy_result": int(acceptance.policy_result), "effective_directive": int(acceptance.effective_directive), "sequence_after": sequence_after})))
+        receipt_raw = _json_bytes(_state_receipt(operation_digest=operation_digest, acceptance=acceptance, sequence_before=sequence_before, sequence_after=sequence_after, state_before_id=bytes(state[0]), state_after_id=statement.state_after_id, clearance_before=bytes(state[4]), clearance_after=clearance_after, count_before=int(state[5]), count_after=count_after, binding_after=binding_after, audit_after=audit_after))
+        receipt = _parse_receipt(receipt_raw); receipt_digest = _receipt_digest(receipt_raw)
+        envelope = build_directive_envelope(config=self.config, job_id=job_id, operation_id=verified.operation_id, disposition_digest=disposition_id, state_store_identity=_state_store_identity(statement, self.config.verifier_sha256), receipt=_parse_receipt(receipt_raw))
+        envelope_digest = _sha(_ENVELOPE, envelope); outbox_operation_id = _operation_identity(self.config, job_id, envelope_digest); idempotency = _idempotency_key(self.config, job_id, envelope_digest)
+        tx = (transaction_id, job_id, verified.operation_id, queue_view, queue_view_digest, encoded, acceptance_digest, acceptance.artifact_digest, statement.request_id, statement.attempt_id, statement.decision_id, operation_digest, disposition_id, "APPLIED", receipt_raw, receipt_digest, sequence_after, envelope, envelope_digest, outbox_operation_id, idempotency, "READY", 0, 0, None, None, None, None, None, now, None, None, None, None, None, None, None, now, now)
+        connection.execute("INSERT INTO composition_transactions VALUES (" + ",".join("?" for _ in tx) + ")", tx)
+        connection.execute("UPDATE composition_meta SET state_id=?,state_epoch=?,state_sequence=?,state_continuity_root=?,state_clearance_root=?,state_clearance_count=?,state_replay_root=?,payment_root=?,settled_batch_count=?,state_binding=?,audit_head=?,last_operation_digest=?,active_dispatch_count=active_dispatch_count+1 WHERE id=1", (statement.state_after_id, statement.epoch, sequence_after, statement.state("after_continuity_root"), clearance_after, count_after, replay_after, _INITIAL_PAYMENT, 0, binding_after, audit_after, operation_digest))
+        self._append_event(connection, kind="APPLIED", tx=tx, before_state="NONE", after_state="READY", payload={"operation_digest": _hex(operation_digest), "queue_view_digest": _hex(queue_view_digest), "acceptance_digest": _hex(acceptance_digest), "artifact_digest": _hex(acceptance.artifact_digest), "state_receipt_digest": _hex(receipt_digest), "envelope_digest": _hex(envelope_digest), "outbox_operation_id": _hex(outbox_operation_id), "idempotency_key": _hex(idempotency), "policy_result": int(acceptance.policy_result), "effective_directive": int(acceptance.effective_directive), "payment_root_unchanged": True, "settlement_id": receipt["settlement_id"], "settlement_domain": receipt["settlement_domain"], "exception_authorization_id": receipt["exception_authorization_id"], "exception_scope_id": receipt["exception_scope_id"], "exception_valid_from": int(receipt["exception_valid_from"]), "exception_valid_until": int(receipt["exception_valid_until"])}, receipt_digest=receipt_digest, now=now)
+        return CompositionProcessResultV2(job_id, verified.operation_id, "APPLIED", disposition_id, receipt_raw, receipt_digest, job_id, outbox_operation_id, False, None), True
+
     @_public_v2_api
-    def process_verified_job(self, queue_database: Path, job_id: str) -> CompositionProcessResultV2:
-        _token(job_id, "job_id")
-        try: verified = read_verified_job(queue_database, job_id)
+    def process_verified_jobs(self, queue_database: Path, job_ids: list[str] | tuple[str, ...]) -> tuple[CompositionProcessResultV2, ...]:
+        if type(job_ids) not in (list, tuple) or not 1 <= len(job_ids) <= 256 or len(set(job_ids)) != len(job_ids) or any(type(job_id) is not str for job_id in job_ids): _raise_fixed(CompositionIntegrityError, "job_ids")
+        for job_id in job_ids: _token(job_id, "job_id")
+        try: verified_jobs = read_verified_jobs(queue_database, job_ids)
         except (IndependentQueueError, OSError, sqlite3.Error): _raise_fixed(CompositionIntegrityError, "queue_verification_failed")
-        if verified.job_id != job_id: _raise_fixed(CompositionIntegrityError, "queue_job_binding")
-        acceptance = self._validate_queue_result(verified); encoded = bytes(verified.acceptance_bytes); queue_view = self._queue_view_bytes(verified)
-        queue_view_digest, acceptance_digest = _sha(_MATERIAL, b"queue-view", queue_view), _sha(_MATERIAL, b"acceptance", encoded)
-        now = int(self.clock.now_ms())
+        if tuple(verified.job_id for verified in verified_jobs) != tuple(job_ids): _raise_fixed(CompositionIntegrityError, "queue_job_binding")
+        prepared: list[tuple[Any, ...]] = []
+        for verified in verified_jobs:
+            acceptance = self._validate_queue_result(verified); encoded = bytes(verified.acceptance_bytes); queue_view = self._queue_view_bytes(verified)
+            queue_view_digest, acceptance_digest = _sha(_MATERIAL, b"queue-view", queue_view), _sha(_MATERIAL, b"acceptance", encoded)
+            prepared.append((verified, acceptance, encoded, queue_view, queue_view_digest, acceptance_digest))
+        now = int(self.clock.now_ms()); results: list[CompositionProcessResultV2] = []; applied_any = False; new_count = 0
         with closing(self._connect()) as connection:
             began = False
             try:
                 connection.execute("BEGIN IMMEDIATE"); began = True; self._meta(connection)
-                existing = connection.execute("SELECT * FROM composition_transactions WHERE queue_job_id=?", (job_id,)).fetchone()
-                if existing is not None:
-                    if bytes(existing[2]) != verified.operation_id or bytes(existing[4]) != queue_view_digest or bytes(existing[6]) != acceptance_digest or bytes(existing[5]) != encoded: _raise_fixed(CompositionConflictError, "composition_conflicting_retry")
-                    connection.execute("COMMIT"); began = False; return self._result_from_tx(tuple(existing), True)
-                operation_digest = _sha(_STATE_OPERATION, encoded, bytes(acceptance.statement.state_before_id), bytes(acceptance.statement.attempt_id), self.config.verifier_sha256)
-                if connection.execute("SELECT 1 FROM composition_transactions WHERE artifact_digest=? OR request_id=? OR attempt_id=? OR operation_digest=?", (acceptance.artifact_digest, acceptance.statement.request_id, acceptance.statement.attempt_id, operation_digest)).fetchone() is not None: _raise_fixed(CompositionConflictError, "composition_conflicting_retry")
-                state = self._ensure_state(connection, acceptance)
-                disposition_id, transaction_id = _sha(_MATERIAL, b"disposition", job_id.encode("ascii"), verified.operation_id, acceptance_digest), _sha(_MATERIAL, b"transaction", _sha(_MATERIAL, b"disposition", job_id.encode("ascii"), verified.operation_id, acceptance_digest))
-                if state is None:
-                    tx = (transaction_id, job_id, verified.operation_id, queue_view, queue_view_digest, encoded, acceptance_digest, acceptance.artifact_digest, acceptance.statement.request_id, acceptance.statement.attempt_id, acceptance.statement.decision_id, operation_digest, disposition_id, "HELD", None, None, None, None, None, None, None, None, 0, 0, None, None, None, None, None, now, None, None, None, None, None, None, "state_profile_mismatch", now, now)
-                    connection.execute("INSERT INTO composition_transactions VALUES (" + ",".join("?" for _ in tx) + ")", tx)
-                    self._append_event(connection, kind="HELD", tx=tx, before_state="NONE", after_state="NONE", payload={"acceptance_digest": _hex(acceptance_digest), "error_code": "state_profile_mismatch"}, receipt_digest=None, now=now)
-                    self._fault("before_composition_commit"); connection.execute("COMMIT"); began = False
-                    return CompositionProcessResultV2(job_id, verified.operation_id, "HELD", disposition_id, None, None, None, None, False, "state_profile_mismatch")
-                if state is None: _raise_fixed(CompositionIntegrityError, "composition_state_missing")
-                if bytes(state[0]) != acceptance.statement.state_before_id or int(state[1]) != acceptance.statement.epoch or int(state[2]) != acceptance.statement.sequence_before or bytes(state[3]) != bytes(acceptance.statement.state("before_continuity_root")) or bytes(state[10]) != bytes(acceptance.statement.state("before_audit_head")) or int(state[5]) != int(acceptance.statement.state("clearance_count_before")) or bytes(state[7]) != _INITIAL_PAYMENT or int(state[8]) != 0:
-                    tx = (transaction_id, job_id, verified.operation_id, queue_view, queue_view_digest, encoded, acceptance_digest, acceptance.artifact_digest, acceptance.statement.request_id, acceptance.statement.attempt_id, acceptance.statement.decision_id, operation_digest, disposition_id, "HELD", None, None, None, None, None, None, None, None, 0, 0, None, None, None, None, None, now, None, None, None, None, None, None, "stale_or_conflicting_state", now, now)
-                    connection.execute("INSERT INTO composition_transactions VALUES (" + ",".join("?" for _ in tx) + ")", tx)
-                    self._append_event(connection, kind="HELD", tx=tx, before_state="NONE", after_state="NONE", payload={"acceptance_digest": _hex(acceptance_digest), "error_code": "stale_or_conflicting_state"}, receipt_digest=None, now=now)
-                    connection.execute("COMMIT"); began = False
-                    return CompositionProcessResultV2(job_id, verified.operation_id, "HELD", disposition_id, None, None, None, None, False, "stale_or_conflicting_state")
-                meta = self._meta(connection)
-                if int(meta[9]) >= self.config.capacity: _raise_fixed(CompositionBackpressureError, "outbox_capacity")
-                statement, sequence_before = acceptance.statement, int(state[2]); sequence_after = sequence_before + 1
-                replay_after = _sha(_STATE_REPLAY, bytes(state[6]), statement.attempt_id, statement.request_id, statement.receipt_id)
-                advanced = int(statement.directive) in (1, 5)
-                clearance_after = _sha(_STATE_CLEARANCE, bytes(state[4]), statement.state_after_id, statement.decision_id, bytes((int(statement.directive),))) if advanced else bytes(state[4])
-                count_after = int(state[5]) + int(advanced)
-                binding_after = _sha(_STATE_BINDING, bytes(meta[20]), operation_digest, statement.state_after_id, replay_after, clearance_after, _u64(count_after), bytes(state[7]), _u64(0), _u64(int(state[1])), _u64(sequence_after), self.config.verifier_sha256, _profile_digest(statement, self.config.verifier_sha256))
-                audit_after = _sha(_STATE_AUDIT_HEAD, bytes(state[10]), _sha(_STATE_AUDIT_EVENT, bytes(state[10]), _json_bytes({"operation_digest": _hex(operation_digest), "request_id": _hex(statement.request_id), "policy_result": int(acceptance.policy_result), "effective_directive": int(acceptance.effective_directive), "sequence_after": sequence_after})))
-                receipt_raw = _json_bytes(_state_receipt(operation_digest=operation_digest, acceptance=acceptance, sequence_before=sequence_before, sequence_after=sequence_after, state_before_id=bytes(state[0]), state_after_id=statement.state_after_id, clearance_before=bytes(state[4]), clearance_after=clearance_after, count_before=int(state[5]), count_after=count_after, binding_after=binding_after, audit_after=audit_after))
-                receipt = _parse_receipt(receipt_raw)
-                receipt_digest = _receipt_digest(receipt_raw)
-                envelope = build_directive_envelope(config=self.config, job_id=job_id, operation_id=verified.operation_id, disposition_digest=disposition_id, state_store_identity=_state_store_identity(statement, self.config.verifier_sha256), receipt=_parse_receipt(receipt_raw))
-                envelope_digest = _sha(_ENVELOPE, envelope); outbox_operation_id = _operation_identity(self.config, job_id, envelope_digest); idempotency = _idempotency_key(self.config, job_id, envelope_digest)
-                tx = (transaction_id, job_id, verified.operation_id, queue_view, queue_view_digest, encoded, acceptance_digest, acceptance.artifact_digest, statement.request_id, statement.attempt_id, statement.decision_id, operation_digest, disposition_id, "APPLIED", receipt_raw, receipt_digest, sequence_after, envelope, envelope_digest, outbox_operation_id, idempotency, "READY", 0, 0, None, None, None, None, None, now, None, None, None, None, None, None, None, now, now)
-                connection.execute("INSERT INTO composition_transactions VALUES (" + ",".join("?" for _ in tx) + ")", tx)
-                connection.execute("UPDATE composition_meta SET state_id=?,state_epoch=?,state_sequence=?,state_continuity_root=?,state_clearance_root=?,state_clearance_count=?,state_replay_root=?,payment_root=?,settled_batch_count=?,state_binding=?,audit_head=?,last_operation_digest=?,active_dispatch_count=active_dispatch_count+1 WHERE id=1", (statement.state_after_id, statement.epoch, sequence_after, statement.state("after_continuity_root"), clearance_after, count_after, replay_after, _INITIAL_PAYMENT, 0, binding_after, audit_after, operation_digest))
-                self._append_event(connection, kind="APPLIED", tx=tx, before_state="NONE", after_state="READY", payload={"operation_digest": _hex(operation_digest), "queue_view_digest": _hex(queue_view_digest), "acceptance_digest": _hex(acceptance_digest), "artifact_digest": _hex(acceptance.artifact_digest), "state_receipt_digest": _hex(receipt_digest), "envelope_digest": _hex(envelope_digest), "outbox_operation_id": _hex(outbox_operation_id), "idempotency_key": _hex(idempotency), "policy_result": int(acceptance.policy_result), "effective_directive": int(acceptance.effective_directive), "payment_root_unchanged": True, "settlement_id": receipt["settlement_id"], "settlement_domain": receipt["settlement_domain"], "exception_authorization_id": receipt["exception_authorization_id"], "exception_scope_id": receipt["exception_scope_id"], "exception_valid_from": int(receipt["exception_valid_from"]), "exception_valid_until": int(receipt["exception_valid_until"])}, receipt_digest=receipt_digest, now=now)
-                self._fault("before_composition_commit"); connection.execute("COMMIT"); began = False
+                existing_rows: list[tuple[Any, ...] | None] = []
+                new_material: set[bytes] = set()
+                for item in prepared:
+                    verified, acceptance, encoded, _queue_view, queue_view_digest, acceptance_digest = item
+                    existing = connection.execute("SELECT * FROM composition_transactions WHERE queue_job_id=?", (verified.job_id,)).fetchone()
+                    if existing is not None:
+                        if bytes(existing[2]) != verified.operation_id or bytes(existing[4]) != queue_view_digest or bytes(existing[6]) != acceptance_digest or bytes(existing[5]) != encoded: _raise_fixed(CompositionConflictError, "composition_conflicting_retry")
+                        existing_rows.append(tuple(existing)); continue
+                    operation_digest = _sha(_STATE_OPERATION, encoded, bytes(acceptance.statement.state_before_id), bytes(acceptance.statement.attempt_id), self.config.verifier_sha256)
+                    material = (bytes(acceptance.artifact_digest), bytes(acceptance.statement.request_id), bytes(acceptance.statement.attempt_id), operation_digest)
+                    if any(value in new_material for value in material) or connection.execute("SELECT 1 FROM composition_transactions WHERE artifact_digest=? OR request_id=? OR attempt_id=? OR operation_digest=?", material).fetchone() is not None: _raise_fixed(CompositionConflictError, "composition_conflicting_retry")
+                    new_material.update(material); existing_rows.append(None); new_count += 1
+                if int(self._meta(connection)[9]) + new_count > self.config.capacity: _raise_fixed(CompositionBackpressureError, "outbox_capacity")
+                for item, existing in zip(prepared, existing_rows):
+                    if existing is not None:
+                        results.append(self._result_from_tx(existing, True)); continue
+                    result, applied = self._apply_verified_job_in_transaction(connection, item, now)
+                    results.append(result); applied_any = applied_any or applied
+                if new_count: self._fault("before_composition_commit")
+                connection.execute("COMMIT"); began = False
             except Exception:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 raise
-        try: self._after_fault("after_composition_commit")
-        except Exception: _raise_fixed(CompositionIndeterminateError, "composition_commit_indeterminate")
-        return CompositionProcessResultV2(job_id, verified.operation_id, "APPLIED", disposition_id, receipt_raw, receipt_digest, job_id, outbox_operation_id, False, None)
+        if applied_any:
+            try: self._after_fault("after_composition_commit")
+            except Exception: _raise_fixed(CompositionIndeterminateError, "composition_commit_indeterminate")
+        return tuple(results)
+
+    @_public_v2_api
+    def process_verified_job(self, queue_database: Path, job_id: str) -> CompositionProcessResultV2:
+        _token(job_id, "job_id")
+        return self.process_verified_jobs(queue_database, (job_id,))[0]
 
     def _recover_expired_leases(self, connection: sqlite3.Connection, now: int) -> None:
         for row in connection.execute("SELECT * FROM composition_transactions WHERE lease_kind IS NOT NULL AND lease_expires_ms<=? ORDER BY lease_expires_ms,queue_job_id", (now,)).fetchall():
