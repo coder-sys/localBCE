@@ -167,7 +167,7 @@ runtime fallback, caller-selected downgrade, or failed-proof conversion between 
 | --- | --- | --- |
 | `DIRECT_STATE_OWNED` | The state owner evaluates canonical, non-PHI facts that it already lawfully holds. | No signature or ZK wrapper is required merely to re-prove the state's own facts. |
 | `AUTHORITATIVE_ASSERTION` | A government-delegated authoritative source emits an operation-scoped, minimally disclosed derived assertion. | A qualified NIST-PQ signature authenticates source authority, provenance, and scope; it does not establish independent truth or source honesty and never selects disposition. |
-| `PRIVATE_ZK` | The state independently verifies a predicate over hidden source-bound data. The source binds a fresh operation-scoped proof-native hiding commitment; the proof opens that commitment and proves only the narrow assertion. | Proof acceptance establishes only the hidden assertion/predicate. It does not establish policy, state transition, chronology, directive, exception authority, outbox, or ACK. |
+| `PRIVATE_ZK` | The state independently verifies a predicate over hidden source-bound data. The source may sign one fresh randomized operation-scoped proof-native hiding commitment `P`; the proof binds its witness and predicate exactly to `P` and the current operation reference. | Proof acceptance establishes only the hidden assertion/predicate. It does not establish policy, state transition, chronology, directive, exception authority, outbox, or ACK. |
 
 The state-approved control set fixes the mode, evaluator identity, profile, and source boundary before
 a request is admitted. `policyResult` and `effectiveDirective` remain state-owned and distinct in all
@@ -175,12 +175,25 @@ three modes. Proof or signature acceptance never equals `CLEAR`. `proofSuiteId` 
 `PRIVATE_ZK`; it remains null and unactivated until that complete private profile qualifies.
 
 An undisclosed payment-relevant assertion affecting automation cannot receive authority from a
-caller Boolean, host comparison, commitment alone, or a classical-only fallback. A source-bound
-commitment may replace exact raw-data SHA3-512 recomputation inside a private proof only when the
-authoritative source's qualified PQ signature binds that exact operation-scoped commitment and the
-proof opens it. Blind Ledger never persists raw-data digests, deterministic claimant/provider hashes,
+caller Boolean, host comparison, commitment alone, or a classical-only fallback. In
+`AUTHORITATIVE_ASSERTION`, when the genuine source contract delegates canonicalization or derivation
+to that source, the source signs the narrow operation-scoped assertion directly; that mode needs no
+raw digest, dual commitment, or ZK wrapper. The signature establishes source authority, provenance,
+and scope, not source truth or honesty. In `PRIVATE_ZK` with a source-attested witness, the source may
+sign one fresh randomized operation-scoped proof-native hiding commitment `P`; the proof must bind its
+witness and predicate to exactly `P` and the current `operation_ref`. That establishes source-attested
+witness provenance plus predicate correctness, not independent raw-record correctness. If the state
+requires independent raw-record-to-assertion verification, the proof must include the exact
+canonicalization/link relation to the authoritative source representation. A signature over two
+unrelated commitments only proves that the authorized key signed both bytes; it is not an equality
+bridge. Exact in-circuit SHA3-512 is required only when the authoritative contract makes SHA3 the
+representation that must be independently linked; otherwise a qualified proof-native representation
+may be contracted. `P`, the canonical body, signature, and proof remain volatile and unlinkable, with
+no stable digest. Blind Ledger never persists raw-data digests, deterministic claimant/provider hashes,
 source capture, proof, signature, path, stdout/stderr, credentials, or stable cross-context
-fingerprints. Official source custody and authorization remain external audit dependencies.
+fingerprints. Blind rejects any claim that signed unrelated dual commitments bridge equality or that
+destroyed artifacts remain independently recoverable. Official source custody and authorization remain
+external audit dependencies.
 
 ### Current nonactivating authoritative-assertion candidate
 
@@ -366,21 +379,28 @@ experiment or protected-proof lanes is forbidden; current prohibitions live only
   ledger must separately be at most `2^-128` after bounded attempts, fan-in, repetitions, batching,
   recursion/aggregation, and all composition. Source, authorization, configuration, and audit
   signatures are qualified PQ trust-boundary inputs; classical-only failure never downgrades.
-- Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` cryptographic
-  acceptance attempts across all operations, retries, batches, instances, and verifier sessions
-  sharing that profile/epoch. Exceeding the ceiling or losing the trustworthy counter fails closed
-  and requires rotation and requalification; this is assurance accounting, not throughput. The
-  exact theorem ledger must cover the full ceiling and union all proof soundness/knowledge,
-  statistical commitment binding where applicable, transcript/challenge collisions, enabled
-  aggregation, operation-reference collisions, abort/retry/reset, and every union factor to at
-  most `2^-128`. Equal allocation across eight per-attempt classes requires at least 164 bits per
-  event; use a 192-bit per-proof/statistical engineering target unless a tighter exact ledger proves
-  the complete bound. Fresh state-issued 256-bit operation references do not replace proof
-  soundness, and no unbounded deployment-lifetime `2^-128` probability is claimed. Each suite's
-  separate computational PQ ledger declares its adversary work/query model, signature/oracle counts,
-  key lifetime, reduction loss, and whether the selected NIST category preserves the intended
-  128-bit product claim under the `2^32` ceiling; stronger categories are selected only when exact
-  evidence requires them.
+- Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` theorem-
+  relevant acceptance opportunities, not merely process invocations, across all operations, retries,
+  batches, hosts, tenants, instances, and verifier sessions sharing that profile/epoch. A batch or
+  aggregate containing `n` independently false-able member statements conservatively consumes `n`
+  member occurrences plus any separate aggregation event unless the exact selected theorem proves a
+  smaller accounting unit. The state owner reserves each opportunity atomically before cryptographic
+  acceptance work. Retries, aborts after challenge or verification begins, malformed candidate
+  verifications, crashes after reservation, and other consumed reservations are never refunded.
+  Exceeding the ceiling, overflow, cap exhaustion, ambiguous batch cardinality, or loss of trustworthy
+  global coordination/counter state fails closed and requires rotation and requalification; this is
+  assurance accounting, not throughput. The exact theorem ledger must cover the full globally reserved
+  ceiling, apply the conservative member-plus-aggregation charge unless its exact theorem justifies
+  less, and union proof soundness/knowledge, statistical commitment binding where applicable,
+  transcript/challenge collisions, enabled aggregation, operation-reference collisions,
+  abort/retry/reset, and every union factor to at most `2^-128`. Equal allocation across eight
+  per-attempt classes requires at least 164 bits per event; use a 192-bit per-proof/statistical
+  engineering target unless a tighter exact ledger proves the complete bound. Fresh state-issued
+  256-bit operation references do not replace proof soundness, and no unbounded deployment-lifetime
+  `2^-128` probability is claimed. Each suite's separate computational PQ ledger declares its
+  adversary work/query model, signature/oracle counts, key lifetime, reduction loss, and whether the
+  selected NIST category preserves the intended 128-bit product claim under the `2^32` ceiling;
+  stronger categories are selected only when exact evidence requires them.
 - RightRail corporate, routine support, monitoring, analytics, and AI systems receive zero PHI.
 
 The rejected directions and their governing reasons are recorded once in

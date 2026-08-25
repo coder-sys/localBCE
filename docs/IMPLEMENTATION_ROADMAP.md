@@ -104,15 +104,23 @@ and composition ledger covering:
    ceiling; and
 6. authenticated challenge generation and transcript composition.
 
-Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` cryptographic
-acceptance attempts across all operations, retries, batches, instances, and verifier sessions
-sharing that profile/epoch. Exceeding the ceiling or losing the trustworthy counter fails closed and
-requires rotation and requalification; this is assurance accounting, not throughput. The exact
-theorem ledger must prove the union of proof soundness/knowledge, commitment binding where
-statistical, transcript/challenge collisions, enabled aggregation, operation-reference collisions,
-abort/retry/reset, and every union factor over that full ceiling is at most `2^-128`. Equal
-allocation across eight per-attempt classes requires at least 164 bits per event; use a 192-bit
-per-proof/statistical engineering target unless an exact tighter ledger proves the complete bound.
+Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` theorem-relevant
+acceptance opportunities, not merely process invocations, across all operations, retries, batches,
+hosts, tenants, instances, and verifier sessions sharing that profile/epoch. A batch or aggregate
+containing `n` independently false-able member statements conservatively consumes `n` member
+occurrences plus any separate aggregation event unless the exact selected theorem proves a smaller
+accounting unit. The state owner reserves each opportunity atomically before cryptographic acceptance
+work. Retries, aborts after challenge or verification begins, malformed candidate verifications,
+crashes after reservation, and other consumed reservations are never refunded. Exceeding the ceiling,
+overflow, cap exhaustion, ambiguous batch cardinality, or loss of trustworthy global
+coordination/counter state fails closed and requires rotation and requalification; this is assurance
+accounting, not throughput. The exact theorem ledger must prove the union of proof soundness/knowledge,
+commitment binding where statistical, transcript/challenge collisions, enabled aggregation,
+operation-reference collisions, abort/retry/reset, and every union factor over the full globally
+reserved opportunity ceiling, applying the conservative member-plus-aggregation charge unless its
+exact theorem justifies less, is at most `2^-128`. Equal allocation across eight per-attempt classes
+requires at least 164 bits per event; use a 192-bit per-proof/statistical engineering target unless
+an exact tighter ledger proves the complete bound.
 The selected PQ primitive parameter sets must meet at least the declared NIST Category 1 comparison
 floor; that floor is a broad reference-resource floor, not an exact proof-soundness theorem or a
 `2^-128` forgery probability. Each suite declares its adversary work/query model, signature/oracle

@@ -21,8 +21,26 @@ control set before request admission. There is no runtime fallback or downgrade 
    source authority, provenance, and scope, not independent truth or source honesty, and never
    selects `policyResult`, `effectiveDirective`, or a directive.
 3. `PRIVATE_ZK` independently verifies a predicate over hidden source-bound data. The authoritative
-   source binds a fresh operation-scoped proof-native hiding commitment; the proof opens that
-   commitment and proves only the narrow assertion.
+   source may sign one fresh randomized operation-scoped proof-native hiding commitment `P`; the
+   proof binds its witness and predicate exactly to `P` and the current operation reference and proves
+   only the narrow assertion.
+
+Mode-specific source binding is not interchangeable. In `AUTHORITATIVE_ASSERTION`, when the genuine
+source contract delegates canonicalization or derivation to that source, the source signs the narrow
+operation-scoped assertion directly; no raw digest, dual commitment, or ZK wrapper is required. The
+signature establishes source authority, provenance, and scope, not source truth or honesty. In
+`PRIVATE_ZK` with a source-attested witness, the source may sign one fresh randomized operation-scoped
+proof-native hiding commitment `P`; the proof must bind its witness and predicate to exactly `P` and
+the current operation reference. This establishes source-attested witness provenance plus predicate
+correctness, not independent raw-record correctness. When independent raw-record-to-assertion
+verification is required, the proof must include the exact canonicalization/link relation to the
+authoritative source representation. A signature over two unrelated commitments only proves that the
+authorized key signed both bytes; it is not an equality bridge. Exact in-circuit SHA3-512 is required
+only when the authoritative contract makes SHA3 the representation that must be independently linked;
+otherwise a qualified proof-native representation may be contracted. `P`, the body, signature, and
+proof remain volatile and unlinkable, with no stable digest. Signed unrelated dual commitments,
+source-signature-as-truth claims, and claims that destroyed artifacts remain independently recoverable
+are rejected.
 
 The smallest current standardized, nonactivating `AUTHORITATIVE_ASSERTION` candidate is
 `sourceAuthProfileId=ML-DSA-44-PURE-HEDGED-V1`: FIPS 204 ML-DSA-44, pure rather than HashML-DSA,
@@ -267,11 +285,17 @@ It cannot establish that an authorized source told the truth, that the policy wa
   `AUTHORITATIVE_ASSERTION` uses an operation-scoped minimally disclosed derived assertion with a
   qualified PQ signature; `PRIVATE_ZK` uses a source-bound hiding commitment and a proof of only the
   hidden assertion/predicate. No mode has runtime fallback or downgrade.
-- The source commitment may remove exact raw-data SHA3-512 recomputation from a private proof only
-  when the authoritative PQ signature binds that exact operation-scoped commitment and the proof
-  opens it. Blind Ledger does not persist raw-data digests, deterministic claimant/provider hashes,
-  source capture, proof, signature, path, stdout/stderr, credentials, or stable fingerprints;
-  official source/state custody is an external audit dependency.
+- A source-attested `PRIVATE_ZK` commitment may remove exact raw-data SHA3-512 recomputation from a
+  private proof only when the selected contract makes the qualified proof-native representation the
+  one being independently linked: the proof binds its witness and predicate exactly to fresh `P` and
+  the current operation reference. A source signature over two unrelated commitments is not an
+  equality bridge, and source signature acceptance is not source truth. If the authoritative contract
+  instead requires independent raw-record linkage, the proof must include the exact canonicalization/
+  link relation; exact in-circuit SHA3-512 is required only when that contract selects SHA3 as the
+  representation. Blind Ledger does not persist raw-data digests, deterministic claimant/provider
+  hashes, source capture, proof, signature, path, stdout/stderr, credentials, or stable fingerprints;
+  official source/state custody is an external audit dependency, and destroyed artifacts are not
+  independently recoverable from Blind storage.
 - Canonical fixed-profile native-v3 statements and privacy-safe observable behavior are required.
   SHA3-512 remains an authoritative external identifier; digest width alone is not proof-system
   security.
@@ -299,17 +323,25 @@ It cannot establish that an authorized source told the truth, that the policy wa
   lifetime, reduction loss, and whether its selected NIST category preserves the intended 128-bit
   product claim under the finite profile/epoch bound; a stronger category is used when exact
   reduction or usage evidence requires it, without a global Category 3 mandate.
-- Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` cryptographic
-  acceptance attempts across all operations, retries, batches, instances, and verifier sessions
-  sharing that profile/epoch. Exceeding the ceiling or losing the trustworthy counter fails closed
-  and requires rotation and requalification; this ceiling is assurance accounting, not throughput.
-- The exact theorem ledger must prove the union of all statistical bad events over that full ceiling
-  is at most `2^-128`, including proof soundness/knowledge, commitment binding where statistical,
-  transcript/challenge collisions, enabled aggregation, operation-reference collisions, abort/
-  retry/reset, and all union factors. Equal allocation across eight per-attempt classes requires at
-  least 164 bits per event; use a 192-bit per-proof/statistical engineering target unless an exact
-  tighter theorem ledger proves the complete bound. No unbounded deployment-lifetime `2^-128`
-  probability is claimed.
+- Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` theorem-
+  relevant acceptance opportunities, not merely process invocations, across all operations, retries,
+  batches, hosts, tenants, instances, and verifier sessions sharing that profile/epoch. A batch or
+  aggregate containing `n` independently false-able member statements conservatively consumes `n`
+  member occurrences plus any separate aggregation event unless the exact selected theorem proves a
+  smaller accounting unit. The state owner reserves each opportunity atomically before cryptographic
+  acceptance work. Retries, aborts after challenge or verification begins, malformed candidate
+  verifications, crashes after reservation, and other consumed reservations are never refunded.
+  Exceeding the ceiling, overflow, cap exhaustion, ambiguous batch cardinality, or loss of trustworthy
+  global coordination/counter state fails closed and requires rotation and requalification; this
+  ceiling is assurance accounting, not throughput.
+- The exact theorem ledger must prove the union of all statistical bad events over the full globally
+  reserved opportunity ceiling, apply the conservative member-plus-aggregation charge unless its
+  exact theorem justifies less, and include proof soundness/knowledge, commitment binding where
+  statistical, transcript/challenge collisions, enabled aggregation, operation-reference collisions,
+  abort/retry/reset, and all union factors. The total must be at most `2^-128`. Equal allocation
+  across eight per-attempt classes requires at least 164 bits per event; use a 192-bit
+  per-proof/statistical engineering target unless an exact tighter theorem proves the complete bound.
+  No unbounded deployment-lifetime `2^-128` probability is claimed.
 - The private proof binds only the hidden source-bound assertion/predicate. The state-owned receipt
   and transaction bind policy, ruleset, `policyResult`, `effectiveDirective`, exception
   authorization, chronology, state-before, state-after, outbox, ACK, and clearance identities;

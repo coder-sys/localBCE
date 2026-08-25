@@ -46,12 +46,24 @@ restarted, or ambiguous handoff becomes `HELD` and requires a fresh state operat
 handoff. These controls do not close the profile theorem, malicious-verifier/QROM, grinding, SHA3,
 Lean, deployment, custody, or source-authorization gates.
 
-For `PRIVATE_ZK`, the source may bind a fresh operation-scoped hiding commitment and a qualified PQ
-signature over that exact commitment. Exact raw-data SHA3-512 recomputation inside the proof may be
-omitted only when the proof opens the signed commitment. This source-attested commitment possibility
-is unimplemented and cannot supply a current verifier receipt or state disposition. `proofSuiteId`
-belongs only to `PRIVATE_ZK` and remains null/unactivated until the complete profile qualifies;
-`DIRECT_STATE_OWNED` and `AUTHORITATIVE_ASSERTION` do not wait on a private-proof backend.
+`AUTHORITATIVE_ASSERTION` signs the narrow operation-scoped assertion directly when the genuine source
+contract delegates canonicalization or derivation to that source; it requires no raw digest, dual
+commitment, or ZK wrapper. The signature establishes source authority, provenance, and scope, not
+source truth or honesty. For `PRIVATE_ZK` with a source-attested witness, the source may sign one
+fresh randomized operation-scoped proof-native hiding commitment `P`; the proof must bind its witness
+and predicate to exactly `P` and the current operation reference. This establishes source-attested
+witness provenance plus predicate correctness, not independent raw-record correctness. If independent
+raw-record-to-assertion verification is required, the proof must include the exact canonicalization/
+link relation to the authoritative source representation; a signature over two unrelated commitments
+is not an equality bridge. Exact in-circuit SHA3-512 is required only when the authoritative contract
+makes SHA3 the representation that must be independently linked; otherwise a qualified proof-native
+representation may be contracted. `P`, the body, signature, and proof remain volatile and unlinkable,
+with no stable digest. This source-attested commitment possibility is unimplemented and cannot supply
+a current verifier receipt or state disposition. `proofSuiteId` belongs only to `PRIVATE_ZK` and remains
+null/unactivated until the complete profile qualifies; `DIRECT_STATE_OWNED` and
+`AUTHORITATIVE_ASSERTION` do not wait on a private-proof backend. Signed unrelated dual commitments,
+source-signature-as-truth claims, and claims that destroyed artifacts remain independently recoverable
+are rejected.
 
 The smallest current standardized, nonactivating `AUTHORITATIVE_ASSERTION` candidate is
 `sourceAuthProfileId=ML-DSA-44-PURE-HEDGED-V1`: FIPS 204 ML-DSA-44, pure rather than HashML-DSA,
@@ -120,11 +132,13 @@ this private-payment plug-in.
    opaque reference/directive outbox. The official state payment system, not the proof or Blind
    Ledger database, moves money.
 
-Public signature verification need not be repeated inside every private proof when the proof instead
-opens a source-attested operation-scoped commitment whose qualified PQ signature was verified by the
-source-authority owner. This moves repeat work to its natural owner; it does not trust a
-prover-supplied root. The signature establishes authority, provenance, and scope, not independent
-truth or source honesty.
+Public signature verification need not be repeated inside every private proof when the proof binds its
+witness and predicate exactly to one fresh source-attested operation-scoped commitment `P` and the
+current operation reference whose qualified PQ signature was verified by the source-authority owner.
+This establishes source-attested witness provenance plus predicate correctness, not independent
+raw-record correctness. It moves repeat work to its natural owner; it does not trust a prover-supplied
+root. A signature over two unrelated commitments is not an equality bridge, and signature acceptance
+establishes authority, provenance, and scope, not source truth or honesty.
 
 ## Clearance semantics and typed receipt
 
@@ -346,17 +360,25 @@ the complete path.
   and the composed system's relevant computational primitives, must meet at least the NIST
   post-quantum Category 1 baseline for its attack model. NIST categories are broad comparison floors,
   not an exact proof-security claim or generic proof-soundness theorem.
-- Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` cryptographic
-  acceptance attempts across all operations, retries, batches, instances, and verifier sessions
-  sharing that profile/epoch. Exceeding the ceiling or losing the trustworthy counter fails closed
-  and requires key/profile rotation and requalification; this is an assurance accounting bound,
-  not a throughput target.
-- The exact theorem ledger must prove the union of all statistical bad events over that full ceiling
-  is at most `2^-128`, including proof soundness/knowledge, commitment binding where statistical,
-  transcript/challenge collisions, enabled aggregation, operation-reference collisions,
-  abort/retry/reset, and every other union factor. Equal allocation across eight per-attempt
-  classes requires at least 164 bits per event; use a 192-bit per-proof/statistical engineering
-  target unless a tighter exact ledger proves the complete bound.
+- Every qualified cryptographic profile/key epoch has a hard global ceiling of `2^32` theorem-
+  relevant acceptance opportunities, not merely process invocations, across all operations, retries,
+  batches, hosts, tenants, instances, and verifier sessions sharing that profile/epoch. A batch or
+  aggregate containing `n` independently false-able member statements conservatively consumes `n`
+  member occurrences plus any separate aggregation event unless the exact selected theorem proves a
+  smaller accounting unit. The state owner reserves each opportunity atomically before cryptographic
+  acceptance work. Retries, aborts after challenge or verification begins, malformed candidate
+  verifications, crashes after reservation, and other consumed reservations are never refunded.
+  Exceeding the ceiling, overflow, cap exhaustion, ambiguous batch cardinality, or loss of trustworthy
+  global coordination/counter state fails closed and requires key/profile rotation and
+  requalification; this is an assurance accounting bound, not a throughput target.
+- The exact theorem ledger must prove the union of all statistical bad events over the full globally
+  reserved opportunity ceiling, apply the conservative member-plus-aggregation charge unless its
+  exact theorem justifies less, and include proof soundness/knowledge, commitment binding where
+  statistical, transcript/challenge collisions, enabled aggregation, operation-reference
+  collisions, abort/retry/reset, and every other union factor. The total must be at most `2^-128`.
+  Equal allocation across eight per-attempt classes requires at least 164 bits per event; use a
+  192-bit per-proof/statistical engineering target unless a tighter exact ledger proves the complete
+  bound.
 - The complete finite proof/aggregate false-acceptance ledger is distinct from the NIST Category 1
   floor and must cover bounded attempts, fan-in, queries, repetitions, batching, recursion/
   aggregation, all bad events, and complete composition. Category 1 alone is not an exact 128-bit
