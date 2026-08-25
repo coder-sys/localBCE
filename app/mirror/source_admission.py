@@ -230,6 +230,11 @@ class VerifiedSourceCoverage:
     page_digests: tuple[str, ...] = ()
     page_evidence: tuple[dict[str, object], ...] = ()
     graph_profile: SourceProfile | None = None
+    source_status: str = "COMPLETE"
+    freshness: str = "UNKNOWN"
+    page_complete: bool = True
+    page_count: int = 1
+    resource_count: int = 0
 
 
 class SourceVerifier(Protocol):
@@ -269,12 +274,25 @@ class SourceAdmission:
     capture_context_digest: str | None = None
     envelope_digest: str | None = None
     page_digests: tuple[str, ...] = ()
+    observation: bytes = b""
+    verification_receipt: bytes = b""
 
 
 MAX_ADAPTER_BYTES = 262_144
 MAX_RECEIPT_BYTES = 32_768
 RECEIPT_SCHEMA = "mirror-source-admission-receipt-v1"
 RECEIPT_SCHEMA_V2 = "mirror-source-admission-receipt-v2"
+SANITIZED_OBSERVATION_SCHEMA = "mirror-source-observation-v1"
+SANITIZED_OBSERVATION_VERSION = 1
+SANITIZED_RECEIPT_SCHEMA = "mirror-source-verification-receipt-v1"
+SANITIZED_OUTCOMES = (
+    "CONTINUITY_CONFIRMED",
+    "CREDENTIAL_EXPIRED",
+    "ENROLLMENT_TERMINATED",
+    "EVIDENCE_INCOMPLETE",
+    "SOURCE_CONFLICT",
+    "COVERAGE_STALE",
+)
 
 
 def _canonical(value: object) -> bytes:
@@ -301,8 +319,116 @@ def _raw_digest(label: str, raw: bytes) -> str:
     return digest.hexdigest()
 
 
+def _scoped_observation_digest(raw: bytes) -> str:
+    """Bind the receipt to sanitized bytes without exposing source identity."""
+
+    digest = hashlib.sha3_512()
+    digest.update(b"BL/MIRROR/INGRESS/V5/sanitized-observation\0")
+    digest.update(raw)
+    return digest.hexdigest()
+
+
 def _v2_profile(profile: SourceProfile) -> bool:
     return profile.source_role_details is not None
+
+
+def _sanitized_values(
+    artifact: Mapping[str, object],
+    result: VerifiedSourceCoverage,
+    profile: SourceProfile,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Derive the only bytes permitted to cross the acquisition port.
+
+    This projection is intentionally aggregate-only.  It is built from the
+    already independently verified graph artifact and never copies a source,
+    record, subject, URL, capture, or digest field.
+    """
+    sources = artifact.get("source_coverage")
+    findings = artifact.get("findings")
+    discrepancies = artifact.get("discrepancies")
+    if not isinstance(sources, list) or not isinstance(findings, list) or not isinstance(discrepancies, list):
+        raise SourceAdmissionError("observation:shape")
+    if len(findings) != 1 or not isinstance(findings[0], Mapping):
+        raise SourceAdmissionError("observation:shape")
+    outcome = findings[0].get("kind")
+    if outcome not in SANITIZED_OUTCOMES:
+        raise SourceAdmissionError("observation:outcome")
+    complete_source_count = 0
+    record_count = 0
+    for source in sources:
+        if not isinstance(source, Mapping):
+            raise SourceAdmissionError("observation:shape")
+        if source.get("coverage_complete") is True:
+            complete_source_count += 1
+        records = source.get("records")
+        if not isinstance(records, list):
+            raise SourceAdmissionError("observation:shape")
+        record_count += len(records)
+    if len(sources) != 2:
+        raise SourceAdmissionError("observation:source-count")
+    if len(discrepancies) > 1:
+        raise SourceAdmissionError("observation:discrepancy-count")
+    observation_time = result.observation_time
+    if type(observation_time) is not int or observation_time < 1:
+        raise SourceAdmissionError("observation:time")
+    source_status = result.source_status
+    freshness = result.freshness
+    page_complete = result.page_complete
+    page_count = result.page_count
+    resource_count = result.resource_count
+    if source_status not in ("COMPLETE", "FAILED") or freshness not in ("FRESH", "UNKNOWN", "STALE"):
+        raise SourceAdmissionError("observation:source-status")
+    if type(page_complete) is not bool or type(page_count) is not int or not 1 <= page_count <= 4:
+        raise SourceAdmissionError("observation:pages")
+    if type(resource_count) is not int or not 0 <= resource_count <= 4096:
+        raise SourceAdmissionError("observation:resources")
+    if outcome == "SOURCE_CONFLICT" and len(discrepancies) != 1:
+        raise SourceAdmissionError("observation:discrepancy-count")
+    if outcome != "SOURCE_CONFLICT" and discrepancies:
+        raise SourceAdmissionError("observation:discrepancy-count")
+    observation = {
+        "schema": SANITIZED_OBSERVATION_SCHEMA,
+        "schema_version": SANITIZED_OBSERVATION_VERSION,
+        "profile_id": profile.profile_id,
+        "profile_version": profile.version,
+        "observation_time": observation_time,
+        "effective_start": profile.effective_start,
+        "effective_end": profile.effective_end,
+        "source_count": len(sources),
+        "complete_source_count": complete_source_count,
+        "record_count": record_count,
+        "finding_count": len(findings),
+        "discrepancy_count": len(discrepancies),
+        "outcome": outcome,
+        "source_status": source_status,
+        "freshness": freshness,
+        "page_complete": page_complete,
+        "page_count": page_count,
+        "resource_count": resource_count,
+        "synthetic_only": True,
+        "production_usable": False,
+        "activation": False,
+        "proofSuiteId": None,
+    }
+    observation_raw = _canonical(observation)
+    receipt = {
+        "schema": SANITIZED_RECEIPT_SCHEMA,
+        "schema_version": 1,
+        "profile_id": profile.profile_id,
+        "profile_version": profile.version,
+        "verifier_id": profile.verifier_id,
+        "verifier_epoch": profile.verifier_epoch,
+        "evidence_mode": profile.evidence_mode.value,
+        "verification_status": "VERIFIED_AT_TIME",
+        "outcome": outcome,
+        "observation_digest": _scoped_observation_digest(observation_raw),
+        "issued_at": result.fetched_at if type(result.fetched_at) is int else observation_time,
+        "synthetic_only": True,
+        "production_usable": False,
+        "activation": False,
+        "proofSuiteId": None,
+    }
+    return observation, receipt
 
 
 class SourceAdmissionService:
@@ -518,9 +644,12 @@ class SourceAdmissionService:
                 "capture_context_digest": _digest("capture-context", {key: external[key] for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest", "observed_at", "fetched_at")} ),
                 "external_policy_digest": external["policy_digest"],
             })
-        receipt_value = {"receipt_id": _digest("receipt-id", body), **body}
-        receipt = _canonical(receipt_value)
-        if expected_receipt is not None and (type(expected_receipt) is not bytes or expected_receipt != receipt):
+        source_receipt_value = {"receipt_id": _digest("receipt-id", body), **body}
+        source_receipt = _canonical(source_receipt_value)
+        observation_value, verification_receipt_value = _sanitized_values(artifact, result, effective_profile)
+        observation = _canonical(observation_value)
+        verification_receipt = _canonical(verification_receipt_value)
+        if expected_receipt is not None and (type(expected_receipt) is not bytes or expected_receipt != source_receipt):
             raise SourceAdmissionError("retry:conflict")
         telemetry = tuple(
             (key, graph_telemetry[key])
@@ -539,7 +668,7 @@ class SourceAdmissionService:
             verifier_epoch=effective_profile.verifier_epoch,
             graph_input=result.graph_input,
             graph_artifact=graph_artifact,
-            receipt=receipt,
+            receipt=source_receipt,
             report_id=report_id,
             production_source_authentication=False,
             telemetry=telemetry,
@@ -551,6 +680,8 @@ class SourceAdmissionService:
             capture_context_digest=body.get("capture_context_digest"),
             envelope_digest=_raw_digest("envelope", adapter_bytes),
             page_digests=tuple(result.page_digests),
+            observation=observation,
+            verification_receipt=verification_receipt,
         )
 
 __all__ = [

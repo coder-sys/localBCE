@@ -543,6 +543,9 @@ def to_verified_source_coverage(result: Mapping[str, object], *, profile: NcMedi
         fetched_at=context.fetched_at, envelope_id=str(result["envelope_id"]), snapshot_id=str(result["snapshot_id"]),
         snapshot_root=str(result["snapshot_root"]), page_digests=tuple(result["page_digests"]), page_evidence=tuple(result["page_evidence"]),
         graph_profile=graph_profile,
+        source_status=str(result["source_status"]), freshness=str(result["freshness"]),
+        page_complete=bool(result["page_complete"]), page_count=int(result["page_count"]),
+        resource_count=int(result["resource_count"]),
     )
 
 

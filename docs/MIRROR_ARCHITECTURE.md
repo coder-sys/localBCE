@@ -18,7 +18,7 @@ synthetic acquisition port (production authorization remains external)
 Operational owner V1 -- one lock, bounded due/retry/recovery composition
         |
         v
-Ingress V2 -- one bounded raw intake frame owner
+Ingress V5 -- one bounded sanitized observation owner
         |
         v
 Core V2 ---- derived graph, reconciliation, and case state
@@ -27,11 +27,13 @@ Core V2 ---- derived graph, reconciliation, and case state
 Recovery V2 - explicit export, restore, and publication recovery points
 ```
 
-Ingress owns acquisition schedule, leases, attempts, exact source/evidence pairing, quarantine,
-and the sole durable raw intake frame. Core owns independently reconstructed derived artifacts,
-events, heads, reconciliation, and case progression. Recovery owns encrypted bundle identity,
+The synthetic source-side adapter and its independent verifier consume raw source bytes only at the
+source boundary and emit one canonical allowlisted observation plus an opaque verification-at-time
+receipt. Ingress owns scheduling, leases, attempts, quarantine, and the sole durable sanitized
+observation. Core independently reconstructs derived artifacts, events, heads, reconciliation, and
+case progression from that observation. Recovery owns encrypted sanitized-state bundle identity,
 key/storage binding, restore, and explicit publication recovery. No layer may create a second raw
-capture owner or mutate another layer's tables.
+capture owner, persist source bytes, or mutate another layer's tables.
 
 The operational owner is the exact `mirror-operational-owner-v1` composition boundary, not a new
 data owner. It pins one ordinary local root, the three existing stores, one nonblocking operational
@@ -55,14 +57,17 @@ reconstruction evidence.
 
 The current North Carolina FHIR profile is synthetic-only. It accepts only the exact registered
 canonical Practitioner, PractitionerRole, and Location fixture resources, including one registered
-changed Location. The independent verifier rejects all other resource bytes before Ingress opens a
-write transaction. Credential graph identity binds the verified Practitioner bytes; enrollment
-identity binds the verified PractitionerRole and Location bytes.
+changed Location. The independent source verifier rejects all other resource bytes before the
+operational owner calls Ingress. Only the bounded observation counts/status/outcome and the
+opaque verification-at-time receipt cross that boundary; provider, subject, credential,
+enrollment, source, URL, path, raw-data, and page identities do not.
 
-The complete intake frame is capped at 262,144 bytes. Raw source captures, credentials, host paths,
-errors, stdout/stderr, and stable real-person or real-provider fingerprints may not enter support,
-monitoring, analytics, AI, receipts, or exports. Public failures use fixed codes. A rejected capture
-must leave database bytes, logical export, support output, and durable state unchanged.
+The source-side complete intake frame remains capped at 262,144 bytes and is not an Ingress/Core
+field. Raw source captures, credentials, host paths, errors, stdout/stderr, exact raw-data digests,
+and stable real-person or real-provider fingerprints may not enter Ingress, Core, Recovery,
+support, monitoring, analytics, AI, receipts, or exports. Public failures use fixed codes. A
+rejected observation must leave database bytes, logical export, support output, and durable state
+unchanged.
 
 ## Provider evidence export boundary
 
@@ -114,7 +119,9 @@ identity drift fails closed.
 
 Recovery reconciliation precedes throughput optimization. Publication has one owner, preserves the
 last known good target on uncertainty, and resolves uncertain outcomes only through independently
-verified state. The owner and its lock/path checks cover the supported local filesystem primitives
+verified sanitized state. Recovery can restore the sanitized observation chain and its recorded
+verification-at-time receipt; it cannot reverify source bytes or source signatures destroyed at the
+source boundary. The owner and its lock/path checks cover the supported local filesystem primitives
 only; hostile local administrators, filesystem ACL enforcement, remote/distributed filesystem
 semantics, production storage durability/HA, backup/DR, monitoring, RPO/RTO, HSM/FIPS custody, and
 state operations remain external qualification dependencies. Synthetic success does not qualify

@@ -2,7 +2,8 @@
 
 Core is a read-only evidence, reconciliation, and observation owner.  It has
 no delivery, payment, clearance, settlement, adjudication, or source-truth
-authority.  Raw source custody remains with Ingress.
+authority.  Raw source custody ends at the source-side adapter; Core receives
+only the independently verified sanitized observation and its at-time receipt.
 """
 
 from __future__ import annotations
@@ -22,12 +23,9 @@ from app.mirror import core_v2_independent as independent
 from app.mirror import external_governance_approval_independent as governance
 from app.mirror import external_privacy_support_approval_independent as privacy
 from app.mirror import ingress_v2_independent as ingress
-from app.mirror import nc_medicaid_fhir_independent as fhir
-from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import external_corrective_action as corrective_action
 from app.mirror import external_corrective_action_independent as corrective_action_independent
 from app.mirror.error_boundary import raise_redacted
-from app.mirror.source_admission import SourceAdmissionService
 
 
 SCHEMA = independent.SCHEMA
@@ -38,7 +36,6 @@ FIXED_FLAGS = dict(independent.FIXED_FLAGS)
 MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
 MAX_ARTIFACT_BYTES = independent.MAX_ARTIFACT_BYTES
 MAX_EVENT_BYTES = independent.MAX_EVENT_BYTES
-MAX_COMPLETE_FRAME_BYTES = fhir.NC_MEDICAID_PROFILE.transport_caps["complete_frame_bytes"]
 MAX_BATCH_ARTIFACTS = 256
 MAX_IDENTIFIER_BYTES = 128
 _REPARSE_POINT = 0x400
@@ -686,12 +683,12 @@ class CoreServiceV2:
     @staticmethod
     def _source_status(ing: Mapping[str, object], prior: Mapping[str, object] | None) -> tuple[str, str]:
         if prior is None:
-            return ("INCOMPLETE" if ing.get("source_status") != "COMPLETE" else "OBSERVED_NEW", "INITIAL")
+            return ("INCOMPLETE" if ing.get("outcome") == "EVIDENCE_INCOMPLETE" else "OBSERVED_NEW", "INITIAL")
         if int(ing["event_sequence"]) <= int(prior["ingress_event_sequence"]):
             raise CoreConflictError("core:source-chronology")
         if int(ing["observation_time"]) <= int(prior["observation_time"]):
             raise CoreConflictError("core:source-chronology")
-        status = "INCOMPLETE" if ing.get("source_status") != "COMPLETE" else ("OBSERVED_CONTINUED" if ing.get("content_root") == prior.get("content_root") else "OBSERVED_CHANGED")
+        status = "INCOMPLETE" if ing.get("outcome") == "EVIDENCE_INCOMPLETE" else ("OBSERVED_CONTINUED" if ing.get("observation_identity") == prior.get("observation_identity") else "OBSERVED_CHANGED")
         return status, "ADVANCING"
 
     @staticmethod
@@ -704,25 +701,24 @@ class CoreServiceV2:
             ("ingress_event_sequence", "event_sequence"),
             ("ingress_prefix_root", "event_prefix_root"),
             ("ingress_after_root", "event_after_root"),
-            ("envelope_id", "envelope_id"),
-            ("envelope_digest", "envelope_digest"),
-            ("snapshot_id", "snapshot_id"),
-            ("snapshot_root", "snapshot_root"),
-            ("content_root", "content_root"),
             ("profile_id", "profile_id"),
             ("profile_version", "profile_version"),
-            ("profile_digest", "profile_digest"),
             ("observation_time", "observation_time"),
-            ("fetched_at", "fetched_at"),
             ("source_status", "source_status"),
             ("freshness", "freshness"),
             ("page_complete", "page_complete"),
             ("page_count", "page_count"),
             ("resource_count", "resource_count"),
+            ("source_count", "source_count"),
+            ("complete_source_count", "complete_source_count"),
+            ("record_count", "record_count"),
+            ("finding_count", "finding_count"),
+            ("discrepancy_count", "discrepancy_count"),
+            ("outcome", "outcome"),
         ):
             if source.get(source_key) != ing.get(ingress_key):
                 return False
-        return source.get("ingress_head_root") == ing.get("event_after_root")
+        return source.get("ingress_head_root") == ing.get("event_after_root") and source.get("observation_identity") == ing.get("observation_identity")
 
     @staticmethod
     def _authority_staleness(
@@ -862,10 +858,11 @@ class CoreServiceV2:
             if type(value) is not str or len(value) != 128 or any(char not in "0123456789abcdef" for char in value):
                 raise CoreConflictError("core:source-input")
         connection = self._open()
+        local: dict[str, dict[str, object]] = {}
+        unresolved: list[str] = []
+        predecessor_ingress_id: str | None = None
         try:
             connection.execute("BEGIN")
-            local: dict[str, dict[str, object]] = {}
-            unresolved: list[str] = []
             for artifact_id in artifact_ids:
                 operation = _digest("source-operation", {"ingress_artifact_id": artifact_id})
                 event = self._event(connection, operation)
@@ -873,27 +870,16 @@ class CoreServiceV2:
                     unresolved.append(artifact_id)
                 else:
                     local[artifact_id] = self._result_from_event(connection, event)
-            predecessor_ingress_id: str | None = None
             if unresolved:
-                source_head = connection.execute(
-                    "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'"
-                ).fetchone()
+                source_head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'").fetchone()
                 if source_head is not None:
-                    prior_row = connection.execute(
-                        "SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='SOURCE_OBSERVATION'",
-                        (source_head[0],),
-                    ).fetchone()
-                    if prior_row is None or type(prior_row[0]) is not bytes:
+                    prior_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='SOURCE_OBSERVATION'", (source_head[0],)).fetchone()
+                    if prior_row is None:
                         raise CoreError("core:source-head")
-                    prior_source = independent._parse(prior_row[0], "core:artifact")
-                    predecessor_ingress_id = str(prior_source["ingress_artifact_id"])
+                    predecessor_ingress_id = str(independent._parse(prior_row[0], "core:artifact")["ingress_artifact_id"])
+            connection.commit()
         finally:
-            _finalize_core_connection(
-                connection,
-                transactional=False,
-                cleanup_code="core:database",
-                rollback_before_close=True,
-            )
+            _finalize_core_connection(connection, transactional=False, cleanup_code="core:database", rollback_before_close=True)
         if not unresolved:
             return tuple(local[value] for value in artifact_ids)
         try:
@@ -903,57 +889,25 @@ class CoreServiceV2:
                 raise CoreConflictError("core:source-not-current")
             if predecessor_ingress_id is not None and not isinstance(snapshots.get(predecessor_ingress_id), dict):
                 raise CoreConflictError("core:source-predecessor")
-            admissions: dict[str, object] = {}
+            checked: dict[str, dict[str, object]] = {}
             for artifact_id in unresolved:
                 item = snapshots[artifact_id]
-                if (
-                    item.get("artifact_id") != artifact_id
-                    or item.get("terminal_state") != "QUARANTINED"
-                    or item.get("terminal_event_kind") not in {"ADMIT", "QUARANTINE", "CONFIRM_QUARANTINE"}
-                ):
+                if item.get("terminal_state") != "QUARANTINED" or item.get("terminal_event_kind") != "ADMIT":
                     raise CoreConflictError("core:source-lifecycle")
-                raw_envelope = item.get("envelope_raw")
-                external_evidence_raw = item.get("external_evidence_raw")
-                external_policy = item.get("external_policy")
-                intake_frame = item.get("intake_frame")
-                if (
-                    type(intake_frame) is not bytes
-                    or len(intake_frame) > MAX_COMPLETE_FRAME_BYTES
-                    or type(raw_envelope) is not bytes
-                    or type(external_evidence_raw) is not bytes
-                    or not isinstance(external_policy, Mapping)
-                ):
-                    raise CoreConflictError("core:source-raw")
-                capture_context = item.get("capture_context")
-                if not isinstance(capture_context, Mapping):
-                    raise CoreConflictError("core:source-profile")
+                observation = item.get("observation")
+                receipt = item.get("verification_receipt")
+                if type(observation) is not bytes or type(receipt) is not bytes:
+                    raise CoreConflictError("core:source-observation")
                 try:
-                    dynamic_context = profile.DynamicCaptureContext(
-                        str(capture_context["subject_id"]),
-                        str(capture_context["credential_id"]),
-                        str(capture_context["enrollment_id"]),
-                        str(capture_context["subject_locator_digest"]),
-                        int(item["observation_time"]),
-                        int(item["fetched_at"]),
-                    )
-                    configured_profile = profile.NC_MEDICAID_PROFILE.graph_profile_for_context(dynamic_context)
-                except Exception:
-                    raise CoreConflictError("core:source-profile") from None
-                admission = SourceAdmissionService(configured_profile, fhir.NcMedicaidFhirVerifier()).admit(
-                    raw_envelope,
-                    external_evidence_raw=external_evidence_raw,
-                    external_policy=external_policy,
-                )
-                admissions[artifact_id] = admission
+                    checked[artifact_id] = ingress.verify_observation_pair(observation, receipt)
+                except ingress.IngressVerificationError:
+                    raise CoreConflictError("core:source-observation") from None
         except (CoreError, CoreConflictError):
             raise
         except ingress.IngressVerificationError:
-            if predecessor_ingress_id is not None:
-                raise CoreConflictError("core:source-predecessor")
-            raise CoreConflictError("core:ingress-reject")
+            raise CoreConflictError("core:ingress-reject") from None
         except Exception:
             raise_redacted(CoreError, "core:ingress-reject")
-
         connection = self._open()
         commit_attempted = False
         commit_succeeded = False
@@ -969,8 +923,10 @@ class CoreServiceV2:
                     results[artifact_id] = self._result_from_event(connection, existing)
                     continue
                 ing = snapshots[artifact_id]
-                admission = admissions[artifact_id]
-                if ing["database_id"] != self.config.ingress_database_id or ing["chain_id"] != self.config.ingress_chain_id or ing["config_digest"] != self.config.ingress_config_digest or admission.profile_id != profile.NC_MEDICAID_PROFILE.source_profile_id or admission.profile_version != 3 or admission.source_contract_digest != profile.NC_MEDICAID_PROFILE.profile_digest or admission.production_source_authentication is not False:
+                checked_value = checked[artifact_id]
+                observation_value = dict(checked_value["observation"])
+                receipt_value = dict(checked_value["verification_receipt"])
+                if ing["database_id"] != self.config.ingress_database_id or ing["chain_id"] != self.config.ingress_chain_id or ing["config_digest"] != self.config.ingress_config_digest:
                     raise CoreConflictError("core:source-profile")
                 source_head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'").fetchone()
                 predecessor_id = str(source_head[0]) if source_head else None
@@ -984,38 +940,45 @@ class CoreServiceV2:
                     if not isinstance(prior_ingress, dict) or not self._ingress_projection_matches(prior, prior_ingress):
                         raise CoreConflictError("core:source-predecessor")
                 status, chronology = self._source_status(ing, prior)
-                graph_raw = bytes(admission.graph_artifact)
+                finding_id = _digest("sanitized-finding", {"profile_id": observation_value["profile_id"], "profile_version": observation_value["profile_version"], "observation_time": observation_value["observation_time"], "outcome": observation_value["outcome"]})
+                graph_value: dict[str, object] = {
+                    "schema": "mirror-core-graph-observation-v1",
+                    "schema_version": 1,
+                    "kind": "GRAPH",
+                    "profile": {"profile_id": observation_value["profile_id"], "version": observation_value["profile_version"]},
+                    "observation": observation_value,
+                    "findings": [{"finding_id": finding_id, "kind": observation_value["outcome"]}],
+                    "report": {"report_id": _digest("sanitized-report", {"profile_id": observation_value["profile_id"], "profile_version": observation_value["profile_version"], "observation_time": observation_value["observation_time"], "outcome": observation_value["outcome"], "finding_id": finding_id})},
+                    "authority": dict(FIXED_FLAGS),
+                }
+                graph_raw = _canonical(graph_value)
                 graph_digest = _raw_digest("graph-artifact", graph_raw)
-                graph_report_id = str(admission.report_id)
-                graph_operation = _digest("graph-operation", {"graph_id": graph_report_id, "graph_digest": graph_digest})
-                graph_request = _digest("graph-request", {"graph_id": graph_report_id, "graph_digest": graph_digest})
-                graph_id, _ = self._admit_artifact(connection, kind="GRAPH", raw=graph_raw, profile_digest=admission.profile_digest, predecessor_id=None, source_artifact_id=None, operation_id=graph_operation, request_digest=graph_request, state="GRAPH", observed_at=now, ingress_watermark=0)
-                try:
-                    admission_receipt = independent._parse(admission.receipt, "core:admission-receipt")
-                    if len(independent._canonical(admission_receipt)) > independent.MAX_ADMISSION_RECEIPT_BYTES:
-                        raise CoreConflictError("core:admission-receipt")
-                except CoreConflictError:
-                    raise
-                except Exception:
-                    raise_redacted(CoreError, "core:admission-receipt")
+                graph_report_id = str(graph_value["report"]["report_id"])
+                graph_id, _ = self._admit_artifact(connection, kind="GRAPH", raw=graph_raw, profile_digest=self.config.runtime_profile_digest, predecessor_id=None, source_artifact_id=None, operation_id=_digest("graph-operation", {"graph_id": graph_report_id, "graph_digest": graph_digest}), request_digest=_digest("graph-request", {"graph_id": graph_report_id, "graph_digest": graph_digest}), state="GRAPH", observed_at=now)
+                observation_identity = str(checked_value["observation_id"])
                 source_body: dict[str, object] = {
-                    "schema": "mirror-core-source-observation-v3", "schema_version": 3, "kind": "SOURCE_OBSERVATION", "artifact_id": "",
+                    "schema": "mirror-core-source-observation-v4", "schema_version": 4, "kind": "SOURCE_OBSERVATION", "artifact_id": "",
                     "ingress_database_id": ing["database_id"], "ingress_chain_id": ing["chain_id"], "ingress_config_digest": ing["config_digest"],
                     "ingress_artifact_id": artifact_id, "ingress_event_sequence": ing["event_sequence"], "ingress_prefix_root": ing.get("event_prefix_root"), "ingress_after_root": ing.get("event_after_root"), "ingress_head_root": ing.get("event_after_root"),
-                    "envelope_id": ing["envelope_id"], "envelope_digest": ing["envelope_digest"], "snapshot_id": ing["snapshot_id"], "snapshot_root": ing["snapshot_root"], "content_root": ing["content_root"],
-                    "profile_id": ing["profile_id"], "profile_version": ing["profile_version"], "profile_digest": ing["profile_digest"], "runtime_profile_digest": self.config.runtime_profile_digest,
-                    "source_contract_digest": admission.source_contract_digest, "external_artifact_id": admission.external_artifact_id, "external_artifact_digest": admission.external_artifact_digest, "capture_id": admission.capture_id, "capture_context_digest": admission.capture_context_digest, "page_digests": list(admission.page_digests),
-                    "observation_time": ing["observation_time"], "fetched_at": ing["fetched_at"], "source_status": ing["source_status"], "freshness": ing["freshness"], "page_complete": bool(ing["page_complete"]), "page_count": ing["page_count"], "resource_count": ing["resource_count"],
-                    "graph_artifact_id": graph_id, "graph_artifact_digest": graph_digest, "admission_receipt": admission_receipt, "admission_receipt_digest": _raw_digest("admission-receipt", admission.receipt), "admission_report_id": graph_report_id,
+                    "observation_identity": observation_identity, "observation": observation_value, "verification_receipt": receipt_value,
+                    "profile_id": observation_value["profile_id"], "profile_version": observation_value["profile_version"], "runtime_profile_digest": self.config.runtime_profile_digest,
+                    "observation_time": observation_value["observation_time"], "source_status": observation_value["source_status"], "freshness": observation_value["freshness"], "page_complete": observation_value["page_complete"], "page_count": observation_value["page_count"], "resource_count": observation_value["resource_count"],
+                    "source_count": observation_value["source_count"], "complete_source_count": observation_value["complete_source_count"], "record_count": observation_value["record_count"], "finding_count": observation_value["finding_count"], "discrepancy_count": observation_value["discrepancy_count"], "outcome": observation_value["outcome"],
+                    "graph_artifact_id": graph_id, "graph_artifact_digest": graph_digest, "admission_receipt": receipt_value, "admission_report_id": graph_report_id,
                     "observation_status": status, "chronology": chronology, "flags": dict(FIXED_FLAGS),
                 }
-                if any(source_body[key] is None for key in ("ingress_prefix_root", "ingress_after_root")):
+                if source_body["ingress_prefix_root"] is None or source_body["ingress_after_root"] is None:
                     raise CoreError("core:source-boundary")
-                source_body["artifact_id"] = _digest("source-artifact-id", {key: source_body[key] for key in source_body if key not in {"artifact_id", "flags"}})
-                source_raw = _canonical(source_body)
-                source_id, _ = self._admit_artifact(connection, kind="SOURCE_OBSERVATION", raw=source_raw, profile_digest=self.config.runtime_profile_digest, predecessor_id=predecessor_id, source_artifact_id=artifact_id, operation_id=operation, request_digest=_digest("source-request", {"ingress_artifact_id": artifact_id}), state=status, observed_at=now, ingress_watermark=int(ing["event_sequence"]))
-                rec_body: dict[str, object] = {"schema": "mirror-core-reconciliation-v3", "schema_version": 3, "kind": "RECONCILIATION", "artifact_id": "", "current_source_artifact_id": source_id, "prior_source_artifact_id": predecessor_id, "current_content_root": ing["content_root"], "prior_content_root": prior.get("content_root") if prior else None, "source_status": ing["source_status"], "observation_status": status, "chronology": chronology, "linkage": "UNCHANGED" if prior and prior.get("graph_artifact_digest") == graph_digest else "LINKED", "flags": dict(FIXED_FLAGS)}
-                rec_body["artifact_id"] = _digest("reconciliation-id", {key: rec_body[key] for key in rec_body if key != "artifact_id"})
+                source_body["artifact_id"] = _digest("source-artifact-id", {key: value for key, value in source_body.items() if key not in {"artifact_id", "flags"}})
+                source_id, _ = self._admit_artifact(connection, kind="SOURCE_OBSERVATION", raw=_canonical(source_body), profile_digest=self.config.runtime_profile_digest, predecessor_id=predecessor_id, source_artifact_id=artifact_id, operation_id=operation, request_digest=_digest("source-request", {"ingress_artifact_id": artifact_id}), state=status, observed_at=now, ingress_watermark=int(ing["event_sequence"]))
+                rec_body: dict[str, object] = {
+                    "schema": "mirror-core-reconciliation-v4", "schema_version": 4, "kind": "RECONCILIATION", "artifact_id": "",
+                    "current_source_artifact_id": source_id, "prior_source_artifact_id": predecessor_id,
+                    "current_observation_identity": observation_identity, "prior_observation_identity": prior.get("observation_identity") if prior else None,
+                    "source_status": observation_value["source_status"], "observation_status": status, "chronology": chronology,
+                    "linkage": "UNCHANGED" if prior and prior.get("observation_identity") == observation_identity else "LINKED", "flags": dict(FIXED_FLAGS),
+                }
+                rec_body["artifact_id"] = _digest("reconciliation-id", {key: value for key, value in rec_body.items() if key != "artifact_id"})
                 rec_predecessor = self._find_reconciliation(connection, predecessor_id) if predecessor_id else None
                 if predecessor_id is not None and rec_predecessor is None:
                     raise CoreConflictError("core:reconciliation-chain")
@@ -1026,40 +989,16 @@ class CoreServiceV2:
             commit_succeeded = True
             return tuple(results[value] for value in artifact_ids)
         except (CoreError, CoreConflictError):
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                close=False,
-                continue_after_cleanup=True,
-            )
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True)
             raise
         except sqlite3.OperationalError as exc:
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                close=False,
-                continue_after_cleanup=True,
-            )
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True)
             _sqlite_error(exc, busy=True)
         except sqlite3.Error as exc:
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                close=False,
-                continue_after_cleanup=True,
-            )
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True)
             _sqlite_error(exc)
         finally:
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                identity_check=self._assert_database_identity,
-                cleanup_code="core:database",
-            )
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core:database")
         raise CoreError("core:database")
 
     @staticmethod
@@ -1194,7 +1133,10 @@ class CoreServiceV2:
             target_ids = tuple(sorted(str(finding["finding_id"]) for finding in actionable))
             target_kinds = tuple(str(finding["kind"]) for finding in sorted(actionable, key=lambda item: str(item["finding_id"])))
             report_id = str(graph_value["report"]["report_id"])
-            subject = graph_value["subject"]
+            subject = {
+                "profile_id": graph_value["profile"]["profile_id"],
+                "profile_version": graph_value["profile"]["version"],
+            }
             subject_digest = _digest("case-subject", subject)
             case_id = _digest("case-id", {"reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": source_id, "graph_artifact_id": source["graph_artifact_id"], "graph_report_id": report_id, "profile_digest": self.config.runtime_profile_digest, "subject_digest": subject_digest, "target_finding_ids": list(target_ids), "target_finding_kinds": list(target_kinds)})
             operation_id = _digest("case-operation", {"case_id": case_id})
@@ -1207,7 +1149,7 @@ class CoreServiceV2:
             body: dict[str, object] = {
                 "schema": "mirror-core-case-v4", "schema_version": 4, "kind": "CASE", "artifact_id": "",
                 "case_id": case_id, "reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": source_id,
-                "graph_artifact_id": source["graph_artifact_id"], "graph_report_id": report_id, "graph_profile_digest": graph_value["profile"]["profile_digest"],
+                "graph_artifact_id": source["graph_artifact_id"], "graph_report_id": report_id, "graph_profile_digest": self.config.runtime_profile_digest,
                 "subject_digest": subject_digest, "target_finding_ids": list(target_ids), "target_finding_kinds": list(target_kinds),
                 "state": "OPEN", "responsibility": "UNKNOWN", "reason": "ACTIONABLE_FINDING", "action_artifact_id": None,
                 "action_observed_at": None, "retest_source_artifact_id": None, "retest_graph_artifact_id": None, "retest_observation_time": None,
@@ -1482,9 +1424,7 @@ class CoreServiceV2:
             if (
                 later_graph.get("profile", {}).get("profile_id") != initial_graph.get("profile", {}).get("profile_id")
                 or later_graph.get("profile", {}).get("version") != initial_graph.get("profile", {}).get("version")
-                or later_graph.get("profile", {}).get("source_contract_digest") != initial_graph.get("profile", {}).get("source_contract_digest")
-                or later_graph["subject"] != initial_graph["subject"]
-                or later_graph.get("scope") != initial_graph.get("scope")
+                or later_graph.get("profile") != initial_graph.get("profile")
             ):
                 raise CoreConflictError("core:case-lineage")
             if int(later["observation_time"]) <= int(prior["action_observed_at"]):

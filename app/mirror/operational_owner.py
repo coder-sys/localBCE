@@ -50,9 +50,8 @@ _EXPECTED_CHILDREN = {
 _SIDECARS = ("-wal", "-shm", "-journal")
 _REPARSE_POINT = 0x400
 _HEX = frozenset("0123456789abcdef")
-_MAX_ENVELOPE_BYTES = ingress.NC_MEDICAID_PROFILE.transport_caps["max_envelope_bytes"]
-_MAX_EVIDENCE_BYTES = ingress.independent.MAX_EXTERNAL_ARTIFACT_BYTES
-_MAX_COMPLETE_FRAME_BYTES = ingress.MAX_COMPLETE_FRAME_BYTES
+_MAX_OBSERVATION_BYTES = ingress_independent.MAX_OBSERVATION_BYTES
+_MAX_VERIFICATION_RECEIPT_BYTES = ingress_independent.MAX_VERIFICATION_RECEIPT_BYTES
 
 
 class OperationalOwnerError(ValueError):
@@ -93,23 +92,26 @@ class OperationalConfigV1:
 
 
 @dataclass(frozen=True)
-class AcquisitionPayloadV1:
-    """Exactly the two bounded payloads handed to Ingress admission."""
+class SanitizedObservationPayloadV1:
+    """Exactly the two bounded non-PHI bytes handed to Ingress admission."""
 
-    envelope_raw: bytes
-    external_evidence_raw: bytes
+    observation: bytes
+    verification_receipt: bytes
 
     def __post_init__(self) -> None:
         if (
-            type(self.envelope_raw) is not bytes
-            or type(self.external_evidence_raw) is not bytes
-            or not self.envelope_raw
-            or not self.external_evidence_raw
-            or len(self.envelope_raw) > _MAX_ENVELOPE_BYTES
-            or len(self.external_evidence_raw) > _MAX_EVIDENCE_BYTES
-            or len(self.envelope_raw) + len(self.external_evidence_raw) > _MAX_COMPLETE_FRAME_BYTES
+            type(self.observation) is not bytes
+            or type(self.verification_receipt) is not bytes
+            or not self.observation
+            or not self.verification_receipt
+            or len(self.observation) > _MAX_OBSERVATION_BYTES
+            or len(self.verification_receipt) > _MAX_VERIFICATION_RECEIPT_BYTES
         ):
             raise OperationalOwnerError("mirror:operational-acquisition")
+        try:
+            ingress_independent.verify_observation_pair(self.observation, self.verification_receipt)
+        except Exception:
+            raise OperationalOwnerError("mirror:operational-acquisition") from None
 
 
 class AcquisitionPort(Protocol):
@@ -117,7 +119,7 @@ class AcquisitionPort(Protocol):
     external_policy_digest: str
     profile_digest: str
 
-    def acquire(self, slot_id: str, scheduled_at: int, attempt: int) -> AcquisitionPayloadV1: ...
+    def acquire(self, slot_id: str, scheduled_at: int, attempt: int) -> SanitizedObservationPayloadV1: ...
 
 @dataclass(frozen=True)
 class OperationalAggregateV1:
@@ -660,7 +662,6 @@ class MirrorOperationalOwnerV1:
             or recovery_config.core_database_id != core_config.database_id
             or recovery_config.ingress_config_digest != ingress_config.digest
             or recovery_config.core_config_digest != core_config.digest
-            or operational_config.external_policy_digest != ingress_config.external_policy().digest
             or operational_config.profile_digest != ingress_config.source_contract_digest
         ):
             raise OperationalOwnerError("mirror:operational-config")
@@ -952,16 +953,16 @@ class MirrorOperationalOwnerV1:
             counts["acquisition_rejected"] += 1
             counts["processed"] += 1
             return
-        if type(payload) is not AcquisitionPayloadV1:
+        if type(payload) is not SanitizedObservationPayloadV1:
             self._assert_owner_identity()
             counts["acquisition_rejected"] += 1
             counts["processed"] += 1
             return
         self._assert_owner_identity()
         try:
-            admitted_receipt = self.ingress.admit_capture(
-                payload.envelope_raw,
-                evidence_raw=payload.external_evidence_raw,
+            admitted_receipt = self.ingress.admit_observation(
+                payload.observation,
+                payload.verification_receipt,
                 scheduled_at=slot.scheduled_at,
                 attempt=attempt,
                 lease_token=lease_token,
@@ -1153,7 +1154,7 @@ __all__ = [
     "OperationalOwnerError",
     "OperationalConfigV1",
     "AcquisitionPort",
-    "AcquisitionPayloadV1",
+    "SanitizedObservationPayloadV1",
     "OperationalAggregateV1",
     "MirrorOperationalOwnerV1",
 ]
