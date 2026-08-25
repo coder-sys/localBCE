@@ -57,6 +57,21 @@ void AppendU64(std::vector<uint8_t>& output, uint64_t value) {
   }
 }
 
+std::vector<uint8_t> U64Bytes(uint64_t value) {
+  std::vector<uint8_t> output;
+  AppendU64(output, value);
+  return output;
+}
+
+void AppendContextPart(std::vector<uint8_t>& output, const char* label,
+                       const std::vector<uint8_t>& value) {
+  const size_t label_bytes = std::strlen(label);
+  AppendU32(output, static_cast<uint32_t>(label_bytes));
+  output.insert(output.end(), label, label + label_bytes);
+  AppendU64(output, value.size());
+  Append(output, value);
+}
+
 Digest HashBytes(const std::vector<uint8_t>& input) {
   proofs::Sha3Reference reference(kDigestBytes);
   reference.update(reinterpret_cast<const char*>(input.data()), input.size());
@@ -88,6 +103,76 @@ Digest Sentinel() {
   return output;
 }
 
+Digest StateLayoutId() {
+  std::vector<uint8_t> literal(kStateLayoutLiteral,
+                               kStateLayoutLiteral + kStateLayoutLiteralBytes);
+  return HashParts(Domain(kStateLayoutDomain), {literal});
+}
+
+Digest NoAuthorizedAmountCommitment() {
+  return HashBytes(Domain(kNoAuthorizedAmountDomain));
+}
+
+Digest ProposedPaymentCommitment(const Case& value) {
+  std::vector<uint8_t> input = Domain(kProposedPaymentDomain);
+  Append(input, value.statement.execution_context);
+  Append(input, value.statement.request_id);
+  AppendU64(input, value.amount_cents);
+  input.insert(input.end(), value.nonce.begin(), value.nonce.end());
+  return HashBytes(input);
+}
+
+Digest AuthorizedPaymentCommitment(const Case& value) {
+  if (value.effective_directive == kClear ||
+      value.effective_directive == kExceptionApproved) {
+    return ProposedPaymentCommitment(value);
+  }
+  return NoAuthorizedAmountCommitment();
+}
+
+Digest CanonicalStateId(const Digest& execution_context, uint64_t sequence,
+                        const std::vector<uint8_t>& state_bytes) {
+  std::vector<uint8_t> input = Domain(kStateIdDomain);
+  Append(input, execution_context);
+  AppendU64(input, sequence);
+  Append(input, StateLayoutId());
+  AppendU32(input, kStateCapacity);
+  AppendU64(input, state_bytes.size());
+  Append(input, state_bytes);
+  return HashBytes(input);
+}
+
+std::vector<uint8_t> GenesisStateBytes() {
+  std::vector<uint8_t> state(kStateCommitmentBytes, 0);
+  state[0] = 'B'; state[1] = 'L'; state[2] = 'S'; state[3] = 'T';
+  state[4] = kStateVersion;
+  for (size_t index = 0; index < 8; ++index) {
+    state[16 + index] = static_cast<uint8_t>(
+        kStateGenesisEpoch >> (56 - index * 8));
+  }
+  const Digest sentinel = Sentinel();
+  std::copy(sentinel.begin(), sentinel.end(), state.begin() + 470);
+  std::copy(sentinel.begin(), sentinel.end(), state.begin() + 534);
+  const Digest no_authorized = NoAuthorizedAmountCommitment();
+  std::copy(no_authorized.begin(), no_authorized.end(),
+            state.begin() + kStateProposedCommitmentOffset);
+  return state;
+}
+
+uint64_t ReadStateU64(const std::array<uint8_t, kPredecessorStateBytes>& state,
+                      size_t offset) {
+  uint64_t value = 0;
+  for (size_t index = 0; index < 8; ++index) {
+    value = (value << 8) | state[offset + index];
+  }
+  return value;
+}
+
+bool StateDigestEqual(const std::array<uint8_t, kPredecessorStateBytes>& state,
+                      size_t offset, const Digest& expected) {
+  return std::equal(expected.begin(), expected.end(), state.begin() + offset);
+}
+
 void FillRole(ProofRole& role) {
   for (size_t index = 0; index < role.size(); ++index) {
     role[index] = static_cast<uint8_t>(kProofRole[index]);
@@ -99,11 +184,11 @@ Digest ScopeId(const Case& value) {
   std::vector<uint8_t> interval;
   AppendU64(interval, value.exception_valid_from);
   AppendU64(interval, value.exception_valid_until);
-  return HashParts(Domain("BL/NATIVE-V3/EXCEPTION-SCOPE/v1"),
+  return HashParts(Domain("BL/NATIVE-V3/EXCEPTION-SCOPE/v2"),
                    {ToVector(value.statement.exception_id),
                     ToVector(value.statement.subject_id),
                     ToVector(value.statement.rule_id),
-                    interval});
+                    interval, ToVector(ProposedPaymentCommitment(value))});
 }
 
 std::vector<uint8_t> SourceRootInput(const Case& value) {
@@ -111,6 +196,8 @@ std::vector<uint8_t> SourceRootInput(const Case& value) {
   Append(output, value.provider_id);
   Append(output, value.credential_id);
   Append(output, value.enrollment_id);
+  Append(output, value.statement.subject_id);
+  Append(output, value.statement.attempt_id);
   AppendU8(output, value.statement.active);
   AppendU8(output, value.statement.complete);
   AppendU8(output, value.statement.authoritative_membership);
@@ -122,6 +209,8 @@ std::vector<uint8_t> CompletenessInput(const Case& value) {
   std::vector<uint8_t> output = Domain("BL/NATIVE-V3/COMPLETENESS/v1");
   Append(output, value.provider_id);
   Append(output, value.credential_id);
+  Append(output, value.statement.subject_id);
+  Append(output, value.statement.attempt_id);
   AppendU8(output, value.statement.complete);
   AppendU8(output, value.statement.authoritative_absence);
   return output;
@@ -137,29 +226,19 @@ std::vector<uint8_t> RequestInput(const Case& value) {
   return output;
 }
 
-Digest BeforeStateId(const Case& value) {
-  std::vector<uint8_t> epoch_sequence;
-  AppendU64(epoch_sequence, value.statement.epoch);
-  AppendU64(epoch_sequence, value.statement.sequence_before);
-  return HashParts(
-      Domain("BL/NATIVE-V3/MINIMAL-BEFORE-STATE/v1"),
-      {ToVector(value.statement.execution_context), epoch_sequence,
-       ToVector(value.before_audit_head),
-       ToVector(value.before_continuity_root)});
-}
-
 Digest RequestId(const Case& value) {
   return HashBytes(RequestInput(value));
 }
 
 Digest DecisionId(const Case& value) {
-  return HashParts(Domain("BL/NATIVE-V3/MINIMAL-DECISION/v1"),
+  return HashParts(Domain("BL/NATIVE-V3/MINIMAL-DECISION/v2"),
                    {ToVector(value.statement.request_id),
                     ToVector(value.statement.source_root_id),
                     ToVector(value.statement.completeness_id),
                     std::vector<uint8_t>{value.policy_result,
                                          value.effective_directive},
-                    ToVector(value.statement.exception_id)});
+                    ToVector(value.statement.exception_id),
+                    ToVector(ProposedPaymentCommitment(value))});
 }
 
 Digest AfterAudit(const Case& value) {
@@ -252,6 +331,7 @@ struct PublicWires {
   V8<Logic> complete;
   V8<Logic> membership;
   V8<Logic> absence;
+  std::array<V8<Logic>, kPredecessorStateBytes> predecessor_state;
   std::array<V8<Logic>, kStateCommitmentBytes> state_commitment;
 };
 
@@ -261,6 +341,7 @@ struct PrivateWires {
   Byte64<Logic> credential;
   Byte64<Logic> enrollment;
   Byte64<Logic> source_payload;
+  Byte64<Logic> source_nonce;
   V8<Logic> active;
   V8<Logic> complete;
   V8<Logic> membership;
@@ -306,6 +387,8 @@ struct PrivateWires {
   Byte64<Logic> write_key;
   Byte64<Logic> write_before;
   Byte64<Logic> write_after;
+  V64<Logic> amount_cents;
+  Byte64<Logic> nonce;
 };
 
 template <class Logic>
@@ -353,6 +436,9 @@ void PushPublic(proofs::DenseFiller<RelationField>& filler,
   filler.push_back(statement.complete, 8, field);
   filler.push_back(statement.authoritative_membership, 8, field);
   filler.push_back(statement.authoritative_absence, 8, field);
+  for (uint8_t byte : statement.predecessor_state_bytes) {
+    filler.push_back(byte, 8, field);
+  }
   for (uint8_t byte : statement.state_commitment_bytes) {
     filler.push_back(byte, 8, field);
   }
@@ -399,6 +485,7 @@ void InputPublic(const Logic& logic, PublicWires<Logic>& value) {
   value.complete = logic.template vinput<8>();
   value.membership = logic.template vinput<8>();
   value.absence = logic.template vinput<8>();
+  for (auto& byte : value.predecessor_state) byte = logic.template vinput<8>();
   for (auto& byte : value.state_commitment) byte = logic.template vinput<8>();
 }
 
@@ -413,6 +500,7 @@ void InputPrivate(const Logic& logic, PrivateWires<Logic>& value) {
   InputDigest(logic, value.credential);
   InputDigest(logic, value.enrollment);
   InputDigest(logic, value.source_payload);
+  InputDigest(logic, value.source_nonce);
   value.active = logic.template vinput<8>();
   value.complete = logic.template vinput<8>();
   value.membership = logic.template vinput<8>();
@@ -458,6 +546,8 @@ void InputPrivate(const Logic& logic, PrivateWires<Logic>& value) {
   InputDigest(logic, value.write_key);
   InputDigest(logic, value.write_before);
   InputDigest(logic, value.write_after);
+  value.amount_cents = logic.template vinput<64>();
+  InputDigest(logic, value.nonce);
 }
 
 template <class Logic>
@@ -592,13 +682,60 @@ void AppendLiteral(std::vector<V8<Logic>>& output, const Logic& logic,
 }
 
 template <class Logic>
+void AssertPredecessorU64(const Logic& logic,
+                          const std::array<V8<Logic>, kPredecessorStateBytes>&
+                              predecessor,
+                          size_t offset, const V64<Logic>& expected) {
+  for (size_t byte = 0; byte < 8; ++byte) {
+    V8<Logic> encoded;
+    for (size_t bit = 0; bit < 8; ++bit) {
+      encoded[bit] = expected[(7 - byte) * 8 + bit];
+    }
+    logic.vassert_eq(predecessor[offset + byte], encoded);
+  }
+}
+
+template <class Logic>
+void AssertPredecessorDigest(
+    const Logic& logic,
+    const std::array<V8<Logic>, kPredecessorStateBytes>& predecessor,
+    size_t offset, const Byte64<Logic>& expected) {
+  for (size_t index = 0; index < kDigestBytes; ++index) {
+    logic.vassert_eq(predecessor[offset + index], expected[index]);
+  }
+}
+
+template <class Logic>
+void AssertPredecessorProjection(const Logic& logic,
+                                 const PublicWires<Logic>& pub,
+                                 const PrivateWires<Logic>& p) {
+  constexpr char kMagic[] = "BLST";
+  for (size_t index = 0; index < 4; ++index) {
+    logic.vassert_eq(pub.predecessor_state[index],
+                     logic.vbit8(static_cast<uint8_t>(kMagic[index])));
+  }
+  logic.vassert_eq(pub.predecessor_state[4], logic.vbit8(kStateVersion));
+  AssertPredecessorU64(logic, pub.predecessor_state, 16, pub.epoch);
+  AssertPredecessorU64(logic, pub.predecessor_state, 96, pub.sequence_before);
+  logic.vassert_eq(pub.predecessor_state[15], p.clearance_marker_before);
+  AssertPredecessorU64(logic, pub.predecessor_state, 142,
+                       p.clearance_count_before);
+  AssertPredecessorDigest(logic, pub.predecessor_state,
+                          kStateHeaderAndScalars + 10 * kDigestBytes,
+                          p.before_audit);
+  AssertPredecessorDigest(logic, pub.predecessor_state,
+                          kStateHeaderAndScalars + 12 * kDigestBytes,
+                          p.before_root);
+}
+
+template <class Logic>
 std::vector<V8<Logic>> StateCommitmentWires(const Logic& logic,
                                             const PublicWires<Logic>& pub,
                                             const PrivateWires<Logic>& p) {
   std::vector<V8<Logic>> output;
   output.reserve(kStateCommitmentBytes);
   AppendLiteral<Logic>(output, logic, "BLST", 4);
-  AppendByte<Logic>(output, logic.vbit8(1));
+  AppendByte<Logic>(output, logic.vbit8(kStateVersion));
   AppendByte<Logic>(output, p.policy);
   AppendByte<Logic>(output, p.directive);
   AppendByte<Logic>(output, pub.complete);
@@ -655,6 +792,11 @@ std::vector<V8<Logic>> StateCommitmentWires(const Logic& logic,
   AppendDigest<Logic>(output, p.write_key);
   AppendDigest<Logic>(output, p.write_before);
   AppendDigest<Logic>(output, p.write_after);
+  for (size_t index = 0; index < kDigestBytes; ++index) {
+    output.push_back(pub.state_commitment[kStateHeaderAndScalars +
+                                          kStateDigestCount * kDigestBytes +
+                                          index]);
+  }
   return output;
 }
 
@@ -676,8 +818,8 @@ void AssertPrivateBatchCommitment(const Logic& logic,
                                   const PrivateWires<Logic>& p,
                                   proofs::Sha3Circuit<Logic>& sha3) {
   std::vector<V8<Logic>> input;
-  AppendLiteral<Logic>(input, logic, "BL/NATIVE-V3/PRIVATE-BATCH/v2",
-                       sizeof("BL/NATIVE-V3/PRIVATE-BATCH/v2") - 1);
+  AppendLiteral<Logic>(input, logic, "BL/NATIVE-V3/PRIVATE-BATCH/v3",
+                       sizeof("BL/NATIVE-V3/PRIVATE-BATCH/v3") - 1);
   AppendByte<Logic>(input, logic.vbit8(0));
   AppendDigest<Logic>(input, pub.source_registry_snapshot);
   AppendDigest<Logic>(input, pub.source_profile);
@@ -688,6 +830,15 @@ void AssertPrivateBatchCommitment(const Logic& logic,
   AppendDigest<Logic>(input, p.credential);
   AppendDigest<Logic>(input, p.enrollment);
   AppendDigest<Logic>(input, p.source_payload);
+  AppendDigest<Logic>(input, p.source_nonce);
+  AppendDigest<Logic>(input, pub.source_address);
+  AppendDigest<Logic>(input, pub.source_key);
+  AppendDigest<Logic>(input, pub.audit_address);
+  AppendDigest<Logic>(input, pub.rule_id);
+  AppendU64BE<Logic>(input, p.rule_effective);
+  AppendU64BE<Logic>(input, p.event);
+  AppendU64BE<Logic>(input, p.observation);
+  AppendU64BE<Logic>(input, p.decision);
   AppendByte<Logic>(input, p.active);
   AppendByte<Logic>(input, p.complete);
   AppendByte<Logic>(input, p.membership);
@@ -696,6 +847,27 @@ void AssertPrivateBatchCommitment(const Logic& logic,
   sha3.assert_sha3_512_no_witness(input, output);
   for (size_t index = 0; index < kDigestBytes; ++index) {
     logic.vassert_eq(pub.private_batch_commitment[index], output[index]);
+  }
+}
+
+template <class Logic>
+void AssertProposedPaymentCommitment(const Logic& logic,
+                                     const PublicWires<Logic>& pub,
+                                     const PrivateWires<Logic>& p,
+                                     proofs::Sha3Circuit<Logic>& sha3) {
+  std::vector<V8<Logic>> input;
+  AppendLiteral<Logic>(input, logic, kProposedPaymentDomain,
+                       sizeof(kProposedPaymentDomain) - 1);
+  AppendDigest<Logic>(input, pub.execution_context);
+  AppendDigest<Logic>(input, pub.request_id);
+  AppendU64BE<Logic>(input, p.amount_cents);
+  AppendDigest<Logic>(input, p.nonce);
+  std::vector<V8<Logic>> output;
+  sha3.assert_sha3_512_no_witness(input, output);
+  const size_t tail = kStateHeaderAndScalars +
+                      kStateDigestCount * kDigestBytes;
+  for (size_t index = 0; index < kDigestBytes; ++index) {
+    logic.vassert_eq(pub.state_commitment[tail + index], output[index]);
   }
 }
 
@@ -765,6 +937,15 @@ void AssertDirective(const Logic& logic, const PublicWires<Logic>& pub,
 }
 
 template <class Logic>
+typename Logic::BitW IsZero64(const Logic& logic, const V64<Logic>& value) {
+  typename Logic::BitW result = logic.bit(1);
+  for (size_t index = 0; index < 64; ++index) {
+    result = logic.land(result, logic.lnot(value[index]));
+  }
+  return result;
+}
+
+template <class Logic>
 void AssertIndicesAndTimes(const Logic& logic, const PublicWires<Logic>& pub,
                            const PrivateWires<Logic>& p) {
   (void)logic.assert1(LessThan(logic, p.rule_effective, p.event));
@@ -792,6 +973,10 @@ void AssertIndicesAndTimes(const Logic& logic, const PublicWires<Logic>& pub,
           LessOrEqual(logic, p.exception_valid_from, p.event));
   Implies(logic, exception,
           LessOrEqual(logic, p.decision, p.exception_valid_until));
+  Implies(logic, logic.lnot(exception),
+          IsZero64(logic, p.exception_valid_from));
+  Implies(logic, logic.lnot(exception),
+          IsZero64(logic, p.exception_valid_until));
   Implies(logic, logic.lnot(exception),
           EqualDigestConstant(logic, pub.exception_scope_id, Sentinel()));
 }
@@ -825,18 +1010,98 @@ void AssertAccessAndTransition(const Logic& logic,
     logic.assert_eq(p.clearance_count_after[index], sum);
     carry = logic.land(p.clearance_count_before[index], carry);
   }
+  (void)logic.assert0(carry);
   carry = logic.bit(1);
   for (size_t index = 0; index < 64; ++index) {
     const auto sum = logic.lxor(pub.sequence_before[index], carry);
     logic.assert_eq(p.sequence_after[index], sum);
     carry = logic.land(pub.sequence_before[index], carry);
   }
+  (void)logic.assert0(carry);
+}
+
+Digest ComputeExecutionContextId() {
+  std::vector<uint8_t> material =
+      Domain("BL/NATIVE-V3/EXECUTION-CONTEXT/v4");
+  const auto bytes = [](const char* value) {
+    return std::vector<uint8_t>(value, value + std::strlen(value));
+  };
+  const auto digest = [](const char* domain, const char* value) {
+    return ToVector(HashText(domain, value));
+  };
+  AppendContextPart(material, "mode", bytes("PRIVATE_ZK"));
+  AppendContextPart(material, "source_registry_snapshot",
+                    digest("BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v2",
+                           "snapshot-1"));
+  AppendContextPart(material, "source_profile",
+                    digest("BL/NATIVE-V3/SOURCE-PROFILE/v2",
+                           "synthetic-authoritative"));
+  AppendContextPart(material, "governance_snapshot",
+                    digest("BL/NATIVE-V3/GOVERNANCE-SNAPSHOT/v3",
+                           "governance-1"));
+  AppendContextPart(material, "automatic_control_set",
+                    digest("BL/NATIVE-V3/CONTROL-SET/v3",
+                           "CLEAR,HOLD,HUMAN_REVIEW,BLOCK,EXCEPTION_APPROVED"));
+  AppendContextPart(material, "settlement_domain",
+                    digest("BL/NATIVE-V3/SETTLEMENT-DOMAIN/v3",
+                           "official-state-rail"));
+  AppendContextPart(material, "evaluator_id",
+                    digest("BL/NATIVE-V3/EVALUATOR/v2",
+                           "minimal-clearance-evaluator"));
+  AppendContextPart(material, "schema_id",
+                    digest("BL/NATIVE-V3/SCHEMA/v2",
+                           "minimal-clearance-schema"));
+  AppendContextPart(material, "program_id",
+                    digest("BL/NATIVE-V3/PROGRAM/v2",
+                           "minimal-clearance-program"));
+  AppendContextPart(material, "policy_id",
+                    digest("BL/NATIVE-V3/POLICY/v2",
+                           "minimal-five-directive-policy"));
+  AppendContextPart(material, "proof_role", bytes(kProofRole));
+  AppendContextPart(material, "semantic_profile",
+                    bytes("MINIMAL_CLEARANCE_SEMANTIC_V6"));
+  std::vector<uint8_t> dimensions;
+  AppendU64(dimensions, 52057);
+  AppendU64(dimensions, 40721);
+  AppendU64(dimensions, 337);
+  AppendU64(dimensions, 24455436);
+  AppendContextPart(material, "native_dimensions", dimensions);
+  AppendContextPart(material, "state_layout_id", ToVector(StateLayoutId()));
+  std::vector<uint8_t> capacity;
+  AppendU32(capacity, kStateCapacity);
+  AppendContextPart(material, "capacity", capacity);
+  std::vector<uint8_t> profile_epoch;
+  AppendU64(profile_epoch, 7);
+  AppendContextPart(material, "profile_epoch", profile_epoch);
+  return HashBytes(material);
 }
 
 }  // namespace
 
+Digest ExecutionContextId() { return ComputeExecutionContextId(); }
+
+Digest StateLayoutIdForEvidence() { return StateLayoutId(); }
+
+Digest NoAuthorizedAmountCommitmentForEvidence() {
+  return NoAuthorizedAmountCommitment();
+}
+
+Digest ProposedPaymentCommitmentForEvidence(const Case& value) {
+  return ProposedPaymentCommitment(value);
+}
+
+Digest CanonicalStateIdForEvidence(const Digest& execution_context,
+                                   uint64_t sequence,
+                                   const std::vector<uint8_t>& state_bytes) {
+  return CanonicalStateId(execution_context, sequence, state_bytes);
+}
+
+std::vector<uint8_t> GenesisStateBytesForEvidence() {
+  return GenesisStateBytes();
+}
+
 std::vector<uint8_t> private_batch_commitment_input(const Case& value) {
-  std::vector<uint8_t> output = Domain("BL/NATIVE-V3/PRIVATE-BATCH/v2");
+  std::vector<uint8_t> output = Domain("BL/NATIVE-V3/PRIVATE-BATCH/v3");
   Append(output, value.statement.source_registry_snapshot);
   Append(output, value.statement.source_profile);
   Append(output, value.statement.subject_id);
@@ -846,6 +1111,15 @@ std::vector<uint8_t> private_batch_commitment_input(const Case& value) {
   Append(output, value.credential_id);
   Append(output, value.enrollment_id);
   Append(output, value.source_payload);
+  Append(output, value.source_nonce);
+  Append(output, value.statement.source_address);
+  Append(output, value.statement.source_key);
+  Append(output, value.statement.audit_address);
+  Append(output, value.statement.rule_id);
+  AppendU64(output, value.rule_effective_time);
+  AppendU64(output, value.event_time);
+  AppendU64(output, value.observation_time);
+  AppendU64(output, value.decision_time);
   AppendU8(output, value.statement.active);
   AppendU8(output, value.statement.complete);
   AppendU8(output, value.statement.authoritative_membership);
@@ -859,6 +1133,14 @@ std::vector<uint8_t> endpoint_input(const Case& value, size_t endpoint_index) {
   switch (endpoint_index) {
     case 0:
       return private_batch_commitment_input(value);
+    case 1: {
+      std::vector<uint8_t> input = Domain(kProposedPaymentDomain);
+      Append(input, value.statement.execution_context);
+      Append(input, value.statement.request_id);
+      AppendU64(input, value.amount_cents);
+      Append(input, value.nonce);
+      return input;
+    }
   }
   return {};
 }
@@ -867,6 +1149,8 @@ const char* endpoint_name(size_t endpoint_index) {
   switch (endpoint_index) {
     case 0:
       return "private_source_registry_commitment";
+    case 1:
+      return "proposed_payment_commitment";
   }
   return "unknown";
 }
@@ -875,7 +1159,7 @@ std::vector<uint8_t> state_commitment_bytes(const Case& value) {
   std::vector<uint8_t> output;
   output.reserve(kStateCommitmentBytes);
   output.insert(output.end(), {'B', 'L', 'S', 'T'});
-  AppendU8(output, 1);
+  AppendU8(output, kStateVersion);
   AppendU8(output, value.policy_result);
   AppendU8(output, value.effective_directive);
   AppendU8(output, value.statement.complete);
@@ -910,6 +1194,10 @@ std::vector<uint8_t> state_commitment_bytes(const Case& value) {
   AppendU64(output, value.clearance_count_before);
   AppendU64(output, value.clearance_count_after);
   AppendStateDigests(output, value);
+  const Digest proposed = ProposedPaymentCommitment(value);
+  Append(output, proposed);
+  proofs::check(output.size() == kStateCommitmentBytes,
+                "minimal clearance state commitment byte shape mismatch");
   return output;
 }
 
@@ -918,14 +1206,26 @@ void rebuild_state_binding(Case& value) {
   const auto state_bytes = state_commitment_bytes(value);
   std::copy(state_bytes.begin(), state_bytes.end(),
             value.statement.state_commitment_bytes.begin());
-  value.statement.state_after_id = HashParts(
-      Domain("BL/NATIVE-V3/MINIMAL-STATE-ID/v1"),
-      {std::vector<uint8_t>{1}, state_bytes});
+  value.statement.state_after_id = CanonicalStateId(
+      value.statement.execution_context, value.sequence_after, state_bytes);
+}
+
+void rebuild_transition_binding(Case& value) {
+  value.statement.request_id = RequestId(value);
+  value.statement.exception_scope_id = ScopeId(value);
+  value.statement.decision_id = DecisionId(value);
+  value.read_decision_id = value.statement.decision_id;
+  value.write_decision_id = value.statement.decision_id;
+  value.write_key = value.statement.decision_id;
+  value.after_audit_head = AfterAudit(value);
+  value.write_after = value.after_audit_head;
+  value.after_continuity_root = AfterRoot(value);
+  rebuild_state_binding(value);
 }
 
 std::vector<uint8_t> public_statement_bytes(const Case& value) {
   std::vector<uint8_t> output;
-  output.reserve(3000);
+  output.reserve(kPublicStatementBytes);
   AppendU8(output, value.statement.protocol_version);
   output.insert(output.end(), value.statement.proof_role.begin(),
                 value.statement.proof_role.end());
@@ -964,8 +1264,12 @@ std::vector<uint8_t> public_statement_bytes(const Case& value) {
   AppendU8(output, value.statement.complete);
   AppendU8(output, value.statement.authoritative_membership);
   AppendU8(output, value.statement.authoritative_absence);
+  output.insert(output.end(), value.statement.predecessor_state_bytes.begin(),
+                value.statement.predecessor_state_bytes.end());
   Append(output, std::vector<uint8_t>(value.statement.state_commitment_bytes.begin(),
                                      value.statement.state_commitment_bytes.end()));
+  proofs::check(output.size() == kPublicStatementBytes,
+                "minimal clearance public statement byte shape mismatch");
   return output;
 }
 
@@ -973,7 +1277,7 @@ DerivedIdentities derive_identities(const Case& value) {
   DerivedIdentities output;
   output.decision_id = DecisionId(value);
   output.join_id = HashParts(
-      Domain("BL/NATIVE-V3/MINIMAL-DECISION-ACCESS-JOIN/v1"),
+      Domain("BL/NATIVE-V3/MINIMAL-DECISION-ACCESS-JOIN/v2"),
       {ToVector(value.statement.decision_id), ToVector(value.read_decision_id),
        ToVector(value.read_address), ToVector(value.read_key),
        ToVector(value.read_before), ToVector(value.read_after),
@@ -982,19 +1286,21 @@ DerivedIdentities derive_identities(const Case& value) {
        ToVector(value.write_after), ToVector(value.statement.state_before_id),
        ToVector(value.statement.state_after_id)});
   output.receipt_id = HashParts(
-      Domain("BL/NATIVE-V3/MINIMAL-RECEIPT-ID/v1"),
+      Domain("BL/NATIVE-V3/MINIMAL-RECEIPT-ID/v2"),
       {ToVector(value.statement.automatic_control_set),
        ToVector(value.statement.decision_id), ToVector(output.join_id),
        ToVector(value.statement.state_before_id),
        ToVector(value.statement.state_after_id),
        std::vector<uint8_t>(value.statement.state_commitment_bytes.begin(),
-                            value.statement.state_commitment_bytes.end())});
+                            value.statement.state_commitment_bytes.end()),
+       ToVector(AuthorizedPaymentCommitment(value))});
   output.settlement_id = HashParts(
-      Domain("BL/NATIVE-V3/MINIMAL-SETTLEMENT-REFERENCE/v1"),
+      Domain("BL/NATIVE-V3/MINIMAL-SETTLEMENT-REFERENCE/v2"),
       {ToVector(value.statement.settlement_domain),
        std::vector<uint8_t>{value.effective_directive},
        ToVector(value.statement.decision_id),
-       ToVector(value.statement.state_after_id)});
+       ToVector(value.statement.state_after_id),
+       ToVector(AuthorizedPaymentCommitment(value))});
   return output;
 }
 
@@ -1002,6 +1308,22 @@ DerivedIdentities derive_identities(const Case& value) {
 Fixture make_fixture() {
   Fixture fixture;
   const NativeV3Fixture base = make_native_v3_fixture();
+  const Digest execution_context = ExecutionContextId();
+  std::array<uint8_t, 5> policies = {kPolicyPass, kPolicyMissing,
+                                     kPolicyAmbiguous, kPolicyFail, kPolicyFail};
+  std::array<uint8_t, 5> directives = {kClear, kHold, kHumanReview, kBlock,
+                                       kExceptionApproved};
+  std::array<uint8_t, 5> completes = {1, 1, 0, 1, 1};
+  std::array<uint8_t, 5> memberships = {1, 0, 0, 1, 1};
+  std::array<uint8_t, 5> absences = {0, 1, 0, 0, 0};
+  std::array<uint8_t, 5> actives = {1, 0, 0, 0, 0};
+  const char* labels[] = {"clear", "hold", "human-review", "block",
+                          "exception-approved"};
+  std::vector<uint8_t> previous_state = GenesisStateBytes();
+  Digest previous_audit{};
+  Digest previous_root{};
+  uint8_t previous_marker = 0;
+  uint64_t previous_count = 0;
   for (size_t index = 0; index < fixture.cases.size(); ++index) {
     const RelationCase& source = base.cases[index];
     Case& value = fixture.cases[index];
@@ -1009,10 +1331,10 @@ Fixture make_fixture() {
     value.credential_id = source.credential_id;
     value.enrollment_id = source.enrollment_id;
     value.source_payload = source.source_payload;
-    value.policy_result = source.policy_result;
-    value.effective_directive = source.effective_directive;
-    value.exception_present = source.exception_present;
-    value.exception_authorized = source.exception_present;
+    value.policy_result = policies[index];
+    value.effective_directive = directives[index];
+    value.exception_present = index == 4 ? 1 : 0;
+    value.exception_authorized = value.exception_present;
     value.economic_mutation = 0;
     value.rule_effective_time = source.rule_effective_time;
     value.event_time = source.event_time;
@@ -1020,8 +1342,8 @@ Fixture make_fixture() {
     value.decision_time = source.decision_time;
     value.read_time = source.read_time;
     value.write_time = source.write_time;
-    value.exception_valid_from = source.exception_present ? 6998 : 0;
-    value.exception_valid_until = source.exception_present ? 7003 : 0;
+    value.exception_valid_from = value.exception_present ? 6998 : 0;
+    value.exception_valid_until = value.exception_present ? 7003 : 0;
     value.decision_index = source.decision_index;
     value.decision_count = source.decision_count;
     value.read_access_index = source.read_access_index;
@@ -1031,64 +1353,84 @@ Fixture make_fixture() {
     value.write_decision_index = source.write_decision_index;
     value.read_mode = source.read_mode;
     value.write_mode = source.write_mode;
-    value.clearance_marker_before = 0;
-    value.clearance_marker_after =
+    value.clearance_marker_before = previous_marker;
+    const uint8_t clearance_transition =
         (value.effective_directive == kClear ||
          value.effective_directive == kExceptionApproved)
             ? 1
             : 0;
-    value.clearance_count_before = 0;
-    value.clearance_count_after = value.clearance_marker_after;
-    value.before_audit_head = source.before_audit_head;
-    value.before_continuity_root = source.before_continuity_root;
-
+    value.clearance_marker_after =
+        static_cast<uint8_t>(previous_marker || clearance_transition);
+    value.clearance_count_before = previous_count;
+    value.clearance_count_after = previous_count + clearance_transition;
+    value.before_audit_head = previous_audit;
+    value.before_continuity_root = previous_root;
+    value.amount_cents = 12345 + static_cast<uint64_t>(index) * 1000;
+    value.nonce.fill(static_cast<uint8_t>(0xa1 + index));
     value.statement.protocol_version = 3;
     FillRole(value.statement.proof_role);
     value.statement.proof_suite.fill(0);
-    value.statement.execution_context =
-        HashText("BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance");
+    value.statement.execution_context = execution_context;
     value.statement.source_registry_snapshot =
-        HashText("BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v1", "snapshot-1");
+        HashText("BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v2", "snapshot-1");
     value.statement.source_profile =
-        HashText("BL/NATIVE-V3/SOURCE-PROFILE/v1", "synthetic-authoritative");
+        HashText("BL/NATIVE-V3/SOURCE-PROFILE/v2", "synthetic-authoritative");
     value.statement.governance_snapshot =
-        HashText("BL/NATIVE-V3/GOVERNANCE-SNAPSHOT/v2", "governance-1");
+        HashText("BL/NATIVE-V3/GOVERNANCE-SNAPSHOT/v3", "governance-1");
     value.statement.automatic_control_set =
-        HashText("BL/NATIVE-V3/CONTROL-SET/v2",
+        HashText("BL/NATIVE-V3/CONTROL-SET/v3",
                  "CLEAR,HOLD,HUMAN_REVIEW,BLOCK,EXCEPTION_APPROVED");
     value.statement.settlement_domain =
-        HashText("BL/NATIVE-V3/SETTLEMENT-DOMAIN/v2", "official-state-rail");
+        HashText("BL/NATIVE-V3/SETTLEMENT-DOMAIN/v3", "official-state-rail");
     value.statement.evaluator_id =
-        HashText("BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator");
+        HashText("BL/NATIVE-V3/EVALUATOR/v2", "minimal-clearance-evaluator");
     value.statement.schema_id =
-        HashText("BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema");
+        HashText("BL/NATIVE-V3/SCHEMA/v2", "minimal-clearance-schema");
     value.statement.program_id =
-        HashText("BL/NATIVE-V3/PROGRAM/v1", "minimal-clearance-program");
+        HashText("BL/NATIVE-V3/PROGRAM/v2", "minimal-clearance-program");
     value.statement.policy_id =
-        HashText("BL/NATIVE-V3/POLICY/v1", "minimal-five-directive-policy");
-    value.statement.subject_id = source.credential_id;
+        HashText("BL/NATIVE-V3/POLICY/v2", "minimal-five-directive-policy");
+    value.statement.subject_id = HashParts(
+        Domain("BL/NATIVE-V3/OPERATION-SUBJECT/v1"),
+        {ToVector(execution_context), ToVector(source.attempt_id),
+         U64Bytes(index)});
     value.statement.attempt_id = source.attempt_id;
-    value.statement.active = source.active_status;
-    value.statement.complete = source.complete;
-    value.statement.authoritative_membership = source.authoritative_membership;
-    value.statement.authoritative_absence = source.authoritative_absence;
+    value.source_nonce = HashParts(
+        Domain("BL/NATIVE-V3/SOURCE-NONCE/v1"),
+        {ToVector(execution_context), ToVector(source.attempt_id),
+         U64Bytes(index)});
+    value.statement.active = actives[index];
+    value.statement.complete = completes[index];
+    value.statement.authoritative_membership = memberships[index];
+    value.statement.authoritative_absence = absences[index];
     value.statement.epoch = 7;
-    value.statement.sequence_before = 11;
-    value.statement.state_before_id = BeforeStateId(value);
+    value.statement.sequence_before = index;
+    std::copy(previous_state.begin(), previous_state.end(),
+              value.statement.predecessor_state_bytes.begin());
+    value.statement.state_before_id = CanonicalStateId(
+        value.statement.execution_context, value.statement.sequence_before,
+        previous_state);
     value.statement.source_root_id = HashBytes(SourceRootInput(value));
     value.statement.completeness_id = HashBytes(CompletenessInput(value));
-    proofs::check(value.statement.source_root_id == source.source_root,
-                  "minimal clearance source-root fixture mismatch");
-    proofs::check(value.statement.completeness_id == source.completeness_id,
-                  "minimal clearance completeness fixture mismatch");
-    value.statement.source_address = source.read_address;
-    value.statement.source_key = source.read_key;
-    value.statement.audit_address = source.write_address;
-    value.statement.exception_id = source.exception_id;
+    value.statement.source_address = HashParts(
+        Domain("BL/NATIVE-V3/STATE-ADDRESS/v2"),
+        {std::vector<uint8_t>{'s', 'o', 'u', 'r', 'c', 'e'},
+         ToVector(value.statement.subject_id), ToVector(value.statement.attempt_id)});
+    value.statement.source_key = HashParts(
+        Domain("BL/NATIVE-V3/SUBJECT-KEY/v2"),
+        {ToVector(value.statement.subject_id), ToVector(value.statement.attempt_id)});
+    value.statement.audit_address = HashParts(
+        Domain("BL/NATIVE-V3/STATE-ADDRESS/v2"),
+        {std::vector<uint8_t>{'a', 'u', 'd', 'i', 't'},
+         ToVector(value.statement.subject_id), ToVector(value.statement.attempt_id)});
+    value.statement.exception_id = value.exception_present
+                                      ? HashText("BL/NATIVE-V3/EXCEPTION-ID/v2",
+                                                 labels[index])
+                                      : Sentinel();
     value.statement.rule_id = source.rule_id;
     value.sequence_after = value.statement.sequence_before + 1;
-    value.statement.exception_scope_id = ScopeId(value);
     value.statement.request_id = RequestId(value);
+    value.statement.exception_scope_id = ScopeId(value);
     value.statement.decision_id = DecisionId(value);
     value.read_decision_id = value.statement.decision_id;
     value.write_decision_id = value.statement.decision_id;
@@ -1105,6 +1447,12 @@ Fixture make_fixture() {
     value.statement.private_batch_commitment =
         HashBytes(private_batch_commitment_input(value));
     rebuild_state_binding(value);
+    const auto current_state = state_commitment_bytes(value);
+    std::copy(current_state.begin(), current_state.end(), previous_state.begin());
+    previous_audit = value.after_audit_head;
+    previous_root = value.after_continuity_root;
+    previous_marker = value.clearance_marker_after;
+    previous_count = value.clearance_count_after;
   }
   return fixture;
 }
@@ -1122,6 +1470,7 @@ void AssertRelation(const Logic& logic, const PublicWires<Logic>& pub,
   AssertDirective(logic, pub, p);
   AssertIndicesAndTimes(logic, pub, p);
   AssertAccessAndTransition(logic, pub, p);
+  AssertPredecessorProjection(logic, pub, p);
   AssertStateCommitment(logic, pub, p);
 }
 
@@ -1147,6 +1496,9 @@ std::unique_ptr<proofs::Circuit<RelationField>> build_circuit_stage(
   AssertRelation(logic, *pub, *priv);
   if (endpoint_count >= 1) {
     AssertPrivateBatchCommitment(logic, *pub, *priv, sha3);
+  }
+  if (endpoint_count >= 2) {
+    AssertProposedPaymentCommitment(logic, *pub, *priv, sha3);
   }
   std::fprintf(stderr, "MINIMAL_CLEARANCE_BUILD phase=mkcircuit\n");
   auto circuit = builder->mkcircuit(1);
@@ -1183,6 +1535,7 @@ void PushPrivate(proofs::DenseFiller<RelationField>& filler, const Case& value,
   PushDigest<Logic>(filler, value.credential_id, field);
   PushDigest<Logic>(filler, value.enrollment_id, field);
   PushDigest<Logic>(filler, value.source_payload, field);
+  PushDigest<Logic>(filler, value.source_nonce, field);
   filler.push_back(value.statement.active, 8, field);
   filler.push_back(value.statement.complete, 8, field);
   filler.push_back(value.statement.authoritative_membership, 8, field);
@@ -1228,6 +1581,8 @@ void PushPrivate(proofs::DenseFiller<RelationField>& filler, const Case& value,
   PushDigest<Logic>(filler, value.write_key, field);
   PushDigest<Logic>(filler, value.write_before, field);
   PushDigest<Logic>(filler, value.write_after, field);
+  filler.push_back(value.amount_cents, 64, field);
+  PushDigest<Logic>(filler, value.nonce, field);
 }
 
 void fill_witness(const Case& value,
@@ -1247,51 +1602,6 @@ bool evaluate_case(const Case& value, std::string& reason) {
     reason = text;
     return false;
   };
-  const Fixture registry = make_fixture();
-  const Case* selected = nullptr;
-  for (const Case& candidate : registry.cases) {
-    if (candidate.statement.attempt_id == value.statement.attempt_id) {
-      selected = &candidate;
-      break;
-    }
-  }
-  if (selected == nullptr) return fail("registry.attempt");
-  const auto same_registry = [&](const PublicStatement& left,
-                                 const PublicStatement& right) {
-    return left.protocol_version == right.protocol_version &&
-           left.proof_role == right.proof_role &&
-           left.proof_suite == right.proof_suite &&
-           left.execution_context == right.execution_context &&
-           left.source_registry_snapshot == right.source_registry_snapshot &&
-           left.source_profile == right.source_profile &&
-           left.governance_snapshot == right.governance_snapshot &&
-           left.automatic_control_set == right.automatic_control_set &&
-           left.settlement_domain == right.settlement_domain &&
-           left.evaluator_id == right.evaluator_id &&
-           left.schema_id == right.schema_id &&
-           left.program_id == right.program_id &&
-           left.policy_id == right.policy_id &&
-           left.subject_id == right.subject_id &&
-           left.attempt_id == right.attempt_id &&
-           left.request_id == right.request_id &&
-           left.source_root_id == right.source_root_id &&
-           left.completeness_id == right.completeness_id &&
-           left.source_address == right.source_address &&
-           left.source_key == right.source_key &&
-           left.audit_address == right.audit_address &&
-           left.exception_id == right.exception_id &&
-           left.exception_scope_id == right.exception_scope_id &&
-           left.rule_id == right.rule_id &&
-           left.decision_id == right.decision_id &&
-           left.epoch == right.epoch &&
-           left.sequence_before == right.sequence_before;
-  };
-  if (!same_registry(value.statement, selected->statement)) {
-    return fail("registry.binding");
-  }
-  if (value.statement.state_before_id != selected->statement.state_before_id) {
-    return fail("state.before-id");
-  }
   if (value.statement.protocol_version != 3) return fail("statement.protocol");
   ProofRole expected_role{};
   FillRole(expected_role);
@@ -1368,7 +1678,9 @@ bool evaluate_case(const Case& value, std::string& reason) {
         value.decision_time > value.exception_valid_until) {
       return fail("exception.interval");
     }
-  } else if (value.statement.exception_id != Sentinel() ||
+  } else if (value.exception_valid_from != 0 ||
+             value.exception_valid_until != 0 ||
+             value.statement.exception_id != Sentinel() ||
              value.statement.exception_scope_id != Sentinel() ||
              value.exception_authorized != 0) {
     return fail("exception.sentinel");
@@ -1386,18 +1698,28 @@ bool evaluate_case(const Case& value, std::string& reason) {
     return fail("access.binding");
   }
   const uint8_t clear_transition = (clear || exception) ? 1 : 0;
-  if (value.sequence_after != value.statement.sequence_before + 1) {
+  if (value.statement.sequence_before == UINT64_MAX ||
+      value.sequence_after != value.statement.sequence_before + 1) {
     return fail("state.sequence-after");
   }
-  if (value.statement.request_id != RequestId(value) ||
-      value.statement.exception_scope_id != ScopeId(value) ||
-      value.statement.decision_id != DecisionId(value) ||
-      value.after_audit_head != AfterAudit(value) ||
-      value.after_continuity_root != AfterRoot(value)) {
-    return fail("state.derived-binding");
+  if (value.statement.request_id != RequestId(value)) {
+    return fail("state.request-id");
+  }
+  if (value.statement.exception_scope_id != ScopeId(value)) {
+    return fail("state.exception-scope");
+  }
+  if (value.statement.decision_id != DecisionId(value)) {
+    return fail("state.decision-id");
+  }
+  if (value.after_audit_head != AfterAudit(value)) {
+    return fail("state.audit-head");
+  }
+  if (value.after_continuity_root != AfterRoot(value)) {
+    return fail("state.continuity-root");
   }
   if (value.clearance_marker_after !=
           static_cast<uint8_t>(value.clearance_marker_before || clear_transition) ||
+      (clear_transition && value.clearance_count_before == UINT64_MAX) ||
       value.clearance_count_after !=
           value.clearance_count_before + clear_transition) {
     return fail("state.clearance-transition");
@@ -1406,6 +1728,44 @@ bool evaluate_case(const Case& value, std::string& reason) {
       value.statement.private_batch_commitment) {
     return fail("private-batch.commitment");
   }
+  if (value.amount_cents > UINT64_MAX) return fail("amount.encoding");
+  const Digest proposed = ProposedPaymentCommitment(value);
+  const Digest authorized = AuthorizedPaymentCommitment(value);
+  if (std::all_of(proposed.begin(), proposed.end(),
+                  [](uint8_t byte) { return byte == 0; })) {
+    return fail("amount.commitment-zero");
+  }
+  if (!std::equal(proposed.begin(), proposed.end(),
+                  value.statement.state_commitment_bytes.begin() +
+                      kStateHeaderAndScalars +
+                      kStateDigestCount * kDigestBytes)) {
+    return fail("amount.commitment");
+  }
+  const auto& predecessor = value.statement.predecessor_state_bytes;
+  if (predecessor[0] != 'B' || predecessor[1] != 'L' ||
+      predecessor[2] != 'S' || predecessor[3] != 'T' ||
+      predecessor[4] != kStateVersion ||
+      ReadStateU64(predecessor, 16) != value.statement.epoch ||
+      ReadStateU64(predecessor, 96) != value.statement.sequence_before ||
+      predecessor[15] != value.clearance_marker_before ||
+      ReadStateU64(predecessor, 142) != value.clearance_count_before ||
+      !StateDigestEqual(predecessor, kStateHeaderAndScalars + 10 * kDigestBytes,
+                        value.before_audit_head) ||
+      !StateDigestEqual(predecessor, kStateHeaderAndScalars + 12 * kDigestBytes,
+                        value.before_continuity_root)) {
+    return fail("state.predecessor-projection");
+  }
+  const auto genesis = GenesisStateBytes();
+  if (value.statement.sequence_before == 0 &&
+      !std::equal(predecessor.begin(), predecessor.end(), genesis.begin())) {
+    return fail("state.genesis");
+  }
+  if (value.statement.state_before_id !=
+      CanonicalStateId(value.statement.execution_context,
+                       value.statement.sequence_before,
+                       std::vector<uint8_t>(predecessor.begin(), predecessor.end()))) {
+    return fail("state.before-id");
+  }
   const std::vector<uint8_t> expected_state = state_commitment_bytes(value);
   if (!std::equal(expected_state.begin(), expected_state.end(),
                   value.statement.state_commitment_bytes.begin(),
@@ -1413,9 +1773,12 @@ bool evaluate_case(const Case& value, std::string& reason) {
     return fail("state.commitment-bytes");
   }
   const std::vector<uint8_t> state = state_commitment_bytes(value);
-  if (HashParts(Domain("BL/NATIVE-V3/MINIMAL-STATE-ID/v1"),
-                {std::vector<uint8_t>{1}, state}) != value.statement.state_after_id) {
+  if (CanonicalStateId(value.statement.execution_context, value.sequence_after,
+                       state) != value.statement.state_after_id) {
     return fail("state.ids");
+  }
+  if (authorized != AuthorizedPaymentCommitment(value)) {
+    return fail("authorized-commitment");
   }
   const DerivedIdentities ids = derive_identities(value);
   if (ids.decision_id != value.statement.decision_id) return fail("decision.id");

@@ -11,22 +11,74 @@ if(NOT EXISTS "${LONGFELLOW_SOURCE}/lib/zk/zk_prover.h")
 endif()
 
 # Source provenance is generated from the pinned manifest and the actual
-# patched source files. Keeping it in a generated header avoids a second
-# hand-maintained copy of source identities in the reporter.
+# patched source files. The manifest also defines the only allowed patched
+# worktree bytes; every path, digest, and Git state set is checked before any
+# source header is consumed by a target.
 set(NATIVE_V3_UPSTREAM_MANIFEST
     "${CMAKE_CURRENT_SOURCE_DIR}/upstream_manifest.json")
 if(NOT EXISTS "${NATIVE_V3_UPSTREAM_MANIFEST}")
   message(FATAL_ERROR "upstream manifest missing")
 endif()
 file(READ "${NATIVE_V3_UPSTREAM_MANIFEST}" NATIVE_V3_MANIFEST_JSON)
-string(JSON NATIVE_V3_MANIFEST_REMOTE GET "${NATIVE_V3_MANIFEST_JSON}"
-       upstream remote)
-string(JSON NATIVE_V3_MANIFEST_COMMIT GET "${NATIVE_V3_MANIFEST_JSON}"
-       upstream commit)
-string(JSON NATIVE_V3_MANIFEST_TREE GET "${NATIVE_V3_MANIFEST_JSON}"
-       upstream tree)
-string(JSON NATIVE_V3_MANIFEST_SHA3_PATCH GET "${NATIVE_V3_MANIFEST_JSON}"
-       sha3_512 patch_sha256)
+
+function(NATIVE_V3_JSON_GET OUTPUT)
+  string(JSON _value ERROR_VARIABLE _error GET
+         "${NATIVE_V3_MANIFEST_JSON}" ${ARGN})
+  if(NOT "${_error}" STREQUAL "NOTFOUND")
+    message(FATAL_ERROR "native-v3 manifest JSON value missing: ${ARGN}")
+  endif()
+  set(${OUTPUT} "${_value}" PARENT_SCOPE)
+endfunction()
+
+function(NATIVE_V3_JSON_TYPE OUTPUT)
+  string(JSON _value ERROR_VARIABLE _error TYPE
+         "${NATIVE_V3_MANIFEST_JSON}" ${ARGN})
+  if(NOT "${_error}" STREQUAL "NOTFOUND")
+    message(FATAL_ERROR "native-v3 manifest JSON type missing: ${ARGN}")
+  endif()
+  set(${OUTPUT} "${_value}" PARENT_SCOPE)
+endfunction()
+
+function(NATIVE_V3_JSON_LENGTH OUTPUT)
+  string(JSON _value ERROR_VARIABLE _error LENGTH
+         "${NATIVE_V3_MANIFEST_JSON}" ${ARGN})
+  if(NOT "${_error}" STREQUAL "NOTFOUND")
+    message(FATAL_ERROR "native-v3 manifest JSON array missing: ${ARGN}")
+  endif()
+  set(${OUTPUT} "${_value}" PARENT_SCOPE)
+endfunction()
+
+function(NATIVE_V3_GIT_LIST OUTPUT)
+  execute_process(
+    COMMAND git "-c" "safe.directory=${LONGFELLOW_SOURCE}"
+            "-C" "${LONGFELLOW_SOURCE}" ${ARGN}
+    OUTPUT_VARIABLE _raw
+    ERROR_VARIABLE _error
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _result)
+  if(NOT "${_result}" STREQUAL "0")
+    message(FATAL_ERROR "native-v3 patched-source Git query failed: ${ARGN}")
+  endif()
+  if("${_raw}" STREQUAL "")
+    set(_list)
+  else()
+    string(REPLACE "\r\n" ";" _list "${_raw}")
+    string(REPLACE "\n" ";" _list "${_list}")
+    string(REPLACE "\r" ";" _list "${_list}")
+    list(FILTER _list EXCLUDE REGEX "^$")
+  endif()
+  set(${OUTPUT} "${_list}" PARENT_SCOPE)
+endfunction()
+
+NATIVE_V3_JSON_TYPE(_manifest_version_type manifest_version)
+NATIVE_V3_JSON_GET(_manifest_version manifest_version)
+if(NOT "${_manifest_version_type}" STREQUAL "NUMBER" OR
+   NOT "${_manifest_version}" STREQUAL "2")
+  message(FATAL_ERROR "native-v3 manifest version mismatch")
+endif()
+NATIVE_V3_JSON_GET(NATIVE_V3_MANIFEST_REMOTE upstream remote)
+NATIVE_V3_JSON_GET(NATIVE_V3_MANIFEST_COMMIT upstream commit)
+NATIVE_V3_JSON_GET(NATIVE_V3_MANIFEST_TREE upstream tree)
 if(NOT NATIVE_V3_MANIFEST_REMOTE STREQUAL
        "https://github.com/google/longfellow-zk.git" OR
    NOT NATIVE_V3_MANIFEST_COMMIT STREQUAL
@@ -36,18 +88,163 @@ if(NOT NATIVE_V3_MANIFEST_REMOTE STREQUAL
   message(FATAL_ERROR "pinned upstream manifest identity mismatch")
 endif()
 
-set(NATIVE_V3_SHA3_PATCH
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches/sha3_512_circuit.patch")
-set(NATIVE_V3_QUAD_PATCH
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches/quad_builder_uint32_bound.patch")
-file(SHA256 "${NATIVE_V3_SHA3_PATCH}" NATIVE_V3_SHA3_PATCH_SHA256)
-file(SHA256 "${NATIVE_V3_QUAD_PATCH}" NATIVE_V3_QUAD_PATCH_SHA256)
-string(TOLOWER "${NATIVE_V3_MANIFEST_SHA3_PATCH}"
-       NATIVE_V3_MANIFEST_SHA3_PATCH_LOWER)
-if(NOT NATIVE_V3_SHA3_PATCH_SHA256 STREQUAL
-       NATIVE_V3_MANIFEST_SHA3_PATCH_LOWER)
-  message(FATAL_ERROR "SHA3 patch identity mismatch")
+set(_expected_patch_paths
+    "patches/sha3_512_circuit.patch"
+    "patches/quad_builder_uint32_bound.patch")
+NATIVE_V3_JSON_TYPE(_patch_files_type patched_source_provenance patch_files)
+NATIVE_V3_JSON_LENGTH(_patch_file_count patched_source_provenance patch_files)
+if(NOT "${_patch_files_type}" STREQUAL "ARRAY" OR
+   NOT "${_patch_file_count}" STREQUAL "2")
+  message(FATAL_ERROR "native-v3 patch manifest shape mismatch")
 endif()
+set(_manifest_patch_paths)
+set(_manifest_patch_hashes)
+foreach(_index RANGE 0 1)
+  NATIVE_V3_JSON_TYPE(_path_type patched_source_provenance patch_files
+                      ${_index} path)
+  NATIVE_V3_JSON_TYPE(_hash_type patched_source_provenance patch_files
+                      ${_index} sha256)
+  NATIVE_V3_JSON_GET(_path patched_source_provenance patch_files ${_index} path)
+  NATIVE_V3_JSON_GET(_hash patched_source_provenance patch_files ${_index} sha256)
+  if(NOT "${_path_type}" STREQUAL "STRING" OR
+     NOT "${_hash_type}" STREQUAL "STRING")
+    message(FATAL_ERROR "native-v3 patch manifest entry type mismatch")
+  endif()
+  list(APPEND _manifest_patch_paths "${_path}")
+  list(APPEND _manifest_patch_hashes "${_hash}")
+endforeach()
+if(NOT "${_manifest_patch_paths}" STREQUAL "${_expected_patch_paths}")
+  message(FATAL_ERROR "native-v3 patch path allowlist mismatch")
+endif()
+NATIVE_V3_JSON_GET(_legacy_sha3_patch_path sha3_512 patch)
+NATIVE_V3_JSON_GET(_legacy_sha3_patch_hash sha3_512 patch_sha256)
+list(GET _manifest_patch_paths 0 _expected_sha3_patch_path)
+if(NOT "${_legacy_sha3_patch_path}" STREQUAL
+       "${_expected_sha3_patch_path}")
+  message(FATAL_ERROR "native-v3 SHA3 patch path binding mismatch")
+endif()
+list(GET _manifest_patch_hashes 0 _expected_sha3_patch_hash)
+if(NOT "${_legacy_sha3_patch_hash}" STREQUAL
+       "${_expected_sha3_patch_hash}")
+  message(FATAL_ERROR "native-v3 SHA3 patch digest binding mismatch")
+endif()
+foreach(_index RANGE 0 1)
+  list(GET _manifest_patch_paths ${_index} _patch_path)
+  list(GET _manifest_patch_hashes ${_index} _expected_hash)
+  string(LENGTH "${_expected_hash}" _hash_length)
+  if(NOT "${_hash_length}" STREQUAL "64")
+    message(FATAL_ERROR "native-v3 patch digest length mismatch")
+  endif()
+  file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${_patch_path}" _observed_hash)
+  string(TOLOWER "${_expected_hash}" _expected_hash_lower)
+  string(TOLOWER "${_observed_hash}" _observed_hash_lower)
+  if(NOT "${_expected_hash_lower}" STREQUAL "${_observed_hash_lower}")
+    message(FATAL_ERROR "native-v3 patch digest mismatch: ${_patch_path}")
+  endif()
+  if(_index EQUAL 0)
+    set(NATIVE_V3_SHA3_PATCH
+        "${CMAKE_CURRENT_SOURCE_DIR}/${_patch_path}")
+    set(NATIVE_V3_SHA3_PATCH_SHA256 "${_observed_hash}")
+  else()
+    set(NATIVE_V3_QUAD_PATCH
+        "${CMAKE_CURRENT_SOURCE_DIR}/${_patch_path}")
+    set(NATIVE_V3_QUAD_PATCH_SHA256 "${_observed_hash}")
+  endif()
+endforeach()
+set(NATIVE_V3_MANIFEST_SHA3_PATCH "${_legacy_sha3_patch_hash}")
+
+set(_expected_unstaged_paths
+    "lib/circuits/tests/sha3/sha3_circuit.h"
+    "lib/sumcheck/quad_builder.h")
+NATIVE_V3_JSON_TYPE(_unstaged_type patched_source_provenance
+                    unstaged_diff_paths)
+NATIVE_V3_JSON_LENGTH(_unstaged_count patched_source_provenance
+                      unstaged_diff_paths)
+if(NOT "${_unstaged_type}" STREQUAL "ARRAY" OR
+   NOT "${_unstaged_count}" STREQUAL "2")
+  message(FATAL_ERROR "native-v3 unstaged allowlist shape mismatch")
+endif()
+set(_manifest_unstaged_paths)
+foreach(_index RANGE 0 1)
+  NATIVE_V3_JSON_GET(_path patched_source_provenance unstaged_diff_paths
+                     ${_index})
+  list(APPEND _manifest_unstaged_paths "${_path}")
+endforeach()
+if(NOT "${_manifest_unstaged_paths}" STREQUAL
+       "${_expected_unstaged_paths}")
+  message(FATAL_ERROR "native-v3 unstaged path allowlist mismatch")
+endif()
+
+foreach(_empty_field IN ITEMS staged_paths untracked_paths)
+  NATIVE_V3_JSON_TYPE(_empty_type patched_source_provenance ${_empty_field})
+  NATIVE_V3_JSON_LENGTH(_empty_count patched_source_provenance ${_empty_field})
+  if(NOT "${_empty_type}" STREQUAL "ARRAY" OR
+     NOT "${_empty_count}" STREQUAL "0")
+    message(FATAL_ERROR "native-v3 ${_empty_field} manifest must be empty")
+  endif()
+endforeach()
+
+NATIVE_V3_GIT_LIST(_actual_unstaged diff --name-only HEAD --)
+NATIVE_V3_GIT_LIST(_actual_staged diff --cached --name-only --)
+NATIVE_V3_GIT_LIST(_actual_untracked ls-files --others --exclude-standard
+                   --full-name)
+if(NOT "${_actual_unstaged}" STREQUAL "${_expected_unstaged_paths}" OR
+   NOT "${_actual_staged}" STREQUAL "" OR
+   NOT "${_actual_untracked}" STREQUAL "")
+  message(FATAL_ERROR "patched-source Git state is outside the manifest")
+endif()
+
+set(_expected_source_paths
+    "lib/circuits/tests/sha3/sha3_circuit.h"
+    "lib/circuits/tests/sha3/sha3_slicing.h"
+    "lib/sumcheck/quad_builder.h")
+NATIVE_V3_JSON_TYPE(_source_files_type patched_source_provenance
+                    consumed_source_files)
+NATIVE_V3_JSON_LENGTH(_source_file_count patched_source_provenance
+                      consumed_source_files)
+if(NOT "${_source_files_type}" STREQUAL "ARRAY" OR
+   NOT "${_source_file_count}" STREQUAL "3")
+  message(FATAL_ERROR "native-v3 consumed-source manifest shape mismatch")
+endif()
+set(_manifest_source_paths)
+set(_manifest_source_hashes)
+foreach(_index RANGE 0 2)
+  NATIVE_V3_JSON_TYPE(_path_type patched_source_provenance
+                      consumed_source_files ${_index} path)
+  NATIVE_V3_JSON_TYPE(_hash_type patched_source_provenance
+                      consumed_source_files ${_index} sha256)
+  NATIVE_V3_JSON_GET(_path patched_source_provenance consumed_source_files
+                     ${_index} path)
+  NATIVE_V3_JSON_GET(_hash patched_source_provenance consumed_source_files
+                     ${_index} sha256)
+  if(NOT "${_path_type}" STREQUAL "STRING" OR
+     NOT "${_hash_type}" STREQUAL "STRING")
+    message(FATAL_ERROR "native-v3 consumed-source manifest entry type mismatch")
+  endif()
+  list(APPEND _manifest_source_paths "${_path}")
+  list(APPEND _manifest_source_hashes "${_hash}")
+endforeach()
+if(NOT "${_manifest_source_paths}" STREQUAL "${_expected_source_paths}")
+  message(FATAL_ERROR "native-v3 consumed-source path allowlist mismatch")
+endif()
+foreach(_index RANGE 0 2)
+  list(GET _manifest_source_paths ${_index} _source_path)
+  list(GET _manifest_source_hashes ${_index} _expected_hash)
+  string(LENGTH "${_expected_hash}" _hash_length)
+  if(NOT "${_hash_length}" STREQUAL "64")
+    message(FATAL_ERROR "native-v3 consumed-source digest length mismatch")
+  endif()
+  set(_source_file "${LONGFELLOW_SOURCE}/${_source_path}")
+  if(NOT EXISTS "${_source_file}")
+    message(FATAL_ERROR "patched source file missing: ${_source_path}")
+  endif()
+  file(SHA256 "${_source_file}" _observed_hash)
+  string(TOLOWER "${_expected_hash}" _expected_hash_lower)
+  string(TOLOWER "${_observed_hash}" _observed_hash_lower)
+  if(NOT "${_expected_hash_lower}" STREQUAL "${_observed_hash_lower}")
+    message(FATAL_ERROR "native-v3 consumed-source digest mismatch: ${_source_path}")
+  endif()
+endforeach()
 
 execute_process(
   COMMAND git -c safe.directory=${LONGFELLOW_SOURCE} -C ${LONGFELLOW_SOURCE}

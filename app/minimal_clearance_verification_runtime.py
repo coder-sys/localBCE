@@ -30,7 +30,7 @@ from app.minimal_clearance_verification_queue import (
     _is_reparse,
     _owned_directory,
 )
-from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, derive_installation_id
+from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, INSTALLATION_ID
 
 
 class VerificationRuntimeError(RuntimeError):
@@ -228,7 +228,7 @@ class MinimalClearanceVerificationRuntime:
             if not workspace_parent.exists(): workspace_parent.mkdir()
             database = root / "queue.sqlite"
             executable = profile.executable
-            config = QueueConfig.from_profile(profile, queue_id="minimal-clearance-queue-v4", capacity=512, artifact_bytes_cap=512 * 1024 * 1024, installation_id=derive_installation_id(root), installation_epoch=1)
+            config = QueueConfig.from_profile(profile, queue_id="minimal-clearance-queue-v6", capacity=512, artifact_bytes_cap=512 * 1024 * 1024 + 68 + 5090, installation_id=INSTALLATION_ID, installation_epoch=1)
         except (OSError, ValueError):
             _raise_fixed("runtime_configuration")
         if not _owned_directory(source_root) or not _workspace_parent_ok(workspace_parent):

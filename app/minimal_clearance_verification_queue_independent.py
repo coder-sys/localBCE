@@ -66,10 +66,19 @@ class IndependentBatchAcceptance:
     member_set_digest: bytes
     batch_id: bytes
     accepted_count: int
+    post_head_root: bytes = bytes(64)
 
 
-_SCHEMA_VERSION: Final[int] = 4
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v4"
+@dataclass(frozen=True, slots=True)
+class IndependentVerifiedQueueBatch:
+    """One persisted Queue V6 promotion batch and its ordered verified members."""
+
+    batch: IndependentBatchAcceptance
+    jobs: tuple[IndependentVerifiedQueueJob, ...]
+
+
+_SCHEMA_VERSION: Final[int] = 6
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v6"
 _STATUS: Final = frozenset({"QUEUED", "LEASED", "CANDIDATE", "VERIFIED", "REJECTED", "HELD"})
 _NONTERMINAL: Final = frozenset({"QUEUED", "LEASED", "CANDIDATE"})
 _TERMINAL: Final = frozenset({"VERIFIED", "REJECTED", "HELD"})
@@ -93,20 +102,20 @@ _RETRYABLE_CODES: Final = frozenset({
     "verifier_containment_shape", "verifier_containment", "verifier_resource", "verifier_timeout",
     "verifier_process_unavailable", "verifier_memory_cap", "verifier_statement_reconstruction", "verifier_preflight_rejected",
 })
-_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v4\x00"
-_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v4\x00"
-_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v4\x00"
-_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v4\x00"
-_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v4\x00"
-_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v4\x00"
-_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v4\x00"
-_BATCH_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPT-BATCH/v4\x00"
+_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v6\x00"
+_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v6\x00"
+_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v6\x00"
+_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v6\x00"
+_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v6\x00"
+_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v6\x00"
+_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v6\x00"
+_BATCH_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPT-BATCH/v6\x00"
 RESTORE_CAPABILITY_LIMITATION_COUNT = 0
 
 _PROFILE_EPOCH: Final[int] = 7
-_PROFILE_CIRCUIT_ID: Final[bytes] = bytes.fromhex("1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0")
-_PROFILE_ROLE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/v1"
-_PROFILE_DIMENSIONS: Final[tuple[int, int, int, int]] = (36_969, 26_721, 217, 12_158_968)
+_PROFILE_CIRCUIT_ID: Final[bytes] = bytes.fromhex("0f9fefb8cf05cc4e7a6b9657878c05a37034736d193272e14981f97fdd5a4275")
+_PROFILE_ROLE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/v3"
+_PROFILE_DIMENSIONS: Final[tuple[int, int, int, int]] = (52_057, 40_721, 337, 24_455_436)
 _PROFILE_DIRECTIVES: Final[tuple[str, ...]] = ("CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED")
 
 
@@ -114,33 +123,100 @@ def _hash_text(domain: bytes, value: str) -> bytes:
     return hashlib.sha3_512(domain + b"\x00" + value.encode("ascii")).digest()
 
 
+_PROFILE_RULE_ID: Final[bytes] = _hash_text(b"BL/NATIVE-V3/RULE/v1", "synthetic-rule-v1")
 _PROFILE_SOURCE_REGISTRY_SNAPSHOT: Final[bytes] = _hash_text(
-    b"BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v1", "snapshot-1"
+    b"BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v2", "snapshot-1"
 )
 _PROFILE_SOURCE_PROFILE: Final[bytes] = _hash_text(
-    b"BL/NATIVE-V3/SOURCE-PROFILE/v1", "synthetic-authoritative"
+    b"BL/NATIVE-V3/SOURCE-PROFILE/v2", "synthetic-authoritative"
 )
 _PROFILE_GOVERNANCE_SNAPSHOT: Final[bytes] = _hash_text(
-    b"BL/NATIVE-V3/GOVERNANCE-SNAPSHOT/v2", "governance-1"
+    b"BL/NATIVE-V3/GOVERNANCE-SNAPSHOT/v3", "governance-1"
 )
+_PROFILE_AUTOMATIC_CONTROL_SET: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/CONTROL-SET/v3", ",".join(_PROFILE_DIRECTIVES)
+)
+_PROFILE_SETTLEMENT_DOMAIN: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/SETTLEMENT-DOMAIN/v3", "official-state-rail"
+)
+_PROFILE_EVALUATOR_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/EVALUATOR/v2", "minimal-clearance-evaluator"
+)
+_PROFILE_SCHEMA_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/SCHEMA/v2", "minimal-clearance-schema"
+)
+_PROFILE_PROGRAM_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/PROGRAM/v2", "minimal-clearance-program"
+)
+_PROFILE_POLICY_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/POLICY/v2", "minimal-five-directive-policy"
+)
+
+_STATE_LAYOUT_LITERAL = (
+    b"BLST-V2|magic:u8[4]@0|version:u8@4=2|policy_result:u8@5|"
+    b"effective_directive:u8@6|complete:u8@7|membership:u8@8|absence:u8@9|"
+    b"active:u8@10|exception_present:u8@11|exception_authorized:u8@12|"
+    b"economic_mutation:u8@13|clearance_marker_before:u8@14|"
+    b"clearance_marker_after:u8@15|epoch:u64be@16|sequence_before:u64be@24|"
+    b"rule_effective_time:u64be@32|event_time:u64be@40|"
+    b"observation_time:u64be@48|decision_time:u64be@56|read_time:u64be@64|"
+    b"write_time:u64be@72|exception_valid_from:u64be@80|"
+    b"exception_valid_until:u64be@88|sequence_after:u64be@96|"
+    b"decision_index:u32be@104|decision_count:u32be@108|"
+    b"read_access_index:u32be@112|write_access_index:u32be@116|"
+    b"access_count:u32be@120|read_decision_index:u32be@124|"
+    b"write_decision_index:u32be@128|read_mode:u8@132|write_mode:u8@133|"
+    b"clearance_count_before:u64be@134|clearance_count_after:u64be@142|"
+    b"digests:23*u8[64]@150|proposed_payment_commitment:u8[64]@1622|"
+    b"length:1686|capacity:u32be=1|tail:final-64-bytes|no-padding"
+)
+
+
+def _context_part(label: str, value: bytes) -> bytes:
+    encoded = label.encode("ascii")
+    return len(encoded).to_bytes(4, "big") + encoded + len(value).to_bytes(8, "big") + value
+
+
+_STATE_LAYOUT_ID: Final[bytes] = hashlib.sha3_512(
+    b"BL/NATIVE-V3/STATE-LAYOUT/v2\x00" + _STATE_LAYOUT_LITERAL
+).digest()
+_PROFILE_EXECUTION_CONTEXT: Final[bytes] = hashlib.sha3_512(
+    b"BL/NATIVE-V3/EXECUTION-CONTEXT/v4\x00"
+    + _context_part("mode", b"PRIVATE_ZK")
+    + _context_part("source_registry_snapshot", _PROFILE_SOURCE_REGISTRY_SNAPSHOT)
+    + _context_part("source_profile", _PROFILE_SOURCE_PROFILE)
+    + _context_part("governance_snapshot", _PROFILE_GOVERNANCE_SNAPSHOT)
+    + _context_part("automatic_control_set", _PROFILE_AUTOMATIC_CONTROL_SET)
+    + _context_part("settlement_domain", _PROFILE_SETTLEMENT_DOMAIN)
+    + _context_part("evaluator_id", _PROFILE_EVALUATOR_ID)
+    + _context_part("schema_id", _PROFILE_SCHEMA_ID)
+    + _context_part("program_id", _PROFILE_PROGRAM_ID)
+    + _context_part("policy_id", _PROFILE_POLICY_ID)
+    + _context_part("proof_role", _PROFILE_ROLE)
+    + _context_part("semantic_profile", b"MINIMAL_CLEARANCE_SEMANTIC_V6")
+    + _context_part("native_dimensions", b"".join(v.to_bytes(8, "big") for v in _PROFILE_DIMENSIONS))
+    + _context_part("state_layout_id", _STATE_LAYOUT_ID)
+    + _context_part("capacity", (1).to_bytes(4, "big"))
+    + _context_part("profile_epoch", _PROFILE_EPOCH.to_bytes(8, "big"))
+).digest()
 
 
 def _profile_digest(verifier: bytes) -> bytes:
     parts = (
         (3).to_bytes(4, "big"), _PROFILE_ROLE, bytes(64),
-        _hash_text(b"BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance"),
+        _PROFILE_EXECUTION_CONTEXT,
         _PROFILE_SOURCE_REGISTRY_SNAPSHOT, _PROFILE_SOURCE_PROFILE,
         _PROFILE_GOVERNANCE_SNAPSHOT,
-        _hash_text(b"BL/NATIVE-V3/CONTROL-SET/v2", ",".join(_PROFILE_DIRECTIVES)),
-        _hash_text(b"BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator"),
-        _hash_text(b"BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema"),
-        _hash_text(b"BL/NATIVE-V3/PROGRAM/v1", "minimal-clearance-program"),
-        _hash_text(b"BL/NATIVE-V3/POLICY/v1", "minimal-five-directive-policy"),
-        _hash_text(b"BL/NATIVE-V3/SETTLEMENT-DOMAIN/v2", "official-state-rail"),
+        _PROFILE_AUTOMATIC_CONTROL_SET,
+        _PROFILE_EVALUATOR_ID,
+        _PROFILE_SCHEMA_ID,
+        _PROFILE_PROGRAM_ID,
+        _PROFILE_POLICY_ID,
+        _PROFILE_SETTLEMENT_DOMAIN,
         _PROFILE_CIRCUIT_ID, b"".join(v.to_bytes(8, "big") for v in _PROFILE_DIMENSIONS),
-        _PROFILE_EPOCH.to_bytes(8, "big"), b"proofSuiteId=null", b"production_usable=false", b"activation=false", verifier,
+        _PROFILE_EPOCH.to_bytes(8, "big"), b"proofSuiteId=null", b"production_usable=false", b"activation=false", _PROFILE_RULE_ID, verifier,
     )
-    digest = hashlib.sha3_512(b"BL/NATIVE-V3/PRIVATE-ZK/STATIC-PROFILE/v4\x00")
+    digest = hashlib.sha3_512(b"BL/NATIVE-V3/PRIVATE-ZK/STATIC-PROFILE/v6\x00")
     for part in parts:
         digest.update(len(part).to_bytes(8, "big")); digest.update(part)
     return digest.digest()
@@ -150,16 +226,17 @@ def _statement_profile_matches(statement: Any) -> bool:
     try:
         fixed = {
             "protocol_version": 3, "proof_role": _PROFILE_ROLE, "proof_suite": bytes(64),
-            "execution_context": _hash_text(b"BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance"),
+            "execution_context": _PROFILE_EXECUTION_CONTEXT,
             "source_registry_snapshot": _PROFILE_SOURCE_REGISTRY_SNAPSHOT,
             "source_profile": _PROFILE_SOURCE_PROFILE,
             "governance_snapshot": _PROFILE_GOVERNANCE_SNAPSHOT,
-            "automatic_control_set": _hash_text(b"BL/NATIVE-V3/CONTROL-SET/v2", ",".join(_PROFILE_DIRECTIVES)),
-            "evaluator_id": _hash_text(b"BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator"),
-            "schema_id": _hash_text(b"BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema"),
-            "program_id": _hash_text(b"BL/NATIVE-V3/PROGRAM/v1", "minimal-clearance-program"),
-            "policy_id": _hash_text(b"BL/NATIVE-V3/POLICY/v1", "minimal-five-directive-policy"),
-            "settlement_domain": _hash_text(b"BL/NATIVE-V3/SETTLEMENT-DOMAIN/v2", "official-state-rail"),
+            "automatic_control_set": _PROFILE_AUTOMATIC_CONTROL_SET,
+            "evaluator_id": _PROFILE_EVALUATOR_ID,
+            "schema_id": _PROFILE_SCHEMA_ID,
+            "program_id": _PROFILE_PROGRAM_ID,
+            "policy_id": _PROFILE_POLICY_ID,
+            "rule_id": _PROFILE_RULE_ID,
+            "settlement_domain": _PROFILE_SETTLEMENT_DOMAIN,
             "epoch": _PROFILE_EPOCH,
         }
         return all(statement.get(key) == value for key, value in fixed.items())
@@ -168,7 +245,7 @@ def _statement_profile_matches(statement: Any) -> bool:
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "queue_metadata": ("id", "schema_version", "queue_id", "config_json", "config_digest", "verifier_sha256", "artifact_bytes_cap", "profile_digest", "profile_epoch", "installation_id", "installation_epoch", "head_root", "next_transition_seq", "next_admission_seq", "storage_used_bytes", "storage_reserved_bytes", "nonterminal_count", "live_lease_count"),
-    "queue_jobs": ("job_id", "operation_id", "material_digest", "artifact_ref", "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"),
+    "queue_jobs": ("job_id", "operation_id", "material_digest", "artifact_ref", "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code", "proposed_payment_commitment", "expected_state_before_id", "expected_private_batch_commitment"),
     "queue_leases": ("job_id", "worker_id", "token_digest", "attempt", "claim_sequence", "leased_ms", "expires_ms"),
     "queue_results": ("operation_id", "job_id", "terminal_status", "receipt_bytes", "error_code", "completed_ms", "claim_sequence", "worker_id", "leased_ms", "expires_ms", "token_digest"),
     "queue_transitions": ("sequence", "transition_kind", "job_id", "operation_id", "before_root", "after_root", "event_bytes", "event_digest"),
@@ -178,8 +255,8 @@ _INDEXES = frozenset({"queue_jobs_status_eligible", "queue_leases_expiry", "queu
 _TRIGGER_NAMES = frozenset({"queue_jobs_no_delete", "queue_jobs_no_update", "queue_leases_no_update", "queue_results_no_update", "queue_results_no_delete", "queue_transitions_no_update", "queue_transitions_no_delete", "queue_metadata_immutable"})
 
 _TABLE_SQL: Final[dict[str, str]] = {
-    "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=4), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), profile_digest BLOB NOT NULL CHECK(length(profile_digest)=64), profile_epoch INTEGER NOT NULL CHECK(profile_epoch=7), installation_id BLOB NOT NULL CHECK(length(installation_id)=64), installation_epoch INTEGER NOT NULL CHECK(installation_epoch>=1), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 1))",
-    "queue_jobs": "CREATE TABLE queue_jobs (job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE CHECK(length(operation_id)=64), material_digest BLOB NOT NULL CHECK(length(material_digest)=64), artifact_ref TEXT NOT NULL, artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes>0), artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256)=32), artifact_sha3_512 BLOB NOT NULL CHECK(length(artifact_sha3_512)=64), status TEXT NOT NULL CHECK(status IN ('QUEUED','LEASED','CANDIDATE','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), next_eligible_ms INTEGER NOT NULL CHECK(next_eligible_ms>=0), created_ms INTEGER NOT NULL CHECK(created_ms>=0), updated_ms INTEGER NOT NULL CHECK(updated_ms>=0), last_error_code TEXT)",
+    "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=6), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), profile_digest BLOB NOT NULL CHECK(length(profile_digest)=64), profile_epoch INTEGER NOT NULL CHECK(profile_epoch=7), installation_id BLOB NOT NULL CHECK(length(installation_id)=64), installation_epoch INTEGER NOT NULL CHECK(installation_epoch>=1), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 1))",
+    "queue_jobs": "CREATE TABLE queue_jobs (job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE CHECK(length(operation_id)=64), material_digest BLOB NOT NULL CHECK(length(material_digest)=64), artifact_ref TEXT NOT NULL, artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes>0), artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256)=32), artifact_sha3_512 BLOB NOT NULL CHECK(length(artifact_sha3_512)=64), status TEXT NOT NULL CHECK(status IN ('QUEUED','LEASED','CANDIDATE','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), next_eligible_ms INTEGER NOT NULL CHECK(next_eligible_ms>=0), created_ms INTEGER NOT NULL CHECK(created_ms>=0), updated_ms INTEGER NOT NULL CHECK(updated_ms>=0), last_error_code TEXT, proposed_payment_commitment BLOB NOT NULL CHECK(length(proposed_payment_commitment)=64), expected_state_before_id BLOB NOT NULL CHECK(length(expected_state_before_id)=64), expected_private_batch_commitment BLOB NOT NULL CHECK(length(expected_private_batch_commitment)=64))",
     "queue_leases": "CREATE TABLE queue_leases (job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 3), claim_sequence INTEGER NOT NULL UNIQUE CHECK(claim_sequence>=1), leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id))",
     "queue_results": "CREATE TABLE queue_results (operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=64), job_id TEXT NOT NULL UNIQUE, terminal_status TEXT NOT NULL CHECK(terminal_status IN ('CANDIDATE','REJECTED','HELD')), receipt_bytes BLOB CHECK(receipt_bytes IS NULL OR length(receipt_bytes)<=16384), error_code TEXT, completed_ms INTEGER NOT NULL CHECK(completed_ms>=0), claim_sequence INTEGER NOT NULL CHECK(claim_sequence>=1), worker_id TEXT NOT NULL, leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), token_digest BLOB NOT NULL CHECK(length(token_digest)=64), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), CHECK((terminal_status='CANDIDATE' AND receipt_bytes IS NOT NULL AND error_code IS NULL) OR (terminal_status IN ('REJECTED','HELD') AND receipt_bytes IS NULL AND error_code IS NOT NULL)))",
     "queue_transitions": "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY CHECK(sequence>=1), transition_kind TEXT NOT NULL, job_id TEXT, operation_id BLOB, before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL CHECK(length(event_bytes)<=65536), event_digest BLOB NOT NULL UNIQUE CHECK(length(event_digest)=64), CHECK((transition_kind='ACCEPT_BATCH' AND job_id IS NULL AND operation_id IS NULL) OR (transition_kind<>'ACCEPT_BATCH' AND job_id IS NOT NULL AND operation_id IS NOT NULL AND length(operation_id)=64)), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id))",
@@ -187,7 +264,7 @@ _TABLE_SQL: Final[dict[str, str]] = {
 _INDEX_SQL: Final[dict[str, str]] = {"queue_jobs_status_eligible": "CREATE INDEX queue_jobs_status_eligible ON queue_jobs(status,next_eligible_ms,admission_seq)", "queue_leases_expiry": "CREATE INDEX queue_leases_expiry ON queue_leases(expires_ms,job_id)", "queue_leases_worker_unique": "CREATE UNIQUE INDEX queue_leases_worker_unique ON queue_leases(worker_id)"}
 _TRIGGER_SQL: Final[dict[str, str]] = {
     "queue_jobs_no_delete": "CREATE TRIGGER queue_jobs_no_delete BEFORE DELETE ON queue_jobs BEGIN SELECT RAISE(ABORT,'queue_jobs_append_only'); END",
-    "queue_jobs_no_update": "CREATE TRIGGER queue_jobs_no_update BEFORE UPDATE OF job_id,operation_id,material_digest,artifact_ref,artifact_bytes,artifact_sha256,artifact_sha3_512,admission_seq ON queue_jobs BEGIN SELECT RAISE(ABORT,'queue_jobs_identity_immutable'); END",
+    "queue_jobs_no_update": "CREATE TRIGGER queue_jobs_no_update BEFORE UPDATE OF job_id,operation_id,material_digest,artifact_ref,artifact_bytes,artifact_sha256,artifact_sha3_512,admission_seq,proposed_payment_commitment,expected_state_before_id,expected_private_batch_commitment ON queue_jobs BEGIN SELECT RAISE(ABORT,'queue_jobs_identity_immutable'); END",
     "queue_leases_no_update": "CREATE TRIGGER queue_leases_no_update BEFORE UPDATE ON queue_leases BEGIN SELECT RAISE(ABORT,'queue_leases_insert_delete_only'); END",
     "queue_results_no_update": "CREATE TRIGGER queue_results_no_update BEFORE UPDATE ON queue_results BEGIN SELECT RAISE(ABORT,'queue_results_immutable'); END",
     "queue_results_no_delete": "CREATE TRIGGER queue_results_no_delete BEFORE DELETE ON queue_results BEGIN SELECT RAISE(ABORT,'queue_results_immutable'); END",
@@ -249,7 +326,7 @@ def _parse_config(value: Any) -> tuple[dict[str, Any], bytes, bytes]:
     queue_id = _token(value["queue_id"], "config_queue_id"); capacity = _integer(value["capacity"], "config_capacity", minimum=1); lease_seconds = _integer(value["lease_seconds"], "config_lease_seconds", minimum=1)
     if capacity > _MAX_CAPACITY or lease_seconds != _LEASE_SECONDS or type(value["max_attempts"]) is not int or value["max_attempts"] != 3 or type(value["max_worker_concurrency"]) is not int or value["max_worker_concurrency"] != _MAX_WORKERS: _fail("config_bounds")
     artifact_cap = _integer(value["artifact_bytes_cap"], "config_artifact_cap", minimum=1)
-    if artifact_cap > 512 * 1024 * 1024: _fail("config_artifact_cap")
+    if artifact_cap > 512 * 1024 * 1024 + 68 + 5090: _fail("config_artifact_cap")
     verifier = _blob(value["verifier_sha256"], 32, "config_verifier")
     if (_blob(value["profile_digest"], 64, "config_profile") != _profile_digest(verifier) or type(value["profile_epoch"]) is not int or value["profile_epoch"] != _PROFILE_EPOCH or _blob(value["installation_id"], 64, "config_installation") is None or type(value["installation_epoch"]) is not int or value["installation_epoch"] < 1 or _blob(value["circuit_id"], 32, "config_circuit") != _PROFILE_CIRCUIT_ID or _blob(value["source_registry_snapshot"], 64, "config_source_registry") != _PROFILE_SOURCE_REGISTRY_SNAPSHOT or _blob(value["source_profile"], 64, "config_source_profile") != _PROFILE_SOURCE_PROFILE or _blob(value["governance_snapshot"], 64, "config_governance") != _PROFILE_GOVERNANCE_SNAPSHOT or value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False): _fail("config_profile")
     retryable = value["retryable_codes"]
@@ -257,7 +334,7 @@ def _parse_config(value: Any) -> tuple[dict[str, Any], bytes, bytes]:
     canonical = _json_bytes(value); return value, canonical, _sha(_MATERIAL_DOMAIN, canonical)
 
 
-def _parse_evidence(value: Any, verifier: bytes) -> dict[str, Any]:
+def _parse_evidence(value: Any, verifier: bytes, *, expected_state_before_id: bytes | None = None, expected_private_batch_commitment: bytes | None = None) -> dict[str, Any]:
     keys = {"artifact_bytes", "artifact_sha256", "artifact_sha3_512", "verifier_sha256", "circuit_id", "acceptance_bytes", "proof_acceptance_digest", "peak_job_commit_bytes", "cap_bytes", "cap_enforced", "active_process_limit", "timed_out", "exit_code", "stdout_sha3_512", "stderr_sha3_512"}
     if type(value) is not dict or set(value) != keys: _fail("receipt_evidence_keys")
     for field in ("artifact_bytes", "peak_job_commit_bytes", "cap_bytes", "active_process_limit", "exit_code"):
@@ -267,17 +344,18 @@ def _parse_evidence(value: Any, verifier: bytes) -> dict[str, Any]:
     if not 0 < len(result["acceptance_bytes"]) <= _MAX_ACCEPTANCE: _fail("receipt_acceptance_bounds")
     result["proof_acceptance_digest"] = _blob(value["proof_acceptance_digest"], 64, "receipt_acceptance"); result["stdout_sha3_512"] = _blob(value["stdout_sha3_512"], 64, "receipt_stdout"); result["stderr_sha3_512"] = _blob(value["stderr_sha3_512"], 64, "receipt_stderr")
     if result["verifier_sha256"] != verifier or result["cap_bytes"] != _CAP_BYTES or result["cap_enforced"] is not True or result["active_process_limit"] != _ACTIVE_PROCESS_LIMIT or result["timed_out"] is not False or result["exit_code"] != 0 or not 0 <= result["peak_job_commit_bytes"] <= _CAP_BYTES: _fail("receipt_containment_binding")
-    try: acceptance = parse_acceptance_bytes(result["acceptance_bytes"])
+    try: acceptance = parse_acceptance_bytes(result["acceptance_bytes"], expected_state_before_id=expected_state_before_id)
     except Exception: _fail("receipt_acceptance_invalid")
     if not _statement_profile_matches(acceptance.statement): _fail("receipt_profile")
+    if expected_private_batch_commitment is not None and acceptance.statement.get("private_batch_commitment") != expected_private_batch_commitment: _fail("receipt_private_batch_commitment")
     if acceptance.canonical_bytes() != result["acceptance_bytes"] or acceptance.artifact_bytes != result["artifact_bytes"] or acceptance.artifact_sha256 != result["artifact_sha256"] or acceptance.artifact_digest != result["artifact_sha3_512"] or acceptance.circuit_id != result["circuit_id"] or _sha(_ACCEPTANCE_DOMAIN, result["acceptance_bytes"]) != result["proof_acceptance_digest"]: _fail("receipt_acceptance_binding")
     return result
 
 
-def _parse_receipt(value: Any, config: Mapping[str, Any]) -> dict[str, Any]:
+def _parse_receipt(value: Any, config: Mapping[str, Any], *, expected_state_before_id: bytes | None = None, expected_private_batch_commitment: bytes | None = None) -> dict[str, Any]:
     keys = {"schema", "queue_id", "job_id", "operation_id", "attempt", "evidence", "receipt_id"}
     if type(value) is not dict or set(value) != keys or value["schema"] != _SCHEMA or value["queue_id"] != config["queue_id"]: _fail("receipt_keys")
-    job_id = _token(value["job_id"], "receipt_job_id"); operation = _blob(value["operation_id"], 64, "receipt_operation"); receipt_id = _blob(value["receipt_id"], 64, "receipt_id"); attempt = _integer(value["attempt"], "receipt_attempt", minimum=1); evidence = _parse_evidence(value["evidence"], _blob(config["verifier_sha256"], 32, "config_verifier"))
+    job_id = _token(value["job_id"], "receipt_job_id"); operation = _blob(value["operation_id"], 64, "receipt_operation"); receipt_id = _blob(value["receipt_id"], 64, "receipt_id"); attempt = _integer(value["attempt"], "receipt_attempt", minimum=1); evidence = _parse_evidence(value["evidence"], _blob(config["verifier_sha256"], 32, "config_verifier"), expected_state_before_id=expected_state_before_id, expected_private_batch_commitment=expected_private_batch_commitment)
     without_id = {"schema": _SCHEMA, "queue_id": config["queue_id"], "job_id": job_id, "operation_id": _hex(operation), "attempt": attempt, "evidence": {key: (_hex(item) if isinstance(item, bytes) else item) for key, item in evidence.items()}}
     if receipt_id != _sha(_RECEIPT_DOMAIN, _json_bytes(without_id)): _fail("receipt_identity")
     return {"job_id": job_id, "operation_id": operation, "attempt": attempt, "evidence": evidence, "receipt_id": receipt_id}
@@ -448,12 +526,12 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
     if len(jobs) != int(meta[13]) or len(transitions) != int(meta[12]) or int(meta[14]) != page_bytes or int(meta[15]) != int(meta[16]) * _MAX_TERMINAL_GROWTH or int(meta[16]) != sum(1 for row in jobs if row[7] in _NONTERMINAL) or int(meta[17]) != len(leases) or page_bytes + int(meta[15]) > _MAX_DATABASE or len(leases) > _MAX_WORKERS: _fail("metadata_counters")
     job_map: dict[str, tuple[Any, ...]] = {}; operation_ids: set[bytes] = set()
     for index, row in enumerate(jobs, 1):
-        if len(row) != 14: _fail("job_shape")
-        job_id, operation, material, ref, size, sha256, sha3, status, admission, attempt, next_ms, created, updated, error = row
+        if len(row) != 17: _fail("job_shape")
+        job_id, operation, material, ref, size, sha256, sha3, status, admission, attempt, next_ms, created, updated, error, proposed, expected_before, expected_private = row
         if type(job_id) is not str or _TOKEN.fullmatch(job_id) is None or type(operation) is not bytes or len(operation) != 64 or operation in operation_ids or type(material) is not bytes or len(material) != 64 or admission != index: _fail("job_identity")
-        if type(ref) is not str or _TOKEN.fullmatch(ref) is None or type(size) is not int or not 0 < size <= config["artifact_bytes_cap"] or type(sha256) is not bytes or len(sha256) != 32 or type(sha3) is not bytes or len(sha3) != 64 or status not in _STATUS or type(attempt) is not int or not 0 <= attempt <= 3: _fail("job_fields")
+        if type(ref) is not str or _TOKEN.fullmatch(ref) is None or type(size) is not int or not 0 < size <= config["artifact_bytes_cap"] or type(sha256) is not bytes or len(sha256) != 32 or type(sha3) is not bytes or len(sha3) != 64 or type(proposed) is not bytes or len(proposed) != 64 or type(expected_before) is not bytes or len(expected_before) != 64 or type(expected_private) is not bytes or len(expected_private) != 64 or status not in _STATUS or type(attempt) is not int or not 0 <= attempt <= 3: _fail("job_fields")
         if any(type(item) is not int or item < 0 for item in (next_ms, created, updated)) or (error is not None and (type(error) is not str or _CODE.fullmatch(error) is None)): _fail("job_fields")
-        metadata = {"artifact_ref": ref, "artifact_bytes": size, "artifact_sha256": _hex(sha256), "artifact_sha3_512": _hex(sha3)}; profile = _blob(config["profile_digest"], 64, "config_profile"); installation = _blob(config["installation_id"], 64, "config_installation"); expected_material = _sha(_MATERIAL_DOMAIN, config["queue_id"].encode("ascii"), job_id.encode("ascii"), _json_bytes(metadata), verifier, profile, int(config["profile_epoch"]).to_bytes(8, "big"), installation, int(config["installation_epoch"]).to_bytes(8, "big")); expected_operation = _sha(_OPERATION_DOMAIN, config["queue_id"].encode("ascii"), job_id.encode("ascii"), expected_material, config_digest)
+        metadata = {"artifact_ref": ref, "artifact_bytes": size, "artifact_sha256": _hex(sha256), "artifact_sha3_512": _hex(sha3), "proposed_payment_commitment": _hex(proposed), "expected_state_before_id": _hex(expected_before), "expected_private_batch_commitment": _hex(expected_private)}; profile = _blob(config["profile_digest"], 64, "config_profile"); installation = _blob(config["installation_id"], 64, "config_installation"); expected_material = _sha(_MATERIAL_DOMAIN, config["queue_id"].encode("ascii"), job_id.encode("ascii"), _json_bytes(metadata), verifier, profile, int(config["profile_epoch"]).to_bytes(8, "big"), installation, int(config["installation_epoch"]).to_bytes(8, "big")); expected_operation = _sha(_OPERATION_DOMAIN, config["queue_id"].encode("ascii"), job_id.encode("ascii"), expected_material, config_digest)
         if material != expected_material or operation != expected_operation: _fail("job_material")
         job_map[job_id] = tuple(row); operation_ids.add(operation)
     result_map: dict[bytes, tuple[Any, ...]] = {}
@@ -534,9 +612,25 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
                 receipt_digest = None if result[3] is None else _hex(_sha(_RECEIPT_DOMAIN, bytes(result[3])))
                 if event.get("receipt_digest") != receipt_digest: _fail("transition_receipt_binding")
                 if event["status"] == "CANDIDATE":
-                    try: receipt_value = json.loads(bytes(result[3]).decode("ascii")); receipt = _parse_receipt(receipt_value, config)
+                    try: receipt_value = json.loads(bytes(result[3]).decode("ascii")); receipt = _parse_receipt(receipt_value, config, expected_state_before_id=bytes(job[15]), expected_private_batch_commitment=bytes(job[16]))
                     except (UnicodeDecodeError, json.JSONDecodeError): _fail("verified_receipt")
-                    if bytes(result[3]) != _json_bytes(receipt_value) or receipt["job_id"] != str(job[0]) or receipt["operation_id"] != bytes(job[1]) or receipt["attempt"] != job[9] or receipt["evidence"]["artifact_bytes"] != job[4] or receipt["evidence"]["artifact_sha256"] != job[5] or receipt["evidence"]["artifact_sha3_512"] != job[6]: _fail("verified_receipt_binding")
+                    try:
+                        accepted_statement = parse_acceptance_bytes(
+                            bytes(receipt["evidence"]["acceptance_bytes"])
+                        ).statement
+                    except Exception:
+                        _fail("verified_receipt_binding")
+                    if (bytes(result[3]) != _json_bytes(receipt_value)
+                            or receipt["job_id"] != str(job[0])
+                            or receipt["operation_id"] != bytes(job[1])
+                            or receipt["attempt"] != job[9]
+                            or receipt["evidence"]["artifact_bytes"] != job[4]
+                            or receipt["evidence"]["artifact_sha256"] != job[5]
+                            or receipt["evidence"]["artifact_sha3_512"] != job[6]
+                            or accepted_statement.state("proposed_payment_commitment") != bytes(job[14])
+                            or accepted_statement.get("private_batch_commitment") != bytes(job[16])
+                            or accepted_statement.state_before_id != bytes(job[15])):
+                        _fail("verified_receipt_binding")
                 if kind.startswith("COMPLETE_"): completion_count += 1
                 current.update(status=str(event["status"]), updated=int(event["at_ms"]), error=None if event["status"] == "CANDIDATE" else str(event["error_code"]), claim=None)
         elif kind == "ACCEPT_BATCH":
@@ -656,9 +750,9 @@ def _database_bytes(path: Path) -> bytes:
 
 
 def _verified_job_from_row(row: tuple[Any, ...], config: Mapping[str, Any], summary: Mapping[str, Any]) -> IndependentVerifiedQueueJob:
-    if len(row) != 16 or row[7] != "VERIFIED" or row[14] != "CANDIDATE" or row[15] is None: _fail("job_not_verified")
+    if len(row) != 19 or row[7] != "VERIFIED" or row[17] != "CANDIDATE" or row[18] is None: _fail("job_not_verified")
     try:
-        receipt_bytes = bytes(row[15]); receipt_value = json.loads(receipt_bytes.decode("ascii")); receipt = _parse_receipt(receipt_value, config); evidence = receipt["evidence"]
+        receipt_bytes = bytes(row[18]); receipt_value = json.loads(receipt_bytes.decode("ascii")); receipt = _parse_receipt(receipt_value, config, expected_state_before_id=bytes(row[15]), expected_private_batch_commitment=bytes(row[16])); evidence = receipt["evidence"]
         return IndependentVerifiedQueueJob(queue_id=str(config["queue_id"]), config_digest=bytes.fromhex(str(summary["config_digest"])), verifier_sha256=bytes(evidence["verifier_sha256"]), job_id=str(row[0]), operation_id=bytes(receipt["operation_id"]), attempt=int(receipt["attempt"]), receipt_bytes=receipt_bytes, receipt_id=bytes(receipt["receipt_id"]), acceptance_bytes=bytes(evidence["acceptance_bytes"]), proof_acceptance_digest=bytes(evidence["proof_acceptance_digest"]), artifact_ref=str(row[3]), artifact_bytes=int(row[4]), artifact_sha256=bytes(row[5]), artifact_sha3_512=bytes(row[6]), circuit_id=bytes(evidence["circuit_id"]), peak_job_commit_bytes=int(evidence["peak_job_commit_bytes"]), cap_bytes=int(evidence["cap_bytes"]), cap_enforced=bool(evidence["cap_enforced"]), active_process_limit=int(evidence["active_process_limit"]), timed_out=bool(evidence["timed_out"]), exit_code=int(evidence["exit_code"]), stdout_sha3_512=bytes(evidence["stdout_sha3_512"]), stderr_sha3_512=bytes(evidence["stderr_sha3_512"]))
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, KeyError):
         _fail("job_read")
@@ -687,6 +781,122 @@ def read_verified_jobs(path: Path, job_ids: list[str] | tuple[str, ...], *, expe
         if connection.in_transaction: connection.execute("ROLLBACK")
         _fail("job_read")
     finally: connection.close()
+
+
+def read_verified_batch(
+    path: Path,
+    batch_id: bytes | None = None,
+    *,
+    expected_config: Mapping[str, Any] | None = None,
+) -> IndependentVerifiedQueueBatch:
+    """Read one persisted ACCEPT_BATCH and all members from one snapshot."""
+    if batch_id is not None and (type(batch_id) is not bytes or len(batch_id) != 64):
+        _fail("batch_id")
+    identity = _path_identity(path)
+    parent_identity = _parent_identity(path.parent)
+    connection = _open_readonly(path)
+    try:
+        _connection_binding(connection, path, identity, parent_identity)
+        connection.execute("BEGIN")
+        _connection_binding(connection, path, identity, parent_identity)
+        summary = _verify_connection(connection, expected_config=expected_config)
+        if identity is None or identity[3] != int(connection.execute("PRAGMA page_count").fetchone()[0]) * _PAGE_SIZE:
+            _fail("database_image_bounds")
+        metadata = connection.execute("SELECT config_json FROM queue_metadata WHERE id=1").fetchone()
+        if metadata is None:
+            _fail("metadata_missing")
+        try:
+            config = json.loads(bytes(metadata[0]).decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            _fail("config_encoding")
+        row = connection.execute(
+            "SELECT sequence,event_bytes,after_root FROM queue_transitions WHERE transition_kind='ACCEPT_BATCH' ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            _fail("batch_missing")
+        try:
+            event = json.loads(bytes(row[1]).decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            _fail("batch_event")
+        if bytes(row[1]) != _json_bytes(event):
+            _fail("batch_event")
+        if type(event) is not dict or event.get("schema") != _SCHEMA:
+            _fail("batch_event")
+        operation_ids = tuple(bytes.fromhex(str(item)) for item in event["operation_ids"])
+        persisted_batch_id = bytes.fromhex(str(event["batch_id"]))
+        if batch_id is not None and persisted_batch_id != batch_id:
+            _fail("batch_identity")
+        config_digest = bytes.fromhex(str(summary["config_digest"]))
+        profile_digest = bytes.fromhex(str(summary["profile_digest"]))
+        installation_id = bytes.fromhex(str(summary["installation_id"]))
+        pre_head = bytes.fromhex(str(event["pre_head_root"]))
+        pre_count = int(event["pre_transition_count"])
+        member_digest = _sha(_BATCH_DOMAIN, b"".join(operation_ids))
+        expected_batch_id = _sha(
+            _BATCH_DOMAIN,
+            bytes.fromhex(str(event["image_sha3_512"])),
+            pre_head,
+            pre_count.to_bytes(8, "big"),
+            config_digest,
+            profile_digest,
+            int(summary["profile_epoch"]).to_bytes(8, "big"),
+            installation_id,
+            int(summary["installation_epoch"]).to_bytes(8, "big"),
+            member_digest,
+            len(operation_ids).to_bytes(8, "big"),
+        )
+        if (
+            persisted_batch_id != expected_batch_id
+            or member_digest != bytes.fromhex(str(event["member_set_digest"]))
+            or int(event["accepted_count"]) != len(operation_ids)
+            or event["operation_ids"] != [item.hex().upper() for item in operation_ids]
+            or bytes.fromhex(str(event["config_digest"])) != config_digest
+            or bytes.fromhex(str(event["profile_digest"])) != profile_digest
+            or bytes.fromhex(str(event["installation_id"])) != installation_id
+        ):
+            _fail("batch_binding")
+        placeholders = ",".join("?" for _ in operation_ids)
+        rows = connection.execute(
+            f"SELECT j.*,r.terminal_status,r.receipt_bytes FROM queue_jobs j JOIN queue_results r ON r.operation_id=j.operation_id WHERE j.operation_id IN ({placeholders})",
+            operation_ids,
+        ).fetchall()
+        by_operation = {bytes(row[1]): tuple(row) for row in rows}
+        if len(by_operation) != len(operation_ids) or any(item not in by_operation for item in operation_ids):
+            _fail("batch_members")
+        jobs = tuple(_verified_job_from_row(by_operation[item], config, summary) for item in operation_ids)
+        if tuple(job.operation_id for job in jobs) != operation_ids:
+            _fail("batch_members")
+        _connection_binding(connection, path, identity, parent_identity)
+        connection.execute("COMMIT")
+        _connection_binding(connection, path, identity, parent_identity)
+        return IndependentVerifiedQueueBatch(
+            IndependentBatchAcceptance(
+                bytes.fromhex(str(event["image_sha3_512"])),
+                pre_head,
+                pre_count,
+                config_digest,
+                profile_digest,
+                int(summary["profile_epoch"]),
+                installation_id,
+                int(summary["installation_epoch"]),
+                operation_ids,
+                member_digest,
+                persisted_batch_id,
+                len(operation_ids),
+                bytes(row[2]),
+            ),
+            jobs,
+        )
+    except IndependentQueueError:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    except (sqlite3.Error, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, KeyError):
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        _fail("batch_read")
+    finally:
+        connection.close()
 
 
 def read_verified_job(path: Path, job_id: str, *, expected_config: Mapping[str, Any] | None = None) -> IndependentVerifiedQueueJob:
@@ -745,4 +955,4 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
             except (OSError, ValueError): pass
 
 
-__all__ = ("IndependentBatchAcceptance", "IndependentQueueError", "IndependentVerifiedQueueJob", "read_verified_job", "read_verified_jobs", "restore_export_to_fresh_database", "verify_completed_batch", "verify_database", "verify_export_bytes")
+__all__ = ("IndependentBatchAcceptance", "IndependentQueueError", "IndependentVerifiedQueueBatch", "IndependentVerifiedQueueJob", "read_verified_batch", "read_verified_job", "read_verified_jobs", "restore_export_to_fresh_database", "verify_completed_batch", "verify_database", "verify_export_bytes")

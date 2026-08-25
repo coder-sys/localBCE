@@ -16,7 +16,10 @@ from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
 
 from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 from app.minimal_clearance_verification_queue_independent import (
-    IndependentQueueError, IndependentVerifiedQueueJob, read_verified_jobs,
+    IndependentQueueError,
+    IndependentVerifiedQueueBatch,
+    IndependentVerifiedQueueJob,
+    read_verified_batch,
 )
 
 
@@ -52,15 +55,15 @@ def _public_v2_api(method: Callable[..., Any]) -> Callable[..., Any]:
     return wrapped
 
 
-_SCHEMA_VERSION: Final[int] = 2
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v2"
+_SCHEMA_VERSION: Final[int] = 3
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v3"
 _HANDOFF_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/v2"
 _ACK_MODE: Final[str] = "SYNTHETIC_ONLY"
 _DIRECTIVES: Final[tuple[str, ...]] = ("CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED")
 _DELIVERY_STATES: Final[frozenset[str]] = frozenset({"READY", "DISPATCH_LEASED", "DELIVERY_UNCONFIRMED", "RECONCILIATION_LEASED", "ACKNOWLEDGED", "DISPATCH_EXHAUSTED", "RECONCILIATION_EXHAUSTED"})
 _EVENT_KINDS: Final[frozenset[str]] = frozenset({"APPLIED", "HELD", "DISPATCH_LEASED", "DISPATCH_RELEASED", "DELIVERY_UNCONFIRMED", "DISPATCH_LEASE_EXPIRED", "DISPATCH_EXHAUSTED", "RECONCILIATION_LEASED", "RECONCILIATION_INDETERMINATE", "RECONCILIATION_LEASE_EXPIRED", "RECONCILIATION_EXHAUSTED", "ACKNOWLEDGED", "ACKNOWLEDGED_BY_RECONCILIATION", "ACK_CONFLICT"})
 _EVENT_PAYLOAD_KEYS: Final[dict[str, frozenset[str]]] = {
-    "APPLIED": frozenset({"operation_digest", "queue_view_digest", "acceptance_digest", "artifact_digest", "state_receipt_digest", "envelope_digest", "outbox_operation_id", "idempotency_key", "policy_result", "effective_directive", "payment_root_unchanged", "settlement_id", "settlement_domain", "exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until"}),
+    "APPLIED": frozenset({"operation_digest", "queue_view_digest", "acceptance_digest", "artifact_digest", "state_receipt_digest", "envelope_digest", "outbox_operation_id", "idempotency_key", "policy_result", "effective_directive", "payment_root_unchanged", "settlement_id", "settlement_domain", "exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until", "queue_batch_id", "queue_batch_member_set_digest", "composition_batch_id", "batch_member_index", "batch_member_count"}),
     "HELD": frozenset({"acceptance_digest", "error_code"}),
     "DISPATCH_LEASED": frozenset({"attempt", "worker_id", "lease_token_digest", "lease_expires_ms"}),
     "DISPATCH_RELEASED": frozenset({"attempt", "error_code"}),
@@ -84,12 +87,12 @@ _MAX_ID = 128
 _CAP_BYTES = 5_000_000_000
 _ACTIVE_PROCESS_LIMIT = 1
 _ZERO_SUITE = bytes(64)
-_CIRCUIT_ID = bytes.fromhex("1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0")
+_CIRCUIT_ID = bytes.fromhex("0f9fefb8cf05cc4e7a6b9657878c05a37034736d193272e14981f97fdd5a4275")
 _COMPOSITION_TABLES: Final[frozenset[str]] = frozenset({"composition_meta", "composition_transactions", "composition_events"})
-_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v2\x00"
-_GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v2\x00"
-_HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/HEAD/v2\x00"
-_EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/EVENT/v2\x00"
+_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v3\x00"
+_GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v3\x00"
+_HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/HEAD/v3\x00"
+_EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/EVENT/v3\x00"
 _STATE_OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/PROOF-OPERATION/v1\x00"
 _STATE_REPLAY = b"BL/MINIMAL-CLEARANCE/PROOF-REPLAY/v1\x00"
 _STATE_CLEARANCE = b"BL/MINIMAL-CLEARANCE/CLEARANCE-ROOT/v1\x00"
@@ -98,7 +101,7 @@ _STATE_GENESIS = b"BL/MINIMAL-CLEARANCE/GENESIS/v1\x00"
 _STATE_AUDIT_EVENT = b"BL/MINIMAL-CLEARANCE/AUDIT-EVENT/v1\x00"
 _STATE_AUDIT_HEAD = b"BL/MINIMAL-CLEARANCE/AUDIT-HEAD/v1\x00"
 _STATE_RECEIPT = b"BL/MINIMAL-CLEARANCE/RECEIPT/v1\x00"
-_SETTLEMENT_REFERENCE = b"BL/NATIVE-V3/MINIMAL-SETTLEMENT-REFERENCE/v1\x00"
+_SETTLEMENT_REFERENCE = b"BL/NATIVE-V3/MINIMAL-SETTLEMENT-REFERENCE/v2\x00"
 _STATE_IDENTITY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/STATE-STORE-IDENTITY/v1\x00"
 _ENVELOPE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ENVELOPE/v2\x00"
 _ACK = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK/v2\x00"
@@ -106,7 +109,8 @@ _ACK_PROFILE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-PROFILE/v
 _ACK_RECEIPT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-RECEIPT/v2\x00"
 _OUTBOX_OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-OPERATION/v2\x00"
 _IDEMPOTENCY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-IDEMPOTENCY/v2\x00"
-_QUEUE_VIEW_SCHEMA = "BL/NATIVE-V3/MINIMAL-CLEARANCE/QUEUE-VIEW/v1"
+_QUEUE_VIEW_SCHEMA = "BL/NATIVE-V3/MINIMAL-CLEARANCE/QUEUE-VIEW/v2"
+_COMPOSITION_BATCH = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/BATCH/v1\x00"
 
 
 def _sha(domain: bytes, *parts: bytes) -> bytes:
@@ -176,11 +180,41 @@ _PRIVATE_EPOCH = 7
 
 
 def _profile_digest(statement: Any, verifier_sha256: bytes) -> bytes:
-    return _sha(b"BL/NATIVE-V3/PRIVATE-ZK/PROFILE/v1\x00", _PRIVATE_MODE, _PRIVATE_CONTEXT, _PRIVATE_SCHEMA, _PRIVATE_PROGRAM, bytes(statement.get("execution_context")), bytes(statement.get("evaluator_id")), bytes(statement.get("schema_id")), bytes(statement.get("program_id")), bytes(statement.get("automatic_control_set")), _CIRCUIT_ID, verifier_sha256, _ZERO_SUITE, _u64(_PRIVATE_EPOCH))
+    return _sha(
+        b"BL/NATIVE-V3/PRIVATE-ZK/PROFILE/v6\x00",
+        _PRIVATE_MODE,
+        _PRIVATE_CONTEXT,
+        _PRIVATE_SCHEMA,
+        _PRIVATE_PROGRAM,
+        bytes(statement.get("proof_role")),
+        bytes(statement.get("execution_context")),
+        bytes(statement.get("source_registry_snapshot")),
+        bytes(statement.get("source_profile")),
+        bytes(statement.get("governance_snapshot")),
+        bytes(statement.get("automatic_control_set")),
+        bytes(statement.get("evaluator_id")),
+        bytes(statement.get("schema_id")),
+        bytes(statement.get("program_id")),
+        bytes(statement.get("policy_id")),
+        bytes(statement.get("rule_id")),
+        _CIRCUIT_ID,
+        verifier_sha256,
+        _ZERO_SUITE,
+        _u64(_PRIVATE_EPOCH),
+    )
 
 
 def _state_store_identity(statement: Any, verifier_sha256: bytes) -> bytes:
-    return _sha(_STATE_IDENTITY, _PRIVATE_CONTEXT, _PRIVATE_SCHEMA, _PRIVATE_PROGRAM, _PRIVATE_MODE, _CIRCUIT_ID, bytes(statement.statement_bytes), verifier_sha256, _profile_digest(statement, verifier_sha256))
+    return _sha(
+        _STATE_IDENTITY,
+        _PRIVATE_CONTEXT,
+        _PRIVATE_SCHEMA,
+        _PRIVATE_PROGRAM,
+        _PRIVATE_MODE,
+        _CIRCUIT_ID,
+        _profile_digest(statement, verifier_sha256),
+        verifier_sha256,
+    )
 
 
 def _fixed_ascii(value: str, label: str) -> bytes:
@@ -241,12 +275,10 @@ class CompositionConfigV2:
     queue_id: str
     queue_config_digest: bytes
     verifier_sha256: bytes
-    state_profile_identity: bytes | None = None
     receiver_identity: bytes = bytes(32)
     receiver_epoch: int = 1
     composition_id: str = "minimal-clearance-composition-v2"
     verifier_epoch: int = 1
-    expected_statement: bytes | None = None
     capacity: int = 16
     lease_seconds: int = 300
     reconciliation_capacity: int = 16
@@ -260,8 +292,6 @@ class CompositionConfigV2:
     def __post_init__(self) -> None:
         _token(self.queue_id, "queue_id"); _token(self.composition_id, "composition_id")
         _blob(self.queue_config_digest, 64, "queue_config_digest"); _blob(self.verifier_sha256, 32, "verifier_sha256"); _blob(self.receiver_identity, 32, "receiver_identity")
-        if self.state_profile_identity is not None: _blob(self.state_profile_identity, 64, "state_profile_identity")
-        if self.expected_statement is not None and (type(self.expected_statement) is not bytes or len(self.expected_statement) != 3340): _raise_fixed(CompositionIntegrityError, "expected_statement")
         for value, label, maximum in ((self.receiver_epoch, "receiver_epoch", 2**63), (self.verifier_epoch, "verifier_epoch", 2**63), (self.capacity, "capacity", 10_000), (self.reconciliation_capacity, "reconciliation_capacity", 10_000), (self.lease_seconds, "lease_seconds", 3_600), (self.reconciliation_lease_seconds, "reconciliation_lease_seconds", 3_600)):
             if type(value) is not int or not 1 <= value <= maximum: _raise_fixed(CompositionIntegrityError, label)
         if self.max_attempts != 3 or self.busy_timeout_ms != 5_000: _raise_fixed(CompositionIntegrityError, "fixed_config")
@@ -271,7 +301,7 @@ class CompositionConfigV2:
     def profile_digest(self) -> bytes: return SyntheticAckEvidenceProfileV2(self.verifier_sha256, self.verifier_epoch, self.receiver_identity, self.receiver_epoch).digest
     @property
     def as_json(self) -> dict[str, Any]:
-        return {"schema_version": _SCHEMA_VERSION, "composition_id": self.composition_id, "queue_id": self.queue_id, "queue_config_digest": _hex(self.queue_config_digest), "verifier_sha256": _hex(self.verifier_sha256), "state_profile_identity": None if self.state_profile_identity is None else _hex(self.state_profile_identity), "receiver_identity": _hex(self.receiver_identity), "receiver_epoch": self.receiver_epoch, "verifier_epoch": self.verifier_epoch, "expected_statement": None if self.expected_statement is None else _hex(self.expected_statement), "capacity": self.capacity, "lease_seconds": self.lease_seconds, "reconciliation_capacity": self.reconciliation_capacity, "reconciliation_lease_seconds": self.reconciliation_lease_seconds, "max_attempts": self.max_attempts, "busy_timeout_ms": self.busy_timeout_ms, "ack_evidence_profile_digest": _hex(self.profile_digest), "directives": list(_DIRECTIVES), "proof_suite_id": None, "production_usable": False, "activation": False}
+        return {"schema_version": _SCHEMA_VERSION, "composition_id": self.composition_id, "queue_id": self.queue_id, "queue_config_digest": _hex(self.queue_config_digest), "verifier_sha256": _hex(self.verifier_sha256), "receiver_identity": _hex(self.receiver_identity), "receiver_epoch": self.receiver_epoch, "verifier_epoch": self.verifier_epoch, "capacity": self.capacity, "lease_seconds": self.lease_seconds, "reconciliation_capacity": self.reconciliation_capacity, "reconciliation_lease_seconds": self.reconciliation_lease_seconds, "max_attempts": self.max_attempts, "busy_timeout_ms": self.busy_timeout_ms, "ack_evidence_profile_digest": _hex(self.profile_digest), "directives": list(_DIRECTIVES), "proof_suite_id": None, "production_usable": False, "activation": False}
     @property
     def canonical_bytes(self) -> bytes: return _json_bytes(self.as_json)
     @property
@@ -341,6 +371,23 @@ def _idempotency_key(config: CompositionConfigV2, job_id: str, envelope_digest: 
     return _sha(_IDEMPOTENCY, config.digest, _fixed_ascii(config.composition_id, "composition_id"), _fixed_ascii(job_id, "job_id"), envelope_digest)
 
 
+def _composition_batch_id(config: CompositionConfigV2, batch: IndependentVerifiedQueueBatch) -> bytes:
+    token = batch.batch
+    if not 1 <= token.accepted_count <= 256 or len(token.operation_ids) != token.accepted_count or tuple(job.operation_id for job in batch.jobs) != token.operation_ids:
+        _raise_fixed(CompositionIntegrityError, "queue_batch_shape")
+    return _sha(
+        _COMPOSITION_BATCH,
+        config.digest,
+        token.batch_id,
+        token.member_set_digest,
+        token.pre_head_root,
+        token.post_head_root,
+        _u64(token.pre_transition_count),
+        _u64(token.accepted_count),
+        b"".join(token.operation_ids),
+    )
+
+
 def _receipt_digest(raw: bytes) -> bytes: return _sha(_STATE_RECEIPT, raw)
 def _receipt_values(receipt: Mapping[str, Any]) -> dict[str, Any]: return {key: (_hex(value) if type(value) is bytes else value) for key, value in receipt.items()}
 _NO_EXCEPTION: Final[bytes] = b"\xe0" + bytes(63)
@@ -364,9 +411,9 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
     if type(raw) is not bytes or not 0 < len(raw) <= _MAX_RECEIPT: _raise_fixed(CompositionIntegrityError, "receipt_bounds")
     try: value = json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError): _raise_fixed(CompositionIntegrityError, "receipt_encoding")
-    required = {"operation_digest", "artifact_sha256", "artifact_digest", "statement_digest", "circuit_id", "bundle_id", "receipt_id", "join_id", "settlement_id", "settlement_domain", "request_id", "attempt_id", "decision_id", "sequence_before", "sequence_after", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "clearance_count_before", "clearance_count_after", "payment_root_before", "payment_root_after", "settled_batch_count_before", "settled_batch_count_after", "state_binding_after", "audit_head_after", "policy_result", "effective_directive", "exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until", "proof_session_accepted", "economic_mutation", "proof_suite_id"}
+    required = {"operation_digest", "artifact_sha256", "artifact_digest", "statement_digest", "circuit_id", "bundle_id", "receipt_id", "join_id", "settlement_id", "settlement_domain", "request_id", "attempt_id", "decision_id", "sequence_before", "sequence_after", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "clearance_count_before", "clearance_count_after", "payment_root_before", "payment_root_after", "settled_batch_count_before", "settled_batch_count_after", "state_binding_after", "audit_head_after", "policy_result", "effective_directive", "exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until", "proof_session_accepted", "economic_mutation", "proof_suite_id", "queue_batch_id", "queue_batch_member_set_digest", "composition_batch_id", "batch_member_index", "batch_member_count"}
     if type(value) is not dict or raw != _json_bytes(value) or set(value) != required: _raise_fixed(CompositionIntegrityError, "receipt_keys")
-    for name in ("operation_digest", "artifact_digest", "statement_digest", "bundle_id", "receipt_id", "join_id", "settlement_id", "settlement_domain", "request_id", "attempt_id", "decision_id", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "payment_root_before", "payment_root_after", "state_binding_after", "audit_head_after", "exception_authorization_id", "exception_scope_id"): _hex_blob(value[name], 64, "receipt_" + name)
+    for name in ("operation_digest", "artifact_digest", "statement_digest", "bundle_id", "receipt_id", "join_id", "settlement_id", "settlement_domain", "request_id", "attempt_id", "decision_id", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "payment_root_before", "payment_root_after", "state_binding_after", "audit_head_after", "exception_authorization_id", "exception_scope_id", "queue_batch_id", "queue_batch_member_set_digest", "composition_batch_id"): _hex_blob(value[name], 64, "receipt_" + name)
     _hex_blob(value["artifact_sha256"], 32, "receipt_artifact_sha256"); _hex_blob(value["circuit_id"], 32, "receipt_circuit")
     for name in ("sequence_before", "sequence_after", "clearance_count_before", "clearance_count_after", "settled_batch_count_before", "settled_batch_count_after"):
         if type(value[name]) is not int or value[name] < 0: _raise_fixed(CompositionIntegrityError, "receipt_integer")
@@ -374,6 +421,7 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
         if type(value[name]) is not int or not 1 <= value[name] <= 5: _raise_fixed(CompositionIntegrityError, "receipt_directive")
     for name in ("exception_valid_from", "exception_valid_until"):
         if type(value[name]) is not int or value[name] < 0: _raise_fixed(CompositionIntegrityError, "receipt_exception_interval")
+    if type(value["batch_member_index"]) is not int or type(value["batch_member_count"]) is not int or not 1 <= value["batch_member_count"] <= 256 or not 0 <= value["batch_member_index"] < value["batch_member_count"]: _raise_fixed(CompositionIntegrityError, "receipt_batch")
     if int(value["effective_directive"]) != 5 and (value["exception_authorization_id"] != _hex(_NO_EXCEPTION) or value["exception_scope_id"] != _hex(_NO_EXCEPTION) or value["exception_valid_from"] != 0 or value["exception_valid_until"] != 0): _raise_fixed(CompositionIntegrityError, "receipt_exception_sentinel")
     if value["proof_session_accepted"] is not True or value["economic_mutation"] is not False or value["proof_suite_id"] is not None: _raise_fixed(CompositionIntegrityError, "receipt_nonactivation")
     return value
@@ -461,10 +509,10 @@ def build_directive_envelope(*, config: CompositionConfigV2, job_id: str, operat
     raw = _json_bytes(env); _parse_envelope(raw); return raw
 
 
-def _state_receipt(*, operation_digest: bytes, acceptance: Any, sequence_before: int, sequence_after: int, state_before_id: bytes, state_after_id: bytes, clearance_before: bytes, clearance_after: bytes, count_before: int, count_after: int, binding_after: bytes, audit_after: bytes) -> dict[str, Any]:
+def _state_receipt(*, operation_digest: bytes, acceptance: Any, sequence_before: int, sequence_after: int, state_before_id: bytes, state_after_id: bytes, clearance_before: bytes, clearance_after: bytes, count_before: int, count_after: int, binding_after: bytes, audit_after: bytes, queue_batch_id: bytes, queue_batch_member_set_digest: bytes, composition_batch_id: bytes, batch_member_index: int, batch_member_count: int) -> dict[str, Any]:
     statement = acceptance.statement
     authorization, scope, valid_from, valid_until = _exception_fields(acceptance)
-    return {"operation_digest": _hex(operation_digest), "artifact_sha256": _hex(acceptance.artifact_sha256), "artifact_digest": _hex(acceptance.artifact_digest), "statement_digest": _hex(acceptance.statement_digest), "circuit_id": _hex(acceptance.circuit_id), "bundle_id": _hex(acceptance.bundle_id), "receipt_id": _hex(statement.receipt_id), "join_id": _hex(statement.join_id), "settlement_id": _hex(statement.settlement_id), "settlement_domain": _hex(statement.get("settlement_domain")), "request_id": _hex(statement.request_id), "attempt_id": _hex(statement.attempt_id), "decision_id": _hex(statement.decision_id), "sequence_before": sequence_before, "sequence_after": sequence_after, "state_before_id": _hex(state_before_id), "state_after_id": _hex(state_after_id), "clearance_root_before": _hex(clearance_before), "clearance_root_after": _hex(clearance_after), "clearance_count_before": count_before, "clearance_count_after": count_after, "payment_root_before": _hex(_INITIAL_PAYMENT), "payment_root_after": _hex(_INITIAL_PAYMENT), "settled_batch_count_before": 0, "settled_batch_count_after": 0, "state_binding_after": _hex(binding_after), "audit_head_after": _hex(audit_after), "policy_result": int(acceptance.policy_result), "effective_directive": int(acceptance.effective_directive), "exception_authorization_id": _hex(authorization), "exception_scope_id": _hex(scope), "exception_valid_from": valid_from, "exception_valid_until": valid_until, "proof_session_accepted": True, "economic_mutation": False, "proof_suite_id": None}
+    return {"operation_digest": _hex(operation_digest), "artifact_sha256": _hex(acceptance.artifact_sha256), "artifact_digest": _hex(acceptance.artifact_digest), "statement_digest": _hex(acceptance.statement_digest), "circuit_id": _hex(acceptance.circuit_id), "bundle_id": _hex(acceptance.bundle_id), "receipt_id": _hex(statement.receipt_id), "join_id": _hex(statement.join_id), "settlement_id": _hex(statement.settlement_id), "settlement_domain": _hex(statement.get("settlement_domain")), "request_id": _hex(statement.request_id), "attempt_id": _hex(statement.attempt_id), "decision_id": _hex(statement.decision_id), "sequence_before": sequence_before, "sequence_after": sequence_after, "state_before_id": _hex(state_before_id), "state_after_id": _hex(state_after_id), "clearance_root_before": _hex(clearance_before), "clearance_root_after": _hex(clearance_after), "clearance_count_before": count_before, "clearance_count_after": count_after, "payment_root_before": _hex(_INITIAL_PAYMENT), "payment_root_after": _hex(_INITIAL_PAYMENT), "settled_batch_count_before": 0, "settled_batch_count_after": 0, "state_binding_after": _hex(binding_after), "audit_head_after": _hex(audit_after), "policy_result": int(acceptance.policy_result), "effective_directive": int(acceptance.effective_directive), "exception_authorization_id": _hex(authorization), "exception_scope_id": _hex(scope), "exception_valid_from": valid_from, "exception_valid_until": valid_until, "proof_session_accepted": True, "economic_mutation": False, "proof_suite_id": None, "queue_batch_id": _hex(queue_batch_id), "queue_batch_member_set_digest": _hex(queue_batch_member_set_digest), "composition_batch_id": _hex(composition_batch_id), "batch_member_index": batch_member_index, "batch_member_count": batch_member_count}
 
 
 class ClearanceCompositionStoreV2:
@@ -494,7 +542,7 @@ class ClearanceCompositionStoreV2:
                 CREATE TABLE IF NOT EXISTS composition_meta (
                     id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL,
                     composition_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL,
-                    state_profile_identity BLOB, expected_statement BLOB,
+                    state_profile_identity BLOB, state_bytes BLOB,
                     event_head BLOB NOT NULL, next_event_sequence INTEGER NOT NULL,
                     active_dispatch_count INTEGER NOT NULL, active_reconciliation_count INTEGER NOT NULL,
                     state_id BLOB, state_epoch INTEGER, state_sequence INTEGER,
@@ -543,7 +591,7 @@ class ClearanceCompositionStoreV2:
                 CREATE INDEX IF NOT EXISTS composition_lease_expiry_idx ON composition_transactions(lease_kind,lease_expires_ms) WHERE lease_kind IS NOT NULL;
                 CREATE TRIGGER IF NOT EXISTS composition_meta_no_delete BEFORE DELETE ON composition_meta BEGIN SELECT RAISE(ABORT,'composition_meta_immutable'); END;
                 CREATE TRIGGER IF NOT EXISTS composition_meta_guard BEFORE UPDATE ON composition_meta
-                WHEN NEW.id IS NOT OLD.id OR NEW.schema_version IS NOT OLD.schema_version OR NEW.composition_id IS NOT OLD.composition_id OR NEW.config_json IS NOT OLD.config_json OR NEW.config_digest IS NOT OLD.config_digest OR (OLD.state_profile_identity IS NOT NULL AND NEW.state_profile_identity IS NOT OLD.state_profile_identity) OR (OLD.expected_statement IS NOT NULL AND NEW.expected_statement IS NOT OLD.expected_statement) OR NEW.proof_suite_id IS NOT OLD.proof_suite_id OR NEW.production_usable IS NOT OLD.production_usable OR NEW.activation IS NOT OLD.activation OR (OLD.payment_root IS NOT NULL AND NEW.payment_root IS NOT OLD.payment_root) OR (OLD.settled_batch_count IS NOT NULL AND NEW.settled_batch_count IS NOT OLD.settled_batch_count)
+                WHEN NEW.id IS NOT OLD.id OR NEW.schema_version IS NOT OLD.schema_version OR NEW.composition_id IS NOT OLD.composition_id OR NEW.config_json IS NOT OLD.config_json OR NEW.config_digest IS NOT OLD.config_digest OR (OLD.state_profile_identity IS NOT NULL AND NEW.state_profile_identity IS NOT OLD.state_profile_identity) OR NEW.proof_suite_id IS NOT OLD.proof_suite_id OR NEW.production_usable IS NOT OLD.production_usable OR NEW.activation IS NOT OLD.activation OR (OLD.payment_root IS NOT NULL AND NEW.payment_root IS NOT OLD.payment_root) OR (OLD.settled_batch_count IS NOT NULL AND NEW.settled_batch_count IS NOT OLD.settled_batch_count)
                 BEGIN SELECT RAISE(ABORT,'composition_meta_immutable'); END;
                 CREATE TRIGGER IF NOT EXISTS composition_transactions_no_delete BEFORE DELETE ON composition_transactions BEGIN SELECT RAISE(ABORT,'composition_transactions_append_only'); END;
                 CREATE TRIGGER IF NOT EXISTS composition_transactions_guard BEFORE UPDATE ON composition_transactions
@@ -558,7 +606,7 @@ class ClearanceCompositionStoreV2:
                 row = connection.execute("SELECT * FROM composition_meta WHERE id=1").fetchone()
                 if row is None:
                     head = _sha(_GENESIS, self.config.composition_id.encode("ascii"), self.config.digest)
-                    values = (1, _SCHEMA_VERSION, self.config.composition_id, self.config.canonical_bytes, self.config.digest, self.config.state_profile_identity, self.config.expected_statement, head, 0, 0, 0, *([None] * 12), None, 0, 0)
+                    values = (1, _SCHEMA_VERSION, self.config.composition_id, self.config.canonical_bytes, self.config.digest, None, None, head, 0, 0, 0, *([None] * 12), None, 0, 0)
                     connection.execute("INSERT INTO composition_meta VALUES (" + ",".join("?" for _ in values) + ")", values)
                 else: self._check_meta(tuple(row))
                 connection.execute("COMMIT")
@@ -568,8 +616,9 @@ class ClearanceCompositionStoreV2:
 
     def _check_meta(self, row: tuple[Any, ...]) -> tuple[Any, ...]:
         if len(row) != 26 or int(row[1]) != _SCHEMA_VERSION or str(row[2]) != self.config.composition_id: _raise_fixed(CompositionIntegrityError, "composition_schema")
-        if bytes(row[3]) != self.config.canonical_bytes or bytes(row[4]) != self.config.digest or (self.config.state_profile_identity is not None and (row[5] is None or bytes(row[5]) != self.config.state_profile_identity)) or (self.config.expected_statement is not None and (row[6] is None or bytes(row[6]) != self.config.expected_statement)) or row[23] is not None or int(row[24]) != 0 or int(row[25]) != 0: _raise_fixed(CompositionIntegrityError, "composition_config_drift")
+        if bytes(row[3]) != self.config.canonical_bytes or bytes(row[4]) != self.config.digest or row[23] is not None or int(row[24]) != 0 or int(row[25]) != 0: _raise_fixed(CompositionIntegrityError, "composition_config_drift")
         if type(row[7]) is not bytes or len(row[7]) != 64 or type(row[8]) is not int or row[8] < 0: _raise_fixed(CompositionIntegrityError, "composition_event_head")
+        if row[6] is not None and (type(row[6]) is not bytes or len(row[6]) != 1686): _raise_fixed(CompositionIntegrityError, "composition_state_bytes")
         if type(row[9]) is not int or not 0 <= row[9] <= self.config.capacity or type(row[10]) is not int or not 0 <= row[10] <= self.config.reconciliation_capacity: _raise_fixed(CompositionIntegrityError, "composition_counters")
         state = row[11:23]
         if row[11] is None and any(x is not None for x in state): _raise_fixed(CompositionIntegrityError, "composition_state_partial")
@@ -603,33 +652,66 @@ class ClearanceCompositionStoreV2:
     def _ensure_state(self, connection: sqlite3.Connection, acceptance: Any) -> tuple[Any, ...] | None:
         meta = self._meta(connection); statement = acceptance.statement
         if meta[11] is not None:
-            return None if meta[6] != bytes(statement.statement_bytes) or meta[5] != _state_store_identity(statement, self.config.verifier_sha256) else tuple(meta[11:23])
-        if self.config.expected_statement is not None and bytes(statement.statement_bytes) != self.config.expected_statement: return None
+            predecessor = bytes(statement.get("predecessor_state_bytes"))
+            return None if meta[6] != predecessor or meta[5] != _state_store_identity(statement, self.config.verifier_sha256) else tuple(meta[11:23])
         profile, identity = _profile_digest(statement, self.config.verifier_sha256), _state_store_identity(statement, self.config.verifier_sha256)
-        if self.config.state_profile_identity is not None and identity != self.config.state_profile_identity: return None
+        predecessor = bytes(statement.get("predecessor_state_bytes"))
         continuity, audit = bytes(statement.state("before_continuity_root")), bytes(statement.state("before_audit_head"))
         clearance, replay = _sha(_STATE_GENESIS, statement.state_before_id, _INITIAL_CLEARANCE), _sha(_STATE_GENESIS, statement.attempt_id, statement.request_id)
-        binding = _sha(_STATE_BINDING, statement.statement_bytes, statement.state_before_id, _u64(statement.epoch), _u64(statement.sequence_before), continuity, clearance, replay, _INITIAL_PAYMENT, _u64(0), self.config.verifier_sha256, profile)
+        binding = _sha(_STATE_BINDING, predecessor, statement.state_before_id, _u64(statement.epoch), _u64(statement.sequence_before), continuity, clearance, replay, _INITIAL_PAYMENT, _u64(0), self.config.verifier_sha256, profile)
         state = (bytes(statement.state_before_id), int(statement.epoch), int(statement.sequence_before), continuity, clearance, int(statement.state("clearance_count_before")), replay, _INITIAL_PAYMENT, 0, binding, audit, None)
-        connection.execute("UPDATE composition_meta SET state_profile_identity=?,expected_statement=?,state_id=?,state_epoch=?,state_sequence=?,state_continuity_root=?,state_clearance_root=?,state_clearance_count=?,state_replay_root=?,payment_root=?,settled_batch_count=?,state_binding=?,audit_head=?,last_operation_digest=? WHERE id=1", (identity, statement.statement_bytes, *state))
+        connection.execute("UPDATE composition_meta SET state_profile_identity=?,state_bytes=?,state_id=?,state_epoch=?,state_sequence=?,state_continuity_root=?,state_clearance_root=?,state_clearance_count=?,state_replay_root=?,payment_root=?,settled_batch_count=?,state_binding=?,audit_head=?,last_operation_digest=? WHERE id=1", (identity, predecessor, *state))
         return self._state(connection)
 
     def _validate_queue_result(self, verified: IndependentVerifiedQueueJob) -> Any:
         if verified.queue_id != self.config.queue_id or verified.config_digest != self.config.queue_config_digest or verified.verifier_sha256 != self.config.verifier_sha256 or verified.cap_bytes != _CAP_BYTES or verified.cap_enforced is not True or verified.active_process_limit != _ACTIVE_PROCESS_LIMIT or verified.timed_out is not False or verified.exit_code != 0 or verified.peak_job_commit_bytes > _CAP_BYTES: _raise_fixed(CompositionIntegrityError, "queue_binding")
         try: acceptance = parse_acceptance_bytes(verified.acceptance_bytes)
         except Exception: _raise_fixed(CompositionIntegrityError, "acceptance_parse")
-        if acceptance.canonical_bytes() != verified.acceptance_bytes or acceptance.artifact_bytes != verified.artifact_bytes or acceptance.artifact_sha256 != verified.artifact_sha256 or acceptance.artifact_digest != verified.artifact_sha3_512 or acceptance.circuit_id != verified.circuit_id or bytes(acceptance.statement.settlement_id) != _sha(_SETTLEMENT_REFERENCE, bytes(acceptance.statement.get("settlement_domain")), bytes((int(acceptance.effective_directive),)), bytes(acceptance.statement.decision_id), bytes(acceptance.statement.state_after_id)): _raise_fixed(CompositionIntegrityError, "acceptance_binding")
+        if acceptance.canonical_bytes() != verified.acceptance_bytes or acceptance.artifact_bytes != verified.artifact_bytes or acceptance.artifact_sha256 != verified.artifact_sha256 or acceptance.artifact_digest != verified.artifact_sha3_512 or acceptance.circuit_id != verified.circuit_id or bytes(acceptance.statement.settlement_id) != _sha(_SETTLEMENT_REFERENCE, bytes(acceptance.statement.get("settlement_domain")), bytes((int(acceptance.effective_directive),)), bytes(acceptance.statement.decision_id), bytes(acceptance.statement.state_after_id), bytes(acceptance.statement.state("authorized_payment_commitment"))): _raise_fixed(CompositionIntegrityError, "acceptance_binding")
         return acceptance
 
     @staticmethod
-    def _queue_view_bytes(verified: IndependentVerifiedQueueJob) -> bytes:
-        return _json_bytes({"schema": _QUEUE_VIEW_SCHEMA, "queue_id": verified.queue_id, "config_digest": _hex(verified.config_digest), "verifier_sha256": _hex(verified.verifier_sha256), "job_id": verified.job_id, "operation_id": _hex(verified.operation_id), "attempt": verified.attempt, "artifact_bytes": verified.artifact_bytes, "artifact_sha256": _hex(verified.artifact_sha256), "artifact_sha3_512": _hex(verified.artifact_sha3_512), "circuit_id": _hex(verified.circuit_id), "peak_job_commit_bytes": verified.peak_job_commit_bytes, "cap_bytes": verified.cap_bytes, "cap_enforced": verified.cap_enforced, "active_process_limit": verified.active_process_limit, "timed_out": verified.timed_out, "exit_code": verified.exit_code})
+    def _queue_view_bytes(
+        verified: IndependentVerifiedQueueJob,
+        batch: IndependentVerifiedQueueBatch,
+        member_index: int,
+        composition_batch_id: bytes,
+    ) -> bytes:
+        token = batch.batch
+        return _json_bytes({
+            "schema": _QUEUE_VIEW_SCHEMA,
+            "queue_id": verified.queue_id,
+            "config_digest": _hex(verified.config_digest),
+            "verifier_sha256": _hex(verified.verifier_sha256),
+            "job_id": verified.job_id,
+            "operation_id": _hex(verified.operation_id),
+            "attempt": verified.attempt,
+            "artifact_bytes": verified.artifact_bytes,
+            "artifact_sha256": _hex(verified.artifact_sha256),
+            "artifact_sha3_512": _hex(verified.artifact_sha3_512),
+            "circuit_id": _hex(verified.circuit_id),
+            "peak_job_commit_bytes": verified.peak_job_commit_bytes,
+            "cap_bytes": verified.cap_bytes,
+            "cap_enforced": verified.cap_enforced,
+            "active_process_limit": verified.active_process_limit,
+            "timed_out": verified.timed_out,
+            "exit_code": verified.exit_code,
+            "queue_batch_id": _hex(token.batch_id),
+            "queue_batch_member_set_digest": _hex(token.member_set_digest),
+            "queue_batch_pre_head_root": _hex(token.pre_head_root),
+            "queue_batch_post_head_root": _hex(token.post_head_root),
+            "queue_batch_pre_transition_count": token.pre_transition_count,
+            "queue_batch_member_index": member_index,
+            "queue_batch_member_count": token.accepted_count,
+            "composition_batch_id": _hex(composition_batch_id),
+        })
 
     def _result_from_tx(self, row: tuple[Any, ...], duplicate: bool) -> CompositionProcessResultV2:
         return CompositionProcessResultV2(str(row[1]), bytes(row[2]), str(row[13]), bytes(row[12]), None if row[14] is None else bytes(row[14]), None if row[15] is None else bytes(row[15]), str(row[1]) if row[17] is not None else None, None if row[19] is None else bytes(row[19]), duplicate, None if row[36] is None else str(row[36]))
 
     def _apply_verified_job_in_transaction(self, connection: sqlite3.Connection, prepared: tuple[Any, ...], now: int) -> tuple[CompositionProcessResultV2, bool]:
-        verified, acceptance, encoded, queue_view, queue_view_digest, acceptance_digest = prepared
+        verified, acceptance, encoded, queue_view, queue_view_digest, acceptance_digest, batch, composition_batch_id, member_index = prepared
+        batch_token = batch.batch
         job_id = verified.job_id
         operation_digest = _sha(_STATE_OPERATION, encoded, bytes(acceptance.statement.state_before_id), bytes(acceptance.statement.attempt_id), self.config.verifier_sha256)
         if connection.execute("SELECT 1 FROM composition_transactions WHERE artifact_digest=? OR request_id=? OR attempt_id=? OR operation_digest=?", (acceptance.artifact_digest, acceptance.statement.request_id, acceptance.statement.attempt_id, operation_digest)).fetchone() is not None: _raise_fixed(CompositionConflictError, "composition_conflicting_retry")
@@ -654,29 +736,43 @@ class ClearanceCompositionStoreV2:
         clearance_after = _sha(_STATE_CLEARANCE, bytes(state[4]), statement.state_after_id, statement.decision_id, bytes((int(statement.directive),))) if advanced else bytes(state[4])
         count_after = int(state[5]) + int(advanced)
         binding_after = _sha(_STATE_BINDING, bytes(meta[20]), operation_digest, statement.state_after_id, replay_after, clearance_after, _u64(count_after), bytes(state[7]), _u64(0), _u64(int(state[1])), _u64(sequence_after), self.config.verifier_sha256, _profile_digest(statement, self.config.verifier_sha256))
-        audit_after = _sha(_STATE_AUDIT_HEAD, bytes(state[10]), _sha(_STATE_AUDIT_EVENT, bytes(state[10]), _json_bytes({"operation_digest": _hex(operation_digest), "request_id": _hex(statement.request_id), "policy_result": int(acceptance.policy_result), "effective_directive": int(acceptance.effective_directive), "sequence_after": sequence_after})))
-        receipt_raw = _json_bytes(_state_receipt(operation_digest=operation_digest, acceptance=acceptance, sequence_before=sequence_before, sequence_after=sequence_after, state_before_id=bytes(state[0]), state_after_id=statement.state_after_id, clearance_before=bytes(state[4]), clearance_after=clearance_after, count_before=int(state[5]), count_after=count_after, binding_after=binding_after, audit_after=audit_after))
+        audit_after = _sha(b"BL/NATIVE-V3/MINIMAL-AUDIT-HEAD/v1\x00", bytes(state[10]), bytes(statement.decision_id), bytes((int(statement.directive),)))
+        receipt_raw = _json_bytes(_state_receipt(operation_digest=operation_digest, acceptance=acceptance, sequence_before=sequence_before, sequence_after=sequence_after, state_before_id=bytes(state[0]), state_after_id=statement.state_after_id, clearance_before=bytes(state[4]), clearance_after=clearance_after, count_before=int(state[5]), count_after=count_after, binding_after=binding_after, audit_after=audit_after, queue_batch_id=batch_token.batch_id, queue_batch_member_set_digest=batch_token.member_set_digest, composition_batch_id=composition_batch_id, batch_member_index=member_index, batch_member_count=batch_token.accepted_count))
         receipt = _parse_receipt(receipt_raw); receipt_digest = _receipt_digest(receipt_raw)
         envelope = build_directive_envelope(config=self.config, job_id=job_id, operation_id=verified.operation_id, disposition_digest=disposition_id, state_store_identity=_state_store_identity(statement, self.config.verifier_sha256), receipt=_parse_receipt(receipt_raw))
         envelope_digest = _sha(_ENVELOPE, envelope); outbox_operation_id = _operation_identity(self.config, job_id, envelope_digest); idempotency = _idempotency_key(self.config, job_id, envelope_digest)
         tx = (transaction_id, job_id, verified.operation_id, queue_view, queue_view_digest, encoded, acceptance_digest, acceptance.artifact_digest, statement.request_id, statement.attempt_id, statement.decision_id, operation_digest, disposition_id, "APPLIED", receipt_raw, receipt_digest, sequence_after, envelope, envelope_digest, outbox_operation_id, idempotency, "READY", 0, 0, None, None, None, None, None, now, None, None, None, None, None, None, None, now, now)
         connection.execute("INSERT INTO composition_transactions VALUES (" + ",".join("?" for _ in tx) + ")", tx)
-        connection.execute("UPDATE composition_meta SET state_id=?,state_epoch=?,state_sequence=?,state_continuity_root=?,state_clearance_root=?,state_clearance_count=?,state_replay_root=?,payment_root=?,settled_batch_count=?,state_binding=?,audit_head=?,last_operation_digest=?,active_dispatch_count=active_dispatch_count+1 WHERE id=1", (statement.state_after_id, statement.epoch, sequence_after, statement.state("after_continuity_root"), clearance_after, count_after, replay_after, _INITIAL_PAYMENT, 0, binding_after, audit_after, operation_digest))
-        self._append_event(connection, kind="APPLIED", tx=tx, before_state="NONE", after_state="READY", payload={"operation_digest": _hex(operation_digest), "queue_view_digest": _hex(queue_view_digest), "acceptance_digest": _hex(acceptance_digest), "artifact_digest": _hex(acceptance.artifact_digest), "state_receipt_digest": _hex(receipt_digest), "envelope_digest": _hex(envelope_digest), "outbox_operation_id": _hex(outbox_operation_id), "idempotency_key": _hex(idempotency), "policy_result": int(acceptance.policy_result), "effective_directive": int(acceptance.effective_directive), "payment_root_unchanged": True, "settlement_id": receipt["settlement_id"], "settlement_domain": receipt["settlement_domain"], "exception_authorization_id": receipt["exception_authorization_id"], "exception_scope_id": receipt["exception_scope_id"], "exception_valid_from": int(receipt["exception_valid_from"]), "exception_valid_until": int(receipt["exception_valid_until"])}, receipt_digest=receipt_digest, now=now)
+        connection.execute("UPDATE composition_meta SET state_bytes=?,state_id=?,state_epoch=?,state_sequence=?,state_continuity_root=?,state_clearance_root=?,state_clearance_count=?,state_replay_root=?,payment_root=?,settled_batch_count=?,state_binding=?,audit_head=?,last_operation_digest=?,active_dispatch_count=active_dispatch_count+1 WHERE id=1", (bytes(statement.get("state_commitment_bytes")), statement.state_after_id, statement.epoch, sequence_after, statement.state("after_continuity_root"), clearance_after, count_after, replay_after, _INITIAL_PAYMENT, 0, binding_after, audit_after, operation_digest))
+        self._append_event(connection, kind="APPLIED", tx=tx, before_state="NONE", after_state="READY", payload={"operation_digest": _hex(operation_digest), "queue_view_digest": _hex(queue_view_digest), "acceptance_digest": _hex(acceptance_digest), "artifact_digest": _hex(acceptance.artifact_digest), "state_receipt_digest": _hex(receipt_digest), "envelope_digest": _hex(envelope_digest), "outbox_operation_id": _hex(outbox_operation_id), "idempotency_key": _hex(idempotency), "policy_result": int(acceptance.policy_result), "effective_directive": int(acceptance.effective_directive), "payment_root_unchanged": True, "settlement_id": receipt["settlement_id"], "settlement_domain": receipt["settlement_domain"], "exception_authorization_id": receipt["exception_authorization_id"], "exception_scope_id": receipt["exception_scope_id"], "exception_valid_from": int(receipt["exception_valid_from"]), "exception_valid_until": int(receipt["exception_valid_until"]), "queue_batch_id": _hex(batch_token.batch_id), "queue_batch_member_set_digest": _hex(batch_token.member_set_digest), "composition_batch_id": _hex(composition_batch_id), "batch_member_index": member_index, "batch_member_count": batch_token.accepted_count}, receipt_digest=receipt_digest, now=now)
         return CompositionProcessResultV2(job_id, verified.operation_id, "APPLIED", disposition_id, receipt_raw, receipt_digest, job_id, outbox_operation_id, False, None), True
 
     @_public_v2_api
-    def process_verified_jobs(self, queue_database: Path, job_ids: list[str] | tuple[str, ...]) -> tuple[CompositionProcessResultV2, ...]:
-        if type(job_ids) not in (list, tuple) or not 1 <= len(job_ids) <= 256 or len(set(job_ids)) != len(job_ids) or any(type(job_id) is not str for job_id in job_ids): _raise_fixed(CompositionIntegrityError, "job_ids")
-        for job_id in job_ids: _token(job_id, "job_id")
-        try: verified_jobs = read_verified_jobs(queue_database, job_ids)
+    def process_verified_jobs(self, queue_database: Path, promotion_batch: IndependentVerifiedQueueBatch | list[str] | tuple[str, ...]) -> tuple[CompositionProcessResultV2, ...]:
+        if type(promotion_batch) is IndependentVerifiedQueueBatch:
+            requested_batch = promotion_batch
+            selector = requested_batch.batch.batch_id
+        elif type(promotion_batch) in (list, tuple):
+            if not 1 <= len(promotion_batch) <= 256 or len(set(promotion_batch)) != len(promotion_batch) or any(type(job_id) is not str for job_id in promotion_batch): _raise_fixed(CompositionIntegrityError, "job_ids")
+            for job_id in promotion_batch: _token(job_id, "job_id")
+            requested_batch = None
+            selector = None
+        else:
+            _raise_fixed(CompositionIntegrityError, "promotion_batch_required")
+        try:
+            verified_batch = read_verified_batch(queue_database, selector)
         except (IndependentQueueError, OSError, sqlite3.Error): _raise_fixed(CompositionIntegrityError, "queue_verification_failed")
-        if tuple(verified.job_id for verified in verified_jobs) != tuple(job_ids): _raise_fixed(CompositionIntegrityError, "queue_job_binding")
+        if requested_batch is not None:
+            if requested_batch.batch != verified_batch.batch or requested_batch.jobs != verified_batch.jobs: _raise_fixed(CompositionIntegrityError, "queue_batch_binding")
+        else:
+            if tuple(verified.job_id for verified in verified_batch.jobs) != tuple(promotion_batch): _raise_fixed(CompositionIntegrityError, "queue_job_binding")
+        verified_jobs = verified_batch.jobs
+        composition_batch_id = _composition_batch_id(self.config, verified_batch)
         prepared: list[tuple[Any, ...]] = []
-        for verified in verified_jobs:
-            acceptance = self._validate_queue_result(verified); encoded = bytes(verified.acceptance_bytes); queue_view = self._queue_view_bytes(verified)
+        for member_index, verified in enumerate(verified_jobs):
+            acceptance = self._validate_queue_result(verified); encoded = bytes(verified.acceptance_bytes); queue_view = self._queue_view_bytes(verified, verified_batch, member_index, composition_batch_id)
             queue_view_digest, acceptance_digest = _sha(_MATERIAL, b"queue-view", queue_view), _sha(_MATERIAL, b"acceptance", encoded)
-            prepared.append((verified, acceptance, encoded, queue_view, queue_view_digest, acceptance_digest))
+            prepared.append((verified, acceptance, encoded, queue_view, queue_view_digest, acceptance_digest, verified_batch, composition_batch_id, member_index))
         now = int(self.clock.now_ms()); results: list[CompositionProcessResultV2] = []; applied_any = False; new_count = 0
         with closing(self._connect()) as connection:
             began = False
@@ -685,7 +781,7 @@ class ClearanceCompositionStoreV2:
                 existing_rows: list[tuple[Any, ...] | None] = []
                 new_material: set[bytes] = set()
                 for item in prepared:
-                    verified, acceptance, encoded, _queue_view, queue_view_digest, acceptance_digest = item
+                    verified, acceptance, encoded, _queue_view, queue_view_digest, acceptance_digest, _batch, _composition_batch_identity, _member_index = item
                     existing = connection.execute("SELECT * FROM composition_transactions WHERE queue_job_id=?", (verified.job_id,)).fetchone()
                     if existing is not None:
                         if bytes(existing[2]) != verified.operation_id or bytes(existing[4]) != queue_view_digest or bytes(existing[6]) != acceptance_digest or bytes(existing[5]) != encoded: _raise_fixed(CompositionConflictError, "composition_conflicting_retry")
@@ -713,7 +809,11 @@ class ClearanceCompositionStoreV2:
     @_public_v2_api
     def process_verified_job(self, queue_database: Path, job_id: str) -> CompositionProcessResultV2:
         _token(job_id, "job_id")
-        return self.process_verified_jobs(queue_database, (job_id,))[0]
+        try:
+            batch = read_verified_batch(queue_database)
+        except (IndependentQueueError, OSError, sqlite3.Error): _raise_fixed(CompositionIntegrityError, "queue_verification_failed")
+        if len(batch.jobs) != 1 or batch.jobs[0].job_id != job_id: _raise_fixed(CompositionIntegrityError, "size_one_batch_required")
+        return self.process_verified_jobs(queue_database, batch)[0]
 
     def _recover_expired_leases(self, connection: sqlite3.Connection, now: int) -> None:
         for row in connection.execute("SELECT * FROM composition_transactions WHERE lease_kind IS NOT NULL AND lease_expires_ms<=? ORDER BY lease_expires_ms,queue_job_id", (now,)).fetchall():

@@ -36,6 +36,20 @@ struct JobPeak {
   bool query_ok = true;
 };
 
+struct JobCensus {
+  uint64_t last_total_processes = 0;
+  uint64_t last_active_processes = 0;
+  uint64_t peak_total_processes = 0;
+  uint64_t peak_active_processes = 0;
+  size_t accounting_queries = 0;
+  size_t accounting_failures = 0;
+  size_t process_id_queries = 0;
+  size_t process_id_failures = 0;
+  std::set<DWORD> seen_process_ids;
+  bool last_accounting_ok = false;
+  bool last_process_id_query_ok = false;
+};
+
 std::string Quote(const std::string& value) {
   std::string output = "\"";
   for (char ch : value) {
@@ -121,6 +135,78 @@ JobPeak SampleJob(HANDLE job, JobPeak peak) {
   return peak;
 }
 
+bool SampleJobCensus(HANDLE job, JobCensus& census) {
+  JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+  ++census.accounting_queries;
+  if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation,
+                                 &accounting, sizeof(accounting), nullptr)) {
+    ++census.accounting_failures;
+    census.last_accounting_ok = false;
+    census.last_process_id_query_ok = false;
+    return false;
+  }
+  census.last_total_processes = accounting.TotalProcesses;
+  census.last_active_processes = accounting.ActiveProcesses;
+  census.peak_total_processes =
+      std::max<uint64_t>(census.peak_total_processes,
+                         accounting.TotalProcesses);
+  census.peak_active_processes =
+      std::max<uint64_t>(census.peak_active_processes,
+                         accounting.ActiveProcesses);
+  census.last_accounting_ok = true;
+
+  // The Job Object process-id list is the race-free membership source for
+  // assigned processes.  Toolhelp remains only a per-process diagnostic; it
+  // is never sufficient to establish complete-tree coverage.
+  size_t buffer_bytes = sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) +
+                        sizeof(ULONG_PTR) * 15;
+  std::vector<uint8_t> buffer(buffer_bytes);
+  DWORD return_bytes = 0;
+  bool listed = false;
+  for (size_t attempt = 0; attempt != 8; ++attempt) {
+    return_bytes = 0;
+    if (QueryInformationJobObject(job, JobObjectBasicProcessIdList,
+                                  buffer.data(),
+                                  static_cast<DWORD>(buffer.size()),
+                                  &return_bytes)) {
+      listed = true;
+      break;
+    }
+    const DWORD error = GetLastError();
+    if (error != ERROR_INSUFFICIENT_BUFFER && error != ERROR_MORE_DATA) break;
+    const size_t required = return_bytes > buffer.size()
+                                ? static_cast<size_t>(return_bytes)
+                                : buffer.size() * 2;
+    if (required <= buffer.size() || required > (1u << 20)) break;
+    buffer.resize(required);
+  }
+  ++census.process_id_queries;
+  if (!listed || buffer.size() < sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST)) {
+    ++census.process_id_failures;
+    census.last_process_id_query_ok = false;
+    return false;
+  }
+  const auto* process_ids =
+      reinterpret_cast<const JOBOBJECT_BASIC_PROCESS_ID_LIST*>(buffer.data());
+  const size_t header_bytes =
+      offsetof(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList);
+  const size_t ids = process_ids->NumberOfProcessIdsInList;
+  if (ids > (buffer.size() - header_bytes) / sizeof(ULONG_PTR) ||
+      ids > process_ids->NumberOfAssignedProcesses) {
+    ++census.process_id_failures;
+    census.last_process_id_query_ok = false;
+    return false;
+  }
+  for (size_t index = 0; index != ids; ++index) {
+    const ULONG_PTR value = process_ids->ProcessIdList[index];
+    if (value <= static_cast<ULONG_PTR>(UINT32_MAX)) {
+      census.seen_process_ids.insert(static_cast<DWORD>(value));
+    }
+  }
+  census.last_process_id_query_ok = true;
+  return true;
+}
+
 uint64_t ScratchBytes(const std::filesystem::path& root, bool& ok) {
   ok = true;
   uint64_t total = 0;
@@ -171,10 +257,16 @@ void PrintProcessPeaks(const std::map<DWORD, ProcessPeak>& peaks) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 4) {
+  if (argc != 4 && argc != 5) {
     std::fprintf(stderr,
                  "usage: longfellow_minimal_clearance_prover_runner "
-                 "PROVER ARTIFACT SCRATCH\n");
+                 "PROVER ARTIFACT SCRATCH [CASE A|B]\n");
+    return 2;
+  }
+  if (argc == 5 && std::string(argv[4]) != "A" &&
+      std::string(argv[4]) != "B") {
+    std::fprintf(stderr,
+                 "MINIMAL_CLEARANCE_RUNNER_REJECT reason=case-selector\n");
     return 2;
   }
   const std::filesystem::path scratch = argv[3];
@@ -186,14 +278,14 @@ int main(int argc, char** argv) {
     return 2;
   }
   std::string command = Quote(argv[1]) + " " + Quote(argv[2]);
+  if (argc == 5) command += " --case " + Quote(argv[4]);
   std::vector<char> command_line(command.begin(), command.end());
   command_line.push_back('\0');
 
   HANDLE job = CreateJobObjectA(nullptr, nullptr);
   if (job == nullptr) {
     std::fprintf(stderr,
-                 "MINIMAL_CLEARANCE_RUNNER_REJECT reason=create-job-error=%lu\n",
-                 static_cast<unsigned long>(GetLastError()));
+                 "MINIMAL_CLEARANCE_RUNNER_REJECT reason=create-job\n");
     return 2;
   }
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
@@ -203,8 +295,7 @@ int main(int argc, char** argv) {
   if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits,
                                sizeof(limits))) {
     std::fprintf(stderr,
-                 "MINIMAL_CLEARANCE_RUNNER_REJECT reason=set-job-limit-error=%lu\n",
-                 static_cast<unsigned long>(GetLastError()));
+                 "MINIMAL_CLEARANCE_RUNNER_REJECT reason=set-job-limit\n");
     CloseHandle(job);
     return 2;
   }
@@ -216,15 +307,13 @@ int main(int argc, char** argv) {
                       CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr,
                       &startup, &process_info)) {
     std::fprintf(stderr,
-                 "MINIMAL_CLEARANCE_RUNNER_REJECT reason=create-process-error=%lu\n",
-                 static_cast<unsigned long>(GetLastError()));
+                 "MINIMAL_CLEARANCE_RUNNER_REJECT reason=create-process\n");
     CloseHandle(job);
     return 2;
   }
   if (!AssignProcessToJobObject(job, process_info.hProcess)) {
     std::fprintf(stderr,
-                 "MINIMAL_CLEARANCE_RUNNER_REJECT reason=assign-job-error=%lu\n",
-                 static_cast<unsigned long>(GetLastError()));
+                 "MINIMAL_CLEARANCE_RUNNER_REJECT reason=assign-job\n");
     TerminateProcess(process_info.hProcess, 3);
     CloseHandle(process_info.hThread);
     CloseHandle(process_info.hProcess);
@@ -235,6 +324,7 @@ int main(int argc, char** argv) {
   const DWORD root_pid = process_info.dwProcessId;
   std::map<DWORD, ProcessPeak> peaks;
   JobPeak job_peak;
+  JobCensus job_census;
   size_t sample_failures = 0;
   size_t scratch_sample_failures = 0;
   uint64_t scratch_peak = 0;
@@ -253,12 +343,28 @@ int main(int argc, char** argv) {
   while (running) {
     const DWORD wait = WaitForSingleObject(process_info.hProcess,
                                            kSampleMilliseconds);
-    const auto descendants = Descendants(root_pid);
-    for (const auto& [pid, parent] : descendants) {
-      auto [it, inserted] = peaks.emplace(pid, ProcessPeak{pid, parent});
-      if (!SampleProcess(it->second)) ++sample_failures;
+    // Do not attempt to reopen members after the root has exited.  The final
+    // Job Object census below accounts for all assigned members, while a
+    // post-exit OpenProcess failure would be a sampling artifact rather than
+    // evidence that the census missed a process.
+    if (wait == WAIT_TIMEOUT) {
+      const auto descendants = Descendants(root_pid);
+      for (const auto& [pid, parent] : descendants) {
+        auto [it, inserted] = peaks.emplace(pid, ProcessPeak{pid, parent});
+        if (!SampleProcess(it->second)) ++sample_failures;
+      }
     }
     job_peak = SampleJob(job, job_peak);
+    if (wait != WAIT_OBJECT_0 && !SampleJobCensus(job, job_census)) {
+      gate_killed = true;
+      gate_reason = "job-census-failure";
+    }
+    if (wait == WAIT_TIMEOUT) {
+      for (const DWORD pid : job_census.seen_process_ids) {
+        auto [it, inserted] = peaks.emplace(pid, ProcessPeak{pid, 0});
+        if (!SampleProcess(it->second)) ++sample_failures;
+      }
+    }
     bool scratch_ok = false;
     scratch_peak = std::max(scratch_peak, ScratchBytes(scratch, scratch_ok));
     if (!scratch_ok) ++scratch_sample_failures;
@@ -295,6 +401,10 @@ int main(int argc, char** argv) {
   // One final job/scratch sample captures post-exit accounting. A process
   // observed only after exit is still counted as uncovered below.
   job_peak = SampleJob(job, job_peak);
+  if (!SampleJobCensus(job, job_census)) {
+    gate_killed = true;
+    gate_reason = "job-census-failure";
+  }
   bool scratch_ok = false;
   scratch_peak = std::max(scratch_peak, ScratchBytes(scratch, scratch_ok));
   if (!scratch_ok) ++scratch_sample_failures;
@@ -307,14 +417,25 @@ int main(int argc, char** argv) {
   for (const auto& [pid, peak] : peaks) {
     if (peak.samples == 0) ++unsampled;
   }
+  const bool job_census_complete =
+      job_census.accounting_failures == 0 &&
+      job_census.process_id_failures == 0 &&
+      job_census.last_accounting_ok && job_census.last_process_id_query_ok &&
+      job_census.last_active_processes == 0 &&
+      job_census.last_total_processes != 0 &&
+      job_census.last_total_processes == job_census.seen_process_ids.size();
   const bool process_tree_complete =
       job_peak.query_ok && sample_failures == 0 && unsampled == 0 &&
-      scratch_sample_failures == 0;
+      scratch_sample_failures == 0 && job_census_complete;
   PrintProcessPeaks(peaks);
   std::printf("MINIMAL_CLEARANCE_RUNNER_SUMMARY exit_code=%lu "
               "gate_killed=%d gate_reason=%s job_assigned=1 "
               "process_tree_complete=%d observed_processes=%zu "
               "unsampled_processes=%zu sample_failures=%zu "
+              "job_total_processes=%llu job_active_processes=%llu "
+              "job_peak_total_processes=%llu job_peak_active_processes=%llu "
+              "job_census_complete=%d job_census_accounting_failures=%zu "
+              "job_census_process_id_failures=%zu "
               "peak_working_set_bytes=%llu peak_private_commit_bytes=%llu "
               "peak_job_commit_bytes=%llu peak_process_commit_bytes=%llu "
               "scratch_peak_bytes_observed=%llu scratch_sample_failures=%zu "
@@ -322,6 +443,12 @@ int main(int argc, char** argv) {
               static_cast<unsigned long>(exit_code), gate_killed ? 1 : 0,
               gate_reason, process_tree_complete ? 1 : 0, peaks.size(),
               unsampled, sample_failures,
+              static_cast<unsigned long long>(job_census.last_total_processes),
+              static_cast<unsigned long long>(job_census.last_active_processes),
+              static_cast<unsigned long long>(job_census.peak_total_processes),
+              static_cast<unsigned long long>(job_census.peak_active_processes),
+              job_census_complete ? 1 : 0, job_census.accounting_failures,
+              job_census.process_id_failures,
               static_cast<unsigned long long>([&]() {
                 uint64_t value = 0;
                 for (const auto& [pid, peak] : peaks)

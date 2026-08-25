@@ -41,16 +41,16 @@ def _public(function: Callable[..., Any]) -> Callable[..., Any]:
     return wrapped
 
 
-_SCHEMA_VERSION: Final[int] = 2
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v2"
+_SCHEMA_VERSION: Final[int] = 3
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v3"
 _HANDOFF_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/v2"
 _ACK_MODE: Final[str] = "SYNTHETIC_ONLY"
 _DIRECTIVES: Final[tuple[str, ...]] = ("CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED")
 _DELIVERY_STATES: Final[frozenset[str]] = frozenset({"READY", "DISPATCH_LEASED", "DELIVERY_UNCONFIRMED", "RECONCILIATION_LEASED", "ACKNOWLEDGED", "DISPATCH_EXHAUSTED", "RECONCILIATION_EXHAUSTED"})
 _EVENT_KINDS: Final[frozenset[str]] = frozenset({"APPLIED", "HELD", "DISPATCH_LEASED", "DISPATCH_RELEASED", "DELIVERY_UNCONFIRMED", "DISPATCH_LEASE_EXPIRED", "DISPATCH_EXHAUSTED", "RECONCILIATION_LEASED", "RECONCILIATION_INDETERMINATE", "RECONCILIATION_LEASE_EXPIRED", "RECONCILIATION_EXHAUSTED", "ACKNOWLEDGED", "ACKNOWLEDGED_BY_RECONCILIATION", "ACK_CONFLICT"})
-_CONFIG_KEYS: Final[frozenset[str]] = frozenset({"schema_version", "composition_id", "queue_id", "queue_config_digest", "verifier_sha256", "state_profile_identity", "receiver_identity", "receiver_epoch", "verifier_epoch", "expected_statement", "capacity", "lease_seconds", "reconciliation_capacity", "reconciliation_lease_seconds", "max_attempts", "busy_timeout_ms", "ack_evidence_profile_digest", "directives", "proof_suite_id", "production_usable", "activation"})
+_CONFIG_KEYS: Final[frozenset[str]] = frozenset({"schema_version", "composition_id", "queue_id", "queue_config_digest", "verifier_sha256", "receiver_identity", "receiver_epoch", "verifier_epoch", "capacity", "lease_seconds", "reconciliation_capacity", "reconciliation_lease_seconds", "max_attempts", "busy_timeout_ms", "ack_evidence_profile_digest", "directives", "proof_suite_id", "production_usable", "activation"})
 _PAYLOAD_KEYS: Final[dict[str, frozenset[str]]] = {
-    "APPLIED": frozenset({"operation_digest", "queue_view_digest", "acceptance_digest", "artifact_digest", "state_receipt_digest", "envelope_digest", "outbox_operation_id", "idempotency_key", "policy_result", "effective_directive", "payment_root_unchanged", "settlement_id", "settlement_domain", "exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until"}),
+    "APPLIED": frozenset({"operation_digest", "queue_view_digest", "acceptance_digest", "artifact_digest", "state_receipt_digest", "envelope_digest", "outbox_operation_id", "idempotency_key", "policy_result", "effective_directive", "payment_root_unchanged", "settlement_id", "settlement_domain", "exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until", "queue_batch_id", "queue_batch_member_set_digest", "composition_batch_id", "batch_member_index", "batch_member_count"}),
     "HELD": frozenset({"acceptance_digest", "error_code"}),
     "DISPATCH_LEASED": frozenset({"attempt", "worker_id", "lease_token_digest", "lease_expires_ms"}),
     "DISPATCH_RELEASED": frozenset({"attempt", "error_code"}),
@@ -72,9 +72,9 @@ _MAX_ID = 128
 _CAP_BYTES = 5_000_000_000
 _ACTIVE_PROCESS_LIMIT = 1
 _ZERO_SUITE = bytes(64)
-_CIRCUIT_ID = bytes.fromhex("1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0")
+_CIRCUIT_ID = bytes.fromhex("0f9fefb8cf05cc4e7a6b9657878c05a37034736d193272e14981f97fdd5a4275")
 _TABLES: Final[tuple[str, ...]] = ("composition_meta", "composition_transactions", "composition_events")
-_META_COLUMNS: Final[tuple[str, ...]] = ("id", "schema_version", "composition_id", "config_json", "config_digest", "state_profile_identity", "expected_statement", "event_head", "next_event_sequence", "active_dispatch_count", "active_reconciliation_count", "state_id", "state_epoch", "state_sequence", "state_continuity_root", "state_clearance_root", "state_clearance_count", "state_replay_root", "payment_root", "settled_batch_count", "state_binding", "audit_head", "last_operation_digest", "proof_suite_id", "production_usable", "activation")
+_META_COLUMNS: Final[tuple[str, ...]] = ("id", "schema_version", "composition_id", "config_json", "config_digest", "state_profile_identity", "state_bytes", "event_head", "next_event_sequence", "active_dispatch_count", "active_reconciliation_count", "state_id", "state_epoch", "state_sequence", "state_continuity_root", "state_clearance_root", "state_clearance_count", "state_replay_root", "payment_root", "settled_batch_count", "state_binding", "audit_head", "last_operation_digest", "proof_suite_id", "production_usable", "activation")
 _TX_COLUMNS: Final[tuple[str, ...]] = ("transaction_id", "queue_job_id", "queue_operation_id", "queue_view_bytes", "queue_view_digest", "acceptance_bytes", "acceptance_digest", "artifact_digest", "request_id", "attempt_id", "decision_id", "operation_digest", "disposition_id", "status", "state_receipt_bytes", "state_receipt_digest", "applied_sequence", "envelope_bytes", "envelope_digest", "outbox_operation_id", "idempotency_key", "delivery_status", "dispatch_attempt", "reconciliation_attempt", "lease_kind", "lease_worker_id", "lease_token", "lease_started_ms", "lease_expires_ms", "next_eligible_ms", "acknowledgment_bytes", "acknowledgment_digest", "acknowledgment_id", "acknowledged_ms", "ack_profile_digest", "qualification_receipt", "error_code", "created_ms", "updated_ms")
 _EVENT_COLUMNS: Final[tuple[str, ...]] = ("global_sequence", "job_id", "job_sequence", "event_kind", "operation_id", "request_id", "transaction_id", "before_state", "after_state", "previous_root", "event_root", "event_bytes", "event_digest", "receipt_digest", "at_ms")
 _SCHEMA_OBJECT_SHA256: Final[dict[tuple[str, str], str]] = {
@@ -82,19 +82,19 @@ _SCHEMA_OBJECT_SHA256: Final[dict[tuple[str, str], str]] = {
     ("index", "composition_ready_idx"): "BDF45078607B4A6FEEE78673E8490E61B333821182F7B6F72B21E87755DC465F",
     ("index", "composition_reconcile_idx"): "2566A7AEFC866A2FE14D7293826050A055723521BDFDAF875946684679AC0754",
     ("table", "composition_events"): "F99CCD99DAA601CE9F1EE96986CB51AC1B07F50AD59C4DD10CC8D39E2C9B0014",
-    ("table", "composition_meta"): "D8D978815802206632B34568767D35A8196E06763FAC16907271E014DFBC59CF",
+    ("table", "composition_meta"): "6EC7E493076005AC8BDC054FF2202A0CCE06484AD2B04006BC0B4A52BE95FA19",
     ("table", "composition_transactions"): "27FC4228A0B4FA9697A4BCCAF5A401540DA0C93962D8985A0319AB7B6E648EAA",
     ("trigger", "composition_events_no_delete"): "311496EA8CCAB27F13AFA94F612EDA9248FDD5050ED597420EF221EAF381A760",
     ("trigger", "composition_events_no_update"): "B76F1683E16695920BEF69F8017D452D4E50E687E4379E9BE4545C6F9ECB39C1",
-    ("trigger", "composition_meta_guard"): "7EC8D87AE026A9F14DF7C3F5FF532B866A55E489B8BC103616F23BE93B7DE0A1",
+    ("trigger", "composition_meta_guard"): "035BBCE8476619DD34BBDF4E144E4D37B46AEFD25A992C133960A0AEAA1B17E4",
     ("trigger", "composition_meta_no_delete"): "93A01AECF5249D5A7C4F6DCAE345485A4FC43D1EA018495C0E5E8B9DD5C36AAA",
     ("trigger", "composition_transactions_guard"): "3AC519524005E4FC0FDB87F49C26D320F901308926381F284C47CAC6A07A096F",
     ("trigger", "composition_transactions_no_delete"): "E3AC5B2BBF54FB86391D87632C3AF46ECF3217A248D67C2306D86C2E86B5D9F1",
 }
-_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v2\x00"
-_GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v2\x00"
-_HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/HEAD/v2\x00"
-_EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/EVENT/v2\x00"
+_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v3\x00"
+_GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v3\x00"
+_HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/HEAD/v3\x00"
+_EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/EVENT/v3\x00"
 _STATE_OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/PROOF-OPERATION/v1\x00"
 _STATE_REPLAY = b"BL/MINIMAL-CLEARANCE/PROOF-REPLAY/v1\x00"
 _STATE_CLEARANCE = b"BL/MINIMAL-CLEARANCE/CLEARANCE-ROOT/v1\x00"
@@ -103,7 +103,7 @@ _STATE_GENESIS = b"BL/MINIMAL-CLEARANCE/GENESIS/v1\x00"
 _STATE_AUDIT_EVENT = b"BL/MINIMAL-CLEARANCE/AUDIT-EVENT/v1\x00"
 _STATE_AUDIT_HEAD = b"BL/MINIMAL-CLEARANCE/AUDIT-HEAD/v1\x00"
 _STATE_RECEIPT = b"BL/MINIMAL-CLEARANCE/RECEIPT/v1\x00"
-_SETTLEMENT_REFERENCE = b"BL/NATIVE-V3/MINIMAL-SETTLEMENT-REFERENCE/v1\x00"
+_SETTLEMENT_REFERENCE = b"BL/NATIVE-V3/MINIMAL-SETTLEMENT-REFERENCE/v2\x00"
 _STATE_IDENTITY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/STATE-STORE-IDENTITY/v1\x00"
 _ENVELOPE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ENVELOPE/v2\x00"
 _ACK = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK/v2\x00"
@@ -111,7 +111,9 @@ _ACK_PROFILE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-PROFILE/v
 _ACK_RECEIPT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-RECEIPT/v2\x00"
 _OUTBOX_OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-OPERATION/v2\x00"
 _IDEMPOTENCY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-IDEMPOTENCY/v2\x00"
-_QUEUE_VIEW_SCHEMA = "BL/NATIVE-V3/MINIMAL-CLEARANCE/QUEUE-VIEW/v1"
+_QUEUE_VIEW_SCHEMA = "BL/NATIVE-V3/MINIMAL-CLEARANCE/QUEUE-VIEW/v2"
+_COMPOSITION_BATCH = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/BATCH/v1\x00"
+_QUEUE_BATCH = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPT-BATCH/v6\x00"
 _NO_EXCEPTION: Final[bytes] = b"\xe0" + bytes(63)
 
 
@@ -167,25 +169,26 @@ _INITIAL_CLEARANCE = _private_identity("clearance-genesis.v1")
 
 
 def _profile_digest(statement: Any, verifier: bytes) -> bytes:
-    return _sha(b"BL/NATIVE-V3/PRIVATE-ZK/PROFILE/v1\x00", _PRIVATE_MODE, _PRIVATE_CONTEXT, _PRIVATE_SCHEMA, _PRIVATE_PROGRAM, bytes(statement.get("execution_context")), bytes(statement.get("evaluator_id")), bytes(statement.get("schema_id")), bytes(statement.get("program_id")), bytes(statement.get("automatic_control_set")), _CIRCUIT_ID, verifier, _ZERO_SUITE, _u64(7))
+    return _sha(b"BL/NATIVE-V3/PRIVATE-ZK/PROFILE/v6\x00", _PRIVATE_MODE, _PRIVATE_CONTEXT, _PRIVATE_SCHEMA, _PRIVATE_PROGRAM, bytes(statement.get("proof_role")), bytes(statement.get("execution_context")), bytes(statement.get("source_registry_snapshot")), bytes(statement.get("source_profile")), bytes(statement.get("governance_snapshot")), bytes(statement.get("automatic_control_set")), bytes(statement.get("evaluator_id")), bytes(statement.get("schema_id")), bytes(statement.get("program_id")), bytes(statement.get("policy_id")), bytes(statement.get("rule_id")), _CIRCUIT_ID, verifier, _ZERO_SUITE, _u64(7))
 
 
 def _state_identity(statement: Any, verifier: bytes) -> bytes:
-    return _sha(_STATE_IDENTITY, _PRIVATE_CONTEXT, _PRIVATE_SCHEMA, _PRIVATE_PROGRAM, _PRIVATE_MODE, _CIRCUIT_ID, bytes(statement.statement_bytes), verifier, _profile_digest(statement, verifier))
+    return _sha(_STATE_IDENTITY, _PRIVATE_CONTEXT, _PRIVATE_SCHEMA, _PRIVATE_PROGRAM, _PRIVATE_MODE, _CIRCUIT_ID, _profile_digest(statement, verifier), verifier)
 
 
 def _parse_receipt(raw: bytes) -> dict[str, Any]:
     if type(raw) is not bytes or not 0 < len(raw) <= _MAX_RECEIPT: _fail("receipt_bounds")
     try: value = json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError): _raise_fixed("receipt_encoding")
-    required = {"operation_digest", "artifact_sha256", "artifact_digest", "statement_digest", "circuit_id", "bundle_id", "receipt_id", "join_id", "settlement_id", "settlement_domain", "request_id", "attempt_id", "decision_id", "sequence_before", "sequence_after", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "clearance_count_before", "clearance_count_after", "payment_root_before", "payment_root_after", "settled_batch_count_before", "settled_batch_count_after", "state_binding_after", "audit_head_after", "policy_result", "effective_directive", "exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until", "proof_session_accepted", "economic_mutation", "proof_suite_id"}
+    required = {"operation_digest", "artifact_sha256", "artifact_digest", "statement_digest", "circuit_id", "bundle_id", "receipt_id", "join_id", "settlement_id", "settlement_domain", "request_id", "attempt_id", "decision_id", "sequence_before", "sequence_after", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "clearance_count_before", "clearance_count_after", "payment_root_before", "payment_root_after", "settled_batch_count_before", "settled_batch_count_after", "state_binding_after", "audit_head_after", "policy_result", "effective_directive", "exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until", "proof_session_accepted", "economic_mutation", "proof_suite_id", "queue_batch_id", "queue_batch_member_set_digest", "composition_batch_id", "batch_member_index", "batch_member_count"}
     if type(value) is not dict or raw != _json_bytes(value) or set(value) != required: _fail("receipt_keys")
-    for name in ("operation_digest", "artifact_digest", "statement_digest", "bundle_id", "receipt_id", "join_id", "settlement_id", "settlement_domain", "request_id", "attempt_id", "decision_id", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "payment_root_before", "payment_root_after", "state_binding_after", "audit_head_after", "exception_authorization_id", "exception_scope_id"): _blob(value[name], 64, "receipt_" + name)
+    for name in ("operation_digest", "artifact_digest", "statement_digest", "bundle_id", "receipt_id", "join_id", "settlement_id", "settlement_domain", "request_id", "attempt_id", "decision_id", "state_before_id", "state_after_id", "clearance_root_before", "clearance_root_after", "payment_root_before", "payment_root_after", "state_binding_after", "audit_head_after", "exception_authorization_id", "exception_scope_id", "queue_batch_id", "queue_batch_member_set_digest", "composition_batch_id"): _blob(value[name], 64, "receipt_" + name)
     _blob(value["artifact_sha256"], 32, "receipt_artifact_sha256"); _blob(value["circuit_id"], 32, "receipt_circuit")
     for name in ("sequence_before", "sequence_after", "clearance_count_before", "clearance_count_after", "settled_batch_count_before", "settled_batch_count_after"):
         if type(value[name]) is not int or value[name] < 0: _fail("receipt_integer")
     if type(value["policy_result"]) is not int or not 1 <= value["policy_result"] <= 5 or type(value["effective_directive"]) is not int or not 1 <= value["effective_directive"] <= 5: _fail("receipt_directive")
     if type(value["exception_valid_from"]) is not int or value["exception_valid_from"] < 0 or type(value["exception_valid_until"]) is not int or value["exception_valid_until"] < 0: _fail("receipt_exception_interval")
+    if type(value["batch_member_index"]) is not int or type(value["batch_member_count"]) is not int or not 1 <= value["batch_member_count"] <= 256 or not 0 <= value["batch_member_index"] < value["batch_member_count"]: _fail("receipt_batch")
     if int(value["effective_directive"]) != 5 and (value["exception_authorization_id"] != _hex(_NO_EXCEPTION) or value["exception_scope_id"] != _hex(_NO_EXCEPTION) or value["exception_valid_from"] != 0 or value["exception_valid_until"] != 0): _fail("receipt_exception_sentinel")
     if value["proof_session_accepted"] is not True or value["economic_mutation"] is not False or value["proof_suite_id"] is not None: _fail("receipt_nonactivation")
     return value
@@ -237,13 +240,20 @@ def _parse_queue_view(raw: bytes) -> dict[str, Any]:
     if type(raw) is not bytes or not raw: _fail("queue_view_bounds")
     try: value = json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError): _raise_fixed("queue_view_encoding")
-    keys = {"schema", "queue_id", "config_digest", "verifier_sha256", "job_id", "operation_id", "attempt", "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "circuit_id", "peak_job_commit_bytes", "cap_bytes", "cap_enforced", "active_process_limit", "timed_out", "exit_code"}
+    keys = {"schema", "queue_id", "config_digest", "verifier_sha256", "job_id", "operation_id", "attempt", "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "circuit_id", "peak_job_commit_bytes", "cap_bytes", "cap_enforced", "active_process_limit", "timed_out", "exit_code", "queue_batch_id", "queue_batch_member_set_digest", "queue_batch_pre_head_root", "queue_batch_post_head_root", "queue_batch_pre_transition_count", "queue_batch_member_index", "queue_batch_member_count", "composition_batch_id"}
     if type(value) is not dict or set(value) != keys or raw != _json_bytes(value) or value["schema"] != _QUEUE_VIEW_SCHEMA: _fail("queue_view_schema")
     for name, size in (("config_digest", 64), ("verifier_sha256", 32), ("operation_id", 64), ("artifact_sha256", 32), ("artifact_sha3_512", 64), ("circuit_id", 32)): _blob(value[name], size, "queue_view_" + name)
+    for name in ("queue_batch_id", "queue_batch_member_set_digest", "queue_batch_pre_head_root", "queue_batch_post_head_root", "composition_batch_id"): _blob(value[name], 64, "queue_view_" + name)
     for name in ("queue_id", "job_id"):
         if type(value[name]) is not str or not 0 < len(value[name]) <= _MAX_ID: _fail("queue_view_identifier")
     if type(value["attempt"]) is not int or value["attempt"] < 1 or type(value["artifact_bytes"]) is not int or value["artifact_bytes"] <= 0 or type(value["peak_job_commit_bytes"]) is not int or not 0 <= value["peak_job_commit_bytes"] <= _CAP_BYTES or value["cap_bytes"] != _CAP_BYTES or value["cap_enforced"] is not True or value["active_process_limit"] != _ACTIVE_PROCESS_LIMIT or value["timed_out"] is not False or value["exit_code"] != 0: _fail("queue_view_containment")
+    if type(value["queue_batch_pre_transition_count"]) is not int or value["queue_batch_pre_transition_count"] < 0 or type(value["queue_batch_member_index"]) is not int or not 0 <= value["queue_batch_member_index"] < 256 or type(value["queue_batch_member_count"]) is not int or not 1 <= value["queue_batch_member_count"] <= 256 or value["queue_batch_member_index"] >= value["queue_batch_member_count"]: _fail("queue_view_batch")
     return value
+
+
+def _composition_batch_id(config_digest: bytes, view: Mapping[str, Any], operation_ids: tuple[bytes, ...]) -> bytes:
+    if len(operation_ids) != int(view["queue_batch_member_count"]): _fail("composition_batch_members")
+    return _sha(_COMPOSITION_BATCH, config_digest, bytes.fromhex(str(view["queue_batch_id"])), bytes.fromhex(str(view["queue_batch_member_set_digest"])), bytes.fromhex(str(view["queue_batch_pre_head_root"])), bytes.fromhex(str(view["queue_batch_post_head_root"])), _u64(int(view["queue_batch_pre_transition_count"])), _u64(int(view["queue_batch_member_count"])), b"".join(operation_ids))
 
 
 def _verify_config(config: Any) -> tuple[bytes, bytes]:
@@ -258,12 +268,6 @@ def _verify_config(config: Any) -> tuple[bytes, bytes]:
     for name, maximum in (("capacity", 10_000), ("reconciliation_capacity", 10_000), ("lease_seconds", 3_600), ("reconciliation_lease_seconds", 3_600)):
         if type(config.get(name)) is not int or not 1 <= config[name] <= maximum: _fail("config_capacity")
     if config.get("max_attempts") != 3 or config.get("busy_timeout_ms") != 5_000: _fail("config_fixed")
-    if config.get("state_profile_identity") is not None and (type(config["state_profile_identity"]) is not str or len(config["state_profile_identity"]) != 128): _fail("config_state_profile")
-    if config.get("expected_statement") is not None and (type(config["expected_statement"]) is not str or len(config["expected_statement"]) != 6_680): _fail("config_expected_statement")
-    try:
-        if config.get("state_profile_identity") is not None: bytes.fromhex(str(config["state_profile_identity"]))
-        if config.get("expected_statement") is not None: bytes.fromhex(str(config["expected_statement"]))
-    except ValueError: _raise_fixed("config_hex")
     expected_profile = _sha(_ACK_PROFILE, _json_bytes({"schema_version": 2, "mode": _ACK_MODE, "verifier_identity": _hex(verifier), "verifier_epoch": int(config["verifier_epoch"]), "receiver_identity": _hex(receiver), "receiver_epoch": int(config["receiver_epoch"]), "proof_suite_id": None, "production_usable": False, "activation": False}))
     if profile != expected_profile: _fail("config_profile")
     return digest, profile
@@ -285,7 +289,8 @@ def _schema_inventory(connection: sqlite3.Connection) -> None:
 def _state_expected(statement: Any, verifier: bytes) -> tuple[Any, ...]:
     continuity, audit = bytes(statement.state("before_continuity_root")), bytes(statement.state("before_audit_head"))
     clearance, replay = _sha(_STATE_GENESIS, statement.state_before_id, _INITIAL_CLEARANCE), _sha(_STATE_GENESIS, statement.attempt_id, statement.request_id)
-    binding = _sha(_STATE_BINDING, statement.statement_bytes, statement.state_before_id, _u64(statement.epoch), _u64(statement.sequence_before), continuity, clearance, replay, _INITIAL_PAYMENT, _u64(0), verifier, _profile_digest(statement, verifier))
+    predecessor = bytes(statement.get("predecessor_state_bytes"))
+    binding = _sha(_STATE_BINDING, predecessor, statement.state_before_id, _u64(statement.epoch), _u64(statement.sequence_before), continuity, clearance, replay, _INITIAL_PAYMENT, _u64(0), verifier, _profile_digest(statement, verifier))
     return (bytes(statement.state_before_id), int(statement.epoch), int(statement.sequence_before), continuity, clearance, int(statement.state("clearance_count_before")), replay, _INITIAL_PAYMENT, 0, binding, audit, None)
 
 
@@ -299,9 +304,8 @@ def _exception_fields(acceptance: Any) -> tuple[bytes, bytes, int, int]:
     return authorization, scope, valid_from, valid_until
 
 
-def _expected_audit(previous: bytes, operation_digest: bytes, request_id: bytes, policy: int, effective: int, sequence_after: int) -> bytes:
-    payload = _json_bytes({"operation_digest": _hex(operation_digest), "request_id": _hex(request_id), "policy_result": policy, "effective_directive": effective, "sequence_after": sequence_after})
-    return _sha(_STATE_AUDIT_HEAD, previous, _sha(_STATE_AUDIT_EVENT, previous, payload))
+def _expected_audit(previous: bytes, decision_id: bytes, effective: int) -> bytes:
+    return _sha(b"BL/NATIVE-V3/MINIMAL-AUDIT-HEAD/v1\x00", previous, decision_id, bytes((effective,)))
 
 
 def _event_error(value: Any) -> None:
@@ -311,12 +315,13 @@ def _event_error(value: Any) -> None:
 def _event_payload(kind: str, payload: Any, tx: tuple[Any, ...], config: Mapping[str, Any], profile: bytes) -> None:
     if type(payload) is not dict or set(payload) != _PAYLOAD_KEYS[kind]: _fail("event_payload")
     if kind == "APPLIED":
-        for name in ("operation_digest", "queue_view_digest", "acceptance_digest", "artifact_digest", "state_receipt_digest", "envelope_digest", "outbox_operation_id", "idempotency_key", "settlement_id", "settlement_domain", "exception_authorization_id", "exception_scope_id"): _blob(payload[name], 64, "event_" + name)
+        for name in ("operation_digest", "queue_view_digest", "acceptance_digest", "artifact_digest", "state_receipt_digest", "envelope_digest", "outbox_operation_id", "idempotency_key", "settlement_id", "settlement_domain", "exception_authorization_id", "exception_scope_id", "queue_batch_id", "queue_batch_member_set_digest", "composition_batch_id"): _blob(payload[name], 64, "event_" + name)
         for name in ("policy_result", "effective_directive"):
             if type(payload[name]) is not int or not 1 <= payload[name] <= 5: _fail("event_directive")
+        if type(payload["batch_member_index"]) is not int or type(payload["batch_member_count"]) is not int or not 1 <= payload["batch_member_count"] <= 256 or not 0 <= payload["batch_member_index"] < payload["batch_member_count"]: _fail("event_batch")
         if payload["payment_root_unchanged"] is not True: _fail("event_economic")
         receipt = _parse_receipt(bytes(tx[14]))
-        if payload["operation_digest"] != _hex(bytes(tx[11])) or payload["queue_view_digest"] != _hex(bytes(tx[4])) or payload["acceptance_digest"] != _hex(bytes(tx[6])) or payload["artifact_digest"] != _hex(bytes(tx[7])) or payload["state_receipt_digest"] != _hex(bytes(tx[15])) or payload["envelope_digest"] != _hex(bytes(tx[18])) or payload["outbox_operation_id"] != _hex(bytes(tx[19])) or payload["idempotency_key"] != _hex(bytes(tx[20])) or payload["settlement_id"] != receipt["settlement_id"] or payload["settlement_domain"] != receipt["settlement_domain"] or payload["policy_result"] != int(receipt["policy_result"]) or payload["effective_directive"] != int(receipt["effective_directive"]): _fail("applied_event_binding")
+        if payload["operation_digest"] != _hex(bytes(tx[11])) or payload["queue_view_digest"] != _hex(bytes(tx[4])) or payload["acceptance_digest"] != _hex(bytes(tx[6])) or payload["artifact_digest"] != _hex(bytes(tx[7])) or payload["state_receipt_digest"] != _hex(bytes(tx[15])) or payload["envelope_digest"] != _hex(bytes(tx[18])) or payload["outbox_operation_id"] != _hex(bytes(tx[19])) or payload["idempotency_key"] != _hex(bytes(tx[20])) or payload["settlement_id"] != receipt["settlement_id"] or payload["settlement_domain"] != receipt["settlement_domain"] or payload["policy_result"] != int(receipt["policy_result"]) or payload["effective_directive"] != int(receipt["effective_directive"]) or any(payload[name] != receipt[name] for name in ("queue_batch_id", "queue_batch_member_set_digest", "composition_batch_id", "batch_member_index", "batch_member_count")): _fail("applied_event_binding")
         for name in ("exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until"):
             if payload[name] != receipt[name]: _fail("applied_exception_binding")
     elif kind == "HELD":
@@ -364,9 +369,7 @@ def _verify_rows(connection: sqlite3.Connection, *, expected_config: Mapping[str
     if meta[11] is not None and (bytes(meta[18]) != _INITIAL_PAYMENT or int(meta[19]) != 0): _fail("economic_sentinel")
     for index, size in ((5, 64), (7, 64), (14, 64), (15, 64), (17, 64), (18, 64), (20, 64), (21, 64), (22, 64)):
         if meta[index] is not None and (type(meta[index]) is not bytes or len(meta[index]) != size): _fail("meta_blob")
-    if meta[6] is not None and (type(meta[6]) is not bytes or len(meta[6]) != 3340): _fail("meta_statement")
-    if config["state_profile_identity"] is not None and (meta[5] is None or bytes(meta[5]) != bytes.fromhex(str(config["state_profile_identity"]))): _fail("meta_state_profile")
-    if config["expected_statement"] is not None and (meta[6] is None or bytes(meta[6]) != bytes.fromhex(str(config["expected_statement"]))): _fail("meta_expected_statement")
+    if meta[6] is not None and (type(meta[6]) is not bytes or len(meta[6]) != 1686): _fail("meta_state_bytes")
     tx_rows = [tuple(row) for row in connection.execute("SELECT * FROM composition_transactions ORDER BY created_ms,queue_job_id").fetchall()]
     event_rows = [tuple(row) for row in connection.execute("SELECT * FROM composition_events ORDER BY global_sequence").fetchall()]
     by_id = {bytes(row[0]): row for row in tx_rows}
@@ -374,12 +377,15 @@ def _verify_rows(connection: sqlite3.Connection, *, expected_config: Mapping[str
     applied = [row for row in tx_rows if row[13] == "APPLIED"]
     ordered_tx_rows = sorted(tx_rows, key=lambda row: (0 if row[13] == "APPLIED" else 1, -1 if row[16] is None else int(row[16]), str(row[1])))
     current: tuple[Any, ...] | None = None
+    current_state_bytes: bytes | None = None
+    batch_groups: dict[bytes, list[tuple[int, bytes, dict[str, Any], tuple[Any, ...]]]] = {}
     applied_sequence = 0
     for tx in ordered_tx_rows:
         if len(tx) != len(_TX_COLUMNS): _fail("transaction_shape")
         if type(tx[1]) is not str or not tx[1] or type(tx[2]) is not bytes or len(tx[2]) != 64 or type(tx[3]) is not bytes or type(tx[5]) is not bytes: _fail("transaction_identity")
         view = _parse_queue_view(bytes(tx[3]))
         if view["job_id"] != tx[1] or bytes.fromhex(view["operation_id"]) != bytes(tx[2]) or bytes(tx[4]) != _sha(_MATERIAL, b"queue-view", bytes(tx[3])): _fail("queue_view_binding")
+        batch_groups.setdefault(bytes.fromhex(str(view["composition_batch_id"])), []).append((int(view["queue_batch_member_index"]), bytes(tx[2]), view, tx))
         try: acceptance = parse_acceptance_bytes(bytes(tx[5]))
         except Exception: _raise_fixed("acceptance_binding")
         if bytes(tx[6]) != _sha(_MATERIAL, b"acceptance", bytes(tx[5])) or acceptance.artifact_digest != bytes(tx[7]) or acceptance.artifact_sha256 != bytes.fromhex(str(view["artifact_sha256"])) or acceptance.artifact_digest != bytes.fromhex(str(view["artifact_sha3_512"])) or acceptance.circuit_id != bytes.fromhex(str(view["circuit_id"])) or int(view["artifact_bytes"]) != int(acceptance.artifact_bytes) or bytes(tx[8]) != acceptance.statement.request_id or bytes(tx[9]) != acceptance.statement.attempt_id or bytes(tx[10]) != acceptance.statement.decision_id: _fail("transaction_acceptance")
@@ -393,9 +399,13 @@ def _verify_rows(connection: sqlite3.Connection, *, expected_config: Mapping[str
         receipt = _parse_receipt(bytes(tx[14]))
         exception_fields = _exception_fields(acceptance)
         settlement_domain = bytes(acceptance.statement.get("settlement_domain"))
-        expected_settlement = _sha(_SETTLEMENT_REFERENCE, settlement_domain, bytes((int(acceptance.effective_directive),)), bytes(acceptance.statement.decision_id), bytes(acceptance.statement.state_after_id))
-        if bytes(tx[15]) != _sha(_STATE_RECEIPT, bytes(tx[14])) or bytes.fromhex(receipt["operation_digest"]) != bytes(tx[11]) or bytes.fromhex(receipt["artifact_digest"]) != bytes(tx[7]) or bytes.fromhex(receipt["request_id"]) != bytes(tx[8]) or bytes.fromhex(receipt["attempt_id"]) != bytes(tx[9]) or bytes.fromhex(receipt["decision_id"]) != bytes(tx[10]) or bytes.fromhex(receipt["settlement_domain"]) != settlement_domain or bytes.fromhex(receipt["settlement_id"]) != expected_settlement or (bytes.fromhex(receipt["exception_authorization_id"]), bytes.fromhex(receipt["exception_scope_id"]), int(receipt["exception_valid_from"]), int(receipt["exception_valid_until"])) != exception_fields: _fail("receipt_binding")
-        if current is None: current = _state_expected(acceptance.statement, bytes.fromhex(str(config["verifier_sha256"])))
+        expected_settlement = _sha(_SETTLEMENT_REFERENCE, settlement_domain, bytes((int(acceptance.effective_directive),)), bytes(acceptance.statement.decision_id), bytes(acceptance.statement.state_after_id), bytes(acceptance.statement.state("authorized_payment_commitment")))
+        if bytes(tx[15]) != _sha(_STATE_RECEIPT, bytes(tx[14])) or bytes.fromhex(receipt["operation_digest"]) != bytes(tx[11]) or bytes.fromhex(receipt["artifact_digest"]) != bytes(tx[7]) or bytes.fromhex(receipt["request_id"]) != bytes(tx[8]) or bytes.fromhex(receipt["attempt_id"]) != bytes(tx[9]) or bytes.fromhex(receipt["decision_id"]) != bytes(tx[10]) or bytes.fromhex(receipt["settlement_domain"]) != settlement_domain or bytes.fromhex(receipt["settlement_id"]) != expected_settlement or (bytes.fromhex(receipt["exception_authorization_id"]), bytes.fromhex(receipt["exception_scope_id"]), int(receipt["exception_valid_from"]), int(receipt["exception_valid_until"])) != exception_fields or receipt["queue_batch_id"] != view["queue_batch_id"] or receipt["queue_batch_member_set_digest"] != view["queue_batch_member_set_digest"] or receipt["composition_batch_id"] != view["composition_batch_id"] or receipt["batch_member_index"] != view["queue_batch_member_index"] or receipt["batch_member_count"] != view["queue_batch_member_count"]: _fail("receipt_binding")
+        predecessor = bytes(acceptance.statement.get("predecessor_state_bytes"))
+        if current is None:
+            current = _state_expected(acceptance.statement, bytes.fromhex(str(config["verifier_sha256"])))
+            current_state_bytes = predecessor
+        if current_state_bytes != predecessor: _fail("state_predecessor_bytes")
         if current[0] != bytes.fromhex(receipt["state_before_id"]) or current[2] != int(receipt["sequence_before"]) or current[4] != bytes.fromhex(receipt["clearance_root_before"]) or current[5] != int(receipt["clearance_count_before"]): _fail("state_before")
         sequence_after = int(current[2]) + 1
         if int(receipt["sequence_after"]) != sequence_after: _fail("receipt_sequence")
@@ -404,7 +414,7 @@ def _verify_rows(connection: sqlite3.Connection, *, expected_config: Mapping[str
         count_after = int(current[5]) + int(advanced)
         replay_after = _sha(_STATE_REPLAY, bytes(current[6]), acceptance.statement.attempt_id, acceptance.statement.request_id, acceptance.statement.receipt_id)
         binding_after = _sha(_STATE_BINDING, bytes(current[9]), bytes(tx[11]), acceptance.statement.state_after_id, replay_after, clearance_after, _u64(count_after), bytes(current[7]), _u64(0), _u64(int(current[1])), _u64(sequence_after), bytes.fromhex(str(config["verifier_sha256"])), _profile_digest(acceptance.statement, bytes.fromhex(str(config["verifier_sha256"]))))
-        audit_after = _expected_audit(bytes(current[10]), bytes(tx[11]), acceptance.statement.request_id, int(acceptance.policy_result), int(acceptance.effective_directive), sequence_after)
+        audit_after = _expected_audit(bytes(current[10]), acceptance.statement.decision_id, int(acceptance.effective_directive))
         if bytes.fromhex(receipt["clearance_root_after"]) != clearance_after or int(receipt["clearance_count_after"]) != count_after or bytes.fromhex(receipt["state_binding_after"]) != binding_after or bytes.fromhex(receipt["audit_head_after"]) != audit_after or receipt["payment_root_before"] != _hex(_INITIAL_PAYMENT) or receipt["payment_root_after"] != _hex(_INITIAL_PAYMENT) or receipt["settled_batch_count_before"] != 0 or receipt["settled_batch_count_after"] != 0: _fail("receipt_state")
         envelope = _parse_envelope(bytes(tx[17]))
         if bytes(tx[18]) != _sha(_ENVELOPE, bytes(tx[17])) or bytes.fromhex(envelope["operation_id"]) != bytes(tx[2]) or bytes.fromhex(envelope["disposition_digest"]) != bytes(tx[12]) or bytes.fromhex(envelope["state_receipt_digest"]) != bytes(tx[15]) or bytes.fromhex(envelope["composition_config_digest"]) != config_digest or envelope["settlement_id"] != receipt["settlement_id"] or envelope["settlement_domain"] != receipt["settlement_domain"] or int(envelope["policy_result"]) != int(receipt["policy_result"]) or int(envelope["effective_directive"]) != int(receipt["effective_directive"]) or any(envelope[name] != receipt[name] for name in ("exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until")): _fail("envelope_binding")
@@ -413,15 +423,23 @@ def _verify_rows(connection: sqlite3.Connection, *, expected_config: Mapping[str
             if any(tx[index] is None for index in (30, 31, 32, 33, 34, 35)): _fail("ack_missing")
             ack = _parse_ack(bytes(tx[30])); qualification = _parse_qualification(bytes(tx[35]))
             if bytes(tx[31]) != _sha(_ACK, bytes(tx[30])) or bytes.fromhex(ack["envelope_digest"]) != bytes(tx[18]) or bytes.fromhex(ack["idempotency_key"]) != bytes(tx[20]) or bytes.fromhex(ack["receiver_identity"]) != bytes.fromhex(str(config["receiver_identity"])) or int(ack["receiver_epoch"]) != int(config["receiver_epoch"]) or bytes.fromhex(ack["verifier_identity"]) != bytes.fromhex(str(config["verifier_sha256"])) or int(ack["verifier_epoch"]) != int(config["verifier_epoch"]) or bytes.fromhex(ack["profile_digest"]) != profile or int(ack["effective_directive"]) != int(envelope["effective_directive"]) or ("policy_result" in ack and int(ack["policy_result"]) != int(envelope["policy_result"])) or str(ack["acknowledgment_id"]) != str(tx[32]) or bytes(tx[34]) != profile or bytes.fromhex(qualification["ack_digest"]) != bytes(tx[31]) or bytes.fromhex(qualification["profile_digest"]) != profile or bytes.fromhex(qualification["verifier_identity"]) != bytes.fromhex(str(config["verifier_sha256"])) or int(qualification["verifier_epoch"]) != int(config["verifier_epoch"]) or bytes.fromhex(qualification["receiver_identity"]) != bytes.fromhex(str(config["receiver_identity"])) or int(qualification["receiver_epoch"]) != int(config["receiver_epoch"]) or bytes.fromhex(qualification["operation_id"]) != bytes(tx[2]) or bytes.fromhex(qualification["job_id_digest"]) != _sha(_ACK_RECEIPT, str(tx[1]).encode("ascii")) or bytes.fromhex(qualification["idempotency_key"]) != bytes(tx[20]) or bytes.fromhex(qualification["envelope_digest"]) != bytes(tx[18]) or bytes.fromhex(qualification["acknowledgment_id"]) != bytes.fromhex(str(ack["acknowledgment_id"])) or int(qualification["policy_result"]) != int(envelope["policy_result"]) or int(qualification["effective_directive"]) != int(envelope["effective_directive"]) or qualification["lease_kind"] not in ("DISPATCH", "RECONCILIATION") or int(qualification["attempt"]) != int(tx[22] if qualification["lease_kind"] == "DISPATCH" else tx[23]): _fail("ack_binding")
-        current = (bytes(acceptance.statement.state_after_id), int(acceptance.statement.epoch), sequence_after, bytes(acceptance.statement.state("after_continuity_root")), clearance_after, count_after, replay_after, _INITIAL_PAYMENT, 0, binding_after, audit_after, bytes(tx[11])); applied_sequence += 1
+        current = (bytes(acceptance.statement.state_after_id), int(acceptance.statement.epoch), sequence_after, bytes(acceptance.statement.state("after_continuity_root")), clearance_after, count_after, replay_after, _INITIAL_PAYMENT, 0, binding_after, audit_after, bytes(tx[11])); current_state_bytes = bytes(acceptance.statement.get("state_commitment_bytes")); applied_sequence += 1
         if int(tx[16]) != sequence_after: _fail("applied_sequence")
+    for composition_batch_id, entries in batch_groups.items():
+        first_view = entries[0][2]
+        member_count = int(first_view["queue_batch_member_count"])
+        if len(entries) != member_count or sorted(index for index, _operation_id, _view, _tx in entries) != list(range(member_count)): _fail("composition_batch_completeness")
+        for _index, _operation_id, view, _tx in entries:
+            if any(view[name] != first_view[name] for name in ("queue_batch_id", "queue_batch_member_set_digest", "queue_batch_pre_head_root", "queue_batch_post_head_root", "queue_batch_pre_transition_count", "queue_batch_member_count")): _fail("composition_batch_binding")
+        ordered = tuple(operation_id for _index, operation_id, _view, _tx in sorted(entries, key=lambda item: item[0]))
+        if _sha(_QUEUE_BATCH, b"".join(ordered)) != bytes.fromhex(str(first_view["queue_batch_member_set_digest"])) or _composition_batch_id(config_digest, first_view, ordered) != composition_batch_id: _fail("composition_batch_identity")
     applied_sequences = sorted(int(tx[16]) for tx in applied)
     if any(right != left + 1 for left, right in zip(applied_sequences, applied_sequences[1:])): _fail("applied_sequence_chain")
     if applied:
         first_applied = min(applied, key=lambda row: int(row[16]))
         first_acceptance = parse_acceptance_bytes(bytes(first_applied[5]))
         expected_identity = _state_identity(first_acceptance.statement, bytes.fromhex(str(config["verifier_sha256"])))
-        if meta[5] != expected_identity or meta[6] != first_acceptance.statement.statement_bytes: _fail("learned_state_profile")
+        if meta[5] != expected_identity or current_state_bytes is None or meta[6] != current_state_bytes: _fail("learned_state_profile")
         if current is None or tuple(meta[11:23]) != current: _fail("current_state")
     elif meta[5] is not None or meta[6] is not None: _fail("learned_state_without_apply")
     active_dispatch = sum(1 for tx in tx_rows if tx[13] == "APPLIED" and tx[21] not in {"ACKNOWLEDGED", "DISPATCH_EXHAUSTED", "RECONCILIATION_EXHAUSTED"})
@@ -446,7 +464,7 @@ def _verify_rows(connection: sqlite3.Connection, *, expected_config: Mapping[str
         payload = value["payload"]
         if event[3] == "APPLIED":
             receipt = _parse_receipt(bytes(tx[14]))
-            if payload["queue_view_digest"] != _hex(bytes(tx[4])) or payload["acceptance_digest"] != _hex(bytes(tx[6])) or payload["artifact_digest"] != _hex(bytes(tx[7])) or payload["state_receipt_digest"] != _hex(bytes(tx[15])) or payload["envelope_digest"] != _hex(bytes(tx[18])) or payload["outbox_operation_id"] != _hex(bytes(tx[19])) or payload["idempotency_key"] != _hex(bytes(tx[20])) or payload["operation_digest"] != _hex(bytes(tx[11])) or payload["policy_result"] != int(receipt["policy_result"]) or payload["effective_directive"] != int(receipt["effective_directive"]) or payload["payment_root_unchanged"] is not True or payload["settlement_id"] != receipt["settlement_id"] or payload["settlement_domain"] != receipt["settlement_domain"] or any(payload[name] != receipt[name] for name in ("exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until")): _fail("applied_event_binding")
+            if payload["queue_view_digest"] != _hex(bytes(tx[4])) or payload["acceptance_digest"] != _hex(bytes(tx[6])) or payload["artifact_digest"] != _hex(bytes(tx[7])) or payload["state_receipt_digest"] != _hex(bytes(tx[15])) or payload["envelope_digest"] != _hex(bytes(tx[18])) or payload["outbox_operation_id"] != _hex(bytes(tx[19])) or payload["idempotency_key"] != _hex(bytes(tx[20])) or payload["operation_digest"] != _hex(bytes(tx[11])) or payload["policy_result"] != int(receipt["policy_result"]) or payload["effective_directive"] != int(receipt["effective_directive"]) or payload["payment_root_unchanged"] is not True or payload["settlement_id"] != receipt["settlement_id"] or payload["settlement_domain"] != receipt["settlement_domain"] or any(payload[name] != receipt[name] for name in ("exception_authorization_id", "exception_scope_id", "exception_valid_from", "exception_valid_until", "queue_batch_id", "queue_batch_member_set_digest", "composition_batch_id", "batch_member_index", "batch_member_count")): _fail("applied_event_binding")
         receipt_digest = None if event[13] is None else bytes(event[13])
         if event[3] in {"APPLIED", "ACKNOWLEDGED", "ACKNOWLEDGED_BY_RECONCILIATION", "ACK_CONFLICT"} and receipt_digest != bytes(tx[15]): _fail("event_receipt_binding")
         if event[3] not in {"APPLIED", "ACKNOWLEDGED", "ACKNOWLEDGED_BY_RECONCILIATION", "ACK_CONFLICT"} and receipt_digest is not None: _fail("event_receipt_binding")

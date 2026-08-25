@@ -125,19 +125,19 @@ class CompositionV2Tests(unittest.TestCase):
     def test_process_verified_jobs_reads_once_and_returns_ordered_tuple(self) -> None:
         queue = self._verified("batch-one")
         store = self._store()
-        original_reader = composition_module.read_verified_jobs
-        observed: list[tuple[str, ...]] = []
+        original_reader = composition_module.read_verified_batch
+        observed: list[object] = []
 
-        def reader(path, job_ids):
-            observed.append(tuple(job_ids))
-            return original_reader(path, job_ids)
+        def reader(path, selector=None):
+            observed.append(selector)
+            return original_reader(path, selector)
 
-        composition_module.read_verified_jobs = reader  # type: ignore[assignment]
+        composition_module.read_verified_batch = reader  # type: ignore[assignment]
         try:
             results = store.process_verified_jobs(queue.path, ("batch-one",))
         finally:
-            composition_module.read_verified_jobs = original_reader  # type: ignore[assignment]
-        self.assertEqual(observed, [("batch-one",)])
+            composition_module.read_verified_batch = original_reader  # type: ignore[assignment]
+        self.assertEqual(observed, [None])
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].status, "APPLIED")
         self.assertFalse(results[0].duplicate_convergence)
@@ -235,7 +235,7 @@ class CompositionV2Tests(unittest.TestCase):
         self.assertNotIn("exception_amount_commitment", receipt)
         self.assertEqual(len(receipt["settlement_id"]), 128)
         self.assertEqual(len(receipt["settlement_domain"]), 128)
-        expected_settlement = composition_module._sha(composition_module._SETTLEMENT_REFERENCE, bytes.fromhex(receipt["settlement_domain"]), bytes((receipt["effective_directive"],)), bytes.fromhex(receipt["decision_id"]), bytes.fromhex(receipt["state_after_id"]))
+        expected_settlement = composition_module._sha(composition_module._SETTLEMENT_REFERENCE, bytes.fromhex(receipt["settlement_domain"]), bytes((receipt["effective_directive"],)), bytes.fromhex(receipt["decision_id"]), bytes.fromhex(receipt["state_after_id"]), bytes(queue_fixtures._accepted().statement.state("proposed_payment_commitment")))
         self.assertEqual(receipt["settlement_id"], expected_settlement.hex().upper())
         with closing(sqlite3.connect(store.path)) as connection:
             envelope = json.loads(bytes(connection.execute("SELECT envelope_bytes FROM composition_transactions WHERE queue_job_id='job-1'").fetchone()[0]).decode("ascii"))
@@ -253,8 +253,8 @@ class CompositionV2Tests(unittest.TestCase):
         store_b = ClearanceCompositionStoreV2(path=self.root / "state-b.sqlite3", config=config_b)
         result_a = store_a.process_verified_job(queue.path, "job-1")
         result_b = store_b.process_verified_job(queue.path, "job-1")
-        self.assertEqual(result_a.state_receipt_bytes, result_b.state_receipt_bytes)
-        self.assertEqual(result_a.state_receipt_digest, result_b.state_receipt_digest)
+        self.assertNotEqual(result_a.state_receipt_bytes, result_b.state_receipt_bytes)
+        self.assertNotEqual(result_a.state_receipt_digest, result_b.state_receipt_digest)
         assert result_a.state_receipt_bytes is not None
         receipt = json.loads(result_a.state_receipt_bytes.decode("ascii"))
         receipt_b = json.loads(result_b.state_receipt_bytes.decode("ascii"))
@@ -264,7 +264,7 @@ class CompositionV2Tests(unittest.TestCase):
             self.assertEqual(connection_a.execute(state_sql).fetchone(), connection_b.execute(state_sql).fetchone())
             row_a = connection_a.execute("SELECT state_receipt_digest,envelope_bytes,envelope_digest,outbox_operation_id,idempotency_key FROM composition_transactions WHERE queue_job_id='job-1'").fetchone()
             row_b = connection_b.execute("SELECT state_receipt_digest,envelope_bytes,envelope_digest,outbox_operation_id,idempotency_key FROM composition_transactions WHERE queue_job_id='job-1'").fetchone()
-        self.assertEqual(row_a[0], row_b[0])
+        self.assertNotEqual(row_a[0], row_b[0])
         self.assertNotEqual(row_a[1], row_b[1])
         self.assertNotEqual(row_a[2:], row_b[2:])
         self.assertNotEqual(config_a.digest, config_b.digest)
@@ -468,7 +468,7 @@ class CompositionV2Tests(unittest.TestCase):
         backup, restored = self.root / "backup.sqlite3", self.root / "restored.sqlite3"
         store.create_backup(backup)
         recovered = store.recover_from_backup(backup_path=backup, recovered_path=restored)
-        self.assertEqual(recovered.snapshot()["schema"], "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v2")
+        self.assertEqual(recovered.snapshot()["schema"], "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v3")
         verify_database(restored, expected_config=store.config.as_json)
         broken = self.root / "broken-backup.sqlite3"
         shutil.copy2(backup, broken)
@@ -504,9 +504,9 @@ class CompositionV2Tests(unittest.TestCase):
     def test_hostile_public_errors_are_fixed_and_support_has_no_canary(self) -> None:
         canaries = ("PHI_CANARY_MEMBER_0001", "credential CANARY_SECRET_ABC123", r"C:\CANARY\private-clearance.sqlite3")
         store = self._store()
-        original_reader = composition_module.read_verified_jobs
+        original_reader = composition_module.read_verified_batch
         def hostile(*_args, **_kwargs): raise RuntimeError("; ".join(canaries))
-        composition_module.read_verified_jobs = hostile  # type: ignore[assignment]
+        composition_module.read_verified_batch = hostile  # type: ignore[assignment]
         try:
             with self.assertRaises(CompositionIntegrityError) as caught:
                 store.process_verified_job(self.root / "missing.sqlite3", "job-1")
@@ -514,7 +514,7 @@ class CompositionV2Tests(unittest.TestCase):
             for canary in canaries:
                 self.assertNotIn(canary, str(caught.exception)); self.assertNotIn(canary, repr(caught.exception)); self.assertNotIn(canary, rendered)
         finally:
-            composition_module.read_verified_jobs = original_reader  # type: ignore[assignment]
+            composition_module.read_verified_batch = original_reader  # type: ignore[assignment]
         queue = self._verified("receiver-job")
         store = ClearanceCompositionStoreV2(path=self.root / "receiver.sqlite3", config=self._config())
         store.process_verified_job(queue.path, "receiver-job")

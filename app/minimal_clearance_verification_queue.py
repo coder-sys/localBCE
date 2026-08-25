@@ -23,8 +23,9 @@ import time
 from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
 
 from app.minimal_clearance_proof_primitives import (
+    _MAX_ARTIFACT_BYTES as _NATIVE_MAX_ARTIFACT_BYTES,
     MinimalClearanceProofStateError,
-    MinimalProofAcceptanceV1,
+    MinimalProofAcceptanceV3,
     NativeVerificationCallResult,
     NativeMinimalClearanceVerifier,
     parse_acceptance_bytes,
@@ -89,8 +90,8 @@ def _raise_fixed(error: VerificationQueueError) -> NoReturn:
         raise
 
 
-_SCHEMA_VERSION: Final[int] = 4
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v4"
+_SCHEMA_VERSION: Final[int] = 6
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v6"
 _STATUS: Final = frozenset({"QUEUED", "LEASED", "CANDIDATE", "VERIFIED", "REJECTED", "HELD"})
 _NONTERMINAL: Final = frozenset({"QUEUED", "LEASED", "CANDIDATE"})
 _TERMINAL: Final = frozenset({"VERIFIED", "REJECTED", "HELD"})
@@ -118,18 +119,18 @@ _WORKSPACE_MARKER_NAME: Final[str] = ".BLV3-WORKSPACE"
 _WORKSPACE_MARKER: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE-WORKSPACE/v3\x00"
 _PAGE_SIZE: Final[int] = 4096
 _MAX_PAGE_COUNT: Final[int] = MAX_QUEUE_DATABASE_BYTES // _PAGE_SIZE
-_MAX_ARTIFACT_BYTES: Final[int] = 512 * 1024 * 1024
+_MAX_ARTIFACT_BYTES: Final[int] = _NATIVE_MAX_ARTIFACT_BYTES
 BOOTSTRAP_CAPABILITY_LIMITATION_COUNT = 0
 
-_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v4\x00"
-_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v4\x00"
-_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v4\x00"
-_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v4\x00"
-_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v4\x00"
-_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v4\x00"
-_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v4\x00"
-_LEASE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/LEASE-FENCE/v4\x00"
-_BATCH_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPT-BATCH/v4\x00"
+_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v6\x00"
+_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v6\x00"
+_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v6\x00"
+_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v6\x00"
+_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v6\x00"
+_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v6\x00"
+_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v6\x00"
+_LEASE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/LEASE-FENCE/v6\x00"
+_BATCH_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPT-BATCH/v6\x00"
 
 # These are producer-owned literals, not caller-controlled strings.  A worker
 # can only expose one of these codes when the exception is the exact trusted
@@ -140,6 +141,10 @@ _PROOF_DETERMINISTIC_REJECT_CODES: Final = frozenset({
     "proof_verifier_output_encoding", "proof_verified_statement_missing",
     "proof_verified_statement_length", "proof_acceptance_truncated", "proof_acceptance_magic",
     "proof_acceptance_version", "proof_acceptance_statement_size", "proof_acceptance_trailing",
+    "proof_genesis_state", "proof_before_state_id", "proof_predecessor_mismatch",
+    "proof_predecessor_epoch", "proof_predecessor_sequence", "proof_predecessor_audit",
+    "proof_predecessor_continuity", "proof_predecessor_marker", "proof_predecessor_count",
+    "proof_proposed_commitment_mismatch", "proof_private_batch_commitment_mismatch",
 })
 _PROOF_TRUSTED_CODES: Final = frozenset({
     "proof_verifier_rejected", "proof_circuit_id", "proof_public_statement_mismatch",
@@ -157,11 +162,15 @@ _PROOF_TRUSTED_CODES: Final = frozenset({
     "proof_statement_stderr_grammar", "proof_policy_directive", "proof_economic_mutation", "proof_directive_flags",
     "proof_public_flag_binding", "proof_state_epoch_sequence", "proof_chronology", "proof_access_time",
     "proof_access_shape", "proof_sequence_after", "proof_clearance_marker", "proof_clearance_count",
-    "proof_exception", "proof_exception_sentinel", "proof_exception_interval", "proof_suite_not_null",
+    "proof_exception", "proof_exception_sentinel", "proof_exception_interval", "proof_exception_scope_id", "proof_suite_not_null",
     "proof_source_root_binding", "proof_completeness_binding", "proof_subject_binding", "proof_attempt_binding",
     "proof_request_binding", "proof_decision_context_binding", "proof_decision_binding", "proof_join_decision_binding",
     "proof_read_value_binding", "proof_write_value_binding", "proof_write_address_binding", "proof_read_address_binding",
     "proof_before_state_id", "proof_request_id", "proof_decision_id", "proof_after_continuity", "proof_after_state_id",
+    "proof_genesis_state", "proof_expected_predecessor", "proof_predecessor_mismatch",
+    "proof_predecessor_epoch", "proof_predecessor_sequence", "proof_predecessor_audit",
+    "proof_predecessor_continuity", "proof_predecessor_marker", "proof_predecessor_count",
+    "proof_proposed_payment_commitment", "proof_proposed_commitment_mismatch",
     "proof_u64_invalid", "proof_u32_invalid", "proof_binding_part_invalid", "proof_artifact_header",
     "proof_artifact_version", "proof_artifact_length", "verifier_executable_hash", "verifier_timeout",
     "verifier_executable_identity_changed", "verifier_process_unavailable", "verifier_containment",
@@ -323,9 +332,8 @@ class QueueConfig:
         if type(self.profile_epoch) is not int or self.profile_epoch != _PROFILE_EPOCH:
             raise VerificationQueueError("queue_profile_epoch")
         if self.installation_id is None:
-            object.__setattr__(self, "installation_id", _sha(b"BL/NATIVE-V3/INSTALLATION/v1\x00", self.queue_id.encode("ascii")))
-        else:
-            _bytes(self.installation_id, 64, "queue_installation_id")
+            raise VerificationQueueError("queue_installation_required")
+        _bytes(self.installation_id, 64, "queue_installation_id")
         if type(self.installation_epoch) is not int or self.installation_epoch < 1:
             raise VerificationQueueError("queue_installation_epoch")
 
@@ -404,6 +412,9 @@ class ArtifactMetadata:
     artifact_bytes: int
     artifact_sha256: bytes
     artifact_sha3_512: bytes
+    proposed_payment_commitment: bytes
+    expected_state_before_id: bytes
+    expected_private_batch_commitment: bytes
 
     def __post_init__(self) -> None:
         _safe_token(self.artifact_ref, "artifact_ref", maximum=_MAX_ARTIFACT_REF)
@@ -411,9 +422,12 @@ class ArtifactMetadata:
             raise VerificationQueueError("artifact_bytes_invalid")
         _bytes(self.artifact_sha256, 32, "artifact_sha256")
         _bytes(self.artifact_sha3_512, 64, "artifact_sha3_512")
+        _bytes(self.proposed_payment_commitment, 64, "proposed_payment_commitment")
+        _bytes(self.expected_state_before_id, 64, "expected_state_before_id")
+        _bytes(self.expected_private_batch_commitment, 64, "expected_private_batch_commitment")
 
     def as_json(self) -> dict[str, Any]:
-        return {"artifact_ref": self.artifact_ref, "artifact_bytes": self.artifact_bytes, "artifact_sha256": _hex(self.artifact_sha256), "artifact_sha3_512": _hex(self.artifact_sha3_512)}
+        return {"artifact_ref": self.artifact_ref, "artifact_bytes": self.artifact_bytes, "artifact_sha256": _hex(self.artifact_sha256), "artifact_sha3_512": _hex(self.artifact_sha3_512), "proposed_payment_commitment": _hex(self.proposed_payment_commitment), "expected_state_before_id": _hex(self.expected_state_before_id), "expected_private_batch_commitment": _hex(self.expected_private_batch_commitment)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -1127,18 +1141,26 @@ def _bounded_output_digests(stdout: object, stderr: object) -> tuple[bytes, byte
     return hashlib.sha3_512(stdout).digest(), hashlib.sha3_512(stderr).digest()
 
 
-def _build_verification_evidence(acceptance: object, containment: object, snapshot: CustodySnapshot, expected_verifier_sha256: bytes) -> _VerificationEvidence:
+def _build_verification_evidence(acceptance: object, containment: object, snapshot: CustodySnapshot, expected_verifier_sha256: bytes, expected_proposed_payment_commitment: bytes, expected_state_before_id: bytes, expected_private_batch_commitment: bytes) -> _VerificationEvidence:
     if type(containment) is not ContainedVerifierResult: raise QueueRetryableError("telemetry_missing")
-    if type(acceptance) is not MinimalProofAcceptanceV1: raise QueueHeldError("proof_acceptance_type")
+    if type(acceptance) is not MinimalProofAcceptanceV3: raise QueueHeldError("proof_acceptance_type")
     if acceptance.proof_accepted is not True: raise QueueDeterministicRejectError("proof_rejected")
     try:
         artifact_bytes = acceptance.artifact_bytes; artifact_sha256 = acceptance.artifact_sha256; artifact_sha3_512 = acceptance.artifact_digest; circuit_id = acceptance.circuit_id; canonical_acceptance = acceptance.canonical_bytes(); peak = containment.peak_job_commit_bytes; cap = containment.cap_bytes; cap_enforced = containment.cap_enforced; active = containment.active_process_limit; timed_out = containment.timed_out; exit_code = containment.exit_code; stdout = containment.stdout; stderr = containment.stderr
     except (AttributeError, TypeError, ValueError): _raise_fixed(QueueRetryableError("verifier_result_shape"))
-    try: parsed_acceptance = parse_acceptance_bytes(canonical_acceptance)
+    try: parsed_acceptance = parse_acceptance_bytes(canonical_acceptance, expected_state_before_id=expected_state_before_id)
+    except MinimalClearanceProofStateError as exc:
+        if str(exc) in _PROOF_DETERMINISTIC_REJECT_CODES:
+            _raise_fixed(QueueDeterministicRejectError(str(exc)))
+        _raise_fixed(QueueHeldError("proof_acceptance_shape"))
     except Exception: _raise_fixed(QueueHeldError("proof_acceptance_shape"))
     if type(artifact_bytes) is not int or type(artifact_sha256) is not bytes or len(artifact_sha256) != 32 or type(artifact_sha3_512) is not bytes or len(artifact_sha3_512) != 64 or type(circuit_id) is not bytes or len(circuit_id) != 32 or type(canonical_acceptance) is not bytes or not 0 < len(canonical_acceptance) <= _MAX_ACCEPTANCE or parsed_acceptance.canonical_bytes() != canonical_acceptance or parsed_acceptance != acceptance:
         raise QueueHeldError("proof_acceptance_shape")
     if artifact_bytes != snapshot.artifact_bytes or artifact_sha256 != snapshot.artifact_sha256 or artifact_sha3_512 != snapshot.artifact_sha3_512 or not snapshot.readonly: raise QueueHeldError("custody_identity_mismatch")
+    if parsed_acceptance.statement.state("proposed_payment_commitment") != expected_proposed_payment_commitment:
+        raise QueueDeterministicRejectError("proof_proposed_commitment_mismatch")
+    if parsed_acceptance.statement.get("private_batch_commitment") != expected_private_batch_commitment:
+        raise QueueDeterministicRejectError("proof_private_batch_commitment_mismatch")
     if not statement_matches_static(parsed_acceptance.statement): raise QueueHeldError("profile_mismatch")
     _bytes(expected_verifier_sha256, 32, "queue_verifier_sha256")
     if type(cap) is not int or type(cap_enforced) is not bool or type(active) is not int or type(timed_out) is not bool or type(exit_code) is not int or type(peak) is not int or peak < 0: raise QueueRetryableError("verifier_containment_shape")
@@ -1150,22 +1172,22 @@ def _build_verification_evidence(acceptance: object, containment: object, snapsh
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "queue_metadata": ("id", "schema_version", "queue_id", "config_json", "config_digest", "verifier_sha256", "artifact_bytes_cap", "profile_digest", "profile_epoch", "installation_id", "installation_epoch", "head_root", "next_transition_seq", "next_admission_seq", "storage_used_bytes", "storage_reserved_bytes", "nonterminal_count", "live_lease_count"),
-    "queue_jobs": ("job_id", "operation_id", "material_digest", "artifact_ref", "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"),
+    "queue_jobs": ("job_id", "operation_id", "material_digest", "artifact_ref", "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code", "proposed_payment_commitment", "expected_state_before_id", "expected_private_batch_commitment"),
     "queue_leases": ("job_id", "worker_id", "token_digest", "attempt", "claim_sequence", "leased_ms", "expires_ms"),
     "queue_results": ("operation_id", "job_id", "terminal_status", "receipt_bytes", "error_code", "completed_ms", "claim_sequence", "worker_id", "leased_ms", "expires_ms", "token_digest"),
     "queue_transitions": ("sequence", "transition_kind", "job_id", "operation_id", "before_root", "after_root", "event_bytes", "event_digest"),
 }
 
 _DDL: Final[tuple[str, ...]] = (
-    "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=4), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), profile_digest BLOB NOT NULL CHECK(length(profile_digest)=64), profile_epoch INTEGER NOT NULL CHECK(profile_epoch=7), installation_id BLOB NOT NULL CHECK(length(installation_id)=64), installation_epoch INTEGER NOT NULL CHECK(installation_epoch>=1), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 1))",
-    "CREATE TABLE queue_jobs (job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE CHECK(length(operation_id)=64), material_digest BLOB NOT NULL CHECK(length(material_digest)=64), artifact_ref TEXT NOT NULL, artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes>0), artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256)=32), artifact_sha3_512 BLOB NOT NULL CHECK(length(artifact_sha3_512)=64), status TEXT NOT NULL CHECK(status IN ('QUEUED','LEASED','CANDIDATE','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), next_eligible_ms INTEGER NOT NULL CHECK(next_eligible_ms>=0), created_ms INTEGER NOT NULL CHECK(created_ms>=0), updated_ms INTEGER NOT NULL CHECK(updated_ms>=0), last_error_code TEXT)",
+    "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=6), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), profile_digest BLOB NOT NULL CHECK(length(profile_digest)=64), profile_epoch INTEGER NOT NULL CHECK(profile_epoch=7), installation_id BLOB NOT NULL CHECK(length(installation_id)=64), installation_epoch INTEGER NOT NULL CHECK(installation_epoch>=1), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 1))",
+    "CREATE TABLE queue_jobs (job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE CHECK(length(operation_id)=64), material_digest BLOB NOT NULL CHECK(length(material_digest)=64), artifact_ref TEXT NOT NULL, artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes>0), artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256)=32), artifact_sha3_512 BLOB NOT NULL CHECK(length(artifact_sha3_512)=64), status TEXT NOT NULL CHECK(status IN ('QUEUED','LEASED','CANDIDATE','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), next_eligible_ms INTEGER NOT NULL CHECK(next_eligible_ms>=0), created_ms INTEGER NOT NULL CHECK(created_ms>=0), updated_ms INTEGER NOT NULL CHECK(updated_ms>=0), last_error_code TEXT, proposed_payment_commitment BLOB NOT NULL CHECK(length(proposed_payment_commitment)=64), expected_state_before_id BLOB NOT NULL CHECK(length(expected_state_before_id)=64), expected_private_batch_commitment BLOB NOT NULL CHECK(length(expected_private_batch_commitment)=64))",
     "CREATE TABLE queue_leases (job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 3), claim_sequence INTEGER NOT NULL UNIQUE CHECK(claim_sequence>=1), leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id))",
     "CREATE TABLE queue_results (operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=64), job_id TEXT NOT NULL UNIQUE, terminal_status TEXT NOT NULL CHECK(terminal_status IN ('CANDIDATE','REJECTED','HELD')), receipt_bytes BLOB CHECK(receipt_bytes IS NULL OR length(receipt_bytes)<=16384), error_code TEXT, completed_ms INTEGER NOT NULL CHECK(completed_ms>=0), claim_sequence INTEGER NOT NULL CHECK(claim_sequence>=1), worker_id TEXT NOT NULL, leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), token_digest BLOB NOT NULL CHECK(length(token_digest)=64), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), CHECK((terminal_status='CANDIDATE' AND receipt_bytes IS NOT NULL AND error_code IS NULL) OR (terminal_status IN ('REJECTED','HELD') AND receipt_bytes IS NULL AND error_code IS NOT NULL)))",
     "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY CHECK(sequence>=1), transition_kind TEXT NOT NULL, job_id TEXT, operation_id BLOB, before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL CHECK(length(event_bytes)<=65536), event_digest BLOB NOT NULL UNIQUE CHECK(length(event_digest)=64), CHECK((transition_kind='ACCEPT_BATCH' AND job_id IS NULL AND operation_id IS NULL) OR (transition_kind<>'ACCEPT_BATCH' AND job_id IS NOT NULL AND operation_id IS NOT NULL AND length(operation_id)=64)), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id))",
 )
 _TRIGGERS: Final[tuple[str, ...]] = (
     "CREATE TRIGGER queue_jobs_no_delete BEFORE DELETE ON queue_jobs BEGIN SELECT RAISE(ABORT,'queue_jobs_append_only'); END",
-    "CREATE TRIGGER queue_jobs_no_update BEFORE UPDATE OF job_id,operation_id,material_digest,artifact_ref,artifact_bytes,artifact_sha256,artifact_sha3_512,admission_seq ON queue_jobs BEGIN SELECT RAISE(ABORT,'queue_jobs_identity_immutable'); END",
+    "CREATE TRIGGER queue_jobs_no_update BEFORE UPDATE OF job_id,operation_id,material_digest,artifact_ref,artifact_bytes,artifact_sha256,artifact_sha3_512,admission_seq,proposed_payment_commitment,expected_state_before_id,expected_private_batch_commitment ON queue_jobs BEGIN SELECT RAISE(ABORT,'queue_jobs_identity_immutable'); END",
     "CREATE TRIGGER queue_leases_no_update BEFORE UPDATE ON queue_leases BEGIN SELECT RAISE(ABORT,'queue_leases_insert_delete_only'); END",
     "CREATE TRIGGER queue_results_no_update BEFORE UPDATE ON queue_results BEGIN SELECT RAISE(ABORT,'queue_results_immutable'); END",
     "CREATE TRIGGER queue_results_no_delete BEFORE DELETE ON queue_results BEGIN SELECT RAISE(ABORT,'queue_results_immutable'); END",
@@ -1467,10 +1489,10 @@ class _VerificationQueueStore:
 
     @staticmethod
     def _metadata_from_row(row: tuple[Any, ...]) -> ArtifactMetadata:
-        return ArtifactMetadata(str(row[3]), int(row[4]), bytes(row[5]), bytes(row[6]))
+        return ArtifactMetadata(str(row[3]), int(row[4]), bytes(row[5]), bytes(row[6]), bytes(row[14]), bytes(row[15]), bytes(row[16]))
 
     def _row_to_job(self, row: tuple[Any, ...]) -> QueueJob:
-        if len(row) != 14 or str(row[7]) not in _STATUS: raise QueueIntegrityError("queue_job_shape")
+        if len(row) != 17 or str(row[7]) not in _STATUS: raise QueueIntegrityError("queue_job_shape")
         error = None if row[13] is None else _safe_code(str(row[13]))
         return QueueJob(str(row[0]), bytes(row[1]), self._metadata_from_row(row), str(row[7]), int(row[8]), int(row[9]), int(row[10]), error)
 
@@ -1555,7 +1577,7 @@ class _VerificationQueueStore:
                 if depth >= self.config.capacity: raise QueueBackpressureError("queue_capacity")
                 if self._page_bytes(connection) + MAX_TERMINAL_GROWTH_PER_NONTERMINAL * (depth + 1) > MAX_QUEUE_DATABASE_BYTES: raise QueueBackpressureError("queue_storage_capacity")
                 admission_seq = int(meta[13]) + 1
-                connection.execute("INSERT INTO queue_jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, operation_id, material, metadata.artifact_ref, metadata.artifact_bytes, metadata.artifact_sha256, metadata.artifact_sha3_512, "QUEUED", admission_seq, 0, now, now, now, None)); self._fault("after_admission_write"); connection.execute("UPDATE queue_metadata SET next_admission_seq=? WHERE id=1", (admission_seq,)); self._append_transition(connection, kind="ADMIT", job_id=job_id, operation_id=operation_id, event={"at_ms": now, "status": "QUEUED", "admission_seq": admission_seq, "attempt": 0, "created_ms": now, "next_eligible_ms": now, "material_digest": _hex(material)}); self._fault("after_transition"); self._update_storage_locked(connection, nonterminal=depth + 1, leases=int(meta[17])); self._commit(connection); began = False
+                connection.execute("INSERT INTO queue_jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, operation_id, material, metadata.artifact_ref, metadata.artifact_bytes, metadata.artifact_sha256, metadata.artifact_sha3_512, "QUEUED", admission_seq, 0, now, now, now, None, metadata.proposed_payment_commitment, metadata.expected_state_before_id, metadata.expected_private_batch_commitment)); self._fault("after_admission_write"); connection.execute("UPDATE queue_metadata SET next_admission_seq=? WHERE id=1", (admission_seq,)); self._append_transition(connection, kind="ADMIT", job_id=job_id, operation_id=operation_id, event={"at_ms": now, "status": "QUEUED", "admission_seq": admission_seq, "attempt": 0, "created_ms": now, "next_eligible_ms": now, "material_digest": _hex(material)}); self._fault("after_transition"); self._update_storage_locked(connection, nonterminal=depth + 1, leases=int(meta[17])); self._commit(connection); began = False
             except VerificationQueueError as exc:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(exc)
@@ -1641,12 +1663,12 @@ class _VerificationQueueStore:
                 row = connection.execute("SELECT j.*,l.token_digest,l.claim_sequence,l.leased_ms,l.expires_ms FROM queue_jobs j JOIN queue_leases l ON l.job_id=j.job_id WHERE j.job_id=? AND j.status='LEASED' AND l.worker_id=?", (job_id, _RUNTIME_WORKER_ID)).fetchone()
                 if row is None:
                     _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
-                job = self._row_to_job(tuple(row[:14]))
-                digest = _lease_digest(self.config, job.job_id, _RUNTIME_WORKER_ID, job.attempt, int(row[15]), int(row[16]), int(row[17]), raw_token)
-                if bytes(row[14]) != digest:
+                job = self._row_to_job(tuple(row[:17]))
+                digest = _lease_digest(self.config, job.job_id, _RUNTIME_WORKER_ID, job.attempt, int(row[18]), int(row[19]), int(row[20]), raw_token)
+                if bytes(row[17]) != digest:
                     _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
-                self._claim_event_without_raw(connection, job_id=job.job_id, operation_id=job.operation_id, claim_sequence=int(row[15]))
-                result = _QueueWorkItem(self.config.queue_id, job.job_id, job.operation_id, job.metadata, job.attempt, _RUNTIME_WORKER_ID, int(row[15]), raw_token, int(row[17]), self.config.verifier_sha256)
+                self._claim_event_without_raw(connection, job_id=job.job_id, operation_id=job.operation_id, claim_sequence=int(row[18]))
+                result = _QueueWorkItem(self.config.queue_id, job.job_id, job.operation_id, job.metadata, job.attempt, _RUNTIME_WORKER_ID, int(row[18]), raw_token, int(row[20]), self.config.verifier_sha256)
                 self._owner_assert()
                 return result
         except QueueIndeterminateError:
@@ -2254,7 +2276,7 @@ class _QueueProcessor:
                 return self._terminal(work, status="HELD", error_code="custody_cleanup")
             return self._terminal(work, status="HELD", error_code="verifier_result_shape")
         try:
-            evidence = _build_verification_evidence(call_result.acceptance, call_result.containment, snapshot, self.store.config.verifier_sha256)
+            evidence = _build_verification_evidence(call_result.acceptance, call_result.containment, snapshot, self.store.config.verifier_sha256, work.metadata.proposed_payment_commitment, work.metadata.expected_state_before_id, work.metadata.expected_private_batch_commitment)
         except (QueueDeterministicRejectError, QueueRetryableError, QueueHeldError) as exc:
             if self._cleanup_snapshot(snapshot):
                 return self._terminal(work, status="HELD", error_code="custody_cleanup")

@@ -1,4 +1,5 @@
 {
+  "manifest_version": 2,
   "experiment": "longfellow_v09_native_v3",
   "disposition": "nonactivating_experiment_only",
   "upstream": {
@@ -19,6 +20,38 @@
     "checkpoint_witnesses_in_optimized_shape": false,
     "patch": "patches/sha3_512_circuit.patch",
     "patch_sha256": "1505A983D144047E1015601E90A4D7B72805AFFBFE31D43A178208DD2AB85F87"
+  },
+  "patched_source_provenance": {
+    "patch_files": [
+      {
+        "path": "patches/sha3_512_circuit.patch",
+        "sha256": "1505A983D144047E1015601E90A4D7B72805AFFBFE31D43A178208DD2AB85F87"
+      },
+      {
+        "path": "patches/quad_builder_uint32_bound.patch",
+        "sha256": "F86EB5DB698EC229F5FD8C09E34BFCCD6FCEBCA1E188C6C4E35B843E35A33C4E"
+      }
+    ],
+    "unstaged_diff_paths": [
+      "lib/circuits/tests/sha3/sha3_circuit.h",
+      "lib/sumcheck/quad_builder.h"
+    ],
+    "staged_paths": [],
+    "untracked_paths": [],
+    "consumed_source_files": [
+      {
+        "path": "lib/circuits/tests/sha3/sha3_circuit.h",
+        "sha256": "FFC0F77681F7BEEA7266C02144E731FA21D9DA51393B214CB739365B45B9C227"
+      },
+      {
+        "path": "lib/circuits/tests/sha3/sha3_slicing.h",
+        "sha256": "F38E9C1407233B60E6235DC825BA99D9A34C6EB284CF8CD994579D03F2894CAB"
+      },
+      {
+        "path": "lib/sumcheck/quad_builder.h",
+        "sha256": "7F8DB09BB44943B9FF5F3A98814DD2DBDA307477957FBCCDFFCCAA4F8AE1DF53"
+      }
+    ]
   },
   "build": {
     "platform": "Windows x64",

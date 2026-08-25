@@ -34,23 +34,25 @@ class MinimalClearanceProofStateError(RuntimeError):
 
 _DIGEST_BYTES: Final[int] = 64
 _SHA256_BYTES: Final[int] = 32
-_PUBLIC_BYTES: Final[int] = 3340
-_PROOF_ROLE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/v1"
+_PUBLIC_BYTES: Final[int] = 5090
+_PROOF_ROLE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/v3"
 _CIRCUIT_ID = bytes.fromhex(
-    "1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0"
+    "0f9fefb8cf05cc4e7a6b9657878c05a37034736d193272e14981f97fdd5a4275"
 )
-_ARTIFACT_MAGIC = b"BLMCV3P1"
+_ARTIFACT_MAGIC = b"BLMCV3P3"
 _ARTIFACT_HEADER_BYTES: Final[int] = 68
-_MAX_ARTIFACT_BYTES: Final[int] = 512 * 1024 * 1024 + _ARTIFACT_HEADER_BYTES + _PUBLIC_BYTES
+_MAX_PROOF_BYTES: Final[int] = 512 * 1024 * 1024
+_MAX_ARTIFACT_BYTES: Final[int] = _MAX_PROOF_BYTES + _ARTIFACT_HEADER_BYTES + _PUBLIC_BYTES
 _MAX_EXECUTABLE_BYTES: Final[int] = _MAX_ARTIFACT_BYTES
 _MAX_ACCEPTANCE: Final[int] = 65_536
 _WORKSPACE_PREFIX: Final[str] = "BLV3-WORKSPACE-"
 _WORKSPACE_MARKER_NAME: Final[str] = ".BLV3-WORKSPACE"
 _WORKSPACE_MARKER: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE-WORKSPACE/v3\x00"
 _STATE_MAGIC = b"BLST"
-_STATE_BYTES: Final[int] = 1622
+_STATE_BYTES: Final[int] = 1686
 _STATE_HEADER_BYTES: Final[int] = 150
 _STATE_DIGEST_COUNT: Final[int] = 23
+_STATE_PROPOSED_COMMITMENT_OFFSET: Final[int] = _STATE_HEADER_BYTES + _STATE_DIGEST_COUNT * _DIGEST_BYTES
 _ZERO_SUITE = bytes(_DIGEST_BYTES)
 _PRIVATE_ZK_ID_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/IDENTITY/v1\x00"
 
@@ -106,7 +108,7 @@ def _is_reparse(metadata: os.stat_result) -> bool:
     )
 
 
-def _private_zk_profile_digest(statement: MinimalProofStatementV1, verifier_sha256: bytes) -> bytes:
+def _private_zk_profile_digest(statement: MinimalProofStatementV3, verifier_sha256: bytes) -> bytes:
     parts = [
         PRIVATE_ZK_MODE_ID,
         PRIVATE_ZK_DATABASE_CONTEXT_ID,
@@ -131,14 +133,13 @@ _PROOF_GENESIS_DOMAIN = b"BL/MINIMAL-CLEARANCE/GENESIS/v1\x00"
 _PROOF_AUDIT_EVENT_DOMAIN = b"BL/MINIMAL-CLEARANCE/AUDIT-EVENT/v1\x00"
 _PROOF_AUDIT_HEAD_DOMAIN = b"BL/MINIMAL-CLEARANCE/AUDIT-HEAD/v1\x00"
 _PROOF_RECEIPT_DOMAIN = b"BL/MINIMAL-CLEARANCE/RECEIPT/v1\x00"
-_ACCEPTANCE_MAGIC = b"BLPACV1\x00"
-_ACCEPTANCE_VERSION: Final[int] = 1
-_SCHEMA_VERSION: Final[int] = 3
+_ACCEPTANCE_MAGIC = b"BLPACV3\x00"
+_ACCEPTANCE_VERSION: Final[int] = 3
 _KIND = "PRIVATE_ZK_CLEARANCE"
-_NATIVE_INPUTS: Final[int] = 36_969
-_NATIVE_PUBLIC_INPUTS: Final[int] = 26_721
-_NATIVE_LAYERS: Final[int] = 217
-_NATIVE_TERMS: Final[int] = 12_158_968
+_NATIVE_INPUTS: Final[int] = 52_057
+_NATIVE_PUBLIC_INPUTS: Final[int] = 40_721
+_NATIVE_LAYERS: Final[int] = 337
+_NATIVE_TERMS: Final[int] = 24_455_436
 _NATIVE_RATE: Final[int] = 4
 _NATIVE_QUERIES: Final[int] = 189
 _NATIVE_TRANSCRIPT_VERSION: Final[int] = 6
@@ -197,6 +198,30 @@ _STATE_DIGEST_NAMES = (
     "write_after",
 )
 
+_STATE_GENESIS_EPOCH: Final[int] = 7
+_STATE_LAYOUT_LITERAL: Final[bytes] = (
+    b"BLST-V2|magic:u8[4]@0|version:u8@4=2|policy_result:u8@5|"
+    b"effective_directive:u8@6|complete:u8@7|membership:u8@8|absence:u8@9|"
+    b"active:u8@10|exception_present:u8@11|exception_authorized:u8@12|"
+    b"economic_mutation:u8@13|clearance_marker_before:u8@14|"
+    b"clearance_marker_after:u8@15|epoch:u64be@16|sequence_before:u64be@24|"
+    b"rule_effective_time:u64be@32|event_time:u64be@40|"
+    b"observation_time:u64be@48|decision_time:u64be@56|read_time:u64be@64|"
+    b"write_time:u64be@72|exception_valid_from:u64be@80|"
+    b"exception_valid_until:u64be@88|sequence_after:u64be@96|"
+    b"decision_index:u32be@104|decision_count:u32be@108|"
+    b"read_access_index:u32be@112|write_access_index:u32be@116|"
+    b"access_count:u32be@120|read_decision_index:u32be@124|"
+    b"write_decision_index:u32be@128|read_mode:u8@132|write_mode:u8@133|"
+    b"clearance_count_before:u64be@134|clearance_count_after:u64be@142|"
+    b"digests:23*u8[64]@150|proposed_payment_commitment:u8[64]@1622|"
+    b"length:1686|capacity:u32be=1|tail:final-64-bytes|no-padding"
+)
+_STATE_LAYOUT_ID_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/STATE-LAYOUT/v2\x00"
+_STATE_ID_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/STATE-ID/v1\x00"
+_PROPOSED_PAYMENT_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/PROPOSED-PAYMENT-COMMITMENT/v1\x00"
+_NO_AUTHORIZED_AMOUNT_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/NO-AUTHORIZED-AMOUNT/v1\x00"
+
 
 def _sha(domain: bytes, *parts: bytes) -> bytes:
     digest = hashlib.sha3_512()
@@ -206,6 +231,10 @@ def _sha(domain: bytes, *parts: bytes) -> bytes:
             raise MinimalClearanceProofStateError("proof_binding_part_invalid")
         digest.update(part)
     return digest.digest()
+
+
+_STATE_LAYOUT_ID: Final[bytes] = _sha(_STATE_LAYOUT_ID_DOMAIN, _STATE_LAYOUT_LITERAL)
+_NO_AUTHORIZED_AMOUNT_COMMITMENT: Final[bytes] = _sha(_NO_AUTHORIZED_AMOUNT_DOMAIN)
 
 
 def _u64(value: int) -> bytes:
@@ -218,6 +247,17 @@ def _u32(value: int) -> bytes:
     if type(value) is not int or value < 0 or value >= 2**32:
         raise MinimalClearanceProofStateError("proof_u32_invalid")
     return value.to_bytes(4, "big")
+
+
+def _genesis_state_bytes() -> bytes:
+    state = bytearray(_STATE_BYTES)
+    state[:4] = _STATE_MAGIC
+    state[4] = 2
+    state[16:24] = _STATE_GENESIS_EPOCH.to_bytes(8, "big")
+    state[470:534] = b"\xe0" + bytes(63)
+    state[534:598] = b"\xe0" + bytes(63)
+    state[_STATE_PROPOSED_COMMITMENT_OFFSET : _STATE_PROPOSED_COMMITMENT_OFFSET + _DIGEST_BYTES] = _NO_AUTHORIZED_AMOUNT_COMMITMENT
+    return bytes(state)
 
 
 def _wide(value: bytes, label: str, *, allow_zero: bool = False) -> bytes:
@@ -255,7 +295,7 @@ def _hex(value: bytes) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class MinimalProofStatementV1:
+class MinimalProofStatementV3:
     """Verifier-selected public statement plus the proof-constrained state row."""
 
     statement_bytes: bytes
@@ -322,10 +362,10 @@ class MinimalProofStatementV1:
 
 
 @dataclass(frozen=True, slots=True)
-class MinimalProofAcceptanceV1:
+class MinimalProofAcceptanceV3:
     """Typed result produced only after independent proof acceptance."""
 
-    statement: MinimalProofStatementV1
+    statement: MinimalProofStatementV3
     artifact_sha256: bytes
     artifact_digest: bytes
     artifact_bytes: int
@@ -333,7 +373,7 @@ class MinimalProofAcceptanceV1:
     proof_accepted: bool = True
 
     def __post_init__(self) -> None:
-        if type(self.statement) is not MinimalProofStatementV1:
+        if type(self.statement) is not MinimalProofStatementV3:
             raise MinimalClearanceProofStateError("proof_acceptance_statement_invalid")
         if type(self.artifact_sha256) is not bytes or len(self.artifact_sha256) != _SHA256_BYTES:
             raise MinimalClearanceProofStateError("proof_acceptance_artifact_sha256_invalid")
@@ -358,7 +398,7 @@ class MinimalProofAcceptanceV1:
 
     @property
     def statement_digest(self) -> bytes:
-        return _sha(b"BL/MINIMAL-CLEARANCE/STATEMENT/v1\x00", self.statement.statement_bytes)
+        return _sha(b"BL/MINIMAL-CLEARANCE/STATEMENT/v3\x00", self.statement.statement_bytes)
 
     @property
     def bundle_id(self) -> bytes:
@@ -377,28 +417,87 @@ class MinimalProofAcceptanceV1:
 class NativeVerificationCallResult:
     """Immutable result binding one acceptance to its own containment call."""
 
-    acceptance: MinimalProofAcceptanceV1 = field(repr=False)
+    acceptance: MinimalProofAcceptanceV3 = field(repr=False)
     containment: ContainedVerifierResult = field(repr=False)
 
 
 def _expected_state_id(
     execution_context: bytes,
-    epoch: int,
     sequence: int,
-    audit_head: bytes,
-    continuity_root: bytes,
+    state_bytes: bytes,
 ) -> bytes:
     return _sha(
-        b"BL/NATIVE-V3/MINIMAL-BEFORE-STATE/v1\x00",
+        _STATE_ID_DOMAIN,
         execution_context,
-        _u64(epoch),
         _u64(sequence),
-        audit_head,
-        continuity_root,
+        _STATE_LAYOUT_ID,
+        _u32(1),
+        _u64(len(state_bytes)),
+        state_bytes,
     )
 
 
-def _parse_statement(statement_bytes: bytes) -> MinimalProofStatementV1:
+def _decode_state_bytes(data: bytes, *, label: str) -> dict[str, object]:
+    if type(data) is not bytes or len(data) != _STATE_BYTES:
+        raise MinimalClearanceProofStateError(f"{label}_length")
+    offset = 0
+    magic, offset = _take(data, offset, 4, f"{label}_magic")
+    version, offset = _read_u8(data, offset, f"{label}_version")
+    if magic != _STATE_MAGIC or version != 2:
+        raise MinimalClearanceProofStateError(f"{label}_header")
+    state: dict[str, object] = {}
+    for name in (
+        "policy_result", "effective_directive", "complete", "membership", "absence",
+        "active", "exception_present", "exception_authorized", "economic_mutation",
+        "clearance_marker_before", "clearance_marker_after",
+    ):
+        value, offset = _read_u8(data, offset, f"{label}_{name}")
+        state[name] = value
+    for name in (
+        "epoch", "sequence_before", "rule_effective_time", "event_time", "observation_time",
+        "decision_time", "read_time", "write_time", "exception_valid_from",
+        "exception_valid_until", "sequence_after",
+    ):
+        value, offset = _read_u64(data, offset, f"{label}_{name}")
+        state[name] = value
+    for name in (
+        "decision_index", "decision_count", "read_access_index", "write_access_index",
+        "access_count", "read_decision_index", "write_decision_index",
+    ):
+        value, offset = _read_u32(data, offset, f"{label}_{name}")
+        state[name] = value
+    state["read_mode"], offset = _read_u8(data, offset, f"{label}_read_mode")
+    state["write_mode"], offset = _read_u8(data, offset, f"{label}_write_mode")
+    for name in ("clearance_count_before", "clearance_count_after"):
+        value, offset = _read_u64(data, offset, f"{label}_{name}")
+        state[name] = value
+    is_genesis = data == _genesis_state_bytes()
+    for name in _STATE_DIGEST_NAMES:
+        raw, offset = _take(data, offset, _DIGEST_BYTES, f"{label}_{name}")
+        raw = bytes(raw)
+        _wide(
+            raw,
+            f"{label}_{name}",
+            allow_zero=(
+                is_genesis
+                or (
+                    int(state["sequence_before"]) == 0
+                    and name in {"before_audit_head", "before_continuity_root", "write_before"}
+                )
+            ),
+        )
+        state[name] = raw
+    proposed, offset = _take(data, offset, _DIGEST_BYTES, f"{label}_proposed_payment_commitment")
+    state["proposed_payment_commitment"] = bytes(proposed)
+    _wide(bytes(proposed), f"{label}_proposed_payment_commitment")
+    if offset != len(data):
+        raise MinimalClearanceProofStateError(f"{label}_trailing")
+    return state
+
+
+def _parse_statement(
+    statement_bytes: bytes, *, expected_state_before_id: bytes | None = None
+) -> MinimalProofStatementV3:
     if type(statement_bytes) is not bytes or len(statement_bytes) != _PUBLIC_BYTES:
         raise MinimalClearanceProofStateError("proof_statement_length")
     offset = 0
@@ -421,56 +520,31 @@ def _parse_statement(statement_bytes: bytes) -> MinimalProofStatementV1:
         if value not in (0, 1):
             raise MinimalClearanceProofStateError(f"statement_{name}_boolean")
         values[name] = value
+    predecessor_bytes, offset = _take(
+        statement_bytes, offset, _STATE_BYTES, "statement_predecessor_state"
+    )
+    predecessor_bytes = bytes(predecessor_bytes)
+    values["predecessor_state_bytes"] = predecessor_bytes
     state_bytes, offset = _take(statement_bytes, offset, _STATE_BYTES, "statement_state_commitment")
     if offset != len(statement_bytes):
         raise MinimalClearanceProofStateError("statement_trailing")
     state_bytes = bytes(state_bytes)
     values["state_commitment_bytes"] = state_bytes
 
-    so = 0
-    magic, so = _take(state_bytes, so, 4, "state_magic")
-    version, so = _read_u8(state_bytes, so, "state_version")
-    if magic != _STATE_MAGIC or version != 1:
-        raise MinimalClearanceProofStateError("state_header")
-    state: dict[str, object] = {}
-    for name in (
-        "policy_result", "effective_directive", "complete", "membership", "absence",
-        "active", "exception_present", "exception_authorized", "economic_mutation",
-        "clearance_marker_before", "clearance_marker_after",
-    ):
-        value, so = _read_u8(state_bytes, so, f"state_{name}")
-        state[name] = value
-    for name in (
-        "epoch", "sequence_before", "rule_effective_time", "event_time", "observation_time",
-        "decision_time", "read_time", "write_time", "exception_valid_from",
-        "exception_valid_until", "sequence_after",
-    ):
-        value, so = _read_u64(state_bytes, so, f"state_{name}")
-        state[name] = value
-    for name in (
-        "decision_index", "decision_count", "read_access_index", "write_access_index",
-        "access_count", "read_decision_index", "write_decision_index",
-    ):
-        value, so = _read_u32(state_bytes, so, f"state_{name}")
-        state[name] = value
-    read_mode, so = _read_u8(state_bytes, so, "state_read_mode")
-    write_mode, so = _read_u8(state_bytes, so, "state_write_mode")
-    state["read_mode"] = read_mode
-    state["write_mode"] = write_mode
-    for name in ("clearance_count_before", "clearance_count_after"):
-        value, so = _read_u64(state_bytes, so, f"state_{name}")
-        state[name] = value
-    for name in _STATE_DIGEST_NAMES:
-        raw, so = _take(state_bytes, so, _DIGEST_BYTES, f"state_{name}")
-        raw = bytes(raw)
-        _wide(raw, f"state_{name}")
-        state[name] = raw
-    if so != len(state_bytes) or so != _STATE_BYTES:
-        raise MinimalClearanceProofStateError("state_length")
+    state = _decode_state_bytes(state_bytes, label="state")
+    predecessor = _decode_state_bytes(predecessor_bytes, label="predecessor_state")
 
-    _validate_statement_and_state(values, state)
+    _validate_statement_and_state(
+        values, state, predecessor, expected_state_before_id=expected_state_before_id
+    )
+    authorized_payment_commitment = (
+        bytes(state["proposed_payment_commitment"])
+        if int(state["effective_directive"]) in (1, 5)
+        else _NO_AUTHORIZED_AMOUNT_COMMITMENT
+    )
+    state["authorized_payment_commitment"] = authorized_payment_commitment
     join_id = _sha(
-        b"BL/NATIVE-V3/MINIMAL-DECISION-ACCESS-JOIN/v1\x00",
+        b"BL/NATIVE-V3/MINIMAL-DECISION-ACCESS-JOIN/v2\x00",
         bytes(values["decision_id"]), bytes(state["read_decision_id"]),
         bytes(state["read_address"]), bytes(state["read_key"]),
         bytes(state["read_before"]), bytes(state["read_after"]),
@@ -480,16 +554,18 @@ def _parse_statement(statement_bytes: bytes) -> MinimalProofStatementV1:
         bytes(values["state_after_id"]),
     )
     receipt_id = _sha(
-        b"BL/NATIVE-V3/MINIMAL-RECEIPT-ID/v1\x00",
+        b"BL/NATIVE-V3/MINIMAL-RECEIPT-ID/v2\x00",
         bytes(values["automatic_control_set"]), bytes(values["decision_id"]), join_id,
         bytes(values["state_before_id"]), bytes(values["state_after_id"]), state_bytes,
+        authorized_payment_commitment,
     )
     settlement_id = _sha(
-        b"BL/NATIVE-V3/MINIMAL-SETTLEMENT-REFERENCE/v1\x00",
+        b"BL/NATIVE-V3/MINIMAL-SETTLEMENT-REFERENCE/v2\x00",
         bytes(values["settlement_domain"]), bytes((int(state["effective_directive"]),)),
         bytes(values["decision_id"]), bytes(values["state_after_id"]),
+        authorized_payment_commitment,
     )
-    return MinimalProofStatementV1(
+    return MinimalProofStatementV3(
         statement_bytes=statement_bytes,
         values=tuple(values.items()),
         state_values=tuple(state.items()),
@@ -608,14 +684,20 @@ def _parse_preflight_output(stdout: bytes, stderr: bytes) -> None:
     expected = (_NATIVE_INPUTS, _NATIVE_PUBLIC_INPUTS, _NATIVE_LAYERS, _NATIVE_TERMS, _PUBLIC_BYTES)
     if values[:5] != expected or bytes.fromhex(match.group(1)) != _CIRCUIT_ID:
         raise MinimalClearanceProofStateError("proof_preflight_profile")
-    if values[5:7] != (7, 11):
+    if values[5:7] != (7, 0):
         raise MinimalClearanceProofStateError("proof_preflight_statement")
     if values[7:] != (0x0102030405060708, 0x1112131415161718):
         raise MinimalClearanceProofStateError("proof_preflight_endian")
     _parse_build_trace(stderr, expected_lines=5)
 
 
-def _validate_statement_and_state(values: dict[str, object], state: dict[str, object]) -> None:
+def _validate_statement_and_state(
+    values: dict[str, object],
+    state: dict[str, object],
+    predecessor: dict[str, object],
+    *,
+    expected_state_before_id: bytes | None = None,
+) -> None:
     policy = int(state["policy_result"])
     directive = int(state["effective_directive"])
     mapping = {1: 1, 2: 2, 3: 3, 4: 4, 5: 4}
@@ -654,7 +736,7 @@ def _validate_statement_and_state(values: dict[str, object], state: dict[str, ob
         raise MinimalClearanceProofStateError("proof_access_time")
     if tuple(int(state[name]) for name in ("decision_index", "decision_count", "read_access_index", "write_access_index", "access_count", "read_decision_index", "write_decision_index", "read_mode", "write_mode")) != (0, 1, 0, 1, 2, 0, 0, 1, 2):
         raise MinimalClearanceProofStateError("proof_access_shape")
-    if int(state["sequence_after"]) != int(values["sequence_before"]) + 1:
+    if int(values["sequence_before"]) >= 2**64 - 1 or int(state["sequence_after"]) != int(values["sequence_before"]) + 1:
         raise MinimalClearanceProofStateError("proof_sequence_after")
     clear_transition = directive in (1, 5)
     if int(state["clearance_marker_after"]) != int(bool(int(state["clearance_marker_before"]) or clear_transition)):
@@ -664,15 +746,41 @@ def _validate_statement_and_state(values: dict[str, object], state: dict[str, ob
         raise MinimalClearanceProofStateError("proof_clearance_count")
     if int(state["exception_present"]) != int(directive == 5) or int(state["exception_authorized"]) != int(directive == 5):
         raise MinimalClearanceProofStateError("proof_exception")
+    proposed_payment_commitment = bytes(state["proposed_payment_commitment"])
+    _wide(proposed_payment_commitment, "proof_proposed_payment_commitment")
+    authorized_payment_commitment = (
+        proposed_payment_commitment if directive in (1, 5)
+        else _NO_AUTHORIZED_AMOUNT_COMMITMENT
+    )
+    state["authorized_payment_commitment"] = authorized_payment_commitment
     exception_id = bytes(values["exception_id"])
     if directive != 5:
         if exception_id != b"\xe0" + bytes(63) or int(state["exception_valid_from"]) != 0 or int(state["exception_valid_until"]) != 0:
             raise MinimalClearanceProofStateError("proof_exception_sentinel")
     elif not (
         int(state["exception_valid_from"]) < int(state["exception_valid_until"])
-        and int(state["exception_valid_from"]) <= int(state["decision_time"]) <= int(state["exception_valid_until"])
+        and int(state["exception_valid_from"]) <= int(state["event_time"])
+        and int(state["decision_time"]) <= int(state["exception_valid_until"])
     ):
         raise MinimalClearanceProofStateError("proof_exception_interval")
+    expected_exception_scope = (
+        b"\xe0" + bytes(63)
+        if directive != 5
+        else _sha(
+            b"BL/NATIVE-V3/EXCEPTION-SCOPE/v2\x00",
+            exception_id,
+            bytes(values["subject_id"]),
+            bytes(values["rule_id"]),
+            _u64(int(state["exception_valid_from"])),
+            _u64(int(state["exception_valid_until"])),
+            proposed_payment_commitment,
+        )
+    )
+    if (
+        expected_exception_scope != bytes(values["exception_scope_id"])
+        or expected_exception_scope != bytes(state["exception_scope_id"])
+    ):
+        raise MinimalClearanceProofStateError("proof_exception_scope_id")
     for name in _STATEMENT_DIGEST_NAMES[1:]:
         _wide(bytes(values[name]), f"proof_{name}")
     if bytes(values["proof_suite"]) != _ZERO_SUITE:
@@ -705,12 +813,32 @@ def _validate_statement_and_state(values: dict[str, object], state: dict[str, ob
         raise MinimalClearanceProofStateError("proof_write_address_binding")
     if bytes(state["read_address"]) != bytes(values["source_address"]) or bytes(state["read_key"]) != bytes(values["source_key"]):
         raise MinimalClearanceProofStateError("proof_read_address_binding")
+    if type(expected_state_before_id) not in (bytes, type(None)):
+        raise MinimalClearanceProofStateError("proof_expected_predecessor")
+    if expected_state_before_id is not None and len(expected_state_before_id) != _DIGEST_BYTES:
+        raise MinimalClearanceProofStateError("proof_expected_predecessor")
+    predecessor_bytes = bytes(values["predecessor_state_bytes"])
+    if int(predecessor["epoch"]) != int(values["epoch"]):
+        raise MinimalClearanceProofStateError("proof_predecessor_epoch")
+    if int(predecessor["sequence_after"]) != int(values["sequence_before"]):
+        raise MinimalClearanceProofStateError("proof_predecessor_sequence")
+    if bytes(predecessor["after_audit_head"]) != bytes(state["before_audit_head"]):
+        raise MinimalClearanceProofStateError("proof_predecessor_audit")
+    if bytes(predecessor["after_continuity_root"]) != bytes(state["before_continuity_root"]):
+        raise MinimalClearanceProofStateError("proof_predecessor_continuity")
+    if int(predecessor["clearance_marker_after"]) != int(state["clearance_marker_before"]):
+        raise MinimalClearanceProofStateError("proof_predecessor_marker")
+    if int(predecessor["clearance_count_after"]) != int(state["clearance_count_before"]):
+        raise MinimalClearanceProofStateError("proof_predecessor_count")
+    if int(values["sequence_before"]) == 0 and predecessor_bytes != _genesis_state_bytes():
+        raise MinimalClearanceProofStateError("proof_genesis_state")
     before_state = _expected_state_id(
-        bytes(values["execution_context"]), int(values["epoch"]), int(values["sequence_before"]),
-        bytes(state["before_audit_head"]), bytes(state["before_continuity_root"]),
+        bytes(values["execution_context"]), int(values["sequence_before"]), predecessor_bytes
     )
     if before_state != bytes(values["state_before_id"]):
         raise MinimalClearanceProofStateError("proof_before_state_id")
+    if expected_state_before_id is not None and expected_state_before_id != before_state:
+        raise MinimalClearanceProofStateError("proof_predecessor_mismatch")
     expected_request = _sha(
         b"BL/NATIVE-V3/REQUEST-ID/v2\x00", bytes(values["subject_id"]), bytes(values["attempt_id"]),
         _u64(int(values["epoch"])), _u64(int(values["sequence_before"])), bytes(values["state_before_id"]),
@@ -718,8 +846,9 @@ def _validate_statement_and_state(values: dict[str, object], state: dict[str, ob
     if expected_request != bytes(values["request_id"]):
         raise MinimalClearanceProofStateError("proof_request_id")
     expected_decision = _sha(
-        b"BL/NATIVE-V3/MINIMAL-DECISION/v1\x00", bytes(values["request_id"]), bytes(values["source_root_id"]),
+        b"BL/NATIVE-V3/MINIMAL-DECISION/v2\x00", bytes(values["request_id"]), bytes(values["source_root_id"]),
         bytes(values["completeness_id"]), bytes((policy, directive)), bytes(values["exception_id"]),
+        proposed_payment_commitment,
     )
     if expected_decision != bytes(values["decision_id"]):
         raise MinimalClearanceProofStateError("proof_decision_id")
@@ -733,14 +862,17 @@ def _validate_statement_and_state(values: dict[str, object], state: dict[str, ob
     )
     if expected_audit != bytes(state["after_audit_head"]) or expected_root != bytes(state["after_continuity_root"]):
         raise MinimalClearanceProofStateError("proof_after_continuity")
-    expected_state = _sha(
-        b"BL/NATIVE-V3/MINIMAL-STATE-ID/v1\x00", b"\x01", bytes(values["state_commitment_bytes"]),
+    expected_state = _expected_state_id(
+        bytes(values["execution_context"]), int(state["sequence_after"]),
+        bytes(values["state_commitment_bytes"]),
     )
     if expected_state != bytes(values["state_after_id"]):
         raise MinimalClearanceProofStateError("proof_after_state_id")
 
 
-def parse_acceptance_bytes(encoded: bytes) -> MinimalProofAcceptanceV1:
+def parse_acceptance_bytes(
+    encoded: bytes, *, expected_state_before_id: bytes | None = None
+) -> MinimalProofAcceptanceV3:
     if type(encoded) is not bytes or len(encoded) < 8 + 4 + 8 + 32 + 64 + 32 + 4:
         raise MinimalClearanceProofStateError("proof_acceptance_truncated")
     offset = 0
@@ -760,8 +892,10 @@ def parse_acceptance_bytes(encoded: bytes) -> MinimalProofAcceptanceV1:
     statement_bytes, offset = _take(encoded, offset, statement_size, "acceptance_statement")
     if offset != len(encoded):
         raise MinimalClearanceProofStateError("proof_acceptance_trailing")
-    statement = _parse_statement(bytes(statement_bytes))
-    return MinimalProofAcceptanceV1(
+    statement = _parse_statement(
+        bytes(statement_bytes), expected_state_before_id=expected_state_before_id
+    )
+    return MinimalProofAcceptanceV3(
         statement=statement,
         artifact_sha256=bytes(artifact_sha256),
         artifact_digest=bytes(artifact_digest),
@@ -902,13 +1036,13 @@ def _snapshot_verified_file(
 def _artifact_public_bytes(raw: bytes) -> tuple[bytes, bytes, bytes]:
     if len(raw) < _ARTIFACT_HEADER_BYTES or raw[:8] != _ARTIFACT_MAGIC:
         raise MinimalClearanceProofStateError("proof_artifact_header")
-    if int.from_bytes(raw[8:12], "big") != 1:
+    if int.from_bytes(raw[8:12], "big") != 3:
         raise MinimalClearanceProofStateError("proof_artifact_version")
     circuit_id = raw[12:44]
     public_size = int.from_bytes(raw[56:60], "big")
     proof_size = int.from_bytes(raw[60:68], "big")
     expected = _ARTIFACT_HEADER_BYTES + public_size + proof_size
-    if public_size != _PUBLIC_BYTES or expected != len(raw):
+    if public_size != _PUBLIC_BYTES or proof_size > _MAX_PROOF_BYTES or expected != len(raw):
         raise MinimalClearanceProofStateError("proof_artifact_length")
     return circuit_id, raw[_ARTIFACT_HEADER_BYTES : _ARTIFACT_HEADER_BYTES + public_size], raw[_ARTIFACT_HEADER_BYTES + public_size :]
 
@@ -1382,7 +1516,7 @@ class NativeMinimalClearanceVerifier:
                 if statement_digest != hashlib.sha3_512(post_public_bytes).digest():
                     raise MinimalClearanceProofStateError("proof_verified_statement_digest")
                 statement = _parse_statement(post_public_bytes)
-                acceptance = MinimalProofAcceptanceV1(
+                acceptance = MinimalProofAcceptanceV3(
                     statement=statement,
                     artifact_sha256=hashlib.sha256(post_raw).digest(),
                     artifact_digest=hashlib.sha3_512(post_raw).digest(),
@@ -1397,6 +1531,6 @@ class NativeMinimalClearanceVerifier:
 
 __all__ = (
     "MinimalClearanceProofStateError",
-    "MinimalProofStatementV1", "MinimalProofAcceptanceV1",
+    "MinimalProofStatementV3", "MinimalProofAcceptanceV3",
     "NativeMinimalClearanceVerifier", "NativeVerificationCallResult", "parse_acceptance_bytes",
 )

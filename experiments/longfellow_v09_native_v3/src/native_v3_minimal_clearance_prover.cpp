@@ -45,9 +45,9 @@ int WriteProducerStatement(const char* path) {
   output.write(reinterpret_cast<const char*>(bytes.data()),
                static_cast<std::streamsize>(bytes.size()));
   if (!output) return 2;
-  std::printf("MINIMAL_CLEARANCE_PRODUCER_PUBLIC_STATEMENT bytes=%zu path=%s "
+  std::printf("MINIMAL_CLEARANCE_PRODUCER_PUBLIC_STATEMENT bytes=%zu "
               "epoch=%llu sequence_before=%llu\n",
-              bytes.size(), path,
+              bytes.size(),
               static_cast<unsigned long long>(fixture.cases[0].statement.epoch),
               static_cast<unsigned long long>(
                   fixture.cases[0].statement.sequence_before));
@@ -68,10 +68,22 @@ int main(int argc, char** argv) {
                 circuit->nl, circuit->nterms(), kSha3EndpointCount);
     return 0;
   }
-  if (argc != 2) {
+  size_t case_index = 0;
+  if (argc == 4 && std::string(argv[2]) == "--case") {
+    if (std::string(argv[3]) == "A" || std::string(argv[3]) == "clear") {
+      case_index = 0;
+    } else if (std::string(argv[3]) == "B" || std::string(argv[3]) == "hold") {
+      case_index = 1;
+    } else {
+      std::fprintf(stderr,
+                   "MINIMAL_CLEARANCE_PROVER_REJECT reason=case-selector\n");
+      return 2;
+    }
+  } else if (argc != 2) {
     std::fprintf(stderr,
                  "usage: longfellow_minimal_clearance_prover ARTIFACT | "
-                 "--public-statement-file PATH | --circuit-id\n");
+                 "--public-statement-file PATH | --circuit-id | "
+                 "ARTIFACT --case A|B\n");
     return 2;
   }
   if (Exists(argv[1])) {
@@ -80,13 +92,13 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  std::fprintf(stderr,
-               "MINIMAL_CLEARANCE_PROVER_ATTEMPT case=clear attempt=1 "
-               "proof_invocations_before=0\n");
+  const char* case_label = case_index == 0 ? "A" : "B";
+  std::fprintf(stderr, "MINIMAL_CLEARANCE_PROVER_ATTEMPT case=%s attempt=%zu "
+               "proof_invocations_before=0\n", case_label, case_index + 1);
   try {
     auto circuit = build_circuit();
     const Fixture fixture = make_fixture();
-    const Case& source_case = fixture.cases[0];
+    const Case& source_case = fixture.cases[case_index];
     const RelationField field;
 
     proofs::Dense<RelationField> witness(1, circuit->ninputs);
@@ -98,12 +110,15 @@ int main(int argc, char** argv) {
     }
     const std::vector<uint8_t> public_bytes =
         public_statement_bytes(source_case);
-    if (public_bytes.size() != kPublicStatementBytes ||
+    if (public_bytes.size() !=
+            blind_ledger_longfellow::minimal_clearance::kPublicStatementBytes ||
         circuit->npub_in != 1 + public_bytes.size() * 8) {
       std::fprintf(stderr,
                    "MINIMAL_CLEARANCE_PROVER_REJECT reason=public-length "
                    "bytes=%zu expected=%zu npub_in=%zu expected_npub=%zu\n",
-                   public_bytes.size(), kPublicStatementBytes, circuit->npub_in,
+                   public_bytes.size(),
+                   blind_ledger_longfellow::minimal_clearance::kPublicStatementBytes,
+                   circuit->npub_in,
                    1 + public_bytes.size() * 8);
       return 1;
     }
@@ -134,23 +149,21 @@ int main(int argc, char** argv) {
     if (!write_artifact(argv[1], circuit_id, kLigeroRate, kLigeroQueries,
                         kTranscriptVersion, public_bytes, proof_bytes, error)) {
       std::fprintf(stderr,
-                   "MINIMAL_CLEARANCE_PROVER_REJECT reason=artifact:%s\n",
-                   error.c_str());
+                   "MINIMAL_CLEARANCE_PROVER_REJECT reason=artifact-write\n");
       return 1;
     }
-    std::printf("MINIMAL_CLEARANCE_PROVER_ACCEPT attempt=1 case=clear "
+    std::printf("MINIMAL_CLEARANCE_PROVER_ACCEPT attempt=%zu case=%s "
                 "proof_invocations=1 inputs=%zu public_inputs=%zu layers=%zu "
                 "terms=%zu public_bytes=%zu proof_bytes=%zu rate=%u "
                 "queries=%u transcript_version=%u circuit_id=%s\n",
-                circuit->ninputs, circuit->npub_in, circuit->nl,
+                case_index + 1, case_label, circuit->ninputs, circuit->npub_in, circuit->nl,
                 circuit->nterms(), public_bytes.size(), proof_bytes.size(),
                 kLigeroRate, kLigeroQueries, kTranscriptVersion,
                 CircuitId(circuit).c_str());
     return 0;
-  } catch (const std::exception& exception) {
+  } catch (const std::exception&) {
     std::fprintf(stderr,
-                 "MINIMAL_CLEARANCE_PROVER_REJECT reason=exception:%s\n",
-                 exception.what());
+                 "MINIMAL_CLEARANCE_PROVER_REJECT reason=exception\n");
     return 1;
   }
 }

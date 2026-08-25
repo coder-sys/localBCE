@@ -1,4 +1,5 @@
 #include <array>
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -67,14 +68,16 @@ int main() {
         derive_identities(fixture.cases[index]).decision_id !=
             derive_identities(retry_fixture.cases[index]).decision_id ||
         endpoint_input(fixture.cases[index], 0) !=
-            endpoint_input(retry_fixture.cases[index], 0)) {
+            endpoint_input(retry_fixture.cases[index], 0) ||
+        endpoint_input(fixture.cases[index], 1) !=
+            endpoint_input(retry_fixture.cases[index], 1)) {
       std::printf("MINIMAL_CLEARANCE_DETERMINISM_FAIL case=%zu\n", index);
       return 1;
     }
   }
   std::printf(
       "MINIMAL_CLEARANCE_DETERMINISM_PASS cases=%zu public_bytes=%zu "
-      "state_commitment_bytes=%zu private_source_endpoints=%zu request_hash_endpoints=0\n",
+      "state_commitment_bytes=%zu sha3_endpoints=%zu request_hash_endpoints=0\n",
       fixture.cases.size(), public_statement_bytes(fixture.cases[0]).size(),
       state_commitment_bytes(fixture.cases[0]).size(), kSha3EndpointCount);
   auto circuit = build_circuit();
@@ -140,6 +143,32 @@ int main() {
         ids.join_id[0], ids.receipt_id[0], ids.settlement_id[0]);
   }
 
+  const auto with_max_predecessor = [](Case current, const Case& source) {
+    Case predecessor = source;
+    predecessor.clearance_count_after = UINT64_MAX;
+    const auto predecessor_bytes = state_commitment_bytes(predecessor);
+    std::copy(predecessor_bytes.begin(), predecessor_bytes.end(),
+              current.statement.predecessor_state_bytes.begin());
+    current.statement.state_before_id = CanonicalStateIdForEvidence(
+        current.statement.execution_context, current.statement.sequence_before,
+        predecessor_bytes);
+    return current;
+  };
+  Case max_count_nonclear =
+      with_max_predecessor(fixture.cases[1], fixture.cases[0]);
+  max_count_nonclear.clearance_count_before = UINT64_MAX;
+  max_count_nonclear.clearance_count_after = UINT64_MAX;
+  rebuild_transition_binding(max_count_nonclear);
+  std::string max_count_reason;
+  if (!evaluate_case(max_count_nonclear, max_count_reason) ||
+      !CircuitAccepts(*circuit, max_count_nonclear, max_count_reason)) {
+    std::printf(
+        "MINIMAL_CLEARANCE_MAX_COUNT_FAIL case=nonclear reason=%s\n",
+        max_count_reason.c_str());
+    return 1;
+  }
+  std::printf("MINIMAL_CLEARANCE_MAX_COUNT_PASS case=nonclear preserved=1\n");
+
   std::vector<Mutation> mutations;
   Mutation source_registry{"source_registry_substitution", fixture.cases[0]};
   Flip(source_registry.value.statement.source_registry_snapshot);
@@ -160,6 +189,18 @@ int main() {
   Mutation private_batch{"private_batch_commitment_substitution", fixture.cases[0]};
   Flip(private_batch.value.statement.private_batch_commitment);
   mutations.push_back(private_batch);
+
+  Mutation amount{"private_amount_substitution", fixture.cases[0]};
+  ++amount.value.amount_cents;
+  mutations.push_back(amount);
+
+  Mutation nonce{"private_nonce_substitution", fixture.cases[0]};
+  Flip(nonce.value.nonce);
+  mutations.push_back(nonce);
+
+  Mutation source_nonce{"private_source_nonce_substitution", fixture.cases[0]};
+  Flip(source_nonce.value.source_nonce);
+  mutations.push_back(source_nonce);
 
   Mutation completeness{"completeness_target_substitution", fixture.cases[0]};
   Flip(completeness.value.statement.completeness_id);
@@ -328,6 +369,53 @@ int main() {
   state_bytes.value.statement.state_commitment_bytes[100] ^= 1;
   mutations.push_back(state_bytes);
 
+  Mutation audit_linkage{"audit_linkage_substitution", fixture.cases[0]};
+  Flip(audit_linkage.value.after_audit_head);
+  audit_linkage.owner = "state-side";
+  audit_linkage.require_circuit_rejection = false;
+  audit_linkage.rebind_state = true;
+  mutations.push_back(audit_linkage);
+
+  Mutation continuity_linkage{"continuity_linkage_substitution", fixture.cases[0]};
+  Flip(continuity_linkage.value.after_continuity_root);
+  continuity_linkage.owner = "state-side";
+  continuity_linkage.require_circuit_rejection = false;
+  continuity_linkage.rebind_state = true;
+  mutations.push_back(continuity_linkage);
+
+  Mutation clearance_count{"clearance_count_linkage_substitution", fixture.cases[0]};
+  ++clearance_count.value.clearance_count_after;
+  clearance_count.owner = "state-side";
+  clearance_count.require_circuit_rejection = false;
+  clearance_count.rebind_state = true;
+  mutations.push_back(clearance_count);
+
+  Mutation max_count_clear{"max_count_clear", fixture.cases[0]};
+  max_count_clear.value.statement.sequence_before = 1;
+  max_count_clear.value.sequence_after = 2;
+  max_count_clear.value.before_audit_head = fixture.cases[0].after_audit_head;
+  max_count_clear.value.before_continuity_root =
+      fixture.cases[0].after_continuity_root;
+  max_count_clear.value.write_before = max_count_clear.value.before_audit_head;
+  max_count_clear.value.clearance_marker_before =
+      fixture.cases[0].clearance_marker_after;
+  max_count_clear.value.clearance_count_before = UINT64_MAX;
+  max_count_clear.value.clearance_count_after = 0;
+  max_count_clear.value =
+      with_max_predecessor(max_count_clear.value, fixture.cases[0]);
+  max_count_clear.rebind_state = false;
+  rebuild_transition_binding(max_count_clear.value);
+  mutations.push_back(max_count_clear);
+
+  Mutation max_count_exception{"max_count_exception", fixture.cases[4]};
+  max_count_exception.value.clearance_count_before = UINT64_MAX;
+  max_count_exception.value.clearance_count_after = 0;
+  max_count_exception.value =
+      with_max_predecessor(max_count_exception.value, fixture.cases[3]);
+  max_count_exception.rebind_state = false;
+  rebuild_transition_binding(max_count_exception.value);
+  mutations.push_back(max_count_exception);
+
   Mutation economic{"economic_mutation_claim", fixture.cases[0]};
   economic.value.economic_mutation = 1;
   economic.rebind_state = true;
@@ -343,7 +431,8 @@ int main() {
     std::string circuit_reason;
     const bool circuit_accepts =
         CircuitAccepts(*circuit, candidate.value, circuit_reason);
-    if (host_accepts ||
+    if ((std::string(mutation.owner) != "verifier-public-statement" &&
+         host_accepts) ||
         (mutation.require_circuit_rejection && circuit_accepts)) {
       std::printf(
         "MINIMAL_CLEARANCE_MUTATION_FAIL name=%s host_accepts=%d "

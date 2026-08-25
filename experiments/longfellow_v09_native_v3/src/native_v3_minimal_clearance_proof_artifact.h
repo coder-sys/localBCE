@@ -9,17 +9,17 @@
 namespace blind_ledger_longfellow::minimal_clearance_proof {
 
 constexpr size_t kCircuitIdBytes = 32;
-constexpr size_t kPublicStatementBytes = 3340;
+constexpr size_t kPublicStatementBytes = 5090;
 constexpr size_t kHeaderBytes = 68;
 constexpr size_t kMaxProofBytes = 512u * 1024u * 1024u;
-constexpr uint32_t kFormatVersion = 1;
+constexpr uint32_t kFormatVersion = 3;
 constexpr uint32_t kLigeroRate = 4;
 constexpr uint32_t kLigeroQueries = 189;
 constexpr uint32_t kTranscriptVersion = 6;
 inline constexpr char kTranscriptLabel[] =
-    "BL/NATIVE-V3/MINIMAL-CLEARANCE/TRANSCRIPT/v1";
+    "BL/NATIVE-V3/MINIMAL-CLEARANCE/TRANSCRIPT/v3";
 inline constexpr std::array<uint8_t, 8> kArtifactMagic = {
-    'B', 'L', 'M', 'C', 'V', '3', 'P', '1'};
+    'B', 'L', 'M', 'C', 'V', '3', 'P', '3'};
 
 struct Artifact {
   std::array<uint8_t, kCircuitIdBytes> circuit_id{};

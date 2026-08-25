@@ -1,4 +1,4 @@
-"""One pinned experimental PRIVATE_ZK profile for the V4 queue runtime.
+"""One pinned experimental PRIVATE_ZK profile for the V6 queue runtime.
 
 The profile is a driver-owned software fence for the current synthetic native
 fixture.  It is deliberately not a production manifest or a proof-backend
@@ -17,15 +17,15 @@ _DIGEST_BYTES: Final[int] = 64
 _ZERO_SUITE: Final[bytes] = bytes(_DIGEST_BYTES)
 PROFILE_EPOCH: Final[int] = 7
 PROTOCOL_VERSION: Final[int] = 3
-PROOF_ROLE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/v1"
+PROOF_ROLE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/v3"
 CIRCUIT_ID: Final[bytes] = bytes.fromhex(
-    "1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0"
+    "0f9fefb8cf05cc4e7a6b9657878c05a37034736d193272e14981f97fdd5a4275"
 )
-NATIVE_DIMENSIONS: Final[tuple[int, int, int, int]] = (36_969, 26_721, 217, 12_158_968)
+NATIVE_DIMENSIONS: Final[tuple[int, int, int, int]] = (52_057, 40_721, 337, 24_455_436)
 DIRECTIVES: Final[tuple[str, ...]] = (
     "CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED",
 )
-_PROFILE_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/STATIC-PROFILE/v4\x00"
+_PROFILE_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/STATIC-PROFILE/v6\x00"
 
 
 def _hash_text(domain: bytes, value: str) -> bytes:
@@ -33,14 +33,96 @@ def _hash_text(domain: bytes, value: str) -> bytes:
 
 
 SOURCE_REGISTRY_SNAPSHOT: Final[bytes] = _hash_text(
-    b"BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v1", "snapshot-1"
+    b"BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v2", "snapshot-1"
 )
 SOURCE_PROFILE: Final[bytes] = _hash_text(
-    b"BL/NATIVE-V3/SOURCE-PROFILE/v1", "synthetic-authoritative"
+    b"BL/NATIVE-V3/SOURCE-PROFILE/v2", "synthetic-authoritative"
 )
 GOVERNANCE_SNAPSHOT: Final[bytes] = _hash_text(
-    b"BL/NATIVE-V3/GOVERNANCE-SNAPSHOT/v2", "governance-1"
+    b"BL/NATIVE-V3/GOVERNANCE-SNAPSHOT/v3", "governance-1"
 )
+AUTOMATIC_CONTROL_SET: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/CONTROL-SET/v3",
+    ",".join(DIRECTIVES),
+)
+SETTLEMENT_DOMAIN: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/SETTLEMENT-DOMAIN/v3", "official-state-rail"
+)
+EVALUATOR_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/EVALUATOR/v2", "minimal-clearance-evaluator"
+)
+SCHEMA_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/SCHEMA/v2", "minimal-clearance-schema"
+)
+PROGRAM_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/PROGRAM/v2", "minimal-clearance-program"
+)
+POLICY_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/POLICY/v2", "minimal-five-directive-policy"
+)
+RULE_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/RULE/v1", "synthetic-rule-v1"
+)
+INSTALLATION_ID: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/INSTALLATION-IDENTITY/v1", "synthetic-v3-installation"
+)
+
+_STATE_LAYOUT_LITERAL: Final[bytes] = (
+    b"BLST-V2|magic:u8[4]@0|version:u8@4=2|policy_result:u8@5|"
+    b"effective_directive:u8@6|complete:u8@7|membership:u8@8|absence:u8@9|"
+    b"active:u8@10|exception_present:u8@11|exception_authorized:u8@12|"
+    b"economic_mutation:u8@13|clearance_marker_before:u8@14|"
+    b"clearance_marker_after:u8@15|epoch:u64be@16|sequence_before:u64be@24|"
+    b"rule_effective_time:u64be@32|event_time:u64be@40|"
+    b"observation_time:u64be@48|decision_time:u64be@56|read_time:u64be@64|"
+    b"write_time:u64be@72|exception_valid_from:u64be@80|"
+    b"exception_valid_until:u64be@88|sequence_after:u64be@96|"
+    b"decision_index:u32be@104|decision_count:u32be@108|"
+    b"read_access_index:u32be@112|write_access_index:u32be@116|"
+    b"access_count:u32be@120|read_decision_index:u32be@124|"
+    b"write_decision_index:u32be@128|read_mode:u8@132|write_mode:u8@133|"
+    b"clearance_count_before:u64be@134|clearance_count_after:u64be@142|"
+    b"digests:23*u8[64]@150|proposed_payment_commitment:u8[64]@1622|"
+    b"length:1686|capacity:u32be=1|tail:final-64-bytes|no-padding"
+)
+_STATE_LAYOUT_ID: Final[bytes] = hashlib.sha3_512(
+    b"BL/NATIVE-V3/STATE-LAYOUT/v2\x00" + _STATE_LAYOUT_LITERAL
+).digest()
+def _context_part(label: str, value: bytes) -> bytes:
+    label_bytes = label.encode("ascii")
+    return (
+        len(label_bytes).to_bytes(4, "big")
+        + label_bytes
+        + len(value).to_bytes(8, "big")
+        + value
+    )
+
+
+_NATIVE_DIMENSIONS_BYTES: Final[bytes] = b"".join(
+    value.to_bytes(8, "big") for value in NATIVE_DIMENSIONS
+)
+_EXECUTION_CONTEXT_MATERIAL: Final[bytes] = (
+    b"BL/NATIVE-V3/EXECUTION-CONTEXT/v4\x00"
+    + _context_part("mode", b"PRIVATE_ZK")
+    + _context_part("source_registry_snapshot", SOURCE_REGISTRY_SNAPSHOT)
+    + _context_part("source_profile", SOURCE_PROFILE)
+    + _context_part("governance_snapshot", GOVERNANCE_SNAPSHOT)
+    + _context_part("automatic_control_set", AUTOMATIC_CONTROL_SET)
+    + _context_part("settlement_domain", SETTLEMENT_DOMAIN)
+    + _context_part("evaluator_id", EVALUATOR_ID)
+    + _context_part("schema_id", SCHEMA_ID)
+    + _context_part("program_id", PROGRAM_ID)
+    + _context_part("policy_id", POLICY_ID)
+    + _context_part("proof_role", PROOF_ROLE)
+    + _context_part("semantic_profile", b"MINIMAL_CLEARANCE_SEMANTIC_V6")
+    + _context_part("native_dimensions", _NATIVE_DIMENSIONS_BYTES)
+    + _context_part("state_layout_id", _STATE_LAYOUT_ID)
+    + _context_part("capacity", (1).to_bytes(4, "big"))
+    + _context_part("profile_epoch", PROFILE_EPOCH.to_bytes(8, "big"))
+)
+EXECUTION_CONTEXT_ID: Final[bytes] = hashlib.sha3_512(
+    _EXECUTION_CONTEXT_MATERIAL
+).digest()
 
 
 def _profile_identity_material() -> tuple[bytes, ...]:
@@ -48,22 +130,23 @@ def _profile_identity_material() -> tuple[bytes, ...]:
         PROTOCOL_VERSION.to_bytes(4, "big"),
         PROOF_ROLE,
         _ZERO_SUITE,
-        _hash_text(b"BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance"),
+        EXECUTION_CONTEXT_ID,
         SOURCE_REGISTRY_SNAPSHOT,
         SOURCE_PROFILE,
         GOVERNANCE_SNAPSHOT,
-        _hash_text(b"BL/NATIVE-V3/CONTROL-SET/v2", ",".join(DIRECTIVES)),
-        _hash_text(b"BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator"),
-        _hash_text(b"BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema"),
-        _hash_text(b"BL/NATIVE-V3/PROGRAM/v1", "minimal-clearance-program"),
-        _hash_text(b"BL/NATIVE-V3/POLICY/v1", "minimal-five-directive-policy"),
-        _hash_text(b"BL/NATIVE-V3/SETTLEMENT-DOMAIN/v2", "official-state-rail"),
+        AUTOMATIC_CONTROL_SET,
+        EVALUATOR_ID,
+        SCHEMA_ID,
+        PROGRAM_ID,
+        POLICY_ID,
+        SETTLEMENT_DOMAIN,
         CIRCUIT_ID,
         b"".join(value.to_bytes(8, "big") for value in NATIVE_DIMENSIONS),
         PROFILE_EPOCH.to_bytes(8, "big"),
         b"proofSuiteId=null",
         b"production_usable=false",
         b"activation=false",
+        RULE_ID,
     )
 
 
@@ -76,14 +159,6 @@ def derive_profile_digest(verifier_sha256: bytes) -> bytes:
         digest.update(len(part).to_bytes(8, "big"))
         digest.update(part)
     return digest.digest()
-
-
-def derive_installation_id(root: Path) -> bytes:
-    if not isinstance(root, Path) or not root.is_absolute():
-        raise ValueError("profile_installation_root")
-    return hashlib.sha3_512(
-        b"BL/NATIVE-V3/INSTALLATION/v1\x00" + root.as_posix().encode("utf-8")
-    ).digest()
 
 
 def statement_matches_static(statement: Any) -> bool:
@@ -102,6 +177,7 @@ def statement_matches_static(statement: Any) -> bool:
             "schema_id": _profile_identity_material()[9],
             "program_id": _profile_identity_material()[10],
             "policy_id": _profile_identity_material()[11],
+            "rule_id": RULE_ID,
             "settlement_domain": _profile_identity_material()[12],
             "epoch": PROFILE_EPOCH,
         }
@@ -143,7 +219,7 @@ class ExperimentalPrivateZkProfile:
     def as_json(self) -> dict[str, Any]:
         material = _profile_identity_material()
         return {
-            "profile_schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE/PRIVATE-ZK-PROFILE/v4",
+            "profile_schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE/PRIVATE-ZK-PROFILE/v6",
             "profile_digest": self.profile_digest.hex().upper(),
             "profile_epoch": self.profile_epoch,
             "verifier_sha256": self.verifier_sha256.hex().upper(),
@@ -174,6 +250,6 @@ class ExperimentalPrivateZkProfile:
 __all__ = (
     "CIRCUIT_ID", "DIRECTIVES", "ExperimentalPrivateZkProfile",
     "GOVERNANCE_SNAPSHOT", "NATIVE_DIMENSIONS", "PROFILE_EPOCH", "PROOF_ROLE",
-    "PROTOCOL_VERSION", "derive_installation_id", "derive_profile_digest",
+    "PROTOCOL_VERSION", "INSTALLATION_ID", "RULE_ID", "derive_profile_digest",
     "SOURCE_PROFILE", "SOURCE_REGISTRY_SNAPSHOT", "statement_matches_static",
 )

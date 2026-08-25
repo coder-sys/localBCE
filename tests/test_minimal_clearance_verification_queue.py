@@ -17,7 +17,7 @@ import app.minimal_clearance_verification_queue_independent as independent_queue
 
 from app.minimal_clearance_proof_primitives import (
     MinimalClearanceProofStateError,
-    MinimalProofAcceptanceV1,
+    MinimalProofAcceptanceV3,
     NativeMinimalClearanceVerifier,
     NativeVerificationCallResult,
     _CIRCUIT_ID,
@@ -51,12 +51,12 @@ from app.minimal_clearance_verification_profile import (
     SOURCE_PROFILE,
     SOURCE_REGISTRY_SNAPSHOT,
     ExperimentalPrivateZkProfile,
-    derive_installation_id,
+    INSTALLATION_ID,
     statement_matches_static,
 )
 
 
-_RETAINED_ARTIFACT = Path(r"C:\Temp\blind-ledger-minimal-clearance-proof-20260817c\minimal_clearance_case0.blmc")
+_RETAINED_ARTIFACT = Path(r"C:\Users\neers\Documents\Codex\2026-08-24-queue-v6-real-run-20260824\source\proof-a.blmc")
 _RAW = _RETAINED_ARTIFACT.read_bytes()
 _SHA256 = hashlib.sha256(_RAW).digest()
 _SHA3 = hashlib.sha3_512(_RAW).digest()
@@ -69,7 +69,7 @@ def _fake_verify(
     **_expected_metadata: object,
 ):
     acceptance = getattr(verifier, "_test_acceptance", None)
-    if type(acceptance) is MinimalProofAcceptanceV1:
+    if type(acceptance) is MinimalProofAcceptanceV3:
         return NativeVerificationCallResult(acceptance, _containment())
     failure = getattr(verifier, "_test_failure", None)
     if failure is not None:
@@ -84,20 +84,20 @@ def _containment() -> ContainedVerifierResult:
     )
 
 
-def _accepted() -> MinimalProofAcceptanceV1:
+def _accepted() -> MinimalProofAcceptanceV3:
     _, statement_bytes, _ = _artifact_public_bytes(_RAW)
-    return MinimalProofAcceptanceV1(
+    return MinimalProofAcceptanceV3(
         statement=_parse_statement(statement_bytes), artifact_sha256=_SHA256,
         artifact_digest=_SHA3, artifact_bytes=len(_RAW), circuit_id=_CIRCUIT_ID,
     )
 
 
-def _Acceptance() -> MinimalProofAcceptanceV1:
+def _Acceptance() -> MinimalProofAcceptanceV3:
     """Compatibility fixture name used by the retained composition tests."""
     return _accepted()
 
 
-def _mutated_static_acceptance(field: str) -> MinimalProofAcceptanceV1:
+def _mutated_static_acceptance(field: str) -> MinimalProofAcceptanceV3:
     acceptance = _accepted()
     value = bytes(acceptance.statement.get(field))
     raw = bytearray(acceptance.statement.statement_bytes)
@@ -109,7 +109,7 @@ def _mutated_static_acceptance(field: str) -> MinimalProofAcceptanceV1:
 
 
 class _Factory:
-    def __init__(self, *, failure: BaseException | None = None, acceptance: MinimalProofAcceptanceV1 | None = None) -> None:
+    def __init__(self, *, failure: BaseException | None = None, acceptance: MinimalProofAcceptanceV3 | None = None) -> None:
         self.failure = failure
         self.acceptance = acceptance
         self.instances: list[NativeMinimalClearanceVerifier] = []
@@ -162,7 +162,7 @@ class VerificationQueueTests(TestCase):
         self.temp.cleanup()
 
     def _config(self, *, capacity: int = 4) -> QueueConfig:
-        return QueueConfig("queue-test", capacity, _VERIFIER, 512 * 1024 * 1024)
+        return QueueConfig("queue-test", capacity, _VERIFIER, 512 * 1024 * 1024, installation_id=INSTALLATION_ID)
 
     def _store(
         self,
@@ -188,7 +188,8 @@ class VerificationQueueTests(TestCase):
 
     @staticmethod
     def _metadata(ref: str = "opaque-ref") -> ArtifactMetadata:
-        return ArtifactMetadata(ref, len(_RAW), _SHA256, _SHA3)
+        acceptance = _accepted()
+        return ArtifactMetadata(ref, len(_RAW), _SHA256, _SHA3, bytes(acceptance.statement.state("proposed_payment_commitment")), acceptance.statement.state_before_id, bytes(acceptance.statement.get("private_batch_commitment")))
 
     def _admit(self, store: _VerificationQueueStore, job_id: str = "job-1", ref: str = "opaque-ref"):
         return store._admit(job_id=job_id, metadata=self._metadata(ref))
@@ -208,7 +209,7 @@ class VerificationQueueTests(TestCase):
 
     def test_v3_config_and_capacity_are_fixed(self) -> None:
         config = self._config(capacity=512)
-        self.assertEqual(config.as_json()["schema_version"], 4)
+        self.assertEqual(config.as_json()["schema_version"], 6)
         self.assertEqual(config.as_json()["max_worker_concurrency"], 1)
         self.assertEqual(config.as_json()["source_registry_snapshot"], SOURCE_REGISTRY_SNAPSHOT.hex().upper())
         self.assertEqual(config.as_json()["source_profile"], SOURCE_PROFILE.hex().upper())
@@ -390,7 +391,7 @@ class VerificationQueueTests(TestCase):
             with self.assertRaises(VerificationQueueError):
                 _VerificationQueueStore(path=path, config=self._config(), owner=owner)
         self.assertTrue(path.is_file())
-        self.assertEqual(real_verify(path, expected_config=self._config().as_json())["schema"], "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v4")
+        self.assertEqual(real_verify(path, expected_config=self._config().as_json())["schema"], "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v6")
         retry = _VerificationQueueStore(path=path, config=self._config(), owner=owner)
         self.assertEqual(retry._snapshot()["counts"]["QUEUED"], 0)
         self.assertEqual(tuple(self.root.glob(".queue-bootstrap-*")), ())
@@ -518,10 +519,10 @@ class VerificationQueueTests(TestCase):
         profile = ExperimentalPrivateZkProfile.supplied(Path(sys.executable), _VERIFIER)
         runtime_config = QueueConfig.from_profile(
             profile,
-            queue_id="minimal-clearance-queue-v4",
+            queue_id="minimal-clearance-queue-v6",
             capacity=512,
-            artifact_bytes_cap=512 * 1024 * 1024,
-            installation_id=derive_installation_id(runtime_root),
+            artifact_bytes_cap=512 * 1024 * 1024 + 68 + 5090,
+            installation_id=INSTALLATION_ID,
         )
         database = runtime_root / "queue.sqlite"
         owner = _QueueRuntimeOwnership(

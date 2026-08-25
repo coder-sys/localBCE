@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from app.minimal_clearance_proof_primitives import MinimalClearanceProofStateError, NativeMinimalClearanceVerifier
 from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig, VerificationQueueError, _QueueRuntimeOwnership, _VerificationQueueStore
-from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, derive_installation_id
+from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, INSTALLATION_ID
 from app.minimal_clearance_verification_runtime import (
     MinimalClearanceVerificationRuntime,
     RuntimeRunResult,
@@ -41,7 +41,13 @@ class VerificationRuntimeTests(unittest.TestCase):
         self.executable = Path(sys.executable)
         self.verifier_hash = hashlib.sha256(self.executable.read_bytes()).digest()
         self.profile = ExperimentalPrivateZkProfile.supplied(self.executable, self.verifier_hash)
-        self.config = QueueConfig("runtime-queue", 4, self.verifier_hash, 512 * 1024 * 1024)
+        self.config = QueueConfig(
+            "runtime-queue",
+            4,
+            self.verifier_hash,
+            512 * 1024 * 1024,
+            installation_id=INSTALLATION_ID,
+        )
         self.identity = NativeMinimalClearanceVerifier.identity_sha256
         self.preflight = NativeMinimalClearanceVerifier.preflight
         self.verify = NativeMinimalClearanceVerifier.verify
@@ -72,10 +78,10 @@ class VerificationRuntimeTests(unittest.TestCase):
     def _runtime_config(self, database: Path) -> QueueConfig:
         return QueueConfig.from_profile(
             self.profile,
-            queue_id="minimal-clearance-queue-v4",
+            queue_id="minimal-clearance-queue-v6",
             capacity=512,
-            artifact_bytes_cap=512 * 1024 * 1024,
-            installation_id=derive_installation_id(self._runtime_root(database)),
+            artifact_bytes_cap=512 * 1024 * 1024 + 68 + 5090,
+            installation_id=INSTALLATION_ID,
         )
 
     def _direct_store(self, database: Path) -> _VerificationQueueStore:
@@ -110,7 +116,15 @@ class VerificationRuntimeTests(unittest.TestCase):
         runtime = self._runtime(database)
         runtime_database = runtime._database_path
         runtime_config = runtime._store.config  # type: ignore[union-attr]
-        metadata = ArtifactMetadata("opaque-ref", len(self.raw), hashlib.sha256(self.raw).digest(), hashlib.sha3_512(self.raw).digest())
+        metadata = ArtifactMetadata(
+            "opaque-ref",
+            len(self.raw),
+            hashlib.sha256(self.raw).digest(),
+            hashlib.sha3_512(self.raw).digest(),
+            bytes(64),
+            bytes(64),
+            bytes(64),
+        )
         runtime.admit(job_id="owned-job", metadata=metadata)
         work = runtime._store._claim_next()  # type: ignore[union-attr]
         self.assertIsNotNone(work)
@@ -250,7 +264,15 @@ class VerificationRuntimeTests(unittest.TestCase):
         )
         self._owners.append(owner)
         store = _VerificationQueueStore(path=runtime_database, config=self._runtime_config(database), owner=owner)
-        metadata = ArtifactMetadata("opaque-ref", len(self.raw), hashlib.sha256(self.raw).digest(), hashlib.sha3_512(self.raw).digest())
+        metadata = ArtifactMetadata(
+            "opaque-ref",
+            len(self.raw),
+            hashlib.sha256(self.raw).digest(),
+            hashlib.sha3_512(self.raw).digest(),
+            bytes(64),
+            bytes(64),
+            bytes(64),
+        )
         store._admit(job_id="job-1", metadata=metadata)
         store._admit(job_id="job-2", metadata=metadata)
         store._owner.close()
@@ -286,7 +308,15 @@ class VerificationRuntimeTests(unittest.TestCase):
         )
         self._owners.append(owner)
         store = _VerificationQueueStore(path=runtime_database, config=self._runtime_config(database), owner=owner)
-        metadata = ArtifactMetadata("opaque-ref", len(self.raw), hashlib.sha256(self.raw).digest(), hashlib.sha3_512(self.raw).digest())
+        metadata = ArtifactMetadata(
+            "opaque-ref",
+            len(self.raw),
+            hashlib.sha256(self.raw).digest(),
+            hashlib.sha3_512(self.raw).digest(),
+            bytes(64),
+            bytes(64),
+            bytes(64),
+        )
         store._admit(job_id="restart-job", metadata=metadata)
         store._claim_next()
         store._owner.close()
