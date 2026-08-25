@@ -92,11 +92,16 @@ lease expiry, restart, transport failure, or ambiguity consumes the handoff and 
 `HELD` with bounded `fresh_handoff_required`; retry requires a new state operation and fresh stream.
 
 Before cryptographic acceptance work, the state owner atomically reserves each theorem-relevant
-acceptance unit for the selected profile/key epoch. Retries, post-challenge aborts, malformed
-candidate verifications, and crashes after reservation consume that reservation and never refund it.
-Loss of trustworthy coordination, overflow, cap exhaustion, or ambiguous batch cardinality fails
-closed. Native-v3 owns the exact acceptance-unit counting and theorem ledger; this document owns the
-reservation and state-transaction semantics.
+acceptance unit against the selected security profile's single deployment/authorization-lifetime
+budget. The reservation may record the operative key epoch for nested operational signature, message,
+and query caps and audit, but key rotation never creates, resets, or refunds the statistical budget.
+Retries, post-challenge aborts, malformed candidate verifications, and crashes after reservation
+consume that reservation and never refund it. Loss of trustworthy coordination, overflow, budget or
+cap exhaustion, or ambiguous batch cardinality fails closed. Only a genuinely new, separately
+requalified security profile can establish a separately scoped budget; any cross-profile or
+system-lifetime claim must explicitly bound and union all profiles. Native-v3 owns the exact
+acceptance-unit counting and theorem ledger; this document owns the reservation and state-transaction
+semantics.
 
 For the active V7 `PRIVATE_ZK` handoff, Native-v3 owns the exact verifier receipt allowlist. The
 database accepts only a mode-specific, non-dispositive evidence result; it never receives a
