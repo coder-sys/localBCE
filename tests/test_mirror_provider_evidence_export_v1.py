@@ -17,6 +17,7 @@ from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import provider_evidence_export_v1 as producer
 from app.mirror import provider_evidence_export_v1_independent as independent
 from app.mirror import provider_trust_graph as graph_producer
+from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror.source_admission import SourceAdmissionService
 from tests.test_nc_medicaid_fhir_source import _envelope
 
@@ -53,6 +54,49 @@ def _selection() -> producer.ProviderEvidenceSelectionV1:
     return producer.ProviderEvidenceSelectionV1(
         graph_artifact=admission.graph_artifact,
         profile_registry=dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY),
+        authorization_evidence=producer.SYNTHETIC_SELECTION_AUTHORIZATION,
+    )
+
+
+def _selection_for_graph_profile(admission, graph_profile) -> producer.ProviderEvidenceSelectionV1:
+    value = json.loads(admission.graph_input.decode("ascii"))
+    value["profile_id"] = graph_profile.profile_id
+    value["profile_version"] = graph_profile.version
+    value["profile_digest"] = graph_profile.profile_digest
+    value["provider_graph_subject"] = graph_profile.subject
+    value["observation_time"] = graph_profile.observation_start
+    subject_key = f"{graph_profile.subject}|{graph_profile.credential_id}|{graph_profile.enrollment_id}"
+    for source, role in zip(value["sources"], graph_profile.source_role_details):
+        source["coverage_observation_time"] = graph_profile.observation_start
+        source["coverage_effective_start"] = graph_profile.effective_start
+        source["coverage_effective_end"] = graph_profile.effective_end
+        source["coverage_authority_id"] = role.authority_id
+        source["coverage_complete"] = source["coverage_complete"] or graph_profile.require_complete
+        source["nonmembership_keys"] = [subject_key for _ in source["nonmembership_keys"]]
+        source["provenance"]["provenance_id"] = role.provenance_id
+        for record in source["records"]:
+            record["provider_id"] = graph_profile.subject
+            record["credential_id"] = graph_profile.credential_id
+            record["enrollment_id"] = graph_profile.enrollment_id
+            record["subject_key"] = subject_key
+            record["observed_at"] = graph_profile.observation_start
+        source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
+            source,
+            profile=graph_profile,
+        )
+    graph_artifact, _telemetry = graph_producer.build_report(
+        graph_producer.canonical_input(value),
+        profile=graph_profile,
+    )
+    verified = graph_independent.verify_artifact_v2(
+        graph_artifact,
+        {graph_profile.profile_id: graph_profile},
+    )
+    if verified.summary.get("accepted") is not True:
+        raise AssertionError("synthetic alternate graph was not independently valid")
+    return producer.ProviderEvidenceSelectionV1(
+        graph_artifact=graph_artifact,
+        profile_registry={graph_profile.profile_id: graph_profile},
         authorization_evidence=producer.SYNTHETIC_SELECTION_AUTHORIZATION,
     )
 
@@ -292,6 +336,68 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
                 now=7_000,
             )
 
+    def test_factory_dynamic_profile_is_authorized_and_fixed_mutations_reject(self) -> None:
+        admission = _admission()
+        dynamic_context = replace(
+            profile.DEFAULT_CAPTURE_CONTEXT,
+            subject_id="a" * 128,
+            credential_id="b" * 128,
+            enrollment_id="c" * 128,
+            subject_locator_digest="d" * 128,
+            observation_time=7_001,
+            fetched_at=7_011,
+        )
+        dynamic_profile = profile.NC_MEDICAID_PROFILE.graph_profile_for_context(dynamic_context)
+        self.assertNotEqual(dynamic_profile, profile.NC_MEDICAID_GRAPH_PROFILE)
+        self.assertTrue(profile.NC_MEDICAID_PROFILE.is_authorized_graph_profile(dynamic_profile))
+        dynamic_selection = _selection_for_graph_profile(admission, dynamic_profile)
+        dynamic_raw = producer.build_export(_request(secrets.token_hex(32)), dynamic_selection, now=7_001)
+        self.assertEqual("EVIDENCE_INCOMPLETE", json.loads(dynamic_raw.decode("ascii"))["outcome"])
+
+        base = profile.NC_MEDICAID_GRAPH_PROFILE
+        altered_role = replace(
+            base.source_role_details[0],
+            authority_id="SYNTHETIC_ALTERED_AUTHORITY",
+            provenance_id="SYNTHETIC_ALTERED_PROVENANCE",
+        )
+        mutations = (
+            ("allow-nonmembership", replace(base, allow_nonmembership=True), ()),
+            (
+                "source-role-authority-provenance",
+                replace(base, source_role_details=(altered_role, base.source_role_details[1])),
+                ("SYNTHETIC_ALTERED_AUTHORITY", "SYNTHETIC_ALTERED_PROVENANCE"),
+            ),
+            ("verifier-id", replace(base, verifier_id="SYNTHETIC_ALTERED_VERIFIER"), ("SYNTHETIC_ALTERED_VERIFIER",)),
+            ("verifier-epoch", replace(base, verifier_epoch=base.verifier_epoch + 1), ()),
+            ("require-complete", replace(base, require_complete=True), ()),
+        )
+        for label, altered, sentinels in mutations:
+            with self.subTest(label=label):
+                selection = _selection_for_graph_profile(admission, altered)
+                altered_repr = repr(altered)
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                response = b""
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    with self.assertRaisesRegex(producer.ProviderEvidenceExportError, "export:profile-authority") as caught:
+                        response = producer.build_export(_request(secrets.token_hex(32)), selection, now=7_000)
+                self.assertEqual(b"", response)
+                for sentinel in sentinels:
+                    self.assertNotIn(sentinel, stdout.getvalue())
+                    self.assertNotIn(sentinel, stderr.getvalue())
+                    self.assertNotIn(sentinel, str(caught.exception))
+                    self.assertNotIn(sentinel.encode("ascii"), response)
+                self.assertNotIn(altered_repr, stdout.getvalue())
+                self.assertNotIn(altered_repr, stderr.getvalue())
+                self.assertNotIn(altered_repr, str(caught.exception))
+                self.assertNotIn(altered_repr.encode("utf-8"), response)
+                for frame, _ in traceback.walk_tb(caught.exception.__traceback__):
+                    filename = frame.f_code.co_filename.replace("\\", "/")
+                    if "/app/mirror/" in filename:
+                        self.assertNotIn(altered_repr, repr(frame.f_locals))
+                        for sentinel in sentinels:
+                            self.assertNotIn(sentinel, repr(frame.f_locals))
+
     def test_expiry_and_replay_under_another_operation_reference_reject(self) -> None:
         operation_ref = secrets.token_hex(32)
         raw = producer.build_export(_request(operation_ref), _selection(), now=7_000)
@@ -368,7 +474,7 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
         selection = _selection()
         legacy = _canonical({
             "schema": "mirror-provider-trust-graph-v2",
-            "profile": {"profile_id": producer.PRIMARY_GRAPH_PROFILE_ID, "version": 3, "profile_digest": "0" * 128},
+            "profile": {"profile_id": profile.SOURCE_PROFILE_ID, "version": 3, "profile_digest": "0" * 128},
             "lifecycle": "APPROVED",
         })
         with self.assertRaises(producer.ProviderEvidenceExportError):

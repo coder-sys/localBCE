@@ -17,6 +17,7 @@ import re
 import traceback
 from typing import NoReturn
 
+from app.mirror import nc_medicaid_fhir_profile as nc_profile
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror.error_boundary import raise_redacted
 
@@ -31,9 +32,6 @@ CONSUMER_DOMAIN = "BLIND/PROVIDER_GOVERNANCE_EVIDENCE"
 EVIDENCE_PROFILE = "provider-continuity-aggregate"
 EVIDENCE_PROFILE_VERSION = 1
 GRAPH_SCHEMA = "mirror-provider-trust-graph-v2"
-PRIMARY_GRAPH_PROFILE_ID = "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v4"
-PRIMARY_GRAPH_PROFILE_VERSION = 3
-PRIMARY_SOURCE_CONTRACT = "4254265d1b422526d1e7f74ef889494d5b1ae6ec4f1778e83ce74d723e8299e6bebc6388596739872a78cad8333285e6adf813ca9154a99785a28c39416e0007"
 SYNTHETIC_SELECTION_AUTHORIZATION = "SYNTHETIC_PRIMARY_PROFILE_VERIFIED"
 QUALIFICATION_STATUS = "SYNTHETIC_ONLY"
 OUTCOME_KINDS = (
@@ -206,15 +204,10 @@ def _validate_selection_inner(selection: ProviderEvidenceSelectionV1) -> object:
     if selection.authorization_evidence != SYNTHETIC_SELECTION_AUTHORIZATION:
         _fail("export:authorization")
     registry = selection.profile_registry
-    if not isinstance(registry, Mapping) or set(registry) != {PRIMARY_GRAPH_PROFILE_ID}:
+    if not isinstance(registry, Mapping) or set(registry) != {nc_profile.SOURCE_PROFILE_ID}:
         _fail("export:profile-registry")
-    profile = registry.get(PRIMARY_GRAPH_PROFILE_ID)
-    if (
-        getattr(profile, "profile_id", None) != PRIMARY_GRAPH_PROFILE_ID
-        or getattr(profile, "version", None) != PRIMARY_GRAPH_PROFILE_VERSION
-        or getattr(profile, "source_contract_digest", None) != PRIMARY_SOURCE_CONTRACT
-        or getattr(getattr(profile, "evidence_mode", None), "value", None) != "observation_only"
-    ):
+    profile = registry.get(nc_profile.SOURCE_PROFILE_ID)
+    if not nc_profile.NC_MEDICAID_PROFILE.is_authorized_graph_profile(profile):
         _fail("export:profile-authority")
     try:
         verified = graph_independent.verify_artifact_v2(
@@ -231,8 +224,8 @@ def _validate_selection_inner(selection: ProviderEvidenceSelectionV1) -> object:
     profile_value = value.get("profile")
     if (
         not isinstance(profile_value, dict)
-        or profile_value.get("profile_id") != PRIMARY_GRAPH_PROFILE_ID
-        or profile_value.get("version") != PRIMARY_GRAPH_PROFILE_VERSION
+        or profile_value.get("profile_id") != profile.profile_id
+        or profile_value.get("version") != profile.version
     ):
         _fail("export:graph-profile")
     if value.get("authority") != {

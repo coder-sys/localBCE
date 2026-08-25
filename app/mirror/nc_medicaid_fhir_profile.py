@@ -295,6 +295,51 @@ class NcMedicaidFhirSourceProfile:
             allow_nonmembership=False, source_contract_digest=self.profile_digest,
         )
 
+    def is_authorized_graph_profile(self, candidate: object) -> bool:
+        """Return whether a dynamic graph profile is producible by this contract."""
+        try:
+            if type(candidate) is not SourceProfile:
+                return False
+            expected = self.graph_profile
+            if (
+                candidate.profile_id != expected.profile_id
+                or candidate.version != expected.version
+                or candidate.scope != expected.scope
+                or candidate.observation_time is not None
+                or candidate.effective_start != expected.effective_start
+                or candidate.effective_end != expected.effective_end
+                or candidate.source_roles != expected.source_roles
+                or candidate.require_complete is not False
+                or candidate.verifier_id != expected.verifier_id
+                or candidate.verifier_epoch != expected.verifier_epoch
+                or candidate.evidence_mode != expected.evidence_mode
+                or candidate.source_role_details != expected.source_role_details
+                or candidate.allow_nonmembership is not False
+                or candidate.canonical_order != expected.canonical_order
+                or candidate.root_rule != expected.root_rule
+                or candidate.source_contract_digest != self.profile_digest
+            ):
+                return False
+            for label, value in (
+                ("subject", candidate.subject),
+                ("credential", candidate.credential_id),
+                ("enrollment", candidate.enrollment_id),
+            ):
+                _opaque(value, label)
+            observation_start = candidate.observation_start
+            observation_end = candidate.observation_end
+            if (
+                type(observation_start) is not int
+                or type(observation_end) is not int
+                or observation_end != observation_start + 1
+                or observation_start < expected.effective_start
+                or observation_end > expected.effective_end
+            ):
+                return False
+            return True
+        except Exception:
+            return False
+
     def binding(self, context: DynamicCaptureContext | None = None) -> dict[str, object]:
         graph_profile = self.graph_profile_for_context(context or self.default_context)
         return {
