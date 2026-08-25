@@ -64,6 +64,46 @@ errors, stdout/stderr, and stable real-person or real-provider fingerprints may 
 monitoring, analytics, AI, receipts, or exports. Public failures use fixed codes. A rejected capture
 must leave database bytes, logical export, support output, and durable state unchanged.
 
+## Provider evidence export boundary
+
+app/mirror/provider_evidence_export_v1.py is the sole producer owner for
+MIRROR_PROVIDER_EVIDENCE_EXPORT_V1. Its request is an exact canonical map containing only the
+fixed request domain/version, a receiver-issued 32-byte one-time operation reference, the fixed
+Blind provider-governance consumer domain, the requested aggregate evidence profile/version, and a
+bounded not-before/expiry window. It contains no provider, claimant, patient, case, claim, source,
+credential, URL, path, raw-data, graph, report, root, or digest identity, and it cannot select
+source authorization or qualification.
+
+The receiver-issued/randomness/provenance property of operation_ref is external to these bytes.
+This boundary enforces only the exact nonzero 32-byte representation and never treats a
+caller-provided digest as authorization. The receiving owner must issue and retain one-time
+references and own replay consumption.
+
+Provider selection remains an in-memory Mirror access-control decision. The selected current
+primary V2 Provider Trust Graph is independently verified before this producer derives a fresh
+allowlist-only aggregate: outcome enum, bounded source/coverage/record/finding/discrepancy counts,
+and fixed synthetic/nonactivating authority flags. No graph object, source map, identifier, digest,
+raw capture, error, credential, URL, path, PHI-shaped value, proof/signature bytes, stable export
+identity, or lifecycle fragment is serialized. The export is returned only as bounded canonical
+bytes; this module has no persistence, recovery, support, monitoring, logging, delivery, or replay
+state.
+
+app/mirror/provider_evidence_export_v1_independent.py is an independently implemented response
+verifier. It does not import the producer, graph producer, or their schema constants. It reparses
+the exact response grammar, binds the expected operation reference and fixed consumer/profile
+domains, checks the current validity window, aggregate consistency, and every enum/range/authority
+flag, and returns only an opaque allowlisted projection. Replay consumption is owned by the
+receiving Blind governance owner; Mirror receives no Blind state or replay authority. proofSuiteId=null,
+production_usable=false, activation=false, and all payment/clearance/economic authority flags
+remain fixed.
+
+This contract is a producer boundary, not a live integration or clearance interface. The
+repository-local Blind graph schema is incompatible and unregistered; a later Blind governance
+consumer must bind this exact contract version and operation reference before admitting evidence.
+No claimant identity, public statement, proof handoff, state receipt, outbox, audit, support
+artifact, payment, clearance, settlement, adjudication, policy result, or effective directive is
+created here.
+
 ## Verification and recovery
 
 Each producer boundary has a separately implemented independent parser or database reconstructor.
