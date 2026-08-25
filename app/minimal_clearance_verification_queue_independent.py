@@ -414,31 +414,52 @@ def read_verified_batch(path: Path, selector: bytes | None = None) -> Independen
         config_raw = bytes(connection.execute("SELECT config_json FROM queue_metadata WHERE id=1").fetchone()[0])
         config = _parse_config(config_raw)
         config_digest = _sha(_MATERIAL, config_raw)
-        rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_jobs WHERE status='VERIFIED' ORDER BY admission_seq").fetchall()]
+        rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_jobs ORDER BY admission_seq").fetchall()]
         result_map = {bytes(row[0]): tuple(row) for row in connection.execute("SELECT * FROM queue_results WHERE terminal_status='VERIFIED'").fetchall()}
     if selector is not None and type(selector) is not bytes:
         _fail("batch_selector")
-    if rows:
-        groups: dict[bytes | None, list[tuple[Any, ...]]] = {}
-        for row in rows:
-            groups.setdefault(None if row[7] is None else bytes(row[7]), []).append(row)
-        if selector is not None:
-            selected: list[tuple[Any, ...]] = []
-            for group in groups.values():
-                refs = tuple(bytes(row[0]) for row in group)
-                member = _sha(_BATCH, b"".join(refs))
-                batch_id = _sha(_BATCH, config_digest, b"" if group[0][7] is None else bytes(group[0][7]), member)
-                if selector in {member, batch_id}:
-                    selected = group
-                    break
-            if not selected:
-                _fail("batch_selector")
-            rows = selected
-        elif len(groups) > 1:
-            rows = next(iter(groups.values()))
-        rows.sort(key=lambda row: (int(row[6]), int(row[11])) )
-        if tuple(int(row[6]) for row in rows) != tuple(range(len(rows))):
+    candidate_groups: list[list[tuple[Any, ...]]] = []
+    batch_groups: dict[bytes, list[tuple[Any, ...]]] = {}
+    for row in rows:
+        if row[7] is None:
+            candidate_groups.append([row])
+            continue
+        root = bytes(row[7])
+        group = batch_groups.get(root)
+        if group is None:
+            group = []
+            batch_groups[root] = group
+            candidate_groups.append(group)
+        group.append(row)
+    ordered_groups: list[tuple[tuple[Any, ...], ...]] = []
+    for group in candidate_groups:
+        ordered = tuple(sorted(group, key=lambda row: (int(row[6]), int(row[11]))))
+        if tuple(int(row[6]) for row in ordered) != tuple(range(len(ordered))):
             _fail("batch_order")
+        if ordered[0][7] is not None and _expected_batch_root(ordered) != bytes(ordered[0][7]):
+            _fail("batch_root_binding")
+        ordered_groups.append(ordered)
+
+    def complete(group: tuple[tuple[Any, ...], ...]) -> bool:
+        return all(str(row[10]) == "VERIFIED" and bytes(row[0]) in result_map for row in group)
+
+    selected: tuple[tuple[Any, ...], ...] | None = None
+    if selector is not None:
+        for group in ordered_groups:
+            refs = tuple(bytes(row[0]) for row in group)
+            member = _sha(_BATCH, b"".join(refs))
+            root = None if group[0][7] is None else bytes(group[0][7])
+            batch_id = _sha(_BATCH, config_digest, b"" if root is None else root, member)
+            if selector in {member, batch_id}:
+                if not complete(group):
+                    _fail("batch_incomplete")
+                selected = group
+                break
+        if selected is None:
+            _fail("batch_selector")
+    else:
+        selected = next((group for group in ordered_groups if complete(group)), None)
+    rows = [] if selected is None else list(selected)
     jobs = tuple(_job_from_rows(config, config_digest, row, result_map[bytes(row[0])]) for row in rows)
     refs = tuple(job.operation_ref for job in jobs)
     member_digest = _sha(_BATCH, b"".join(refs))

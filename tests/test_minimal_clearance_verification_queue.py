@@ -155,6 +155,16 @@ class QueueV7Tests(unittest.TestCase):
         job = self.store.submit_handoff(operation_ref=statement.operation_ref, proof_stream=io.BytesIO(_proof_bytes(statement)), declared_length=len(_proof_bytes(statement)))
         return statement, job
 
+    def _issue_batch(self, *, second_proof: bytes | None = None) -> tuple[tuple[IssuedOperationStatement, ...], tuple[object, ...]]:
+        statements = self.store.issue_batch(templates=(self._template(0), self._template(1)))
+        proofs = (_proof_bytes(statements[0]), _proof_bytes(statements[1]) if second_proof is None else second_proof)
+        jobs = self.store.submit_batch_handoffs(statements=statements, proof_streams=tuple(io.BytesIO(proof) for proof in proofs))
+        return statements, jobs
+
+    def _batch_selector(self, statements: tuple[IssuedOperationStatement, ...]) -> bytes:
+        member = queue_independent._sha(queue_independent._BATCH, b"".join(statement.operation_ref for statement in statements))
+        return queue_independent._sha(queue_independent._BATCH, self.config.digest, statements[0].batch_root or b"", member)
+
     def test_v7_schema_has_only_allowlisted_fields_and_flags(self) -> None:
         self.assertEqual(self.config.as_json["schema_version"], 7)
         self.assertEqual(self.config.as_json["handoff_protocol"], "ISSUE_THEN_HANDOFF_V1")
@@ -379,6 +389,46 @@ class QueueV7Tests(unittest.TestCase):
         self.assertEqual(tuple(job.operation_ref for job in batch.jobs), tuple(job.operation_ref for job in jobs))
         self.assertEqual(tuple(job.batch_position for job in batch.jobs), (0, 1))
         self.assertEqual(verify_database(self.store.path, expected_config=self.config.as_json)["verified_count"], 2)
+
+    def test_reader_never_exposes_partial_promotion_batch(self) -> None:
+        statements, jobs = self._issue_batch()
+        verifier = _Verifier()
+        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
+        selector = self._batch_selector(statements)
+        self.assertEqual(read_verified_batch(self.store.path).jobs, ())
+        with self.assertRaises(IndependentQueueError) as raised:
+            read_verified_batch(self.store.path, selector)
+        self.assertEqual(str(raised.exception), "batch_incomplete")
+        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
+        batch = read_verified_batch(self.store.path, selector)
+        self.assertEqual(tuple(job.operation_ref for job in batch.jobs), tuple(job.operation_ref for job in jobs))
+        self.assertEqual(tuple(job.batch_position for job in batch.jobs), (0, 1))
+        self.assertEqual(batch.batch.batch_id, selector)
+
+    def test_reader_keeps_verified_standalone_operations_in_separate_groups(self) -> None:
+        first, first_job = self._issue(0)
+        second, second_job = self._issue(1)
+        verifier = _Verifier()
+        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
+        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
+        oldest = read_verified_batch(self.store.path)
+        self.assertEqual(tuple(job.operation_ref for job in oldest.jobs), (first_job.operation_ref,))
+        self.assertEqual(oldest.jobs[0].batch_position, 0)
+        second_member = queue_independent._sha(queue_independent._BATCH, second.operation_ref)
+        second_selector = queue_independent._sha(queue_independent._BATCH, self.config.digest, b"", second_member)
+        selected = read_verified_batch(self.store.path, second_selector)
+        self.assertEqual(tuple(job.operation_ref for job in selected.jobs), (second_job.operation_ref,))
+        self.assertEqual(selected.batch.batch_id, second_selector)
+
+    def test_reader_skips_incomplete_older_group_for_later_complete_group(self) -> None:
+        _, jobs = self._issue_batch(second_proof=b"not-a-proof")
+        verifier = _Verifier()
+        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
+        self.assertEqual(self.store._process_one(verifier=verifier).status, "REJECTED")
+        _, later_job = self._issue(2)
+        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
+        batch = read_verified_batch(self.store.path)
+        self.assertEqual(tuple(job.operation_ref for job in batch.jobs), (later_job.operation_ref,))
 
     def test_independent_reconstruction_rejects_a_self_consistent_missing_lifecycle(self) -> None:
         statement, job = self._issue()

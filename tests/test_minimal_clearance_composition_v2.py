@@ -132,6 +132,34 @@ class CompositionV7Tests(unittest.TestCase):
         store.verify_integrity()
         store.close()
 
+    def test_incomplete_queue_batch_is_not_promoted_and_complete_batch_applies(self) -> None:
+        templates = tuple(OperationTemplate(f"assertion-{index}", 1, "state-profile-v7", 0, 10**15, None, ()) for index in range(2))
+        statements = self.queue.issue_batch(templates=templates)
+        jobs = self.queue.submit_batch_handoffs(statements=statements, proof_streams=tuple(io.BytesIO(_proof(statement)) for statement in statements))
+        verifier = _Verifier()
+        self.assertEqual(self.queue._process_one(verifier=verifier).status, "VERIFIED")
+        empty = read_verified_batch(self.queue.path)
+        self.assertEqual(empty.jobs, ())
+        store = self._store()
+        controls = self._controls(jobs)
+        before = store.snapshot()
+        with self.assertRaises(CompositionIntegrityError) as raised:
+            store.process_verified_jobs(self.queue.path, empty, state_controls=controls)
+        self.assertEqual(str(raised.exception), "queue_verification_failed")
+        self.assertEqual(store.snapshot(), before)
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT active_dispatch_count FROM composition_meta WHERE id=1").fetchone()[0], 0)
+        self.assertEqual(verify_database(store.path, expected_config=self.composition_config.as_json)["transaction_counts"], {"APPLIED": 0, "HELD": 0})
+        self.assertEqual(self.queue._process_one(verifier=verifier).status, "VERIFIED")
+        complete = read_verified_batch(self.queue.path)
+        results = store.process_verified_jobs(self.queue.path, complete, state_controls=controls)
+        self.assertEqual([result.status for result in results], ["APPLIED", "APPLIED"])
+        self.assertEqual(store.snapshot()["state_sequence"], 2)
+        self.assertEqual(verify_database(store.path, expected_config=self.composition_config.as_json)["transaction_counts"], {"APPLIED": 2, "HELD": 0})
+        store.close()
+
     def test_three_member_chain_advances_clearance_root_from_prior_root(self) -> None:
         jobs, batch = self._admit_verified(3)
         store = self._store()
