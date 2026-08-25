@@ -15,6 +15,7 @@ cleanup() {
 trap cleanup EXIT
 
 export PATH="${HOME}/.cargo/bin:${PATH}"
+export PYTHONPATH="${ROOT_DIR}/gov-rules-kg-prototype/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 [[ -x "${PYTHON}" ]] || {
   echo "missing gov-rules-kg-prototype virtualenv Python: ${PYTHON}" >&2
