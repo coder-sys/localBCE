@@ -18,7 +18,7 @@ source-bound assertion/predicate. The proof relation does not own the ordered st
 directive, exception, outbox, or ACK. Proof acceptance is only one input to the state owner, and the
 state-owned result and database mutation must commit in one fail-closed atomic transaction.
 
-The smallest initial qualified `PRIVATE_ZK` profile is one authoritative source producing one ordered
+The first complete `PRIVATE_ZK` scale profile may be one authoritative source producing one ordered
 100-operation batch proof. The private proof owns only the exact undisclosed assertion relation, its
 operation/batch binding, hiding commitment/opening, qualified source-bound root, and minimal assertion
 result. The independent verifier returns only an opaque assertion-verification receipt/outcome. An exact
@@ -51,11 +51,11 @@ state-computed before handoff.
 
 The inactive handoff boundary does not create a proof workspace or persist proof/source/signature/
 commitment bytes, artifact digests, acceptance bytes, or process-output hashes. An activated profile
-owns its own exact small envelope cap; there is no universal input-admission allowance. The complete
-process-tree hard peak remains strictly below 5,000,000,000 bytes. A consumed, failed, expired,
-restarted, or ambiguous handoff becomes `HELD` and requires a fresh state operation and fresh
-handoff. These controls do not close the profile theorem, malicious-verifier/QROM, grinding, SHA3,
-Lean, deployment, custody, or source-authorization gates.
+owns its exact proof envelope and complete-path resource profile under the contract below; there is no
+universal input-admission allowance. A consumed, failed, expired, restarted, or ambiguous handoff
+becomes `HELD` and requires a fresh state operation and fresh handoff. These controls do not close the
+profile theorem, malicious-verifier/QROM, grinding, SHA3, Lean, deployment, custody, or
+source-authorization gates.
 
 ## Source-auth and private representation contract
 
@@ -112,13 +112,15 @@ and profile versions, bounded validity window, ordered batch position/root when 
 source registry root when needed. Names, claim numbers, provider fingerprints, raw-data hashes,
 source paths, and stable cross-batch identifiers are excluded.
 
-The current statement grammar still lacks the complete proposed/authorized payment-amount binding
-required by the typed receipt contract below, and its before/after state identifiers are not yet the
-single canonical state-layout formula required for sequential production authority. A breaking,
-versioned native statement revision must bind one hiding proposed-amount commitment, derive the
-authorized commitment from the state-owned effective directive, and have the state transaction and
-Lean relation prove exact continuity before this lane can advance. Until then proof acceptance
-cannot authorize `CLEAR` or any economic action.
+The current statement grammar intentionally carries only the strict public allowlist. A selected hidden
+assertion may bind an amount only when that amount is itself part of the selected assertion contract;
+state-held amounts remain state-owned. Policy, directive, chronology, reads/writes, exception authority,
+and the state transition are likewise state/Lean/database semantics, not universal proof fields. If an
+authoritative contract requires independent raw-record linkage to a SHA3 representation, the selected
+relation must include that linkage; otherwise a qualified proof-native representation may be used. The
+typed receipt and separately verified atomic state transition may evolve together only at a breaking,
+versioned boundary. Until the selected relation and state/Lean gates qualify, proof acceptance cannot
+authorize `CLEAR` or any economic action.
 
 ## Production-shaped patch-in contract
 
@@ -428,31 +430,28 @@ the complete path.
 - Proof, trace, operation count, errors, and externally visible schedule are fixed per selected
   deployment profile and independent of all five directives, exception presence, padding, and
   other private values.
-- Each selected verification profile owns the smallest exact envelope cap that passes parser,
-  leakage, and capacity tests. There is no universal input-admission allowance; an unselected
-  private-proof profile remains inactive.
+- Each selected verification profile owns the smallest exact proof-envelope cap that passes parser,
+  leakage, and capacity tests, never above the absolute `4,500,000,000`-byte admission ceiling. There
+  is no universal profile allowance; an unselected private-proof profile remains inactive.
 - Fresh secret randomness is OS-CSPRNG-owned, domain-separated, never reused or logged, and zeroized
   after proving.
-- Complete prover process-tree peak resident memory is strictly below 5,000,000,000 decimal bytes;
-  scratch is strictly below that value; proving causes no swap or pagefile growth.
-- The independent state-side verifier and complete declared reference profile must meet the
-  laptop-class 100/35 and below-5-GB gates. A source-local prover or optional aggregator may declare
-  exact accelerator or hardware requirements; its wall time and resources remain part of complete-
-  profile evidence, and component-only numbers receive no product credit.
+- The complete controlled reference path includes source-local proving, optional aggregation when
+  selected, independent verification, the atomic state transaction, and outbox/ACK; its complete
+  process tree must remain strictly below `5,000,000,000` bytes. A selected profile may separately
+  declare exact source-local accelerator or hardware requirements, but that deployment evidence cannot
+  satisfy or replace the pinned laptop product gate.
 - Report source-prover, optional-aggregator, independent-verifier, state-transaction, and outbox/ACK
   stages separately, with external official-source and official-ACK latency measured and disclosed
   separately when applicable. A complete-profile measurement begins at admitted canonical input and
   ends after independent verification, the atomic state transaction, and outbox/ACK; component or
   cached timings receive only component credit.
-
-The first scale admission floor is 100 complete operations in a fixed declared reference profile
-within 35 seconds p95 on a laptop-class state-side verifier host, with the complete resource and
-negative-test boundary. Source-local prover/aggregator hardware may differ only when its exact
-requirements are declared and measured as part of the same complete profile. This is
-an engineering floor inherited from the earlier campaign, not the final product SLA. Sustained
-claims/second, p95 time-to-first decision, thermal throttling, energy, queue/cadence leakage, and
-recovery are reported. A larger profile is forbidden until this boundary accepts and product volume
-actually requires it.
+- For product credit, that complete controlled reference path must run 100 complete operations within
+  35 seconds p95 on the pinned laptop-class reference hardware, with the complete resource and
+  negative-test boundary. Other source hardware may be disclosed separately but does not satisfy or
+  replace this gate. This is an engineering floor inherited from the earlier campaign, not the final
+  product SLA. Sustained claims/second, p95 time-to-first decision, thermal throttling, energy,
+  queue/cadence leakage, and recovery are reported. A larger profile is forbidden until this boundary
+  accepts and product volume actually requires it.
 
 ## Implementation order
 
@@ -468,8 +467,11 @@ explicit phase authorization. It still must close before production clearance or
    and state-mutation negatives. The exception seal is synthetic-KAT-only.
 3. At the later authorized formal gate, implement the Lean kernel, canonical decoder, theorem
    manifest, independent check, and narrow fail-closed Rust adapter against the frozen KATs.
-4. Implement the smallest complete private fixture: one fact, rule, directive, chronological
-   read/write, SHA3-512 endpoints, native proof, and independent verifier linked to Lean.
+4. Implement the smallest complete narrow private fixture: one hidden assertion relation with its
+   operation/batch/source-bound commitment and minimal result, an independent verifier returning the
+   typed receipt, and its binding into the separately verified state transaction and later Lean
+   semantics. Include SHA3 linkage only when the selected authoritative representation contract
+   requires it.
 5. Require rejection of corruption, wrong bindings, reorder, omission, duplicate/replay, directive,
    exception, and after-state mutations plus complete resource telemetry.
 6. Add fixed-profile batching and a streaming state/memory implementation. Optimize only the

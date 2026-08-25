@@ -96,12 +96,13 @@ requirements.
 
 ## Next implementation after theorem closure
 
-1. Freeze the smallest complete private statement and fixed evaluator profile.
+1. Freeze the smallest complete narrow private statement/receipt and fixed evaluator profile.
 2. Build a bounded-memory source-local prover and a genuinely independent state-side verifier;
    declare any exact prover/aggregator accelerator or hardware requirements in the complete profile.
-3. Prove the business semantics and ordered state transition atomically, including exact SHA3-512
-   roots, completeness/nonmembership, replay, exception, chronology, retry, and after-state
-   mutation behavior.
+3. Compose the narrow assertion-verification receipt into the separately verified atomic state
+   transition and later Lean semantics. Keep state-held amounts, policyResult/effectiveDirective,
+   chronology, exception, replay, retry, and after-state mutation state-owned; require SHA3 linkage
+   only when the selected authoritative representation contract requires that relation.
 4. Measure the complete profile at the Native-v3 qualification boundary, retaining separately
    attributable stage evidence for source-prover, optional aggregator, independent verifier,
    state transaction, and outbox/ACK. Component-only numbers receive no complete-profile credit.
