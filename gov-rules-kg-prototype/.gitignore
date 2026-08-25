@@ -11,6 +11,9 @@ data/*.sqlite-*
 reports/*.json
 reports/*.md
 !reports/.gitkeep
+!reports/claude_web_candidate_corpus.json
+!reports/claude_web_mapping_qa.json
+!reports/claude_web_promotion_ready.json
 !reports/state_medicaid_core_preflight_v1.json
 !reports/rules_corpus_checkpoint_v1.json
 !data/.gitkeep
