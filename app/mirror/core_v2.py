@@ -152,6 +152,7 @@ class CoreConfigV2:
     governance_policy_digest: str
     privacy_policy_digest: str
     ingress_config_digest: str
+    corrective_action_control_digest: str
     max_sessions: int = 8
     max_slots_per_session: int = 16
     cadence_seconds: int = 60
@@ -163,6 +164,8 @@ class CoreConfigV2:
             if type(value) is not str or len(value) != 128 or any(char not in "0123456789abcdef" for char in value):
                 raise CoreError("core:config")
         if type(self.ingress_config_digest) is not str or len(self.ingress_config_digest) != 128 or any(char not in "0123456789abcdef" for char in self.ingress_config_digest):
+            raise CoreError("core:config")
+        if type(self.corrective_action_control_digest) is not str or len(self.corrective_action_control_digest) != 128 or any(char not in "0123456789abcdef" for char in self.corrective_action_control_digest):
             raise CoreError("core:config")
         if type(self.max_sessions) is not int or not 1 <= self.max_sessions <= 64 or type(self.max_slots_per_session) is not int or not 1 <= self.max_slots_per_session <= 256 or type(self.cadence_seconds) is not int or self.cadence_seconds <= 0:
             raise CoreError("core:config")
@@ -177,6 +180,7 @@ class CoreConfigV2:
             "runtime_profile_digest": self.runtime_profile_digest,
             "governance_policy_digest": self.governance_policy_digest,
             "privacy_policy_digest": self.privacy_policy_digest,
+            "corrective_action_control_digest": self.corrective_action_control_digest,
             "max_sessions": self.max_sessions, "max_slots_per_session": self.max_slots_per_session,
             "cadence_seconds": self.cadence_seconds, "flags": dict(FIXED_FLAGS),
         }
@@ -454,12 +458,26 @@ def _init(path: Path, config: CoreConfigV2) -> tuple[int, int]:
 
 
 class CoreServiceV2:
-    def __init__(self, path: str | Path, config: CoreConfigV2, *, clock: object | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        config: CoreConfigV2,
+        *,
+        clock: object | None = None,
+        corrective_action_control: corrective_action.CorrectiveActionControlV1 | None = None,
+        corrective_action_verifier: corrective_action.CorrectiveActionVerifier | None = None,
+    ) -> None:
         self.path = Path(path)
         self.config = config
         self.clock = clock if clock is not None else lambda: int(time.time())
         if not callable(self.clock):
             raise CoreError("core:clock")
+        if (corrective_action_control is None) != (corrective_action_verifier is None):
+            raise CoreError("core:action-control")
+        self._corrective_action_control = corrective_action_control
+        self._corrective_action_verifier = corrective_action_verifier
+        if corrective_action_control is not None:
+            self._require_corrective_action_dependencies()
         self._database_identity = _init(self.path, config)
 
     def _open(self) -> sqlite3.Connection:
@@ -467,6 +485,42 @@ class CoreServiceV2:
 
     def _assert_database_identity(self) -> None:
         _require_path_identity(self.path, self._database_identity)
+
+    def _require_corrective_action_dependencies(self) -> tuple[corrective_action.CorrectiveActionControlV1, corrective_action.CorrectiveActionVerifier]:
+        control = self._corrective_action_control
+        verifier = self._corrective_action_verifier
+        if not isinstance(control, corrective_action.CorrectiveActionControlV1) or verifier is None:
+            raise CoreConflictError("core:action-control")
+        if control.digest != self.config.corrective_action_control_digest:
+            raise CoreConflictError("core:action-control")
+        try:
+            values = (
+                verifier.identity,
+                verifier.epoch,
+                verifier.authority_evidence_digest,
+                verifier.revocation_head_digest,
+                verifier.terms_digest,
+                verifier.retention_policy_digest,
+                verifier.valid_from,
+                verifier.valid_until,
+                verifier.max_evidence_bytes,
+                verifier.verify,
+            )
+        except Exception:
+            raise_redacted(CoreConflictError, "core:action-control")
+        if values[:-1] != (
+            control.verifier_id,
+            control.verifier_epoch,
+            control.authority_evidence_digest,
+            control.revocation_head_digest,
+            control.terms_digest,
+            control.retention_policy_digest,
+            control.valid_from,
+            control.valid_until,
+            control.max_evidence_bytes,
+        ) or not callable(values[-1]):
+            raise CoreConflictError("core:action-control")
+        return control, verifier
 
     def _operational_represented_ingress_artifact_ids(self, limit: int) -> tuple[str, ...]:
         """Return the bounded raw-free source representation projection."""
@@ -1175,16 +1229,134 @@ class CoreServiceV2:
             _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core:database")
         raise CoreError("core:database")
 
-    def record_case_action(self, current_case_artifact_id: str, *, action_raw: bytes, policy: corrective_action.CorrectiveActionPolicyV1, evidence_raw: bytes) -> CoreReceipt:
-        _require_digest(current_case_artifact_id, "core:case-input")
-        if not isinstance(policy, corrective_action.CorrectiveActionPolicyV1):
-            raise CoreConflictError("core:action-policy")
-        if policy.current_case_artifact_id != current_case_artifact_id:
-            raise CoreConflictError("core:action-policy")
+    def _read_open_case_for_action(
+        self,
+        current_case_artifact_id: str,
+        control: corrective_action.CorrectiveActionControlV1,
+        evidence_raw: bytes,
+    ) -> tuple[corrective_action.CorrectiveActionPolicyV1 | None, str | None]:
+        connection: sqlite3.Connection | None = None
         try:
-            checked = corrective_action_independent.verify_artifact(action_raw, policy=policy.material(), evidence_raw=evidence_raw)
+            connection = self._open()
+            row = connection.execute(
+                "SELECT raw,predecessor_id FROM core_artifacts WHERE artifact_id=? AND kind='CASE'",
+                (current_case_artifact_id,),
+            ).fetchone()
+            if row is None or type(row["raw"]) is not bytes:
+                raise CoreConflictError("core:case-missing")
+            case = independent._parse(row["raw"], "core:case")
+            action_case: dict[str, object] | None = None
+            action_row_id: str | None = None
+            expected_action_current_id: str | None = None
+            if case.get("state") == "ACTION_RECORDED":
+                action_case = case
+                action_row_id = case.get("action_artifact_id")
+                expected_action_current_id = row["predecessor_id"]
+            elif case.get("state") == "OPEN":
+                successor_rows = connection.execute(
+                    "SELECT raw FROM core_artifacts WHERE kind='CASE' AND predecessor_id=? ORDER BY created_event_sequence",
+                    (current_case_artifact_id,),
+                ).fetchall()
+                if len(successor_rows) > 1:
+                    raise CoreConflictError("core:case-chain")
+                if successor_rows:
+                    candidate = independent._parse(successor_rows[0]["raw"], "core:case")
+                    if candidate.get("state") == "ACTION_RECORDED":
+                        action_case = candidate
+                        action_row_id = candidate.get("action_artifact_id")
+                        expected_action_current_id = current_case_artifact_id
+            if action_case is not None:
+                if type(action_row_id) is not str:
+                    raise CoreConflictError("core:case-action")
+                action_row = connection.execute(
+                    "SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='CASE_ACTION'",
+                    (action_row_id,),
+                ).fetchone()
+                if action_row is None or type(action_row["raw"]) is not bytes:
+                    raise CoreConflictError("core:case-action")
+                try:
+                    action = corrective_action_independent.verify_artifact(
+                        action_row["raw"],
+                        evidence_raw=evidence_raw,
+                        control_digest=control.digest,
+                    )
+                except Exception:
+                    raise_redacted(CoreConflictError, "core:action-verification")
+                if action.get("current_case_artifact_id") != expected_action_current_id or action.get("case_id") != action_case.get("case_id"):
+                    raise CoreConflictError("core:action-binding")
+                return None, _digest(
+                    "case-transition-operation",
+                    {
+                        "case_artifact_id": expected_action_current_id,
+                        "action_artifact_id": action_row_id,
+                        "transition": "ACTION_RECORDED",
+                    },
+                )
+            if case.get("state") != "OPEN":
+                raise CoreConflictError("core:case-state")
+            head = connection.execute(
+                "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?",
+                (case["case_id"],),
+            ).fetchone()
+            if head is None or head["head_ref"] != current_case_artifact_id:
+                raise CoreConflictError("core:case-head")
+            return corrective_action.CorrectiveActionPolicyV1.for_case(
+                case,
+                control,
+                current_case_artifact_id=current_case_artifact_id,
+            ), None
+        except (CoreError, CoreConflictError):
+            raise
+        except independent.CoreVerificationError:
+            raise_redacted(CoreConflictError, "core:case")
+        except (OSError, sqlite3.Error, TypeError, ValueError, KeyError):
+            raise_redacted(CoreConflictError, "core:case")
+        finally:
+            _finalize_core_connection(
+                connection,
+                identity_check=self._assert_database_identity,
+                transactional=False,
+                cleanup_code="core:case",
+            )
+
+    def record_case_action(self, current_case_artifact_id: str, *, evidence_raw: bytes) -> CoreReceipt:
+        _require_digest(current_case_artifact_id, "core:case-input")
+        control, verifier = self._require_corrective_action_dependencies()
+        if type(evidence_raw) is not bytes or not evidence_raw or len(evidence_raw) > control.max_evidence_bytes:
+            raise CoreConflictError("core:action-evidence")
+        policy, retry_operation_id = self._read_open_case_for_action(current_case_artifact_id, control, evidence_raw)
+        if retry_operation_id is not None:
+            connection = self._open(); commit_attempted = False; commit_succeeded = False
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = self._event(connection, retry_operation_id)
+                if existing is None:
+                    raise CoreConflictError("core:case-retry")
+                commit_attempted = True; connection.commit(); commit_succeeded = True
+                return self._receipt(existing)
+            except (CoreError, CoreConflictError):
+                _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); raise
+            except sqlite3.Error as exc:
+                _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _sqlite_error(exc)
+            finally:
+                _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core:database")
+        if policy is None:
+            raise CoreConflictError("core:case")
+        try:
+            action_raw = corrective_action.CorrectiveActionService(
+                policy,
+                verifier,
+                control=control,
+            ).observe(evidence_raw)
+            checked = corrective_action_independent.verify_artifact(
+                action_raw,
+                policy=policy.material(),
+                evidence_raw=evidence_raw,
+                control_digest=control.digest,
+            )
         except Exception:
             raise_redacted(CoreConflictError, "core:action-verification")
+        self._require_corrective_action_dependencies()
         action_id = str(checked["artifact_id"])
         action_row_id = _digest(
             "artifact-row-id",
@@ -1200,6 +1372,7 @@ class CoreServiceV2:
         connection = self._open(); commit_attempted = False; commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
+            self._require_corrective_action_dependencies()
             existing = self._event(connection, operation_id)
             if existing is not None:
                 commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(existing)
@@ -1222,8 +1395,15 @@ class CoreServiceV2:
                 or tuple(checked["target_finding_kinds"]) != tuple(prior["target_finding_kinds"])
             ):
                 raise CoreConflictError("core:action-binding")
+            current_policy = corrective_action.CorrectiveActionPolicyV1.for_case(
+                prior,
+                control,
+                current_case_artifact_id=current_case_artifact_id,
+            )
+            if current_policy.material() != policy.material() or checked.get("control_digest") != control.digest:
+                raise CoreConflictError("core:action-control")
             now = self._owner_now(connection)
-            if int(checked["observed_at"]) > now:
+            if not control.valid_from <= now <= control.valid_until or int(checked["observed_at"]) > now:
                 raise CoreConflictError("core:action-time")
             action_op = _digest("case-action-operation", {"action_id": action_id, "case_id": prior["case_id"]})
             action_req = _digest("case-action-request", {"action_id": action_id, "case_id": prior["case_id"], "evidence_digest": checked["evidence_sha3_512"]})
@@ -1272,7 +1452,10 @@ class CoreServiceV2:
             if action_row is None or type(action_row[0]) is not bytes:
                 raise CoreConflictError("core:case-action")
             try:
-                action = corrective_action_independent.verify_artifact(action_row[0])
+                action = corrective_action_independent.verify_artifact(
+                    action_row[0],
+                    control_digest=self.config.corrective_action_control_digest,
+                )
             except Exception:
                 raise_redacted(CoreConflictError, "core:case-action")
             if (

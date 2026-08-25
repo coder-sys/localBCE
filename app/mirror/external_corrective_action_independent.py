@@ -29,6 +29,17 @@ _HEX = re.compile(r"^[0-9a-f]{128}$")
 _POLICY_KEYS = {"case_id", "current_case_artifact_id", "source_artifact_id", "graph_artifact_id", "graph_report_id", "target_finding_ids", "target_finding_kinds", "verifier_id", "verifier_epoch", "authority_evidence_digest", "revocation_head_digest", "terms_digest", "retention_policy_digest", "valid_from", "valid_until", "max_evidence_bytes", "flags"}
 _ASSERTION_KEYS = {"action_id", "case_id", "current_case_artifact_id", "source_artifact_id", "graph_artifact_id", "graph_report_id", "target_finding_ids", "target_finding_kinds", "action_code", "observed_at", "valid_from", "valid_until", "verifier_id", "verifier_epoch", "evidence_sha3_512", "evidence_byte_length"}
 _ARTIFACT_KEYS = {"schema", "schema_version", "kind", "artifact_id", "policy", "policy_digest", "assertion", "flags"}
+_CONTROL_KEYS = (
+    "verifier_id",
+    "verifier_epoch",
+    "authority_evidence_digest",
+    "revocation_head_digest",
+    "terms_digest",
+    "retention_policy_digest",
+    "valid_from",
+    "valid_until",
+    "max_evidence_bytes",
+)
 
 
 class IndependentCorrectiveActionError(ValueError):
@@ -125,7 +136,36 @@ def _validate_policy(policy: Mapping[str, object]) -> dict[str, object]:
     return item
 
 
-def verify_artifact(raw: bytes, *, policy: Mapping[str, object] | None = None, evidence_raw: bytes | None = None) -> dict[str, object]:
+def control_digest_from_policy(policy: Mapping[str, object]) -> str:
+    if not isinstance(policy, Mapping):
+        raise IndependentCorrectiveActionError("policy:control")
+    try:
+        material = {key: policy[key] for key in _CONTROL_KEYS}
+    except (KeyError, TypeError):
+        raise_redacted(IndependentCorrectiveActionError, "policy:control")
+    _ascii(material["verifier_id"], "policy:verifier")
+    for key in ("authority_evidence_digest", "revocation_head_digest", "terms_digest", "retention_policy_digest"):
+        _hex(material[key], "policy:control")
+    if (
+        type(material["verifier_epoch"]) is not int
+        or material["verifier_epoch"] < 0
+        or type(material["valid_from"]) is not int
+        or type(material["valid_until"]) is not int
+        or not 0 <= material["valid_from"] <= material["valid_until"] <= MAX_TIMESTAMP
+        or type(material["max_evidence_bytes"]) is not int
+        or not 1 <= material["max_evidence_bytes"] <= MAX_EVIDENCE_BYTES
+    ):
+        raise IndependentCorrectiveActionError("policy:control")
+    return _digest("control", material)
+
+
+def verify_artifact(
+    raw: bytes,
+    *,
+    policy: Mapping[str, object] | None = None,
+    evidence_raw: bytes | None = None,
+    control_digest: str | None = None,
+) -> dict[str, object]:
     artifact = _parse(raw)
     if _expect(artifact, _ARTIFACT_KEYS, "action:schema")["schema"] != SCHEMA or artifact["schema_version"] != SCHEMA_VERSION or artifact["kind"] != "CORRECTIVE_ACTION":
         raise IndependentCorrectiveActionError("action:identity")
@@ -135,6 +175,9 @@ def verify_artifact(raw: bytes, *, policy: Mapping[str, object] | None = None, e
     policy_digest = _digest("policy", artifact_policy)
     if artifact["policy_digest"] != policy_digest:
         raise IndependentCorrectiveActionError("action:policy-digest")
+    derived_control_digest = control_digest_from_policy(artifact_policy)
+    if control_digest is not None and (not isinstance(control_digest, str) or _HEX.fullmatch(control_digest) is None or derived_control_digest != control_digest):
+        raise IndependentCorrectiveActionError("action:control")
     if policy is not None:
         supplied = _validate_policy(policy)
         if supplied != artifact_policy:
@@ -167,7 +210,7 @@ def verify_artifact(raw: bytes, *, policy: Mapping[str, object] | None = None, e
     expected_id = _digest("artifact-id", {key: artifact[key] for key in _ARTIFACT_KEYS if key != "artifact_id"})
     if artifact["artifact_id"] != expected_id:
         raise IndependentCorrectiveActionError("action:id")
-    return {"accepted": True, "artifact_id": artifact["artifact_id"], "policy_digest": policy_digest, "case_id": artifact_policy["case_id"], "current_case_artifact_id": artifact_policy["current_case_artifact_id"], "source_artifact_id": artifact_policy["source_artifact_id"], "graph_artifact_id": artifact_policy["graph_artifact_id"], "graph_report_id": artifact_policy["graph_report_id"], "target_finding_ids": tuple(artifact_policy["target_finding_ids"]), "target_finding_kinds": tuple(artifact_policy["target_finding_kinds"]), "action_code": assertion["action_code"], "observed_at": assertion["observed_at"], "verifier_id": assertion["verifier_id"], "verifier_epoch": assertion["verifier_epoch"], "evidence_sha3_512": assertion["evidence_sha3_512"], "evidence_byte_length": assertion["evidence_byte_length"], "policy": artifact_policy}
+    return {"accepted": True, "artifact_id": artifact["artifact_id"], "policy_digest": policy_digest, "control_digest": derived_control_digest, "case_id": artifact_policy["case_id"], "current_case_artifact_id": artifact_policy["current_case_artifact_id"], "source_artifact_id": artifact_policy["source_artifact_id"], "graph_artifact_id": artifact_policy["graph_artifact_id"], "graph_report_id": artifact_policy["graph_report_id"], "target_finding_ids": tuple(artifact_policy["target_finding_ids"]), "target_finding_kinds": tuple(artifact_policy["target_finding_kinds"]), "action_code": assertion["action_code"], "observed_at": assertion["observed_at"], "verifier_id": assertion["verifier_id"], "verifier_epoch": assertion["verifier_epoch"], "evidence_sha3_512": assertion["evidence_sha3_512"], "evidence_byte_length": assertion["evidence_byte_length"], "policy": artifact_policy}
 
 
 def verify_bytes(raw: bytes, *, policy: Mapping[str, object] | None = None, evidence_raw: bytes | None = None) -> dict[str, object]:

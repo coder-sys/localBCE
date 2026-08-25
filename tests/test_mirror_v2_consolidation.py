@@ -416,6 +416,25 @@ class _PrivacyVerifier:
 class _CorrectiveActionVerifier:
     identity = "SYNTH_CORRECTIVE_ACTION_VERIFIER"
     epoch = 1
+    authority_evidence_digest = _hex("corrective-action-authority")
+    revocation_head_digest = _hex("corrective-action-revocation")
+    terms_digest = _hex("corrective-action-terms")
+    retention_policy_digest = _hex("corrective-action-retention")
+    valid_from = profile.FIXTURE_OBSERVATION_TIME
+    valid_until = profile.FIXTURE_OBSERVATION_TIME + 3600
+    max_evidence_bytes = 1024
+
+    def __init__(self, control: corrective_action.CorrectiveActionControlV1 | None = None) -> None:
+        if control is not None:
+            self.identity = control.verifier_id
+            self.epoch = control.verifier_epoch
+            self.authority_evidence_digest = control.authority_evidence_digest
+            self.revocation_head_digest = control.revocation_head_digest
+            self.terms_digest = control.terms_digest
+            self.retention_policy_digest = control.retention_policy_digest
+            self.valid_from = control.valid_from
+            self.valid_until = control.valid_until
+            self.max_evidence_bytes = control.max_evidence_bytes
 
     def verify(
         self,
@@ -527,15 +546,34 @@ class MirrorV2Fixture(unittest.TestCase):
             revocation_head_digest=_hex("privacy-revocation"),
         )
         self.privacy_raw = privacy.ExternalPrivacySupportApprovalService(self.privacy_policy, _PrivacyVerifier(self.privacy_policy)).observe(b"synthetic privacy assertion").raw
+        self.corrective_action_control = corrective_action.CorrectiveActionControlV1(
+            verifier_id=_CorrectiveActionVerifier.identity,
+            verifier_epoch=_CorrectiveActionVerifier.epoch,
+            authority_evidence_digest=_CorrectiveActionVerifier.authority_evidence_digest,
+            revocation_head_digest=_CorrectiveActionVerifier.revocation_head_digest,
+            terms_digest=_CorrectiveActionVerifier.terms_digest,
+            retention_policy_digest=_CorrectiveActionVerifier.retention_policy_digest,
+            valid_from=_CorrectiveActionVerifier.valid_from,
+            valid_until=_CorrectiveActionVerifier.valid_until,
+            max_evidence_bytes=_CorrectiveActionVerifier.max_evidence_bytes,
+        )
+        self.corrective_action_verifier = _CorrectiveActionVerifier(self.corrective_action_control)
         self.core_config = core.CoreConfigV2(
             database_id="core-v2-synthetic", chain_id="core-chain-v2",
             ingress_database_id=self.ingress_config.database_id, ingress_chain_id=self.ingress_config.chain_id, ingress_config_digest=self.ingress_config.digest,
             runtime_profile_digest=profile.NC_MEDICAID_PROFILE.profile_digest,
             governance_policy_digest=self.governance_policy.digest,
             privacy_policy_digest=self.privacy_policy.digest,
+            corrective_action_control_digest=self.corrective_action_control.digest,
         )
         self.core_clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME + 2)
-        self.core = core.CoreServiceV2(self.core_path, self.core_config, clock=self.core_clock)
+        self.core = core.CoreServiceV2(
+            self.core_path,
+            self.core_config,
+            clock=self.core_clock,
+            corrective_action_control=self.corrective_action_control,
+            corrective_action_verifier=self.corrective_action_verifier,
+        )
         self.source_result = self.core.ingest_source(self.ingress_path, self.ingress_receipt.artifact_id or "")
         self.gov_core_id = self.core.admit_governance(self.governance_raw, policy=self.governance_policy, evidence_raw=b"synthetic governance assertion")
         self.privacy_core_id = self.core.admit_privacy(self.privacy_raw, policy=self.privacy_policy, evidence_raw=b"synthetic privacy assertion")
@@ -1029,14 +1067,12 @@ class MirrorV2Fixture(unittest.TestCase):
         case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
         later = self._admit_later_source()
         case_b = self.core.admit_case(later["source_result"]["reconciliation_artifact_id"])
-        a_action, a_action_id, a_raw, a_policy, a_evidence = self._record_case_action(case_a)
-        b_action, b_action_id, b_raw, b_policy, b_evidence = self._record_case_action(case_b)
+        a_action, a_action_id, a_evidence = self._record_case_action(case_a)
+        b_action, b_action_id, b_evidence = self._record_case_action(case_b)
         self.assertEqual(
             a_action.raw,
             self.core.record_case_action(
                 case_a,
-                action_raw=a_raw,
-                policy=a_policy,
                 evidence_raw=a_evidence,
             ).raw,
         )
@@ -1044,8 +1080,6 @@ class MirrorV2Fixture(unittest.TestCase):
             b_action.raw,
             self.core.record_case_action(
                 case_b,
-                action_raw=b_raw,
-                policy=b_policy,
                 evidence_raw=b_evidence,
             ).raw,
         )
@@ -1121,15 +1155,13 @@ class MirrorV2Fixture(unittest.TestCase):
             connection.close()
         self.assertEqual(case["state"], "OPEN")
         self.assertEqual(case["responsibility"], "UNKNOWN")
-        action_receipt, action_id, action_raw, action_policy, evidence = self._record_case_action(case_id)
+        action_receipt, action_id, evidence = self._record_case_action(case_id)
         before_bytes = self.core_path.read_bytes()
         before_verify = self.core.verify(ingress_path=self.ingress_path)
         with self.assertRaisesRegex(core.CoreConflictError, "core:action-verification"):
             self.core.record_case_action(
                 case_id,
-                action_raw=action_raw,
-                policy=replace(action_policy, graph_report_id=_hex("rebound-action-policy")),
-                evidence_raw=evidence,
+                evidence_raw=b"different corrective evidence",
             )
         self.assertEqual(before_bytes, self.core_path.read_bytes())
         self.assertEqual(before_verify, self.core.verify(ingress_path=self.ingress_path))
@@ -1153,15 +1185,261 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertNotEqual(action_id, final_case_id)
         core_independent.verify_database(self.core_path, expected_database_id=self.core_config.database_id, expected_config_digest=self.core_config.digest, ingress_path=self.ingress_path)
 
+    def test_corrective_action_control_is_pinned_and_replayed(self) -> None:
+        case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        mismatches = (
+            ("identity", "OTHER_CORRECTIVE_ACTION_VERIFIER"),
+            ("epoch", self.corrective_action_control.verifier_epoch + 1),
+            ("authority_evidence_digest", _hex("other-authority")),
+            ("revocation_head_digest", _hex("other-revocation")),
+            ("terms_digest", _hex("other-terms")),
+            ("retention_policy_digest", _hex("other-retention")),
+            ("valid_from", self.corrective_action_control.valid_from + 1),
+            ("valid_until", self.corrective_action_control.valid_until - 1),
+            ("max_evidence_bytes", self.corrective_action_control.max_evidence_bytes - 1),
+        )
+        for index, (attribute, value) in enumerate(mismatches):
+            verifier = _CorrectiveActionVerifier(self.corrective_action_control)
+            setattr(verifier, attribute, value)
+            path = self.root / f"unbound-corrective-verifier-{index}.db"
+            with self.assertRaisesRegex(core.CoreError, "core:action-control"):
+                core.CoreServiceV2(
+                    path,
+                    self.core_config,
+                    corrective_action_control=self.corrective_action_control,
+                    corrective_action_verifier=verifier,
+                )
+            self.assertFalse(path.exists())
+
+        wrong_config = replace(
+            self.core_config,
+            corrective_action_control_digest=_hex("wrong-control-config"),
+        )
+        wrong_config_path = self.root / "wrong-control-config.db"
+        with self.assertRaisesRegex(core.CoreError, "core:action-control"):
+            core.CoreServiceV2(
+                wrong_config_path,
+                wrong_config,
+                corrective_action_control=self.corrective_action_control,
+                corrective_action_verifier=self.corrective_action_verifier,
+            )
+        self.assertFalse(wrong_config_path.exists())
+
+        before = self.core_path.read_bytes()
+        self.corrective_action_verifier.authority_evidence_digest = _hex("mutated-after-init")
+        with self.assertRaisesRegex(core.CoreConflictError, "core:action-control"):
+            self.core.record_case_action(case_id, evidence_raw=b"synthetic corrective evidence")
+        self.assertEqual(before, self.core_path.read_bytes())
+
+    def test_independent_rejects_rehashed_case_action_with_alternative_control_lineage(self) -> None:
+        case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        _receipt, _successor_id, _evidence = self._record_case_action(case_id)
+        tampered = self.root / "core-case-action-control.db"
+        shutil.copy2(self.core_path, tampered)
+        connection = sqlite3.connect(tampered)
+        connection.row_factory = sqlite3.Row
+        try:
+            artifact_rows = connection.execute("SELECT * FROM core_artifacts ORDER BY created_event_sequence").fetchall()
+            action_row = None
+            case_successor_row = None
+            for row in artifact_rows:
+                value = json.loads(bytes(row["raw"]).decode("ascii"))
+                if row["kind"] == "CASE_ACTION":
+                    action_row = row
+                elif row["kind"] == "CASE" and row["predecessor_id"] == case_id and value["state"] == "ACTION_RECORDED":
+                    case_successor_row = row
+            self.assertIsNotNone(action_row)
+            self.assertIsNotNone(case_successor_row)
+            action_value = json.loads(bytes(action_row["raw"]).decode("ascii"))
+            policy = dict(action_value["policy"])
+            policy["authority_evidence_digest"] = _hex("rebound-control-authority")
+            action_value["policy"] = policy
+            action_value["policy_digest"] = core_independent._digest("policy", policy)
+            assertion = dict(action_value["assertion"])
+            assertion["action_id"] = core_independent._digest(
+                "action-id",
+                {
+                    "policy_digest": action_value["policy_digest"],
+                    "evidence_sha3_512": assertion["evidence_sha3_512"],
+                    "action_code": assertion["action_code"],
+                    "observed_at": assertion["observed_at"],
+                },
+            )
+            action_value["assertion"] = assertion
+            action_value["artifact_id"] = core_independent._digest(
+                "artifact-id",
+                {key: action_value[key] for key in ("schema", "schema_version", "kind", "policy", "policy_digest", "assertion", "flags")},
+            )
+            action_raw = core_independent._canonical(action_value)
+            action_row_id = core_independent._digest(
+                "artifact-row-id",
+                {
+                    "kind": "CASE_ACTION",
+                    "raw": core_independent._raw_digest("artifact-bytes", action_raw),
+                    "profile_digest": action_row["profile_digest"],
+                    "source_artifact_id": action_row["source_artifact_id"],
+                    "predecessor_id": action_row["predecessor_id"],
+                },
+            )
+            action_event = None
+            successor_event = None
+            for event_row in connection.execute("SELECT sequence,event_raw FROM core_events WHERE event_kind='ARTIFACT' ORDER BY sequence").fetchall():
+                event = json.loads(bytes(event_row["event_raw"]).decode("ascii"))
+                if event["material"].get("kind") == "CASE_ACTION":
+                    action_event = (event_row["sequence"], event)
+                elif event["material"].get("kind") == "CASE" and event["material"].get("predecessor_id") == case_id and event["material"].get("current_state") == "ACTION_RECORDED":
+                    successor_event = (event_row["sequence"], event)
+            self.assertIsNotNone(action_event)
+            self.assertIsNotNone(successor_event)
+            action_sequence, action_event = action_event
+            successor_sequence, successor_event = successor_event
+            action_event["subject_id"] = action_row_id
+            action_event["operation_id"] = core_independent._digest(
+                "case-action-operation",
+                {"action_id": action_value["artifact_id"], "case_id": policy["case_id"]},
+            )
+            action_event["request_digest"] = core_independent._digest(
+                "case-action-request",
+                {"action_id": action_value["artifact_id"], "case_id": policy["case_id"], "evidence_digest": assertion["evidence_sha3_512"]},
+            )
+            action_event["material"].update(
+                {
+                    "artifact_id": action_row_id,
+                    "raw_digest": core_independent._raw_digest("artifact-bytes", action_raw),
+                    "raw_length": len(action_raw),
+                }
+            )
+            action_event["payload_digest"] = action_row_id
+            action_event["payload_length"] = len(action_raw)
+            action_event["material_digest"] = core_independent._digest("material", action_event["material"])
+            action_event["event_id"] = core_independent._digest(
+                "event-id",
+                {key: action_event[key] for key in core_independent.EVENT_RAW_KEYS if key not in {"event_id", "after_root", "stream_after_root"}},
+            )
+            action_event["after_root"] = core_independent._event_root(action_event)
+            action_event["stream_after_root"] = core_independent._stream_root(action_event)
+            action_raw_event = core_independent._canonical(action_event)
+
+            successor_value = json.loads(bytes(case_successor_row["raw"]).decode("ascii"))
+            successor_value["action_artifact_id"] = action_row_id
+            successor_value["artifact_id"] = core_independent._digest(
+                "case-artifact",
+                {key: successor_value[key] for key in successor_value if key != "artifact_id"},
+            )
+            successor_raw = core_independent._canonical(successor_value)
+            successor_row_id = core_independent._digest(
+                "artifact-row-id",
+                {
+                    "kind": "CASE",
+                    "raw": core_independent._raw_digest("artifact-bytes", successor_raw),
+                    "profile_digest": case_successor_row["profile_digest"],
+                    "source_artifact_id": case_successor_row["source_artifact_id"],
+                    "predecessor_id": case_successor_row["predecessor_id"],
+                },
+            )
+            successor_event["before_root"] = action_event["after_root"]
+            successor_event["subject_id"] = successor_row_id
+            successor_event["operation_id"] = core_independent._digest(
+                "case-transition-operation",
+                {"case_artifact_id": case_id, "action_artifact_id": action_row_id, "transition": "ACTION_RECORDED"},
+            )
+            successor_event["request_digest"] = core_independent._digest(
+                "case-transition-request",
+                {"case_artifact_id": case_id, "action_artifact_id": action_row_id, "transition": "ACTION_RECORDED"},
+            )
+            successor_event["material"].update(
+                {
+                    "artifact_id": successor_row_id,
+                    "raw_digest": core_independent._raw_digest("artifact-bytes", successor_raw),
+                    "raw_length": len(successor_raw),
+                }
+            )
+            successor_event["payload_digest"] = successor_row_id
+            successor_event["payload_length"] = len(successor_raw)
+            successor_event["material_digest"] = core_independent._digest("material", successor_event["material"])
+            successor_event["event_id"] = core_independent._digest(
+                "event-id",
+                {key: successor_event[key] for key in core_independent.EVENT_RAW_KEYS if key not in {"event_id", "after_root", "stream_after_root"}},
+            )
+            successor_event["after_root"] = core_independent._event_root(successor_event)
+            successor_event["stream_after_root"] = core_independent._stream_root(successor_event)
+            successor_raw_event = core_independent._canonical(successor_event)
+
+            connection.execute("UPDATE core_artifacts SET artifact_id=?,raw=? WHERE artifact_id=?", (action_row_id, action_raw, action_row["artifact_id"]))
+            connection.execute("UPDATE core_artifacts SET artifact_id=?,raw=? WHERE artifact_id=?", (successor_row_id, successor_raw, case_successor_row["artifact_id"]))
+            connection.execute(
+                "UPDATE core_events SET event_id=?,operation_id=?,subject_id=?,event_raw=?,receipt_digest=? WHERE sequence=?",
+                (action_event["event_id"], action_event["operation_id"], action_event["subject_id"], action_raw_event, core_independent._raw_digest("receipt", action_raw_event), action_sequence),
+            )
+            connection.execute(
+                "UPDATE core_events SET event_id=?,operation_id=?,subject_id=?,event_raw=?,receipt_digest=? WHERE sequence=?",
+                (successor_event["event_id"], successor_event["operation_id"], successor_event["subject_id"], successor_raw_event, core_independent._raw_digest("receipt", successor_raw_event), successor_sequence),
+            )
+            connection.execute("UPDATE core_meta SET head_root=? WHERE meta_id=1", (successor_event["after_root"],))
+            connection.execute(
+                "UPDATE core_heads SET head_ref=?,head_root=? WHERE stream_kind='CASE_ACTION' AND stream_id=?",
+                (action_row_id, action_event["stream_after_root"], policy["case_id"]),
+            )
+            connection.execute(
+                "UPDATE core_heads SET head_ref=?,head_root=? WHERE stream_kind='ARTIFACT' AND stream_id=?",
+                (successor_row_id, successor_event["stream_after_root"], policy["case_id"]),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:case-action"):
+            core_independent.verify_database(
+                tampered,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+            )
+
+    def test_superseded_case_value_is_not_accepted(self) -> None:
+        case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        connection = sqlite3.connect(self.core_path)
+        connection.row_factory = sqlite3.Row
+        try:
+            row = connection.execute("SELECT * FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (case_id,)).fetchone()
+        finally:
+            connection.close()
+        value = json.loads(bytes(row["raw"]).decode("ascii"))
+        value["state"] = "SUPERSEDED"
+        value["artifact_id"] = core_independent._digest(
+            "case-artifact",
+            {key: value[key] for key in value if key != "artifact_id"},
+        )
+        rebound = {key: row[key] for key in core_independent.TABLE_COLUMNS["core_artifacts"]}
+        rebound["raw"] = core_independent._canonical(value)
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:case"):
+            core_independent._verify_artifact_value(rebound, self.core_config.material())
+
+    def test_corrective_action_recovery_export_restore_parity(self) -> None:
+        case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        original, _successor_id, _evidence = self._record_case_action(case_id)
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        restored_ingress = self.root / "action-restored-ingress.db"
+        restored_core = self.root / "action-restored-core.db"
+        restored = self.recovery_service.restore_point(point.point_id, restored_ingress, restored_core)
+        self.assertEqual(restored.state, "PUBLISHED")
+        restored_core_service = core.CoreServiceV2(restored_core, self.core_config)
+        self.assertEqual(restored_core_service.verify(ingress_path=restored_ingress)["head_root"], self.core.verify(ingress_path=self.ingress_path)["head_root"])
+        self.assertEqual(original.next_state, "CASE")
+        core_independent.verify_database(
+            restored_core,
+            expected_database_id=self.core_config.database_id,
+            expected_config_digest=self.core_config.digest,
+            ingress_path=restored_ingress,
+        )
+
     def test_case_action_and_retest_concurrent_retries_are_idempotent(self) -> None:
         case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
-        action_receipt, _action_id, action_raw, action_policy, evidence = self._record_case_action(case_id)
+        action_receipt, _action_id, evidence = self._record_case_action(case_id)
         action_results: list[core.CoreReceipt] = []
         action_errors: list[BaseException] = []
 
         def retry_action() -> None:
             try:
-                action_results.append(self.core.record_case_action(case_id, action_raw=action_raw, policy=action_policy, evidence_raw=evidence))
+                action_results.append(self.core.record_case_action(case_id, evidence_raw=evidence))
             except BaseException as exc:
                 action_errors.append(exc)
 
@@ -1174,11 +1452,9 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertEqual(2, len(action_results))
         self.assertEqual({action_receipt.raw}, {result.raw for result in action_results})
 
-        conflicting_policy = replace(action_policy, authority_evidence_digest=_hex("conflicting-action-authority"))
-        conflicting_raw = corrective_action.CorrectiveActionService(conflicting_policy, _CorrectiveActionVerifier()).observe(evidence)
         before_conflict = self.core.verify(ingress_path=self.ingress_path)
-        with self.assertRaisesRegex(core.CoreConflictError, r"core:case-(?:state|head)"):
-            self.core.record_case_action(case_id, action_raw=conflicting_raw, policy=conflicting_policy, evidence_raw=evidence)
+        with self.assertRaisesRegex(core.CoreConflictError, "core:action-verification"):
+            self.core.record_case_action(case_id, evidence_raw=b"conflicting corrective evidence")
         self.assertEqual(before_conflict, self.core.verify(ingress_path=self.ingress_path))
 
         later = self._admit_later_source(subject_seed=None)
@@ -1205,7 +1481,7 @@ class MirrorV2Fixture(unittest.TestCase):
         case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
         later = self._admit_later_source()
         case_b = self.core.admit_case(later["source_result"]["reconciliation_artifact_id"])
-        _, b_action_id, _b_raw, _b_policy, _b_evidence = self._record_case_action(case_b)
+        _, b_action_id, _b_evidence = self._record_case_action(case_b)
         tampered = self.root / "core-cross-case-stream.db"
         shutil.copy2(self.core_path, tampered)
         connection = sqlite3.connect(tampered)
@@ -1804,42 +2080,11 @@ class MirrorV2Fixture(unittest.TestCase):
         result = self.core.ingest_source(self.ingress_path, receipt.artifact_id or "")
         return {"source_result": result, "artifact_id": receipt.artifact_id or "", "observation_time": observation_time, "envelope": envelope}
 
-    def _record_case_action(self, case_artifact_id: str) -> tuple[core.CoreReceipt, str, bytes, corrective_action.CorrectiveActionPolicyV1, bytes]:
-        connection = sqlite3.connect(self.core_path)
-        try:
-            case_raw = bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (case_artifact_id,)).fetchone()[0])
-            case = json.loads(case_raw.decode("ascii"))
-            source_raw = bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='SOURCE_OBSERVATION'", (case["source_artifact_id"],)).fetchone()[0])
-            source = json.loads(source_raw.decode("ascii"))
-        finally:
-            connection.close()
-        policy = corrective_action.CorrectiveActionPolicyV1(
-            case_id=case["case_id"],
-            current_case_artifact_id=case_artifact_id,
-            source_artifact_id=case["source_artifact_id"],
-            graph_artifact_id=case["graph_artifact_id"],
-            graph_report_id=case["graph_report_id"],
-            target_finding_ids=tuple(case["target_finding_ids"]),
-            target_finding_kinds=tuple(case["target_finding_kinds"]),
-            verifier_id=_CorrectiveActionVerifier.identity,
-            verifier_epoch=_CorrectiveActionVerifier.epoch,
-            authority_evidence_digest=_hex(case_artifact_id + "-authority")[:128],
-            revocation_head_digest=_hex(case_artifact_id + "-revocation")[:128],
-            terms_digest=_hex(case_artifact_id + "-terms")[:128],
-            retention_policy_digest=_hex(case_artifact_id + "-retention")[:128],
-            valid_from=int(source["observation_time"]),
-            valid_until=int(source["observation_time"]) + 100,
-        )
+    def _record_case_action(self, case_artifact_id: str) -> tuple[core.CoreReceipt, str, bytes]:
         evidence = b"synthetic corrective evidence"
-        action_raw = corrective_action.CorrectiveActionService(policy, _CorrectiveActionVerifier()).observe(evidence)
-        receipt = self.core.record_case_action(
-            case_artifact_id,
-            action_raw=action_raw,
-            policy=policy,
-            evidence_raw=evidence,
-        )
+        receipt = self.core.record_case_action(case_artifact_id, evidence_raw=evidence)
         action_value = json.loads(receipt.raw.decode("ascii"))["material"]
-        return receipt, str(action_value["artifact_id"]), action_raw, policy, evidence
+        return receipt, str(action_value["artifact_id"]), evidence
 
     def test_exact_three_owner_tables_and_full_chain(self) -> None:
         point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)

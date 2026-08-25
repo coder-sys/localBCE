@@ -1,7 +1,8 @@
 """Synthetic, bounded corrective-action evidence boundary.
 
-This module authenticates only a caller-injected evidence verifier result.  It
-does not store or dispatch the evidence and grants no corrective authority.
+The control value is state-owned.  This module authenticates an injected
+verifier only after its complete identity matches that control; it does not
+store or dispatch evidence and grants no production corrective authority.
 """
 
 from __future__ import annotations
@@ -32,6 +33,17 @@ FIXED_FLAGS = {
 }
 _HEX = re.compile(r"^[0-9a-f]{128}$")
 _ALLOWED_ACTIONS = ("CORRECTIVE_ACTION_RECORDED",)
+_CONTROL_KEYS = (
+    "verifier_id",
+    "verifier_epoch",
+    "authority_evidence_digest",
+    "revocation_head_digest",
+    "terms_digest",
+    "retention_policy_digest",
+    "valid_from",
+    "valid_until",
+    "max_evidence_bytes",
+)
 
 
 class CorrectiveActionError(ValueError):
@@ -77,6 +89,59 @@ def _text(value: object, code: str, maximum: int = 128) -> str:
     except UnicodeEncodeError:
         raise_redacted(CorrectiveActionError, code)
     return value
+
+
+@dataclass(frozen=True)
+class CorrectiveActionControlV1:
+    verifier_id: str
+    verifier_epoch: int
+    authority_evidence_digest: str
+    revocation_head_digest: str
+    terms_digest: str
+    retention_policy_digest: str
+    valid_from: int
+    valid_until: int
+    max_evidence_bytes: int
+
+    def __post_init__(self) -> None:
+        _text(self.verifier_id, "control:verifier")
+        for value in (
+            self.authority_evidence_digest,
+            self.revocation_head_digest,
+            self.terms_digest,
+            self.retention_policy_digest,
+        ):
+            _hex(value, "control:identity")
+        if (
+            type(self.verifier_epoch) is not int
+            or self.verifier_epoch < 0
+            or type(self.valid_from) is not int
+            or type(self.valid_until) is not int
+            or not 0 <= self.valid_from <= self.valid_until <= MAX_TIMESTAMP
+        ):
+            raise CorrectiveActionError("control:interval")
+        if type(self.max_evidence_bytes) is not int or not 1 <= self.max_evidence_bytes <= MAX_EVIDENCE_BYTES:
+            raise CorrectiveActionError("control:cap")
+
+    def material(self) -> dict[str, object]:
+        return {key: getattr(self, key) for key in _CONTROL_KEYS}
+
+    @property
+    def digest(self) -> str:
+        return _digest("control", self.material())
+
+
+def _control_from_policy(policy: Mapping[str, object]) -> CorrectiveActionControlV1:
+    try:
+        return CorrectiveActionControlV1(**{key: policy[key] for key in _CONTROL_KEYS})
+    except CorrectiveActionError:
+        raise
+    except (KeyError, TypeError, ValueError):
+        raise_redacted(CorrectiveActionError, "policy:control")
+
+
+def control_digest_from_policy(policy: Mapping[str, object]) -> str:
+    return _control_from_policy(policy).digest
 
 
 @dataclass(frozen=True)
@@ -140,6 +205,40 @@ class CorrectiveActionPolicyV1:
     def digest(self) -> str:
         return _digest("policy", self.material())
 
+    @classmethod
+    def for_case(
+        cls,
+        case: Mapping[str, object],
+        control: CorrectiveActionControlV1,
+        *,
+        current_case_artifact_id: str,
+    ) -> "CorrectiveActionPolicyV1":
+        if not isinstance(case, Mapping) or not isinstance(control, CorrectiveActionControlV1):
+            raise CorrectiveActionError("policy:case")
+        try:
+            return cls(
+                case_id=case["case_id"],
+                current_case_artifact_id=current_case_artifact_id,
+                source_artifact_id=case["source_artifact_id"],
+                graph_artifact_id=case["graph_artifact_id"],
+                graph_report_id=case["graph_report_id"],
+                target_finding_ids=tuple(case["target_finding_ids"]),
+                target_finding_kinds=tuple(case["target_finding_kinds"]),
+                verifier_id=control.verifier_id,
+                verifier_epoch=control.verifier_epoch,
+                authority_evidence_digest=control.authority_evidence_digest,
+                revocation_head_digest=control.revocation_head_digest,
+                terms_digest=control.terms_digest,
+                retention_policy_digest=control.retention_policy_digest,
+                valid_from=control.valid_from,
+                valid_until=control.valid_until,
+                max_evidence_bytes=control.max_evidence_bytes,
+            )
+        except CorrectiveActionError:
+            raise
+        except (KeyError, TypeError, ValueError):
+            raise_redacted(CorrectiveActionError, "policy:case")
+
 
 @dataclass(frozen=True)
 class VerifiedCorrectiveActionV1:
@@ -169,7 +268,59 @@ class CorrectiveActionVerifier(Protocol):
     @property
     def epoch(self) -> int: ...
 
+    @property
+    def authority_evidence_digest(self) -> str: ...
+
+    @property
+    def revocation_head_digest(self) -> str: ...
+
+    @property
+    def terms_digest(self) -> str: ...
+
+    @property
+    def retention_policy_digest(self) -> str: ...
+
+    @property
+    def valid_from(self) -> int: ...
+
+    @property
+    def valid_until(self) -> int: ...
+
+    @property
+    def max_evidence_bytes(self) -> int: ...
+
     def verify(self, evidence_raw: bytes, policy: CorrectiveActionPolicyV1) -> VerifiedCorrectiveActionV1: ...
+
+
+def _require_verifier_control(control: CorrectiveActionControlV1, verifier: CorrectiveActionVerifier, code: str) -> None:
+    if not isinstance(control, CorrectiveActionControlV1):
+        raise CorrectiveActionError(code)
+    try:
+        values = (
+            verifier.identity,
+            verifier.epoch,
+            verifier.authority_evidence_digest,
+            verifier.revocation_head_digest,
+            verifier.terms_digest,
+            verifier.retention_policy_digest,
+            verifier.valid_from,
+            verifier.valid_until,
+            verifier.max_evidence_bytes,
+        )
+    except Exception:
+        raise_redacted(CorrectiveActionError, code)
+    if values != (
+        control.verifier_id,
+        control.verifier_epoch,
+        control.authority_evidence_digest,
+        control.revocation_head_digest,
+        control.terms_digest,
+        control.retention_policy_digest,
+        control.valid_from,
+        control.valid_until,
+        control.max_evidence_bytes,
+    ):
+        raise CorrectiveActionError(code)
 
 
 def _assert_verified(result: object, policy: CorrectiveActionPolicyV1, evidence_raw: bytes) -> VerifiedCorrectiveActionV1:
@@ -199,25 +350,26 @@ def _assert_verified(result: object, policy: CorrectiveActionPolicyV1, evidence_
 
 
 class CorrectiveActionService:
-    def __init__(self, policy: CorrectiveActionPolicyV1, verifier: CorrectiveActionVerifier) -> None:
-        if not isinstance(policy, CorrectiveActionPolicyV1):
+    def __init__(self, policy: CorrectiveActionPolicyV1, verifier: CorrectiveActionVerifier, *, control: CorrectiveActionControlV1) -> None:
+        if not isinstance(policy, CorrectiveActionPolicyV1) or not isinstance(control, CorrectiveActionControlV1):
             raise CorrectiveActionError("composition:policy")
+        if control_digest_from_policy(policy.material()) != control.digest:
+            raise CorrectiveActionError("composition:control")
         try:
-            if verifier.identity != policy.verifier_id or verifier.epoch != policy.verifier_epoch:
-                raise CorrectiveActionError("composition:verifier")
+            _require_verifier_control(control, verifier, "composition:verifier")
         except CorrectiveActionError:
             raise
         except Exception:
             raise_redacted(CorrectiveActionError, "composition:verifier")
         self.policy = policy
+        self._control = control
         self._verifier = verifier
 
     def observe(self, evidence_raw: bytes) -> bytes:
         if type(evidence_raw) is not bytes or not evidence_raw or len(evidence_raw) > self.policy.max_evidence_bytes:
             raise CorrectiveActionError("action:evidence-cap")
         try:
-            if self._verifier.identity != self.policy.verifier_id or self._verifier.epoch != self.policy.verifier_epoch:
-                raise CorrectiveActionError("action:verifier")
+            _require_verifier_control(self._control, self._verifier, "action:verifier")
             result = self._verifier.verify(evidence_raw, self.policy)
         except CorrectiveActionError:
             raise

@@ -300,7 +300,7 @@ def _verify_config(value: Mapping[str, object], expected_digest: str | None = No
     required = {
         "schema", "schema_version", "database_id", "chain_id", "ingress_database_id", "ingress_chain_id",
         "ingress_config_digest", "runtime_profile_digest", "governance_policy_digest",
-        "privacy_policy_digest", "max_sessions", "max_slots_per_session", "cadence_seconds",
+        "privacy_policy_digest", "corrective_action_control_digest", "max_sessions", "max_slots_per_session", "cadence_seconds",
         "flags",
     }
     if set(value) != required or value.get("schema") != SCHEMA or value.get("schema_version") != SCHEMA_VERSION or value.get("flags") != FIXED_FLAGS:
@@ -310,6 +310,7 @@ def _verify_config(value: Mapping[str, object], expected_digest: str | None = No
     _hex(value["ingress_config_digest"], "core:config")
     for key in ("runtime_profile_digest", "governance_policy_digest", "privacy_policy_digest"):
         _hex(value[key], "core:config")
+    _hex(value["corrective_action_control_digest"], "core:config")
     if type(value["max_sessions"]) is not int or not 1 <= value["max_sessions"] <= 64 or type(value["max_slots_per_session"]) is not int or not 1 <= value["max_slots_per_session"] <= 256 or type(value["cadence_seconds"]) is not int or value["cadence_seconds"] <= 0:
         raise CoreVerificationError("core:config")
     if expected_digest is not None and _digest("config", dict(value)) != expected_digest:
@@ -768,7 +769,7 @@ def _verify_artifact_value(row: Mapping[str, object], config: Mapping[str, objec
             raise CoreVerificationError("core:privacy")
     elif kind == "CASE":
         expected = {"schema", "schema_version", "kind", "artifact_id", "case_id", "reconciliation_artifact_id", "source_artifact_id", "graph_artifact_id", "graph_report_id", "graph_profile_digest", "subject_digest", "target_finding_ids", "target_finding_kinds", "state", "responsibility", "reason", "action_artifact_id", "action_observed_at", "retest_source_artifact_id", "retest_graph_artifact_id", "retest_observation_time", "flags"}
-        if set(value) != expected or value["schema"] != "mirror-core-case-v4" or value["schema_version"] != 4 or value["flags"] != FIXED_FLAGS or value["state"] not in {"OPEN", "ACTION_RECORDED", "RETEST_FAILED_OR_INDETERMINATE", "RESOLVED", "SUPERSEDED"} or value["responsibility"] != "UNKNOWN":
+        if set(value) != expected or value["schema"] != "mirror-core-case-v4" or value["schema_version"] != 4 or value["flags"] != FIXED_FLAGS or value["state"] not in {"OPEN", "ACTION_RECORDED", "RETEST_FAILED_OR_INDETERMINATE", "RESOLVED"} or value["responsibility"] != "UNKNOWN":
             raise CoreVerificationError("core:case")
         for key in ("artifact_id", "case_id", "reconciliation_artifact_id", "source_artifact_id", "graph_artifact_id", "graph_report_id", "graph_profile_digest", "subject_digest"):
             _hex(value[key], "core:case")
@@ -790,7 +791,7 @@ def _verify_artifact_value(row: Mapping[str, object], config: Mapping[str, objec
             raise CoreVerificationError("core:case-state")
     elif kind == "CASE_ACTION":
         try:
-            corrective_action.verify_artifact(raw)
+            corrective_action.verify_artifact(raw, control_digest=config["corrective_action_control_digest"])
         except Exception:
             raise CoreVerificationError("core:case-action")
     expected_profile = {

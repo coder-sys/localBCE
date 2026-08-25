@@ -101,6 +101,7 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
             governance_policy_digest=_hex("operational-governance"),
             privacy_policy_digest=_hex("operational-privacy"),
             ingress_config_digest=self.ingress_config.digest,
+            corrective_action_control_digest=_hex("operational-corrective-control"),
         )
         self.custody = _Custody()
         self.storage = _Storage()
