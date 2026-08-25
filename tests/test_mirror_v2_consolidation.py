@@ -1231,6 +1231,72 @@ class MirrorV2Fixture(unittest.TestCase):
             self.core.record_case_action(case_id, evidence_raw=b"synthetic corrective evidence")
         self.assertEqual(before, self.core_path.read_bytes())
 
+    def test_corrective_action_independent_acceptance_requires_state_control(self) -> None:
+        case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        _receipt, _action_id, evidence = self._record_case_action(case_id)
+        connection = sqlite3.connect(self.core_path)
+        try:
+            action_raw = bytes(connection.execute("SELECT raw FROM core_artifacts WHERE kind='CASE_ACTION'").fetchone()[0])
+        finally:
+            connection.close()
+        expected = self.corrective_action_control.digest
+        accepted = corrective_action_independent.verify_artifact(
+            action_raw,
+            control_digest=expected,
+            evidence_raw=evidence,
+        )
+        self.assertTrue(accepted["accepted"])
+        self.assertEqual(
+            accepted,
+            corrective_action_independent.verify_bytes(
+                action_raw,
+                control_digest=expected,
+                evidence_raw=evidence,
+            ),
+        )
+        with self.assertRaises(TypeError):
+            corrective_action_independent.verify_artifact(action_raw)
+        with self.assertRaises(TypeError):
+            corrective_action_independent.verify_bytes(action_raw)
+        for invalid in (None, "0" * 127, "A" * 128, "0" * 128):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(corrective_action_independent.IndependentCorrectiveActionError, "action:control") as caught:
+                    corrective_action_independent.verify_artifact(action_raw, control_digest=invalid)  # type: ignore[arg-type]
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+
+    def test_corrective_action_verifier_drift_after_verify_fails_before_core_write(self) -> None:
+        case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+
+        class DriftingVerifier(_CorrectiveActionVerifier):
+            def verify(
+                self,
+                evidence_raw: bytes,
+                policy: corrective_action.CorrectiveActionPolicyV1,
+            ) -> corrective_action.VerifiedCorrectiveActionV1:
+                result = super().verify(evidence_raw, policy)
+                self.terms_digest = _hex("drifted-corrective-action-terms")
+                return result
+
+        drifting = DriftingVerifier(self.corrective_action_control)
+        self.core._corrective_action_verifier = drifting
+        before = self.core_path.read_bytes()
+        connection = sqlite3.connect(self.core_path)
+        try:
+            before_events = int(connection.execute("SELECT COUNT(*) FROM core_events").fetchone()[0])
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(core.CoreConflictError, "core:action-verification") as caught:
+            self.core.record_case_action(case_id, evidence_raw=b"synthetic corrective evidence")
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertEqual(before, self.core_path.read_bytes())
+        connection = sqlite3.connect(self.core_path)
+        try:
+            self.assertEqual(before_events, int(connection.execute("SELECT COUNT(*) FROM core_events").fetchone()[0]))
+        finally:
+            connection.close()
+
     def test_independent_rejects_rehashed_case_action_with_alternative_control_lineage(self) -> None:
         case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
         _receipt, _successor_id, _evidence = self._record_case_action(case_id)

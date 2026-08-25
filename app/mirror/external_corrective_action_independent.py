@@ -164,8 +164,10 @@ def verify_artifact(
     *,
     policy: Mapping[str, object] | None = None,
     evidence_raw: bytes | None = None,
-    control_digest: str | None = None,
+    control_digest: str,
 ) -> dict[str, object]:
+    if not isinstance(control_digest, str) or _HEX.fullmatch(control_digest) is None:
+        raise IndependentCorrectiveActionError("action:control")
     artifact = _parse(raw)
     if _expect(artifact, _ARTIFACT_KEYS, "action:schema")["schema"] != SCHEMA or artifact["schema_version"] != SCHEMA_VERSION or artifact["kind"] != "CORRECTIVE_ACTION":
         raise IndependentCorrectiveActionError("action:identity")
@@ -176,7 +178,7 @@ def verify_artifact(
     if artifact["policy_digest"] != policy_digest:
         raise IndependentCorrectiveActionError("action:policy-digest")
     derived_control_digest = control_digest_from_policy(artifact_policy)
-    if control_digest is not None and (not isinstance(control_digest, str) or _HEX.fullmatch(control_digest) is None or derived_control_digest != control_digest):
+    if derived_control_digest != control_digest:
         raise IndependentCorrectiveActionError("action:control")
     if policy is not None:
         supplied = _validate_policy(policy)
@@ -213,8 +215,8 @@ def verify_artifact(
     return {"accepted": True, "artifact_id": artifact["artifact_id"], "policy_digest": policy_digest, "control_digest": derived_control_digest, "case_id": artifact_policy["case_id"], "current_case_artifact_id": artifact_policy["current_case_artifact_id"], "source_artifact_id": artifact_policy["source_artifact_id"], "graph_artifact_id": artifact_policy["graph_artifact_id"], "graph_report_id": artifact_policy["graph_report_id"], "target_finding_ids": tuple(artifact_policy["target_finding_ids"]), "target_finding_kinds": tuple(artifact_policy["target_finding_kinds"]), "action_code": assertion["action_code"], "observed_at": assertion["observed_at"], "verifier_id": assertion["verifier_id"], "verifier_epoch": assertion["verifier_epoch"], "evidence_sha3_512": assertion["evidence_sha3_512"], "evidence_byte_length": assertion["evidence_byte_length"], "policy": artifact_policy}
 
 
-def verify_bytes(raw: bytes, *, policy: Mapping[str, object] | None = None, evidence_raw: bytes | None = None) -> dict[str, object]:
-    return verify_artifact(raw, policy=policy, evidence_raw=evidence_raw)
+def verify_bytes(raw: bytes, *, control_digest: str, policy: Mapping[str, object] | None = None, evidence_raw: bytes | None = None) -> dict[str, object]:
+    return verify_artifact(raw, policy=policy, evidence_raw=evidence_raw, control_digest=control_digest)
 
 
 def main(argv: list[str] | None = None) -> int:

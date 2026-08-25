@@ -371,6 +371,7 @@ class CorrectiveActionService:
         try:
             _require_verifier_control(self._control, self._verifier, "action:verifier")
             result = self._verifier.verify(evidence_raw, self.policy)
+            _require_verifier_control(self._control, self._verifier, "action:verifier")
         except CorrectiveActionError:
             raise
         except Exception:
