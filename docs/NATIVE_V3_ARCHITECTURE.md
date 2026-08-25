@@ -1,6 +1,6 @@
 # Native-v3 proof architecture
 
-Updated: 2026-08-24
+Updated: 2026-08-25
 Status: production-shaped target architecture; current qualification status is authoritative in
 `STATE.md` and `CURRENT_TASK.md`, and no backend is selected.
 Owner: private-proof, security, state, privacy, and CPU qualification authority. The commercial
@@ -13,8 +13,9 @@ retired; Git history and retained archives preserve their exact evidence.
 ## Product invariant
 
 When evidence must remain hidden across the state clearance trust boundary and affects an automated
-payment directive, a pinned native verifier must accept one proof of the exact hidden decision and
-ordered state transition. The accepted typed output and the database mutation must commit in one
+payment directive, a future qualified native verifier may accept one proof of the exact hidden
+assertion and ordered state relation. Proof acceptance is only one input to the state owner: it does
+not choose policy or directive. The state-owned result and database mutation must commit in one
 fail-closed atomic transaction.
 
 ZK is not required merely because data is sensitive. If the state clearance service already
@@ -28,12 +29,17 @@ boundary. Ethereum is not a dependency.
 
 ## Current experimental engineering boundary
 
-The current native-v3 minimal-clearance artifact, verifier, acceptance parser, durable verification
-queue, and application composition are experimental engineering only. The verifier executable is
-held and rehashed by verifier-owned custody, the queue independently replays completed candidates
-before promotion, and uncertain publication or database commit outcomes fail closed. These controls
-do not close the theorem, malicious-verifier/QROM, grinding, SHA3-512, Lean, deployment, or
-production-custody gates.
+The current native-v3 proof and application code are experimental engineering only. The V7 queue
+clean break uses a state-generated random 32-byte operation reference and one verifier-owned
+volatile readable stream; it does not create a proof workspace or persist proof/source/signature/
+commitment bytes, artifact digests, acceptance bytes, or process-output hashes. The exact
+4,500,000,000-byte admission cap and complete process-tree peak below 5,000,000,000 bytes remain
+required. A consumed, failed, expired, restarted, or ambiguous handoff becomes HELD and requires
+a fresh state operation and fresh handoff. These controls do not close the theorem,
+malicious-verifier/QROM, grinding, SHA3-512, Lean, deployment, or production-custody gates.
+A future qualified contract may additionally bind a fresh source-attested `P`/signature and a
+hiding commitment to the state challenge; that possibility is unimplemented and cannot supply a
+current verifier receipt or state disposition.
 
 The current statement grammar still lacks the complete proposed/authorized payment-amount binding
 required by the typed receipt contract below, and its before/after state identifiers are not yet the
@@ -46,7 +52,7 @@ lane can advance. Until then proof acceptance cannot authorize `CLEAR` or any ec
 
 Native-v3 is the private-clearance plug-in behind a fixed business and state interface, not a
 semantic rewrite. A qualified implementation must preserve the canonical five-directive grammar,
-`policyResult`/`effectiveDirective` separation, verifier-owned control-set/order, authoritative
+`policyResult`/`effectiveDirective` separation, governed control-set/order, authoritative
 absence, four-time chronology, decision/access join, exception identity, roots, replay, and
 fail-closed state transition. Productionization is qualification and substitution of the Lean
 kernel, native verifier/backend, authenticated source/governance inputs, and production
@@ -62,15 +68,16 @@ this private-payment plug-in.
    resulting typed record commitment into an immutable authenticated registry.
 2. The prover receives private registered records and constructs one fixed-profile ordered operation
    table. Padding and every clearance outcome have the same observable proof shape.
-3. One proof binds the exact public statement, proves private registry membership and policy
-   semantics, derives both the underlying policy result and effective clearance directive, proves
-   chronological reads/writes and value conservation, and proves the old-to-new state transition.
-4. An independent native verifier reconstructs the statement and transcript and returns an opaque,
-   typed clearance receipt. Producers, Python, CUDA, GPUs, transports, logs, and caller booleans
-   have no acceptance authority.
-5. The database rechecks the receipt's context, epoch, sequence, and before-state and atomically
-   applies exactly its after-state and clearance commitment. The official state payment system,
-   not the proof or Blind Ledger database, moves money.
+3. A future qualified proof binds the state-issued challenge and hidden assertion; it does not
+   own state disposition or choose a policy/directive.
+4. The independent verifier consumes the volatile stream and returns only proof acceptance, the
+   opaque operation reference, bounded assertion/profile/version/order/resource fields, and
+   qualification flags. Producers, transports, logs, and caller booleans have no acceptance
+   authority, and the stream is never refetched.
+5. The state owner separately resolves `PASS`/`MISSING`/`AMBIGUOUS`/`FAIL` plus state exception
+   approval into exactly the five directives, then atomically applies the ordered state chain and
+   opaque reference/directive outbox. The official state payment system, not the proof or Blind
+   Ledger database, moves money.
 
 Public signature verification is not repeated inside every proof when the proof instead establishes
 membership in the verifier-owned immutable registry whose ingestion rule verified those exact signed
@@ -78,9 +85,10 @@ bytes. This moves repeat work to its natural owner; it does not trust a prover-s
 
 ## Clearance semantics and typed receipt
 
-Native v3 proves one of five fixed directives: `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, or
-`EXCEPTION_APPROVED`. Proof acceptance is not itself a directive and must never default to
-`CLEAR`.
+Native v3 preserves five fixed state directives: `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and
+`EXCEPTION_APPROVED`. A future qualified proof binds the hidden assertion and ordered state
+relation, while the verifier returns proof acceptance only; proof acceptance is not itself a
+directive and must never default to `CLEAR`.
 
 - `CLEAR` means every selected deterministic automatic check passed.
 - `HOLD` means a fixable deterministic requirement is missing.
@@ -89,19 +97,18 @@ Native v3 proves one of five fixed directives: `CLEAR`, `HOLD`, `HUMAN_REVIEW`, 
 - `BLOCK` means a clear state-approved deterministic condition failed.
 - `EXCEPTION_APPROVED` means a separately governed state official authorized a scoped override.
 
-The private operation row carries an underlying `policyResult`, an `effectiveDirective`, and a
-fixed-width `exceptionAuthorizationId`. The no-exception case uses a domain-separated nonzero sentinel.
-`EXCEPTION_APPROVED` requires membership of an immutable signed authorization record whose role,
-reason, subject, rule, amount or amount bound, effective interval, and expiry cover the exact
-operation. The proof preserves the underlying result so an override cannot erase the original
+The state-owned operation row carries an underlying `policyResult`, an `effectiveDirective`, and
+state-owned exception approval. The no-exception case uses a domain-separated sentinel. The state
+owner maps `PASS` to `CLEAR`, `MISSING` to `HOLD`, `AMBIGUOUS` to `HUMAN_REVIEW`, `FAIL` without
+exception to `BLOCK`, and `FAIL` with state exception approval to `EXCEPTION_APPROVED`. The proof
+preserves no disposition authority, so a verifier or witness cannot erase or rewrite the state
 decision trail.
 
-The public statement remains commitment-only and fixed-shape. The native verifier returns a
-state-local typed receipt binding the directive, underlying result, rule/evidence/decision-path
-commitments, exception identity or sentinel, exact authorized-amount commitment, and before/after
-state. The database may release only `CLEAR` or valid `EXCEPTION_APPROVED` to the official payment
-system. `HOLD`, `HUMAN_REVIEW`, and `BLOCK` advance replay/audit state but do not advance economic
-clearance state.
+The future public contract remains commitment-only and fixed-shape. The independent verifier
+returns no directive, policy result, raw proof, source identity, or exact artifact fingerprint.
+The state owner emits the separate state receipt and may release only the state-owned directive to
+the official payment system. `HOLD`, `HUMAN_REVIEW`, and `BLOCK` do not advance economic clearance
+state.
 
 A verifier failure returns no receipt and no directive. Operational continuity may use a separately
 authorized, signed, expiring human override recorded by Mirror; it is outside proof acceptance and
@@ -189,8 +196,8 @@ ClearanceDecisionRow
   proposedPaymentCommitment
   decisionPathCommitment       // ordered applicable rules, evidence, conflict resolution, and reasons
   authorizedAmountCommitment
-  policyResult
-  effectiveDirective
+  policyResult                  // state-owned disposition control result
+  effectiveDirective             // resolved only by the state owner
   exceptionAuthorizationId     // governed identity or canonical no-exception sentinel
 
 StateAccessRow
@@ -215,12 +222,12 @@ observation-only separation, replay, decision/access joins, and allowed after-st
 the cryptographic verifier and transcript/proof-envelope authority; the database remains the
 concurrency, durability, and recovery authority.
 
-A private proof can authorize no mutation unless the Rust verifier accepts and the exact
-proof-bound typed receipt/transition is accepted by the Lean kernel. A direct state-owned
-evaluation uses the same Lean semantic relation over canonical governed plaintext inputs. The
-deployed path must execute the proved definitions or have a reviewed refinement proof to them; KAT
-agreement alone is not formal-verification credit. The full theorem and build contract is
-`LEAN_FORMAL_KERNEL.md`.
+A private proof can authorize no mutation unless the Rust verifier accepts and the state owner
+accepts the minimal verifier receipt plus its own state-owned disposition/transition through the
+Lean kernel. A direct state-owned evaluation uses the same Lean semantic relation over canonical
+governed plaintext inputs. The deployed path must execute the proved definitions or have a
+reviewed refinement proof to them; KAT agreement alone is not formal-verification credit. The full
+theorem and build contract is `LEAN_FORMAL_KERNEL.md`.
 
 ## State and replay design
 

@@ -1,7 +1,7 @@
 # Clearance database + conditional mandatory-ZK architecture
 
 Status: authoritative transaction boundary; proof boundary is `NATIVE_V3_ARCHITECTURE.md`
-Updated: 2026-08-24
+Updated: 2026-08-25
 Owner: this document defines the verifier-to-database, retry, recovery, migration, and
 anti-rollback boundary. It does not select a backend or claim production persistence.
 
@@ -49,25 +49,62 @@ This seam can qualify for the read-only wedge independently of the private-payme
 
 ## Transaction boundary
 
-For each batch, the service:
+### Queue/Proof Handoff V7 clean break
 
-1. receives a canonical native-v3 statement and fixed-profile proof envelope for the private-proof
+The active experimental queue boundary is V7. V6 databases, artifact readers, filesystem
+snapshot/refetch paths, and proof-bound disposition receipts are unsupported and fail closed; no
+migration, compatibility reader, fallback, wrapper, or dual path exists. Blind state creates a
+fresh random 32-byte operation reference for each admission. Durable queue data contains only that
+opaque reference, state-issued allowlisted assertion/profile/version, bounded validity window,
+ordered batch position/root, optional approved-source registry root, chronology/status/retry data,
+and qualification flags. Caller job IDs, artifact/source paths, patient/provider/case identity,
+raw-data digests, acceptance bytes, and process-output hashes are not queue fields.
+
+The V7 ownership chain is source-local prover -> optional aggregator -> independent verifier ->
+state owner -> opaque-reference/directive outbox and ACK -> audit/recovery. The verifier receives a
+readable binary stream through one volatile single-use handoff, with the exact 4,500,000,000-byte
+admission cap and a complete process-tree peak requirement below 5,000,000,000 bytes. No proof,
+source, signature, commitment, or verifier output bytes are written to a proof workspace, DB,
+receipt, event, log, export, backup, or error. Mutable staging is wiped where technically
+possible; Python/OS/crash-dump zeroization is not claimed. A timeout, crash, lease expiry, restart,
+transport failure, or ambiguity consumes the handoff and fails closed to
+HELD with bounded `fresh_handoff_required`; retry requires a new state operation and fresh stream.
+
+The verifier receipt is limited to `proofAccepted`, the matching opaque reference, assertion and
+profile versions, bounded validity/order fields, verifier/profile version, bounded outcome/error/
+resource codes, qualification flags, and the nonactivating flags. It never supplies
+`policyResult` or `effectiveDirective`. The state owner separately controls `PASS`, `MISSING`,
+`AMBIGUOUS`, or `FAIL` and resolves exactly `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, or
+`EXCEPTION_APPROVED`; proof acceptance alone can never create `CLEAR`. A complete promotion batch
+is preflighted against one state snapshot and commits all composition rows, events, state roots,
+and outbox rows in one transaction. A mixed APPLIED/HELD persisted image is independently rejected.
+
+This V7 boundary remains synthetic/experimental: `proofSuiteId=null`, `production_usable=false`,
+activation=false, no backend is selected or qualified, and the co-equal zero-PHI, post-quantum,
+recovery, 100-in-35-seconds, and below-5-GB gates remain open.
+
+For a future qualified private batch, the service will:
+
+1. receive a canonical native-v3 statement and fixed-profile proof envelope for the private-proof
    path;
-2. selects verifier-owned source-registry, exact automatic-control-set, governance, schema, program,
-   and candidate-suite context;
-3. verifies the mandatory zero-knowledge proof with the native verifier;
-4. opens or continues a serializable transaction;
-5. rechecks the batch nonce, state-before roots, governance roots, and anti-rollback epoch;
-6. rejects consumed nullifiers, stale roots, duplicates, or conflicting retries;
-7. validates the proof-bound typed receipt and its underlying policy result, effective directive,
-   exception authorization or sentinel, and exact amount/decision-path commitments;
-8. reserves the exact canonical semantic receipt and proposed transition for the later mandatory
-   Lean gate; the current nonactivating boundary has no Lean result, and any future missing result,
+2. select governed source-registry, automatic-control-set, governance, schema, program, and
+   candidate-suite context;
+3. verify the mandatory zero-knowledge proof with the native verifier, returning only the minimal
+   allowlisted receipt;
+4. let the state owner resolve its separate disposition control and preflight the complete ordered
+   state chain against one snapshot;
+5. open one serializable transaction only after preflight, rechecking state-before roots,
+   governance roots, and anti-rollback epoch;
+6. reject consumed nullifiers, stale roots, duplicates, conflicting retries, and partial batches;
+7. pass only proof acceptance to the state owner; policy result, exception approval, effective
+   directive, exact amount, and decision-path state remain state-owned rather than proof-supplied;
+8. reserve the exact canonical state receipt and proposed transition for the later mandatory Lean
+   gate; the current nonactivating boundary has no Lean result, and any future missing result,
    decoding error, theorem-version mismatch, or Rust/Lean disagreement rejects;
-9. writes the state-after roots, clearance commitment, and audit event; economic clearance may
-   advance only for `CLEAR` or a valid `EXCEPTION_APPROVED`;
-10. commits the database transition exactly once, or rolls it back; an uncertain response is resolved
-   only by exact idempotent retry.
+9. write state-after roots, the state-owned clearance commitment, and the audit event; economic
+   clearance may advance only for `CLEAR` or a valid `EXCEPTION_APPROVED`;
+10. commit the database transition exactly once, or roll it back; an uncertain response is resolved
+    only by exact idempotent retry without proof reuse.
 
 Verifier acceptance alone is never interpreted as `CLEAR` and never proves that funds moved. A
 private-path database write without verifier acceptance is forbidden. The official state payment
@@ -75,12 +112,11 @@ system consumes an accepted clearance directive and later returns the actual out
 
 ## Current experimental application chain
 
-The current nonactivating implementation separates four owners: native verifier custody and
-acceptance; a durable verification queue with independent candidate replay; one atomic clearance
-composition store; and an idempotent official-system handoff/acknowledgment boundary. Queue
-promotion uses at-least-once recovery and classifies any uncertain commit or cleanup outcome as
-indeterminate. Composition preserves `policyResult` separately from `effectiveDirective`, and the
-handoff cannot mutate payment, settlement, or official-system state.
+The current nonactivating V7 implementation separates the source/prover, optional aggregation,
+independent verifier, state-owned disposition, durable composition/outbox, and audit/recovery
+owners. Queue promotion uses a one-use volatile handoff; it never refetches proof bytes. The
+state owner, not the verifier, preserves `policyResult` separately from `effectiveDirective`, and
+the opaque outbox cannot mutate payment, settlement, or official-system state.
 
 This chain is not yet the production transaction described above. Its current native statement
 does not carry the complete proposed/authorized amount contract, Lean is not linked, and the
@@ -90,13 +126,13 @@ amount and canonical state identifiers rather than silently accepting the old gr
 
 ## Directive transition rules
 
-| Effective directive | Required proof-bound condition | Clearance/economic mutation |
+| Effective directive | Required state-owned condition (with accepted proof where applicable) | Clearance/economic mutation |
 | --- | --- | --- |
-| `CLEAR` | Underlying deterministic result is `CLEAR`; no exception is present. | Advance replay/audit state and exact authorized clearance state. |
-| `HOLD` | A fixable deterministic requirement is missing and authoritative completeness/nonmembership covers that absence. | Advance replay/audit state only. |
-| `HUMAN_REVIEW` | Judgment, ambiguity, incomplete evidence, unavailable authority, unresolved rule conflict, or additional evidence is required. | Advance replay/audit state only. |
-| `BLOCK` | A selected deterministic prohibition holds, including any absence backed by authoritative completeness/nonmembership. | Advance replay/audit state only. |
-| `EXCEPTION_APPROVED` | A registered signed state authorization covers the underlying result, subject, rule, amount, time, and scope. | Advance replay/audit state and only the clearance allowed by that authorization. |
+| `CLEAR` | Accepted proof where required, state `policyResult=PASS`, and no state exception is present. | Advance replay/audit state and exact authorized clearance state. |
+| `HOLD` | Accepted proof where required and state `policyResult=MISSING`; a fixable requirement is missing. | Advance replay/audit state only. |
+| `HUMAN_REVIEW` | Accepted proof where required and state `policyResult=AMBIGUOUS`; judgment, ambiguity, or additional evidence is required. | Advance replay/audit state only. |
+| `BLOCK` | Accepted proof where required and state `policyResult=FAIL` without state exception; a selected prohibition holds. | Advance replay/audit state only. |
+| `EXCEPTION_APPROVED` | Accepted proof where required, state `policyResult=FAIL`, and a registered state exception authorizes the scoped override. | Advance replay/audit state and only the clearance allowed by that authorization. |
 
 The no-exception case uses a canonical domain-separated nonzero sentinel so every row has the same
 shape. An emergency continuity action is a separate signed and expiring human override transaction,
@@ -162,12 +198,11 @@ No production proof is selected: the live verifier-selection sentinel is `proofS
 `production_usable=false`, and `selection_status=UNSELECTED`. `DIRECT_STATE_OWNED` is a
 verifier-owned synthetic continuity control-set identity, not a selected production evaluator.
 
-The complete selected proof must establish that a hidden, fixed-profile witness satisfies the
-pinned clearance program: membership in verifier-owned immutable source/governance registries,
-policy and ruleset evaluation, the underlying result and effective five-value directive, any
-exception authorization, exact ordered state reads/writes, replay protection, value conservation,
-and the bound state/clearance transition. It may reveal only the canonical native-v3 statement;
-the state-local typed directive is returned only in the proof-bound verifier receipt.
+The complete selected proof must eventually establish the hidden assertion and its authenticated
+state-issued challenge under the future qualified contract. The verifier returns only proof
+acceptance and a narrow opaque receipt; state-owned policy/disposition control, exception approval,
+ordered state reads/writes, replay protection, value conservation, and the legal transition remain
+state/Lean responsibilities. It may reveal no source identity or raw witness material.
 
 Governed ingestion verifies source signatures over exact canonical bytes once, before registry
 publication. Repeating public signature verification inside every proof is unnecessary when private

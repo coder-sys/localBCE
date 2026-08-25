@@ -57,6 +57,18 @@ generated vector alone is not deployed formal-verification credit.
 
 ## Current private-proof blocker
 
+The active Queue/Proof Handoff V7 boundary is a clean-break state-owned handoff, not a
+qualified private-proof backend. State issues a one-time opaque operation reference and
+allowlisted statement; an explicit verifier-owned volatile stream is consumed once within the
+4,500,000,000-byte admission cap and no proof workspace or raw proof/source material is
+durable. The verifier returns only a bounded proof-acceptance receipt, while the state owner
+maps PASS/MISSING/AMBIGUOUS/FAIL plus state exception approval to CLEAR/HOLD/HUMAN_REVIEW/
+BLOCK/EXCEPTION_APPROVED. Ordered batches are preflighted against one state snapshot and
+applied atomically, with independent reconstruction and fail-closed retry/recovery. Old V6
+databases are unsupported; no migration, compatibility reader, active backend, PQ qualification,
+Lean completion, or product-throughput claim follows from this seam. The co-equal PQ, zero-PHI,
+recovery, 100-in-35s, and complete-process-tree-under-5GB gates remain open.
+
 Before selecting or implementing a private backend, close and review one complete theorem ledger
 covering:
 
