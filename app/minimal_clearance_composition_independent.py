@@ -10,29 +10,18 @@ import re
 import sqlite3
 from typing import Any, Final, Mapping
 
-from app.minimal_clearance_authoritative_assertion import (
-    LIFETIME_ACCEPTANCE_CAP,
-    MEMBER_COUNT,
-    QUALIFICATION_FLAGS,
-    RESERVATION_UNITS,
-    SIGNATURE_PROFILE_VERSION,
-    SOURCE_AUTH_PROFILE_ID,
-    parse_result,
-)
-from app.minimal_clearance_authoritative_assertion_independent import verify_authoritative_connection
-
 
 class IndependentCompositionError(RuntimeError):
     pass
 
 
-_SCHEMA_VERSION: Final[int] = 6
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v6"
-_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v6\x00"
-_GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v6\x00"
-_EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/EVENT/v6\x00"
-_HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/HEAD/v6\x00"
-_STATE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/STATE/v6\x00"
+_SCHEMA_VERSION: Final[int] = 4
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v4"
+_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v4\x00"
+_GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v4\x00"
+_EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/EVENT/v4\x00"
+_HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/HEAD/v4\x00"
+_STATE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/STATE/v4\x00"
 _DIRECTIVES = ("CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED")
 _POLICY = ("PASS", "MISSING", "AMBIGUOUS", "FAIL")
 _TOKEN = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
@@ -41,12 +30,7 @@ _META = ("id", "schema_version", "config_json", "config_digest", "event_head", "
 _TX = ("transaction_id", "operation_ref", "status", "proof_accepted", "policy_result", "effective_directive", "disposition_id", "state_profile_identity", "state_before_id", "state_after_id", "sequence_before", "sequence_after", "state_receipt_bytes", "state_receipt_digest", "error_code", "created_ms", "updated_ms")
 _EVENT_COLUMNS = ("sequence", "operation_ref", "event_kind", "before_state", "after_state", "payload", "event_digest", "event_root", "at_ms")
 _OUTBOX = ("operation_ref", "effective_directive", "status", "attempt", "worker_id", "lease_token", "lease_expires_ms", "updated_ms")
-_AUTH_OPERATION = ("operation_ref", "batch_root", "batch_position", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "status", "updated_ms")
-_AUTH_BATCH = ("batch_root", "member_count", "status", "state_profile_version", "source_auth_profile_id", "signature_profile_version", "source_key_epoch", "reservation_units", "reservation_before", "reservation_after", "cryptographic_attempted", "verification_time_ms", "created_ms", "updated_ms", "last_error_code")
-_AUTH_RESULT = ("batch_root", "assertion_accepted", "receipt_bytes", "receipt_digest", "outcome_code", "error_code", "created_ms")
-_AUTH_LEDGER = ("profile_id", "lifetime_cap", "computational_units_used", "statistical_units_used", "last_key_epoch")
 _EVENT_PAYLOAD_KEYS = {"APPLIED": frozenset({"operation_ref", "proof_accepted", "policy_result", "effective_directive", "state_receipt_digest", "sequence_before", "sequence_after"})}
-_AUTHORITATIVE_EVENT_PAYLOAD_KEYS = frozenset({"operation_ref", "evidence_mode", "assertion_accepted", "proof_accepted", "batch_root", "policy_result", "effective_directive", "state_receipt_digest", "sequence_before", "sequence_after"})
 _ZERO = bytes(64)
 
 
@@ -117,15 +101,8 @@ def _parse_state_receipt(raw: bytes) -> dict[str, Any]:
     except (UnicodeDecodeError, json.JSONDecodeError):
         _fail("receipt_encoding")
     required = {"schema", "operation_ref", "proof_accepted", "policy_result", "effective_directive", "state_profile_identity", "state_before_id", "state_before_bytes", "state_after_id", "state_after_bytes", "epoch", "predecessor_continuity_root", "state_after_continuity_root", "predecessor_audit_head", "decision_id", "state_after_audit_head", "predecessor_clearance_root", "state_after_clearance_root", "clearance_marker_before", "clearance_marker_after", "sequence_before", "sequence_after", "clearance_count_before", "clearance_count_after", "payment_root", "exception_approved", "exception_authorization_id", "economic_mutation", "proof_suite_id", "production_usable", "activation"}
-    authoritative_required = required | {"evidence_mode", "assertion_accepted", "batch_root", "assertion_receipt_digest"}
-    if type(value) is not dict or (set(value) != required and set(value) != authoritative_required) or raw != _json_bytes(value) or value["schema"] != _SCHEMA or value["proof_suite_id"] is not None or type(value["production_usable"]) is not bool or value["production_usable"] is not False or type(value["activation"]) is not bool or value["activation"] is not False:
+    if type(value) is not dict or set(value) != required or raw != _json_bytes(value) or value["schema"] != _SCHEMA or value["proof_suite_id"] is not None or type(value["production_usable"]) is not bool or value["production_usable"] is not False or type(value["activation"]) is not bool or value["activation"] is not False:
         _fail("receipt_keys")
-    authoritative = set(value) == authoritative_required
-    if authoritative:
-        if value["evidence_mode"] != "AUTHORITATIVE_ASSERTION" or value["assertion_accepted"] is not True:
-            _fail("receipt_evidence")
-        _blob(value["batch_root"], 64, "receipt_batch_root")
-        _blob(value["assertion_receipt_digest"], 64, "receipt_assertion_digest")
     _blob(value["operation_ref"], 32, "receipt_operation_ref")
     _blob(value["state_profile_identity"], 64, "receipt_profile")
     _blob(value["state_before_id"], 64, "receipt_before")
@@ -136,7 +113,7 @@ def _parse_state_receipt(raw: bytes) -> dict[str, Any]:
         _blob(value[name], 64, "receipt_" + name)
     if type(value["epoch"]) is not int or value["epoch"] < 1:
         _fail("receipt_epoch")
-    if value["policy_result"] not in _POLICY or value["effective_directive"] not in _DIRECTIVES or type(value["proof_accepted"]) is not bool or value["proof_accepted"] is not (False if authoritative else True) or type(value["exception_approved"]) is not bool or type(value["economic_mutation"]) is not bool or value["economic_mutation"] is not False:
+    if value["policy_result"] not in _POLICY or value["effective_directive"] not in _DIRECTIVES or type(value["proof_accepted"]) is not bool or value["proof_accepted"] is not True or type(value["exception_approved"]) is not bool or type(value["economic_mutation"]) is not bool or value["economic_mutation"] is not False:
         _fail("receipt_disposition")
     if value["exception_approved"] != (value["policy_result"] == "FAIL" and value["exception_authorization_id"] != "0" * 128):
         _fail("receipt_exception")
@@ -169,26 +146,11 @@ def _parse_state_receipt(raw: bytes) -> dict[str, Any]:
     return value
 
 
-def _parse_authoritative_result(raw: bytes) -> Any:
-    if type(raw) is not bytes or not raw or len(raw) > 16 * 1024:
-        _fail("authoritative_result_bounds")
-    try:
-        value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        _fail("authoritative_result_encoding")
-    if type(value) is not dict or raw != _json_bytes(value):
-        _fail("authoritative_result_encoding")
-    try:
-        return parse_result(value)
-    except Exception:
-        _fail("authoritative_result_shape")
-
-
 def _verify(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None) -> dict[str, Any]:
     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-    if tables != {"composition_meta", "composition_transactions", "composition_events", "composition_outbox", "authoritative_operations", "authoritative_batches", "authoritative_results", "authoritative_profile_ledger"}:
+    if tables != {"composition_meta", "composition_transactions", "composition_events", "composition_outbox"}:
         _fail("schema_tables")
-    for table, expected in (("composition_meta", _META), ("composition_transactions", _TX), ("composition_events", _EVENT_COLUMNS), ("composition_outbox", _OUTBOX), ("authoritative_operations", _AUTH_OPERATION), ("authoritative_batches", _AUTH_BATCH), ("authoritative_results", _AUTH_RESULT), ("authoritative_profile_ledger", _AUTH_LEDGER)):
+    for table, expected in (("composition_meta", _META), ("composition_transactions", _TX), ("composition_events", _EVENT_COLUMNS), ("composition_outbox", _OUTBOX)):
         if tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")) != expected:
             _fail("schema_columns")
     meta = connection.execute("SELECT * FROM composition_meta WHERE id=1").fetchone()
@@ -212,18 +174,11 @@ def _verify(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any
     expected_sequence = 0
     for row in transactions:
         ref = bytes(row[1])
-        if len(ref) != 32 or str(row[2]) != "APPLIED" or int(row[3]) not in (0, 1) or str(row[4]) not in _POLICY or str(row[5]) not in _DIRECTIVES or any(len(bytes(row[index])) != 64 for index in (6, 7, 8, 9)) or row[12] is None or row[13] is None:
+        if len(ref) != 32 or str(row[2]) != "APPLIED" or int(row[3]) != 1 or str(row[4]) not in _POLICY or str(row[5]) not in _DIRECTIVES or any(len(bytes(row[index])) != 64 for index in (6, 7, 8, 9)) or row[12] is None or row[13] is None:
             _fail("transaction_shape")
         status_counts["APPLIED"] += 1
         receipt_raw = bytes(row[12])
         receipt = _parse_state_receipt(receipt_raw)
-        if int(row[3]) == 0:
-            batch_root = bytes.fromhex(receipt["batch_root"])
-            auth_result = connection.execute("SELECT assertion_accepted,receipt_digest FROM authoritative_results WHERE batch_root=?", (batch_root,)).fetchone()
-            if receipt.get("evidence_mode") != "AUTHORITATIVE_ASSERTION" or auth_result is None or int(auth_result[0]) != 1 or bytes(auth_result[1]) != bytes.fromhex(receipt["assertion_receipt_digest"]):
-                _fail("authoritative_transaction_binding")
-        elif receipt.get("evidence_mode") is not None:
-            _fail("transaction_evidence")
         if bytes.fromhex(receipt["operation_ref"]) != ref or bytes.fromhex(receipt["state_profile_identity"]) != bytes(row[7]) or bytes.fromhex(receipt["state_before_id"]) != bytes(row[8]) or bytes.fromhex(receipt["state_after_id"]) != bytes(row[9]) or receipt["policy_result"] != str(row[4]) or receipt["effective_directive"] != str(row[5]) or int(receipt["sequence_before"]) != int(row[10]) or int(receipt["sequence_after"]) != int(row[11]) or bytes(row[13]) != _sha(_STATE, receipt_raw):
             _fail("receipt_binding")
         if int(row[10]) != expected_sequence or int(row[11]) != expected_sequence + 1:
@@ -275,10 +230,7 @@ def _verify(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any
             payload = json.loads(bytes(row[5]).decode("ascii"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             _fail("event_encoding")
-        transaction = transaction_map[ref]
-        is_authoritative = int(transaction[3]) == 0
-        expected_event_keys = _AUTHORITATIVE_EVENT_PAYLOAD_KEYS if is_authoritative else _EVENT_PAYLOAD_KEYS["APPLIED"]
-        if type(payload) is not dict or set(payload) != expected_event_keys or bytes(row[5]) != _json_bytes(payload) or payload["operation_ref"] != ref.hex().upper() or payload["proof_accepted"] is not (False if is_authoritative else True) or payload["policy_result"] != str(transaction[4]) or payload["effective_directive"] != str(transaction[5]) or payload["state_receipt_digest"] != bytes(transaction[13]).hex().upper() or payload["sequence_before"] != int(transaction[10]) or payload["sequence_after"] != int(transaction[11]) or (is_authoritative and (payload["evidence_mode"] != "AUTHORITATIVE_ASSERTION" or payload["assertion_accepted"] is not True or payload["batch_root"] != receipts[ref]["batch_root"])):
+        if type(payload) is not dict or set(payload) != _EVENT_PAYLOAD_KEYS["APPLIED"] or bytes(row[5]) != _json_bytes(payload) or payload["operation_ref"] != ref.hex().upper() or payload["proof_accepted"] is not True or payload["policy_result"] != str(transaction_map[ref][4]) or payload["effective_directive"] != str(transaction_map[ref][5]) or payload["state_receipt_digest"] != bytes(transaction_map[ref][13]).hex().upper() or payload["sequence_before"] != int(transaction_map[ref][10]) or payload["sequence_after"] != int(transaction_map[ref][11]):
             _fail("event_binding")
         raw = _json_bytes({"schema": _SCHEMA, "sequence": index, "operation_ref": _hex(ref), "event_kind": str(row[2]), "before_state": str(row[3]), "after_state": str(row[4]), "payload": payload, "at_ms": int(row[8])})
         digest = _sha(_EVENT, index.to_bytes(8, "big"), raw)
@@ -297,10 +249,6 @@ def _verify(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any
         expected_state = ((6, bytes.fromhex(previous["state_profile_identity"])), (7, bytes.fromhex(previous["state_after_id"])), (8, bytes.fromhex(previous["state_after_bytes"])), (9, int(previous["epoch"])), (10, int(previous["sequence_after"])), (11, bytes.fromhex(previous["state_after_continuity_root"])), (12, bytes.fromhex(previous["state_after_audit_head"])), (13, bytes.fromhex(previous["state_after_clearance_root"])), (14, int(previous["clearance_count_after"])))
         if any(meta[index] != value for index, value in expected_state):
             _fail("meta_state")
-    try:
-        verify_authoritative_connection(connection)
-    except Exception:
-        _fail("authoritative_database")
     return {"schema": _SCHEMA, "composition_id": str(config["composition_id"]), "transaction_counts": status_counts, "event_count": len(events), "outbox_count": len(outbox_rows), "state_sequence": meta[10], "proof_suite_id": None, "production_usable": False, "activation": False}
 
 
