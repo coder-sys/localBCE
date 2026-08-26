@@ -19,19 +19,20 @@ from app.minimal_clearance_authoritative_assertion import (
     SOURCE_AUTH_PROFILE_ID,
     parse_result,
 )
+from app.minimal_clearance_authoritative_assertion_independent import verify_authoritative_connection
 
 
 class IndependentCompositionError(RuntimeError):
     pass
 
 
-_SCHEMA_VERSION: Final[int] = 5
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v5"
-_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v5\x00"
-_GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v5\x00"
-_EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/EVENT/v5\x00"
-_HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/HEAD/v5\x00"
-_STATE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/STATE/v5\x00"
+_SCHEMA_VERSION: Final[int] = 6
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v6"
+_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v6\x00"
+_GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v6\x00"
+_EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/EVENT/v6\x00"
+_HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/HEAD/v6\x00"
+_STATE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/STATE/v6\x00"
 _DIRECTIVES = ("CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED")
 _POLICY = ("PASS", "MISSING", "AMBIGUOUS", "FAIL")
 _TOKEN = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
@@ -41,8 +42,8 @@ _TX = ("transaction_id", "operation_ref", "status", "proof_accepted", "policy_re
 _EVENT_COLUMNS = ("sequence", "operation_ref", "event_kind", "before_state", "after_state", "payload", "event_digest", "event_root", "at_ms")
 _OUTBOX = ("operation_ref", "effective_directive", "status", "attempt", "worker_id", "lease_token", "lease_expires_ms", "updated_ms")
 _AUTH_OPERATION = ("operation_ref", "batch_root", "batch_position", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "status", "updated_ms")
-_AUTH_BATCH = ("batch_root", "member_count", "status", "state_profile_version", "source_auth_profile_id", "signature_profile_version", "source_key_epoch", "reservation_units", "reservation_before", "reservation_after", "created_ms", "updated_ms", "last_error_code")
-_AUTH_RESULT = ("batch_root", "assertion_accepted", "receipt_bytes", "receipt_digest", "outcome_code", "error_code", "resource_code", "created_ms")
+_AUTH_BATCH = ("batch_root", "member_count", "status", "state_profile_version", "source_auth_profile_id", "signature_profile_version", "source_key_epoch", "reservation_units", "reservation_before", "reservation_after", "cryptographic_attempted", "verification_time_ms", "created_ms", "updated_ms", "last_error_code")
+_AUTH_RESULT = ("batch_root", "assertion_accepted", "receipt_bytes", "receipt_digest", "outcome_code", "error_code", "created_ms")
 _AUTH_LEDGER = ("profile_id", "lifetime_cap", "computational_units_used", "statistical_units_used", "last_key_epoch")
 _EVENT_PAYLOAD_KEYS = {"APPLIED": frozenset({"operation_ref", "proof_accepted", "policy_result", "effective_directive", "state_receipt_digest", "sequence_before", "sequence_after"})}
 _AUTHORITATIVE_EVENT_PAYLOAD_KEYS = frozenset({"operation_ref", "evidence_mode", "assertion_accepted", "proof_accepted", "batch_root", "policy_result", "effective_directive", "state_receipt_digest", "sequence_before", "sequence_after"})
@@ -296,32 +297,10 @@ def _verify(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any
         expected_state = ((6, bytes.fromhex(previous["state_profile_identity"])), (7, bytes.fromhex(previous["state_after_id"])), (8, bytes.fromhex(previous["state_after_bytes"])), (9, int(previous["epoch"])), (10, int(previous["sequence_after"])), (11, bytes.fromhex(previous["state_after_continuity_root"])), (12, bytes.fromhex(previous["state_after_audit_head"])), (13, bytes.fromhex(previous["state_after_clearance_root"])), (14, int(previous["clearance_count_after"])))
         if any(meta[index] != value for index, value in expected_state):
             _fail("meta_state")
-    ledger = connection.execute("SELECT * FROM authoritative_profile_ledger WHERE profile_id=?", (SOURCE_AUTH_PROFILE_ID,)).fetchone()
-    if ledger is None or int(ledger[1]) != LIFETIME_ACCEPTANCE_CAP or int(ledger[2]) < 0 or int(ledger[2]) > int(ledger[1]) or int(ledger[3]) != 0 or int(ledger[4]) < 0:
-        _fail("authoritative_ledger")
-    for batch_row in connection.execute("SELECT * FROM authoritative_batches ORDER BY created_ms,batch_root").fetchall():
-        root = bytes(batch_row[0])
-        if len(root) != 64 or int(batch_row[1]) != MEMBER_COUNT or str(batch_row[2]) not in {"ISSUED", "RESERVED", "HELD", "APPLIED"} or str(batch_row[4]) != SOURCE_AUTH_PROFILE_ID or str(batch_row[5]) != SIGNATURE_PROFILE_VERSION or int(batch_row[6]) < 0 or int(batch_row[7]) != RESERVATION_UNITS or int(batch_row[9]) not in {int(batch_row[8]), int(batch_row[8]) + RESERVATION_UNITS}:
-            _fail("authoritative_batch")
-        operations = connection.execute("SELECT * FROM authoritative_operations WHERE batch_root=? ORDER BY batch_position", (root,)).fetchall()
-        if len(operations) != MEMBER_COUNT or tuple(int(row[2]) for row in operations) != tuple(range(MEMBER_COUNT)) or any(bytes(row[1]) != root or bytes(row[9]) != b"authoritative_assertion_v1" or str(row[10]) != str(batch_row[2]) for row in operations):
-            _fail("authoritative_operations")
-        result = connection.execute("SELECT * FROM authoritative_results WHERE batch_root=?", (root,)).fetchone()
-        if str(batch_row[2]) == "APPLIED":
-            if result is None or int(result[1]) != 1 or result[2] is None or result[3] is None:
-                _fail("authoritative_result")
-            parsed = _parse_authoritative_result(bytes(result[2]))
-            if not parsed.assertion_accepted or parsed.batch_root != root or bytes(result[3]) != parsed.receipt_digest:
-                _fail("authoritative_result")
-        elif str(batch_row[2]) in {"ISSUED", "RESERVED"}:
-            if result is not None:
-                _fail("authoritative_result_unexpected")
-        elif str(batch_row[2]) == "HELD" and result is not None:
-            if int(result[1]) != 0 or result[2] is None or result[3] is None:
-                _fail("authoritative_result")
-            parsed = _parse_authoritative_result(bytes(result[2]))
-            if parsed.batch_root != root or parsed.assertion_accepted or bytes(result[3]) != parsed.receipt_digest:
-                _fail("authoritative_result")
+    try:
+        verify_authoritative_connection(connection)
+    except Exception:
+        _fail("authoritative_database")
     return {"schema": _SCHEMA, "composition_id": str(config["composition_id"]), "transaction_counts": status_counts, "event_count": len(events), "outbox_count": len(outbox_rows), "state_sequence": meta[10], "proof_suite_id": None, "production_usable": False, "activation": False}
 
 

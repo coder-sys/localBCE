@@ -19,6 +19,7 @@ from app.minimal_clearance_authoritative_assertion import (
     AuthoritativeAssertionVerifierV1,
     AuthoritativeBatchStatementV1,
     AuthoritativeIssuedOperationV1,
+    compute_reservation_after,
     MEMBER_COUNT,
     RESERVATION_UNITS,
     VolatileSignatureHandoff,
@@ -38,7 +39,7 @@ from app.minimal_clearance_composition import (
     StateDispositionControl,
     build_synthetic_acknowledgment,
 )
-from app.minimal_clearance_composition_independent import verify_database
+from app.minimal_clearance_composition_independent import IndependentCompositionError, verify_database
 
 
 class _Receiver:
@@ -73,6 +74,14 @@ class _ChunkedStream:
         self._value.clear()
 
 
+class _Clock:
+    def __init__(self, value: int = 1_000) -> None:
+        self.value = value
+
+    def now_ms(self) -> int:
+        return self.value
+
+
 class AuthoritativeAssertionV1Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -82,18 +91,19 @@ class AuthoritativeAssertionV1Tests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="bl-authoritative-v1-")
         self.root = Path(self.temp.name)
         self.config = CompositionConfigV2("authoritative-v1", b"q" * 64, capacity=128)
+        self.clock = _Clock()
 
     def tearDown(self) -> None:
         self.temp.cleanup()
 
     def _store(self, name: str = "composition.sqlite") -> ClearanceCompositionStoreV2:
-        return ClearanceCompositionStoreV2(path=self.root / name, config=self.config)
+        return ClearanceCompositionStoreV2(path=self.root / name, config=self.config, clock=self.clock)
 
-    def _templates(self, suffix: str = "") -> tuple[AuthoritativeAssertionTemplateV1, ...]:
-        return tuple(AuthoritativeAssertionTemplateV1(f"assertion-{suffix}{index}", 1, "state-policy-v1", 0, 31_536_000_000) for index in range(MEMBER_COUNT))
+    def _templates(self, suffix: str = "", valid_from: int = 0, valid_until: int = 31_536_000_000) -> tuple[AuthoritativeAssertionTemplateV1, ...]:
+        return tuple(AuthoritativeAssertionTemplateV1(f"assertion-{suffix}{index}", 1, "state-policy-v1", valid_from, valid_until) for index in range(MEMBER_COUNT))
 
-    def _issue(self, store: ClearanceCompositionStoreV2, suffix: str = "") -> AuthoritativeBatchStatementV1:
-        return store.issue_authoritative_batch(templates=self._templates(suffix))
+    def _issue(self, store: ClearanceCompositionStoreV2, suffix: str = "", *, valid_from: int = 0, valid_until: int = 31_536_000_000) -> AuthoritativeBatchStatementV1:
+        return store.issue_authoritative_batch(templates=self._templates(suffix, valid_from, valid_until))
 
     def _controls(self, batch: AuthoritativeBatchStatementV1) -> dict[bytes, StateDispositionControl]:
         profile = b"s" * 64
@@ -323,7 +333,7 @@ class AuthoritativeAssertionV1Tests(unittest.TestCase):
         store.reserve_authoritative_batch(batch)
         refs = batch.operation_refs
         store.close()
-        recovered = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite", config=self.config)
+        recovered = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite", config=self.config, clock=self.clock)
         self.assertEqual(read_authoritative_batch(recovered.path, batch.batch_root).status, "HELD")
         with closing(sqlite3.connect(recovered.path)) as connection:
             self.assertEqual(connection.execute("SELECT computational_units_used FROM authoritative_profile_ledger").fetchone()[0], RESERVATION_UNITS)
@@ -368,6 +378,19 @@ class AuthoritativeAssertionV1Tests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT computational_units_used FROM authoritative_profile_ledger").fetchone()[0], RESERVATION_UNITS)
         store.close()
 
+    def test_malformed_result_keeps_batch_epoch_for_durable_hold(self) -> None:
+        store = self._store("malformed-epoch.sqlite")
+        batch = self._issue(store)
+        reservation = store.reserve_authoritative_batch(batch)
+        malformed = AuthoritativeAssertionVerifierV1(public_key=self.public_key, source_key_epoch=batch.source_key_epoch + 1).verify(batch, io.BytesIO(b"x" * 3_308), reservation=reservation, declared_length=3_308)
+        self.assertFalse(malformed.assertion_accepted)
+        self.assertEqual(malformed.outcome_code, "MALFORMED")
+        self.assertEqual(malformed.source_key_epoch, batch.source_key_epoch)
+        store.hold_authoritative_batch(batch, malformed)
+        self.assertEqual(read_authoritative_batch(store.path, batch.batch_root).status, "HELD")
+        verify_authoritative_database(store.path)
+        store.close()
+
     def test_concurrent_submitters_have_one_finalization_and_one_duplicate(self) -> None:
         store = self._store()
         batch = self._issue(store, "concurrent-")
@@ -386,22 +409,181 @@ class AuthoritativeAssertionV1Tests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT status FROM authoritative_batches WHERE batch_root=?", (batch.batch_root,)).fetchone()[0], "APPLIED")
         store.close()
 
-    def test_lifetime_cap_accepts_exact_boundary_then_fails_closed(self) -> None:
-        store = self._store()
-        batch = self._issue(store)
-        with closing(sqlite3.connect(store.path)) as connection:
-            connection.execute("UPDATE authoritative_profile_ledger SET computational_units_used=?", (2**32 - RESERVATION_UNITS,))
-            connection.commit()
-        store.reserve_authoritative_batch(batch)
-        with closing(sqlite3.connect(store.path)) as connection:
-            self.assertEqual(connection.execute("SELECT computational_units_used FROM authoritative_profile_ledger").fetchone()[0], 2**32)
-        store.close()
-        recovered = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite", config=self.config)
-        next_batch = self._issue(recovered, "cap-")
+    def test_state_owned_validity_is_half_open_and_rejects_before_crypto(self) -> None:
+        cases = (
+            ("expired", 0, 1_000, "authoritative_validity_window"),
+            ("not-yet-valid", 1_001, 2_000, "authoritative_validity_window"),
+            ("valid-from-equality", 1_000, 2_000, None),
+            ("valid-until-equality", 0, 1_000, "authoritative_validity_window"),
+        )
+        for label, valid_from, valid_until, expected_error in cases:
+            with self.subTest(label=label):
+                self.clock.value = 1_000
+                store = self._store(f"validity-{label}.sqlite")
+                batch = self._issue(store, f"{label}-", valid_from=valid_from, valid_until=valid_until)
+                before = store.snapshot()
+                if expected_error is None:
+                    reservation = store.reserve_authoritative_batch(batch)
+                    self.assertEqual(reservation.verification_time_ms, 1_000)
+                    signature = ml_dsa_65.sign(self.secret_key, signature_message(batch))
+                    result = AuthoritativeAssertionVerifierV1(public_key=self.public_key).verify(batch, io.BytesIO(signature), reservation=reservation, declared_length=len(signature))
+                    self.assertTrue(result.assertion_accepted)
+                    self.assertEqual(result.verification_time_ms, 1_000)
+                    store.process_authoritative_assertion(batch, result, state_controls=self._controls(batch))
+                    self.assertEqual(store.snapshot()["state_sequence"], MEMBER_COUNT)
+                else:
+                    with self.assertRaises(CompositionIntegrityError) as raised:
+                        store.reserve_authoritative_batch(batch)
+                    self.assertEqual(str(raised.exception), expected_error)
+                    self.assertEqual(store.snapshot(), before)
+                    self.assertEqual(read_authoritative_batch(store.path, batch.batch_root).status, "HELD")
+                    with closing(sqlite3.connect(store.path)) as connection:
+                        self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+                        self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
+                        self.assertEqual(connection.execute("SELECT computational_units_used FROM authoritative_profile_ledger").fetchone()[0], 0)
+                    verify_database(store.path, expected_config=self.config.as_json)
+                    verify_authoritative_database(store.path)
+                store.close()
+
+    def test_captured_verification_time_expires_before_apply_and_clock_rewind_fails_closed(self) -> None:
+        self.clock.value = 1_000
+        store = self._store("captured-time.sqlite")
+        batch = self._issue(store, valid_from=1_000, valid_until=1_100)
+        reservation = store.reserve_authoritative_batch(batch)
+        signature = ml_dsa_65.sign(self.secret_key, signature_message(batch))
+        result = AuthoritativeAssertionVerifierV1(public_key=self.public_key).verify(batch, io.BytesIO(signature), reservation=reservation, declared_length=len(signature))
+        self.clock.value = 5_000
+        before_apply = store.snapshot()
         with self.assertRaises(CompositionIntegrityError) as raised:
-            recovered.reserve_authoritative_batch(next_batch)
+            store.process_authoritative_assertion(batch, result, state_controls=self._controls(batch))
+        self.assertEqual(str(raised.exception), "authoritative_validity_window")
+        after_apply = store.snapshot()
+        self.assertEqual(after_apply["state_sequence"], before_apply["state_sequence"])
+        self.assertEqual(after_apply["transaction_counts"], before_apply["transaction_counts"])
+        self.assertEqual(after_apply["outbox_counts"], before_apply["outbox_counts"])
+        self.assertEqual(after_apply["event_head"], before_apply["event_head"])
+        held = read_authoritative_batch(store.path, batch.batch_root)
+        self.assertEqual(held.status, "HELD")
+        self.assertTrue(held.cryptographic_attempted)
+        self.assertEqual(held.last_error_code, "authoritative_validity_window")
+        self.assertEqual(held.reservation_after, RESERVATION_UNITS)
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT computational_units_used FROM authoritative_profile_ledger").fetchone()[0], RESERVATION_UNITS)
+        verify_authoritative_database(store.path)
+        verify_database(store.path, expected_config=self.config.as_json)
+        store.close()
+
+        self.clock.value = 1_000
+        post_reserve_rewind = self._store("post-reserve-clock-rewind.sqlite")
+        rewind_batch = self._issue(post_reserve_rewind, valid_from=0, valid_until=2_000)
+        rewind_reservation = post_reserve_rewind.reserve_authoritative_batch(rewind_batch)
+        rewind_signature = ml_dsa_65.sign(self.secret_key, signature_message(rewind_batch))
+        rewind_result = AuthoritativeAssertionVerifierV1(public_key=self.public_key).verify(rewind_batch, io.BytesIO(rewind_signature), reservation=rewind_reservation, declared_length=len(rewind_signature))
+        self.clock.value = 999
+        with self.assertRaises(CompositionIntegrityError) as raised:
+            post_reserve_rewind.process_authoritative_assertion(rewind_batch, rewind_result, state_controls=self._controls(rewind_batch))
+        self.assertEqual(str(raised.exception), "authoritative_clock_rewind")
+        held_rewind = read_authoritative_batch(post_reserve_rewind.path, rewind_batch.batch_root)
+        self.assertEqual(held_rewind.status, "HELD")
+        self.assertEqual(held_rewind.last_error_code, "authoritative_clock_rewind")
+        self.assertTrue(held_rewind.cryptographic_attempted)
+        with closing(sqlite3.connect(post_reserve_rewind.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT computational_units_used FROM authoritative_profile_ledger").fetchone()[0], RESERVATION_UNITS)
+        verify_authoritative_database(post_reserve_rewind.path)
+        verify_database(post_reserve_rewind.path, expected_config=self.config.as_json)
+        post_reserve_rewind.close()
+
+        self.clock.value = 1_000
+        rewound = self._store("clock-rewind.sqlite")
+        rewind_batch = self._issue(rewound, valid_from=0, valid_until=2_000)
+        before = rewound.snapshot()
+        self.clock.value = 999
+        with self.assertRaises(CompositionIntegrityError) as raised:
+            rewound.reserve_authoritative_batch(rewind_batch)
+        self.assertEqual(str(raised.exception), "authoritative_clock_rewind")
+        self.assertEqual(rewound.snapshot(), before)
+        self.assertEqual(read_authoritative_batch(rewound.path, rewind_batch.batch_root).status, "HELD")
+        with closing(sqlite3.connect(rewound.path)) as connection:
+            self.assertEqual(connection.execute("SELECT computational_units_used FROM authoritative_profile_ledger").fetchone()[0], 0)
+        verify_authoritative_database(rewound.path)
+        rewound.close()
+
+    def test_receipt_matrix_and_all_durable_result_columns_are_independently_checked(self) -> None:
+        store = self._store("result-semantics.sqlite")
+        batch = self._issue(store)
+        reservation = store.reserve_authoritative_batch(batch)
+        signature = ml_dsa_65.sign(self.secret_key, signature_message(batch))
+        accepted = AuthoritativeAssertionVerifierV1(public_key=self.public_key).verify(batch, io.BytesIO(signature), reservation=reservation, declared_length=len(signature))
+        contradictory = (
+            {**accepted.as_json, "outcome_code": "SIGNATURE_INVALID", "error_code": "signature_invalid"},
+            {**accepted.as_json, "error_code": "signature_invalid"},
+            {**accepted.as_json, "assertion_accepted": False, "outcome_code": "ACCEPTED", "error_code": None},
+            {**accepted.as_json, "resource_code": None},
+        )
+        for value in contradictory:
+            with self.assertRaises(AuthoritativeAssertionError):
+                parse_result(value)
+        with self.assertRaises(CompositionIntegrityError) as raised:
+            store.process_authoritative_assertion(batch, replace(accepted, verification_time_ms=accepted.verification_time_ms + 1), state_controls=self._controls(batch))
+        self.assertEqual(str(raised.exception), "authoritative_result_binding")
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM authoritative_batches WHERE batch_root=?", (batch.batch_root,)).fetchone()[0], "RESERVED")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
+        store.process_authoritative_assertion(batch, accepted, state_controls=self._controls(batch))
+        with closing(sqlite3.connect(store.path)) as connection:
+            connection.execute("UPDATE authoritative_results SET created_ms=created_ms+1 WHERE batch_root=?", (batch.batch_root,))
+            connection.commit()
+        with self.assertRaises(IndependentAuthoritativeAssertionError):
+            verify_authoritative_database(store.path)
+        with self.assertRaises(IndependentCompositionError):
+            verify_database(store.path, expected_config=self.config.as_json)
+        store.close()
+
+    def test_independent_readers_reject_ledger_rewind_jump_overlap_and_gap(self) -> None:
+        mutations = (("rewind", "UPDATE authoritative_profile_ledger SET computational_units_used=0"), ("jump", "UPDATE authoritative_profile_ledger SET computational_units_used=202"))
+        for label, statement in mutations:
+            with self.subTest(label=label):
+                store = self._store(f"ledger-{label}.sqlite")
+                batch = self._issue(store)
+                store.reserve_authoritative_batch(batch)
+                with closing(sqlite3.connect(store.path)) as connection:
+                    connection.execute(statement)
+                    connection.commit()
+                with self.assertRaises(IndependentAuthoritativeAssertionError):
+                    verify_authoritative_database(store.path)
+                with self.assertRaises(IndependentCompositionError):
+                    verify_database(store.path, expected_config=self.config.as_json)
+                store.close()
+
+        for label, before_value, after_value in (("overlap", 0, 101), ("gap", 102, 203)):
+            with self.subTest(label=label):
+                store = self._store(f"ledger-{label}.sqlite")
+                first = self._issue(store, "first-")
+                first_reservation = store.reserve_authoritative_batch(first)
+                failed = AuthoritativeAssertionVerifierV1(public_key=self.public_key).verify(first, io.BytesIO(b"x" * 3_309), reservation=first_reservation, declared_length=3_309)
+                store.hold_authoritative_batch(first, failed)
+                second = self._issue(store, "second-")
+                store.reserve_authoritative_batch(second)
+                with closing(sqlite3.connect(store.path)) as connection:
+                    connection.execute("UPDATE authoritative_batches SET reservation_before=?,reservation_after=? WHERE batch_root=?", (before_value, after_value, second.batch_root))
+                    connection.commit()
+                with self.assertRaises(IndependentAuthoritativeAssertionError):
+                    verify_authoritative_database(store.path)
+                with self.assertRaises(IndependentCompositionError):
+                    verify_database(store.path, expected_config=self.config.as_json)
+                store.close()
+
+    def test_lifetime_cap_accepts_exact_boundary_then_fails_closed(self) -> None:
+        self.assertEqual(compute_reservation_after(2**32 - RESERVATION_UNITS), 2**32)
+        with self.assertRaises(AuthoritativeAssertionError) as raised:
+            compute_reservation_after(2**32)
         self.assertEqual(str(raised.exception), "authoritative_budget_exhausted")
-        recovered.close()
 
 
 if __name__ == "__main__":

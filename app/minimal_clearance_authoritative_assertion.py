@@ -51,6 +51,14 @@ _RECEIPT = b"BL/AUTHORITATIVE-ASSERTION/RECEIPT/v1\x00"
 _VERIFIER_TOKEN = object()
 _DURABLE_TOKEN = object()
 _RESERVATION_TOKEN = object()
+_REJECTED_RESULT_ERRORS: Final[dict[str, frozenset[str]]] = {
+    "MALFORMED": frozenset({
+        "signature_handoff_stream", "signature_length", "signature_transport", "signature_bytes",
+        "signature_trailing_bytes", "signature_handoff_closed", "signature_handoff_reuse",
+    }),
+    "SIGNATURE_INVALID": frozenset({"signature_invalid"}),
+    "KEY_EPOCH_MISMATCH": frozenset({"source_key_epoch_mismatch"}),
+}
 
 
 def _token(value: object, code: str) -> str:
@@ -231,15 +239,18 @@ def signature_message(batch: AuthoritativeBatchStatementV1) -> bytes:
 class AuthoritativeReservation:
     """Single-use state-owned proof-attempt reservation capability."""
 
-    __slots__ = ("batch_root", "units", "_used", "_origin")
+    __slots__ = ("batch_root", "units", "verification_time_ms", "_used", "_origin")
 
-    def __init__(self, batch_root: bytes, units: int, *, _origin: object) -> None:
+    def __init__(self, batch_root: bytes, units: int, verification_time_ms: int, *, _origin: object) -> None:
         self.batch_root = _root(batch_root, "reservation_batch_root")
         if type(units) is not int or units != RESERVATION_UNITS:
             _fail("reservation_units")
+        if type(verification_time_ms) is not int or not 0 <= verification_time_ms < 2**64:
+            _fail("verification_time")
         if _origin is not _RESERVATION_TOKEN:
             _fail("reservation_origin")
         self.units = units
+        self.verification_time_ms = verification_time_ms
         self._used = False
         self._origin = _origin
 
@@ -249,8 +260,20 @@ class AuthoritativeReservation:
         self._used = True
 
 
-def _create_reservation(batch_root: bytes) -> AuthoritativeReservation:
-    return AuthoritativeReservation(batch_root, RESERVATION_UNITS, _origin=_RESERVATION_TOKEN)
+def _create_reservation(batch_root: bytes, verification_time_ms: int) -> AuthoritativeReservation:
+    return AuthoritativeReservation(batch_root, RESERVATION_UNITS, verification_time_ms, _origin=_RESERVATION_TOKEN)
+
+
+def compute_reservation_after(used: int) -> int:
+    """Return the only valid next computational-ledger terminal value."""
+    if type(used) is not int or used < 0 or used > LIFETIME_ACCEPTANCE_CAP:
+        _fail("authoritative_ledger")
+    if used == LIFETIME_ACCEPTANCE_CAP or RESERVATION_UNITS > LIFETIME_ACCEPTANCE_CAP - used:
+        _fail("authoritative_budget_exhausted")
+    after = used + RESERVATION_UNITS
+    if after > LIFETIME_ACCEPTANCE_CAP:
+        _fail("authoritative_budget_overflow")
+    return after
 
 
 class VolatileSignatureHandoff:
@@ -346,9 +369,9 @@ class AuthoritativeAssertionResultV1:
     signature_profile_version: str
     verifier_profile_version: str
     source_key_epoch: int
+    verification_time_ms: int
     outcome_code: str
     error_code: str | None = None
-    resource_code: str | None = None
     qualification_flags: tuple[str, ...] = QUALIFICATION_FLAGS
     _origin: object = field(default=None, repr=False, compare=False)
 
@@ -364,11 +387,16 @@ class AuthoritativeAssertionResultV1:
             _fail("assertion_result_profile")
         if type(self.source_key_epoch) is not int or self.source_key_epoch < 0:
             _fail("assertion_result_epoch")
+        if type(self.verification_time_ms) is not int or not 0 <= self.verification_time_ms < 2**64:
+            _fail("assertion_result_time")
         _token(self.outcome_code, "assertion_outcome")
         if self.error_code is not None:
             _token(self.error_code, "assertion_error")
-        if self.resource_code is not None:
-            _token(self.resource_code, "assertion_resource")
+        if self.assertion_accepted:
+            if self.outcome_code != "ACCEPTED" or self.error_code is not None:
+                _fail("assertion_result_semantics")
+        elif self.outcome_code not in _REJECTED_RESULT_ERRORS or self.error_code not in _REJECTED_RESULT_ERRORS[self.outcome_code]:
+            _fail("assertion_result_semantics")
         if type(self.qualification_flags) is not tuple or self.qualification_flags != QUALIFICATION_FLAGS:
             _fail("assertion_result_flags")
 
@@ -384,9 +412,9 @@ class AuthoritativeAssertionResultV1:
             "signature_profile_version": self.signature_profile_version,
             "verifier_profile_version": self.verifier_profile_version,
             "source_key_epoch": self.source_key_epoch,
+            "verification_time_ms": self.verification_time_ms,
             "outcome_code": self.outcome_code,
             "error_code": self.error_code,
-            "resource_code": self.resource_code,
             "qualification_flags": list(self.qualification_flags),
             "proof_suite_id": None,
             "production_usable": False,
@@ -414,7 +442,7 @@ class AuthoritativeAssertionResultV1:
 _RESULT_KEYS: Final[frozenset[str]] = frozenset({
     "schema", "evidence_mode", "assertion_accepted", "batch_root", "member_count",
     "source_auth_profile_id", "signature_profile_version", "verifier_profile_version",
-    "source_key_epoch", "outcome_code", "error_code", "resource_code", "qualification_flags",
+    "source_key_epoch", "verification_time_ms", "outcome_code", "error_code", "qualification_flags",
     "proof_suite_id", "production_usable", "activation",
 })
 
@@ -426,14 +454,14 @@ def parse_result(value: object) -> AuthoritativeAssertionResultV1:
         _fail("assertion_result_unknown_field")
     if value["schema"] != "BL/AUTHORITATIVE-ASSERTION/RECEIPT/v1" or value["evidence_mode"] != MODE or value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False:
         _fail("assertion_result_binding")
-    if type(value["assertion_accepted"]) is not bool or type(value["member_count"]) is not int or type(value["source_key_epoch"]) is not int or type(value["qualification_flags"]) is not list:
+    if type(value["assertion_accepted"]) is not bool or type(value["member_count"]) is not int or type(value["source_key_epoch"]) is not int or type(value["verification_time_ms"]) is not int or type(value["qualification_flags"]) is not list:
         _fail("assertion_result_shape")
     try:
         batch_root = bytes.fromhex(value["batch_root"])
     except (TypeError, ValueError):
         _fail("assertion_batch_root")
     flags = tuple(value["qualification_flags"])
-    return AuthoritativeAssertionResultV1(bool(value["assertion_accepted"]), batch_root, int(value["member_count"]), str(value["source_auth_profile_id"]), str(value["signature_profile_version"]), str(value["verifier_profile_version"]), int(value["source_key_epoch"]), str(value["outcome_code"]), None if value["error_code"] is None else str(value["error_code"]), None if value["resource_code"] is None else str(value["resource_code"]), flags, _origin=_DURABLE_TOKEN)
+    return AuthoritativeAssertionResultV1(bool(value["assertion_accepted"]), batch_root, int(value["member_count"]), str(value["source_auth_profile_id"]), str(value["signature_profile_version"]), str(value["verifier_profile_version"]), int(value["source_key_epoch"]), int(value["verification_time_ms"]), str(value["outcome_code"]), None if value["error_code"] is None else str(value["error_code"]), flags, _origin=_DURABLE_TOKEN)
 
 
 class AuthoritativeAssertionVerifierV1:
@@ -473,20 +501,20 @@ class AuthoritativeAssertionVerifierV1:
             try:
                 handoff = signature_stream if isinstance(signature_stream, VolatileSignatureHandoff) else VolatileSignatureHandoff(signature_stream, declared_length=declared_length)
             except AuthoritativeAssertionError as error:
-                return AuthoritativeAssertionResultV1(False, batch.batch_root, MEMBER_COUNT, SOURCE_AUTH_PROFILE_ID, SIGNATURE_PROFILE_VERSION, VERIFIER_PROFILE_VERSION, self._source_key_epoch, "MALFORMED", str(error), None, _origin=_VERIFIER_TOKEN)
+                return AuthoritativeAssertionResultV1(False, batch.batch_root, MEMBER_COUNT, SOURCE_AUTH_PROFILE_ID, SIGNATURE_PROFILE_VERSION, VERIFIER_PROFILE_VERSION, batch.source_key_epoch, reservation.verification_time_ms, "MALFORMED", str(error), _origin=_VERIFIER_TOKEN)
             if batch.source_key_epoch != self._source_key_epoch:
-                return AuthoritativeAssertionResultV1(False, batch.batch_root, MEMBER_COUNT, SOURCE_AUTH_PROFILE_ID, SIGNATURE_PROFILE_VERSION, VERIFIER_PROFILE_VERSION, batch.source_key_epoch, "KEY_EPOCH_MISMATCH", "source_key_epoch_mismatch", None, _origin=_VERIFIER_TOKEN)
+                return AuthoritativeAssertionResultV1(False, batch.batch_root, MEMBER_COUNT, SOURCE_AUTH_PROFILE_ID, SIGNATURE_PROFILE_VERSION, VERIFIER_PROFILE_VERSION, batch.source_key_epoch, reservation.verification_time_ms, "KEY_EPOCH_MISMATCH", "source_key_epoch_mismatch", _origin=_VERIFIER_TOKEN)
             try:
                 signature = handoff.read_exact()
             except AuthoritativeAssertionError as error:
-                return AuthoritativeAssertionResultV1(False, batch.batch_root, MEMBER_COUNT, SOURCE_AUTH_PROFILE_ID, SIGNATURE_PROFILE_VERSION, VERIFIER_PROFILE_VERSION, self._source_key_epoch, "MALFORMED", str(error), None, _origin=_VERIFIER_TOKEN)
+                return AuthoritativeAssertionResultV1(False, batch.batch_root, MEMBER_COUNT, SOURCE_AUTH_PROFILE_ID, SIGNATURE_PROFILE_VERSION, VERIFIER_PROFILE_VERSION, self._source_key_epoch, reservation.verification_time_ms, "MALFORMED", str(error), _origin=_VERIFIER_TOKEN)
             try:
                 from pqcrypto.sign import ml_dsa_65
 
                 accepted = bool(ml_dsa_65.verify(self._public_key, signature_message(batch), signature))
             except BaseException:
                 accepted = False
-            return AuthoritativeAssertionResultV1(accepted, batch.batch_root, MEMBER_COUNT, SOURCE_AUTH_PROFILE_ID, SIGNATURE_PROFILE_VERSION, VERIFIER_PROFILE_VERSION, self._source_key_epoch, "ACCEPTED" if accepted else "SIGNATURE_INVALID", None if accepted else "signature_invalid", None, _origin=_VERIFIER_TOKEN)
+            return AuthoritativeAssertionResultV1(accepted, batch.batch_root, MEMBER_COUNT, SOURCE_AUTH_PROFILE_ID, SIGNATURE_PROFILE_VERSION, VERIFIER_PROFILE_VERSION, self._source_key_epoch, reservation.verification_time_ms, "ACCEPTED" if accepted else "SIGNATURE_INVALID", None if accepted else "signature_invalid", _origin=_VERIFIER_TOKEN)
         finally:
             if handoff is not None:
                 handoff.close()
@@ -498,5 +526,5 @@ __all__ = (
     "LIFETIME_ACCEPTANCE_CAP", "MAX_VALIDITY_WINDOW_MS", "MEMBER_COUNT", "MODE", "PUBLIC_KEY_SIZE", "QUALIFICATION_FLAGS",
     "RECEIPT_LIMIT_BYTES", "RESERVATION_UNITS", "SECRET_KEY_SIZE", "SIGNATURE_PROFILE_VERSION",
     "SIGNATURE_SIZE", "SOURCE_AUTH_PROFILE_ID", "VERIFIER_PROFILE_VERSION", "VolatileSignatureHandoff",
-    "compute_batch_root", "parse_result", "signature_message",
+    "compute_batch_root", "compute_reservation_after", "parse_result", "signature_message",
 )
