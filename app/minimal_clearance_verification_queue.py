@@ -104,8 +104,8 @@ CIRCUIT_FINGERPRINT: Final[bytes] = bytes.fromhex(
     "c1fcc3b7c0837d64dc1cec954194e1648f3375bfe7f08a8a9347aa320137efd4"
 )
 PROFILE_FINGERPRINT: Final[bytes] = bytes.fromhex(
-    "625af0b814643d81b5848bb3ee1f76935e5f05c8232d31c9f6b969e810e28c88"
-    "5897a5bab2a89ae3f4721208b64f9b99c677a8e8e90b481aec4fc3ddc9b921fe"
+    "b613ceacddde261a1b01107550bb2d74dfb7f1583fb60c150ccd1ed2bca9c48c"
+    "2c14a724ccbdbf750c3d7668ddad9066de8df273a1070c66cb036622c1f80d7b"
 )
 
 
@@ -1362,7 +1362,7 @@ class _VerificationQueueStore:
                 connection.rollback()
                 raise
         # Close the volatile handoff only after the terminal commit is durable.
-            self._close_handoff_locked(work.batch.batch_id)
+        self._close_handoff_locked(work.batch.batch_id)
         self._after_commit("batch_complete")
         return QueueResult(work.batch.batch_id, status, receipt, final_error, RANGE100_COUNT if status == "VERIFIED" else 0)
 

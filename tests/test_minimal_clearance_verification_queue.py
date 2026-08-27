@@ -14,7 +14,9 @@ from app.minimal_clearance_verification_queue import (
     DATABASE_MAX_PAGE_COUNT,
     DATABASE_PAGE_SIZE,
     BatchVerifierResult,
+    CIRCUIT_FINGERPRINT,
     OperationTemplate,
+    PROFILE_FINGERPRINT,
     QueueConfig,
     QueueConflictError,
     QueueHeldError,
@@ -169,6 +171,16 @@ class QueueV8Tests(unittest.TestCase):
             self.assertIn("queue_members", tables)
             self.assertNotIn("queue_jobs", tables)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0], 100)
+
+    def test_registered_v3_fingerprint_is_shared_by_owner_and_independent_reader(self) -> None:
+        batch = self.issue()
+        self.assertEqual(
+            PROFILE_FINGERPRINT.hex(),
+            "b613ceacddde261a1b01107550bb2d74dfb7f1583fb60c150ccd1ed2bca9c48c2c14a724ccbdbf750c3d7668ddad9066de8df273a1070c66cb036622c1f80d7b",
+        )
+        self.assertEqual(batch.proof_statement[112:176], CIRCUIT_FINGERPRINT)
+        self.assertEqual(batch.proof_statement[176:240], PROFILE_FINGERPRINT)
+        self.store._verify_integrity()
 
     def test_issue_owns_references_and_rejects_heterogeneous_template(self) -> None:
         with self.assertRaises(TypeError):
