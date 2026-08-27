@@ -1,7 +1,8 @@
 """Single-owner Queue V8 runtime.
 
-The runtime exposes only the state-issued 100-member batch issuance and its
-one-shot volatile handoff. It has no per-operation or legacy V7 entry point.
+The runtime exposes one state-issued 100-member batch and one volatile
+handoff.  Counters are explicit: batch outcomes are counted in batches while
+accepted operations are counted in operations.
 """
 
 from __future__ import annotations
@@ -38,26 +39,36 @@ def _fixed(code: str) -> None:
 class RuntimeRunResult:
     outcome: str
     code: str | None
-    accepted_count: int | None
-    rejected_count: int | None
-    held_count: int | None
+    accepted_operation_count: int
+    verified_batch_count: int
+    rejected_batch_count: int
+    held_batch_count: int
     recovered_leases: int
 
     @property
     def processed(self) -> int:
-        return 0 if self.outcome == "INDETERMINATE" else sum(int(value or 0) for value in (self.accepted_count, self.rejected_count, self.held_count))
+        """Number of terminal batch outcomes, never an operation count."""
+        if self.outcome == "INDETERMINATE":
+            return 0
+        return sum(int(value or 0) for value in (self.verified_batch_count, self.rejected_batch_count, self.held_batch_count))
 
     @property
     def verified(self) -> int:
-        return int(self.accepted_count or 0)
+        """Accepted operation count, retained for existing reporting callers."""
+        return int(self.accepted_operation_count or 0)
+
+    @property
+    def accepted_count(self) -> int:
+        """Compatibility-free explicit alias for accepted_operation_count."""
+        return int(self.accepted_operation_count or 0)
 
     @property
     def rejected(self) -> int:
-        return int(self.rejected_count or 0)
+        return int(self.rejected_batch_count or 0)
 
     @property
     def held(self) -> int:
-        return int(self.held_count or 0)
+        return int(self.held_batch_count or 0)
 
     @property
     def indeterminate(self) -> bool:
@@ -72,20 +83,26 @@ class MinimalClearanceVerificationRuntime:
             _fixed("runtime_configuration")
         if verifier is None:
             _fixed("runtime_backend_unqualified")
+        owner: _QueueRuntimeOwnership | None = None
         try:
             database = root / "queue.sqlite"
             if config is None:
                 config = QueueConfig("minimal-clearance-queue-v8", 100)
             owner = _QueueRuntimeOwnership(lock_path=database.with_name(database.name + ".runtime-lock"), parent=root)
-            self._store = _VerificationQueueStore(path=database, config=config, owner=owner)
+            store = _VerificationQueueStore(path=database, config=config, owner=owner)
         except VerificationQueueError as error:
+            if owner is not None:
+                owner.close()
             _fixed(str(error))
         except BaseException:
+            if owner is not None:
+                owner.close()
             _fixed("runtime_startup")
         self._closed = False
         self._root = root
         self._database_path = database
         self._database_owner = owner
+        self._store = store
         self._verifier = verifier
         self._recovered_leases = self._store._startup_recovered_count
 
@@ -101,26 +118,35 @@ class MinimalClearanceVerificationRuntime:
         self._assert_open()
         if type(max_batches) is not int or not 1 <= max_batches <= 256:
             _fixed("runtime_max_batches")
-        accepted = rejected = held = 0
+        accepted_operations = verified_batches = rejected_batches = held_batches = 0
+        outcome_code: str | None = None
         for _ in range(max_batches):
             result = self._store._process_one_batch(verifier=self._verifier)
+            held_batches += self._store._last_claim_held_count
             if result is None:
+                if self._store._last_claim_error is not None and outcome_code is None:
+                    outcome_code = self._store._last_claim_error
                 break
+            if result.error_code is not None and outcome_code is None:
+                outcome_code = result.error_code
             if result.status == "VERIFIED":
-                accepted += result.accepted_count
+                if result.accepted_count != 100:
+                    _fixed("runtime_result")
+                accepted_operations += result.accepted_count
+                verified_batches += 1
             elif result.status == "REJECTED":
-                rejected += 1
+                rejected_batches += 1
             elif result.status == "HELD":
-                held += 1
+                held_batches += 1
             else:
                 _fixed("runtime_result")
-        if accepted == rejected == held == 0:
-            return RuntimeRunResult("EMPTY", None, None, None, None, self._recovered_leases)
-        return RuntimeRunResult("PROCESSED", None, accepted, rejected, held, self._recovered_leases)
+        if accepted_operations == verified_batches == rejected_batches == held_batches == 0:
+            return RuntimeRunResult("EMPTY", outcome_code, 0, 0, 0, 0, self._recovered_leases)
+        return RuntimeRunResult("PROCESSED", outcome_code, accepted_operations, verified_batches, rejected_batches, held_batches, self._recovered_leases)
 
-    def issue_batch(self, *, templates: tuple[OperationTemplate, ...]) -> IssuedVerificationBatch:
+    def issue_batch(self, *, template: OperationTemplate, operation_refs: tuple[bytes, ...]) -> IssuedVerificationBatch:
         self._assert_open()
-        return self._store.issue_batch(templates=templates)
+        return self._store.issue_batch(template=template, operation_refs=operation_refs)
 
     def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: BinaryIO | VolatileProofHandoff, declared_length: int | None = None) -> IssuedVerificationBatch:
         self._assert_open()

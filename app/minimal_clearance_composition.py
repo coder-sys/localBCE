@@ -1,4 +1,4 @@
-"""State-owned Queue/Proof Handoff V7 composition.
+"""State-owned Queue/Proof Handoff V8 composition.
 
 Verifier output contributes only ``proof_accepted`` and its opaque receipt.
 Disposition is computed from a separate state-owned control. Complete ordered
@@ -248,7 +248,7 @@ class CompositionConfigV2:
     verifier_profile_identity: bytes = bytes(32)
     receiver_identity: bytes = bytes(32)
     receiver_epoch: int = 1
-    composition_id: str = "minimal-clearance-composition-v7"
+    composition_id: str = "minimal-clearance-composition-v8"
     verifier_epoch: int = 1
     capacity: int = 16
     lease_seconds: int = 300

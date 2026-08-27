@@ -45,9 +45,9 @@ pre-admission modes exist: `DIRECT_STATE_OWNED` for state-owned canonical non-PH
 `AUTHORITATIVE_ASSERTION` for an operation-scoped minimally disclosed derived assertion with a
 qualified PQ source signature, and `PRIVATE_ZK` for a proof over a hidden source-bound assertion.
 The verifier-owned control set selects one mode before admission; no runtime fallback or downgrade
-exists. The V7 queue issues a state-generated random 32-byte operation reference and immutable
-allowlisted statement before a volatile handoff; batch positions and the ordered batch root are
-state-computed before handoff.
+exists. The V8 queue issues a state-generated ordered set of exactly 100 opaque 32-byte operation
+references and one shared immutable allowlisted statement before a volatile handoff; batch positions
+and the ordered batch root are state-computed before handoff.
 
 The inactive handoff boundary does not create a proof workspace or persist proof/source/signature/
 commitment bytes, artifact digests, acceptance bytes, or process-output hashes. An activated profile
@@ -107,9 +107,9 @@ enter or remain recoverable from crash dumps, swap/pagefile, temp files, backups
 captures, or AI. Mutable staging wipes are best effort; this does not falsely claim byte-zeroization
 that Python can prove.
 
-The strict public handoff allowlist is the one-time random operation reference/challenge, assertion
-and profile versions, bounded validity window, ordered batch position/root when needed, and approved-
-source registry root when needed. Names, claim numbers, provider fingerprints, raw-data hashes,
+The strict public handoff allowlist is the one-time random ordered set of 100 operation references
+and batch challenge, shared assertion and profile versions, bounded validity window, ordered batch
+positions/root, and approved-source registry root when needed. Names, claim numbers, provider fingerprints, raw-data hashes,
 source paths, and stable cross-batch identifiers are excluded.
 
 The current statement grammar intentionally carries only the strict public allowlist. A selected hidden
@@ -146,8 +146,8 @@ this private-payment plug-in.
 3. The evidence owner returns only a mode-specific, non-dispositive evidence result:
    `DIRECT_STATE_OWNED` returns the state-owned evaluation, `AUTHORITATIVE_ASSERTION` returns the
    qualified source-signature/assertion result, and `PRIVATE_ZK` returns proof acceptance plus the
-   opaque operation reference and bounded assertion/profile/version/order/resource fields. For the
-   active V7 private handoff, the independent verifier consumes the volatile stream once; producers,
+   opaque ordered batch references and bounded shared assertion/profile/version/order/resource fields. For the
+   active V8 private handoff, the independent verifier consumes the volatile stream once; producers,
    transports, logs, and caller booleans have no acceptance authority, and the stream is never
    refetched. None of these results contains policyResult or effectiveDirective.
 4. The state owner separately resolves `PASS`/`MISSING`/`AMBIGUOUS`/`FAIL` plus state exception

@@ -21,7 +21,10 @@ class _Verifier:
 
 
 class RuntimeV8Tests(unittest.TestCase):
-    def test_runtime_exposes_only_batch_issue_then_handoff(self) -> None:
+    def refs(self, offset: int = 0) -> tuple[bytes, ...]:
+        return tuple((offset + index + 1).to_bytes(32, "big") for index in range(100))
+
+    def test_runtime_exposes_explicit_batch_and_operation_counters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = QueueConfig("runtime-v8", 100)
@@ -30,32 +33,30 @@ class RuntimeV8Tests(unittest.TestCase):
                 MinimalClearanceVerificationRuntime(root=root)
             with MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config) as runtime:
                 now = int(time.time() * 1000)
-                templates = tuple(OperationTemplate(f"assertion-{index}", 1, "state-profile-v8", now - 100, now + 2_000_000) for index in range(100))
-                batch = runtime.issue_batch(templates=templates)
+                template = OperationTemplate("shared-runtime", 1, "state-profile-v8", now - 100, now + 2_000_000)
+                batch = runtime.issue_batch(template=template, operation_refs=self.refs())
                 runtime.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"runtime-proof"), declared_length=13)
                 result = runtime.run(max_batches=1)
-                self.assertEqual((result.outcome, result.accepted_count, result.processed, verifier.calls), ("PROCESSED", 100, 100, 1))
-                for name in ("issue_operation", "submit_handoff", "submit_batch_handoffs"):
-                    self.assertFalse(hasattr(runtime, name), name)
+                self.assertEqual((result.outcome, result.accepted_operation_count, result.verified_batch_count, result.rejected_batch_count, result.held_batch_count, result.processed, verifier.calls), ("PROCESSED", 100, 1, 0, 0, 1, 1))
+                self.assertEqual(result.verified, 100)
+                empty = runtime.run(max_batches=1)
+                self.assertEqual((empty.outcome, empty.accepted_operation_count, empty.verified_batch_count, empty.rejected_batch_count, empty.held_batch_count, empty.processed), ("EMPTY", 0, 0, 0, 0, 0))
                 runtime._verify_integrity()
 
-    def test_runtime_restart_holds_queued_batch_without_reuse(self) -> None:
+    def test_runtime_startup_failure_releases_lock_and_immediate_retry_succeeds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = QueueConfig("runtime-v8-restart", 100)
+            config = QueueConfig("runtime-v8-retry", 100)
             verifier = _Verifier(config)
             runtime = MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config)
-            now = int(time.time() * 1000)
-            templates = tuple(OperationTemplate(f"restart-{index}", 1, "state-profile-v8", now - 100, now + 2_000_000) for index in range(100))
-            batch = runtime.issue_batch(templates=templates)
-            runtime.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"restart-proof"), declared_length=13)
             runtime.close()
-            restarted = MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config)
-            try:
-                self.assertEqual(restarted.run(max_batches=1).outcome, "EMPTY")
-                restarted._verify_integrity()
-            finally:
-                restarted.close()
+            (root / "queue.sqlite").write_bytes(b"not-a-database")
+            with self.assertRaises(VerificationRuntimeError):
+                MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config)
+            self.assertFalse((root / "queue.sqlite.runtime-lock").exists())
+            (root / "queue.sqlite").unlink()
+            with MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config) as retry:
+                retry._verify_integrity()
 
 
 if __name__ == "__main__":

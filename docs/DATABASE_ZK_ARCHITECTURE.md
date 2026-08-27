@@ -62,24 +62,24 @@ This seam can qualify for the read-only wedge independently of the private-payme
 
 ## Transaction boundary
 
-### Queue/Proof Handoff V7 clean break
+### Queue/Proof Handoff V8 clean break
 
-The active experimental queue boundary is V7. V6 databases, artifact readers, filesystem
+The active experimental queue boundary is V8. V6/V7 databases, artifact readers, filesystem
 snapshot/refetch paths, and proof-bound disposition receipts are unsupported and fail closed; no
 migration, compatibility reader, fallback, wrapper, or dual path exists. Blind state creates a
-fresh random 32-byte operation reference for each admission. Durable queue data contains only that
-opaque reference, state-issued allowlisted assertion/profile/version, bounded validity window,
-ordered batch position/root, optional approved-source registry root, chronology/status/retry data,
-and qualification flags. Caller job IDs, artifact/source paths, patient/provider/case identity,
+exactly 100 fresh state-generated random 32-byte operation references for each batch. Durable queue
+data contains only those opaque references, their immutable positions, the shared state-issued
+allowlisted assertion/profile/version, bounded validity window, ordered batch root, optional
+approved-source registry root, chronology/status/retry data, and qualification flags. Caller job IDs,
+artifact/source paths, patient/provider/case identity,
 raw-data digests, acceptance bytes, and process-output hashes are not queue fields.
 
-The V7 ownership chain is source-local prover -> optional aggregator -> independent verifier ->
+The V8 ownership chain is source-local prover -> optional aggregator -> independent verifier ->
 state owner -> opaque-reference/directive outbox and ACK -> audit/recovery. Admission is two phase:
-the state first issues an immutable allowlisted statement and fresh random 32-byte operation
-reference in `AWAITING_HANDOFF`; for a batch it assigns positions and computes one domain-separated
-ordered root from the exact issued references and canonical templates. Only after issuance may a
-caller submit the single-use readable binary stream for that exact reference (or exact ordered
-batch), transitioning it to `QUEUED`. The verifier receives that stream and the complete issued
+the state first issues an immutable allowlisted shared template, exactly 100 ordered opaque
+references, and one complete batch statement in `AWAITING_HANDOFF`; it computes one domain-separated
+ordered root from the exact references and shared template. Only after issuance may a caller submit
+the single-use readable binary stream for that exact ordered batch, transitioning it to `QUEUED`. The verifier receives that stream and the complete issued
 statement, never an unrelated caller/reference argument. The verifier receives a
 readable binary stream through one volatile single-use handoff. Native-v3 owns each selected
 profile's envelope and process-tree safety constraints; there is no universal input-admission
@@ -103,7 +103,7 @@ system-lifetime claim must explicitly bound and union all profiles. Native-v3 ow
 acceptance-unit counting and theorem ledger; this document owns the reservation and state-transaction
 semantics.
 
-For the active V7 `PRIVATE_ZK` handoff, Native-v3 owns the exact verifier receipt allowlist. The
+For the active V8 `PRIVATE_ZK` handoff, Native-v3 owns the exact verifier receipt allowlist. The
 database accepts only a mode-specific, non-dispositive evidence result; it never receives a
 `policyResult` or `effectiveDirective` from the verifier or source. `DIRECT_STATE_OWNED` and
 `AUTHORITATIVE_ASSERTION` use their separate mode-specific state-evaluation or qualified
@@ -114,7 +114,7 @@ complete promotion batch is preflighted against one state snapshot and commits a
 rows, events, state roots, and outbox rows in one transaction. A mixed APPLIED/HELD persisted image
 is independently rejected.
 
-This V7 boundary remains synthetic/experimental: `proofSuiteId=null`, `production_usable=false`,
+This V8 boundary remains synthetic/experimental: `proofSuiteId=null`, `production_usable=false`,
 activation=false, no backend is selected or qualified, and the co-equal Native-v3 profile gates
 remain open.
 
@@ -147,7 +147,7 @@ system consumes an accepted clearance directive and later returns the actual out
 
 ## Current experimental application chain
 
-The current nonactivating V7 implementation separates the source/prover, optional aggregation,
+The current nonactivating V8 implementation separates the source/prover, optional aggregation,
 independent verifier, state-owned disposition, durable composition/outbox, and audit/recovery
 owners. Queue promotion uses a one-use volatile handoff; it never refetches proof bytes. The
 state owner, not the verifier, preserves `policyResult` separately from `effectiveDirective`, and
