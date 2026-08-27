@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import ctypes
 from ctypes import wintypes
+import hashlib
+import hmac
 import os
 from pathlib import Path
 import threading
@@ -45,6 +47,33 @@ _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _HANDLE_FLAG_INHERIT = 0x00000001
 _DUPLICATE_SAME_ACCESS = 0x00000002
 _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+_GENERIC_READ = 0x80000000
+_FILE_SHARE_READ = 0x00000001
+_OPEN_EXISTING = 3
+_FILE_ATTRIBUTE_NORMAL = 0x00000080
+_FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+_FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000
+_FILE_TYPE_DISK = 1
+_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+_EXECUTABLE_HASH_CHUNK_BYTES = 1 << 20
+_SHA256_BYTES = 32
+
+
+class _ByHandleFileInformation(ctypes.Structure):
+    _fields_ = [
+        ("dwFileAttributes", wintypes.DWORD),
+        ("ftCreationTime", wintypes.FILETIME),
+        ("ftLastAccessTime", wintypes.FILETIME),
+        ("ftLastWriteTime", wintypes.FILETIME),
+        ("dwVolumeSerialNumber", wintypes.DWORD),
+        ("nFileSizeHigh", wintypes.DWORD),
+        ("nFileSizeLow", wintypes.DWORD),
+        ("nNumberOfLinks", wintypes.DWORD),
+        ("nFileIndexHigh", wintypes.DWORD),
+        ("nFileIndexLow", wintypes.DWORD),
+    ]
 
 
 class _JobObjectBasicLimitInformation(ctypes.Structure):
@@ -182,6 +211,160 @@ class ContainedVerifierResult:
 
 def _win_error(label: str) -> VerifierProcessError:
     return VerifierProcessError(f"{label}:{ctypes.get_last_error()}")
+
+
+def _handle_number(handle: object) -> int:
+    value = getattr(handle, "value", handle)
+    if value is None:
+        return 0
+    return int(value)
+
+
+def _invalid_handle(handle: object) -> bool:
+    return _handle_number(handle) in (0, -1, _INVALID_HANDLE_VALUE)
+
+
+class _PinnedExecutableHandle:
+    __slots__ = ("_kernel32", "_handle", "_closed")
+
+    def __init__(self, kernel32: object, handle: object) -> None:
+        self._kernel32 = kernel32
+        self._handle = handle
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if not self._kernel32.CloseHandle(self._handle):
+                raise _win_error("verifier_executable_close")
+        except VerifierProcessError:
+            raise
+        except BaseException:
+            raise VerifierProcessError("verifier_executable_close") from None
+
+
+def _configure_executable_pin_apis(kernel32: object) -> None:
+    required = (
+        "CreateFileW", "GetFileType", "GetFileInformationByHandle",
+        "ReadFile", "CloseHandle",
+    )
+    for name in required:
+        if not hasattr(kernel32, name):
+            raise VerifierProcessError(f"verifier_api_missing:{name}")
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.GetFileType.argtypes = [wintypes.HANDLE]
+    kernel32.GetFileType.restype = wintypes.DWORD
+    kernel32.GetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(_ByHandleFileInformation),
+    ]
+    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel32.ReadFile.argtypes = [
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+    ]
+    kernel32.ReadFile.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+
+def _validate_executable_pin(
+    expected_executable_size_bytes: int | None,
+    expected_executable_sha256: bytes | None,
+) -> None:
+    if expected_executable_size_bytes is None and expected_executable_sha256 is None:
+        return
+    if (
+        type(expected_executable_size_bytes) is not int
+        or expected_executable_size_bytes <= 0
+        or type(expected_executable_sha256) is not bytes
+        or len(expected_executable_sha256) != _SHA256_BYTES
+    ):
+        raise VerifierProcessError("verifier_executable_pin")
+
+
+def _open_pinned_executable(
+    *,
+    kernel32: object,
+    executable: Path,
+    expected_executable_size_bytes: int,
+    expected_executable_sha256: bytes,
+) -> _PinnedExecutableHandle:
+    """Hash one non-reparse file through a share-denying live handle."""
+
+    _configure_executable_pin_apis(kernel32)
+    _validate_executable_pin(expected_executable_size_bytes, expected_executable_sha256)
+    if not isinstance(executable, Path) or not executable.is_absolute():
+        raise VerifierProcessError("verifier_executable_path")
+    handle = kernel32.CreateFileW(
+        str(executable),
+        _GENERIC_READ,
+        _FILE_SHARE_READ,
+        None,
+        _OPEN_EXISTING,
+        _FILE_ATTRIBUTE_NORMAL | _FILE_FLAG_OPEN_REPARSE_POINT | _FILE_FLAG_SEQUENTIAL_SCAN,
+        None,
+    )
+    if _invalid_handle(handle):
+        raise _win_error("verifier_executable_open")
+    pinned = _PinnedExecutableHandle(kernel32, handle)
+    try:
+        information = _ByHandleFileInformation()
+        if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(information)):
+            raise _win_error("verifier_executable_stat")
+        attributes = int(information.dwFileAttributes)
+        if (
+            attributes & _FILE_ATTRIBUTE_DIRECTORY
+            or attributes & _FILE_ATTRIBUTE_REPARSE_POINT
+            or int(kernel32.GetFileType(handle)) != _FILE_TYPE_DISK
+        ):
+            raise VerifierProcessError("verifier_executable_not_regular_file")
+        actual_size = (int(information.nFileSizeHigh) << 32) | int(information.nFileSizeLow)
+        if actual_size != expected_executable_size_bytes:
+            raise VerifierProcessError("verifier_executable_size")
+
+        digest = hashlib.sha256()
+        buffer = ctypes.create_string_buffer(_EXECUTABLE_HASH_CHUNK_BYTES)
+        total = 0
+        try:
+            while True:
+                read = wintypes.DWORD()
+                if not kernel32.ReadFile(
+                    handle, buffer, _EXECUTABLE_HASH_CHUNK_BYTES,
+                    ctypes.byref(read), None,
+                ):
+                    raise _win_error("verifier_executable_read")
+                count = int(read.value)
+                if count > _EXECUTABLE_HASH_CHUNK_BYTES:
+                    raise VerifierProcessError("verifier_executable_read")
+                if count == 0:
+                    break
+                total += count
+                if total > expected_executable_size_bytes:
+                    raise VerifierProcessError("verifier_executable_size")
+                digest.update(buffer.raw[:count])
+        finally:
+            ctypes.memset(buffer, 0, _EXECUTABLE_HASH_CHUNK_BYTES)
+        if total != expected_executable_size_bytes:
+            raise VerifierProcessError("verifier_executable_size")
+        if not hmac.compare_digest(digest.digest(), expected_executable_sha256):
+            raise VerifierProcessError("verifier_executable_identity")
+        return pinned
+    except BaseException as primary_error:
+        try:
+            pinned.close()
+        except BaseException:
+            raise
+        raise primary_error
 
 
 def _quote_argument(value: str) -> str:
@@ -406,13 +589,15 @@ def run_contained_verifier(
     timeout_seconds: float,
     job_memory_cap_bytes: int = CAP_BYTES,
     _stdin_descriptor: int | None = None,
+    expected_executable_size_bytes: int | None = None,
+    expected_executable_sha256: bytes | None = None,
 ) -> ContainedVerifierResult:
     """Run one native verifier form under the required suspended Job Object."""
 
     if os.name != "nt":
         raise VerifierProcessError("verifier_windows_only")
-    if not isinstance(executable, Path) or executable.is_symlink() or not executable.is_file():
-        raise VerifierProcessError("verifier_executable_not_regular_file")
+    if not isinstance(executable, Path) or not executable.is_absolute():
+        raise VerifierProcessError("verifier_executable_path")
     if not workspace.is_dir() or workspace.is_symlink():
         raise VerifierProcessError("verifier_workspace")
     if type(timeout_seconds) is not float or not 0 < timeout_seconds <= 30 * 60:
@@ -425,6 +610,10 @@ def run_contained_verifier(
         type(_stdin_descriptor) is not int or _stdin_descriptor < 0
     ):
         raise VerifierProcessError("verifier_input_handle")
+    _validate_executable_pin(
+        expected_executable_size_bytes,
+        expected_executable_sha256,
+    )
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     required_apis = (
@@ -433,7 +622,8 @@ def run_contained_verifier(
         "TerminateJobObject", "GetExitCodeProcess", "QueryInformationJobObject",
         "CloseHandle", "SetHandleInformation", "InitializeProcThreadAttributeList",
         "UpdateProcThreadAttribute", "DeleteProcThreadAttributeList",
-        "GetCurrentProcess",
+        "GetCurrentProcess", "CreateFileW", "GetFileType",
+        "GetFileInformationByHandle", "ReadFile",
     )
     for name in required_apis:
         if not hasattr(kernel32, name):
@@ -469,6 +659,7 @@ def run_contained_verifier(
     kernel32.QueryInformationJobObject.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
+    _configure_executable_pin_apis(kernel32)
     kernel32.GetCurrentProcess.argtypes = []
     kernel32.GetCurrentProcess.restype = wintypes.HANDLE
     try:
@@ -526,6 +717,15 @@ def run_contained_verifier(
     memory_sampled = False
     child_process_count = 0
     admission_exceeded = False
+    pinned_executable: _PinnedExecutableHandle | None = None
+
+    def _release_pinned_executable() -> None:
+        nonlocal pinned_executable
+        pin = pinned_executable
+        pinned_executable = None
+        if pin is None:
+            return
+        pin.close()
 
     def _read_memory(handle: wintypes.HANDLE) -> tuple[int, int] | None:
         counters = _ProcessMemoryCountersEx()
@@ -623,6 +823,13 @@ def run_contained_verifier(
             except (OSError, ValueError, ImportError, TypeError):
                 raise VerifierProcessError("verifier_input_handle") from None
         try:
+            if expected_executable_size_bytes is not None:
+                pinned_executable = _open_pinned_executable(
+                    kernel32=kernel32,
+                    executable=executable,
+                    expected_executable_size_bytes=expected_executable_size_bytes,
+                    expected_executable_sha256=expected_executable_sha256,  # type: ignore[arg-type]
+                )
             _create_process_with_owned_output_handles(
                 kernel32=kernel32,
                 executable=executable,
@@ -639,6 +846,16 @@ def run_contained_verifier(
             # The helper owns and closes both parent descriptors on every path.
             stdout_write = None
             stderr_write = None
+            if pinned_executable is not None:
+                try:
+                    _release_pinned_executable()
+                except BaseException:
+                    if process_info.hProcess:
+                        try:
+                            kernel32.TerminateProcess(process_info.hProcess, 1)
+                        except BaseException:
+                            pass
+                    raise
         if not kernel32.AssignProcessToJobObject(job, process_info.hProcess):
             kernel32.TerminateProcess(process_info.hProcess, 1)
             raise _win_error("verifier_job_assign")
@@ -787,6 +1004,8 @@ def run_contained_verifier_stream(
     *,
     workspace: Path,
     timeout_seconds: float,
+    expected_executable_size_bytes: int | None = None,
+    expected_executable_sha256: bytes | None = None,
 ) -> ContainedVerifierResult:
     """Feed one bounded binary stream through the existing Job Object lane."""
 
@@ -828,6 +1047,8 @@ def run_contained_verifier_stream(
             timeout_seconds=timeout_seconds,
             job_memory_cap_bytes=ADMISSION_CAP_BYTES,
             _stdin_descriptor=read_descriptor,
+            expected_executable_size_bytes=expected_executable_size_bytes,
+            expected_executable_sha256=expected_executable_sha256,
         )
         return result
     finally:

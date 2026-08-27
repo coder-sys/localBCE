@@ -66,19 +66,19 @@ class _Clock:
         return 1_700_000_000_001
 
 
-def _contained(*, exit_code: int = 0, stdout: bytes = b"", stderr: bytes = b"", timed_out: bool = False, cap_enforced: bool = True, process_tree_complete: bool = True, cleanup_complete: bool = True) -> ContainedVerifierResult:
+def _contained(*, exit_code: int = 0, stdout: bytes = b"", stderr: bytes = b"", peak_job_commit_bytes: int = 1024, timed_out: bool = False, cap_enforced: bool = True, process_tree_complete: bool = True, measurement_complete: bool = True, cleanup_complete: bool = True) -> ContainedVerifierResult:
     return ContainedVerifierResult(
         exit_code=exit_code,
         stdout=stdout,
         stderr=stderr,
-        peak_job_commit_bytes=1024,
+        peak_job_commit_bytes=peak_job_commit_bytes,
         cap_bytes=ADMISSION_CAP_BYTES,
         cap_enforced=cap_enforced,
         active_process_limit=ACTIVE_PROCESS_LIMIT,
         timed_out=timed_out,
         child_process_count=1,
         process_tree_complete=process_tree_complete,
-        measurement_complete=True,
+        measurement_complete=measurement_complete,
         cleanup_complete=cleanup_complete,
     )
 
@@ -93,8 +93,25 @@ class SourceAuthAdapterTests(unittest.TestCase):
     def _run(self, result: ContainedVerifierResult = _contained()):
         captured: dict[str, object] = {}
 
-        def runner(executable: Path, arguments: tuple[str, ...], frame: bytes, *, workspace: Path, timeout_seconds: float):
-            captured.update(executable=executable, arguments=arguments, frame=frame, workspace=workspace, timeout_seconds=timeout_seconds)
+        def runner(
+            executable: Path,
+            arguments: tuple[str, ...],
+            frame: bytes,
+            *,
+            workspace: Path,
+            timeout_seconds: float,
+            expected_executable_size_bytes: int,
+            expected_executable_sha256: bytes,
+        ):
+            captured.update(
+                executable=executable,
+                arguments=arguments,
+                frame=frame,
+                workspace=workspace,
+                timeout_seconds=timeout_seconds,
+                expected_executable_size_bytes=expected_executable_size_bytes,
+                expected_executable_sha256=expected_executable_sha256,
+            )
             return result
 
         return captured, runner
@@ -117,6 +134,8 @@ class SourceAuthAdapterTests(unittest.TestCase):
         self.assertEqual(captured["arguments"], SOURCE_AUTH_PROCESS_ARGUMENTS)
         self.assertEqual(captured["workspace"], self.fixture.root)
         self.assertEqual(captured["timeout_seconds"], 30.0)
+        self.assertEqual(captured["expected_executable_size_bytes"], len(self.fixture.executable_bytes))
+        self.assertEqual(captured["expected_executable_sha256"], hashlib.sha256(self.fixture.executable_bytes).digest())
         ipc = captured["frame"]
         self.assertIs(type(ipc), bytes)
         self.assertEqual(len(ipc), SOURCE_AUTH_IPC_BYTES)
@@ -185,9 +204,12 @@ class SourceAuthAdapterTests(unittest.TestCase):
     def test_output_exit_two_timeout_and_containment_fail_closed(self) -> None:
         cases = (
             (_contained(stdout=b"x"), "verifier_transport"),
+            (_contained(stderr=b"x"), "verifier_transport"),
             (_contained(exit_code=2), "verifier_transport"),
             (_contained(timed_out=True), "verifier_timeout"),
             (_contained(cap_enforced=False), "verifier_transport"),
+            (_contained(measurement_complete=False), "verifier_transport"),
+            (_contained(peak_job_commit_bytes=-1), "verifier_transport"),
             (_contained(process_tree_complete=False), "verifier_transport"),
             (_contained(cleanup_complete=False), "verifier_transport"),
         )
@@ -205,22 +227,14 @@ class SourceAuthAdapterTests(unittest.TestCase):
                     with self.assertRaisesRegex(QueueHeldError, code):
                         self.fixture.adapter.verify(VolatileProofHandoff(io.BytesIO(self.fixture.frame)), self.fixture.batch)
 
-    def test_artifact_pin_length_and_hash_mismatch_skip_runner(self) -> None:
-        for replacement in (dict(executable_size_bytes=self.fixture.config.executable_size_bytes + 1), dict(executable_sha256=b"x" * 32)):
-            with self.subTest(replacement=replacement):
-                config = SourceAuthVerifierConfig(
-                    queue_config=self.fixture.queue_config,
-                    executable_path=self.fixture.executable,
-                    executable_size_bytes=replacement.get("executable_size_bytes", self.fixture.config.executable_size_bytes),
-                    executable_sha256=replacement.get("executable_sha256", self.fixture.config.executable_sha256),
-                    workspace=self.fixture.root,
-                    ml_dsa_87_public_key=self.fixture.key,
-                    timeout_seconds=30.0,
-                )
-                with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream") as runner:
-                    with self.assertRaisesRegex(QueueHeldError, "verifier_transport"):
-                        MinimalClearanceSourceAuthVerifierAdapter(config).verify(VolatileProofHandoff(io.BytesIO(self.fixture.frame)), self.fixture.batch)
-                runner.assert_not_called()
+    def test_forwards_artifact_pin_to_contained_runner(self) -> None:
+        captured, runner = self._run()
+        with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
+            MinimalClearanceSourceAuthVerifierAdapter(self.fixture.config).verify(
+                VolatileProofHandoff(io.BytesIO(self.fixture.frame)), self.fixture.batch
+            )
+        self.assertEqual(captured["expected_executable_size_bytes"], self.fixture.config.executable_size_bytes)
+        self.assertEqual(captured["expected_executable_sha256"], self.fixture.config.executable_sha256)
 
     def test_public_key_is_not_repr_or_queue_durable_material(self) -> None:
         self.assertNotIn(self.fixture.key.hex(), repr(self.fixture.config))
@@ -236,8 +250,17 @@ class SourceAuthAdapterTests(unittest.TestCase):
         store = _VerificationQueueStore(path=database, config=self.fixture.queue_config, owner=owner, clock=_Clock())
         captured: dict[str, bytes] = {}
 
-        def runner(_executable: Path, _arguments: tuple[str, ...], ipc: bytes, *, workspace: Path, timeout_seconds: float):
-            del workspace, timeout_seconds
+        def runner(
+            _executable: Path,
+            _arguments: tuple[str, ...],
+            ipc: bytes,
+            *,
+            workspace: Path,
+            timeout_seconds: float,
+            expected_executable_size_bytes: int,
+            expected_executable_sha256: bytes,
+        ):
+            del workspace, timeout_seconds, expected_executable_size_bytes, expected_executable_sha256
             captured["ipc"] = ipc
             return _contained()
 

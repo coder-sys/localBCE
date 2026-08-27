@@ -8,8 +8,6 @@ signature, key, frame, IPC, or process-output bytes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import hashlib
-import hmac
 from pathlib import Path
 from typing import Final, NoReturn
 
@@ -36,7 +34,6 @@ SOURCE_AUTH_IPC_BYTES: Final[int] = 4_684_883
 SOURCE_AUTH_PROCESS_ARGUMENTS: Final[tuple[str, ...]] = ()
 SOURCE_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0 * 60.0
 _SHA256_BYTES: Final[int] = 32
-_FRAME_CHUNK_BYTES: Final[int] = 1 << 20
 
 
 def _raise_fixed(error: QueueHeldError | QueueIntegrityError) -> NoReturn:
@@ -147,30 +144,6 @@ def _build_ipc_input(*, batch: IssuedVerificationBatch, source_key_epoch: int, p
     return ipc
 
 
-def _verify_executable_pin(config: SourceAuthVerifierConfig) -> None:
-    path = config.executable_path
-    try:
-        if path.is_symlink() or not path.is_file():
-            _hold("verifier_transport")
-        before = path.stat()
-        if before.st_size != config.executable_size_bytes:
-            _hold("verifier_transport")
-        digest = hashlib.sha256()
-        with path.open("rb") as executable:
-            while True:
-                chunk = executable.read(_FRAME_CHUNK_BYTES)
-                if not chunk:
-                    break
-                digest.update(chunk)
-        after = path.stat()
-        if path.is_symlink() or after.st_size != config.executable_size_bytes or not hmac.compare_digest(digest.digest(), config.executable_sha256):
-            _hold("verifier_transport")
-    except (QueueHeldError, QueueIntegrityError):
-        raise
-    except BaseException:
-        _hold("verifier_transport")
-
-
 def _validate_contained_result(result: object) -> ContainedVerifierResult:
     if type(result) is not ContainedVerifierResult:
         _hold("verifier_transport")
@@ -182,13 +155,16 @@ def _validate_contained_result(result: object) -> ContainedVerifierResult:
         or result.stderr
         or result.timed_out is not False
         or result.cap_enforced is not True
+        or type(result.cap_bytes) is not int
         or result.cap_bytes != ADMISSION_CAP_BYTES
+        or type(result.active_process_limit) is not int
         or result.active_process_limit != ACTIVE_PROCESS_LIMIT
         or type(result.peak_job_commit_bytes) is not int
-        or result.peak_job_commit_bytes > ADMISSION_CAP_BYTES
+        or not 0 <= result.peak_job_commit_bytes <= ADMISSION_CAP_BYTES
         or type(result.child_process_count) is not int
         or result.child_process_count < 1
         or result.process_tree_complete is not True
+        or result.measurement_complete is not True
         or result.cleanup_complete is not True
     ):
         if getattr(result, "timed_out", False) is True:
@@ -224,7 +200,6 @@ class MinimalClearanceSourceAuthVerifierAdapter:
                 public_key=self._config.ml_dsa_87_public_key,
                 frame=frame,
             )
-            _verify_executable_pin(self._config)
             try:
                 contained = run_contained_verifier_stream(
                     self._config.executable_path,
@@ -232,6 +207,8 @@ class MinimalClearanceSourceAuthVerifierAdapter:
                     bytes(ipc),
                     workspace=self._config.workspace,
                     timeout_seconds=self._config.timeout_seconds,
+                    expected_executable_size_bytes=self._config.executable_size_bytes,
+                    expected_executable_sha256=self._config.executable_sha256,
                 )
             except VerifierProcessError as error:
                 if str(error).startswith("verifier_timeout"):
