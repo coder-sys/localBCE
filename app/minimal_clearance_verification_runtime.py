@@ -1,8 +1,7 @@
-"""Single-owner Queue/Proof Handoff V7 runtime.
+"""Single-owner Queue V8 runtime.
 
-The runtime owns the database owner and the volatile handoff map. It never
-creates a proof workspace and never constructs an unqualified native backend.
-Tests may inject a synthetic verifier explicitly.
+The runtime exposes only the state-issued 100-member batch issuance and its
+one-shot volatile handoff. It has no per-operation or legacy V7 entry point.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from app.minimal_clearance_verification_queue import (
-    IssuedOperationStatement,
+    IssuedVerificationBatch,
     OperationTemplate,
     QueueConfig,
     QueueResult,
@@ -66,7 +65,7 @@ class RuntimeRunResult:
 
 
 class MinimalClearanceVerificationRuntime:
-    """One owner, one synchronous worker, one-use volatile handoffs."""
+    """One owner, one synchronous worker, one batch handoff."""
 
     def __init__(self, *, root: Path, verifier: object | None = None, config: QueueConfig | None = None) -> None:
         if not isinstance(root, Path) or not root.is_absolute() or not root.is_dir():
@@ -76,7 +75,7 @@ class MinimalClearanceVerificationRuntime:
         try:
             database = root / "queue.sqlite"
             if config is None:
-                config = QueueConfig("minimal-clearance-queue-v7", 256)
+                config = QueueConfig("minimal-clearance-queue-v8", 100)
             owner = _QueueRuntimeOwnership(lock_path=database.with_name(database.name + ".runtime-lock"), parent=root)
             self._store = _VerificationQueueStore(path=database, config=config, owner=owner)
         except VerificationQueueError as error:
@@ -98,17 +97,17 @@ class MinimalClearanceVerificationRuntime:
         except BaseException:
             _fixed("runtime_owner")
 
-    def run(self, *, max_jobs: int = 256) -> RuntimeRunResult:
+    def run(self, *, max_batches: int = 1) -> RuntimeRunResult:
         self._assert_open()
-        if type(max_jobs) is not int or not 1 <= max_jobs <= 256:
-            _fixed("runtime_max_jobs")
+        if type(max_batches) is not int or not 1 <= max_batches <= 256:
+            _fixed("runtime_max_batches")
         accepted = rejected = held = 0
-        for _ in range(max_jobs):
-            result = self._store._process_one(verifier=self._verifier)
+        for _ in range(max_batches):
+            result = self._store._process_one_batch(verifier=self._verifier)
             if result is None:
                 break
             if result.status == "VERIFIED":
-                accepted += 1
+                accepted += result.accepted_count
             elif result.status == "REJECTED":
                 rejected += 1
             elif result.status == "HELD":
@@ -119,21 +118,13 @@ class MinimalClearanceVerificationRuntime:
             return RuntimeRunResult("EMPTY", None, None, None, None, self._recovered_leases)
         return RuntimeRunResult("PROCESSED", None, accepted, rejected, held, self._recovered_leases)
 
-    def issue_operation(self, *, template: OperationTemplate) -> IssuedOperationStatement:
-        self._assert_open()
-        return self._store.issue_operation(template=template)
-
-    def issue_batch(self, *, templates: tuple[OperationTemplate, ...]) -> tuple[IssuedOperationStatement, ...]:
+    def issue_batch(self, *, templates: tuple[OperationTemplate, ...]) -> IssuedVerificationBatch:
         self._assert_open()
         return self._store.issue_batch(templates=templates)
 
-    def submit_handoff(self, *, operation_ref: bytes, proof_stream: BinaryIO | VolatileProofHandoff, declared_length: int | None = None) -> None:
+    def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: BinaryIO | VolatileProofHandoff, declared_length: int | None = None) -> IssuedVerificationBatch:
         self._assert_open()
-        self._store.submit_handoff(operation_ref=operation_ref, proof_stream=proof_stream, declared_length=declared_length)
-
-    def submit_batch_handoffs(self, *, statements: tuple[IssuedOperationStatement, ...], proof_streams: tuple[BinaryIO | VolatileProofHandoff, ...], declared_lengths: tuple[int | None, ...] | None = None) -> tuple[Any, ...]:
-        self._assert_open()
-        return self._store.submit_batch_handoffs(statements=statements, proof_streams=proof_streams, declared_lengths=declared_lengths)
+        return self._store.submit_batch_handoff(issued_batch=issued_batch, proof_stream=proof_stream, declared_length=declared_length)
 
     def _verify_integrity(self) -> None:
         self._assert_open()
@@ -145,7 +136,7 @@ class MinimalClearanceVerificationRuntime:
 
     def _expected_config(self) -> dict[str, object]:
         self._assert_open()
-        return self._store.config.as_json()
+        return self._store.config.as_json
 
     def support_summary(self) -> dict[str, Any]:
         self._assert_open()

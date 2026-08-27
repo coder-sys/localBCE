@@ -1,447 +1,317 @@
-from __future__ import annotations
-
-from contextlib import closing
-from dataclasses import replace
 import io
-import json
-from pathlib import Path
 import sqlite3
 import tempfile
+import time
 import unittest
+from contextlib import closing
+from pathlib import Path
 
 from app.minimal_clearance_verification_queue import (
     ADMISSION_CAP_BYTES,
-    PROCESS_TREE_PEAK_CAP_BYTES,
-    IssuedOperationStatement,
-    OperationTemplate,
+    BatchVerifierResult,
     QueueConfig,
     QueueConflictError,
-    QueueDeterministicRejectError,
     QueueHeldError,
-    QueueIntegrityError,
-    QueueLeaseError,
-    VerifierResult,
+    OperationTemplate,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
     _VerificationQueueStore,
-    _compute_batch_root,
+    _build_statement,
+    _reserve_units,
 )
 from app.minimal_clearance_verification_queue_independent import (
     IndependentQueueError,
     read_verified_batch,
     verify_database,
 )
-import app.minimal_clearance_verification_queue_independent as queue_independent
-
-
-class _Verifier:
-    def __init__(self, *, unknown: bool = False, accepted: bool = True, profile: str = "synthetic-v7-unqualified") -> None:
-        self.unknown = unknown
-        self.accepted = accepted
-        self.profile = profile
-        self.seen: list[bytes] = []
-
-    def verify(self, stream: VolatileProofHandoff, statement: IssuedOperationStatement):
-        raw = stream.read()
-        stream.read()
-        self.seen.append(raw)
-        embedded = _decode_proof(raw)
-        if self.unknown:
-            return {
-                "proof_accepted": True,
-                "operation_ref": embedded.operation_ref.hex().upper(),
-                "assertion_identifier": embedded.assertion_identifier,
-                "assertion_version": embedded.assertion_version,
-                "state_profile_version": embedded.state_profile_version,
-                "valid_from_ms": embedded.valid_from_ms,
-                "valid_until_ms": embedded.valid_until_ms,
-                "batch_position": embedded.batch_position,
-                "batch_root": None if embedded.batch_root is None else embedded.batch_root.hex().upper(),
-                "approved_source_registry_root": None if embedded.approved_source_registry_root is None else embedded.approved_source_registry_root.hex().upper(),
-                "verifier_profile_version": self.profile,
-                "outcome_code": "ok",
-                "error_code": None,
-                "resource_code": None,
-                "qualification_flags": list(embedded.qualification_flags),
-                "policy_result": "PASS",
-            }
-        return VerifierResult(
-            self.accepted,
-            embedded.operation_ref,
-            embedded.assertion_identifier,
-            embedded.assertion_version,
-            embedded.state_profile_version,
-            embedded.valid_from_ms,
-            embedded.valid_until_ms,
-            embedded.batch_position,
-            embedded.batch_root,
-            embedded.approved_source_registry_root,
-            self.profile,
-            "ok" if self.accepted else "rejected",
-            qualification_flags=embedded.qualification_flags,
-        )
-
-
-_PROOF_MAGIC = b"BL/SYNTHETIC-QUEUE-PROOF/v7\x00"
-
-
-def _proof_bytes(statement: IssuedOperationStatement) -> bytes:
-    raw = statement.canonical_bytes
-    return _PROOF_MAGIC + len(raw).to_bytes(4, "big") + raw
-
-
-def _decode_proof(raw: bytes) -> IssuedOperationStatement:
-    start = raw.find(_PROOF_MAGIC)
-    if start < 0 or len(raw) < start + len(_PROOF_MAGIC) + 4:
-        raise QueueDeterministicRejectError("synthetic_proof")
-    offset = start + len(_PROOF_MAGIC)
-    length = int.from_bytes(raw[offset:offset + 4], "big")
-    payload = raw[offset + 4:offset + 4 + length]
-    if length != len(payload):
-        raise QueueDeterministicRejectError("synthetic_proof")
-    try:
-        value = json.loads(payload.decode("ascii"))
-        if set(value) != set(IssuedOperationStatement(b"r" * 32, "a", 1, "p", 0, 1).as_json):
-            raise ValueError
-        return IssuedOperationStatement(
-            bytes.fromhex(value["operation_ref"]), value["assertion_identifier"], int(value["assertion_version"]),
-            value["state_profile_version"], int(value["valid_from_ms"]), int(value["valid_until_ms"]),
-            int(value["batch_position"]), None if value["batch_root"] is None else bytes.fromhex(value["batch_root"]),
-            None if value["approved_source_registry_root"] is None else bytes.fromhex(value["approved_source_registry_root"]),
-            tuple(value["qualification_flags"]),
-        )
-    except (TypeError, ValueError, KeyError, json.JSONDecodeError):
-        raise QueueDeterministicRejectError("synthetic_proof")
 
 
 class _Clock:
-    def __init__(self, value: int = 0) -> None:
-        self.value = value
+    def __init__(self, now: int) -> None:
+        self.now = now
 
     def now_ms(self) -> int:
-        return self.value
+        return self.now
 
 
-class _EchoVerifier:
-    def verify(self, _stream: VolatileProofHandoff, statement: IssuedOperationStatement) -> VerifierResult:
-        return VerifierResult(True, statement.operation_ref, statement.assertion_identifier, statement.assertion_version, statement.state_profile_version, statement.valid_from_ms, statement.valid_until_ms, statement.batch_position, statement.batch_root, statement.approved_source_registry_root, "synthetic-v7-unqualified", "echo", qualification_flags=statement.qualification_flags)
+class _Verifier:
+    def __init__(self, config: QueueConfig, *, proof_accepted: bool = True, source_authenticated: bool = True, mutate: str | None = None, unknown: bool = False) -> None:
+        self.config = config
+        self.proof_accepted = proof_accepted
+        self.source_authenticated = source_authenticated
+        self.mutate = mutate
+        self.unknown = unknown
+        self.calls = 0
+
+    def verify(self, stream: VolatileProofHandoff, issued_batch):
+        self.calls += 1
+        while stream.read(17):
+            pass
+        statement = issued_batch.proof_statement
+        root = issued_batch.batch_root
+        if self.mutate == "statement":
+            statement = bytes([statement[0] ^ 1]) + statement[1:]
+        if self.mutate == "root":
+            root = bytes([root[0] ^ 1]) + root[1:]
+        source_profile = self.config.source_auth_profile
+        source_epoch = self.config.source_key_epoch
+        flags = self.config.qualification_flags
+        if self.mutate == "source_profile":
+            source_profile = "untrusted-source-auth"
+        if self.mutate == "source_epoch":
+            source_epoch += 1
+        if self.mutate == "flags":
+            flags = ("untrusted-flag",)
+        if self.unknown:
+            return {
+                "proof_accepted": self.proof_accepted,
+                "source_authenticated": self.source_authenticated,
+                "proof_statement": statement,
+                "batch_root": root,
+                "source_auth_profile": source_profile,
+                "source_key_epoch": source_epoch,
+                "result_code": "accepted" if self.proof_accepted else "rejected",
+                "qualification_flags": list(flags),
+                "policyResult": "PASS",
+            }
+        return BatchVerifierResult(
+            self.proof_accepted,
+            self.source_authenticated,
+            statement,
+            root,
+            source_profile,
+            source_epoch,
+            "accepted" if self.proof_accepted else "rejected",
+            flags,
+        )
 
 
-class _PartialVerifier:
-    def verify(self, stream: VolatileProofHandoff, statement: IssuedOperationStatement) -> VerifierResult:
-        stream.read(1)
-        stream.read(0)
-        return VerifierResult(True, statement.operation_ref, statement.assertion_identifier, statement.assertion_version, statement.state_profile_version, statement.valid_from_ms, statement.valid_until_ms, statement.batch_position, statement.batch_root, statement.approved_source_registry_root, "synthetic-v7-unqualified", "partial", qualification_flags=statement.qualification_flags)
-
-
-class QueueV7Tests(unittest.TestCase):
+class QueueV8Tests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory(prefix="bl-queue-v7-")
-        self.root = Path(self.temp.name)
-        self.config = QueueConfig("queue-v7-test", 8)
+        self._temp = tempfile.TemporaryDirectory()
+        self.root = Path(self._temp.name)
+        self.path = self.root / "queue.sqlite"
+        self.clock = _Clock(1_700_000_000_000)
+        self.config = QueueConfig("queue-v8", 512)
         self.owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
-        self.store = _VerificationQueueStore(path=self.root / "queue.sqlite", config=self.config, owner=self.owner)
+        self.store = _VerificationQueueStore(path=self.path, config=self.config, owner=self.owner, clock=self.clock)
 
     def tearDown(self) -> None:
         self.store._close()
         self.owner.close()
-        self.temp.cleanup()
+        self._temp.cleanup()
 
-    def _template(self, position: int = 0) -> OperationTemplate:
-        return OperationTemplate(f"assertion-{position}", 1, "state-profile-v7", 0, 10**15, None, ())
+    def templates(self, *, offset: int = 0, registry: bytes | None = None) -> tuple[OperationTemplate, ...]:
+        return tuple(OperationTemplate(f"assertion-{offset + index}", 1, "state-profile-v8", self.clock.now - 100, self.clock.now + 3_000_000, registry, ()) for index in range(100))
 
-    def _issue(self, position: int = 0) -> tuple[IssuedOperationStatement, object]:
-        statement = self.store.issue_operation(template=self._template(position))
-        job = self.store.submit_handoff(operation_ref=statement.operation_ref, proof_stream=io.BytesIO(_proof_bytes(statement)), declared_length=len(_proof_bytes(statement)))
-        return statement, job
+    def issue(self, *, offset: int = 0, registry: bytes | None = None):
+        return self.store.issue_batch(templates=self.templates(offset=offset, registry=registry))
 
-    def _issue_batch(self, *, second_proof: bytes | None = None) -> tuple[tuple[IssuedOperationStatement, ...], tuple[object, ...]]:
-        statements = self.store.issue_batch(templates=(self._template(0), self._template(1)))
-        proofs = (_proof_bytes(statements[0]), _proof_bytes(statements[1]) if second_proof is None else second_proof)
-        jobs = self.store.submit_batch_handoffs(statements=statements, proof_streams=tuple(io.BytesIO(proof) for proof in proofs))
-        return statements, jobs
+    def submit(self, batch, proof: bytes = b"synthetic-volatile-proof") -> None:
+        self.store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(proof), declared_length=len(proof))
 
-    def _batch_selector(self, statements: tuple[IssuedOperationStatement, ...]) -> bytes:
-        member = queue_independent._sha(queue_independent._BATCH, b"".join(statement.operation_ref for statement in statements))
-        return queue_independent._sha(queue_independent._BATCH, self.config.digest, statements[0].batch_root or b"", member)
+    def snapshot(self) -> bytes:
+        return self.path.read_bytes()
 
-    def test_v7_schema_has_only_allowlisted_fields_and_flags(self) -> None:
-        self.assertEqual(self.config.as_json["schema_version"], 7)
-        self.assertEqual(self.config.as_json["handoff_protocol"], "ISSUE_THEN_HANDOFF_V1")
-        self.assertEqual(self.config.as_json["admission_cap_bytes"], 4_500_000_000)
-        self.assertLess(self.config.as_json["process_tree_peak_cap_bytes"], 5_000_000_000)
-        with closing(sqlite3.connect(self.store.path)) as connection:
-            columns = {
-                table: tuple(row[1] for row in connection.execute(f"PRAGMA table_info({table})"))
-                for table in ("queue_metadata", "queue_jobs", "queue_leases", "queue_results", "queue_transitions")
-            }
-        joined = " ".join(" ".join(value) for value in columns.values()).lower()
-        for forbidden in ("artifact", "source_path", "patient", "provider", "case_id", "stdout", "stderr", "acceptance_bytes", "policy_result", "effective_directive"):
-            self.assertNotIn(forbidden, joined)
-        self.assertEqual(ADMISSION_CAP_BYTES, 4_500_000_000)
-        self.assertEqual(PROCESS_TREE_PEAK_CAP_BYTES, 4_999_999_999)
-
-    def test_stream_is_single_use_and_raw_material_never_enters_durable_surfaces(self) -> None:
-        sentinel = b"RAW_PROOF_SENTINEL_SOURCE_PATH_PATIENT_PROVIDER_CASE"
-        statement = self.store.issue_operation(template=self._template())
-        proof = sentinel + _proof_bytes(statement)
-        stream = io.BytesIO(proof)
-        job = self.store.submit_handoff(operation_ref=statement.operation_ref, proof_stream=stream, declared_length=len(proof))
-        verifier = _Verifier()
-        result = self.store._process_one(verifier=verifier)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.status, "VERIFIED")
-        self.assertEqual(len(verifier.seen), 1)
-        self.assertIn(sentinel, verifier.seen[0])
-        self.assertTrue(stream.closed)
-        self.assertEqual(len(job.operation_ref), 32)
-        receipt = result.receipt_bytes or b""
-        exported = self.store._export_bytes()
-        database = self.store.path.read_bytes()
-        self.assertNotIn(sentinel, receipt)
-        self.assertNotIn(sentinel, exported)
-        self.assertNotIn(sentinel, database)
-        self.assertFalse(any("workspace" in item.name.lower() for item in self.root.iterdir()))
-        self.assertEqual(verify_database(self.store.path, expected_config=self.config.as_json)["verified_count"], 1)
-
-    def test_new_admission_generates_different_reference_and_unknown_verifier_fields_hold(self) -> None:
-        first_statement, first = self._issue()
-        self.assertEqual(self.store._process_one(verifier=_Verifier()).status, "VERIFIED")
-        second_statement = self.store.issue_operation(template=self._template(1))
-        second = self.store.submit_handoff(operation_ref=second_statement.operation_ref, proof_stream=io.BytesIO(_proof_bytes(second_statement)))
-        self.assertNotEqual(first.operation_ref, second.operation_ref)
-        held = self.store._process_one(verifier=_Verifier(unknown=True))
-        self.assertEqual(held.status, "HELD")
-        self.assertEqual(held.error_code, "verifier_result_unknown_field")
-        self.assertEqual(verify_database(self.store.path, expected_config=self.config.as_json)["status_counts"]["HELD"], 1)
-
-    def test_declared_oversize_rejected_before_any_queue_mutation(self) -> None:
-        stream = io.BytesIO(b"oversize")
-        with self.assertRaises(QueueHeldError) as raised:
-            statement = self.store.issue_operation(template=self._template())
-            self.store.submit_handoff(operation_ref=statement.operation_ref, proof_stream=stream, declared_length=ADMISSION_CAP_BYTES + 1)
-        self.assertEqual(str(raised.exception), "proof_handoff_oversize")
-        self.assertTrue(stream.closed)
-        self.assertEqual(self.store._snapshot()["counts"]["AWAITING_HANDOFF"], 1)
-        self.assertEqual(self.store._snapshot()["admission_count"], 1)
-
-    def test_batch_admission_is_atomic_when_a_later_handoff_is_invalid(self) -> None:
-        first = io.BytesIO(b"first")
-        second = io.BytesIO(b"second")
-        with self.assertRaises(QueueHeldError) as raised:
-            statements = self.store.issue_batch(templates=(self._template(0), self._template(1)))
-            before = self.store._snapshot()
-            self.store.submit_batch_handoffs(statements=statements, proof_streams=(first, second), declared_lengths=(5, ADMISSION_CAP_BYTES + 1))
-        self.assertEqual(str(raised.exception), "proof_handoff_oversize")
-        self.assertTrue(first.closed)
-        self.assertTrue(second.closed)
-        self.assertEqual(self.store._snapshot()["admission_count"], 2)
-        self.assertEqual(self.store._snapshot()["counts"]["AWAITING_HANDOFF"], 2)
-        self.assertEqual(self.store._snapshot(), before)
-
-    def test_two_phase_api_has_no_one_step_alias_and_echo_only_verifier_fails_closed(self) -> None:
-        self.assertFalse(hasattr(self.store, "admit"))
-        self.assertFalse(hasattr(self.store, "admit_batch"))
-        with self.assertRaises(TypeError):
-            self.store.submit_handoff(proof_stream=io.BytesIO(b"proof"))
-        statement = self.store.issue_operation(template=self._template())
-        self.assertEqual(self.store._snapshot()["counts"]["AWAITING_HANDOFF"], 1)
-        self.store.submit_handoff(operation_ref=statement.operation_ref, proof_stream=io.BytesIO(_proof_bytes(statement)))
-        result = self.store._process_one(verifier=_EchoVerifier())
-        self.assertEqual((result.status, result.error_code), ("HELD", "verifier_stream_not_consumed"))
-        self.assertEqual(self.store._get_job(statement.operation_ref).status, "HELD")
-        duplicate_stream = io.BytesIO(_proof_bytes(statement))
-        with self.assertRaises(QueueConflictError) as raised:
-            self.store.submit_handoff(operation_ref=statement.operation_ref, proof_stream=duplicate_stream)
-        self.assertEqual(str(raised.exception), "handoff_duplicate")
-        self.assertTrue(duplicate_stream.closed)
-
-    def test_precomputed_proof_wrong_reference_and_statement_fields_fail_closed(self) -> None:
-        first = self.store.issue_operation(template=self._template(0))
-        second = self.store.issue_operation(template=self._template(1))
-        self.store.submit_handoff(operation_ref=second.operation_ref, proof_stream=io.BytesIO(_proof_bytes(first)))
-        self.assertEqual(self.store._process_one(verifier=_Verifier()).error_code, "verifier_statement_mismatch")
-        mutations = (
-            {"assertion_identifier": "wrong-assertion"},
-            {"state_profile_version": "wrong-profile"},
-            {"valid_until_ms": 10**14},
-            {"batch_position": 1},
-            {"batch_root": b"z" * 64},
+    def test_exact_100_state_issuance_and_v3_statement(self) -> None:
+        batch = self.issue()
+        self.assertEqual(len(batch.statements), 100)
+        self.assertEqual(len({item.operation_ref for item in batch.statements}), 100)
+        self.assertEqual(batch.statements[0].batch_position, 0)
+        self.assertEqual(batch.statements[-1].batch_position, 99)
+        self.assertEqual(len(batch.batch_root), 64)
+        self.assertEqual(batch.ordered_binding, batch.batch_root[:32])
+        self.assertEqual(len(batch.proof_statement), 240)
+        self.assertEqual(batch.proof_statement[:16], b"BL-R100-STMT-V1\x00")
+        self.assertEqual(batch.proof_statement[16:18], b"\x01\x00")
+        self.assertEqual(int.from_bytes(batch.proof_statement[18:20], "little"), 240)
+        self.assertEqual(batch.proof_statement[52:84], batch.batch_root[:32])
+        fixed_root = bytes(range(64))
+        fixed_statement = _build_statement(
+            batch_root=fixed_root,
+            state_challenge=bytes(range(32)),
+            valid_from_ms=1,
+            valid_until_ms=2,
         )
-        for index, changes in enumerate(mutations, start=2):
-            issued = self.store.issue_operation(template=self._template(index))
-            wrong = replace(issued, **changes)
-            self.store.submit_handoff(operation_ref=issued.operation_ref, proof_stream=io.BytesIO(_proof_bytes(wrong)))
-            self.assertEqual(self.store._process_one(verifier=_Verifier()).error_code, "verifier_statement_mismatch")
-
-    def test_complete_statement_and_verifier_profile_are_bound(self) -> None:
-        template = OperationTemplate("registry-bound", 1, "state-profile-v7", 0, 10**15, b"a" * 64, ())
-        issued = self.store.issue_operation(template=template)
-        wrong = replace(issued, approved_source_registry_root=b"b" * 64)
-        self.store.submit_handoff(operation_ref=issued.operation_ref, proof_stream=io.BytesIO(_proof_bytes(wrong)))
-        self.assertEqual(self.store._process_one(verifier=_Verifier()).error_code, "verifier_statement_mismatch")
-        profiled = self.store.issue_operation(template=self._template(1))
-        self.store.submit_handoff(operation_ref=profiled.operation_ref, proof_stream=io.BytesIO(_proof_bytes(profiled)))
-        self.assertEqual(self.store._process_one(verifier=_Verifier(profile="wrong-profile")).error_code, "verifier_statement_mismatch")
-
-    def test_partial_stream_cannot_mark_eof_with_zero_length_read(self) -> None:
-        issued = self.store.issue_operation(template=self._template())
-        proof = _proof_bytes(issued)
-        self.store.submit_handoff(operation_ref=issued.operation_ref, proof_stream=io.BytesIO(proof))
-        result = self.store._process_one(verifier=_PartialVerifier())
-        self.assertEqual((result.status, result.error_code), ("HELD", "verifier_stream_not_consumed"))
-
-    def test_state_issued_batch_root_is_recomputed_and_caller_cannot_supply_one(self) -> None:
+        self.assertEqual(fixed_statement[52:84], bytes(range(32)))
+        self.assertEqual(int.from_bytes(batch.proof_statement[84:88], "little"), 3)
+        self.assertEqual(batch.proof_statement[112:176], bytes.fromhex("982cbb064e424c3734b09a4e8579338092fd3b71d7ae81f7a64174d9ba8919f6c1fcc3b7c0837d64dc1cec954194e1648f3375bfe7f08a8a9347aa320137efd4"))
+        self.assertEqual(batch.proof_statement[176:240], bytes.fromhex("625af0b814643d81b5848bb3ee1f76935e5f05c8232d31c9f6b969e810e28c885897a5bab2a89ae3f4721208b64f9b99c677a8e8e90b481aec4fc3ddc9b921fe"))
         with self.assertRaises(TypeError):
-            OperationTemplate("caller-root", 1, "state-profile-v7", 0, 10**15, None, (), batch_root=b"x" * 64)
-        statements = self.store.issue_batch(templates=(self._template(0), self._template(1)))
-        self.assertEqual(statements[0].batch_root, _compute_batch_root(tuple(replace(statement, batch_root=None) for statement in statements)))
-        self.assertEqual(verify_database(self.store.path, expected_config=self.config.as_json)["status_counts"]["AWAITING_HANDOFF"], 2)
-        with self.assertRaises(QueueConflictError) as raised:
-            self.store.submit_batch_handoffs(statements=(statements[1], statements[0]), proof_streams=(io.BytesIO(_proof_bytes(statements[1])), io.BytesIO(_proof_bytes(statements[0]))))
-        self.assertEqual(str(raised.exception), "queue_batch_binding")
-        self.assertEqual(verify_database(self.store.path, expected_config=self.config.as_json)["status_counts"]["HELD"], 2)
+            OperationTemplate("x", 1, "state", 1, 2, operation_ref=b"x")
+        for name in ("issue_operation", "submit_handoff", "submit_batch_handoffs", "_process_one"):
+            self.assertFalse(hasattr(self.store, name), name)
 
-    def test_failed_and_expired_handoffs_consume_reference_and_new_issue_is_distinct(self) -> None:
-        failed = self.store.issue_operation(template=self._template())
-        self.store.submit_handoff(operation_ref=failed.operation_ref, proof_stream=io.BytesIO(b"not-a-proof"))
-        self.assertEqual(self.store._process_one(verifier=_Verifier()).status, "REJECTED")
-        with self.assertRaises(QueueConflictError) as raised:
-            self.store.submit_handoff(operation_ref=failed.operation_ref, proof_stream=io.BytesIO(b"not-a-proof"))
-        self.assertEqual(str(raised.exception), "handoff_duplicate")
-        expired_owner = _QueueRuntimeOwnership(lock_path=self.root / "expired.sqlite.runtime-lock", parent=self.root)
-        expired_clock = _Clock(2)
-        expired_store = _VerificationQueueStore(path=self.root / "expired.sqlite", config=self.config, owner=expired_owner, clock=expired_clock)
-        try:
-            expired = expired_store.issue_operation(template=OperationTemplate("expired", 1, "state-profile-v7", 0, 1))
-            expired_stream = io.BytesIO(b"proof")
-            with self.assertRaises(QueueHeldError) as held:
-                expired_store.submit_handoff(operation_ref=expired.operation_ref, proof_stream=expired_stream)
-            self.assertEqual(str(held.exception), "fresh_handoff_required")
-            self.assertTrue(expired_stream.closed)
-            fresh = expired_store.issue_operation(template=self._template())
-            self.assertNotEqual(expired.operation_ref, fresh.operation_ref)
-        finally:
-            expired_store._close()
-            expired_owner.close()
+    def test_issue_requires_exactly_100_and_caller_cannot_supply_root_or_refs(self) -> None:
+        with self.assertRaisesRegex(Exception, "queue_batch_requires_100"):
+            self.store.issue_batch(templates=self.templates()[:-1])
+        with self.assertRaisesRegex(Exception, "queue_batch_requires_100"):
+            self.store.issue_batch(templates=self.templates() + (self.templates()[0],))
+        with self.assertRaises(TypeError):
+            self.store.issue_batch(templates=self.templates(), batch_root=bytes(64))
 
-    def test_expiry_completion_commits_held_and_closes_the_volatile_handoff(self) -> None:
-        clock = _Clock()
-        path = self.root / "expiry.sqlite"
-        owner = _QueueRuntimeOwnership(lock_path=self.root / "expiry.sqlite.runtime-lock", parent=self.root)
-        store = _VerificationQueueStore(path=path, config=self.config, owner=owner, clock=clock)
-        stream = io.BytesIO(b"expired")
-        try:
-            statement = store.issue_operation(template=self._template())
-            job = store.submit_handoff(operation_ref=statement.operation_ref, proof_stream=stream)
-            work = store._claim_next()
-            clock.value = 3_600_001
-            with self.assertRaises(QueueLeaseError) as raised:
-                store._complete(work, status="HELD", error_code="fresh_handoff_required")
-            self.assertEqual(str(raised.exception), "lease_expired")
-            self.assertTrue(stream.closed)
-            self.assertEqual(store._get_job(job.operation_ref).status, "HELD")
-            self.assertEqual(verify_database(path, expected_config=self.config.as_json)["status_counts"]["HELD"], 1)
-        finally:
-            store._close()
-            owner.close()
+    def test_attempt_budget_exact_boundary_is_101_units_and_does_not_roll_by_epoch(self) -> None:
+        self.assertEqual(_reserve_units(2**32 - 101), 2**32)
+        with self.assertRaisesRegex(Exception, "computational_budget_exhausted"):
+            _reserve_units(2**32 - 100)
+        with self.assertRaisesRegex(Exception, "computational_ledger"):
+            _reserve_units(-1)
 
-    def test_restart_and_lease_expiry_are_held_and_require_fresh_handoff(self) -> None:
-        statement, job = self._issue()
-        work = self.store._claim_next()
-        self.assertEqual(work.operation_ref, job.operation_ref)
+    def test_valid_batch_is_one_verifier_call_and_one_atomic_verified_projection(self) -> None:
+        batch = self.issue()
+        self.submit(batch)
+        verifier = _Verifier(self.config)
+        result = self.store._process_one_batch(verifier=verifier)
+        self.assertEqual((result.status, result.accepted_count, verifier.calls), ("VERIFIED", 100, 1))
+        promoted = read_verified_batch(self.path, batch.batch_id)
+        self.assertEqual(len(promoted.jobs), 100)
+        self.assertEqual(tuple(job.operation_ref for job in promoted.jobs), tuple(item.operation_ref for item in batch.statements))
+        self.assertEqual(promoted.batch.batch_id, batch.batch_id)
+        self.assertEqual(promoted.batch.accepted_count, 100)
+        self.assertEqual(verify_database(self.path)["verified_count"], 100)
+        durable = self.snapshot()
+        self.assertNotIn(b"synthetic-volatile-proof", durable)
+        self.assertNotIn(b"raw_proof", durable)
+        self.assertNotIn(b"source_path", durable)
+
+    def test_proof_and_source_acceptance_are_both_required_and_unknown_result_is_held(self) -> None:
+        for accepted, authenticated, expected in ((False, True, "REJECTED"), (True, False, "REJECTED")):
+            batch = self.issue(offset=10 if accepted else 20)
+            self.submit(batch)
+            result = self.store._process_one_batch(verifier=_Verifier(self.config, proof_accepted=accepted, source_authenticated=authenticated))
+            self.assertEqual(result.status, expected)
+            with self.assertRaisesRegex(IndependentQueueError, "batch_incomplete"):
+                read_verified_batch(self.path, batch.batch_id)
+        unknown = self.issue(offset=30)
+        self.submit(unknown)
+        result = self.store._process_one_batch(verifier=_Verifier(self.config, unknown=True))
+        self.assertEqual((result.status, result.error_code), ("HELD", "verifier_result_unknown_field"))
+        with self.assertRaisesRegex(IndependentQueueError, "batch_incomplete"):
+            read_verified_batch(self.path, unknown.batch_id)
+
+    def test_result_statement_and_root_mismatch_fail_closed(self) -> None:
+        for kind in ("statement", "root"):
+            batch = self.issue(offset=40 if kind == "statement" else 50)
+            self.submit(batch)
+            result = self.store._process_one_batch(verifier=_Verifier(self.config, mutate=kind))
+            self.assertEqual(result.status, "REJECTED")
+            with self.assertRaisesRegex(IndependentQueueError, "batch_incomplete"):
+                read_verified_batch(self.path, batch.batch_id)
+
+    def test_result_source_profile_epoch_and_flags_are_state_bound(self) -> None:
+        for index, kind in enumerate(("source_profile", "source_epoch", "flags"), start=60):
+            batch = self.issue(offset=index * 100)
+            self.submit(batch)
+            result = self.store._process_one_batch(verifier=_Verifier(self.config, mutate=kind))
+            self.assertEqual((result.status, result.error_code), ("REJECTED", "verifier_result_mismatch"))
+            with self.assertRaisesRegex(IndependentQueueError, "batch_incomplete"):
+                read_verified_batch(self.path, batch.batch_id)
+
+    def test_handoff_is_single_use_and_declared_oversize_is_rejected_before_queueing(self) -> None:
+        batch = self.issue()
+        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_oversize"):
+            self.store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"x"), declared_length=ADMISSION_CAP_BYTES + 1)
+        self.assertEqual(verify_database(self.path)["status_counts"]["AWAITING_HANDOFF"], 100)
+        self.submit(batch)
+        with self.assertRaisesRegex(QueueConflictError, "fresh_handoff_required"):
+            self.store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"duplicate"), declared_length=9)
+
+    def test_reservation_precedes_verifier_and_restart_holds_without_reuse(self) -> None:
+        batch = self.issue()
+        self.submit(batch)
+        def crash(label: str) -> None:
+            if label == "after_reservation":
+                raise RuntimeError("injected")
+        self.store._after_commit_fault = crash
+        with self.assertRaises(RuntimeError):
+            self.store._process_one_batch(verifier=_Verifier(self.config))
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            self.assertEqual(connection.execute("SELECT status,attempt FROM queue_batches").fetchone(), ("LEASED", 1))
+            self.assertEqual(connection.execute("SELECT computational_units_used FROM queue_metadata").fetchone()[0], 101)
         self.store._close()
         self.owner.close()
-        owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
-        restarted = _VerificationQueueStore(path=self.store.path, config=self.config, owner=owner)
-        try:
-            recovered = restarted._get_job(job.operation_ref)
-            self.assertEqual(recovered.status, "HELD")
-            self.assertEqual(recovered.last_error_code, "fresh_handoff_required")
-            self.assertIsNone(restarted._claim_next())
-            self.assertEqual(verify_database(restarted.path, expected_config=self.config.as_json)["status_counts"]["HELD"], 1)
-        finally:
-            restarted._close()
-            owner.close()
-            self.store = _VerificationQueueStore(path=self.root / "queue.sqlite", config=self.config, owner=_QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root))
-            self.owner = self.store._owner
+        self.owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
+        self.store = _VerificationQueueStore(path=self.path, config=self.config, owner=self.owner, clock=self.clock)
+        self.assertEqual(verify_database(self.path)["status_counts"]["HELD"], 100)
+        with self.assertRaisesRegex(IndependentQueueError, "batch_incomplete"):
+            read_verified_batch(self.path, batch.batch_id)
+        with self.assertRaisesRegex(QueueConflictError, "fresh_handoff_required"):
+            self.submit(batch)
+        replacement = self.issue(offset=90)
+        self.assertNotEqual(replacement.batch_id, batch.batch_id)
+        self.assertNotEqual(replacement.state_challenge, batch.state_challenge)
 
-    def test_old_schema_is_unsupported_without_migration(self) -> None:
-        old = self.root / "old.sqlite"
-        with closing(sqlite3.connect(old)) as connection:
-            connection.execute("CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY, schema_version INTEGER)")
+    def test_startup_rejects_mixed_active_image_before_recovery_mutation(self) -> None:
+        batch = self.issue()
+        self.submit(batch)
+        self.store._close()
+        self.owner.close()
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            connection.execute("PRAGMA ignore_check_constraints=ON")
+            connection.execute("UPDATE queue_jobs SET status='HELD' WHERE batch_position=0")
             connection.commit()
-        owner = _QueueRuntimeOwnership(lock_path=self.root / "old.sqlite.runtime-lock", parent=self.root)
+        before = self.snapshot()
+        replacement_owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
         try:
-            with self.assertRaises(QueueIntegrityError) as raised:
-                _VerificationQueueStore(path=old, config=self.config, owner=owner)
-            self.assertEqual(str(raised.exception), "queue_schema")
+            with self.assertRaisesRegex(IndependentQueueError, "batch_status_binding"):
+                _VerificationQueueStore(path=self.path, config=self.config, owner=replacement_owner, clock=self.clock)
+            self.assertEqual(self.snapshot(), before)
         finally:
-            owner.close()
+            replacement_owner.close()
 
-    def test_verified_batch_is_ordered_and_independent(self) -> None:
-        statements = self.store.issue_batch(templates=(self._template(0), self._template(1)))
-        jobs = self.store.submit_batch_handoffs(statements=statements, proof_streams=tuple(io.BytesIO(_proof_bytes(statement)) for statement in statements))
-        verifier = _Verifier()
-        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
-        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
-        batch = read_verified_batch(self.store.path)
-        self.assertEqual(tuple(job.operation_ref for job in batch.jobs), tuple(job.operation_ref for job in jobs))
-        self.assertEqual(tuple(job.batch_position for job in batch.jobs), (0, 1))
-        self.assertEqual(verify_database(self.store.path, expected_config=self.config.as_json)["verified_count"], 2)
+    def test_validity_window_is_checked_before_crypto_and_has_no_attempt_charge(self) -> None:
+        too_old = self.store.issue_batch(templates=tuple(OperationTemplate(f"expired-{i}", 1, "state-profile-v8", 1, 2) for i in range(100)))
+        with self.assertRaisesRegex(QueueConflictError, "validity_expired"):
+            self.submit(too_old)
+        verifier = _Verifier(self.config)
+        self.assertIsNone(self.store._process_one_batch(verifier=verifier))
+        self.assertEqual(verifier.calls, 0)
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            self.assertEqual(connection.execute("SELECT computational_units_used FROM queue_metadata").fetchone()[0], 0)
+        self.assertEqual(verify_database(self.path)["status_counts"]["HELD"], 100)
 
-    def test_reader_never_exposes_partial_promotion_batch(self) -> None:
-        statements, jobs = self._issue_batch()
-        verifier = _Verifier()
-        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
-        selector = self._batch_selector(statements)
-        self.assertEqual(read_verified_batch(self.store.path).jobs, ())
-        with self.assertRaises(IndependentQueueError) as raised:
-            read_verified_batch(self.store.path, selector)
-        self.assertEqual(str(raised.exception), "batch_incomplete")
-        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
-        batch = read_verified_batch(self.store.path, selector)
-        self.assertEqual(tuple(job.operation_ref for job in batch.jobs), tuple(job.operation_ref for job in jobs))
-        self.assertEqual(tuple(job.batch_position for job in batch.jobs), (0, 1))
-        self.assertEqual(batch.batch.batch_id, selector)
+    def test_unselected_reader_skips_incomplete_older_batch_and_selector_cannot_shrink(self) -> None:
+        older = self.issue(offset=100)
+        later = self.issue(offset=200)
+        self.submit(later)
+        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
+        selected = read_verified_batch(self.path)
+        self.assertEqual(selected.batch.batch_id, later.batch_id)
+        self.assertEqual(len(selected.jobs), 100)
+        with self.assertRaisesRegex(IndependentQueueError, "batch_incomplete"):
+            read_verified_batch(self.path, older.batch_id)
 
-    def test_reader_keeps_verified_standalone_operations_in_separate_groups(self) -> None:
-        first, first_job = self._issue(0)
-        second, second_job = self._issue(1)
-        verifier = _Verifier()
-        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
-        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
-        oldest = read_verified_batch(self.store.path)
-        self.assertEqual(tuple(job.operation_ref for job in oldest.jobs), (first_job.operation_ref,))
-        self.assertEqual(oldest.jobs[0].batch_position, 0)
-        second_member = queue_independent._sha(queue_independent._BATCH, second.operation_ref)
-        second_selector = queue_independent._sha(queue_independent._BATCH, self.config.digest, b"", second_member)
-        selected = read_verified_batch(self.store.path, second_selector)
-        self.assertEqual(tuple(job.operation_ref for job in selected.jobs), (second_job.operation_ref,))
-        self.assertEqual(selected.batch.batch_id, second_selector)
-
-    def test_reader_skips_incomplete_older_group_for_later_complete_group(self) -> None:
-        _, jobs = self._issue_batch(second_proof=b"not-a-proof")
-        verifier = _Verifier()
-        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
-        self.assertEqual(self.store._process_one(verifier=verifier).status, "REJECTED")
-        _, later_job = self._issue(2)
-        self.assertEqual(self.store._process_one(verifier=verifier).status, "VERIFIED")
-        batch = read_verified_batch(self.store.path)
-        self.assertEqual(tuple(job.operation_ref for job in batch.jobs), (later_job.operation_ref,))
-
-    def test_independent_reconstruction_rejects_a_self_consistent_missing_lifecycle(self) -> None:
-        statement, job = self._issue()
-        self.assertEqual(self.store._process_one(verifier=_Verifier()).status, "VERIFIED")
-        with closing(sqlite3.connect(self.store.path)) as connection:
-            connection.execute("DROP TRIGGER queue_transitions_no_delete")
-            connection.execute("DELETE FROM queue_transitions WHERE operation_ref=?", (job.operation_ref,))
-            genesis = queue_independent._sha(queue_independent._GENESIS, self.config.queue_id.encode("ascii"), self.config.digest)
-            connection.execute("UPDATE queue_metadata SET head_root=?,next_transition_seq=0 WHERE id=1", (genesis,))
-            connection.commit()
-        with self.assertRaises(IndependentQueueError) as raised:
-            verify_database(self.store.path, expected_config=self.config.as_json)
-        self.assertEqual(str(raised.exception), "lifecycle_issue")
+    def test_independent_reconstruction_rejects_root_prefix_refs_positions_templates_and_partial_images(self) -> None:
+        batch = self.issue(registry=bytes([7]) * 64)
+        self.submit(batch)
+        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
+        self.store._close()
+        self.owner.close()
+        original = self.path.read_bytes()
+        mutations = ("ordered_binding", "ref", "position", "template", "registry", "partial")
+        for mutation in mutations:
+            self.path.write_bytes(original)
+            with closing(sqlite3.connect(str(self.path))) as connection:
+                if mutation == "ordered_binding":
+                    connection.execute("UPDATE queue_batches SET ordered_binding=?", (bytes(32),))
+                elif mutation == "ref":
+                    connection.execute("UPDATE queue_jobs SET operation_ref=? WHERE batch_position=0", (bytes([8]) * 32,))
+                elif mutation == "position":
+                    connection.execute("PRAGMA ignore_check_constraints=ON")
+                    connection.execute("UPDATE queue_jobs SET batch_position=100 WHERE batch_position=0")
+                elif mutation == "template":
+                    connection.execute("UPDATE queue_jobs SET assertion_version=2 WHERE batch_position=0")
+                elif mutation == "registry":
+                    connection.execute("UPDATE queue_jobs SET approved_source_registry_root=? WHERE batch_position=0", (bytes([8]) * 64,))
+                else:
+                    connection.execute("DROP TRIGGER queue_jobs_no_delete")
+                    connection.execute("DELETE FROM queue_jobs WHERE batch_position=99")
+                connection.commit()
+            with self.assertRaises(IndependentQueueError):
+                verify_database(self.path)
+        self.path.write_bytes(original)
+        self.owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
+        self.store = _VerificationQueueStore(path=self.path, config=self.config, owner=self.owner, clock=self.clock)
 
 
 if __name__ == "__main__":
