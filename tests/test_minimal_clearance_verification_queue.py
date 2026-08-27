@@ -1,10 +1,13 @@
 import io
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from app.minimal_clearance_verification_queue import (
     ADMISSION_CAP_BYTES,
@@ -139,11 +142,8 @@ class QueueV8Tests(unittest.TestCase):
     def template(self, *, identifier: str = "shared-assertion", start: int | None = None, end: int | None = None, registry: bytes | None = None) -> OperationTemplate:
         return OperationTemplate(identifier, 1, "state-profile-v8", self.clock.now - 100 if start is None else start, self.clock.now + 3_000_000 if end is None else end, registry, ())
 
-    def refs(self, offset: int = 0) -> tuple[bytes, ...]:
-        return tuple((offset + index + 1).to_bytes(32, "big") for index in range(100))
-
     def issue(self, *, offset: int = 0, template: OperationTemplate | None = None):
-        return self.store.issue_batch(template=template or self.template(), operation_refs=self.refs(offset))
+        return self.store.issue_batch(template=template or self.template(identifier=f"shared-assertion-{offset}"))
 
     def submit(self, batch, proof: bytes = b"synthetic-volatile-proof") -> None:
         self.store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(proof), declared_length=len(proof))
@@ -170,23 +170,67 @@ class QueueV8Tests(unittest.TestCase):
             self.assertNotIn("queue_jobs", tables)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0], 100)
 
-    def test_issue_requires_exact_100_refs_and_rejects_heterogeneous_template(self) -> None:
-        with self.assertRaisesRegex(Exception, "queue_batch_requires_100"):
-            self.store.issue_batch(template=self.template(), operation_refs=self.refs()[:-1])
-        with self.assertRaisesRegex(Exception, "queue_batch_requires_100"):
-            self.store.issue_batch(template=self.template(), operation_refs=self.refs() + (self.refs()[0],))
+    def test_issue_owns_references_and_rejects_heterogeneous_template(self) -> None:
+        with self.assertRaises(TypeError):
+            self.store.issue_batch(template=self.template(), operation_refs=tuple(bytes([index]) * 32 for index in range(100)))  # type: ignore[call-arg]
         with self.assertRaises(TypeError):
             self.store.issue_batch(templates=tuple(self.template(identifier=f"different-{i}") for i in range(100)))  # type: ignore[call-arg]
         with self.assertRaisesRegex(Exception, "template_shape"):
-            self.store.issue_batch(template=(self.template(),), operation_refs=self.refs())  # type: ignore[arg-type]
+            self.store.issue_batch(template=(self.template(),))  # type: ignore[arg-type]
 
     def test_operation_refs_and_admission_sequences_are_global_and_immutable(self) -> None:
         first = self.issue()
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.issue()
+        second = self.issue(offset=1)
         with closing(sqlite3.connect(str(self.path))) as connection:
-            rows = connection.execute("SELECT batch_position,operation_ref,admission_seq FROM queue_members WHERE batch_id=? ORDER BY batch_position", (first.batch_id,)).fetchall()
-            self.assertEqual([int(row[2]) for row in rows], list(range(1, 101)))
+            rows = connection.execute("SELECT batch_id,batch_position,operation_ref,admission_seq FROM queue_members ORDER BY admission_seq").fetchall()
+            self.assertEqual([int(row[3]) for row in rows], list(range(1, 201)))
+            self.assertEqual(len({bytes(row[2]) for row in rows}), 200)
+            self.assertEqual({bytes(row[0]) for row in rows}, {first.batch_id, second.batch_id})
+
+    def test_state_generation_collision_fails_before_any_batch_row_persists(self) -> None:
+        duplicate = bytes([7]) * 32
+        with patch("app.minimal_clearance_verification_queue.secrets.token_bytes", side_effect=[duplicate, duplicate]):
+            with self.assertRaisesRegex(Exception, "queue_randomness"):
+                self.store.issue_batch(template=self.template())
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_batches").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0], 0)
+
+    def test_binary_state_reference_with_forbidden_looking_bytes_is_accepted(self) -> None:
+        refs = [b"\x00log" + bytes(range(4, 32))]
+        refs.extend(bytes([index]) * 32 for index in range(1, 100))
+        self.assertEqual(len(refs), 100)
+        self.assertEqual(len(set(refs)), 100)
+        with patch(
+            "app.minimal_clearance_verification_queue.secrets.token_bytes",
+            side_effect=refs + [bytes([0xAA]) * 32, bytes([0xBB]) * 32],
+        ) as token_bytes:
+            batch = self.store.issue_batch(template=self.template())
+        self.assertEqual(token_bytes.call_count, 102)
+        self.assertEqual(batch.operation_refs[0], refs[0])
+        self.submit(batch)
+        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
+        self.assertEqual(read_verified_batch(self.path, batch.batch_id).batch.batch_id, batch.batch_id)
+
+    def test_live_child_owner_is_not_stolen_then_exact_stale_lock_is_reclaimed(self) -> None:
+        lock_path = self.root / "child-owner.runtime-lock"
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            lock_path.write_text(str(child.pid), encoding="ascii")
+            with self.assertRaisesRegex(Exception, "runtime_already_owned"):
+                _QueueRuntimeOwnership(lock_path=lock_path, parent=self.root)
+            self.assertIsNone(child.poll())
+            child.terminate()
+            child.wait(timeout=5)
+            reclaimed = _QueueRuntimeOwnership(lock_path=lock_path, parent=self.root)
+            reclaimed.close()
+            self.assertFalse(lock_path.exists())
+        finally:
+            if child.poll() is None:
+                child.terminate()
+                child.wait(timeout=5)
+            if lock_path.exists():
+                lock_path.unlink()
 
     def test_attempt_budget_is_one_proof_attempt(self) -> None:
         self.assertEqual(_reserve_proof_attempt(2**32 - 1), 2**32)
@@ -264,7 +308,7 @@ class QueueV8Tests(unittest.TestCase):
         epoch_owner = _QueueRuntimeOwnership(lock_path=epoch_root / "queue.sqlite.runtime-lock", parent=epoch_root)
         epoch_store = _VerificationQueueStore(path=epoch_path, config=QueueConfig("u64-epoch-max", 100, source_key_epoch=2**64 - 1), owner=epoch_owner, clock=self.clock)
         try:
-            batch = epoch_store.issue_batch(template=self.template(), operation_refs=self.refs(10_000))
+            batch = epoch_store.issue_batch(template=self.template(identifier="epoch"))
             epoch_store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"epoch-proof"), declared_length=11)
             self.assertEqual(epoch_store._process_one_batch(verifier=_Verifier(epoch_store.config)).status, "VERIFIED")
             verify_database(epoch_path, expected_config=epoch_store.config.as_json)

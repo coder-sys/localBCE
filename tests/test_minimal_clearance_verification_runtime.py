@@ -21,9 +21,6 @@ class _Verifier:
 
 
 class RuntimeV8Tests(unittest.TestCase):
-    def refs(self, offset: int = 0) -> tuple[bytes, ...]:
-        return tuple((offset + index + 1).to_bytes(32, "big") for index in range(100))
-
     def test_runtime_exposes_explicit_batch_and_operation_counters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -34,7 +31,9 @@ class RuntimeV8Tests(unittest.TestCase):
             with MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config) as runtime:
                 now = int(time.time() * 1000)
                 template = OperationTemplate("shared-runtime", 1, "state-profile-v8", now - 100, now + 2_000_000)
-                batch = runtime.issue_batch(template=template, operation_refs=self.refs())
+                with self.assertRaises(TypeError):
+                    runtime.issue_batch(template=template, operation_refs=tuple(bytes([index]) * 32 for index in range(100)))  # type: ignore[call-arg]
+                batch = runtime.issue_batch(template=template)
                 runtime.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"runtime-proof"), declared_length=13)
                 result = runtime.run(max_batches=1)
                 self.assertEqual((result.outcome, result.accepted_operation_count, result.verified_batch_count, result.rejected_batch_count, result.held_batch_count, result.processed, verifier.calls), ("PROCESSED", 100, 1, 0, 0, 1, 1))

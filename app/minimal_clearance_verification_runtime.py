@@ -144,9 +144,9 @@ class MinimalClearanceVerificationRuntime:
             return RuntimeRunResult("EMPTY", outcome_code, 0, 0, 0, 0, self._recovered_leases)
         return RuntimeRunResult("PROCESSED", outcome_code, accepted_operations, verified_batches, rejected_batches, held_batches, self._recovered_leases)
 
-    def issue_batch(self, *, template: OperationTemplate, operation_refs: tuple[bytes, ...]) -> IssuedVerificationBatch:
+    def issue_batch(self, *, template: OperationTemplate) -> IssuedVerificationBatch:
         self._assert_open()
-        return self._store.issue_batch(template=template, operation_refs=operation_refs)
+        return self._store.issue_batch(template=template)
 
     def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: BinaryIO | VolatileProofHandoff, declared_length: int | None = None) -> IssuedVerificationBatch:
         self._assert_open()

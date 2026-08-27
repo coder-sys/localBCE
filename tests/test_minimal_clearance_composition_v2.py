@@ -77,8 +77,7 @@ class CompositionV8Tests(unittest.TestCase):
 
     def _verified_batch(self, offset: int = 0):
         template = OperationTemplate(f"assertion-{offset}", 1, "state-profile-v8", self.clock.now - 100, self.clock.now + 3_000_000)
-        refs = tuple((offset + index + 1).to_bytes(32, "big") for index in range(100))
-        batch = self.queue.issue_batch(template=template, operation_refs=refs)
+        batch = self.queue.issue_batch(template=template)
         self.queue.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"volatile-proof"), declared_length=14)
         self.assertEqual(self.queue._process_one_batch(verifier=_Verifier(self.queue_config)).status, "VERIFIED")
         return read_verified_batch(self.queue_path, batch.batch_id)

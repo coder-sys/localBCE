@@ -74,19 +74,12 @@ generated vector alone is not deployed formal-verification credit.
 
 ## Current private-proof blocker
 
-The active Queue/Proof Handoff V7 boundary is a clean-break state-owned handoff, not a
-qualified private-proof backend. State first issues a fresh one-time opaque operation reference and
-allowlisted statement in `AWAITING_HANDOFF`; for a batch it assigns exact positions and computes the
-ordered batch root from issued references and canonical templates. Only then may an explicit
-verifier-owned volatile stream be submitted for that exact issued statement and consumed once. No
-proof workspace or raw proof/source material is durable. The verifier returns only a bounded,
-non-dispositive evidence result, while the state owner maps its disposition control and exception
-approval to the five directives. Ordered batches are preflighted against one state snapshot and
-applied atomically, with independent reconstruction and fail-closed retry/recovery. Old V6
-databases are unsupported; no migration, compatibility reader, active backend, qualification,
-Lean completion, or product-throughput claim follows from this seam. The exact cryptographic,
-zero-PHI deployment, resource, and complete-profile measurement gates remain open under the
-Native-v3 authority.
+The active Queue/Proof Handoff version and contract defer to
+`docs/DATABASE_ZK_ARCHITECTURE.md`; this roadmap records only dependency status. That boundary is
+not a qualified private-proof backend, and its clean-break, state-owned, non-dispositive,
+fail-closed semantics do not establish an active backend, qualification, Lean completion, or
+product-throughput claim. The exact cryptographic, zero-PHI deployment, resource, and complete-profile
+measurement gates remain open under the Native-v3 authority.
 
 Before selecting or implementing a private backend, the complete profile must close the exact
 source-binding, privacy/setup, PQ, acceptance-accounting, theorem-composition, zero-PHI deployment,

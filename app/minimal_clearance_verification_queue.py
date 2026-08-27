@@ -164,6 +164,7 @@ _ALLOWED_CODES: Final[frozenset[str]] = frozenset({
     "batch_window_mismatch", "source_key_epoch", "queue_profile_invalid",
     "queue_profile_epoch", "queue_profile_version", "queue_capacity_invalid",
     "qualification_flags_invalid", "validity_window_invalid", "validity_window_too_long",
+    "queue_randomness",
     "template_shape", "assertion_identifier_invalid", "assertion_identifier_forbidden",
     "assertion_version_invalid", "state_profile_version_invalid", "state_profile_version_forbidden",
     "source_registry_root", "qualification_flag_invalid", "batch_position_invalid",
@@ -474,6 +475,19 @@ def _batch_identity_digest(batch: IssuedVerificationBatch, config: QueueConfig) 
     )
 
 
+def _generate_operation_refs() -> tuple[bytes, ...]:
+    refs: list[bytes] = []
+    for _ in range(RANGE100_COUNT):
+        try:
+            operation_ref = secrets.token_bytes(MAX_OPERATION_REF_BYTES)
+        except BaseException:
+            _raise_fixed(VerificationQueueError("queue_randomness"))
+        if type(operation_ref) is not bytes or len(operation_ref) != MAX_OPERATION_REF_BYTES or operation_ref in refs:
+            _raise_fixed(VerificationQueueError("queue_randomness"))
+        refs.append(operation_ref)
+    return tuple(refs)
+
+
 class VolatileProofHandoff:
     """Single-use readable stream with bounded mutable staging."""
 
@@ -645,6 +659,51 @@ class _QueueWorkItem:
     lease_expires_ms: int
 
 
+def _owner_process_is_live(pid: int) -> bool:
+    """Return live for a confirmed live or ambiguously probeable owner PID."""
+    if type(pid) is not int or pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            ERROR_INVALID_PARAMETER = 87
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle.restype = wintypes.BOOL
+
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return ctypes.get_last_error() != ERROR_INVALID_PARAMETER
+            result = True
+            try:
+                exit_code = wintypes.DWORD()
+                if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    result = exit_code.value == STILL_ACTIVE
+            finally:
+                if not kernel32.CloseHandle(handle):
+                    result = True
+            return result
+        except BaseException:
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    except BaseException:
+        return True
+    return True
+
+
 class _QueueRuntimeOwnership:
     """Exclusive process ownership with exact stale-lock recovery."""
 
@@ -674,14 +733,7 @@ class _QueueRuntimeOwnership:
                     if pid <= 0:
                         stale = True
                     else:
-                        try:
-                            os.kill(pid, 0)
-                        except PermissionError:
-                            # A live process whose PID cannot be probed is
-                            # still an owner; never steal its lock.
-                            stale = False
-                        except OSError:
-                            stale = True
+                        stale = not _owner_process_is_live(pid)
                 except (OSError, ValueError):
                     stale = True
                 if not stale:
@@ -1038,13 +1090,10 @@ class _VerificationQueueStore:
         self._append_event(connection, kind="BATCH_ISSUED", batch_id=batch.batch_id, status="AWAITING_HANDOFF", error_code=None, attempt=0, at_ms=now, extra={"member_count": RANGE100_COUNT, "identity_digest": _hex(batch.identity_digest)})
         connection.execute("UPDATE queue_metadata SET next_admission_seq=?,nonterminal_count=nonterminal_count+1 WHERE id=1", (batch_admission_seq * RANGE100_COUNT,))
 
-    def issue_batch(self, *, template: OperationTemplate, operation_refs: tuple[bytes, ...]) -> IssuedVerificationBatch:
+    def issue_batch(self, *, template: OperationTemplate) -> IssuedVerificationBatch:
         self._assert_owner()
         _template_value_check(template)
-        if type(operation_refs) is not tuple or len(operation_refs) != RANGE100_COUNT or len(set(operation_refs)) != RANGE100_COUNT:
-            _raise_fixed(VerificationQueueError("queue_batch_requires_100"))
-        for operation_ref in operation_refs:
-            _blob(operation_ref, MAX_OPERATION_REF_BYTES, "operation_ref")
+        operation_refs = _generate_operation_refs()
         root = _compute_batch_root_from_refs(template, operation_refs)
         challenge = secrets.token_bytes(MAX_STATE_CHALLENGE_BYTES)
         batch_id = secrets.token_bytes(32)

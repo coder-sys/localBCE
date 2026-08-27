@@ -78,7 +78,7 @@ _ALLOWED_CODES = frozenset({
     "runtime_already_owned", "runtime_configuration", "queue_parent", "queue_owner_required", "queue_configuration",
     "queue_integer", "queue_batch_shape", "queue_batch_order", "queue_batch_requires_100", "batch_window_mismatch",
     "source_key_epoch", "queue_profile_invalid", "queue_profile_epoch", "queue_profile_version", "queue_capacity_invalid",
-    "qualification_flags_invalid", "validity_window_invalid", "validity_window_too_long", "template_shape",
+    "qualification_flags_invalid", "validity_window_invalid", "validity_window_too_long", "queue_randomness", "template_shape",
     "assertion_identifier_invalid", "assertion_identifier_forbidden", "assertion_version_invalid", "state_profile_version_invalid",
     "state_profile_version_forbidden", "source_registry_root", "qualification_flag_invalid", "batch_position_invalid",
     "batch_root", "batch_statement", "batch_identity", "statement_binding", "statement_length", "statement_window",
@@ -484,7 +484,6 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             _fail("member_binding")
         ref = _blob(_db_bytes(row[2], "operation_ref"), 32, "operation_ref")
         member_groups[batch_id].append(row)
-        _forbidden_bytes((ref,))
     all_refs = [bytes(row[2]) for row in member_rows]
     if len(set(all_refs)) != len(all_refs) or len({int(row[3]) for row in member_rows}) != len(member_rows):
         _fail("member_binding")
