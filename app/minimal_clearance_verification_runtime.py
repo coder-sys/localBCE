@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Mapping, Protocol
 
 from app.minimal_clearance_source_auth_verifier_adapter import (
     MinimalClearanceSourceAuthVerifierAdapter,
@@ -21,10 +21,12 @@ from app.minimal_clearance_verification_queue import (
     QueueConfig,
     QueueResult,
     VerificationQueueError,
+    VerificationOutcome,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
     _VerificationQueueStore,
 )
+from app.minimal_clearance_composition import CompositionConfigV2, StateDispositionControl
 
 
 class VerificationRuntimeError(RuntimeError):
@@ -37,6 +39,12 @@ def _fixed(code: str) -> None:
     error.__context__ = None
     error.__suppress_context__ = True
     raise error
+
+
+class StateDispositionPort(Protocol):
+    """State policy authority, called only after verifier acceptance."""
+
+    def controls_for(self, *, batch_id: bytes, operation_refs: tuple[bytes, ...], verification_outcome: VerificationOutcome) -> Mapping[bytes, StateDispositionControl]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,24 +91,35 @@ class MinimalClearanceVerificationRuntime:
     """One owner, one synchronous worker, one batch handoff."""
 
     @classmethod
-    def from_source_auth(cls, *, root: Path, source_auth_config: SourceAuthVerifierConfig) -> "MinimalClearanceVerificationRuntime":
+    def from_source_auth(cls, *, root: Path, source_auth_config: SourceAuthVerifierConfig, state_disposition_port: StateDispositionPort | None = None, composition_config: CompositionConfigV2 | None = None) -> "MinimalClearanceVerificationRuntime":
         if type(source_auth_config) is not SourceAuthVerifierConfig:
             _fixed("runtime_configuration")
         verifier = MinimalClearanceSourceAuthVerifierAdapter(source_auth_config)
-        return cls(root=root, verifier=verifier, config=source_auth_config.queue_config)
+        return cls(root=root, verifier=verifier, config=source_auth_config.queue_config, state_disposition_port=state_disposition_port, composition_config=composition_config)
 
-    def __init__(self, *, root: Path, verifier: object | None = None, config: QueueConfig | None = None) -> None:
+    def __init__(self, *, root: Path, verifier: object | None = None, config: QueueConfig | None = None, state_disposition_port: StateDispositionPort | None = None, composition_config: CompositionConfigV2 | None = None) -> None:
         if not isinstance(root, Path) or not root.is_absolute() or not root.is_dir():
             _fixed("runtime_configuration")
         if verifier is None:
             _fixed("runtime_backend_unqualified")
         owner: _QueueRuntimeOwnership | None = None
         try:
-            database = root / "queue.sqlite"
+            database = root / "state.sqlite"
+            for legacy in (root / "queue.sqlite", root / "composition.sqlite"):
+                if legacy.exists():
+                    _fixed("legacy_database_unsupported")
             if config is None:
-                config = QueueConfig("minimal-clearance-queue-v9", 100)
+                config = QueueConfig("minimal-clearance-state-v10", 100)
+            if composition_config is None:
+                composition_config = CompositionConfigV2(config.queue_id, config.digest, capacity=max(100, config.capacity))
+            if type(composition_config) is not CompositionConfigV2 or composition_config.queue_id != config.queue_id or composition_config.queue_config_digest != config.digest:
+                _fixed("runtime_configuration")
             owner = _QueueRuntimeOwnership(lock_path=database.with_name(database.name + ".runtime-lock"), parent=root)
-            store = _VerificationQueueStore(path=database, config=config, owner=owner)
+            store = _VerificationQueueStore(path=database, config=config, owner=owner, composition_config=composition_config)
+        except VerificationRuntimeError as error:
+            if owner is not None:
+                owner.close()
+            _fixed(str(error))
         except VerificationQueueError as error:
             if owner is not None:
                 owner.close()
@@ -115,6 +134,8 @@ class MinimalClearanceVerificationRuntime:
         self._database_owner = owner
         self._store = store
         self._verifier = verifier
+        self._state_disposition_port = state_disposition_port
+        self._composition_config = composition_config
         self._recovered_leases = self._store._startup_recovered_count
 
     def _assert_open(self) -> None:
@@ -132,7 +153,7 @@ class MinimalClearanceVerificationRuntime:
         accepted_operations = verified_batches = rejected_batches = held_batches = 0
         outcome_code: str | None = None
         for _ in range(max_batches):
-            result = self._store._process_one_batch(verifier=self._verifier)
+            result = self._store._process_one_batch(verifier=self._verifier, state_disposition_port=self._state_disposition_port)
             held_batches += self._store._last_claim_held_count
             if result is None:
                 if self._store._last_claim_error is not None and outcome_code is None:
@@ -204,4 +225,4 @@ class MinimalClearanceVerificationRuntime:
         self.close()
 
 
-__all__ = ("MinimalClearanceVerificationRuntime", "RuntimeRunResult", "VerificationRuntimeError")
+__all__ = ("MinimalClearanceVerificationRuntime", "RuntimeRunResult", "StateDispositionPort", "VerificationRuntimeError")

@@ -19,12 +19,7 @@ import sqlite3
 import time
 from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
 
-from app.minimal_clearance_verification_queue_independent import (
-    IndependentQueueError,
-    IndependentVerifiedQueueBatch,
-    IndependentVerifiedQueueJob,
-    read_verified_batch,
-)
+from app.minimal_clearance_verification_queue_independent import IndependentVerifiedQueueJob
 
 
 class CompositionError(RuntimeError):
@@ -248,9 +243,9 @@ class CompositionConfigV2:
     verifier_profile_identity: bytes = bytes(32)
     receiver_identity: bytes = bytes(32)
     receiver_epoch: int = 1
-    composition_id: str = "minimal-clearance-composition-v8"
+    composition_id: str = "minimal-clearance-state-v10"
     verifier_epoch: int = 1
-    capacity: int = 16
+    capacity: int = 100
     lease_seconds: int = 300
     reconciliation_capacity: int = 16
     reconciliation_lease_seconds: int = 300
@@ -400,60 +395,92 @@ def _parse_acknowledgment(raw: bytes, *, envelope_bytes: bytes, idempotency_key:
     return raw
 
 
+_QUEUE_TABLES = frozenset(("queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions"))
+_COMPOSITION_TABLES = frozenset(("composition_meta", "composition_transactions", "composition_events", "composition_outbox"))
 _META_COLUMNS = ("id", "schema_version", "config_json", "config_digest", "event_head", "next_event_sequence", "state_profile_identity", "state_id", "state_bytes", "state_epoch", "state_sequence", "state_continuity_root", "state_audit_head", "state_clearance_root", "state_clearance_count", "payment_root", "active_dispatch_count")
 _TX_COLUMNS = ("transaction_id", "operation_ref", "status", "proof_accepted", "policy_result", "effective_directive", "disposition_id", "state_profile_identity", "state_before_id", "state_after_id", "sequence_before", "sequence_after", "state_receipt_bytes", "state_receipt_digest", "error_code", "created_ms", "updated_ms")
 _EVENT_COLUMNS = ("sequence", "operation_ref", "event_kind", "before_state", "after_state", "payload", "event_digest", "event_root", "at_ms")
 _OUTBOX_COLUMNS = ("operation_ref", "effective_directive", "status", "attempt", "worker_id", "lease_token", "lease_expires_ms", "updated_ms")
+_COMPOSITION_TABLE_SQL = {
+    "composition_meta": "CREATE TABLE composition_meta (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=4), config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), event_head BLOB NOT NULL CHECK(length(event_head)=64), next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence>=0), state_profile_identity BLOB, state_id BLOB, state_bytes BLOB, state_epoch INTEGER, state_sequence INTEGER, state_continuity_root BLOB, state_audit_head BLOB, state_clearance_root BLOB, state_clearance_count INTEGER, payment_root BLOB NOT NULL CHECK(length(payment_root)=64), active_dispatch_count INTEGER NOT NULL CHECK(active_dispatch_count>=0))",
+    "composition_transactions": "CREATE TABLE composition_transactions (transaction_id BLOB PRIMARY KEY CHECK(length(transaction_id)=64), operation_ref BLOB NOT NULL UNIQUE CHECK(length(operation_ref)=32) REFERENCES queue_members(operation_ref), status TEXT NOT NULL CHECK(status IN ('APPLIED','HELD')), proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), policy_result TEXT NOT NULL CHECK(policy_result IN ('PASS','MISSING','AMBIGUOUS','FAIL')), effective_directive TEXT NOT NULL CHECK(effective_directive IN ('CLEAR','HOLD','HUMAN_REVIEW','BLOCK','EXCEPTION_APPROVED')), disposition_id BLOB NOT NULL CHECK(length(disposition_id)=64), state_profile_identity BLOB NOT NULL CHECK(length(state_profile_identity)=64), state_before_id BLOB NOT NULL CHECK(length(state_before_id)=64), state_after_id BLOB NOT NULL CHECK(length(state_after_id)=64), sequence_before INTEGER NOT NULL, sequence_after INTEGER NOT NULL, state_receipt_bytes BLOB, state_receipt_digest BLOB, error_code TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)",
+    "composition_events": "CREATE TABLE composition_events (sequence INTEGER PRIMARY KEY CHECK(sequence>=1), operation_ref BLOB NOT NULL CHECK(length(operation_ref)=32) REFERENCES queue_members(operation_ref), event_kind TEXT NOT NULL CHECK(event_kind IN ('APPLIED','HELD','DISPATCH_LEASED','ACKNOWLEDGED','DELIVERY_UNCONFIRMED','LEASE_EXPIRED')), before_state TEXT NOT NULL, after_state TEXT NOT NULL, payload BLOB NOT NULL CHECK(length(payload)<=4096), event_digest BLOB NOT NULL UNIQUE CHECK(length(event_digest)=64), event_root BLOB NOT NULL CHECK(length(event_root)=64), at_ms INTEGER NOT NULL)",
+    "composition_outbox": "CREATE TABLE composition_outbox (operation_ref BLOB PRIMARY KEY CHECK(length(operation_ref)=32) REFERENCES queue_members(operation_ref), effective_directive TEXT NOT NULL CHECK(effective_directive IN ('CLEAR','HOLD','HUMAN_REVIEW','BLOCK','EXCEPTION_APPROVED')), status TEXT NOT NULL CHECK(status IN ('READY','LEASED','ACKNOWLEDGED','DELIVERY_UNCONFIRMED')), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), worker_id TEXT, lease_token BLOB, lease_expires_ms INTEGER, updated_ms INTEGER NOT NULL)",
+}
+_COMPOSITION_TRIGGER_SQL = {
+    "composition_transactions_no_delete": "CREATE TRIGGER composition_transactions_no_delete BEFORE DELETE ON composition_transactions BEGIN SELECT RAISE(ABORT,'composition_append_only'); END",
+    "composition_events_no_update": "CREATE TRIGGER composition_events_no_update BEFORE UPDATE ON composition_events BEGIN SELECT RAISE(ABORT,'composition_append_only'); END",
+    "composition_events_no_delete": "CREATE TRIGGER composition_events_no_delete BEFORE DELETE ON composition_events BEGIN SELECT RAISE(ABORT,'composition_append_only'); END",
+}
+
+
+def _create_composition_schema(connection: sqlite3.Connection, config: CompositionConfigV2) -> None:
+    """Create the Composition half of an already-open State database."""
+    for table in ("composition_meta", "composition_transactions", "composition_events", "composition_outbox"):
+        connection.execute(_COMPOSITION_TABLE_SQL[table])
+    connection.execute("CREATE INDEX composition_outbox_ready_idx ON composition_outbox(status,updated_ms)")
+    for trigger in ("composition_transactions_no_delete", "composition_events_no_update", "composition_events_no_delete"):
+        connection.execute(_COMPOSITION_TRIGGER_SQL[trigger])
+    head = _sha(_GENESIS, config.digest)
+    connection.execute("INSERT INTO composition_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (1, _SCHEMA_VERSION, config.canonical_bytes, config.digest, head, 0, None, None, None, None, None, None, None, None, None, _INITIAL_PAYMENT, 0))
+
+
+def _check_composition_schema(connection: sqlite3.Connection, config: CompositionConfigV2, *, require_queue: bool = True) -> None:
+    tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    expected = _COMPOSITION_TABLES | (_QUEUE_TABLES if require_queue else frozenset())
+    if tables != expected:
+        _fail(CompositionIntegrityError, "composition_schema")
+    if tuple(str(row[1]) for row in connection.execute("PRAGMA table_info(composition_meta)")) != _META_COLUMNS or tuple(str(row[1]) for row in connection.execute("PRAGMA table_info(composition_transactions)")) != _TX_COLUMNS or tuple(str(row[1]) for row in connection.execute("PRAGMA table_info(composition_events)")) != _EVENT_COLUMNS or tuple(str(row[1]) for row in connection.execute("PRAGMA table_info(composition_outbox)")) != _OUTBOX_COLUMNS:
+        _fail(CompositionIntegrityError, "composition_schema")
+    table_sql = {str(row[0]): str(row[1]) for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    if any(re.sub(r"\s+", " ", table_sql[name].strip()).lower() != re.sub(r"\s+", " ", expected.strip()).lower() for name, expected in _COMPOSITION_TABLE_SQL.items()):
+        _fail(CompositionIntegrityError, "composition_schema")
+    triggers = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    expected_triggers = set(_COMPOSITION_TRIGGER_SQL)
+    if not expected_triggers.issubset(triggers):
+        _fail(CompositionIntegrityError, "composition_schema")
+    trigger_rows = {str(row[0]): str(row[1]) for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'")}
+    if any(re.sub(r"\s+", " ", trigger_rows[name].strip()).lower() != re.sub(r"\s+", " ", expected.strip()).lower() for name, expected in _COMPOSITION_TRIGGER_SQL.items()):
+        _fail(CompositionIntegrityError, "composition_schema")
+    row = connection.execute("SELECT schema_version,config_json,config_digest FROM composition_meta WHERE id=1").fetchone()
+    if row is None or int(row[0]) != _SCHEMA_VERSION or bytes(row[2]) != config.digest or bytes(row[1]) != config.canonical_bytes:
+        _fail(CompositionIntegrityError, "composition_schema")
 
 
 class ClearanceCompositionStoreV2:
     def __init__(self, *, path: Path, config: CompositionConfigV2, clock: CompositionClock | None = None, before_fault: Callable[[str], None] | None = None, after_commit_fault: Callable[[str], None] | None = None) -> None:
-        if not isinstance(path, Path) or not path.is_absolute() or not path.parent.is_dir() or not isinstance(config, CompositionConfigV2):
+        if not isinstance(path, Path) or not path.is_absolute() or path.name != "state.sqlite" or not path.parent.is_dir() or not isinstance(config, CompositionConfigV2):
             _fail(CompositionIntegrityError, "composition_configuration")
         self.path = path
         self.config = config
         self.clock = clock or _SystemClock()
         self._before_fault = before_fault
         self._after_commit_fault = after_commit_fault
-        if path.exists():
-            self._check_schema()
-        else:
-            self._initialize()
+        if not path.exists():
+            _fail(CompositionIntegrityError, "state_database_required")
+        self._check_schema()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA page_size=4096")
+        connection.execute("PRAGMA max_page_count=32768")
+        connection.execute("PRAGMA journal_mode=DELETE")
+        connection.execute("PRAGMA synchronous=FULL")
         return connection
 
     def _check_schema(self) -> None:
         with closing(sqlite3.connect(str(self.path))) as connection:
-            tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-            if tables != {"composition_meta", "composition_transactions", "composition_events", "composition_outbox"}:
-                _fail(CompositionIntegrityError, "composition_schema")
-            if tuple(str(row[1]) for row in connection.execute("PRAGMA table_info(composition_meta)")) != _META_COLUMNS or tuple(str(row[1]) for row in connection.execute("PRAGMA table_info(composition_transactions)")) != _TX_COLUMNS or tuple(str(row[1]) for row in connection.execute("PRAGMA table_info(composition_events)")) != _EVENT_COLUMNS or tuple(str(row[1]) for row in connection.execute("PRAGMA table_info(composition_outbox)")) != _OUTBOX_COLUMNS:
-                _fail(CompositionIntegrityError, "composition_schema")
-            row = connection.execute("SELECT schema_version,config_json,config_digest FROM composition_meta WHERE id=1").fetchone()
-            if row is None or int(row[0]) != _SCHEMA_VERSION or bytes(row[2]) != self.config.digest or bytes(row[1]) != self.config.canonical_bytes:
+            _check_composition_schema(connection, self.config)
+            try:
+                from app.minimal_clearance_verification_queue_independent import _verify_connection
+                _verify_connection(connection)
+            except Exception:
                 _fail(CompositionIntegrityError, "composition_schema")
 
     def _initialize(self) -> None:
-        with closing(self._connect()) as connection:
-            connection.execute("PRAGMA journal_mode=DELETE")
-            connection.execute("PRAGMA synchronous=FULL")
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute("CREATE TABLE composition_meta (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=4), config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), event_head BLOB NOT NULL CHECK(length(event_head)=64), next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence>=0), state_profile_identity BLOB, state_id BLOB, state_bytes BLOB, state_epoch INTEGER, state_sequence INTEGER, state_continuity_root BLOB, state_audit_head BLOB, state_clearance_root BLOB, state_clearance_count INTEGER, payment_root BLOB NOT NULL CHECK(length(payment_root)=64), active_dispatch_count INTEGER NOT NULL CHECK(active_dispatch_count>=0))")
-            connection.execute("CREATE TABLE composition_transactions (transaction_id BLOB PRIMARY KEY CHECK(length(transaction_id)=64), operation_ref BLOB NOT NULL UNIQUE CHECK(length(operation_ref)=32), status TEXT NOT NULL CHECK(status IN ('APPLIED','HELD')), proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), policy_result TEXT NOT NULL CHECK(policy_result IN ('PASS','MISSING','AMBIGUOUS','FAIL')), effective_directive TEXT NOT NULL CHECK(effective_directive IN ('CLEAR','HOLD','HUMAN_REVIEW','BLOCK','EXCEPTION_APPROVED')), disposition_id BLOB NOT NULL CHECK(length(disposition_id)=64), state_profile_identity BLOB NOT NULL CHECK(length(state_profile_identity)=64), state_before_id BLOB NOT NULL CHECK(length(state_before_id)=64), state_after_id BLOB NOT NULL CHECK(length(state_after_id)=64), sequence_before INTEGER NOT NULL, sequence_after INTEGER NOT NULL, state_receipt_bytes BLOB, state_receipt_digest BLOB, error_code TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)")
-            connection.execute("CREATE TABLE composition_events (sequence INTEGER PRIMARY KEY CHECK(sequence>=1), operation_ref BLOB NOT NULL CHECK(length(operation_ref)=32), event_kind TEXT NOT NULL CHECK(event_kind IN ('APPLIED','HELD','DISPATCH_LEASED','ACKNOWLEDGED','DELIVERY_UNCONFIRMED','LEASE_EXPIRED')), before_state TEXT NOT NULL, after_state TEXT NOT NULL, payload BLOB NOT NULL CHECK(length(payload)<=4096), event_digest BLOB NOT NULL UNIQUE CHECK(length(event_digest)=64), event_root BLOB NOT NULL CHECK(length(event_root)=64), at_ms INTEGER NOT NULL)")
-            connection.execute("CREATE TABLE composition_outbox (operation_ref BLOB PRIMARY KEY CHECK(length(operation_ref)=32), effective_directive TEXT NOT NULL CHECK(effective_directive IN ('CLEAR','HOLD','HUMAN_REVIEW','BLOCK','EXCEPTION_APPROVED')), status TEXT NOT NULL CHECK(status IN ('READY','LEASED','ACKNOWLEDGED','DELIVERY_UNCONFIRMED')), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), worker_id TEXT, lease_token BLOB, lease_expires_ms INTEGER, updated_ms INTEGER NOT NULL)")
-            connection.execute("CREATE INDEX composition_outbox_ready_idx ON composition_outbox(status,updated_ms)")
-            connection.execute("CREATE TRIGGER composition_transactions_no_delete BEFORE DELETE ON composition_transactions BEGIN SELECT RAISE(ABORT,'composition_append_only'); END")
-            connection.execute("CREATE TRIGGER composition_events_no_update BEFORE UPDATE ON composition_events BEGIN SELECT RAISE(ABORT,'composition_append_only'); END")
-            connection.execute("CREATE TRIGGER composition_events_no_delete BEFORE DELETE ON composition_events BEGIN SELECT RAISE(ABORT,'composition_append_only'); END")
-            head = _sha(_GENESIS, self.config.digest)
-            connection.execute("INSERT INTO composition_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (1, _SCHEMA_VERSION, self.config.canonical_bytes, self.config.digest, head, 0, None, None, None, None, None, None, None, None, None, _INITIAL_PAYMENT, 0))
-            connection.execute("COMMIT")
-        self._check_schema()
+        _fail(CompositionIntegrityError, "state_database_required")
 
     def _meta(self, connection: sqlite3.Connection) -> tuple[Any, ...]:
         row = connection.execute("SELECT * FROM composition_meta WHERE id=1").fetchone()
@@ -537,72 +564,101 @@ class ClearanceCompositionStoreV2:
         job_id = _hex(job.operation_ref)
         return CompositionProcessResultV2(job_id, job.operation_ref, status, disposition, receipt, digest, job_id if status == "APPLIED" else None, job.operation_ref if status == "APPLIED" else None, duplicate, error)
 
-    def process_verified_jobs(self, queue_database: Path, promotion_batch: IndependentVerifiedQueueBatch | list[str] | tuple[str, ...], *, state_controls: Mapping[bytes, StateDispositionControl] | None = None) -> tuple[CompositionProcessResultV2, ...]:
-        if type(promotion_batch) is not IndependentVerifiedQueueBatch:
-            _fail(CompositionIntegrityError, "promotion_batch_required")
-        requested = promotion_batch
-        selector = requested.batch.batch_id
-        try:
-            batch = read_verified_batch(queue_database, selector)
-        except (IndependentQueueError, OSError, sqlite3.Error):
-            _fail(CompositionIntegrityError, "queue_verification_failed")
-        if not batch.jobs or any(job.queue_id != self.config.queue_id or job.config_digest != self.config.queue_config_digest for job in batch.jobs):
-            _fail(CompositionIntegrityError, "queue_authority_binding")
-        if requested.batch != batch.batch or requested.jobs != batch.jobs:
-            _fail(CompositionIntegrityError, "queue_batch_binding")
-        prepared = [(job, self._control_for(job, state_controls)) for job in batch.jobs]
-        if not prepared:
-            _fail(CompositionIntegrityError, "empty_batch")
-        now = int(self.clock.now_ms())
-        with closing(self._connect()) as connection:
+    def _validate_event_chain(self, connection: sqlite3.Connection) -> None:
+        meta = self._meta(connection)
+        expected_head = _sha(_GENESIS, self.config.digest)
+        rows = connection.execute("SELECT * FROM composition_events ORDER BY sequence").fetchall()
+        for index, row in enumerate(rows, start=1):
+            if int(row[0]) != index or type(row[5]) is not bytes:
+                _fail(CompositionConflictError, "composition_conflicting_retry")
             try:
-                connection.execute("BEGIN IMMEDIATE")
-                existing = [connection.execute("SELECT * FROM composition_transactions WHERE operation_ref=?", (job.operation_ref,)).fetchone() for job, _ in prepared]
-                if any(row is not None for row in existing) and not all(row is not None for row in existing):
+                payload = json.loads(bytes(row[5]).decode("ascii"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                _fail(CompositionConflictError, "composition_conflicting_retry")
+            event = {"schema": _SCHEMA, "sequence": index, "operation_ref": _hex(bytes(row[1])), "event_kind": str(row[2]), "before_state": str(row[3]), "after_state": str(row[4]), "payload": payload, "at_ms": int(row[8])}
+            raw = _json_bytes(event)
+            digest = _sha(_EVENT, _u64(index), raw)
+            root = _sha(_HEAD, expected_head, _u64(index), digest)
+            if bytes(row[6]) != digest or bytes(row[7]) != root:
+                _fail(CompositionConflictError, "composition_conflicting_retry")
+            expected_head = root
+        if bytes(meta[4]) != expected_head or int(meta[5]) != len(rows):
+            _fail(CompositionConflictError, "composition_conflicting_retry")
+
+    def _apply_verified_jobs_in_transaction(self, connection: sqlite3.Connection, jobs: tuple[IndependentVerifiedQueueJob, ...], *, state_controls: Mapping[bytes, StateDispositionControl], now: int) -> tuple[CompositionProcessResultV2, ...]:
+        if type(jobs) is not tuple or len(jobs) != 100 or not isinstance(state_controls, Mapping) or len(state_controls) != 100:
+            _fail(CompositionIntegrityError, "state_control_set")
+        refs = tuple(job.operation_ref for job in jobs)
+        if len(set(refs)) != 100 or set(state_controls) != set(refs):
+            _fail(CompositionIntegrityError, "state_control_set")
+        prepared: list[tuple[IndependentVerifiedQueueJob, StateDispositionControl]] = []
+        for job in jobs:
+            if job.queue_id != self.config.queue_id or job.config_digest != self.config.queue_config_digest:
+                _fail(CompositionIntegrityError, "queue_authority_binding")
+            control = state_controls.get(job.operation_ref)
+            if type(control) is not StateDispositionControl or control.operation_ref != job.operation_ref:
+                _fail(CompositionIntegrityError, "state_control_shape")
+            prepared.append((job, control))
+
+        existing = [connection.execute("SELECT * FROM composition_transactions WHERE operation_ref=?", (job.operation_ref,)).fetchone() for job, _ in prepared]
+        if any(row is not None for row in existing):
+            if not all(row is not None for row in existing):
+                _fail(CompositionConflictError, "composition_conflicting_retry")
+            self._validate_event_chain(connection)
+            results: list[CompositionProcessResultV2] = []
+            for (job, control), row in zip(prepared, existing):
+                assert row is not None
+                directive = control.effective_directive
+                disposition = _sha(_MATERIAL, b"disposition", job.operation_ref, directive.encode("ascii"), control.state_profile_identity)
+                count_after = control.clearance_count_before + int(directive in {"CLEAR", "EXCEPTION_APPROVED"})
+                expected_receipt = self._receipt(job, control, directive, int(row[10]), int(row[11]), control.clearance_count_before, count_after)
+                if str(row[2]) != "APPLIED" or int(row[3]) != 1 or str(row[4]) != control.policy_result or str(row[5]) != directive or bytes(row[6]) != disposition or bytes(row[7]) != control.state_profile_identity or bytes(row[8]) != control.predecessor_state_id or bytes(row[9]) != control.state_after_id or int(row[11]) != int(row[10]) + 1 or row[12] is None or bytes(row[12]) != expected_receipt or row[13] is None or bytes(row[13]) != _sha(_STATE, expected_receipt):
                     _fail(CompositionConflictError, "composition_conflicting_retry")
-                if all(row is not None for row in existing):
-                    if len({str(row[2]) for row in existing if row is not None}) != 1 or any(str(row[2]) != "APPLIED" for row in existing if row is not None):
-                        _fail(CompositionIntegrityError, "composition_batch_state_chain")
-                    for (job, control), row in zip(prepared, existing):
-                        if row is None or str(row[4]) != control.policy_result or str(row[5]) != control.effective_directive or row[12] is None:
-                            _fail(CompositionConflictError, "composition_conflicting_retry")
-                        expected_receipt = self._receipt(job, control, control.effective_directive, int(row[10]), int(row[11]), control.clearance_count_before, control.clearance_count_before + int(control.effective_directive in {"CLEAR", "EXCEPTION_APPROVED"}))
-                        if bytes(row[12]) != expected_receipt or bytes(row[13]) != _sha(_STATE, expected_receipt):
-                            _fail(CompositionConflictError, "composition_conflicting_retry")
-                    connection.execute("COMMIT")
-                    return tuple(self._result(job, str(row[2]), bytes(row[6]), None if row[12] is None else bytes(row[12]), True, None if row[14] is None else str(row[14])) for (job, _), row in zip(prepared, existing) if row is not None)
-                checked = self._preflight(connection, prepared)
-                if int(self._meta(connection)[16]) + len(prepared) > self.config.capacity:
-                    _fail(CompositionBackpressureError, "outbox_capacity")
-                results: list[CompositionProcessResultV2] = []
-                current_state = self._meta(connection)
-                for (job, control), (_, directive, state_before_id, state_after_id, seq_before, seq_after, count_before, count_after) in zip(prepared, checked):
-                    disposition = _sha(_MATERIAL, b"disposition", job.operation_ref, directive.encode("ascii"), control.state_profile_identity)
-                    transaction_id = _sha(_MATERIAL, b"transaction", disposition)
-                    receipt = self._receipt(job, control, directive, seq_before, seq_after, count_before, count_after)
-                    receipt_digest = _sha(_STATE, receipt)
-                    tx = (transaction_id, job.operation_ref, "APPLIED", 1, control.policy_result, directive, disposition, control.state_profile_identity, state_before_id, state_after_id, seq_before, seq_after, receipt, receipt_digest, None, now, now)
-                    connection.execute("INSERT INTO composition_transactions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tx)
-                    connection.execute("INSERT INTO composition_outbox VALUES (?,?,?,?,?,?,?,?)", (job.operation_ref, directive, "READY", 0, None, None, None, now))
-                    payload = {"operation_ref": _hex(job.operation_ref), "proof_accepted": True, "policy_result": control.policy_result, "effective_directive": directive, "state_receipt_digest": _hex(receipt_digest), "sequence_before": seq_before, "sequence_after": seq_after}
-                    self._append_event(connection, operation_ref=job.operation_ref, kind="APPLIED", before="NONE", after="READY", payload=payload, at_ms=now)
-                    audit_after = _sha(_STATE, bytes(current_state[12]) if current_state[12] is not None else _ZERO, control.decision_id, directive.encode("ascii"))
-                    clearance_after = control.state_after_clearance_root
-                    connection.execute("UPDATE composition_meta SET state_profile_identity=?,state_id=?,state_bytes=?,state_epoch=?,state_sequence=?,state_continuity_root=?,state_audit_head=?,state_clearance_root=?,state_clearance_count=?,payment_root=?,active_dispatch_count=active_dispatch_count+1 WHERE id=1", (control.state_profile_identity, state_after_id, control.state_after_bytes, control.epoch, seq_after, control.state_after_continuity_root, audit_after, clearance_after, count_after, _INITIAL_PAYMENT))
-                    current_state = self._meta(connection)
-                    results.append(self._result(job, "APPLIED", disposition, receipt, False, None))
-                self._fault("before_composition_commit")
-                connection.execute("COMMIT")
-            except (CompositionError, sqlite3.Error):
-                if connection.in_transaction:
-                    connection.execute("ROLLBACK")
-                raise
-            except BaseException:
-                if connection.in_transaction:
-                    connection.execute("ROLLBACK")
-                _fail(CompositionIntegrityError, "composition_transaction_rollback")
-        self._after_fault("after_composition_commit")
-        return tuple(results)
+                outbox = connection.execute("SELECT * FROM composition_outbox WHERE operation_ref=?", (job.operation_ref,)).fetchall()
+                events = connection.execute("SELECT * FROM composition_events WHERE operation_ref=? AND event_kind='APPLIED'", (job.operation_ref,)).fetchall()
+                if len(outbox) != 1 or bytes(outbox[0][0]) != job.operation_ref or str(outbox[0][1]) != directive or str(outbox[0][2]) not in {"READY", "LEASED", "ACKNOWLEDGED", "DELIVERY_UNCONFIRMED"} or len(events) != 1:
+                    _fail(CompositionConflictError, "composition_conflicting_retry")
+                try:
+                    payload = json.loads(bytes(events[0][5]).decode("ascii"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    _fail(CompositionConflictError, "composition_conflicting_retry")
+                expected_payload = {"operation_ref": _hex(job.operation_ref), "proof_accepted": True, "policy_result": control.policy_result, "effective_directive": directive, "state_receipt_digest": _hex(bytes(row[13])), "sequence_before": int(row[10]), "sequence_after": int(row[11])}
+                if payload != expected_payload or str(events[0][3]) != "NONE" or str(events[0][4]) != "READY":
+                    _fail(CompositionConflictError, "composition_conflicting_retry")
+                results.append(self._result(job, "APPLIED", disposition, expected_receipt, True, None))
+            return tuple(results)
+
+        checked = self._preflight(connection, prepared)
+        if len(checked) != 100 or int(self._meta(connection)[16]) + 100 > self.config.capacity:
+            _fail(CompositionBackpressureError, "outbox_capacity")
+        entries: list[tuple[IndependentVerifiedQueueJob, StateDispositionControl, str, bytes, bytes, bytes, bytes, tuple[Any, ...], bytes, dict[str, Any], int]] = []
+        meta = self._meta(connection)
+        audit_head = _ZERO if meta[12] is None else bytes(meta[12])
+        for (job, control), checked_row in zip(prepared, checked):
+            _, directive, state_before_id, state_after_id, seq_before, seq_after, count_before, count_after = checked_row
+            disposition = _sha(_MATERIAL, b"disposition", job.operation_ref, directive.encode("ascii"), control.state_profile_identity)
+            transaction_id = _sha(_MATERIAL, b"transaction", disposition)
+            receipt = self._receipt(job, control, directive, seq_before, seq_after, count_before, count_after)
+            receipt_digest = _sha(_STATE, receipt)
+            tx = (transaction_id, job.operation_ref, "APPLIED", 1, control.policy_result, directive, disposition, control.state_profile_identity, state_before_id, state_after_id, seq_before, seq_after, receipt, receipt_digest, None, now, now)
+            payload = {"operation_ref": _hex(job.operation_ref), "proof_accepted": True, "policy_result": control.policy_result, "effective_directive": directive, "state_receipt_digest": _hex(receipt_digest), "sequence_before": seq_before, "sequence_after": seq_after}
+            audit_head = _sha(_STATE, audit_head, control.decision_id, directive.encode("ascii"))
+            entries.append((job, control, directive, disposition, transaction_id, receipt, receipt_digest, tx, payload, audit_head, count_after))
+
+        for entry in entries:
+            connection.execute("INSERT INTO composition_transactions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", entry[7])
+        self._fault("after_composition_transactions")
+        for entry in entries:
+            self._append_event(connection, operation_ref=entry[0].operation_ref, kind="APPLIED", before="NONE", after="READY", payload=entry[8], at_ms=now)
+        self._fault("after_composition_events")
+        for entry in entries:
+            connection.execute("INSERT INTO composition_outbox VALUES (?,?,?,?,?,?,?,?)", (entry[0].operation_ref, entry[2], "READY", 0, None, None, None, now))
+        self._fault("after_composition_outbox")
+        last_job, last_control, last_directive, _, _, _, _, _, _, final_audit, final_count = entries[-1]
+        connection.execute("UPDATE composition_meta SET state_profile_identity=?,state_id=?,state_bytes=?,state_epoch=?,state_sequence=?,state_continuity_root=?,state_audit_head=?,state_clearance_root=?,state_clearance_count=?,payment_root=?,active_dispatch_count=active_dispatch_count+100 WHERE id=1", (last_control.state_profile_identity, last_control.state_after_id, last_control.state_after_bytes, last_control.epoch, last_control.sequence_before + 1, last_control.state_after_continuity_root, final_audit, last_control.state_after_clearance_root, final_count, _INITIAL_PAYMENT))
+        self._fault("after_composition_meta")
+        self._fault("before_composition_commit")
+        return tuple(self._result(entry[0], "APPLIED", entry[3], entry[5], False, None) for entry in entries)
 
     def _expire_outbox_locked(self, connection: sqlite3.Connection, now: int) -> None:
         rows = connection.execute("SELECT operation_ref,attempt FROM composition_outbox WHERE status='LEASED' AND lease_expires_ms<=?", (now,)).fetchall()
@@ -763,6 +819,16 @@ class ClearanceCompositionStoreV2:
 
     def close(self) -> None:
         return None
+
+
+def _apply_verified_jobs_in_transaction(connection: sqlite3.Connection, *, config: CompositionConfigV2, jobs: tuple[IndependentVerifiedQueueJob, ...], state_controls: Mapping[bytes, StateDispositionControl], now: int, before_fault: Callable[[str], None] | None = None) -> tuple[CompositionProcessResultV2, ...]:
+    """Apply one exact accepted batch on the caller's State transaction."""
+    writer = object.__new__(ClearanceCompositionStoreV2)
+    writer.config = config
+    writer.clock = _SystemClock()
+    writer._before_fault = before_fault
+    writer._after_commit_fault = None
+    return writer._apply_verified_jobs_in_transaction(connection, jobs, state_controls=state_controls, now=now)
 
 
 __all__ = ("ClearanceCompositionStoreV2", "CompositionBackpressureError", "CompositionClock", "CompositionConflictError", "CompositionConfigV2", "CompositionDeliveryResultV2", "CompositionError", "CompositionIndeterminateError", "CompositionIntegrityError", "CompositionLeaseError", "CompositionOutboxWorkV2", "CompositionProcessResultV2", "CompositionReconciliationWorkV2", "OfficialStateReceiverLookupPort", "OfficialStateReceiverPort", "StateDispositionControl", "SyntheticAckEvidenceProfileV2", "build_synthetic_acknowledgment", "resolve_effective_directive")

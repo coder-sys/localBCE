@@ -71,8 +71,8 @@ def _raise_fixed(error: VerificationQueueError) -> NoReturn:
     raise error
 
 
-SCHEMA_VERSION: Final[int] = 9
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v9"
+SCHEMA_VERSION: Final[int] = 10
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v10"
 MAX_QUEUE_CAPACITY: Final[int] = 512
 DATABASE_PAGE_SIZE: Final[int] = 4096
 DATABASE_MAX_PAGE_COUNT: Final[int] = 32768
@@ -180,6 +180,7 @@ _ALLOWED_CODES: Final[frozenset[str]] = frozenset({
     "receipt_result_code", "receipt_error", "flags_bounds", "flags_encoding",
     "flags_shape", "event_fields", "event_bounds", "handoff_not_consumed",
     "runtime_backend_unqualified", "runtime_result", "runtime_max_batches",
+    "state_disposition", "state_disposition_shape", "state_control_set", "state_control_shape", "composition_schema", "proof_session_active",
 })
 
 
@@ -596,6 +597,25 @@ class VolatileProofHandoff:
 
 
 @dataclass(frozen=True, slots=True)
+class VerificationOutcome:
+    """Non-dispositive verifier fact passed across the runtime/State seam."""
+
+    proof_accepted: bool
+    source_authenticated: bool
+    result_code: str
+    qualification_flags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if type(self.proof_accepted) is not bool or type(self.source_authenticated) is not bool:
+            _raise_fixed(QueueIntegrityError("verifier_result_shape"))
+        _code(self.result_code, "verifier_result_code")
+        if type(self.qualification_flags) is not tuple or len(self.qualification_flags) > 32 or tuple(sorted(self.qualification_flags)) != self.qualification_flags or len(set(self.qualification_flags)) != len(self.qualification_flags):
+            _raise_fixed(QueueIntegrityError("verifier_result_flags"))
+        for flag in self.qualification_flags:
+            _token(flag, "qualification_flag", 96)
+
+
+@dataclass(frozen=True, slots=True)
 class BatchVerifierResult:
     proof_accepted: bool
     source_authenticated: bool
@@ -623,6 +643,10 @@ class BatchVerifierResult:
     @property
     def as_json(self) -> dict[str, Any]:
         return {"proof_accepted": self.proof_accepted, "source_authenticated": self.source_authenticated, "proof_statement": _hex(self.proof_statement), "batch_root": _hex(self.batch_root), "source_auth_profile": self.source_auth_profile, "source_key_epoch": self.source_key_epoch, "result_code": self.result_code, "qualification_flags": list(self.qualification_flags)}
+
+    @property
+    def non_dispositive_outcome(self) -> VerificationOutcome:
+        return VerificationOutcome(self.proof_accepted, self.source_authenticated, self.result_code, self.qualification_flags)
 
 
 def parse_batch_verifier_result(value: object) -> BatchVerifierResult:
@@ -846,7 +870,7 @@ def _normalize_schema_sql(value: str) -> str:
     return re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", normalized))
 
 
-def _create_schema(connection: sqlite3.Connection) -> None:
+def _create_schema(connection: sqlite3.Connection, composition_config: object) -> None:
     connection.executescript(
         """
         CREATE TABLE queue_metadata (
@@ -907,6 +931,8 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         """
     )
     connection.executescript("\n".join(sql + ";" for _, sql in _TRIGGER_DEFS))
+    from app.minimal_clearance_composition import _create_composition_schema
+    _create_composition_schema(connection, composition_config)
 
 
 def _flags_bytes(flags: tuple[str, ...]) -> bytes:
@@ -950,11 +976,11 @@ def _statement_from_batch(connection: sqlite3.Connection, batch_row: tuple[Any, 
 
 
 class _VerificationQueueStore:
-    def __init__(self, *, path: Path, config: QueueConfig, owner: _QueueRuntimeOwnership | None = None, clock: "QueueClock | None" = None, before_fault: Callable[[str], None] | None = None, after_commit_fault: Callable[[str], None] | None = None) -> None:
+    def __init__(self, *, path: Path, config: QueueConfig, owner: _QueueRuntimeOwnership | None = None, clock: "QueueClock | None" = None, before_fault: Callable[[str], None] | None = None, after_commit_fault: Callable[[str], None] | None = None, composition_config: object | None = None) -> None:
         if owner is None:
             _raise_fixed(VerificationQueueError("queue_owner_required"))
         try:
-            if not isinstance(path, Path) or not path.is_absolute() or not isinstance(config, QueueConfig):
+            if not isinstance(path, Path) or not path.is_absolute() or path.name != "state.sqlite" or not isinstance(config, QueueConfig):
                 _raise_fixed(VerificationQueueError("queue_configuration"))
             if not path.parent.is_dir():
                 _raise_fixed(VerificationQueueError("queue_parent"))
@@ -970,12 +996,18 @@ class _VerificationQueueStore:
         self.clock = clock or SystemQueueClock()
         self._before_fault = before_fault
         self._after_commit_fault = after_commit_fault
+        from app.minimal_clearance_composition import CompositionConfigV2
+        if composition_config is None:
+            composition_config = CompositionConfigV2(config.queue_id, config.digest, capacity=max(RANGE100_COUNT, config.capacity))
+        if type(composition_config) is not CompositionConfigV2 or composition_config.queue_id != config.queue_id or composition_config.queue_config_digest != config.digest:
+            owner.close()
+            _raise_fixed(VerificationQueueError("composition_schema"))
+        self.composition_config = composition_config
         self._handoffs: dict[bytes, VolatileProofHandoff] = {}
         self._closed = False
         self._startup_recovered_count = 0
         self._last_claim_error: str | None = None
         self._last_claim_held_count = 0
-        self._retry_work: _QueueWorkItem | None = None
         try:
             if self.path.exists():
                 if self.path.is_symlink() or self.path.stat().st_size > MAX_QUEUE_DATABASE_BYTES:
@@ -1016,7 +1048,7 @@ class _VerificationQueueStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                _create_schema(connection)
+                _create_schema(connection, self.composition_config)
                 config_raw = self.config.canonical_bytes
                 config_digest = self.config.digest
                 head = _sha3(_GENESIS, self.config.queue_id.encode("ascii"), config_digest)
@@ -1029,13 +1061,15 @@ class _VerificationQueueStore:
     def _schema_check(self) -> None:
         with closing(self._connect()) as connection:
             tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-            if tables != _TABLES or any(_columns(connection, table) != _TABLE_COLUMNS[table] for table in _TABLES):
+            from app.minimal_clearance_composition import _COMPOSITION_TABLES, _check_composition_schema
+            if tables != _TABLES | _COMPOSITION_TABLES or any(_columns(connection, table) != _TABLE_COLUMNS[table] for table in _TABLES):
                 _raise_fixed(VerificationQueueError("queue_schema_unsupported"))
             table_sql = {str(row[0]): str(row[1]) for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-            if set(table_sql) != _TABLES or any(_normalize_schema_sql(table_sql[name]) != _normalize_schema_sql(_TABLE_SCHEMA_SQL[name]) for name in _TABLES):
+            if set(table_sql) != _TABLES | _COMPOSITION_TABLES or any(_normalize_schema_sql(table_sql[name]) != _normalize_schema_sql(_TABLE_SCHEMA_SQL[name]) for name in _TABLES):
                 _raise_fixed(VerificationQueueError("queue_schema_unsupported"))
             trigger_rows = {str(row[0]): str(row[1]) for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'")}
-            if set(trigger_rows) != {name for name, _ in _TRIGGER_DEFS}:
+            expected_triggers = {name for name, _ in _TRIGGER_DEFS} | {"composition_transactions_no_delete", "composition_events_no_update", "composition_events_no_delete"}
+            if set(trigger_rows) != expected_triggers:
                 _raise_fixed(VerificationQueueError("queue_schema_unsupported"))
             for name, expected in _TRIGGER_DEFS:
                 if re.sub(r"\s+", " ", trigger_rows[name].strip()).lower() != re.sub(r"\s+", " ", expected.strip()).lower():
@@ -1051,6 +1085,10 @@ class _VerificationQueueStore:
                 _raise_fixed(VerificationQueueError("queue_config_encoding"))
             if stored != self.config.as_json or bytes(meta[4]) != self.config.digest or bytes(meta[4]) != _sha3(_MATERIAL, bytes(meta[3])):
                 _raise_fixed(VerificationQueueError("queue_config_binding"))
+            try:
+                _check_composition_schema(connection, self.composition_config)
+            except BaseException:
+                _raise_fixed(VerificationQueueError("composition_schema"))
 
     def _meta(self, connection: sqlite3.Connection) -> tuple[Any, ...]:
         row = connection.execute("SELECT * FROM queue_metadata WHERE id=1").fetchone()
@@ -1248,22 +1286,6 @@ class _VerificationQueueStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                row = connection.execute("SELECT * FROM queue_batches WHERE status='QUEUED' AND next_eligible_ms<=? ORDER BY admission_seq LIMIT 1", (now,)).fetchone()
-                if row is None:
-                    held = list(self._expire_locked(connection, now))
-                    connection.commit()
-                    for batch_id in held:
-                        self._close_handoff_locked(batch_id)
-                    self._last_claim_held_count = len(held)
-                    return None
-                meta = self._meta(connection)
-                before = int(meta[17])
-                try:
-                    after = _reserve_proof_attempt(before, cap=min(int(meta[18]), PROOF_ATTEMPTS_CAP))
-                except QueueBackpressureError:
-                    connection.rollback()
-                    self._last_claim_error = "computational_budget_exhausted"
-                    return None
                 held = list(self._expire_locked(connection, now))
                 row = connection.execute("SELECT * FROM queue_batches WHERE status='QUEUED' AND next_eligible_ms<=? ORDER BY admission_seq LIMIT 1", (now,)).fetchone()
                 if row is None:
@@ -1273,6 +1295,17 @@ class _VerificationQueueStore:
                     self._last_claim_held_count = len(held)
                     return None
                 meta = self._meta(connection)
+                if int(meta[16]) != 0 or int(connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0]) != 0:
+                    connection.rollback()
+                    self._last_claim_error = "proof_session_active"
+                    return None
+                before = int(meta[17])
+                try:
+                    after = _reserve_proof_attempt(before, cap=min(int(meta[18]), PROOF_ATTEMPTS_CAP))
+                except QueueBackpressureError:
+                    connection.rollback()
+                    self._last_claim_error = "computational_budget_exhausted"
+                    return None
                 batch_id = bytes(row[0])
                 attempt_id = int(meta[19]) + 1
                 claim_seq = int(meta[13]) + 1
@@ -1306,7 +1339,16 @@ class _VerificationQueueStore:
     def _lease_fence(self, connection: sqlite3.Connection, work: _QueueWorkItem) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
         row = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
         lease = connection.execute("SELECT * FROM queue_leases WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
+        attempt = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
         if row is None or lease is None or str(row[13]) != "LEASED" or int(row[15]) != work.attempt or str(lease[1]) != work.worker_id or int(lease[3]) != work.attempt or int(lease[4]) != work.claim_sequence or int(lease[6]) != work.lease_expires_ms:
+            _raise_fixed(QueueLeaseError("completion_not_live"))
+        if attempt is None or int(attempt[0]) <= 0 or bytes(attempt[1]) != work.batch.batch_id or int(attempt[4]) != PROOF_ATTEMPTS_PER_BATCH or bytes(attempt[5]) != _u64(self.config.source_key_epoch) or str(attempt[6]) != "RESERVED":
+            _raise_fixed(QueueLeaseError("completion_not_live"))
+        try:
+            durable = _statement_from_batch(connection, tuple(row))
+        except VerificationQueueError:
+            _raise_fixed(QueueLeaseError("completion_not_live"))
+        if durable != work.batch or _batch_identity_digest(durable, self.config) != durable.identity_digest:
             _raise_fixed(QueueLeaseError("completion_not_live"))
         expected = hmac.new(work.lease_token, _sha3(_LEASE, self.config.digest, work.batch.batch_id, _u64(work.attempt), _u64(work.claim_sequence), _u64(int(lease[5])), _u64(int(lease[6]))), hashlib.sha3_512).digest()
         if bytes(lease[2]) != expected:
@@ -1323,19 +1365,49 @@ class _VerificationQueueStore:
             _raise_fixed(QueueIntegrityError("receipt_cap"))
         return raw
 
-    def _complete_batch(self, work: _QueueWorkItem, *, status: str, verifier_result: BatchVerifierResult | None = None, error_code: str | None = None) -> QueueResult:
+    def _composition_jobs(self, work: _QueueWorkItem, verifier_result: BatchVerifierResult) -> tuple[Any, ...]:
+        from app.minimal_clearance_verification_queue_independent import IndependentVerifiedQueueJob
+        return tuple(IndependentVerifiedQueueJob(self.config.queue_id, self.config.digest, operation_ref, "VERIFIED", True, work.attempt, b"", bytes(32), work.batch.template.assertion_identifier, work.batch.template.assertion_version, work.batch.template.state_profile_version, work.batch.template.valid_from_ms, work.batch.template.valid_until_ms, position, work.batch.batch_root, work.batch.template.approved_source_registry_root, self.config.profile_version, verifier_result.result_code, self.config.qualification_flags) for position, operation_ref in enumerate(work.batch.operation_refs))
+
+    def _complete_batch(self, work: _QueueWorkItem, *, status: str, verifier_result: BatchVerifierResult | None = None, error_code: str | None = None, state_controls: Mapping[bytes, object] | None = None) -> QueueResult:
         if status not in _TERMINAL:
             _raise_fixed(QueueIntegrityError("completion_status"))
         accepted = bool(verifier_result is not None and verifier_result.proof_accepted)
         authenticated = bool(verifier_result is not None and verifier_result.source_authenticated)
         if status == "VERIFIED" and not (accepted and authenticated):
             _raise_fixed(QueueIntegrityError("completion_acceptance"))
+        if status == "VERIFIED" and (state_controls is None or not isinstance(state_controls, Mapping)):
+            _raise_fixed(QueueIntegrityError("state_disposition"))
+        if verifier_result is not None and (
+            verifier_result.proof_statement != work.batch.proof_statement
+            or verifier_result.batch_root != work.batch.batch_root
+            or verifier_result.source_auth_profile != self.config.source_auth_profile
+            or verifier_result.source_key_epoch != self.config.source_key_epoch
+            or verifier_result.qualification_flags != self.config.qualification_flags
+        ):
+            _raise_fixed(QueueIntegrityError("verifier_result_mismatch"))
+        if status == "VERIFIED" and verifier_result is not None and verifier_result.result_code != "accepted":
+            _raise_fixed(QueueIntegrityError("verifier_result_code"))
         result_code = verifier_result.result_code if verifier_result is not None else ("rejected" if status == "REJECTED" else "fresh_handoff_required")
         result_code = _code(result_code, "completion_code")
         final_error = None if error_code is None else _code(error_code, "completion_error")
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                existing_batch = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
+                if existing_batch is None:
+                    _raise_fixed(QueueLeaseError("completion_not_live"))
+                if str(existing_batch[13]) == "VERIFIED":
+                    if status != "VERIFIED" or verifier_result is None:
+                        _raise_fixed(QueueLeaseError("completion_not_live"))
+                    from app.minimal_clearance_composition import _apply_verified_jobs_in_transaction
+                    _apply_verified_jobs_in_transaction(connection, config=self.composition_config, jobs=self._composition_jobs(work, verifier_result), state_controls=state_controls, now=int(self.clock.now_ms()))  # type: ignore[arg-type]
+                    existing_result = connection.execute("SELECT * FROM queue_results WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
+                    if existing_result is None or str(existing_result[1]) != "VERIFIED":
+                        _raise_fixed(QueueIntegrityError("completion_acceptance"))
+                    connection.commit()
+                    self._close_handoff_locked(work.batch.batch_id)
+                    return QueueResult(work.batch.batch_id, "VERIFIED", bytes(existing_result[3]), None if existing_result[14] is None else str(existing_result[14]), RANGE100_COUNT)
                 row, lease = self._lease_fence(connection, work)
                 # Recheck the clock after the live lease fence, within the
                 # same completion transaction that closes the reservation.
@@ -1362,6 +1434,10 @@ class _VerificationQueueStore:
                 self._append_event(connection, kind="BATCH_HELD" if status == "HELD" else "BATCH_COMPLETED", batch_id=work.batch.batch_id, status=status, error_code=final_error, attempt=work.attempt, at_ms=now, extra={"member_count": RANGE100_COUNT})
                 meta = self._meta(connection)
                 connection.execute("UPDATE queue_metadata SET live_lease_count=0,nonterminal_count=? WHERE id=1", (max(0, int(meta[15]) - 1),))
+                if status == "VERIFIED":
+                    from app.minimal_clearance_composition import _apply_verified_jobs_in_transaction
+                    composition_jobs = self._composition_jobs(work, verifier_result)
+                    _apply_verified_jobs_in_transaction(connection, config=self.composition_config, jobs=composition_jobs, state_controls=state_controls, now=now, before_fault=self._fault)  # type: ignore[arg-type]
                 self._fault("before_queue_commit")
                 connection.commit()
             except BaseException:
@@ -1388,15 +1464,23 @@ class _VerificationQueueStore:
                 connection.rollback()
                 raise
 
-    def _process_one_batch(self, *, verifier: VerifierPort) -> QueueResult | None:
+    def _state_controls(self, work: _QueueWorkItem, outcome: VerificationOutcome, port: object | None) -> Mapping[bytes, object]:
+        if port is None:
+            _raise_fixed(QueueHeldError("state_disposition"))
+        controls_for = getattr(port, "controls_for", None)
+        if not callable(controls_for):
+            _raise_fixed(QueueHeldError("state_disposition"))
+        try:
+            controls = controls_for(batch_id=work.batch.batch_id, operation_refs=work.batch.operation_refs, verification_outcome=outcome)
+        except BaseException:
+            _raise_fixed(QueueHeldError("state_disposition"))
+        if not isinstance(controls, Mapping) or len(controls) != RANGE100_COUNT or set(controls) != set(work.batch.operation_refs):
+            _raise_fixed(QueueHeldError("state_control_set"))
+        return controls
+
+    def _process_one_batch(self, *, verifier: VerifierPort, state_disposition_port: object | None = None) -> QueueResult | None:
         self._assert_owner()
-        work = self._retry_work
-        self._retry_work = None
-        if work is not None:
-            self._last_claim_error = None
-            self._last_claim_held_count = 0
-        if work is None:
-            work = self._claim_next_batch()
+        work = self._claim_next_batch()
         if work is None:
             return None
         handoff = self._handoffs.get(work.batch.batch_id)
@@ -1412,7 +1496,8 @@ class _VerificationQueueStore:
                 if result.proof_accepted and result.source_authenticated:
                     if result.result_code != "accepted":
                         raise QueueHeldError("verifier_result_code")
-                    return self._complete_batch(work, status="VERIFIED", verifier_result=result)
+                    controls = self._state_controls(work, result.non_dispositive_outcome, state_disposition_port)
+                    return self._complete_batch(work, status="VERIFIED", verifier_result=result, state_controls=controls)
                 if result.result_code != "rejected":
                     raise QueueHeldError("verifier_result_code")
                 return self._complete_batch(work, status="REJECTED", verifier_result=result, error_code="proof_or_source_not_accepted")
@@ -1422,7 +1507,7 @@ class _VerificationQueueStore:
                 return self._complete_batch(work, status="REJECTED", error_code=_code(str(exc), "completion_error"))
             except (QueueHeldError, QueueIntegrityError) as exc:
                 raw = str(exc)
-                code = raw if raw in {"verifier_stream_not_consumed", "verifier_result_unknown_field", "verifier_result_shape", "verifier_result_flags", "verifier_key_epoch", "verifier_result_code", "verifier_transport"} else "fresh_handoff_required"
+                code = raw if raw in {"verifier_stream_not_consumed", "verifier_result_unknown_field", "verifier_result_shape", "verifier_result_flags", "verifier_key_epoch", "verifier_result_code", "verifier_transport", "state_disposition", "state_control_set", "state_control_shape"} else "fresh_handoff_required"
                 return self._complete_batch(work, status="HELD", error_code=code)
             except QueueRetryableError:
                 return self._complete_batch(work, status="HELD", error_code="fresh_handoff_required")
@@ -1431,20 +1516,14 @@ class _VerificationQueueStore:
             except BaseException:
                 return self._complete_batch(work, status="HELD", error_code="fresh_handoff_required")
         except BaseException:
-            # A failed commit after bytes were consumed cannot leave a retryable
-            # lease pointing at the consumed stream.  Close it as HELD; an
-            # unconsumed stream remains available for retry.
-            if handoff.consumed and not handoff.closed:
-                self._consume_failed_handoff(work)
-            elif not handoff.closed:
-                self._retry_work = work
+            # Every post-reservation failure burns the attempt.  In particular,
+            # an unconsumed or partially consumed stream is never retryable.
+            if not handoff.closed:
+                try:
+                    self._consume_failed_handoff(work)
+                except BaseException:
+                    self._close_handoff_locked(work.batch.batch_id)
             raise
-
-    def _promote_candidates(self) -> tuple[dict[str, Any], ...]:
-        self._assert_owner()
-        from app.minimal_clearance_verification_queue_independent import read_verified_batch
-        batch = read_verified_batch(self.path)
-        return () if not batch.jobs else ({"batch_id": batch.batch.batch_id, "head_root": batch.batch.post_head_root, "accepted_count": len(batch.jobs)},)
 
     def _read_projection(self) -> dict[str, Any]:
         self._assert_owner()
@@ -1477,7 +1556,6 @@ class _VerificationQueueStore:
         for handoff in tuple(self._handoffs.values()):
             handoff.close()
         self._handoffs.clear()
-        self._retry_work = None
 
 
 class QueueClock(Protocol):
@@ -1523,5 +1601,5 @@ __all__ = (
     "DIRECTIVES", "MAX_QUEUE_DATABASE_BYTES", "MAX_QUEUE_CAPACITY", "MAX_TERMINAL_GROWTH_PER_NONTERMINAL", "PROCESS_TREE_PEAK_CAP_BYTES",
     "PROFILE_FINGERPRINT", "PROFILE_VERSION", "CIRCUIT_FINGERPRINT", "PROOF_STATEMENT_BYTES", "RANGE100_COUNT", "PROOF_ATTEMPTS_CAP", "PROOF_ATTEMPTS_PER_BATCH",
     "BatchVerifierResult", "IssuedOperationStatement", "IssuedVerificationBatch", "OperationTemplate", "QueueBackpressureError", "QueueClock", "QueueConfig",
-    "QueueConflictError", "QueueDeterministicRejectError", "QueueHeldError", "QueueIndeterminateError", "QueueIntegrityError", "QueueLeaseError", "QueueResult", "QueueRetryableError", "SystemQueueClock", "VerificationQueueError", "VerifierPort", "VolatileProofHandoff", "parse_batch_verifier_result", "_QueueRuntimeOwnership", "_VerificationQueueStore", "_compute_batch_root", "_build_statement", "_parse_receipt", "_reserve_proof_attempt", "BOOTSTRAP_CAPABILITY_LIMITATION_COUNT",
+    "QueueConflictError", "QueueDeterministicRejectError", "QueueHeldError", "QueueIndeterminateError", "QueueIntegrityError", "QueueLeaseError", "QueueResult", "QueueRetryableError", "SystemQueueClock", "VerificationOutcome", "VerificationQueueError", "VerifierPort", "VolatileProofHandoff", "parse_batch_verifier_result", "_QueueRuntimeOwnership", "_VerificationQueueStore", "_compute_batch_root", "_build_statement", "_parse_receipt", "_reserve_proof_attempt", "BOOTSTRAP_CAPABILITY_LIMITATION_COUNT",
 )

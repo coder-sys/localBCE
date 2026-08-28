@@ -32,6 +32,8 @@ _EVENT_COLUMNS = ("sequence", "operation_ref", "event_kind", "before_state", "af
 _OUTBOX = ("operation_ref", "effective_directive", "status", "attempt", "worker_id", "lease_token", "lease_expires_ms", "updated_ms")
 _EVENT_PAYLOAD_KEYS = {"APPLIED": frozenset({"operation_ref", "proof_accepted", "policy_result", "effective_directive", "state_receipt_digest", "sequence_before", "sequence_after"})}
 _ZERO = bytes(64)
+_QUEUE_TABLES = frozenset(("queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions"))
+_COMPOSITION_TABLES = frozenset(("composition_meta", "composition_transactions", "composition_events", "composition_outbox"))
 
 
 def _fail(code: str) -> None:
@@ -148,7 +150,7 @@ def _parse_state_receipt(raw: bytes) -> dict[str, Any]:
 
 def _verify(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None) -> dict[str, Any]:
     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-    if tables != {"composition_meta", "composition_transactions", "composition_events", "composition_outbox"}:
+    if tables != _QUEUE_TABLES | _COMPOSITION_TABLES:
         _fail("schema_tables")
     for table, expected in (("composition_meta", _META), ("composition_transactions", _TX), ("composition_events", _EVENT_COLUMNS), ("composition_outbox", _OUTBOX)):
         if tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")) != expected:
@@ -257,13 +259,25 @@ def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = N
         _fail("database_path")
     try:
         with closing(sqlite3.connect(str(path), timeout=5.0)) as connection:
-            return _verify(connection, expected_config=expected_config)
+            result = _verify(connection, expected_config=expected_config)
+            try:
+                from app.minimal_clearance_verification_queue_independent import verify_database as verify_queue_database
+                verify_queue_database(path)
+            except Exception:
+                _fail("queue_schema")
+            return result
     except sqlite3.Error:
         _fail("database_sqlite")
 
 
 def verify_database_connection(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    return _verify(connection, expected_config=expected_config)
+    result = _verify(connection, expected_config=expected_config)
+    try:
+        from app.minimal_clearance_verification_queue_independent import _verify_connection as verify_queue_connection
+        verify_queue_connection(connection)
+    except Exception:
+        _fail("queue_schema")
+    return result
 
 
 __all__ = ("IndependentCompositionError", "verify_database", "verify_database_connection")

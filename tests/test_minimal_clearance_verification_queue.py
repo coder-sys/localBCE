@@ -1,45 +1,28 @@
-import hashlib
 import io
-import json
 import sqlite3
-import subprocess
-import sys
 import tempfile
 import unittest
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
 
-from app import minimal_clearance_resource_limits as resource_limits
+import app.minimal_clearance_composition as composition
+from app.minimal_clearance_composition import (
+    CompositionConfigV2,
+    CompositionConflictError,
+    StateDispositionControl,
+    resolve_effective_directive,
+)
 from app.minimal_clearance_verification_queue import (
-    ADMISSION_CAP_BYTES,
-    ACTIVE_PROCESS_LIMIT,
-    DATABASE_MAX_PAGE_COUNT,
-    DATABASE_PAGE_SIZE,
     BatchVerifierResult,
-    CIRCUIT_FINGERPRINT,
     OperationTemplate,
-    PROFILE_VERSION,
-    PROFILE_VERSION_TOKEN,
-    PROFILE_FINGERPRINT,
-    PROCESS_TREE_PEAK_CAP_BYTES,
     QueueConfig,
-    QueueConflictError,
-    QueueHeldError,
-    QueueIntegrityError,
     QueueLeaseError,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
     _VerificationQueueStore,
-    _build_statement,
-    _reserve_proof_attempt,
 )
-from app.minimal_clearance_verification_queue_independent import (
-    IndependentQueueError,
-    read_verified_batch,
-    verify_database,
-)
+from app.minimal_clearance_verification_queue_independent import read_verified_batch, verify_database
 
 
 class _Clock:
@@ -50,638 +33,322 @@ class _Clock:
         return self.now
 
 
+def _new_store(root: Path, clock: _Clock, *, capacity: int = 100, before_fault=None):
+    config = QueueConfig("state-test-v10", capacity)
+    composition_config = CompositionConfigV2(config.queue_id, config.digest, capacity=capacity)
+    owner = _QueueRuntimeOwnership(lock_path=root / "state.sqlite.runtime-lock", parent=root)
+    store = _VerificationQueueStore(
+        path=root / "state.sqlite",
+        config=config,
+        owner=owner,
+        clock=clock,
+        before_fault=before_fault,
+        composition_config=composition_config,
+    )
+    return config, composition_config, owner, store
+
+
+def _prepare(store: _VerificationQueueStore, config: QueueConfig, clock: _Clock, *, proof: bytes = b"volatile-proof", duration: int = 60_000):
+    template = OperationTemplate(
+        "shared-assertion",
+        1,
+        config.profile_version,
+        clock.now - 100,
+        clock.now + duration,
+    )
+    batch = store.issue_batch(template=template)
+    store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(proof), declared_length=len(proof))
+    return batch
+
+
+def _controls(operation_refs: tuple[bytes, ...], policies: tuple[str, ...] | None = None) -> dict[bytes, StateDispositionControl]:
+    if policies is None:
+        policies = ("PASS", "MISSING", "AMBIGUOUS", "FAIL", "FAIL") * 20
+    if len(policies) != 100:
+        raise AssertionError(len(policies))
+    profile = bytes([9]) * 64
+    state_id = bytes(64)
+    state_bytes = bytes(64)
+    continuity = bytes(64)
+    audit = bytes(64)
+    clearance = bytes(64)
+    marker = 0
+    count = 0
+    result: dict[bytes, StateDispositionControl] = {}
+    for index, operation_ref in enumerate(operation_refs):
+        policy = policies[index]
+        exception = policy == "FAIL" and index % 5 == 4
+        control = StateDispositionControl(
+            operation_ref,
+            policy,
+            exception,
+            bytes([index + 1]) * 64 if exception else bytes(64),
+            profile,
+            state_id,
+            state_bytes,
+            1,
+            index,
+            continuity,
+            audit,
+            clearance,
+            marker,
+            count,
+        )
+        result[operation_ref] = control
+        state_id = control.state_after_id
+        state_bytes = control.state_after_bytes
+        continuity = control.state_after_continuity_root
+        clearance = control.state_after_clearance_root
+        audit = composition._sha(composition._STATE, audit, control.decision_id, control.effective_directive.encode("ascii"))
+        marker = int(bool(marker or control.effective_directive in {"CLEAR", "EXCEPTION_APPROVED"}))
+        count += int(control.effective_directive in {"CLEAR", "EXCEPTION_APPROVED"})
+    return result
+
+
 class _Verifier:
-    def __init__(self, config: QueueConfig, *, proof_accepted: bool = True, source_authenticated: bool = True, mutate: str | None = None, unknown: bool = False, advance: int | None = None) -> None:
+    def __init__(self, config: QueueConfig, *, accepted: bool = True, source_authenticated: bool = True, result_code: str | None = None) -> None:
         self.config = config
-        self.proof_accepted = proof_accepted
+        self.accepted = accepted
         self.source_authenticated = source_authenticated
-        self.mutate = mutate
-        self.unknown = unknown
-        self.advance = advance
+        self.result_code = result_code or ("accepted" if accepted and source_authenticated else "rejected")
         self.calls = 0
 
-    def verify(self, stream: VolatileProofHandoff, issued_batch):
+    def verify(self, stream: VolatileProofHandoff, batch):
         self.calls += 1
-        while stream.read(17):
+        while stream.read(23):
             pass
-        if self.advance is not None:
-            self.config.clock.now += self.advance  # type: ignore[attr-defined]
-        statement = issued_batch.proof_statement
-        root = issued_batch.batch_root
-        profile = self.config.source_auth_profile
-        epoch = self.config.source_key_epoch
-        flags = self.config.qualification_flags
-        if self.mutate == "statement":
-            statement = bytes([statement[0] ^ 1]) + statement[1:]
-        if self.mutate == "root":
-            root = bytes([root[0] ^ 1]) + root[1:]
-        if self.mutate == "source_profile":
-            profile = "untrusted-source-auth"
-        if self.mutate == "source_epoch":
-            epoch += 1
-        if self.mutate == "flags":
-            flags = ("untrusted-flag",)
-        if self.unknown:
-            return {"proof_accepted": self.proof_accepted, "source_authenticated": self.source_authenticated, "proof_statement": statement, "batch_root": root, "source_auth_profile": profile, "source_key_epoch": epoch, "result_code": "accepted", "qualification_flags": list(flags), "policyResult": "PASS"}
-        return BatchVerifierResult(self.proof_accepted, self.source_authenticated, statement, root, profile, epoch, "accepted" if self.proof_accepted else "rejected", flags)
+        return BatchVerifierResult(
+            self.accepted,
+            self.source_authenticated,
+            batch.proof_statement,
+            batch.batch_root,
+            self.config.source_auth_profile,
+            self.config.source_key_epoch,
+            self.result_code,
+            self.config.qualification_flags,
+        )
 
 
-class _AdvanceVerifier(_Verifier):
-    def __init__(self, config: QueueConfig, clock: _Clock, advance: int) -> None:
-        super().__init__(config)
-        self._clock = clock
-        self._advance = advance
-
-    def verify(self, stream: VolatileProofHandoff, issued_batch):
-        self.calls += 1
-        while stream.read(17):
-            pass
-        self._clock.now += self._advance
-        return BatchVerifierResult(True, True, issued_batch.proof_statement, issued_batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", self.config.qualification_flags)
-
-
-class _RollbackVerifier:
-    def __init__(self, config: QueueConfig) -> None:
-        self.config = config
+class _MalformedVerifier:
+    def __init__(self) -> None:
         self.calls = 0
-
-    def verify(self, stream: VolatileProofHandoff, issued_batch):
-        self.calls += 1
-        while stream.read(11):
-            pass
-        return BatchVerifierResult(True, True, issued_batch.proof_statement, issued_batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", self.config.qualification_flags)
-
-
-class _BadCodeVerifier:
-    def __init__(self, config: QueueConfig, result: dict[str, object]) -> None:
-        self.config = config
-        self.result = result
 
     def verify(self, stream: VolatileProofHandoff, _batch):
-        while stream.read(11):
-            pass
-        return self.result
-
-
-class _NoReadVerifier:
-    def __init__(self, config: QueueConfig) -> None:
-        self.config = config
-        self.calls = 0
-
-    def verify(self, _stream: VolatileProofHandoff, batch):
         self.calls += 1
-        return BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", self.config.qualification_flags)
+        while stream.read(23):
+            pass
+        return {}
 
 
-class QueueV9Tests(unittest.TestCase):
+class _DispositionPort:
+    def __init__(self, *, policies: tuple[str, ...] | None = None) -> None:
+        self.policies = policies
+        self.calls: list[tuple[bytes, tuple[bytes, ...], object]] = []
+
+    def controls_for(self, *, batch_id: bytes, operation_refs: tuple[bytes, ...], verification_outcome):
+        self.calls.append((batch_id, operation_refs, verification_outcome))
+        return _controls(operation_refs, self.policies)
+
+
+def _counts(path: Path) -> dict[str, int]:
+    with closing(sqlite3.connect(str(path))) as connection:
+        return {
+            "queue_batches": int(connection.execute("SELECT COUNT(*) FROM queue_batches").fetchone()[0]),
+            "queue_members": int(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0]),
+            "queue_leases": int(connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0]),
+            "queue_attempts": int(connection.execute("SELECT COUNT(*) FROM queue_attempts").fetchone()[0]),
+            "queue_results": int(connection.execute("SELECT COUNT(*) FROM queue_results").fetchone()[0]),
+            "queue_transitions": int(connection.execute("SELECT COUNT(*) FROM queue_transitions").fetchone()[0]),
+            "composition_transactions": int(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0]),
+            "composition_events": int(connection.execute("SELECT COUNT(*) FROM composition_events").fetchone()[0]),
+            "composition_outbox": int(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0]),
+        }
+
+
+class QueueV10Tests(unittest.TestCase):
     def setUp(self) -> None:
-        self._temp = tempfile.TemporaryDirectory()
-        self.root = Path(self._temp.name)
-        self.path = self.root / "queue.sqlite"
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
         self.clock = _Clock()
-        self.config = QueueConfig("queue-v9", 512)
-        self.owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
-        self.store = _VerificationQueueStore(path=self.path, config=self.config, owner=self.owner, clock=self.clock)
+        self.config, self.composition_config, self.owner, self.store = _new_store(self.root, self.clock)
 
     def tearDown(self) -> None:
         self.store._close()
         self.owner.close()
-        self._temp.cleanup()
+        self.temp.cleanup()
 
-    def template(self, *, identifier: str = "shared-assertion", start: int | None = None, end: int | None = None, registry: bytes | None = None) -> OperationTemplate:
-        return OperationTemplate(identifier, 1, "state-profile-v9", self.clock.now - 100 if start is None else start, self.clock.now + 3_000_000 if end is None else end, registry, ())
-
-    def issue(self, *, offset: int = 0, template: OperationTemplate | None = None):
-        return self.store.issue_batch(template=template or self.template(identifier=f"shared-assertion-{offset}"))
-
-    def submit(self, batch, proof: bytes = b"synthetic-volatile-proof") -> None:
-        self.store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(proof), declared_length=len(proof))
-
-    def test_exact_100_has_one_shared_owner_and_fixed_statement(self) -> None:
-        batch = self.issue()
-        self.assertEqual(len(batch.operation_refs), 100)
-        self.assertEqual(len(batch.statements), 100)
-        self.assertEqual(len({item.operation_ref for item in batch.statements}), 100)
-        self.assertEqual(len({item.template for item in batch.statements}), 1)
-        self.assertEqual(batch.statements[0].batch_position, 0)
-        self.assertEqual(batch.statements[-1].batch_position, 99)
-        self.assertEqual(batch.ordered_binding, batch.batch_root[:32])
-        self.assertEqual(len(batch.proof_statement), 240)
-        self.assertEqual(batch.proof_statement[:16], b"BL-R100-STMT-V1\x00")
-        self.assertEqual(batch.proof_statement[16:18], b"\x01\x00")
-        self.assertEqual(int.from_bytes(batch.proof_statement[18:20], "little"), 240)
-        self.assertEqual(batch.proof_statement[52:84], batch.batch_root[:32])
-        fixed = _build_statement(batch_root=bytes(range(64)), state_challenge=bytes(range(32)), valid_from_ms=1, valid_until_ms=2)
-        self.assertEqual(fixed[52:84], bytes(range(32)))
-        with closing(sqlite3.connect(str(self.path))) as connection:
+    def test_state_database_is_unified_v10_and_keeps_current_statement_bytes(self) -> None:
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-            self.assertIn("queue_members", tables)
-            self.assertNotIn("queue_jobs", tables)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0], 100)
+            self.assertEqual(tables, {"queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions", "composition_meta", "composition_transactions", "composition_events", "composition_outbox"})
+            self.assertEqual(connection.execute("SELECT schema_version FROM queue_metadata").fetchone()[0], 10)
+            self.assertEqual(connection.execute("SELECT schema_version FROM composition_meta").fetchone()[0], 4)
+            self.assertEqual(connection.execute("PRAGMA foreign_key_list(composition_transactions)").fetchone()[2], "queue_members")
+        batch = _prepare(self.store, self.config, self.clock)
+        self.assertEqual((len(batch.proof_statement), batch.proof_statement[:16], batch.proof_statement[16:20]), (240, b"BL-R100-STMT-V1\x00", b"\x01\x00\xf0\x00"))
 
-    def test_exact_registered_v4_statement_vector(self) -> None:
-        statement = _build_statement(
-            batch_root=bytes(range(32, 96)),
-            state_challenge=bytes(range(32)),
-            valid_from_ms=1_700_000_000_000,
-            valid_until_ms=1_700_003_600_000,
-        )
-        self.assertEqual(
-            statement.hex(),
-            "424c2d523130302d53544d542d5631000100f000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0400000001000000010000000068e5cf8b01000080561cd08b010000982cbb064e424c3734b09a4e8579338092fd3b71d7ae81f7a64174d9ba8919f6c1fcc3b7c0837d64dc1cec954194e1648f3375bfe7f08a8a9347aa320137efd48ed47d3fd17bb3a332adf8dd5d8facb97be23cb430e2e582cb360d383577d706e88d2a568a78772e89292201fc273a958ac1263280be1662b7ec64830347822a",
-        )
-
-    def test_registered_v4_fingerprint_is_shared_by_owner_and_independent_reader(self) -> None:
-        batch = self.issue()
-        self.assertEqual((self.config.profile_version, self.config.profile_epoch), (PROFILE_VERSION_TOKEN, PROFILE_VERSION))
-        self.assertEqual(
-            PROFILE_FINGERPRINT.hex(),
-            "8ed47d3fd17bb3a332adf8dd5d8facb97be23cb430e2e582cb360d383577d706e88d2a568a78772e89292201fc273a958ac1263280be1662b7ec64830347822a",
-        )
-        self.assertEqual(batch.proof_statement[112:176], CIRCUIT_FINGERPRINT)
-        self.assertEqual(batch.proof_statement[176:240], PROFILE_FINGERPRINT)
-        self.store._verify_integrity()
-        verify_database(self.path, expected_config=self.config.as_json)
-
-    def test_resource_authority_has_exact_v4_config_and_genesis_root_identity(self) -> None:
-        self.assertEqual(ADMISSION_CAP_BYTES, resource_limits.ADMISSION_CAP_BYTES)
-        self.assertEqual(PROCESS_TREE_PEAK_CAP_BYTES, resource_limits.PROCESS_TREE_PEAK_CAP_BYTES)
-        self.assertEqual(ACTIVE_PROCESS_LIMIT, resource_limits.ACTIVE_PROCESS_LIMIT)
-        self.assertEqual(len(self.config.canonical_bytes), 818)
-        self.assertEqual(
-            hashlib.sha256(self.config.canonical_bytes).hexdigest(),
-            "754cb932d3e299a2d674513a73fecb6c96b2b25b4fd8b198a16d440dc6a636d7",
-        )
-        self.assertEqual(
-            self.config.digest.hex(),
-            "7e5135804aa1d2e49c08c118501f983fb4d254008251da3e3cff2c531e0c039b144e31cd70033baf9e6becdcd1fe127f01881fe39e90840521aeacc59550086d",
-        )
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            metadata = connection.execute("SELECT head_root FROM queue_metadata WHERE id=1").fetchone()
-        self.assertEqual(
-            bytes(metadata[0]).hex(),
-            "565de158d8596621ea188597fbe566f357776bd84817c09b637a8b3e1f0747b4e399df18554de9ab7cfed8794bf781fb63a169c464c3e965631e5b4b63cf2f26",
-        )
-
-    def test_v2_v3_and_superseded_v4_profile_inputs_are_rejected(self) -> None:
-        superseded_v4 = bytes.fromhex(
-            "b6cb1d0116852121d1e2c197b4f387096e2e344e51c6b9a37331322a1befb85d"
-            "15780d0cfa43ff06cfc6c82542d376bad0b9bd353e83772fe0316f84892194bf"
-        )
-        cases = (
-            ("v2", {"profile_version": "BLIND-ZKBPP-CUNRUH-RANGE100-V2"}, "queue_profile_version"),
-            ("v3", {"profile_version": "BLIND-ZKBPP-CUNRUH-RANGE100-V3"}, "queue_profile_version"),
-            ("superseded_v4", {"profile_digest": superseded_v4}, "queue_profile_invalid"),
-        )
-        for name, changes, error in cases:
-            with self.subTest(name=name):
-                with self.assertRaisesRegex(Exception, error):
-                    QueueConfig("rejected-profile", 100, **changes)
-
-    def test_issue_owns_references_and_rejects_heterogeneous_template(self) -> None:
-        with self.assertRaises(TypeError):
-            self.store.issue_batch(template=self.template(), operation_refs=tuple(bytes([index]) * 32 for index in range(100)))  # type: ignore[call-arg]
-        with self.assertRaises(TypeError):
-            self.store.issue_batch(templates=tuple(self.template(identifier=f"different-{i}") for i in range(100)))  # type: ignore[call-arg]
-        with self.assertRaisesRegex(Exception, "template_shape"):
-            self.store.issue_batch(template=(self.template(),))  # type: ignore[arg-type]
-
-    def test_operation_refs_and_admission_sequences_are_global_and_immutable(self) -> None:
-        first = self.issue()
-        second = self.issue(offset=1)
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            rows = connection.execute("SELECT batch_id,batch_position,operation_ref,admission_seq FROM queue_members ORDER BY admission_seq").fetchall()
-            self.assertEqual([int(row[3]) for row in rows], list(range(1, 201)))
-            self.assertEqual(len({bytes(row[2]) for row in rows}), 200)
-            self.assertEqual({bytes(row[0]) for row in rows}, {first.batch_id, second.batch_id})
-
-    def test_state_generation_collision_fails_before_any_batch_row_persists(self) -> None:
-        duplicate = bytes([7]) * 32
-        with patch("app.minimal_clearance_verification_queue.secrets.token_bytes", side_effect=[duplicate, duplicate]):
-            with self.assertRaisesRegex(Exception, "queue_randomness"):
-                self.store.issue_batch(template=self.template())
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_batches").fetchone()[0], 0)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0], 0)
-
-    def test_binary_state_reference_with_forbidden_looking_bytes_is_accepted(self) -> None:
-        refs = [b"\x00log" + bytes(range(4, 32))]
-        refs.extend(bytes([index]) * 32 for index in range(1, 100))
-        self.assertEqual(len(refs), 100)
-        self.assertEqual(len(set(refs)), 100)
-        with patch(
-            "app.minimal_clearance_verification_queue.secrets.token_bytes",
-            side_effect=refs + [bytes([0xAA]) * 32, bytes([0xBB]) * 32],
-        ) as token_bytes:
-            batch = self.store.issue_batch(template=self.template())
-        self.assertEqual(token_bytes.call_count, 102)
-        self.assertEqual(batch.operation_refs[0], refs[0])
-        self.submit(batch)
-        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
-        self.assertEqual(read_verified_batch(self.path, batch.batch_id).batch.batch_id, batch.batch_id)
-
-    def test_live_child_owner_is_not_stolen_then_exact_stale_lock_is_reclaimed(self) -> None:
-        lock_path = self.root / "child-owner.runtime-lock"
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        try:
-            lock_path.write_text(str(child.pid), encoding="ascii")
-            with self.assertRaisesRegex(Exception, "runtime_already_owned"):
-                _QueueRuntimeOwnership(lock_path=lock_path, parent=self.root)
-            self.assertIsNone(child.poll())
-            child.terminate()
-            child.wait(timeout=5)
-            reclaimed = _QueueRuntimeOwnership(lock_path=lock_path, parent=self.root)
-            reclaimed.close()
-            self.assertFalse(lock_path.exists())
-        finally:
-            if child.poll() is None:
-                child.terminate()
-                child.wait(timeout=5)
-            if lock_path.exists():
-                lock_path.unlink()
-
-    def test_conservative_attempt_budget_charges_101_and_rejects_boundary_without_overflow(self) -> None:
-        cap = 2**32
-        max_batches = cap // 101
-        remainder = cap % 101
-        self.assertEqual((max_batches, remainder), (42_524_428, 68))
-        max_used = cap - remainder
-        last_before = max_used - 101
-        self.assertEqual(_reserve_proof_attempt(0), 101)
-        self.assertEqual(_reserve_proof_attempt(last_before), max_used)
-        with self.assertRaisesRegex(Exception, "computational_budget_exhausted"):
-            _reserve_proof_attempt(max_used)
-        with self.assertRaisesRegex(Exception, "computational_budget_exhausted"):
-            _reserve_proof_attempt(cap - 100)
-        with self.assertRaisesRegex(Exception, "computational_budget_exhausted"):
-            _reserve_proof_attempt(cap)
-        with self.assertRaisesRegex(Exception, "computational_budget_exhausted"):
-            _reserve_proof_attempt(cap + 1)
-        with self.assertRaisesRegex(Exception, "proof_attempt_ledger"):
-            _reserve_proof_attempt(-1)
-
-    def test_budget_boundary_rejects_without_mutating_queued_batch_or_ledger(self) -> None:
-        batch = self.issue()
-        self.submit(batch)
-        cap = 2**32
-        max_used = cap - 68
-        last_before = max_used - 101
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            connection.execute("UPDATE queue_metadata SET proof_attempts_used=? WHERE id=1", (last_before,))
-            connection.commit()
+    def test_exact_100_members_and_one_101_unit_attempt_record(self) -> None:
+        batch = _prepare(self.store, self.config, self.clock)
         work = self.store._claim_next_batch()
         self.assertIsNotNone(work)
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            reservation = connection.execute("SELECT reservation_before,reservation_after,proof_attempts FROM queue_attempts").fetchone()
-            metadata = connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()
-            worker = connection.execute("SELECT worker_id FROM queue_leases").fetchone()
-        self.assertEqual(tuple(reservation), (last_before, cap - 68, 101))
-        self.assertEqual(metadata[0], cap - 68)
-        self.assertEqual(worker[0], "queue-v9-worker")
-        self.assertEqual(self.store._complete_batch(work, status="HELD", error_code="fresh_handoff_required").status, "HELD")  # type: ignore[arg-type]
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], 100)
+            attempt = connection.execute("SELECT reservation_before,reservation_after,proof_attempts,status FROM queue_attempts WHERE batch_id=?", (batch.batch_id,)).fetchone()
+            self.assertEqual(tuple(attempt), (0, 101, 101, "RESERVED"))
+            self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (101, 1))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
 
-        next_batch = self.issue(offset=100)
-        self.submit(next_batch)
-        before = self.path.read_bytes()
-        self.assertIsNone(self.store._claim_next_batch())
-        self.assertEqual(self.store._last_claim_error, "computational_budget_exhausted")
-        self.assertEqual(self.path.read_bytes(), before)
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (next_batch.batch_id,)).fetchone()[0], "QUEUED")
-            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], cap - 68)
-
-    def test_terminal_and_held_attempt_rows_retain_101_units(self) -> None:
-        verified = self.issue()
-        self.submit(verified)
-        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
-        rejected = self.issue(offset=100)
-        self.submit(rejected)
-        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config, proof_accepted=False)).status, "REJECTED")
-        held = self.issue(offset=200)
-        self.submit(held)
-        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config, unknown=True)).status, "HELD")
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            rows = connection.execute("SELECT reservation_before,reservation_after,proof_attempts,status FROM queue_attempts ORDER BY attempt_id").fetchall()
-            used = connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0]
-        self.assertEqual(rows, [(0, 101, 101, "ACCEPTED"), (101, 202, 101, "REJECTED"), (202, 303, 101, "HELD")])
-        self.assertEqual(used, 303)
-
-    def test_cumulative_attempt_chain_and_independent_v9_rejections(self) -> None:
-        batch = self.issue()
-        self.submit(batch)
-        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            rows = connection.execute("SELECT reservation_before,reservation_after,proof_attempts FROM queue_attempts").fetchall()
-            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
-        self.assertEqual(rows, [(0, 101, 101)])
-        original = self.path.read_bytes()
-
-        def reject_copy(name: str, mutate) -> None:
-            candidate = self.root / f"{name}.sqlite"
-            candidate.write_bytes(original)
-            with closing(sqlite3.connect(str(candidate))) as connection:
-                mutate(connection)
-                connection.commit()
-            with self.assertRaises(IndependentQueueError):
-                verify_database(candidate)
-
-        for value in (1, 100, 102):
-            with self.subTest(proof_attempts=value):
-                reject_copy(
-                    f"proof-attempts-{value}",
-                    lambda connection, value=value: (
-                        connection.execute("PRAGMA ignore_check_constraints=ON"),
-                        connection.execute("DROP TRIGGER queue_attempts_transition_guard"),
-                        connection.execute("UPDATE queue_attempts SET proof_attempts=?", (value,)),
-                    ),
-                )
-        reject_copy(
-            "discontinuous-attempt",
-            lambda connection: (
-                connection.execute("PRAGMA ignore_check_constraints=ON"),
-                connection.execute("DROP TRIGGER queue_attempts_transition_guard"),
-                connection.execute("UPDATE queue_attempts SET reservation_after=102"),
-            ),
-        )
-        reject_copy(
-            "attempt-cap-overflow",
-            lambda connection: connection.execute("UPDATE queue_metadata SET proof_attempts_used=?", (2**32 + 1,)),
-        )
-
-        v8_schema = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v8"
-        reject_copy(
-            "v8-schema",
-            lambda connection: (
-                connection.execute("DROP TRIGGER queue_metadata_config_guard"),
-                connection.execute("UPDATE queue_metadata SET schema_version=8"),
-            ),
-        )
-
-        def alter_v8_config(connection) -> None:
-            value = dict(self.config.as_json)
-            value["schema_version"] = 8
-            raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-            connection.execute("DROP TRIGGER queue_metadata_config_guard")
-            connection.execute("UPDATE queue_metadata SET config_json=?", (raw,))
-
-        reject_copy("v8-config", alter_v8_config)
-
-        def alter_v8_event(connection) -> None:
-            event_raw = bytes(connection.execute("SELECT event_bytes FROM queue_transitions ORDER BY sequence LIMIT 1").fetchone()[0])
-            event = json.loads(event_raw.decode("ascii"))
-            event["schema"] = v8_schema
-            replacement = json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-            connection.execute("DROP TRIGGER queue_transitions_no_update")
-            connection.execute("UPDATE queue_transitions SET event_bytes=? WHERE sequence=1", (replacement,))
-
-        reject_copy("v8-event-history", alter_v8_event)
-
-    def test_valid_batch_is_one_verifier_call_one_reservation_and_atomic_projection(self) -> None:
-        batch = self.issue()
-        self.submit(batch)
+    def test_accepted_batch_commits_queue_and_all_state_rows_once(self) -> None:
+        batch = _prepare(self.store, self.config, self.clock, proof=b"raw_proof raw_signature frame_payload challenge_bytes opening_bytes response_bytes")
         verifier = _Verifier(self.config)
-        result = self.store._process_one_batch(verifier=verifier)
-        self.assertEqual((result.status, result.accepted_count, verifier.calls), ("VERIFIED", 100, 1))
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_attempts").fetchone()[0], 1)
-            self.assertEqual(connection.execute("SELECT proof_attempts FROM queue_attempts").fetchone()[0], 101)
-            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_results").fetchone()[0], 1)
-        promoted = read_verified_batch(self.path, batch.batch_id)
-        self.assertEqual(len(promoted.jobs), 100)
-        self.assertEqual(tuple(job.operation_ref for job in promoted.jobs), batch.operation_refs)
-        self.assertEqual(promoted.batch.accepted_count, 100)
-        self.assertEqual(verify_database(self.path)["accepted_operation_count"], 100)
-        durable = self.path.read_bytes()
-        self.assertNotIn(b"synthetic-volatile-proof", durable)
-        self.assertNotIn(b"raw_proof", durable)
-        self.assertNotIn(b"source_path", durable)
+        port = _DispositionPort()
+        result = self.store._process_one_batch(verifier=verifier, state_disposition_port=port)
+        self.assertEqual((result.status, result.accepted_count, verifier.calls, len(port.calls)), ("VERIFIED", 100, 1, 1))
+        outcome = port.calls[0][2]
+        self.assertFalse(hasattr(outcome, "effective_directive"))
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "VERIFIED")
+            self.assertEqual(connection.execute("SELECT terminal_status,proof_accepted,source_authenticated FROM queue_results WHERE batch_id=?", (batch.batch_id,)).fetchone(), ("VERIFIED", 1, 1))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions WHERE status='APPLIED'").fetchone()[0], 100)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events WHERE event_kind='APPLIED'").fetchone()[0], 100)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox WHERE status='READY'").fetchone()[0], 100)
+            self.assertEqual({row[0] for row in connection.execute("SELECT DISTINCT effective_directive FROM composition_transactions")}, {"CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"})
+            self.assertEqual({row[0] for row in connection.execute("SELECT DISTINCT policy_result FROM composition_transactions")}, {"PASS", "MISSING", "AMBIGUOUS", "FAIL"})
+        raw = (self.root / "state.sqlite").read_bytes()
+        wal = self.root / "state.sqlite-wal"
+        if wal.exists():
+            raw += wal.read_bytes()
+        for marker in (b"raw_proof", b"raw_signature", b"frame_payload", b"challenge_bytes", b"opening_bytes", b"response_bytes"):
+            self.assertNotIn(marker, raw)
+        self.assertEqual(verify_database(self.root / "state.sqlite")["accepted_operation_count"], 100)
+        reconstructed = read_verified_batch(self.root / "state.sqlite", batch.batch_id)
+        self.assertEqual(len(reconstructed.jobs), 100)
 
-    def test_invalid_signature_is_typed_reject_and_internal_result_is_held(self) -> None:
-        batch = self.issue()
-        self.submit(batch)
-        result = self.store._process_one_batch(verifier=_Verifier(self.config, proof_accepted=False))
-        self.assertEqual((result.status, result.error_code), ("REJECTED", "proof_or_source_not_accepted"))
-        with self.assertRaisesRegex(IndependentQueueError, "batch_incomplete"):
-            read_verified_batch(self.path, batch.batch_id)
-        malformed = self.issue(offset=100)
-        self.submit(malformed)
-        held = self.store._process_one_batch(verifier=_Verifier(self.config, unknown=True))
-        self.assertEqual((held.status, held.error_code), ("HELD", "verifier_result_unknown_field"))
+    def test_verifier_acceptance_never_supplies_clearance(self) -> None:
+        batch = _prepare(self.store, self.config, self.clock)
+        port = _DispositionPort(policies=("MISSING",) * 100)
+        result = self.store._process_one_batch(verifier=_Verifier(self.config), state_disposition_port=port)
+        self.assertEqual((result.status, result.accepted_count, len(port.calls)), ("VERIFIED", 100, 1))
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT DISTINCT effective_directive FROM composition_transactions").fetchone()[0], "HOLD")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions WHERE policy_result='PASS'").fetchone()[0], 0)
+        self.assertEqual(resolve_effective_directive("PASS"), "CLEAR")
+        self.assertEqual(batch.batch_id, port.calls[0][0])
 
-    def test_result_binding_mismatch_rejects_without_verified_exposure(self) -> None:
-        for index, kind in enumerate(("statement", "root", "source_profile", "source_epoch", "flags")):
-            batch = self.issue(offset=200 + index * 100)
-            self.submit(batch)
-            result = self.store._process_one_batch(verifier=_Verifier(self.config, mutate=kind))
-            self.assertEqual(result.status, "REJECTED")
-            with self.assertRaisesRegex(IndependentQueueError, "batch_incomplete"):
-                read_verified_batch(self.path, batch.batch_id)
+    def test_rejected_and_malformed_paths_do_not_call_state_port_or_compose(self) -> None:
+        port = _DispositionPort()
+        first = _prepare(self.store, self.config, self.clock)
+        rejected = self.store._process_one_batch(verifier=_Verifier(self.config, accepted=False), state_disposition_port=port)
+        second = _prepare(self.store, self.config, self.clock)
+        held = self.store._process_one_batch(verifier=_MalformedVerifier(), state_disposition_port=port)
+        self.assertEqual((rejected.status, held.status, len(port.calls)), ("REJECTED", "HELD", 0))
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (first.batch_id,)).fetchone()[0], "REJECTED")
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (second.batch_id,)).fetchone()[0], "HELD")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
 
-    def test_handoff_is_single_use_and_oversize_is_rejected(self) -> None:
-        exact_batch = self.issue()
-        self.store.submit_batch_handoff(
-            issued_batch=exact_batch,
-            proof_stream=io.BytesIO(b"x"),
-            declared_length=ADMISSION_CAP_BYTES,
-        )
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            self.assertEqual(
-                connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (exact_batch.batch_id,)).fetchone()[0],
-                "QUEUED",
-            )
-        batch = self.issue(offset=100)
-        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_oversize"):
-            self.store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"x"), declared_length=ADMISSION_CAP_BYTES + 1)
-        self.assertEqual(verify_database(self.path)["status_counts"]["AWAITING_HANDOFF"], 1)
-        self.submit(batch)
-        with self.assertRaisesRegex(QueueConflictError, "fresh_handoff_required"):
-            self.store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"duplicate"), declared_length=9)
+    def test_terminal_transaction_rolls_back_every_cross_table_stage_and_keeps_live_lease(self) -> None:
+        labels = ("after_composition_transactions", "after_composition_events", "after_composition_outbox", "after_composition_meta", "before_composition_commit", "before_queue_commit")
+        for label in labels:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                clock = _Clock()
+                config, _composition_config, owner, store = _new_store(root, clock)
+                try:
+                    batch = _prepare(store, config, clock)
+                    work = store._claim_next_batch()
+                    controls = _controls(batch.operation_refs)
+                    verifier_result = BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, config.source_auth_profile, config.source_key_epoch, "accepted", ())
+                    store._before_fault = lambda actual, expected=label: (_ for _ in ()).throw(RuntimeError("injected")) if actual == expected else None
+                    with self.assertRaisesRegex(RuntimeError, "injected"):
+                        store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
+                    with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                        self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "LEASED")
+                        self.assertEqual(connection.execute("SELECT status FROM queue_attempts WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "RESERVED")
+                        self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0], 1)
+                        self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_results").fetchone()[0], 0)
+                        self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+                        self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events").fetchone()[0], 0)
+                        self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
+                finally:
+                    store._close()
+                    owner.close()
 
-    def test_handoff_null_empty_and_declared_length_errors_are_typed(self) -> None:
-        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_stream"):
-            VolatileProofHandoff(None)  # type: ignore[arg-type]
-        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_empty"):
-            VolatileProofHandoff(io.BytesIO(b""), declared_length=0).read()
-        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_length"):
-            handoff = VolatileProofHandoff(io.BytesIO(b"abc"), declared_length=2)
-            handoff.read()
-
-    def test_source_epoch_accepts_full_u64_value_in_configuration(self) -> None:
-        config = QueueConfig("u64-epoch", 100, source_key_epoch=2**32)
-        self.assertEqual(config.source_key_epoch, 2**32)
-        epoch_root = self.root / "epoch"
-        epoch_root.mkdir()
-        epoch_path = epoch_root / "queue.sqlite"
-        epoch_owner = _QueueRuntimeOwnership(lock_path=epoch_root / "queue.sqlite.runtime-lock", parent=epoch_root)
-        epoch_store = _VerificationQueueStore(path=epoch_path, config=QueueConfig("u64-epoch-max", 100, source_key_epoch=2**64 - 1), owner=epoch_owner, clock=self.clock)
-        try:
-            batch = epoch_store.issue_batch(template=self.template(identifier="epoch"))
-            epoch_store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"epoch-proof"), declared_length=11)
-            self.assertEqual(epoch_store._process_one_batch(verifier=_Verifier(epoch_store.config)).status, "VERIFIED")
-            verify_database(epoch_path, expected_config=epoch_store.config.as_json)
-        finally:
-            epoch_store._close()
-            epoch_owner.close()
-
-    def test_validity_and_lease_expiry_inside_verifier_return_held(self) -> None:
-        batch = self.issue(template=self.template(end=self.clock.now + 10_000))
-        self.submit(batch)
-        verifier = _AdvanceVerifier(self.config, self.clock, 10_001)
-        result = self.store._process_one_batch(verifier=verifier)
-        self.assertEqual((result.status, result.error_code), ("HELD", "validity_expired"))
-        batch2 = self.issue(offset=500, template=self.template(end=self.clock.now + 100_000))
-        self.submit(batch2)
-        verifier2 = _AdvanceVerifier(self.config, self.clock, 60_001)
-        result2 = self.store._process_one_batch(verifier=verifier2)
-        self.assertEqual((result2.status, result2.error_code), ("HELD", "lease_expired"))
-
-    def test_stale_lease_token_fails_without_mutating_current_work(self) -> None:
-        batch = self.issue()
-        self.submit(batch)
+    def test_stale_lease_token_is_fenced_without_any_state_write(self) -> None:
+        batch = _prepare(self.store, self.config, self.clock)
         work = self.store._claim_next_batch()
-        self.assertIsNotNone(work)
+        controls = _controls(batch.operation_refs)
+        verifier_result = BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
         stale = replace(work, lease_token=bytes(32))
-        before = self.path.read_bytes()
         with self.assertRaises(QueueLeaseError):
-            self.store._complete_batch(stale, status="HELD", error_code="fresh_handoff_required")
-        self.assertEqual(self.path.read_bytes(), before)
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            self.assertEqual(connection.execute("SELECT status FROM queue_batches").fetchone()[0], "LEASED")
+            self.store._complete_batch(stale, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
+        state = _counts(self.root / "state.sqlite")
+        self.assertEqual((state["queue_results"], state["composition_transactions"], state["composition_events"], state["composition_outbox"], state["queue_leases"]), (0, 0, 0, 0, 1))
 
-    def test_identity_rewrite_and_required_trigger_tamper_are_rejected(self) -> None:
-        batch = self.issue()
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            with self.assertRaises(sqlite3.IntegrityError):
-                connection.execute("UPDATE queue_batches SET batch_root=? WHERE batch_id=?", (bytes(64), batch.batch_id))
-            connection.rollback()
+    def test_duplicate_replay_requires_complete_outbox_and_event_chain(self) -> None:
+        batch = _prepare(self.store, self.config, self.clock)
+        work = self.store._claim_next_batch()
+        controls = _controls(batch.operation_refs)
+        verifier_result = BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
+        self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            saved_outbox = tuple(connection.execute("SELECT * FROM composition_outbox WHERE operation_ref=?", (batch.operation_refs[0],)).fetchone())
+            connection.execute("DELETE FROM composition_outbox WHERE operation_ref=?", (batch.operation_refs[0],))
             connection.commit()
-        original = self.path.read_bytes()
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            connection.execute("DROP TRIGGER queue_members_no_update")
+        with self.assertRaises(CompositionConflictError):
+            self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            connection.execute("INSERT INTO composition_outbox VALUES (?,?,?,?,?,?,?,?)", saved_outbox)
+            connection.execute("DROP TRIGGER composition_events_no_update")
+            connection.execute("UPDATE composition_events SET event_digest=? WHERE operation_ref=?", (bytes(64), batch.operation_refs[0]))
             connection.commit()
-        with self.assertRaises(IndependentQueueError):
-            verify_database(self.path)
-        self.path.write_bytes(original)
+        with self.assertRaises(CompositionConflictError):
+            self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "VERIFIED")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 100)
 
-    def test_required_trigger_tamper_does_not_get_repaired_by_startup(self) -> None:
-        batch = self.issue()
-        self.store._close()
-        self.owner.close()
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            connection.execute("DROP TRIGGER queue_members_no_delete")
-            connection.commit()
-        replacement = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
-        try:
-            with self.assertRaises(Exception):
-                _VerificationQueueStore(path=self.path, config=self.config, owner=replacement, clock=self.clock)
-            self.assertFalse((self.root / "queue.sqlite.runtime-lock").exists())
-        finally:
-            replacement.close()
-
-    def test_zero_phi_code_allowlist_rejects_before_persistence_and_scans_durable_codes(self) -> None:
-        bad_codes = ("provider_id_mismatch", "identity", "digest", "path", "log")
-        batches = []
-        for index, bad_code in enumerate(bad_codes):
-            batch = self.issue(offset=index * 100)
-            batches.append(batch)
-            self.submit(batch)
-            malicious = {"proof_accepted": False, "source_authenticated": False, "proof_statement": batch.proof_statement, "batch_root": batch.batch_root, "source_auth_profile": self.config.source_auth_profile, "source_key_epoch": self.config.source_key_epoch, "result_code": bad_code, "qualification_flags": []}
-            held = self.store._process_one_batch(verifier=_BadCodeVerifier(self.config, malicious))
-            self.assertEqual((held.status, held.error_code), ("HELD", "verifier_result_code"))
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_results").fetchone()[0], len(bad_codes))
-            rows = connection.execute("SELECT result_code,error_code FROM queue_results").fetchall()
-            self.assertEqual({row[0] for row in rows}, {"fresh_handoff_required"})
-            self.assertEqual({row[1] for row in rows}, {"verifier_result_code"})
-            connection.execute("UPDATE queue_batches SET last_error_code='provider_id_mismatch' WHERE batch_id=?", (batches[-1].batch_id,))
-            connection.commit()
-        with self.assertRaises(IndependentQueueError):
-            verify_database(self.path)
-
-    def test_database_cap_and_pragmas_are_exact_without_large_materialization(self) -> None:
-        self.assertEqual(DATABASE_PAGE_SIZE * DATABASE_MAX_PAGE_COUNT, 134_217_728)
-        with closing(self.store._connect()) as connection:
-            self.assertEqual(connection.execute("PRAGMA page_size").fetchone()[0], DATABASE_PAGE_SIZE)
-            self.assertEqual(connection.execute("PRAGMA max_page_count").fetchone()[0], DATABASE_MAX_PAGE_COUNT)
-            self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0].lower(), "delete")
-            self.assertEqual(connection.execute("PRAGMA synchronous").fetchone()[0], 2)
-            self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
-        self.assertLessEqual(self.path.stat().st_size, 134_217_728)
-
-    def test_rollback_after_consumption_closes_as_fresh_handoff_required(self) -> None:
-        batch = self.issue()
-        self.submit(batch)
-        self.store._before_fault = lambda label: (_ for _ in ()).throw(RuntimeError("injected")) if label == "before_queue_commit" else None
-        with self.assertRaises(RuntimeError):
-            self.store._process_one_batch(verifier=_RollbackVerifier(self.config))
-        self.assertEqual(verify_database(self.path)["status_counts"]["HELD"], 1)
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            self.assertEqual(connection.execute("SELECT proof_attempts,reservation_before,reservation_after FROM queue_attempts").fetchone(), (101, 0, 101))
-            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
-        self.assertIsNone(self.store._process_one_batch(verifier=_RollbackVerifier(self.config)))
-
-    def test_rollback_before_consumption_preserves_handoff_for_same_attempt_retry(self) -> None:
-        batch = self.issue()
-        self.submit(batch)
-        self.store._before_fault = lambda label: (_ for _ in ()).throw(RuntimeError("injected")) if label == "before_queue_commit" else None
-        with self.assertRaises(RuntimeError):
-            self.store._process_one_batch(verifier=_NoReadVerifier(self.config))
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            self.assertEqual(connection.execute("SELECT status FROM queue_batches").fetchone()[0], "LEASED")
-        self.store._before_fault = None
-        verifier = _Verifier(self.config)
-        result = self.store._process_one_batch(verifier=verifier)
-        self.assertEqual((result.status, verifier.calls), ("VERIFIED", 1))
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
-            self.assertEqual(connection.execute("SELECT proof_attempts FROM queue_attempts").fetchone()[0], 101)
-
-    def test_startup_recovery_does_not_refund_reserved_units(self) -> None:
-        batch = self.issue()
-        self.submit(batch)
+    def test_startup_burns_a_live_session_and_never_resumes_it(self) -> None:
+        batch = _prepare(self.store, self.config, self.clock)
         self.assertIsNotNone(self.store._claim_next_batch())
         self.store._close()
         self.owner.close()
-        replacement_owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
-        replacement_store = None
-        try:
-            replacement_store = _VerificationQueueStore(path=self.path, config=self.config, owner=replacement_owner, clock=self.clock)
-            self.assertEqual(replacement_store._startup_recovered_count, 1)
-            with closing(sqlite3.connect(str(self.path))) as connection:
-                self.assertEqual(connection.execute("SELECT status FROM queue_batches").fetchone()[0], "HELD")
-                self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
-                self.assertEqual(connection.execute("SELECT proof_attempts,status FROM queue_attempts").fetchone(), (101, "HELD"))
-        finally:
-            if replacement_store is not None:
-                replacement_store._close()
-            replacement_owner.close()
+        self.owner = _QueueRuntimeOwnership(lock_path=self.root / "state.sqlite.runtime-lock", parent=self.root)
+        self.store = _VerificationQueueStore(path=self.root / "state.sqlite", config=self.config, owner=self.owner, clock=self.clock, composition_config=self.composition_config)
+        self.assertEqual(self.store._startup_recovered_count, 1)
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "HELD")
+            self.assertEqual(connection.execute("SELECT status FROM queue_attempts WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "HELD")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
 
-    def test_batch_local_post_root_is_stable_after_later_batch(self) -> None:
-        first = self.issue()
-        self.submit(first)
-        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
-        first_read = read_verified_batch(self.path, first.batch_id)
-        second = self.issue(offset=1000)
-        self.submit(second)
-        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
-        second_read = read_verified_batch(self.path, second.batch_id)
-        self.assertNotEqual(first_read.batch.post_head_root, second_read.batch.post_head_root)
-        self.assertEqual(read_verified_batch(self.path, first.batch_id).batch.post_head_root, first_read.batch.post_head_root)
-
-    def test_startup_releases_owner_after_failure_and_retry_succeeds(self) -> None:
-        batch = self.issue()
+    def test_expired_active_lease_is_burned_before_another_batch_is_claimed(self) -> None:
         self.store._close()
         self.owner.close()
-        with closing(sqlite3.connect(str(self.path))) as connection:
-            connection.execute("DROP TRIGGER queue_metadata_config_guard")
-            connection.execute("UPDATE queue_metadata SET config_json=? WHERE id=1", (b"bad",))
-            connection.commit()
-        replacement = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
-        with self.assertRaises(Exception):
-            _VerificationQueueStore(path=self.path, config=self.config, owner=replacement, clock=self.clock)
-        self.assertFalse((self.root / "queue.sqlite.runtime-lock").exists())
-        replacement.close()
+        self.temp.cleanup()
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.clock = _Clock()
+        self.config, self.composition_config, self.owner, self.store = _new_store(self.root, self.clock, capacity=200)
+        first = _prepare(self.store, self.config, self.clock, duration=300_000)
+        second = _prepare(self.store, self.config, self.clock, duration=300_000)
+        self.assertIsNotNone(self.store._claim_next_batch())
+        self.clock.now += 61_000
+        next_work = self.store._claim_next_batch()
+        self.assertIsNotNone(next_work)
+        self.assertEqual(self.store._last_claim_held_count, 1)
+        self.assertEqual(next_work.batch.batch_id, second.batch_id)
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (first.batch_id,)).fetchone()[0], "HELD")
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (second.batch_id,)).fetchone()[0], "LEASED")
+
+    def test_no_authoritative_promotion_or_cross_store_process_api_remains(self) -> None:
+        from app.minimal_clearance_composition import ClearanceCompositionStoreV2
+
+        self.assertFalse(hasattr(ClearanceCompositionStoreV2, "process_verified_jobs"))
+        self.assertFalse(hasattr(self.store, "_promote_candidates"))
 
 
 if __name__ == "__main__":

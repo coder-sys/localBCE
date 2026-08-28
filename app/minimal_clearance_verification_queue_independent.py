@@ -23,8 +23,8 @@ class IndependentQueueError(RuntimeError):
     pass
 
 
-SCHEMA_VERSION: Final[int] = 9
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v9"
+SCHEMA_VERSION: Final[int] = 10
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v10"
 _MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v9\x00"
 _ADMISSION_CAP: Final[int] = 4_500_000_000
 _DATABASE_PAGE_SIZE: Final[int] = 4096
@@ -55,6 +55,12 @@ _GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GEN
 _EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v9\x00"
 _HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v9\x00"
 _MEMBER_SET: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MEMBER-SET/v9\x00"
+_COMPOSITION_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v4"
+_COMPOSITION_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v4\x00"
+_COMPOSITION_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v4\x00"
+_COMPOSITION_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/EVENT/v4\x00"
+_COMPOSITION_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/HEAD/v4\x00"
+_COMPOSITION_STATE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/STATE/v4\x00"
 _SAFE_TOKEN = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,95}\Z")
 _FORBIDDEN_CODE_WORDS = (
@@ -97,6 +103,10 @@ _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "queue_attempts": ("attempt_id", "batch_id", "reservation_before", "reservation_after", "proof_attempts", "source_key_epoch", "status", "reserved_ms", "closed_ms", "result_code"),
     "queue_results": ("batch_id", "terminal_status", "receipt_id", "receipt_bytes", "proof_accepted", "source_authenticated", "proof_statement", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "completed_ms", "attempt", "error_code"),
     "queue_transitions": ("sequence", "transition_kind", "batch_id", "before_root", "after_root", "event_bytes", "event_digest"),
+    "composition_meta": ("id", "schema_version", "config_json", "config_digest", "event_head", "next_event_sequence", "state_profile_identity", "state_id", "state_bytes", "state_epoch", "state_sequence", "state_continuity_root", "state_audit_head", "state_clearance_root", "state_clearance_count", "payment_root", "active_dispatch_count"),
+    "composition_transactions": ("transaction_id", "operation_ref", "status", "proof_accepted", "policy_result", "effective_directive", "disposition_id", "state_profile_identity", "state_before_id", "state_after_id", "sequence_before", "sequence_after", "state_receipt_bytes", "state_receipt_digest", "error_code", "created_ms", "updated_ms"),
+    "composition_events": ("sequence", "operation_ref", "event_kind", "before_state", "after_state", "payload", "event_digest", "event_root", "at_ms"),
+    "composition_outbox": ("operation_ref", "effective_directive", "status", "attempt", "worker_id", "lease_token", "lease_expires_ms", "updated_ms"),
 }
 _TABLES = frozenset(_TABLE_COLUMNS)
 _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
@@ -107,6 +117,10 @@ _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
     "queue_attempts": "CREATE TABLE queue_attempts (attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id), reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before), proof_attempts INTEGER NOT NULL CHECK(proof_attempts=101), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL, closed_ms INTEGER, result_code TEXT)",
     "queue_results": "CREATE TABLE queue_results (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_id BLOB NOT NULL CHECK(length(receipt_id)=32), receipt_bytes BLOB NOT NULL, proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), source_authenticated INTEGER NOT NULL CHECK(source_authenticated IN (0,1)), proof_statement BLOB NOT NULL CHECK(length(proof_statement)=240), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), result_code TEXT NOT NULL, qualification_flags BLOB NOT NULL, completed_ms INTEGER NOT NULL, attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), error_code TEXT)",
     "queue_transitions": "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL, batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL, event_digest BLOB NOT NULL CHECK(length(event_digest)=64))",
+    "composition_meta": "CREATE TABLE composition_meta (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=4), config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), event_head BLOB NOT NULL CHECK(length(event_head)=64), next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence>=0), state_profile_identity BLOB, state_id BLOB, state_bytes BLOB, state_epoch INTEGER, state_sequence INTEGER, state_continuity_root BLOB, state_audit_head BLOB, state_clearance_root BLOB, state_clearance_count INTEGER, payment_root BLOB NOT NULL CHECK(length(payment_root)=64), active_dispatch_count INTEGER NOT NULL CHECK(active_dispatch_count>=0))",
+    "composition_transactions": "CREATE TABLE composition_transactions (transaction_id BLOB PRIMARY KEY CHECK(length(transaction_id)=64), operation_ref BLOB NOT NULL UNIQUE CHECK(length(operation_ref)=32) REFERENCES queue_members(operation_ref), status TEXT NOT NULL CHECK(status IN ('APPLIED','HELD')), proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), policy_result TEXT NOT NULL CHECK(policy_result IN ('PASS','MISSING','AMBIGUOUS','FAIL')), effective_directive TEXT NOT NULL CHECK(effective_directive IN ('CLEAR','HOLD','HUMAN_REVIEW','BLOCK','EXCEPTION_APPROVED')), disposition_id BLOB NOT NULL CHECK(length(disposition_id)=64), state_profile_identity BLOB NOT NULL CHECK(length(state_profile_identity)=64), state_before_id BLOB NOT NULL CHECK(length(state_before_id)=64), state_after_id BLOB NOT NULL CHECK(length(state_after_id)=64), sequence_before INTEGER NOT NULL, sequence_after INTEGER NOT NULL, state_receipt_bytes BLOB, state_receipt_digest BLOB, error_code TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)",
+    "composition_events": "CREATE TABLE composition_events (sequence INTEGER PRIMARY KEY CHECK(sequence>=1), operation_ref BLOB NOT NULL CHECK(length(operation_ref)=32) REFERENCES queue_members(operation_ref), event_kind TEXT NOT NULL CHECK(event_kind IN ('APPLIED','HELD','DISPATCH_LEASED','ACKNOWLEDGED','DELIVERY_UNCONFIRMED','LEASE_EXPIRED')), before_state TEXT NOT NULL, after_state TEXT NOT NULL, payload BLOB NOT NULL CHECK(length(payload)<=4096), event_digest BLOB NOT NULL UNIQUE CHECK(length(event_digest)=64), event_root BLOB NOT NULL CHECK(length(event_root)=64), at_ms INTEGER NOT NULL)",
+    "composition_outbox": "CREATE TABLE composition_outbox (operation_ref BLOB PRIMARY KEY CHECK(length(operation_ref)=32) REFERENCES queue_members(operation_ref), effective_directive TEXT NOT NULL CHECK(effective_directive IN ('CLEAR','HOLD','HUMAN_REVIEW','BLOCK','EXCEPTION_APPROVED')), status TEXT NOT NULL CHECK(status IN ('READY','LEASED','ACKNOWLEDGED','DELIVERY_UNCONFIRMED')), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), worker_id TEXT, lease_token BLOB, lease_expires_ms INTEGER, updated_ms INTEGER NOT NULL)",
 }
 _STATUSES = frozenset(("AWAITING_HANDOFF", "QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD"))
 _TERMINAL = frozenset(("VERIFIED", "REJECTED", "HELD"))
@@ -122,6 +136,9 @@ _TRIGGER_DEFS: Final[tuple[tuple[str, str], ...]] = (
     ("queue_attempts_transition_guard", "CREATE TRIGGER queue_attempts_transition_guard BEFORE UPDATE ON queue_attempts WHEN NOT (OLD.status='RESERVED' AND NEW.status IN ('ACCEPTED','REJECTED','HELD') AND OLD.attempt_id=NEW.attempt_id AND OLD.batch_id=NEW.batch_id AND OLD.reservation_before=NEW.reservation_before AND OLD.reservation_after=NEW.reservation_after AND OLD.proof_attempts=NEW.proof_attempts AND OLD.source_key_epoch=NEW.source_key_epoch AND OLD.reserved_ms=NEW.reserved_ms AND NEW.closed_ms IS NOT NULL AND (OLD.result_code IS NULL OR NEW.result_code=OLD.result_code OR NEW.result_code IS NOT NULL)) BEGIN SELECT RAISE(ABORT,'queue_attempt_transition_guard'); END"),
     ("queue_attempts_no_delete", "CREATE TRIGGER queue_attempts_no_delete BEFORE DELETE ON queue_attempts BEGIN SELECT RAISE(ABORT,'queue_attempt_delete_guard'); END"),
     ("queue_metadata_config_guard", "CREATE TRIGGER queue_metadata_config_guard BEFORE UPDATE OF schema_version,queue_id,config_json,config_digest,admission_cap_bytes,process_tree_peak_cap_bytes,active_process_limit,page_size,max_page_count,journal_mode,synchronous,proof_attempts_cap ON queue_metadata BEGIN SELECT RAISE(ABORT,'queue_metadata_config_guard'); END"),
+    ("composition_transactions_no_delete", "CREATE TRIGGER composition_transactions_no_delete BEFORE DELETE ON composition_transactions BEGIN SELECT RAISE(ABORT,'composition_append_only'); END"),
+    ("composition_events_no_update", "CREATE TRIGGER composition_events_no_update BEFORE UPDATE ON composition_events BEGIN SELECT RAISE(ABORT,'composition_append_only'); END"),
+    ("composition_events_no_delete", "CREATE TRIGGER composition_events_no_delete BEFORE DELETE ON composition_events BEGIN SELECT RAISE(ABORT,'composition_append_only'); END"),
 )
 
 
@@ -424,6 +441,77 @@ def _verify_lifecycle(events: list[dict[str, Any]], status: str, attempt: int) -
         _fail("lifecycle_status")
 
 
+def _verify_composition(connection: sqlite3.Connection, *, config: Mapping[str, Any], queue_config_digest: bytes, batch_map: Mapping[bytes, tuple[Any, ...]], member_groups: Mapping[bytes, list[tuple[Any, ...]]]) -> dict[str, Any]:
+    meta = connection.execute("SELECT * FROM composition_meta WHERE id=1").fetchone()
+    if meta is None or int(meta[1]) != 4 or type(meta[2]) is not bytes or type(meta[3]) is not bytes or len(meta[3]) != 64:
+        _fail("composition_metadata")
+    try:
+        composition_config = json.loads(bytes(meta[2]).decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _fail("composition_config")
+    if type(composition_config) is not dict or bytes(meta[3]) != _sha(_COMPOSITION_MATERIAL, bytes(meta[2])) or composition_config.get("schema_version") != 4 or composition_config.get("queue_id") != config["queue_id"] or composition_config.get("queue_config_digest") != _hex(queue_config_digest) or composition_config.get("proof_suite_id") is not None or composition_config.get("production_usable") is not False or composition_config.get("activation") is not False:
+        _fail("composition_config")
+    tx_rows = [tuple(row) for row in connection.execute("SELECT * FROM composition_transactions ORDER BY operation_ref").fetchall()]
+    event_rows = [tuple(row) for row in connection.execute("SELECT * FROM composition_events ORDER BY sequence").fetchall()]
+    outbox_rows = [tuple(row) for row in connection.execute("SELECT * FROM composition_outbox ORDER BY operation_ref").fetchall()]
+    tx_map: dict[bytes, tuple[Any, ...]] = {}
+    for row in tx_rows:
+        ref = _blob(_db_bytes(row[1], "composition_operation_ref"), 32, "composition_operation_ref")
+        if ref in tx_map or _blob(_db_bytes(row[0], "composition_transaction_id"), 64, "composition_transaction_id") == bytes(64) or str(row[2]) != "APPLIED" or int(row[3]) != 1 or str(row[4]) not in {"PASS", "MISSING", "AMBIGUOUS", "FAIL"} or str(row[5]) not in {"CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"}:
+            _fail("composition_transaction")
+        for index in (6, 7, 8, 9, 13):
+            if row[index] is not None:
+                _blob(_db_bytes(row[index], "composition_transaction_binding"), 64, "composition_transaction_binding")
+        if row[12] is None or row[13] is None or bytes(row[13]) != _sha(_COMPOSITION_STATE, bytes(row[12])) or int(row[11]) != int(row[10]) + 1:
+            _fail("composition_transaction")
+        tx_map[ref] = row
+    outbox_map: dict[bytes, tuple[Any, ...]] = {}
+    for row in outbox_rows:
+        ref = _blob(_db_bytes(row[0], "composition_outbox_ref"), 32, "composition_outbox_ref")
+        if ref in outbox_map or str(row[1]) not in {"CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"} or str(row[2]) not in {"READY", "LEASED", "ACKNOWLEDGED", "DELIVERY_UNCONFIRMED"} or type(row[3]) is not int or not 0 <= int(row[3]) <= 3:
+            _fail("composition_outbox")
+        if str(row[2]) == "READY" and any(row[index] is not None for index in (4, 5, 6)):
+            _fail("composition_outbox")
+        outbox_map[ref] = row
+    applied_events: dict[bytes, list[tuple[Any, ...]]] = {}
+    expected_head = _sha(_COMPOSITION_GENESIS, bytes(meta[3]))
+    for index, row in enumerate(event_rows, start=1):
+        sequence, ref_raw, kind, before, after, payload_raw, event_digest, event_root, at_ms = row
+        ref = _blob(_db_bytes(ref_raw, "composition_event_ref"), 32, "composition_event_ref")
+        if int(sequence) != index or type(kind) is not str or kind not in {"APPLIED", "HELD", "DISPATCH_LEASED", "ACKNOWLEDGED", "DELIVERY_UNCONFIRMED", "LEASE_EXPIRED"} or type(before) is not str or type(after) is not str or type(payload_raw) is not bytes or len(payload_raw) > 4096 or int(at_ms) < 0:
+            _fail("composition_event")
+        try:
+            payload = json.loads(bytes(payload_raw).decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            _fail("composition_event")
+        if kind == "APPLIED":
+            expected = {"operation_ref", "proof_accepted", "policy_result", "effective_directive", "state_receipt_digest", "sequence_before", "sequence_after"}
+            if type(payload) is not dict or set(payload) != expected or payload.get("operation_ref") != _hex(ref) or payload.get("proof_accepted") is not True or payload.get("policy_result") not in {"PASS", "MISSING", "AMBIGUOUS", "FAIL"} or payload.get("effective_directive") not in {"CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"} or type(payload.get("state_receipt_digest")) is not str or re.fullmatch(r"[0-9A-F]{128}\Z", payload["state_receipt_digest"]) is None or type(payload.get("sequence_before")) is not int or type(payload.get("sequence_after")) is not int or payload["sequence_after"] != payload["sequence_before"] + 1 or before != "NONE" or after != "READY":
+                _fail("composition_event")
+            applied_events.setdefault(ref, []).append(row)
+        event = {"schema": _COMPOSITION_SCHEMA, "sequence": int(sequence), "operation_ref": _hex(ref), "event_kind": kind, "before_state": before, "after_state": after, "payload": payload, "at_ms": int(at_ms)}
+        raw = _json_bytes(event)
+        digest = _sha(_COMPOSITION_EVENT, _u64(int(sequence)), raw)
+        root = _sha(_COMPOSITION_HEAD, expected_head, _u64(int(sequence)), digest)
+        if bytes(event_digest) != digest or bytes(event_root) != root:
+            _fail("composition_event_chain")
+        expected_head = root
+    if any(len(events) != 1 for events in applied_events.values()) or bytes(meta[4]) != expected_head or int(meta[5]) != len(event_rows) or set(tx_map) != set(outbox_map) or set(tx_map) != set(applied_events):
+        _fail("composition_head")
+    verified_refs: set[bytes] = set()
+    for batch_id, batch in batch_map.items():
+        refs = {bytes(row[2]) for row in member_groups[batch_id]}
+        if str(batch[13]) == "VERIFIED":
+            if len(refs) != _COUNT or not refs.issubset(tx_map):
+                _fail("composition_batch_complete")
+            verified_refs.update(refs)
+        elif refs & set(tx_map):
+            _fail("composition_nonaccepted")
+    if set(tx_map) != verified_refs:
+        _fail("composition_batch_complete")
+    return {"meta": tuple(meta), "transactions": tx_rows, "events": event_rows, "outbox": outbox_rows}
+
+
 def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     try:
         connection.execute("PRAGMA foreign_keys=ON")
@@ -632,7 +720,8 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         _fail("head_binding")
     for batch_id, row in batch_map.items():
         _verify_lifecycle(events_by_batch[batch_id], str(row[13]), int(row[15]))
-    return {"schema": _SCHEMA, "config": config, "config_digest": config_digest, "meta": tuple(meta), "batches": batch_map, "members": member_groups, "results": result_map, "transitions": transition_rows, "events": events_by_batch, "head_root": _db_bytes(meta[12], "head_root"), "status_counts": status_counts, "transition_count": len(transition_rows), "verified_batch_count": status_counts["VERIFIED"], "accepted_operation_count": status_counts["VERIFIED"] * _COUNT, "verified_count": status_counts["VERIFIED"], "proof_bytes_persisted": False, "path_custody": False, "proof_suite_id": None, "production_usable": False, "activation": False}
+    composition = _verify_composition(connection, config=config, queue_config_digest=config_digest, batch_map=batch_map, member_groups=member_groups)
+    return {"schema": _SCHEMA, "config": config, "config_digest": config_digest, "meta": tuple(meta), "batches": batch_map, "members": member_groups, "results": result_map, "transitions": transition_rows, "events": events_by_batch, "composition": composition, "head_root": _db_bytes(meta[12], "head_root"), "status_counts": status_counts, "transition_count": len(transition_rows), "verified_batch_count": status_counts["VERIFIED"], "accepted_operation_count": status_counts["VERIFIED"] * _COUNT, "verified_count": status_counts["VERIFIED"], "proof_bytes_persisted": False, "path_custody": False, "proof_suite_id": None, "production_usable": False, "activation": False}
 
 
 def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -649,7 +738,7 @@ def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = 
 
 def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     verified = _verify_database(path, expected_config=expected_config)
-    return {key: value for key, value in verified.items() if key not in {"config", "config_digest", "meta", "batches", "members", "results", "transitions", "events"}}
+    return {key: value for key, value in verified.items() if key not in {"config", "config_digest", "meta", "batches", "members", "results", "transitions", "events", "composition"}}
 
 
 def _job_from_rows(config: Mapping[str, Any], config_digest: bytes, owner: tuple[Any, ...], member: tuple[Any, ...], result: tuple[Any, ...]) -> IndependentVerifiedQueueJob:
