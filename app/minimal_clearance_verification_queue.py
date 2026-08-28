@@ -1369,6 +1369,28 @@ class _VerificationQueueStore:
         from app.minimal_clearance_verification_queue_independent import IndependentVerifiedQueueJob
         return tuple(IndependentVerifiedQueueJob(self.config.queue_id, self.config.digest, operation_ref, "VERIFIED", True, work.attempt, b"", bytes(32), work.batch.template.assertion_identifier, work.batch.template.assertion_version, work.batch.template.state_profile_version, work.batch.template.valid_from_ms, work.batch.template.valid_until_ms, position, work.batch.batch_root, work.batch.template.approved_source_registry_root, self.config.profile_version, verifier_result.result_code, self.config.qualification_flags) for position, operation_ref in enumerate(work.batch.operation_refs))
 
+    def _verified_duplicate_result(self, connection: sqlite3.Connection, work: _QueueWorkItem, verifier_result: BatchVerifierResult) -> tuple[Any, ...]:
+        existing_batch = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
+        if existing_batch is None or str(existing_batch[13]) != "VERIFIED":
+            _raise_fixed(QueueLeaseError("completion_not_live"))
+        try:
+            durable = _statement_from_batch(connection, tuple(existing_batch))
+        except VerificationQueueError:
+            _raise_fixed(QueueLeaseError("completion_not_live"))
+        if durable != work.batch or _batch_identity_digest(durable, self.config) != durable.identity_digest:
+            _raise_fixed(QueueLeaseError("completion_not_live"))
+        if not verifier_result.proof_accepted or not verifier_result.source_authenticated or verifier_result.result_code != "accepted" or verifier_result.proof_statement != durable.proof_statement or verifier_result.batch_root != durable.batch_root or verifier_result.source_auth_profile != self.config.source_auth_profile or verifier_result.source_key_epoch != self.config.source_key_epoch or verifier_result.qualification_flags != self.config.qualification_flags:
+            _raise_fixed(QueueIntegrityError("completion_acceptance"))
+        existing_result = connection.execute("SELECT * FROM queue_results WHERE batch_id=?", (durable.batch_id,)).fetchone()
+        if existing_result is None:
+            _raise_fixed(QueueIntegrityError("completion_acceptance"))
+        expected_receipt = self._receipt(batch=durable, proof_accepted=True, source_authenticated=True, result_code="accepted", error_code=None, qualification_flags=self.config.qualification_flags)
+        expected_receipt_id = _sha3(_MATERIAL, b"receipt", durable.batch_id, _u64(int(existing_batch[15])))[:32]
+        expected_flags = _flags_bytes(self.config.qualification_flags)
+        if type(existing_result[0]) is not bytes or bytes(existing_result[0]) != durable.batch_id or str(existing_result[1]) != "VERIFIED" or type(existing_result[2]) is not bytes or bytes(existing_result[2]) != expected_receipt_id or type(existing_result[3]) is not bytes or bytes(existing_result[3]) != expected_receipt or type(existing_result[4]) is not int or int(existing_result[4]) != 1 or type(existing_result[5]) is not int or int(existing_result[5]) != 1 or type(existing_result[6]) is not bytes or bytes(existing_result[6]) != durable.proof_statement or type(existing_result[7]) is not bytes or bytes(existing_result[7]) != durable.batch_root or str(existing_result[8]) != self.config.source_auth_profile or type(existing_result[9]) is not bytes or bytes(existing_result[9]) != _u64(self.config.source_key_epoch) or str(existing_result[10]) != verifier_result.result_code or type(existing_result[11]) is not bytes or bytes(existing_result[11]) != expected_flags or int(existing_result[13]) != int(existing_batch[15]) or existing_result[14] is not None:
+            _raise_fixed(QueueIntegrityError("completion_acceptance"))
+        return tuple(existing_result)
+
     def _complete_batch(self, work: _QueueWorkItem, *, status: str, verifier_result: BatchVerifierResult | None = None, error_code: str | None = None, state_controls: Mapping[bytes, object] | None = None) -> QueueResult:
         if status not in _TERMINAL:
             _raise_fixed(QueueIntegrityError("completion_status"))
@@ -1400,11 +1422,9 @@ class _VerificationQueueStore:
                 if str(existing_batch[13]) == "VERIFIED":
                     if status != "VERIFIED" or verifier_result is None:
                         _raise_fixed(QueueLeaseError("completion_not_live"))
+                    existing_result = self._verified_duplicate_result(connection, work, verifier_result)
                     from app.minimal_clearance_composition import _apply_verified_jobs_in_transaction
                     _apply_verified_jobs_in_transaction(connection, config=self.composition_config, jobs=self._composition_jobs(work, verifier_result), state_controls=state_controls, now=int(self.clock.now_ms()))  # type: ignore[arg-type]
-                    existing_result = connection.execute("SELECT * FROM queue_results WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
-                    if existing_result is None or str(existing_result[1]) != "VERIFIED":
-                        _raise_fixed(QueueIntegrityError("completion_acceptance"))
                     connection.commit()
                     self._close_handoff_locked(work.batch.batch_id)
                     return QueueResult(work.batch.batch_id, "VERIFIED", bytes(existing_result[3]), None if existing_result[14] is None else str(existing_result[14]), RANGE100_COUNT)

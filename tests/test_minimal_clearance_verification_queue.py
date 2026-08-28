@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import app.minimal_clearance_composition as composition
+from app.minimal_clearance_verification_queue import _build_statement, _compute_batch_root_from_refs
 from app.minimal_clearance_composition import (
     CompositionConfigV2,
     CompositionConflictError,
@@ -309,6 +310,36 @@ class QueueV10Tests(unittest.TestCase):
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "VERIFIED")
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 100)
+
+    def test_duplicate_replay_fences_durable_identity_before_composition(self) -> None:
+        batch = _prepare(self.store, self.config, self.clock)
+        work = self.store._claim_next_batch()
+        controls = _controls(batch.operation_refs)
+        verifier_result = BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
+        first = self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
+        duplicate = self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
+        self.assertEqual((first.status, duplicate.status, duplicate.accepted_count), ("VERIFIED", "VERIFIED", 100))
+
+        def snapshot() -> tuple[tuple[tuple[str, int], ...], tuple[bytes | None, ...], tuple[bytes, ...]]:
+            with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+                table_names = ("queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions", "composition_transactions", "composition_events", "composition_outbox")
+                counts = tuple((name, int(connection.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0])) for name in table_names)
+                queue_root = connection.execute("SELECT head_root FROM queue_metadata WHERE id=1").fetchone()[0]
+                composition_roots = connection.execute("SELECT event_head,state_continuity_root,state_audit_head,state_clearance_root,payment_root FROM composition_meta WHERE id=1").fetchone()
+                roots = tuple(None if value is None else bytes(value) for value in (queue_root, *composition_roots))
+                batch_roots = tuple(bytes(row[0]) for row in connection.execute("SELECT batch_root FROM queue_batches ORDER BY admission_seq"))
+                return counts, roots, batch_roots
+
+        before = snapshot()
+        forged_template = replace(batch.template, assertion_identifier="forged-assertion")
+        forged_root = _compute_batch_root_from_refs(forged_template, batch.operation_refs)
+        forged_batch = replace(work.batch, template=forged_template, batch_root=forged_root, ordered_binding=forged_root[:32], proof_statement=_build_statement(batch_root=forged_root, state_challenge=batch.state_challenge, valid_from_ms=forged_template.valid_from_ms, valid_until_ms=forged_template.valid_until_ms))
+        forged_work = replace(work, batch=forged_batch)
+        forged_result = BatchVerifierResult(True, True, forged_batch.proof_statement, forged_batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
+        with self.assertRaises(QueueLeaseError) as error:
+            self.store._complete_batch(forged_work, status="VERIFIED", verifier_result=forged_result, state_controls=controls)
+        self.assertEqual(str(error.exception), "completion_not_live")
+        self.assertEqual(snapshot(), before)
 
     def test_startup_burns_a_live_session_and_never_resumes_it(self) -> None:
         batch = _prepare(self.store, self.config, self.clock)

@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import app.minimal_clearance_composition as composition
+from app.minimal_clearance_composition import StateDispositionControl
 from app.minimal_clearance_source_auth_verifier_adapter import (
     ML_DSA_87_PUBLIC_KEY_BYTES,
     MinimalClearanceSourceAuthVerifierAdapter,
@@ -81,6 +83,40 @@ def _contained(*, exit_code: int = 0, stdout: bytes = b"", stderr: bytes = b"", 
         measurement_complete=measurement_complete,
         cleanup_complete=cleanup_complete,
     )
+
+
+def _state_controls(operation_refs: tuple[bytes, ...]) -> dict[bytes, StateDispositionControl]:
+    profile = bytes([9]) * 64
+    state_id = bytes(64)
+    state_bytes = bytes(64)
+    continuity = bytes(64)
+    audit = bytes(64)
+    clearance = bytes(64)
+    result: dict[bytes, StateDispositionControl] = {}
+    for index, operation_ref in enumerate(operation_refs):
+        control = StateDispositionControl(
+            operation_ref=operation_ref,
+            policy_result="MISSING",
+            state_profile_identity=profile,
+            predecessor_state_id=state_id,
+            predecessor_state_bytes=state_bytes,
+            sequence_before=index,
+            predecessor_continuity_root=continuity,
+            predecessor_audit_head=audit,
+            predecessor_clearance_root=clearance,
+        )
+        result[operation_ref] = control
+        state_id = control.state_after_id
+        state_bytes = control.state_after_bytes
+        continuity = control.state_after_continuity_root
+        audit = composition._sha(composition._STATE, audit, control.decision_id, control.effective_directive.encode("ascii"))
+    return result
+
+
+class _StateDispositionPort:
+    def controls_for(self, *, batch_id: bytes, operation_refs: tuple[bytes, ...], verification_outcome: object) -> dict[bytes, StateDispositionControl]:
+        del batch_id, verification_outcome
+        return _state_controls(operation_refs)
 
 
 class SourceAuthAdapterTests(unittest.TestCase):
@@ -252,7 +288,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
         self.assertNotIn(self.fixture.key.hex(), str(result.as_json))
 
     def test_queue_projection_does_not_persist_key_frame_or_ipc(self) -> None:
-        database = self.fixture.root / "queue.sqlite"
+        database = self.fixture.root / "state.sqlite"
         owner = _QueueRuntimeOwnership(lock_path=database.with_name(database.name + ".runtime-lock"), parent=self.fixture.root)
         store = _VerificationQueueStore(path=database, config=self.fixture.queue_config, owner=owner, clock=_Clock())
         captured: dict[str, bytes] = {}
@@ -275,7 +311,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
             batch = store.issue_batch(template=self.fixture.batch.template)
             store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(self.fixture.frame), declared_length=SOURCE_AUTH_FRAME_BYTES)
             with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
-                self.assertEqual(store._process_one_batch(verifier=self.fixture.adapter).status, "VERIFIED")
+                self.assertEqual(store._process_one_batch(verifier=self.fixture.adapter, state_disposition_port=_StateDispositionPort()).status, "VERIFIED")
             store._verify_integrity()
             durable = database.read_bytes()
             self.assertNotIn(self.fixture.key, durable)
