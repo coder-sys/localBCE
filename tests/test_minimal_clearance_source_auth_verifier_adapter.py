@@ -45,8 +45,8 @@ class _Fixture:
         template = OperationTemplate("assertion", 1, "state-profile-v9", 1_700_000_000_000, 1_700_003_600_000, None, self.queue_config.qualification_flags)
         refs = tuple(index.to_bytes(32, "little") for index in range(100))
         root = _compute_batch_root_from_refs(template, refs)
-        statement = _build_statement(batch_root=root, state_challenge=bytes(range(32)), valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
-        self.batch = IssuedVerificationBatch(b"b" * 32, template, refs, root, bytes(range(32)), root[:32], statement, 1, b"i" * 64)
+        statement = _build_statement(batch_root=root, session_ref=bytes(range(64)), valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
+        self.batch = IssuedVerificationBatch(b"b" * 32, template, refs, root, bytes(range(64)), statement, 1, b"i" * 64)
         self.config = SourceAuthVerifierConfig(
             queue_config=self.queue_config,
             executable_path=self.executable,
@@ -198,7 +198,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
 
     def _forged_batch(self, **changes: object) -> IssuedVerificationBatch:
         forged = object.__new__(IssuedVerificationBatch)
-        field_names = ("batch_id", "template", "operation_refs", "batch_root", "state_challenge", "ordered_binding", "proof_statement", "admission_seq", "identity_digest")
+        field_names = ("batch_id", "template", "operation_refs", "batch_root", "session_ref", "proof_statement", "admission_seq", "identity_digest")
         for field_name in field_names:
             object.__setattr__(forged, field_name, changes.get(field_name, getattr(self.fixture.batch, field_name)))
         return forged

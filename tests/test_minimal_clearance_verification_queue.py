@@ -18,7 +18,9 @@ from app.minimal_clearance_verification_queue import (
     BatchVerifierResult,
     OperationTemplate,
     QueueConfig,
+    QueueIntegrityError,
     QueueLeaseError,
+    VerificationQueueError,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
     _VerificationQueueStore,
@@ -178,15 +180,60 @@ class QueueV10Tests(unittest.TestCase):
         self.owner.close()
         self.temp.cleanup()
 
-    def test_state_database_is_unified_v10_and_keeps_current_statement_bytes(self) -> None:
+    def test_state_database_is_unified_v10_and_owns_profile6_statement_bytes(self) -> None:
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
             self.assertEqual(tables, {"queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions", "composition_meta", "composition_transactions", "composition_events", "composition_outbox"})
             self.assertEqual(connection.execute("SELECT schema_version FROM queue_metadata").fetchone()[0], 10)
             self.assertEqual(connection.execute("SELECT schema_version FROM composition_meta").fetchone()[0], 4)
             self.assertEqual(connection.execute("PRAGMA foreign_key_list(composition_transactions)").fetchone()[2], "queue_members")
+            self.assertEqual(tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_batches)")), ("batch_id", "batch_root", "session_ref", "proof_statement", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "identity_digest", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"))
         batch = _prepare(self.store, self.config, self.clock)
-        self.assertEqual((len(batch.proof_statement), batch.proof_statement[:16], batch.proof_statement[16:20]), (240, b"BL-R100-STMT-V1\x00", b"\x01\x00\xf0\x00"))
+        expected = (
+            b"BL-R100-STMT-V2\x00"
+            + (2).to_bytes(2, "little")
+            + (304).to_bytes(2, "little")
+            + batch.session_ref
+            + batch.batch_root
+            + (6).to_bytes(4, "little")
+            + bytes((1, 0, 0, 0))
+            + (1).to_bytes(4, "little")
+            + batch.template.valid_from_ms.to_bytes(8, "little")
+            + batch.template.valid_until_ms.to_bytes(8, "little")
+            + bytes.fromhex("16B1039E4BE0964066B369AD8760CC8580878929FE8ACBE81CF6D540C8BBD7F026789905691164F4287B666BC7E274CCDDBC6C636DC36C1543E34D8D999958BD")
+            + bytes.fromhex("D8F4730213839DDF027AF1B122AED5D80F4D8A725E9493C0CED59A59F560B12E97B6BAC28A373FA80CEC1DB4C6E0FBCCFD9ED2E37B3D0086A72D17F32F42EDF2")
+        )
+        self.assertEqual(len(batch.session_ref), 64)
+        self.assertNotEqual(batch.session_ref, bytes(64))
+        self.assertEqual(len(batch.proof_statement), 304)
+        self.assertEqual(batch.proof_statement, expected)
+        self.assertEqual(batch.proof_statement[20:84], batch.session_ref)
+        self.assertEqual(batch.proof_statement[84:148], batch.batch_root)
+        self.assertEqual(batch.proof_statement[148:152], b"\x06\x00\x00\x00")
+        self.assertEqual(batch.proof_statement[152:156], b"\x01\x00\x00\x00")
+        self.assertEqual(batch.proof_statement[156:160], b"\x01\x00\x00\x00")
+        self.assertEqual(self.config.profile_version, "BLIND-ZKBPP-CUNRUH-RANGE100-V6")
+        self.assertEqual(self.config.profile_epoch, 6)
+
+    def test_profile6_statement_rejects_zero_identity_and_invalid_window(self) -> None:
+        batch = _prepare(self.store, self.config, self.clock)
+        with self.assertRaisesRegex(QueueIntegrityError, "session_ref"):
+            _build_statement(batch_root=batch.batch_root, session_ref=bytes(64), valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
+        with self.assertRaisesRegex(QueueIntegrityError, "batch_root"):
+            _build_statement(batch_root=bytes(64), session_ref=batch.session_ref, valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
+        with self.assertRaisesRegex(QueueIntegrityError, "session_ref"):
+            _build_statement(batch_root=batch.batch_root, session_ref=batch.session_ref[:-1], valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
+        with self.assertRaisesRegex(QueueIntegrityError, "proof_statement"):
+            replace(batch, proof_statement=batch.proof_statement[:-1])
+        for start, end in ((batch.template.valid_from_ms, batch.template.valid_from_ms), (batch.template.valid_until_ms, batch.template.valid_until_ms), (batch.template.valid_from_ms, batch.template.valid_from_ms + 3_600_001)):
+            with self.subTest(start=start, end=end), self.assertRaisesRegex(QueueIntegrityError, "statement_window"):
+                _build_statement(batch_root=batch.batch_root, session_ref=batch.session_ref, valid_from_ms=start, valid_until_ms=end)
+
+        for offset in (0, 16, 18, 153, 176, 240):
+            forged = bytearray(batch.proof_statement)
+            forged[offset] ^= 1
+            with self.subTest(offset=offset), self.assertRaisesRegex(VerificationQueueError, "statement_binding"):
+                replace(batch, proof_statement=bytes(forged))
 
     def test_exact_100_members_and_one_101_unit_attempt_record(self) -> None:
         batch = _prepare(self.store, self.config, self.clock)
@@ -339,7 +386,7 @@ class QueueV10Tests(unittest.TestCase):
 
         forged_template = replace(batch.template, assertion_identifier="forged-assertion")
         forged_root = _compute_batch_root_from_refs(forged_template, batch.operation_refs)
-        forged_batch = replace(work.batch, template=forged_template, batch_root=forged_root, ordered_binding=forged_root[:32], proof_statement=_build_statement(batch_root=forged_root, state_challenge=batch.state_challenge, valid_from_ms=forged_template.valid_from_ms, valid_until_ms=forged_template.valid_until_ms))
+        forged_batch = replace(work.batch, template=forged_template, batch_root=forged_root, proof_statement=_build_statement(batch_root=forged_root, session_ref=work.batch.session_ref, valid_from_ms=forged_template.valid_from_ms, valid_until_ms=forged_template.valid_until_ms))
         forged_work = replace(work, batch=forged_batch)
         forged_result = BatchVerifierResult(True, True, forged_batch.proof_statement, forged_batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
         with self.assertRaises(QueueLeaseError) as error:

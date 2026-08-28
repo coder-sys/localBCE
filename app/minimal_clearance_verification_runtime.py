@@ -1,4 +1,4 @@
-"""Single-owner Queue V9 runtime.
+"""Single-owner Queue V10 runtime.
 
 The runtime exposes one state-issued 100-member batch and one volatile
 handoff.  Counters are explicit: batch outcomes are counted in batches while
