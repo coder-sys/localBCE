@@ -35,8 +35,8 @@ class _Fixture:
     def __init__(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.executable = self.root / "blind-source-auth-v3.exe"
-        self.executable_bytes = b"synthetic-future-v3-executable"
+        self.executable = self.root / "blind-source-auth-v4.exe"
+        self.executable_bytes = b"synthetic-future-v4-executable"
         self.executable.write_bytes(self.executable_bytes)
         self.key = bytes(range(256)) * (ML_DSA_87_PUBLIC_KEY_BYTES // 256) + bytes(range(ML_DSA_87_PUBLIC_KEY_BYTES % 256))
         self.queue_config = QueueConfig("queue-v8", 100, source_key_epoch=0x0102030405060708, qualification_flags=("flag-a", "flag-b"))
@@ -117,6 +117,9 @@ class SourceAuthAdapterTests(unittest.TestCase):
         return captured, runner
 
     def test_builds_exact_ordered_ipc_and_returns_bound_acceptance(self) -> None:
+        self.assertEqual(SOURCE_AUTH_FRAME_BYTES, 4_875_387)
+        self.assertEqual(SOURCE_AUTH_IPC_BYTES, 4_881_491)
+        self.assertEqual(SOURCE_AUTH_IPC_BYTES, 6_104 + SOURCE_AUTH_FRAME_BYTES)
         captured, runner = self._run()
         handoff = VolatileProofHandoff(io.BytesIO(self.fixture.frame), declared_length=SOURCE_AUTH_FRAME_BYTES)
         with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):

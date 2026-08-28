@@ -3,7 +3,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from app.minimal_clearance_source_auth_verifier_adapter import (
+    MinimalClearanceSourceAuthVerifierAdapter,
+    SourceAuthVerifierConfig,
+)
 from app.minimal_clearance_verification_queue import BatchVerifierResult, OperationTemplate, QueueConfig, VolatileProofHandoff
 from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime, VerificationRuntimeError
 
@@ -21,6 +26,49 @@ class _Verifier:
 
 
 class RuntimeV8Tests(unittest.TestCase):
+    def _source_auth_config(self, root: Path) -> SourceAuthVerifierConfig:
+        return SourceAuthVerifierConfig(
+            queue_config=QueueConfig("runtime-v4-source-auth", 100),
+            executable_path=root / "blind-source-auth-v4.exe",
+            executable_size_bytes=50_688,
+            executable_sha256=bytes.fromhex("68373B03EF32E4FCC9A87B99851C84F4A8158AEB32D189F23DDA3393775AABB2"),
+            workspace=root,
+            ml_dsa_87_public_key=bytes(2_592),
+            timeout_seconds=30.0,
+        )
+
+    def test_from_source_auth_constructs_one_adapter_and_delegates_exact_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self._source_auth_config(root)
+            with patch("app.minimal_clearance_verification_runtime.MinimalClearanceSourceAuthVerifierAdapter") as adapter_factory, patch.object(MinimalClearanceVerificationRuntime, "__init__", return_value=None) as generic_constructor:
+                runtime = MinimalClearanceVerificationRuntime.from_source_auth(root=root, source_auth_config=config)
+            adapter_factory.assert_called_once_with(config)
+            generic_constructor.assert_called_once_with(root=root, verifier=adapter_factory.return_value, config=config.queue_config)
+            self.assertIsInstance(runtime, MinimalClearanceVerificationRuntime)
+
+    def test_from_source_auth_is_a_real_nonactivating_production_construction(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self._source_auth_config(root)
+            with MinimalClearanceVerificationRuntime.from_source_auth(root=root, source_auth_config=config) as runtime:
+                self.assertIs(type(runtime._verifier), MinimalClearanceSourceAuthVerifierAdapter)
+                self.assertIs(runtime._store.config, config.queue_config)
+                self.assertEqual(runtime._verifier.config.executable_size_bytes, 50_688)
+                self.assertEqual(runtime._verifier.config.executable_sha256, bytes.fromhex("68373B03EF32E4FCC9A87B99851C84F4A8158AEB32D189F23DDA3393775AABB2"))
+
+    def test_source_auth_config_cannot_omit_executable_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = QueueConfig("runtime-v4-required-pin", 100)
+            with self.assertRaises(TypeError):
+                SourceAuthVerifierConfig(
+                    queue_config=config,
+                    executable_path=root / "blind-source-auth-v4.exe",
+                    workspace=root,
+                    ml_dsa_87_public_key=bytes(2_592),
+                )  # type: ignore[call-arg]
+
     def test_runtime_exposes_explicit_batch_and_operation_counters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

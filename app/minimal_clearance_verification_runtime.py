@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from app.minimal_clearance_source_auth_verifier_adapter import (
+    MinimalClearanceSourceAuthVerifierAdapter,
+    SourceAuthVerifierConfig,
+)
 from app.minimal_clearance_verification_queue import (
     IssuedVerificationBatch,
     OperationTemplate,
@@ -77,6 +81,13 @@ class RuntimeRunResult:
 
 class MinimalClearanceVerificationRuntime:
     """One owner, one synchronous worker, one batch handoff."""
+
+    @classmethod
+    def from_source_auth(cls, *, root: Path, source_auth_config: SourceAuthVerifierConfig) -> "MinimalClearanceVerificationRuntime":
+        if type(source_auth_config) is not SourceAuthVerifierConfig:
+            _fixed("runtime_configuration")
+        verifier = MinimalClearanceSourceAuthVerifierAdapter(source_auth_config)
+        return cls(root=root, verifier=verifier, config=source_auth_config.queue_config)
 
     def __init__(self, *, root: Path, verifier: object | None = None, config: QueueConfig | None = None) -> None:
         if not isinstance(root, Path) or not root.is_absolute() or not root.is_dir():

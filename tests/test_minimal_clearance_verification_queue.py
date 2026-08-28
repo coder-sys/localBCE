@@ -19,6 +19,8 @@ from app.minimal_clearance_verification_queue import (
     BatchVerifierResult,
     CIRCUIT_FINGERPRINT,
     OperationTemplate,
+    PROFILE_VERSION,
+    PROFILE_VERSION_TOKEN,
     PROFILE_FINGERPRINT,
     PROCESS_TREE_PEAK_CAP_BYTES,
     QueueConfig,
@@ -176,35 +178,64 @@ class QueueV8Tests(unittest.TestCase):
             self.assertNotIn("queue_jobs", tables)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0], 100)
 
-    def test_registered_v3_fingerprint_is_shared_by_owner_and_independent_reader(self) -> None:
+    def test_exact_registered_v4_statement_vector(self) -> None:
+        statement = _build_statement(
+            batch_root=bytes(range(32, 96)),
+            state_challenge=bytes(range(32)),
+            valid_from_ms=1_700_000_000_000,
+            valid_until_ms=1_700_003_600_000,
+        )
+        self.assertEqual(
+            statement.hex(),
+            "424c2d523130302d53544d542d5631000100f000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0400000001000000010000000068e5cf8b01000080561cd08b010000982cbb064e424c3734b09a4e8579338092fd3b71d7ae81f7a64174d9ba8919f6c1fcc3b7c0837d64dc1cec954194e1648f3375bfe7f08a8a9347aa320137efd48ed47d3fd17bb3a332adf8dd5d8facb97be23cb430e2e582cb360d383577d706e88d2a568a78772e89292201fc273a958ac1263280be1662b7ec64830347822a",
+        )
+
+    def test_registered_v4_fingerprint_is_shared_by_owner_and_independent_reader(self) -> None:
         batch = self.issue()
+        self.assertEqual((self.config.profile_version, self.config.profile_epoch), (PROFILE_VERSION_TOKEN, PROFILE_VERSION))
         self.assertEqual(
             PROFILE_FINGERPRINT.hex(),
-            "b613ceacddde261a1b01107550bb2d74dfb7f1583fb60c150ccd1ed2bca9c48c2c14a724ccbdbf750c3d7668ddad9066de8df273a1070c66cb036622c1f80d7b",
+            "8ed47d3fd17bb3a332adf8dd5d8facb97be23cb430e2e582cb360d383577d706e88d2a568a78772e89292201fc273a958ac1263280be1662b7ec64830347822a",
         )
         self.assertEqual(batch.proof_statement[112:176], CIRCUIT_FINGERPRINT)
         self.assertEqual(batch.proof_statement[176:240], PROFILE_FINGERPRINT)
         self.store._verify_integrity()
+        verify_database(self.path, expected_config=self.config.as_json)
 
-    def test_resource_authority_preserves_config_and_genesis_root_identity(self) -> None:
+    def test_resource_authority_has_exact_v4_config_and_genesis_root_identity(self) -> None:
         self.assertEqual(ADMISSION_CAP_BYTES, resource_limits.ADMISSION_CAP_BYTES)
         self.assertEqual(PROCESS_TREE_PEAK_CAP_BYTES, resource_limits.PROCESS_TREE_PEAK_CAP_BYTES)
         self.assertEqual(ACTIVE_PROCESS_LIMIT, resource_limits.ACTIVE_PROCESS_LIMIT)
         self.assertEqual(len(self.config.canonical_bytes), 818)
         self.assertEqual(
             hashlib.sha256(self.config.canonical_bytes).hexdigest(),
-            "51efaf2842b988563dfbf1bb9f5284b4fa789a45a48f30a28129eb42be70939c",
+            "4c2236143d572d7e3c87bdeea6b53345368bc891170267efc2123d9dfe481e04",
         )
         self.assertEqual(
             self.config.digest.hex(),
-            "0dcab87eea4f4eb8f53b68ecdfd43735df26da70accd6a6f49582b875279fe5d27d92e268af5bc7b0d284d3f45547a02994e472d349141802b5b2ca785713f24",
+            "eaffce0bab6c43d2552bee033823d24e94f6685fffac51fb3db2eb21b31704c32ee70c01a45ffc726861e3d27fbbafc82f1520077de73718e05358b8edf04307",
         )
         with closing(sqlite3.connect(str(self.path))) as connection:
             metadata = connection.execute("SELECT head_root FROM queue_metadata WHERE id=1").fetchone()
         self.assertEqual(
             bytes(metadata[0]).hex(),
-            "48c7befaac6f86190fdb0e2534dc8711ef802dc8bff7216309c87ddeadac070950b64a592e8f3a2d9b763cb221e5f40d2b525d6d4b6578726fee2d5a939f0cc0",
+            "b5f7cf470a0f6abdc7ff759fbf9afb39f38d23811bd4c16fdfeafe517c64975a0ad140dbf329c6c0da95a9062ebb792c6bc74a0ab99924dab915fe5ee576c7e9",
         )
+
+    def test_v2_v3_and_superseded_v4_profile_inputs_are_rejected(self) -> None:
+        superseded_v4 = bytes.fromhex(
+            "b6cb1d0116852121d1e2c197b4f387096e2e344e51c6b9a37331322a1befb85d"
+            "15780d0cfa43ff06cfc6c82542d376bad0b9bd353e83772fe0316f84892194bf"
+        )
+        cases = (
+            ("v2", {"profile_version": "BLIND-ZKBPP-CUNRUH-RANGE100-V2"}, "queue_profile_version"),
+            ("v3", {"profile_version": "BLIND-ZKBPP-CUNRUH-RANGE100-V3"}, "queue_profile_version"),
+            ("superseded_v4", {"profile_digest": superseded_v4}, "queue_profile_invalid"),
+        )
+        for name, changes, error in cases:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(Exception, error):
+                    QueueConfig("rejected-profile", 100, **changes)
 
     def test_issue_owns_references_and_rejects_heterogeneous_template(self) -> None:
         with self.assertRaises(TypeError):

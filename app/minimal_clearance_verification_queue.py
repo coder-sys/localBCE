@@ -93,10 +93,10 @@ DIRECTIVES: Final[tuple[str, ...]] = (
 )
 BOOTSTRAP_CAPABILITY_LIMITATION_COUNT: Final[int] = 0
 
-PROFILE_VERSION: Final[int] = 3
+PROFILE_VERSION: Final[int] = 4
 RELATION_VERSION: Final[int] = 1
 POLICY_VERSION: Final[int] = 1
-PROFILE_VERSION_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V3"
+PROFILE_VERSION_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V4"
 SOURCE_AUTH_PROFILE_DEFAULT: Final[str] = "synthetic-source-auth-v8-unqualified"
 STATEMENT_MAGIC: Final[bytes] = b"BL-R100-STMT-V1\x00"
 # Opaque registered identifiers.  The queue has no proof parser, transcript,
@@ -106,8 +106,8 @@ CIRCUIT_FINGERPRINT: Final[bytes] = bytes.fromhex(
     "c1fcc3b7c0837d64dc1cec954194e1648f3375bfe7f08a8a9347aa320137efd4"
 )
 PROFILE_FINGERPRINT: Final[bytes] = bytes.fromhex(
-    "b613ceacddde261a1b01107550bb2d74dfb7f1583fb60c150ccd1ed2bca9c48c"
-    "2c14a724ccbdbf750c3d7668ddad9066de8df273a1070c66cb036622c1f80d7b"
+    "8ed47d3fd17bb3a332adf8dd5d8facb97be23cb430e2e582cb360d383577d706"
+    "e88d2a568a78772e89292201fc273a958ac1263280be1662b7ec64830347822a"
 )
 
 

@@ -1,4 +1,4 @@
-"""Nonactivating Queue adapter shell for the signed Native-v3 source boundary.
+"""Nonactivating Queue adapter shell for the signed Native V4 source boundary.
 
 The adapter owns only volatile frame assembly and the narrow process call.  It
 does not parse proof material, select a disposition, or persist source,
@@ -30,9 +30,9 @@ from app.minimal_clearance_verifier_process import (
 )
 
 
-SOURCE_AUTH_FRAME_BYTES: Final[int] = 4_678_779
+SOURCE_AUTH_FRAME_BYTES: Final[int] = 4_875_387
 ML_DSA_87_PUBLIC_KEY_BYTES: Final[int] = 2_592
-SOURCE_AUTH_IPC_BYTES: Final[int] = 4_684_883
+SOURCE_AUTH_IPC_BYTES: Final[int] = 4_881_491
 SOURCE_AUTH_PROCESS_ARGUMENTS: Final[tuple[str, ...]] = ()
 SOURCE_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0 * 60.0
 _SHA256_BYTES: Final[int] = 32

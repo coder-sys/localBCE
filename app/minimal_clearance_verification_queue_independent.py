@@ -44,10 +44,10 @@ _CIRCUIT: Final[bytes] = bytes.fromhex(
     "c1fcc3b7c0837d64dc1cec954194e1648f3375bfe7f08a8a9347aa320137efd4"
 )
 _PROFILE: Final[bytes] = bytes.fromhex(
-    "b613ceacddde261a1b01107550bb2d74dfb7f1583fb60c150ccd1ed2bca9c48c"
-    "2c14a724ccbdbf750c3d7668ddad9066de8df273a1070c66cb036622c1f80d7b"
+    "8ed47d3fd17bb3a332adf8dd5d8facb97be23cb430e2e582cb360d383577d706"
+    "e88d2a568a78772e89292201fc273a958ac1263280be1662b7ec64830347822a"
 )
-_PROFILE_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V3"
+_PROFILE_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V4"
 _DIRECTIVES: Final[list[str]] = ["CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"]
 _BATCH_LEAF: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v8\x00"
 _BATCH_ROOT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v8\x00"
@@ -246,7 +246,7 @@ def _parse_config(raw: bytes, expected_config: Mapping[str, Any] | None = None) 
     _token(value["queue_id"], "config_queue_id", 96)
     if value["profile_version"] != _PROFILE_TOKEN or _parse_hex(value["profile_digest"], 64, "config_profile_digest") != _PROFILE:
         _fail("config_profile")
-    if type(value["profile_epoch"]) is not int or value["profile_epoch"] != 3:
+    if type(value["profile_epoch"]) is not int or value["profile_epoch"] != 4:
         _fail("config_profile_epoch")
     _token(value["source_auth_profile"], "config_source_profile", 96)
     if type(value["source_key_epoch"]) is not int or not 1 <= value["source_key_epoch"] <= _MAX_EPOCH:
@@ -287,7 +287,7 @@ def _build_statement(*, batch_root: bytes, state_challenge: bytes, valid_from_ms
     _blob(state_challenge, 32, "state_challenge")
     if type(valid_from_ms) is not int or type(valid_until_ms) is not int or not 0 <= valid_from_ms < valid_until_ms or valid_until_ms - valid_from_ms > _MAX_WINDOW:
         _fail("statement_window")
-    statement = _MAGIC + (1).to_bytes(2, "little") + _STATEMENT_BYTES.to_bytes(2, "little") + state_challenge + batch_root[:32] + (3).to_bytes(4, "little") + (1).to_bytes(4, "little") + (1).to_bytes(4, "little") + _u64le(valid_from_ms) + _u64le(valid_until_ms) + _CIRCUIT + _PROFILE
+    statement = _MAGIC + (1).to_bytes(2, "little") + _STATEMENT_BYTES.to_bytes(2, "little") + state_challenge + batch_root[:32] + (4).to_bytes(4, "little") + (1).to_bytes(4, "little") + (1).to_bytes(4, "little") + _u64le(valid_from_ms) + _u64le(valid_until_ms) + _CIRCUIT + _PROFILE
     if len(statement) != _STATEMENT_BYTES:
         _fail("statement_length")
     return statement
