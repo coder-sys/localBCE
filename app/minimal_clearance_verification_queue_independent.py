@@ -1,4 +1,4 @@
-"""Independent reconstruction of the durable Queue V8 image.
+"""Independent reconstruction of the durable Queue V9 image.
 
 This module intentionally does not import the queue writer.  It checks the
 clean-break schema, exact guard identity, immutable batch/member image,
@@ -23,15 +23,15 @@ class IndependentQueueError(RuntimeError):
     pass
 
 
-SCHEMA_VERSION: Final[int] = 8
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v8"
-_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v8\x00"
+SCHEMA_VERSION: Final[int] = 9
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v9"
+_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v9\x00"
 _ADMISSION_CAP: Final[int] = 4_500_000_000
 _DATABASE_PAGE_SIZE: Final[int] = 4096
 _DATABASE_MAX_PAGE_COUNT: Final[int] = 32768
 _DATABASE_CAP: Final[int] = _DATABASE_PAGE_SIZE * _DATABASE_MAX_PAGE_COUNT
 _COUNT: Final[int] = 100
-_PROOF_ATTEMPTS_PER_BATCH: Final[int] = 1
+_PROOF_ATTEMPTS_PER_BATCH: Final[int] = 101
 _PROOF_ATTEMPTS_CAP: Final[int] = 2**32
 _MAX_WINDOW: Final[int] = 3_600_000
 _MAX_EPOCH: Final[int] = 2**64 - 1
@@ -49,12 +49,12 @@ _PROFILE: Final[bytes] = bytes.fromhex(
 )
 _PROFILE_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V4"
 _DIRECTIVES: Final[list[str]] = ["CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"]
-_BATCH_LEAF: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v8\x00"
-_BATCH_ROOT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v8\x00"
-_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v8\x00"
-_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v8\x00"
-_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v8\x00"
-_MEMBER_SET: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MEMBER-SET/v8\x00"
+_BATCH_LEAF: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v9\x00"
+_BATCH_ROOT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v9\x00"
+_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v9\x00"
+_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v9\x00"
+_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v9\x00"
+_MEMBER_SET: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MEMBER-SET/v9\x00"
 _SAFE_TOKEN = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,95}\Z")
 _FORBIDDEN_CODE_WORDS = (
@@ -104,7 +104,7 @@ _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
     "queue_batches": "CREATE TABLE queue_batches (batch_id BLOB PRIMARY KEY CHECK(length(batch_id)=32), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), state_challenge BLOB NOT NULL CHECK(length(state_challenge)=32), ordered_binding BLOB NOT NULL CHECK(length(ordered_binding)=32), proof_statement BLOB NOT NULL CHECK(length(proof_statement)=240), assertion_identifier TEXT NOT NULL, assertion_version INTEGER NOT NULL, state_profile_version TEXT NOT NULL, valid_from_ms INTEGER NOT NULL, valid_until_ms INTEGER NOT NULL, approved_source_registry_root BLOB, qualification_flags BLOB NOT NULL, identity_digest BLOB NOT NULL CHECK(length(identity_digest)=64), status TEXT NOT NULL CHECK(status IN ('AWAITING_HANDOFF','QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), next_eligible_ms INTEGER NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, last_error_code TEXT, CHECK(approved_source_registry_root IS NULL OR length(approved_source_registry_root)=64), CHECK(valid_from_ms<valid_until_ms))",
     "queue_members": "CREATE TABLE queue_members (batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), batch_position INTEGER NOT NULL CHECK(batch_position BETWEEN 0 AND 99), operation_ref BLOB NOT NULL CHECK(length(operation_ref)=32), admission_seq INTEGER NOT NULL CHECK(admission_seq>=1), PRIMARY KEY(batch_id,batch_position), UNIQUE(operation_ref), UNIQUE(admission_seq))",
     "queue_leases": "CREATE TABLE queue_leases (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt=1), claim_sequence INTEGER NOT NULL, leased_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms))",
-    "queue_attempts": "CREATE TABLE queue_attempts (attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id), reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before), proof_attempts INTEGER NOT NULL CHECK(proof_attempts=1), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL, closed_ms INTEGER, result_code TEXT)",
+    "queue_attempts": "CREATE TABLE queue_attempts (attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id), reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before), proof_attempts INTEGER NOT NULL CHECK(proof_attempts=101), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL, closed_ms INTEGER, result_code TEXT)",
     "queue_results": "CREATE TABLE queue_results (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_id BLOB NOT NULL CHECK(length(receipt_id)=32), receipt_bytes BLOB NOT NULL, proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), source_authenticated INTEGER NOT NULL CHECK(source_authenticated IN (0,1)), proof_statement BLOB NOT NULL CHECK(length(proof_statement)=240), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), result_code TEXT NOT NULL, qualification_flags BLOB NOT NULL, completed_ms INTEGER NOT NULL, attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), error_code TEXT)",
     "queue_transitions": "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL, batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL, event_digest BLOB NOT NULL CHECK(length(event_digest)=64))",
 }
@@ -302,7 +302,7 @@ def _parse_statement(statement: bytes, *, batch_root: bytes, state_challenge: by
 
 def _identity_digest(batch: tuple[Any, ...], members: tuple[tuple[Any, ...], ...], config: Mapping[str, Any]) -> bytes:
     refs = b"".join(_u64(int(row[1])) + _blob(_db_bytes(row[2], "operation_ref"), 32, "operation_ref") for row in sorted(members, key=lambda row: int(row[1])))
-    return _sha(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v8\x00", _blob(_db_bytes(batch[0], "batch_id"), 32, "batch_id"), _blob(_db_bytes(batch[1], "batch_root"), 64, "batch_root"), _blob(_db_bytes(batch[2], "state_challenge"), 32, "state_challenge"), _blob(_db_bytes(batch[4], "proof_statement"), 240, "proof_statement"), _template_bytes(batch), _u64(_COUNT), refs, _u64(int(batch[8])), _u64(int(batch[9])), str(config["source_auth_profile"]).encode("ascii"), _u64(int(config["source_key_epoch"])))
+    return _sha(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v9\x00", _blob(_db_bytes(batch[0], "batch_id"), 32, "batch_id"), _blob(_db_bytes(batch[1], "batch_root"), 64, "batch_root"), _blob(_db_bytes(batch[2], "state_challenge"), 32, "state_challenge"), _blob(_db_bytes(batch[4], "proof_statement"), 240, "proof_statement"), _template_bytes(batch), _u64(_COUNT), refs, _u64(int(batch[8])), _u64(int(batch[9])), str(config["source_auth_profile"]).encode("ascii"), _u64(int(config["source_key_epoch"])))
 
 
 @dataclass(frozen=True, slots=True)
@@ -701,7 +701,7 @@ def read_verified_batch(path: Path, selector: bytes | None = None) -> Independen
 def verify_export_bytes(raw: bytes, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     if type(raw) is not bytes or not raw or len(raw) > _DATABASE_CAP:
         _fail("export_bytes")
-    with tempfile.TemporaryDirectory(prefix="bl-v8-export-") as directory:
+    with tempfile.TemporaryDirectory(prefix="bl-v9-export-") as directory:
         path = Path(directory) / "queue.sqlite"
         path.write_bytes(raw)
         return verify_database(path, expected_config=expected_config)

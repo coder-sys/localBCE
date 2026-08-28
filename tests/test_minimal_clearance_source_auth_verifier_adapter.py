@@ -39,8 +39,8 @@ class _Fixture:
         self.executable_bytes = b"synthetic-future-v4-executable"
         self.executable.write_bytes(self.executable_bytes)
         self.key = bytes(range(256)) * (ML_DSA_87_PUBLIC_KEY_BYTES // 256) + bytes(range(ML_DSA_87_PUBLIC_KEY_BYTES % 256))
-        self.queue_config = QueueConfig("queue-v8", 100, source_key_epoch=0x0102030405060708, qualification_flags=("flag-a", "flag-b"))
-        template = OperationTemplate("assertion", 1, "state-profile-v8", 1_700_000_000_000, 1_700_003_600_000, None, self.queue_config.qualification_flags)
+        self.queue_config = QueueConfig("queue-v9", 100, source_key_epoch=0x0102030405060708, qualification_flags=("flag-a", "flag-b"))
+        template = OperationTemplate("assertion", 1, "state-profile-v9", 1_700_000_000_000, 1_700_003_600_000, None, self.queue_config.qualification_flags)
         refs = tuple(index.to_bytes(32, "little") for index in range(100))
         root = _compute_batch_root_from_refs(template, refs)
         statement = _build_statement(batch_root=root, state_challenge=bytes(range(32)), valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)

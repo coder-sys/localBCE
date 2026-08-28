@@ -1,4 +1,4 @@
-"""Single-owner Queue V8 runtime.
+"""Single-owner Queue V9 runtime.
 
 The runtime exposes one state-issued 100-member batch and one volatile
 handoff.  Counters are explicit: batch outcomes are counted in batches while
@@ -98,7 +98,7 @@ class MinimalClearanceVerificationRuntime:
         try:
             database = root / "queue.sqlite"
             if config is None:
-                config = QueueConfig("minimal-clearance-queue-v8", 100)
+                config = QueueConfig("minimal-clearance-queue-v9", 100)
             owner = _QueueRuntimeOwnership(lock_path=database.with_name(database.name + ".runtime-lock"), parent=root)
             store = _VerificationQueueStore(path=database, config=config, owner=owner)
         except VerificationQueueError as error:

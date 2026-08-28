@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import sqlite3
 import subprocess
 import sys
@@ -132,13 +133,13 @@ class _NoReadVerifier:
         return BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", self.config.qualification_flags)
 
 
-class QueueV8Tests(unittest.TestCase):
+class QueueV9Tests(unittest.TestCase):
     def setUp(self) -> None:
         self._temp = tempfile.TemporaryDirectory()
         self.root = Path(self._temp.name)
         self.path = self.root / "queue.sqlite"
         self.clock = _Clock()
-        self.config = QueueConfig("queue-v8", 512)
+        self.config = QueueConfig("queue-v9", 512)
         self.owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
         self.store = _VerificationQueueStore(path=self.path, config=self.config, owner=self.owner, clock=self.clock)
 
@@ -148,7 +149,7 @@ class QueueV8Tests(unittest.TestCase):
         self._temp.cleanup()
 
     def template(self, *, identifier: str = "shared-assertion", start: int | None = None, end: int | None = None, registry: bytes | None = None) -> OperationTemplate:
-        return OperationTemplate(identifier, 1, "state-profile-v8", self.clock.now - 100 if start is None else start, self.clock.now + 3_000_000 if end is None else end, registry, ())
+        return OperationTemplate(identifier, 1, "state-profile-v9", self.clock.now - 100 if start is None else start, self.clock.now + 3_000_000 if end is None else end, registry, ())
 
     def issue(self, *, offset: int = 0, template: OperationTemplate | None = None):
         return self.store.issue_batch(template=template or self.template(identifier=f"shared-assertion-{offset}"))
@@ -209,17 +210,17 @@ class QueueV8Tests(unittest.TestCase):
         self.assertEqual(len(self.config.canonical_bytes), 818)
         self.assertEqual(
             hashlib.sha256(self.config.canonical_bytes).hexdigest(),
-            "4c2236143d572d7e3c87bdeea6b53345368bc891170267efc2123d9dfe481e04",
+            "754cb932d3e299a2d674513a73fecb6c96b2b25b4fd8b198a16d440dc6a636d7",
         )
         self.assertEqual(
             self.config.digest.hex(),
-            "eaffce0bab6c43d2552bee033823d24e94f6685fffac51fb3db2eb21b31704c32ee70c01a45ffc726861e3d27fbbafc82f1520077de73718e05358b8edf04307",
+            "7e5135804aa1d2e49c08c118501f983fb4d254008251da3e3cff2c531e0c039b144e31cd70033baf9e6becdcd1fe127f01881fe39e90840521aeacc59550086d",
         )
         with closing(sqlite3.connect(str(self.path))) as connection:
             metadata = connection.execute("SELECT head_root FROM queue_metadata WHERE id=1").fetchone()
         self.assertEqual(
             bytes(metadata[0]).hex(),
-            "b5f7cf470a0f6abdc7ff759fbf9afb39f38d23811bd4c16fdfeafe517c64975a0ad140dbf329c6c0da95a9062ebb792c6bc74a0ab99924dab915fe5ee576c7e9",
+            "565de158d8596621ea188597fbe566f357776bd84817c09b637a8b3e1f0747b4e399df18554de9ab7cfed8794bf781fb63a169c464c3e965631e5b4b63cf2f26",
         )
 
     def test_v2_v3_and_superseded_v4_profile_inputs_are_rejected(self) -> None:
@@ -299,12 +300,141 @@ class QueueV8Tests(unittest.TestCase):
             if lock_path.exists():
                 lock_path.unlink()
 
-    def test_attempt_budget_is_one_proof_attempt(self) -> None:
-        self.assertEqual(_reserve_proof_attempt(2**32 - 1), 2**32)
+    def test_conservative_attempt_budget_charges_101_and_rejects_boundary_without_overflow(self) -> None:
+        cap = 2**32
+        max_batches = cap // 101
+        remainder = cap % 101
+        self.assertEqual((max_batches, remainder), (42_524_428, 68))
+        max_used = cap - remainder
+        last_before = max_used - 101
+        self.assertEqual(_reserve_proof_attempt(0), 101)
+        self.assertEqual(_reserve_proof_attempt(last_before), max_used)
         with self.assertRaisesRegex(Exception, "computational_budget_exhausted"):
-            _reserve_proof_attempt(2**32)
+            _reserve_proof_attempt(max_used)
+        with self.assertRaisesRegex(Exception, "computational_budget_exhausted"):
+            _reserve_proof_attempt(cap - 100)
+        with self.assertRaisesRegex(Exception, "computational_budget_exhausted"):
+            _reserve_proof_attempt(cap)
+        with self.assertRaisesRegex(Exception, "computational_budget_exhausted"):
+            _reserve_proof_attempt(cap + 1)
         with self.assertRaisesRegex(Exception, "proof_attempt_ledger"):
             _reserve_proof_attempt(-1)
+
+    def test_budget_boundary_rejects_without_mutating_queued_batch_or_ledger(self) -> None:
+        batch = self.issue()
+        self.submit(batch)
+        cap = 2**32
+        max_used = cap - 68
+        last_before = max_used - 101
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            connection.execute("UPDATE queue_metadata SET proof_attempts_used=? WHERE id=1", (last_before,))
+            connection.commit()
+        work = self.store._claim_next_batch()
+        self.assertIsNotNone(work)
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            reservation = connection.execute("SELECT reservation_before,reservation_after,proof_attempts FROM queue_attempts").fetchone()
+            metadata = connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()
+            worker = connection.execute("SELECT worker_id FROM queue_leases").fetchone()
+        self.assertEqual(tuple(reservation), (last_before, cap - 68, 101))
+        self.assertEqual(metadata[0], cap - 68)
+        self.assertEqual(worker[0], "queue-v9-worker")
+        self.assertEqual(self.store._complete_batch(work, status="HELD", error_code="fresh_handoff_required").status, "HELD")  # type: ignore[arg-type]
+
+        next_batch = self.issue(offset=100)
+        self.submit(next_batch)
+        before = self.path.read_bytes()
+        self.assertIsNone(self.store._claim_next_batch())
+        self.assertEqual(self.store._last_claim_error, "computational_budget_exhausted")
+        self.assertEqual(self.path.read_bytes(), before)
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (next_batch.batch_id,)).fetchone()[0], "QUEUED")
+            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], cap - 68)
+
+    def test_terminal_and_held_attempt_rows_retain_101_units(self) -> None:
+        verified = self.issue()
+        self.submit(verified)
+        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
+        rejected = self.issue(offset=100)
+        self.submit(rejected)
+        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config, proof_accepted=False)).status, "REJECTED")
+        held = self.issue(offset=200)
+        self.submit(held)
+        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config, unknown=True)).status, "HELD")
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            rows = connection.execute("SELECT reservation_before,reservation_after,proof_attempts,status FROM queue_attempts ORDER BY attempt_id").fetchall()
+            used = connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0]
+        self.assertEqual(rows, [(0, 101, 101, "ACCEPTED"), (101, 202, 101, "REJECTED"), (202, 303, 101, "HELD")])
+        self.assertEqual(used, 303)
+
+    def test_cumulative_attempt_chain_and_independent_v9_rejections(self) -> None:
+        batch = self.issue()
+        self.submit(batch)
+        self.assertEqual(self.store._process_one_batch(verifier=_Verifier(self.config)).status, "VERIFIED")
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            rows = connection.execute("SELECT reservation_before,reservation_after,proof_attempts FROM queue_attempts").fetchall()
+            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
+        self.assertEqual(rows, [(0, 101, 101)])
+        original = self.path.read_bytes()
+
+        def reject_copy(name: str, mutate) -> None:
+            candidate = self.root / f"{name}.sqlite"
+            candidate.write_bytes(original)
+            with closing(sqlite3.connect(str(candidate))) as connection:
+                mutate(connection)
+                connection.commit()
+            with self.assertRaises(IndependentQueueError):
+                verify_database(candidate)
+
+        for value in (1, 100, 102):
+            with self.subTest(proof_attempts=value):
+                reject_copy(
+                    f"proof-attempts-{value}",
+                    lambda connection, value=value: (
+                        connection.execute("PRAGMA ignore_check_constraints=ON"),
+                        connection.execute("DROP TRIGGER queue_attempts_transition_guard"),
+                        connection.execute("UPDATE queue_attempts SET proof_attempts=?", (value,)),
+                    ),
+                )
+        reject_copy(
+            "discontinuous-attempt",
+            lambda connection: (
+                connection.execute("PRAGMA ignore_check_constraints=ON"),
+                connection.execute("DROP TRIGGER queue_attempts_transition_guard"),
+                connection.execute("UPDATE queue_attempts SET reservation_after=102"),
+            ),
+        )
+        reject_copy(
+            "attempt-cap-overflow",
+            lambda connection: connection.execute("UPDATE queue_metadata SET proof_attempts_used=?", (2**32 + 1,)),
+        )
+
+        v8_schema = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v8"
+        reject_copy(
+            "v8-schema",
+            lambda connection: (
+                connection.execute("DROP TRIGGER queue_metadata_config_guard"),
+                connection.execute("UPDATE queue_metadata SET schema_version=8"),
+            ),
+        )
+
+        def alter_v8_config(connection) -> None:
+            value = dict(self.config.as_json)
+            value["schema_version"] = 8
+            raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+            connection.execute("DROP TRIGGER queue_metadata_config_guard")
+            connection.execute("UPDATE queue_metadata SET config_json=?", (raw,))
+
+        reject_copy("v8-config", alter_v8_config)
+
+        def alter_v8_event(connection) -> None:
+            event_raw = bytes(connection.execute("SELECT event_bytes FROM queue_transitions ORDER BY sequence LIMIT 1").fetchone()[0])
+            event = json.loads(event_raw.decode("ascii"))
+            event["schema"] = v8_schema
+            replacement = json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+            connection.execute("DROP TRIGGER queue_transitions_no_update")
+            connection.execute("UPDATE queue_transitions SET event_bytes=? WHERE sequence=1", (replacement,))
+
+        reject_copy("v8-event-history", alter_v8_event)
 
     def test_valid_batch_is_one_verifier_call_one_reservation_and_atomic_projection(self) -> None:
         batch = self.issue()
@@ -314,8 +444,8 @@ class QueueV8Tests(unittest.TestCase):
         self.assertEqual((result.status, result.accepted_count, verifier.calls), ("VERIFIED", 100, 1))
         with closing(sqlite3.connect(str(self.path))) as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_attempts").fetchone()[0], 1)
-            self.assertEqual(connection.execute("SELECT proof_attempts FROM queue_attempts").fetchone()[0], 1)
-            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT proof_attempts FROM queue_attempts").fetchone()[0], 101)
+            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_results").fetchone()[0], 1)
         promoted = read_verified_batch(self.path, batch.batch_id)
         self.assertEqual(len(promoted.jobs), 100)
@@ -486,6 +616,9 @@ class QueueV8Tests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.store._process_one_batch(verifier=_RollbackVerifier(self.config))
         self.assertEqual(verify_database(self.path)["status_counts"]["HELD"], 1)
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            self.assertEqual(connection.execute("SELECT proof_attempts,reservation_before,reservation_after FROM queue_attempts").fetchone(), (101, 0, 101))
+            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
         self.assertIsNone(self.store._process_one_batch(verifier=_RollbackVerifier(self.config)))
 
     def test_rollback_before_consumption_preserves_handoff_for_same_attempt_retry(self) -> None:
@@ -500,6 +633,29 @@ class QueueV8Tests(unittest.TestCase):
         verifier = _Verifier(self.config)
         result = self.store._process_one_batch(verifier=verifier)
         self.assertEqual((result.status, verifier.calls), ("VERIFIED", 1))
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
+            self.assertEqual(connection.execute("SELECT proof_attempts FROM queue_attempts").fetchone()[0], 101)
+
+    def test_startup_recovery_does_not_refund_reserved_units(self) -> None:
+        batch = self.issue()
+        self.submit(batch)
+        self.assertIsNotNone(self.store._claim_next_batch())
+        self.store._close()
+        self.owner.close()
+        replacement_owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
+        replacement_store = None
+        try:
+            replacement_store = _VerificationQueueStore(path=self.path, config=self.config, owner=replacement_owner, clock=self.clock)
+            self.assertEqual(replacement_store._startup_recovered_count, 1)
+            with closing(sqlite3.connect(str(self.path))) as connection:
+                self.assertEqual(connection.execute("SELECT status FROM queue_batches").fetchone()[0], "HELD")
+                self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
+                self.assertEqual(connection.execute("SELECT proof_attempts,status FROM queue_attempts").fetchone(), (101, "HELD"))
+        finally:
+            if replacement_store is not None:
+                replacement_store._close()
+            replacement_owner.close()
 
     def test_batch_local_post_root_is_stable_after_later_batch(self) -> None:
         first = self.issue()

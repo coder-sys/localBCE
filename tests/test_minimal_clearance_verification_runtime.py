@@ -25,10 +25,10 @@ class _Verifier:
         return BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", self.config.qualification_flags)
 
 
-class RuntimeV8Tests(unittest.TestCase):
+class RuntimeV9Tests(unittest.TestCase):
     def _source_auth_config(self, root: Path) -> SourceAuthVerifierConfig:
         return SourceAuthVerifierConfig(
-            queue_config=QueueConfig("runtime-v4-source-auth", 100),
+            queue_config=QueueConfig("runtime-v9-source-auth", 100),
             executable_path=root / "blind-source-auth-v4.exe",
             executable_size_bytes=50_688,
             executable_sha256=bytes.fromhex("68373B03EF32E4FCC9A87B99851C84F4A8158AEB32D189F23DDA3393775AABB2"),
@@ -60,7 +60,7 @@ class RuntimeV8Tests(unittest.TestCase):
     def test_source_auth_config_cannot_omit_executable_pin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = QueueConfig("runtime-v4-required-pin", 100)
+            config = QueueConfig("runtime-v9-required-pin", 100)
             with self.assertRaises(TypeError):
                 SourceAuthVerifierConfig(
                     queue_config=config,
@@ -72,13 +72,13 @@ class RuntimeV8Tests(unittest.TestCase):
     def test_runtime_exposes_explicit_batch_and_operation_counters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = QueueConfig("runtime-v8", 100)
+            config = QueueConfig("runtime-v9", 100)
             verifier = _Verifier(config)
             with self.assertRaisesRegex(VerificationRuntimeError, "runtime_backend_unqualified"):
                 MinimalClearanceVerificationRuntime(root=root)
             with MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config) as runtime:
                 now = int(time.time() * 1000)
-                template = OperationTemplate("shared-runtime", 1, "state-profile-v8", now - 100, now + 2_000_000)
+                template = OperationTemplate("shared-runtime", 1, "state-profile-v9", now - 100, now + 2_000_000)
                 with self.assertRaises(TypeError):
                     runtime.issue_batch(template=template, operation_refs=tuple(bytes([index]) * 32 for index in range(100)))  # type: ignore[call-arg]
                 batch = runtime.issue_batch(template=template)
@@ -93,7 +93,7 @@ class RuntimeV8Tests(unittest.TestCase):
     def test_runtime_startup_failure_releases_lock_and_immediate_retry_succeeds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = QueueConfig("runtime-v8-retry", 100)
+            config = QueueConfig("runtime-v9-retry", 100)
             verifier = _Verifier(config)
             runtime = MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config)
             runtime.close()

@@ -1,7 +1,8 @@
-"""Queue V8: one state-owned handoff for exactly one Range100 proof.
+"""Queue V9: one state-owned handoff for exactly one Range100 proof.
 
 The queue owns only the public batch statement, the volatile handoff, one
-lease, one theorem-relevant proof-attempt reservation, and a bounded receipt.
+lease, one 101-opportunity theorem-relevant proof-attempt reservation, and a
+bounded receipt.
 It never parses proof bytes, constructs a proof transcript, stores proof or
 source material, or chooses a clearance disposition.
 """
@@ -70,8 +71,8 @@ def _raise_fixed(error: VerificationQueueError) -> NoReturn:
     raise error
 
 
-SCHEMA_VERSION: Final[int] = 8
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v8"
+SCHEMA_VERSION: Final[int] = 9
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v9"
 MAX_QUEUE_CAPACITY: Final[int] = 512
 DATABASE_PAGE_SIZE: Final[int] = 4096
 DATABASE_MAX_PAGE_COUNT: Final[int] = 32768
@@ -84,7 +85,7 @@ MAX_STATE_CHALLENGE_BYTES: Final[int] = 32
 MAX_ORDERED_BINDING_BYTES: Final[int] = 32
 PROOF_STATEMENT_BYTES: Final[int] = 240
 RANGE100_COUNT: Final[int] = 100
-PROOF_ATTEMPTS_PER_BATCH: Final[int] = 1
+PROOF_ATTEMPTS_PER_BATCH: Final[int] = 101
 PROOF_ATTEMPTS_CAP: Final[int] = 2**32
 MAX_VALIDITY_WINDOW_MS: Final[int] = 3_600_000
 MAX_SOURCE_KEY_EPOCH: Final[int] = 2**64 - 1
@@ -97,7 +98,7 @@ PROFILE_VERSION: Final[int] = 4
 RELATION_VERSION: Final[int] = 1
 POLICY_VERSION: Final[int] = 1
 PROFILE_VERSION_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V4"
-SOURCE_AUTH_PROFILE_DEFAULT: Final[str] = "synthetic-source-auth-v8-unqualified"
+SOURCE_AUTH_PROFILE_DEFAULT: Final[str] = "synthetic-source-auth-v9-unqualified"
 STATEMENT_MAGIC: Final[bytes] = b"BL-R100-STMT-V1\x00"
 # Opaque registered identifiers.  The queue has no proof parser, transcript,
 # or proof-internal fingerprint construction.
@@ -238,7 +239,7 @@ def _template_value_check(template: "OperationTemplate") -> None:
 
 @dataclass(frozen=True, slots=True)
 class QueueConfig:
-    """Immutable state-owned V8 queue configuration."""
+    """Immutable state-owned V9 queue configuration."""
 
     queue_id: str
     capacity: int
@@ -314,7 +315,7 @@ class QueueConfig:
 
     @property
     def digest(self) -> bytes:
-        return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v8\x00", self.canonical_bytes)
+        return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v9\x00", self.canonical_bytes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,7 +386,7 @@ class IssuedOperationStatement:
 
 
 def _batch_leaf(position: int, operation_ref: bytes, template: OperationTemplate) -> bytes:
-    return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v8\x00", _u64(position), operation_ref, template.canonical_bytes)
+    return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v9\x00", _u64(position), operation_ref, template.canonical_bytes)
 
 
 def _compute_batch_root_from_refs(template: OperationTemplate, operation_refs: tuple[bytes, ...]) -> bytes:
@@ -395,7 +396,7 @@ def _compute_batch_root_from_refs(template: OperationTemplate, operation_refs: t
     for ref in operation_refs:
         _blob(ref, MAX_OPERATION_REF_BYTES, "operation_ref")
     leaves = tuple(_batch_leaf(position, ref, template) for position, ref in enumerate(operation_refs))
-    return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v8\x00", _u64(RANGE100_COUNT), b"".join(leaves))
+    return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v9\x00", _u64(RANGE100_COUNT), b"".join(leaves))
 
 
 def _compute_batch_root(statements: tuple[IssuedOperationStatement, ...]) -> bytes:
@@ -469,7 +470,7 @@ class IssuedVerificationBatch:
 def _batch_identity_digest(batch: IssuedVerificationBatch, config: QueueConfig) -> bytes:
     ordered_refs = b"".join(_u64(position) + ref for position, ref in enumerate(batch.operation_refs))
     return _sha3(
-        b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v8\x00",
+        b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v9\x00",
         batch.batch_id, batch.batch_root, batch.state_challenge, batch.proof_statement,
         batch.template.canonical_bytes, _u64(RANGE100_COUNT), ordered_refs,
         _u64(batch.template.valid_from_ms), _u64(batch.template.valid_until_ms),
@@ -805,19 +806,19 @@ _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
     "queue_batches": "CREATE TABLE queue_batches (batch_id BLOB PRIMARY KEY CHECK(length(batch_id)=32), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), state_challenge BLOB NOT NULL CHECK(length(state_challenge)=32), ordered_binding BLOB NOT NULL CHECK(length(ordered_binding)=32), proof_statement BLOB NOT NULL CHECK(length(proof_statement)=240), assertion_identifier TEXT NOT NULL, assertion_version INTEGER NOT NULL, state_profile_version TEXT NOT NULL, valid_from_ms INTEGER NOT NULL, valid_until_ms INTEGER NOT NULL, approved_source_registry_root BLOB, qualification_flags BLOB NOT NULL, identity_digest BLOB NOT NULL CHECK(length(identity_digest)=64), status TEXT NOT NULL CHECK(status IN ('AWAITING_HANDOFF','QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), next_eligible_ms INTEGER NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, last_error_code TEXT, CHECK(approved_source_registry_root IS NULL OR length(approved_source_registry_root)=64), CHECK(valid_from_ms<valid_until_ms))",
     "queue_members": "CREATE TABLE queue_members (batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), batch_position INTEGER NOT NULL CHECK(batch_position BETWEEN 0 AND 99), operation_ref BLOB NOT NULL CHECK(length(operation_ref)=32), admission_seq INTEGER NOT NULL CHECK(admission_seq>=1), PRIMARY KEY(batch_id,batch_position), UNIQUE(operation_ref), UNIQUE(admission_seq))",
     "queue_leases": "CREATE TABLE queue_leases (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt=1), claim_sequence INTEGER NOT NULL, leased_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms))",
-    "queue_attempts": "CREATE TABLE queue_attempts (attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id), reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before), proof_attempts INTEGER NOT NULL CHECK(proof_attempts=1), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL, closed_ms INTEGER, result_code TEXT)",
+    "queue_attempts": "CREATE TABLE queue_attempts (attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id), reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before), proof_attempts INTEGER NOT NULL CHECK(proof_attempts=101), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL, closed_ms INTEGER, result_code TEXT)",
     "queue_results": "CREATE TABLE queue_results (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_id BLOB NOT NULL CHECK(length(receipt_id)=32), receipt_bytes BLOB NOT NULL, proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), source_authenticated INTEGER NOT NULL CHECK(source_authenticated IN (0,1)), proof_statement BLOB NOT NULL CHECK(length(proof_statement)=240), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), result_code TEXT NOT NULL, qualification_flags BLOB NOT NULL, completed_ms INTEGER NOT NULL, attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), error_code TEXT)",
     "queue_transitions": "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL, batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL, event_digest BLOB NOT NULL CHECK(length(event_digest)=64))",
 }
 _STATUSES: Final[tuple[str, ...]] = ("AWAITING_HANDOFF", "QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD")
 _TERMINAL: Final[frozenset[str]] = frozenset(("VERIFIED", "REJECTED", "HELD"))
 _ACTIVE: Final[frozenset[str]] = frozenset(("AWAITING_HANDOFF", "QUEUED", "LEASED"))
-_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v8\x00"
-_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v8\x00"
-_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v8\x00"
-_LEASE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/LEASE/v8\x00"
-_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v8\x00"
-_RUNTIME_WORKER: Final[str] = "queue-v8-worker"
+_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v9\x00"
+_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v9\x00"
+_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v9\x00"
+_LEASE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/LEASE/v9\x00"
+_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v9\x00"
+_RUNTIME_WORKER: Final[str] = "queue-v9-worker"
 _LEASE_MS: Final[int] = 60_000
 _MAX_EVENT_BYTES: Final[int] = 4096
 
@@ -886,7 +887,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE queue_attempts (
             attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id),
             reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before),
-            proof_attempts INTEGER NOT NULL CHECK(proof_attempts=1), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8),
+            proof_attempts INTEGER NOT NULL CHECK(proof_attempts=101), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8),
             status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL,
             closed_ms INTEGER, result_code TEXT
         );
@@ -1247,9 +1248,9 @@ class _VerificationQueueStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                held = list(self._expire_locked(connection, now))
                 row = connection.execute("SELECT * FROM queue_batches WHERE status='QUEUED' AND next_eligible_ms<=? ORDER BY admission_seq LIMIT 1", (now,)).fetchone()
                 if row is None:
+                    held = list(self._expire_locked(connection, now))
                     connection.commit()
                     for batch_id in held:
                         self._close_handoff_locked(batch_id)
@@ -1260,15 +1261,18 @@ class _VerificationQueueStore:
                 try:
                     after = _reserve_proof_attempt(before, cap=min(int(meta[18]), PROOF_ATTEMPTS_CAP))
                 except QueueBackpressureError:
-                    held_id = bytes(row[0])
-                    if self._hold_batch_locked(connection, batch_id=held_id, now=now, code="computational_budget_exhausted"):
-                        held.append(held_id)
+                    connection.rollback()
+                    self._last_claim_error = "computational_budget_exhausted"
+                    return None
+                held = list(self._expire_locked(connection, now))
+                row = connection.execute("SELECT * FROM queue_batches WHERE status='QUEUED' AND next_eligible_ms<=? ORDER BY admission_seq LIMIT 1", (now,)).fetchone()
+                if row is None:
                     connection.commit()
                     for batch_id in held:
                         self._close_handoff_locked(batch_id)
                     self._last_claim_held_count = len(held)
-                    self._last_claim_error = "computational_budget_exhausted"
                     return None
+                meta = self._meta(connection)
                 batch_id = bytes(row[0])
                 attempt_id = int(meta[19]) + 1
                 claim_seq = int(meta[13]) + 1

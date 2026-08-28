@@ -56,17 +56,17 @@ class _Receiver:
         return build_synthetic_acknowledgment(envelope_bytes, config=self.config, idempotency_key=idempotency_key, accepted_ms=self.clock.now_ms())
 
 
-class CompositionV8Tests(unittest.TestCase):
+class CompositionV9Tests(unittest.TestCase):
     def setUp(self) -> None:
         self._temp = tempfile.TemporaryDirectory()
         self.root = Path(self._temp.name)
         self.clock = _Clock()
         self.queue_path = self.root / "queue.sqlite"
-        self.queue_config = QueueConfig("queue-v8", 512)
+        self.queue_config = QueueConfig("queue-v9", 512)
         self.queue_owner = _QueueRuntimeOwnership(lock_path=self.root / "queue.sqlite.runtime-lock", parent=self.root)
         self.queue = _VerificationQueueStore(path=self.queue_path, config=self.queue_config, owner=self.queue_owner, clock=self.clock)
         self.composition_path = self.root / "composition.sqlite"
-        self.composition_config = CompositionConfigV2("queue-v8", self.queue_config.digest, capacity=200)
+        self.composition_config = CompositionConfigV2("queue-v9", self.queue_config.digest, capacity=200)
         self.composition_store = ClearanceCompositionStoreV2(path=self.composition_path, config=self.composition_config, clock=self.clock)
 
     def tearDown(self) -> None:
@@ -76,7 +76,7 @@ class CompositionV8Tests(unittest.TestCase):
         self._temp.cleanup()
 
     def _verified_batch(self, offset: int = 0):
-        template = OperationTemplate(f"assertion-{offset}", 1, "state-profile-v8", self.clock.now - 100, self.clock.now + 3_000_000)
+        template = OperationTemplate(f"assertion-{offset}", 1, "state-profile-v9", self.clock.now - 100, self.clock.now + 3_000_000)
         batch = self.queue.issue_batch(template=template)
         self.queue.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"volatile-proof"), declared_length=14)
         self.assertEqual(self.queue._process_one_batch(verifier=_Verifier(self.queue_config)).status, "VERIFIED")
