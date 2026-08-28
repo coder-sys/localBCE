@@ -1377,17 +1377,19 @@ class _VerificationQueueStore:
             durable = _statement_from_batch(connection, tuple(existing_batch))
         except VerificationQueueError:
             _raise_fixed(QueueLeaseError("completion_not_live"))
-        if durable != work.batch or _batch_identity_digest(durable, self.config) != durable.identity_digest:
+        if durable != work.batch or _batch_identity_digest(durable, self.config) != durable.identity_digest or type(work.attempt) is not int or work.attempt != int(existing_batch[15]):
             _raise_fixed(QueueLeaseError("completion_not_live"))
         if not verifier_result.proof_accepted or not verifier_result.source_authenticated or verifier_result.result_code != "accepted" or verifier_result.proof_statement != durable.proof_statement or verifier_result.batch_root != durable.batch_root or verifier_result.source_auth_profile != self.config.source_auth_profile or verifier_result.source_key_epoch != self.config.source_key_epoch or verifier_result.qualification_flags != self.config.qualification_flags:
             _raise_fixed(QueueIntegrityError("completion_acceptance"))
         existing_result = connection.execute("SELECT * FROM queue_results WHERE batch_id=?", (durable.batch_id,)).fetchone()
         if existing_result is None:
             _raise_fixed(QueueIntegrityError("completion_acceptance"))
+        if type(existing_result[13]) is not int or int(existing_result[13]) != int(existing_batch[15]):
+            _raise_fixed(QueueLeaseError("completion_not_live"))
         expected_receipt = self._receipt(batch=durable, proof_accepted=True, source_authenticated=True, result_code="accepted", error_code=None, qualification_flags=self.config.qualification_flags)
         expected_receipt_id = _sha3(_MATERIAL, b"receipt", durable.batch_id, _u64(int(existing_batch[15])))[:32]
         expected_flags = _flags_bytes(self.config.qualification_flags)
-        if type(existing_result[0]) is not bytes or bytes(existing_result[0]) != durable.batch_id or str(existing_result[1]) != "VERIFIED" or type(existing_result[2]) is not bytes or bytes(existing_result[2]) != expected_receipt_id or type(existing_result[3]) is not bytes or bytes(existing_result[3]) != expected_receipt or type(existing_result[4]) is not int or int(existing_result[4]) != 1 or type(existing_result[5]) is not int or int(existing_result[5]) != 1 or type(existing_result[6]) is not bytes or bytes(existing_result[6]) != durable.proof_statement or type(existing_result[7]) is not bytes or bytes(existing_result[7]) != durable.batch_root or str(existing_result[8]) != self.config.source_auth_profile or type(existing_result[9]) is not bytes or bytes(existing_result[9]) != _u64(self.config.source_key_epoch) or str(existing_result[10]) != verifier_result.result_code or type(existing_result[11]) is not bytes or bytes(existing_result[11]) != expected_flags or int(existing_result[13]) != int(existing_batch[15]) or existing_result[14] is not None:
+        if type(existing_result[0]) is not bytes or bytes(existing_result[0]) != durable.batch_id or str(existing_result[1]) != "VERIFIED" or type(existing_result[2]) is not bytes or bytes(existing_result[2]) != expected_receipt_id or type(existing_result[3]) is not bytes or bytes(existing_result[3]) != expected_receipt or type(existing_result[4]) is not int or int(existing_result[4]) != 1 or type(existing_result[5]) is not int or int(existing_result[5]) != 1 or type(existing_result[6]) is not bytes or bytes(existing_result[6]) != durable.proof_statement or type(existing_result[7]) is not bytes or bytes(existing_result[7]) != durable.batch_root or str(existing_result[8]) != self.config.source_auth_profile or type(existing_result[9]) is not bytes or bytes(existing_result[9]) != _u64(self.config.source_key_epoch) or str(existing_result[10]) != verifier_result.result_code or type(existing_result[11]) is not bytes or bytes(existing_result[11]) != expected_flags or existing_result[14] is not None:
             _raise_fixed(QueueIntegrityError("completion_acceptance"))
         return tuple(existing_result)
 

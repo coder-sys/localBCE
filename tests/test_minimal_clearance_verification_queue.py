@@ -331,6 +331,12 @@ class QueueV10Tests(unittest.TestCase):
                 return counts, roots, batch_roots
 
         before = snapshot()
+        forged_attempt_work = replace(work, attempt=999)
+        with self.assertRaises(QueueLeaseError) as attempt_error:
+            self.store._complete_batch(forged_attempt_work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
+        self.assertEqual(str(attempt_error.exception), "completion_not_live")
+        self.assertEqual(snapshot(), before)
+
         forged_template = replace(batch.template, assertion_identifier="forged-assertion")
         forged_root = _compute_batch_root_from_refs(forged_template, batch.operation_refs)
         forged_batch = replace(work.batch, template=forged_template, batch_root=forged_root, ordered_binding=forged_root[:32], proof_statement=_build_statement(batch_root=forged_root, state_challenge=batch.state_challenge, valid_from_ms=forged_template.valid_from_ms, valid_until_ms=forged_template.valid_until_ms))
