@@ -66,17 +66,17 @@ class _Clock:
         return 1_700_000_000_001
 
 
-def _contained(*, exit_code: int = 0, stdout: bytes = b"", stderr: bytes = b"", peak_job_commit_bytes: int = 1024, timed_out: bool = False, cap_enforced: bool = True, process_tree_complete: bool = True, measurement_complete: bool = True, cleanup_complete: bool = True) -> ContainedVerifierResult:
+def _contained(*, exit_code: int = 0, stdout: bytes = b"", stderr: bytes = b"", peak_job_commit_bytes: int = 1024, timed_out: bool = False, cap_bytes: int = ADMISSION_CAP_BYTES, cap_enforced: bool = True, active_process_limit: int = ACTIVE_PROCESS_LIMIT, child_process_count: int = 1, process_tree_complete: bool = True, measurement_complete: bool = True, cleanup_complete: bool = True) -> ContainedVerifierResult:
     return ContainedVerifierResult(
         exit_code=exit_code,
         stdout=stdout,
         stderr=stderr,
         peak_job_commit_bytes=peak_job_commit_bytes,
-        cap_bytes=ADMISSION_CAP_BYTES,
+        cap_bytes=cap_bytes,
         cap_enforced=cap_enforced,
-        active_process_limit=ACTIVE_PROCESS_LIMIT,
+        active_process_limit=active_process_limit,
         timed_out=timed_out,
-        child_process_count=1,
+        child_process_count=child_process_count,
         process_tree_complete=process_tree_complete,
         measurement_complete=measurement_complete,
         cleanup_complete=cleanup_complete,
@@ -208,6 +208,10 @@ class SourceAuthAdapterTests(unittest.TestCase):
             (_contained(exit_code=2), "verifier_transport"),
             (_contained(timed_out=True), "verifier_timeout"),
             (_contained(cap_enforced=False), "verifier_transport"),
+            (_contained(cap_bytes=ADMISSION_CAP_BYTES + 1), "verifier_transport"),
+            (_contained(peak_job_commit_bytes=ADMISSION_CAP_BYTES + 1), "verifier_transport"),
+            (_contained(active_process_limit=ACTIVE_PROCESS_LIMIT + 1), "verifier_transport"),
+            (_contained(child_process_count=0), "verifier_transport"),
             (_contained(measurement_complete=False), "verifier_transport"),
             (_contained(peak_job_commit_bytes=-1), "verifier_transport"),
             (_contained(process_tree_complete=False), "verifier_transport"),

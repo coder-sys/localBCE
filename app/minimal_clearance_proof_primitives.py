@@ -20,8 +20,11 @@ import stat
 import tempfile
 from typing import Callable, Final
 
+from app.minimal_clearance_resource_limits import (
+    ACTIVE_PROCESS_LIMIT,
+    PROCESS_TREE_PEAK_CAP_BYTES,
+)
 from app.minimal_clearance_verifier_process import (
-    CAP_BYTES,
     ContainedVerifierResult,
     VerifierProcessError,
     run_contained_verifier,
@@ -1433,10 +1436,21 @@ class NativeMinimalClearanceVerifier:
             raise
         if result.timed_out:
             raise MinimalClearanceProofStateError("verifier_timeout")
-        if not result.cap_enforced or result.cap_bytes != CAP_BYTES or result.active_process_limit != 1:
+        if (
+            result.cap_enforced is not True
+            or type(result.cap_bytes) is not int
+            or result.cap_bytes != PROCESS_TREE_PEAK_CAP_BYTES
+            or type(result.active_process_limit) is not int
+            or result.active_process_limit != ACTIVE_PROCESS_LIMIT
+            or type(result.peak_job_commit_bytes) is not int
+            or not 0 <= result.peak_job_commit_bytes <= result.cap_bytes
+            or type(result.child_process_count) is not int
+            or result.child_process_count < 1
+            or result.process_tree_complete is not True
+            or result.measurement_complete is not True
+            or result.cleanup_complete is not True
+        ):
             raise MinimalClearanceProofStateError("verifier_containment")
-        if result.peak_job_commit_bytes > CAP_BYTES:
-            raise MinimalClearanceProofStateError("verifier_memory_cap")
         return result
 
     def _ensure_preflight(self) -> None:

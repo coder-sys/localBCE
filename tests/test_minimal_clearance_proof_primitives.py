@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+from dataclasses import replace
 import hashlib
 from pathlib import Path
 import os
@@ -218,10 +219,14 @@ def test_native_verifier_forwards_held_size_and_digest(monkeypatch, tmp_path: Pa
             stdout=b"",
             stderr=b"",
             peak_job_commit_bytes=0,
-            cap_bytes=proof.CAP_BYTES,
+            cap_bytes=proof.PROCESS_TREE_PEAK_CAP_BYTES,
             cap_enforced=True,
-            active_process_limit=1,
+            active_process_limit=proof.ACTIVE_PROCESS_LIMIT,
             timed_out=False,
+            child_process_count=1,
+            process_tree_complete=True,
+            measurement_complete=True,
+            cleanup_complete=True,
         )
 
     monkeypatch.setattr(proof, "_open_held_file", lambda *_args, **_kwargs: Held())
@@ -242,6 +247,64 @@ def test_native_verifier_forwards_held_size_and_digest(monkeypatch, tmp_path: Pa
             },
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cap_enforced", False),
+        ("cap_bytes", proof.PROCESS_TREE_PEAK_CAP_BYTES - 1),
+        ("peak_job_commit_bytes", -1),
+        ("child_process_count", 0),
+        ("process_tree_complete", False),
+        ("measurement_complete", False),
+        ("cleanup_complete", False),
+    ],
+)
+def test_native_verifier_rejects_incomplete_or_mismatched_resource_evidence(
+    monkeypatch, tmp_path: Path, field: str, value: object
+) -> None:
+    expected = b"held-verifier"
+    verifier = object.__new__(proof.NativeMinimalClearanceVerifier)
+    verifier.executable = tmp_path / "verifier.exe"
+    verifier._executable_sha256 = hashlib.sha256(expected).digest()
+    verifier.timeout_seconds = 1.0
+
+    class Held:
+        descriptor = 123
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+        def digest(self, algorithm: str) -> tuple[int, bytes]:
+            assert algorithm == "sha256"
+            return len(expected), verifier._executable_sha256
+
+    valid = proof.ContainedVerifierResult(
+        exit_code=0,
+        stdout=b"",
+        stderr=b"",
+        peak_job_commit_bytes=0,
+        cap_bytes=proof.PROCESS_TREE_PEAK_CAP_BYTES,
+        cap_enforced=True,
+        active_process_limit=proof.ACTIVE_PROCESS_LIMIT,
+        timed_out=False,
+        child_process_count=1,
+        process_tree_complete=True,
+        measurement_complete=True,
+        cleanup_complete=True,
+    )
+    monkeypatch.setattr(proof, "_open_held_file", lambda *_args, **_kwargs: Held())
+    monkeypatch.setattr(
+        proof,
+        "run_contained_verifier",
+        lambda *_args, **_kwargs: replace(valid, **{field: value}),
+    )
+    with pytest.raises(proof.MinimalClearanceProofStateError, match="verifier_containment"):
+        verifier._run(tmp_path, "--preflight")
 
 
 def test_source_has_no_unbounded_proof_snapshot_read_bytes() -> None:

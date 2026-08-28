@@ -20,14 +20,17 @@ import re
 import threading
 import time
 
+from app.minimal_clearance_resource_limits import (
+    ACTIVE_PROCESS_LIMIT,
+    ADMISSION_CAP_BYTES,
+    PROCESS_TREE_PEAK_CAP_BYTES,
+)
+
 
 class VerifierProcessError(RuntimeError):
     """The required Windows verifier containment boundary was not established."""
 
 
-CAP_BYTES = 5_000_000_000
-ADMISSION_CAP_BYTES = 4_500_000_000
-ACTIVE_PROCESS_LIMIT = 1
 MAX_STDOUT_BYTES = 65_536
 MAX_STDERR_BYTES = 262_144
 STREAM_MAX_AGGREGATE_BYTES = 2 * 1024 * 1024 * 1024
@@ -45,6 +48,11 @@ _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 _JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_JOB_LIMIT_FLAGS = (
+    _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    | _JOB_OBJECT_LIMIT_JOB_MEMORY
+    | _JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+)
 _HANDLE_FLAG_INHERIT = 0x00000001
 _DUPLICATE_SAME_ACCESS = 0x00000002
 _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
@@ -95,6 +103,22 @@ class _FileIdInfo(ctypes.Structure):
     _fields_ = [
         ("VolumeSerialNumber", ctypes.c_ulonglong),
         ("FileId", ctypes.c_ubyte * 16),
+    ]
+
+
+class _SystemInfo(ctypes.Structure):
+    _fields_ = [
+        ("wProcessorArchitecture", wintypes.WORD),
+        ("wReserved", wintypes.WORD),
+        ("dwPageSize", wintypes.DWORD),
+        ("lpMinimumApplicationAddress", wintypes.LPVOID),
+        ("lpMaximumApplicationAddress", wintypes.LPVOID),
+        ("dwActiveProcessorMask", ctypes.c_size_t),
+        ("dwNumberOfProcessors", wintypes.DWORD),
+        ("dwProcessorType", wintypes.DWORD),
+        ("dwAllocationGranularity", wintypes.DWORD),
+        ("wProcessorLevel", wintypes.WORD),
+        ("wProcessorRevision", wintypes.WORD),
     ]
 
 
@@ -383,6 +407,20 @@ def _validate_executable_pin(
         or len(expected_executable_sha256) != _SHA256_BYTES
     ):
         raise VerifierProcessError("verifier_executable_pin")
+
+
+def _effective_job_memory_limit(requested: int, page_size: int) -> int:
+    if (
+        type(requested) is not int
+        or type(page_size) is not int
+        or page_size <= 0
+        or page_size & (page_size - 1)
+    ):
+        raise VerifierProcessError("verifier_job_page_size")
+    effective = requested - (requested % page_size)
+    if effective <= 0:
+        raise VerifierProcessError("verifier_job_page_size")
+    return effective
 
 
 def _open_executable_file_handle(
@@ -1002,7 +1040,7 @@ def run_contained_verifier(
     *,
     workspace: Path,
     timeout_seconds: float,
-    job_memory_cap_bytes: int = CAP_BYTES,
+    job_memory_cap_bytes: int = PROCESS_TREE_PEAK_CAP_BYTES,
     _stdin_descriptor: int | None = None,
     expected_executable_size_bytes: int | None = None,
     expected_executable_sha256: bytes | None = None,
@@ -1017,7 +1055,10 @@ def run_contained_verifier(
         raise VerifierProcessError("verifier_workspace")
     if type(timeout_seconds) is not float or not 0 < timeout_seconds <= 30 * 60:
         raise VerifierProcessError("verifier_timeout")
-    if type(job_memory_cap_bytes) is not int or not 0 < job_memory_cap_bytes <= CAP_BYTES:
+    if (
+        type(job_memory_cap_bytes) is not int
+        or not 0 < job_memory_cap_bytes <= PROCESS_TREE_PEAK_CAP_BYTES
+    ):
         raise VerifierProcessError("verifier_memory_cap")
     if any(type(argument) is not str for argument in arguments):
         raise VerifierProcessError("verifier_argument_type")
@@ -1037,7 +1078,7 @@ def run_contained_verifier(
         "TerminateJobObject", "GetExitCodeProcess", "QueryInformationJobObject",
         "CloseHandle", "SetHandleInformation", "InitializeProcThreadAttributeList",
         "UpdateProcThreadAttribute", "DeleteProcThreadAttributeList",
-        "GetCurrentProcess", "CreateFileW", "GetFileType",
+        "GetCurrentProcess", "GetSystemInfo", "CreateFileW", "GetFileType",
         "GetFileInformationByHandle", "GetFinalPathNameByHandleW",
         "GetFileInformationByHandleEx", "QueryDosDeviceW",
         "CompareStringOrdinal", "K32GetProcessImageFileNameW", "ReadFile",
@@ -1079,6 +1120,8 @@ def run_contained_verifier(
     _configure_executable_pin_apis(kernel32)
     kernel32.GetCurrentProcess.argtypes = []
     kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.GetSystemInfo.argtypes = [ctypes.POINTER(_SystemInfo)]
+    kernel32.GetSystemInfo.restype = None
     try:
         psapi = ctypes.WinDLL("psapi", use_last_error=True)
     except OSError:
@@ -1100,6 +1143,14 @@ def run_contained_verifier(
             wintypes.DWORD,
         ]
         kernel32.DuplicateHandle.restype = wintypes.BOOL
+    system_info = _SystemInfo()
+    try:
+        kernel32.GetSystemInfo(ctypes.byref(system_info))
+    except BaseException:
+        raise VerifierProcessError("verifier_job_page_size") from None
+    effective_job_memory_limit = _effective_job_memory_limit(
+        job_memory_cap_bytes, int(system_info.dwPageSize)
+    )
     kernel32.InitializeProcThreadAttributeList.argtypes = [
         wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
         ctypes.POINTER(ctypes.c_size_t),
@@ -1191,11 +1242,7 @@ def run_contained_verifier(
         if not job:
             raise _win_error("verifier_job_create")
         limits = _JobObjectExtendedLimitInformation()
-        limits.BasicLimitInformation.LimitFlags = (
-            _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            | _JOB_OBJECT_LIMIT_JOB_MEMORY
-            | _JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-        )
+        limits.BasicLimitInformation.LimitFlags = _JOB_LIMIT_FLAGS
         limits.BasicLimitInformation.ActiveProcessLimit = ACTIVE_PROCESS_LIMIT
         limits.JobMemoryLimit = job_memory_cap_bytes
         if not kernel32.SetInformationJobObject(
@@ -1378,9 +1425,25 @@ def run_contained_verifier(
         ):
             raise _win_error("verifier_job_query")
         peak_commit = int(observed.PeakJobMemoryUsed)
+        observed_limits = _JobObjectExtendedLimitInformation()
+        if not kernel32.QueryInformationJobObject(
+            job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(observed_limits), ctypes.sizeof(observed_limits), None
+        ):
+            raise _win_error("verifier_job_limits_readback")
+        # Windows reports JobMemoryLimit at page granularity.  The requested
+        # cap remains the contract value; this readback must equal its exact
+        # platform-effective limit, not an arbitrary lower or higher value.
+        if (
+            int(observed_limits.BasicLimitInformation.LimitFlags) != _JOB_LIMIT_FLAGS
+            or int(observed_limits.BasicLimitInformation.ActiveProcessLimit)
+            != ACTIVE_PROCESS_LIMIT
+            or int(observed_limits.JobMemoryLimit) != effective_job_memory_limit
+        ):
+            raise VerifierProcessError("verifier_job_limits_readback")
         stdout = reader_output.get("stdout", b"")
         stderr = reader_output.get("stderr", b"")
-        if peak_commit > job_memory_cap_bytes:
+        if peak_commit > effective_job_memory_limit:
             raise VerifierProcessError("verifier_job_memory_cap")
         accounting = _JobObjectBasicAccountingInformation()
         if not kernel32.QueryInformationJobObject(
@@ -1533,7 +1596,8 @@ def run_contained_verifier_stream(
 
 
 __all__ = (
-    "ACTIVE_PROCESS_LIMIT", "ADMISSION_CAP_BYTES", "CAP_BYTES", "ContainedVerifierResult",
+    "ACTIVE_PROCESS_LIMIT", "ADMISSION_CAP_BYTES", "ContainedVerifierResult",
+    "PROCESS_TREE_PEAK_CAP_BYTES",
     "STREAM_MAX_AGGREGATE_BYTES", "STREAM_MAX_FRAME_BYTES",
     "VerifierProcessError", "run_contained_verifier", "run_contained_verifier_stream",
 )

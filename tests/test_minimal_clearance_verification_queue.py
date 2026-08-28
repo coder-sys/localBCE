@@ -1,3 +1,4 @@
+import hashlib
 import io
 import sqlite3
 import subprocess
@@ -9,14 +10,17 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from app import minimal_clearance_resource_limits as resource_limits
 from app.minimal_clearance_verification_queue import (
     ADMISSION_CAP_BYTES,
+    ACTIVE_PROCESS_LIMIT,
     DATABASE_MAX_PAGE_COUNT,
     DATABASE_PAGE_SIZE,
     BatchVerifierResult,
     CIRCUIT_FINGERPRINT,
     OperationTemplate,
     PROFILE_FINGERPRINT,
+    PROCESS_TREE_PEAK_CAP_BYTES,
     QueueConfig,
     QueueConflictError,
     QueueHeldError,
@@ -182,6 +186,26 @@ class QueueV8Tests(unittest.TestCase):
         self.assertEqual(batch.proof_statement[176:240], PROFILE_FINGERPRINT)
         self.store._verify_integrity()
 
+    def test_resource_authority_preserves_config_and_genesis_root_identity(self) -> None:
+        self.assertEqual(ADMISSION_CAP_BYTES, resource_limits.ADMISSION_CAP_BYTES)
+        self.assertEqual(PROCESS_TREE_PEAK_CAP_BYTES, resource_limits.PROCESS_TREE_PEAK_CAP_BYTES)
+        self.assertEqual(ACTIVE_PROCESS_LIMIT, resource_limits.ACTIVE_PROCESS_LIMIT)
+        self.assertEqual(len(self.config.canonical_bytes), 818)
+        self.assertEqual(
+            hashlib.sha256(self.config.canonical_bytes).hexdigest(),
+            "51efaf2842b988563dfbf1bb9f5284b4fa789a45a48f30a28129eb42be70939c",
+        )
+        self.assertEqual(
+            self.config.digest.hex(),
+            "0dcab87eea4f4eb8f53b68ecdfd43735df26da70accd6a6f49582b875279fe5d27d92e268af5bc7b0d284d3f45547a02994e472d349141802b5b2ca785713f24",
+        )
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            metadata = connection.execute("SELECT head_root FROM queue_metadata WHERE id=1").fetchone()
+        self.assertEqual(
+            bytes(metadata[0]).hex(),
+            "48c7befaac6f86190fdb0e2534dc8711ef802dc8bff7216309c87ddeadac070950b64a592e8f3a2d9b763cb221e5f40d2b525d6d4b6578726fee2d5a939f0cc0",
+        )
+
     def test_issue_owns_references_and_rejects_heterogeneous_template(self) -> None:
         with self.assertRaises(TypeError):
             self.store.issue_batch(template=self.template(), operation_refs=tuple(bytes([index]) * 32 for index in range(100)))  # type: ignore[call-arg]
@@ -294,7 +318,18 @@ class QueueV8Tests(unittest.TestCase):
                 read_verified_batch(self.path, batch.batch_id)
 
     def test_handoff_is_single_use_and_oversize_is_rejected(self) -> None:
-        batch = self.issue()
+        exact_batch = self.issue()
+        self.store.submit_batch_handoff(
+            issued_batch=exact_batch,
+            proof_stream=io.BytesIO(b"x"),
+            declared_length=ADMISSION_CAP_BYTES,
+        )
+        with closing(sqlite3.connect(str(self.path))) as connection:
+            self.assertEqual(
+                connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (exact_batch.batch_id,)).fetchone()[0],
+                "QUEUED",
+            )
+        batch = self.issue(offset=100)
         with self.assertRaisesRegex(QueueHeldError, "proof_handoff_oversize"):
             self.store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"x"), declared_length=ADMISSION_CAP_BYTES + 1)
         self.assertEqual(verify_database(self.path)["status_counts"]["AWAITING_HANDOFF"], 1)

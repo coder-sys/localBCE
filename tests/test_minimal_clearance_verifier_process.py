@@ -27,9 +27,10 @@ class _FakeFunction:
 
 
 class _Kernel:
-    def __init__(self, *, failure: str | None = None, overlap: bool = False, pin_failure: str | None = None, pin_data: bytes | None = None):
+    def __init__(self, *, failure: str | None = None, overlap: bool = False, pin_failure: str | None = None, pin_data: bytes | None = None, job_limit_mismatch: str | None = None):
         self.failure = failure
         self.pin_failure = pin_failure
+        self.job_limit_mismatch = job_limit_mismatch
         self.pin_data = pin_data or b""
         self.pin_path: Path | None = None
         self.canonical_path = r"\\?\Volume{11111111-2222-3333-4444-555555555555}\synthetic\verifier.exe"
@@ -44,6 +45,9 @@ class _Kernel:
         self._next_pin_handle = 16000
         self.pin_closed = False
         self.pin_close_count = 0
+        self.job_limit_flags = 0
+        self.job_memory_limit = 0
+        self.job_active_process_limit = 0
         self.events: list[tuple[str, object]] = []
         self.handles: list[int] = []
         self._processes = itertools.count(1)
@@ -65,6 +69,7 @@ class _Kernel:
         self.CloseHandle = _FakeFunction(self._close)
         self.SetHandleInformation = _FakeFunction(lambda *_: 1)
         self.GetCurrentProcess = _FakeFunction(lambda: 9000)
+        self.GetSystemInfo = _FakeFunction(self._system_info)
         self.DuplicateHandle = _FakeFunction(self._duplicate)
         self.CreateFileW = _FakeFunction(self._open_file)
         self.GetFileType = _FakeFunction(self._file_type)
@@ -91,9 +96,19 @@ class _Kernel:
         self.events.append(("job", value))
         return value
 
-    def _limits(self, *_):
+    def _limits(self, _job, _class, limits_ptr, _size):
+        limits = ctypes.cast(limits_ptr, ctypes.POINTER(process._JobObjectExtendedLimitInformation)).contents
+        self.job_limit_flags = int(limits.BasicLimitInformation.LimitFlags)
+        self.job_memory_limit = int(limits.JobMemoryLimit)
+        self.job_active_process_limit = int(limits.BasicLimitInformation.ActiveProcessLimit)
+        self.events.append(("job_limits_set", (self.job_limit_flags, self.job_memory_limit, self.job_active_process_limit)))
         self.events.append(("limits", True))
         return 0 if self.failure == "limits" else 1
+
+    def _system_info(self, info_ptr):
+        information = ctypes.cast(info_ptr, ctypes.POINTER(process._SystemInfo)).contents
+        information.dwPageSize = 4096
+        self.events.append(("system_info", 4096))
 
     def _attrs_init(self, attribute_list, _count, _flags, size_ptr):
         size = ctypes.cast(size_ptr, ctypes.POINTER(ctypes.c_size_t)).contents
@@ -314,6 +329,19 @@ class _Kernel:
         else:
             observed = ctypes.cast(observed_ptr, ctypes.POINTER(process._JobObjectExtendedLimitInformation)).contents
             observed.PeakJobMemoryUsed = 1
+            flags = self.job_limit_flags
+            memory_limit = process._effective_job_memory_limit(self.job_memory_limit, 4096)
+            active_limit = self.job_active_process_limit
+            if self.job_limit_mismatch == "flags":
+                flags ^= process._JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            elif self.job_limit_mismatch == "memory":
+                memory_limit += 1
+            elif self.job_limit_mismatch == "active":
+                active_limit += 1
+            observed.BasicLimitInformation.LimitFlags = flags
+            observed.BasicLimitInformation.ActiveProcessLimit = active_limit
+            observed.JobMemoryLimit = memory_limit
+            self.events.append(("job_limits_readback", (flags, memory_limit, active_limit)))
         return 1
 
     def _close(self, handle):
@@ -418,6 +446,65 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                                 expected_executable_sha256=expected_hash,
                             )
 
+    def test_resource_limit_contract_rejects_five_gib_and_keeps_five_gib_minus_one(self):
+        payload = b"resource-limited-verifier"
+        with tempfile.TemporaryDirectory() as root_name:
+            root = Path(root_name)
+            executable = root / "verifier.exe"
+            executable.write_bytes(payload)
+            kernel = _Kernel(pin_data=payload)
+            with patch.object(process.ctypes, "WinDLL", return_value=kernel):
+                result = process.run_contained_verifier(
+                    executable,
+                    (),
+                    workspace=root,
+                    timeout_seconds=1.0,
+                    job_memory_cap_bytes=process.PROCESS_TREE_PEAK_CAP_BYTES,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
+            self.assertEqual(result.cap_bytes, process.PROCESS_TREE_PEAK_CAP_BYTES)
+            with patch.object(
+                process.ctypes,
+                "WinDLL",
+                side_effect=AssertionError("invalid cap reached Win32 boundary"),
+            ):
+                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_memory_cap"):
+                    process.run_contained_verifier(
+                        executable,
+                        (),
+                        workspace=root,
+                        timeout_seconds=1.0,
+                        job_memory_cap_bytes=5_000_000_000,
+                        expected_executable_size_bytes=len(payload),
+                        expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    )
+
+    def test_job_limit_readback_mismatch_fails_closed(self):
+        payload = b"synthetic-pinned-verifier"
+        for mismatch in ("flags", "memory", "active"):
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as root_name:
+                root = Path(root_name)
+                executable = root / "verifier.exe"
+                executable.write_bytes(payload)
+                kernel = _Kernel(pin_data=payload, job_limit_mismatch=mismatch)
+                with patch.object(process.ctypes, "WinDLL", return_value=kernel):
+                    with self.assertRaisesRegex(process.VerifierProcessError, "verifier_job_limits_readback"):
+                        process.run_contained_verifier(
+                            executable,
+                            (),
+                            workspace=root,
+                            timeout_seconds=1.0,
+                            expected_executable_size_bytes=len(payload),
+                            expected_executable_sha256=hashlib.sha256(payload).digest(),
+                        )
+                self.assertGreaterEqual(
+                    sum(name == "job_limits_readback" for name, _ in kernel.events),
+                    1,
+                )
+                self.assertEqual(kernel.pin_close_count, len(kernel.pin_handles))
+                self.assertTrue(all(state["closed"] for state in kernel.pin_handles.values()))
+
     def test_pinned_handles_are_held_through_create_assignment_sample_and_resume(self):
         payload = b"synthetic-pinned-verifier"
         with tempfile.TemporaryDirectory() as root_name:
@@ -485,6 +572,15 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             self.assertLess(names.index("memory"), names.index("resume"))
             self.assertLess(names.index("memory"), names.index("pin_close"))
             self.assertLess(names.index("resume"), names.index("pin_close"))
+            self.assertEqual(
+                next(value for name, value in kernel.events if name == "job_limits_set"),
+                (
+                    process._JOB_LIMIT_FLAGS,
+                    process.PROCESS_TREE_PEAK_CAP_BYTES,
+                    process.ACTIVE_PROCESS_LIMIT,
+                ),
+            )
+            self.assertGreaterEqual(sum(name == "job_limits_readback" for name, _ in kernel.events), 1)
 
     def test_suspended_child_binding_failures_kill_and_reap_before_assignment(self):
         payload = b"synthetic-pinned-verifier"

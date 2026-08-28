@@ -20,6 +20,12 @@ import secrets
 import sqlite3
 from typing import Any, BinaryIO, Callable, Final, Mapping, NoReturn, Protocol
 
+from app.minimal_clearance_resource_limits import (
+    ACTIVE_PROCESS_LIMIT,
+    ADMISSION_CAP_BYTES,
+    PROCESS_TREE_PEAK_CAP_BYTES,
+)
+
 
 class VerificationQueueError(RuntimeError):
     pass
@@ -66,10 +72,6 @@ def _raise_fixed(error: VerificationQueueError) -> NoReturn:
 
 SCHEMA_VERSION: Final[int] = 8
 _SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v8"
-ADMISSION_CAP_BYTES: Final[int] = 4_500_000_000
-PROCESS_TREE_PEAK_CAP_BYTES: Final[int] = 4_999_999_999
-CAP_BYTES: Final[int] = 5_000_000_000
-ACTIVE_PROCESS_LIMIT: Final[int] = 1
 MAX_QUEUE_CAPACITY: Final[int] = 512
 DATABASE_PAGE_SIZE: Final[int] = 4096
 DATABASE_MAX_PAGE_COUNT: Final[int] = 32768
@@ -1513,7 +1515,7 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
 
 
 __all__ = (
-    "ADMISSION_CAP_BYTES", "ACTIVE_PROCESS_LIMIT", "CAP_BYTES", "DATABASE_MAX_PAGE_COUNT", "DATABASE_PAGE_SIZE",
+    "ADMISSION_CAP_BYTES", "ACTIVE_PROCESS_LIMIT", "DATABASE_MAX_PAGE_COUNT", "DATABASE_PAGE_SIZE",
     "DIRECTIVES", "MAX_QUEUE_DATABASE_BYTES", "MAX_QUEUE_CAPACITY", "MAX_TERMINAL_GROWTH_PER_NONTERMINAL", "PROCESS_TREE_PEAK_CAP_BYTES",
     "PROFILE_FINGERPRINT", "PROFILE_VERSION", "CIRCUIT_FINGERPRINT", "PROOF_STATEMENT_BYTES", "RANGE100_COUNT", "PROOF_ATTEMPTS_CAP", "PROOF_ATTEMPTS_PER_BATCH",
     "BatchVerifierResult", "IssuedOperationStatement", "IssuedVerificationBatch", "OperationTemplate", "QueueBackpressureError", "QueueClock", "QueueConfig",

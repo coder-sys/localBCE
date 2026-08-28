@@ -11,9 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, NoReturn
 
-from app.minimal_clearance_verification_queue import (
-    ADMISSION_CAP_BYTES,
+from app.minimal_clearance_resource_limits import (
     ACTIVE_PROCESS_LIMIT,
+    ADMISSION_CAP_BYTES,
+)
+from app.minimal_clearance_verification_queue import (
     BatchVerifierResult,
     IssuedVerificationBatch,
     QueueConfig,
@@ -160,7 +162,7 @@ def _validate_contained_result(result: object) -> ContainedVerifierResult:
         or type(result.active_process_limit) is not int
         or result.active_process_limit != ACTIVE_PROCESS_LIMIT
         or type(result.peak_job_commit_bytes) is not int
-        or not 0 <= result.peak_job_commit_bytes <= ADMISSION_CAP_BYTES
+        or not 0 <= result.peak_job_commit_bytes <= result.cap_bytes
         or type(result.child_process_count) is not int
         or result.child_process_count < 1
         or result.process_tree_complete is not True
