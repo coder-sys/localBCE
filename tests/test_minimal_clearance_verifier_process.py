@@ -378,6 +378,46 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         self.assertIn(("close", 14000), kernel.events)
         self.assertIn(("startup_input", 14000), kernel.events)
 
+    def test_missing_or_partial_executable_pin_is_rejected_before_create(self):
+        payload = b"unpinned-path-is-forbidden"
+        digest = hashlib.sha256(payload).digest()
+        cases = ((None, None), (len(payload), None), (None, digest))
+        with tempfile.TemporaryDirectory() as root_name:
+            root = Path(root_name)
+            executable = root / "verifier.exe"
+            executable.write_bytes(payload)
+            for expected_size, expected_hash in cases:
+                with self.subTest(expected_size=expected_size, expected_hash=expected_hash):
+                    with patch.object(
+                        process.ctypes,
+                        "WinDLL",
+                        side_effect=AssertionError("CreateProcess boundary was reached"),
+                    ):
+                        with self.assertRaisesRegex(process.VerifierProcessError, "verifier_executable_pin"):
+                            process.run_contained_verifier(
+                                executable,
+                                (),
+                                workspace=root,
+                                timeout_seconds=1.0,
+                                expected_executable_size_bytes=expected_size,
+                                expected_executable_sha256=expected_hash,
+                            )
+                    with patch.object(
+                        process,
+                        "run_contained_verifier",
+                        side_effect=AssertionError("stream delegated before pin validation"),
+                    ):
+                        with self.assertRaisesRegex(process.VerifierProcessError, "verifier_executable_pin"):
+                            process.run_contained_verifier_stream(
+                                executable,
+                                (),
+                                b"frame",
+                                workspace=root,
+                                timeout_seconds=1.0,
+                                expected_executable_size_bytes=expected_size,
+                                expected_executable_sha256=expected_hash,
+                            )
+
     def test_pinned_handles_are_held_through_create_assignment_sample_and_resume(self):
         payload = b"synthetic-pinned-verifier"
         with tempfile.TemporaryDirectory() as root_name:
@@ -474,6 +514,34 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                 self.assertLess(names.index("wait"), names.index("pin_close"))
                 self.assertEqual(kernel.pin_close_count, len(kernel.pin_handles))
                 self.assertTrue(all(state["closed"] for state in kernel.pin_handles.values()))
+
+    def test_post_create_cleanup_failure_is_killed_and_reaped_once_before_pin_close(self):
+        payload = b"synthetic-pinned-verifier"
+        with tempfile.TemporaryDirectory() as root_name:
+            root = Path(root_name)
+            executable = root / "verifier.exe"
+            executable.write_bytes(payload)
+            kernel = _Kernel(failure="attribute_delete", pin_data=payload)
+            with patch.object(process.ctypes, "WinDLL", return_value=kernel):
+                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_process_cleanup"):
+                    process.run_contained_verifier(
+                        executable,
+                        (),
+                        workspace=root,
+                        timeout_seconds=1.0,
+                        expected_executable_size_bytes=len(payload),
+                        expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    )
+            names = [name for name, _ in kernel.events]
+            self.assertEqual(names.count("terminate_process"), 1)
+            self.assertEqual(names.count("wait"), 1)
+            self.assertEqual(names.count("assign"), 0)
+            self.assertEqual(names.count("resume"), 0)
+            self.assertLess(names.index("create"), names.index("terminate_process"))
+            self.assertLess(names.index("terminate_process"), names.index("wait"))
+            self.assertLess(names.index("wait"), names.index("pin_close"))
+            self.assertEqual(kernel.pin_close_count, len(kernel.pin_handles))
+            self.assertTrue(all(state["closed"] for state in kernel.pin_handles.values()))
 
     @unittest.skipUnless(os.name == "nt", "Windows share-mode pin test")
     def test_real_pinned_handle_denies_write_delete_and_replace_until_close(self):
@@ -674,7 +742,7 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         self.assertTrue(all(any(name == "create" for name, _ in kernel.events) for kernel in kernels))
 
     def test_attribute_and_creation_failures_cleanup_once(self):
-        for failure in ("attribute_initialize", "attribute_update", "create", "attribute_delete"):
+        for failure in ("attribute_initialize", "attribute_update", "create"):
             with self.subTest(failure=failure):
                 kernel = _Kernel(failure=failure)
                 parent, readers = self._descriptors()
@@ -708,17 +776,23 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
     def test_real_child_output_overflow_is_terminated_without_output_files(self):
         with tempfile.TemporaryDirectory() as root_name:
             workspace = Path(root_name)
+            executable = Path(sys._base_executable)
+            payload = executable.read_bytes()
             with self.assertRaisesRegex(process.VerifierProcessError, "stdout_cap"):
                 process.run_contained_verifier(
-                    Path(sys._base_executable),
+                    executable,
                     ("-c", "import sys;sys.stdout.write('x'*70000);sys.stdout.flush()"),
                     workspace=workspace,
                     timeout_seconds=30.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
                 )
             self.assertEqual(tuple(workspace.iterdir()), ())
 
     def test_failure_boundaries_remain_fixed_and_close_handles(self):
         stages = {"setup", "limits", "attribute_initialize", "attribute_update", "create", "assign", "resume", "wait", "exit", "query", "close"}
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
         for failure in sorted(stages):
             with self.subTest(failure=failure):
                 kernel = _Kernel(failure=failure)
@@ -731,7 +805,14 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                     workspace = Path(root)
                     with patch.object(process.ctypes, "WinDLL", return_value=kernel), patch.object(process, "_create_output_pipe", side_effect=fake_pipe), patch.object(process.ctypes, "get_last_error", return_value=5):
                         with self.assertRaises(process.VerifierProcessError):
-                            process.run_contained_verifier(Path(sys.executable), ("-c", "print(1)"), workspace=workspace, timeout_seconds=1.0)
+                            process.run_contained_verifier(
+                                executable,
+                                ("-c", "print(1)"),
+                                workspace=workspace,
+                                timeout_seconds=1.0,
+                                expected_executable_size_bytes=len(payload),
+                                expected_executable_sha256=hashlib.sha256(payload).digest(),
+                            )
 
     @unittest.skipUnless(os.name == "nt", "Windows handle inheritance test")
     def test_real_windows_handle_canary_is_not_inherited_and_capture_works(self):
@@ -739,6 +820,8 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)
+            executable = Path(sys._base_executable)
+            payload = executable.read_bytes()
             canary = root / "canary.bin"
             descriptor = os.open(canary, os.O_BINARY | os.O_CREAT | os.O_WRONLY, 0o600)
             try:
@@ -748,7 +831,14 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                 script = "import msvcrt,os,sys;" + script
                 workspace = root / "workspace"
                 workspace.mkdir()
-                result = process.run_contained_verifier(Path(sys._base_executable), ("-c", script, str(handle)), workspace=workspace, timeout_seconds=30.0)
+                result = process.run_contained_verifier(
+                    executable,
+                    ("-c", script, str(handle)),
+                    workspace=workspace,
+                    timeout_seconds=30.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
                 self.assertEqual(result.exit_code, 0)
                 self.assertEqual(canary.read_bytes(), b"")
                 self.assertIn(b"CANARY_HANDLE_UNAVAILABLE", result.stdout)

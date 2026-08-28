@@ -1419,6 +1419,8 @@ class NativeMinimalClearanceVerifier:
                         self.executable, tuple(args), workspace=workspace,
                         timeout_seconds=self.timeout_seconds,
                         _stdin_descriptor=(None if artifact is None else artifact.descriptor),
+                        expected_executable_size_bytes=_size,
+                        expected_executable_sha256=before_digest,
                     )
                 except VerifierProcessError:
                     process_failed = True

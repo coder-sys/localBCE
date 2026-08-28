@@ -188,6 +188,62 @@ def test_identity_recheck_uses_the_same_bounded_reader(monkeypatch, tmp_path: Pa
     assert calls == [(verifier.executable, proof._MAX_EXECUTABLE_BYTES, "verifier_executable")]
 
 
+def test_native_verifier_forwards_held_size_and_digest(monkeypatch, tmp_path: Path) -> None:
+    expected = b"held-verifier"
+    expected_size = len(expected)
+    expected_digest = hashlib.sha256(expected).digest()
+    verifier = object.__new__(proof.NativeMinimalClearanceVerifier)
+    verifier.executable = tmp_path / "verifier.exe"
+    verifier._executable_sha256 = expected_digest
+    verifier.timeout_seconds = 1.0
+    calls: list[tuple[str, tuple[str, ...], dict[str, object]]] = []
+
+    class Held:
+        descriptor = 123
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+        def digest(self, algorithm: str) -> tuple[int, bytes]:
+            assert algorithm == "sha256"
+            return expected_size, expected_digest
+
+    def fake_run(executable: Path, arguments: tuple[str, ...], **kwargs: object) -> proof.ContainedVerifierResult:
+        calls.append((str(executable), arguments, kwargs))
+        return proof.ContainedVerifierResult(
+            exit_code=0,
+            stdout=b"",
+            stderr=b"",
+            peak_job_commit_bytes=0,
+            cap_bytes=proof.CAP_BYTES,
+            cap_enforced=True,
+            active_process_limit=1,
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(proof, "_open_held_file", lambda *_args, **_kwargs: Held())
+    monkeypatch.setattr(proof, "run_contained_verifier", fake_run)
+    result = verifier._run(tmp_path, "--preflight")
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            str(verifier.executable),
+            ("--preflight",),
+            {
+                "workspace": tmp_path,
+                "timeout_seconds": 1.0,
+                "_stdin_descriptor": None,
+                "expected_executable_size_bytes": expected_size,
+                "expected_executable_sha256": expected_digest,
+            },
+        )
+    ]
+
+
 def test_source_has_no_unbounded_proof_snapshot_read_bytes() -> None:
     source = Path(proof.__file__).read_text(encoding="utf-8")
     assert "read_bytes(" not in source

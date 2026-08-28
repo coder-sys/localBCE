@@ -376,8 +376,6 @@ def _validate_executable_pin(
     expected_executable_size_bytes: int | None,
     expected_executable_sha256: bytes | None,
 ) -> None:
-    if expected_executable_size_bytes is None and expected_executable_sha256 is None:
-        return
     if (
         type(expected_executable_size_bytes) is not int
         or expected_executable_size_bytes <= 0
@@ -865,7 +863,6 @@ def _create_process_with_owned_output_handles(
     attribute_storage: ctypes.Array | None = None
     attribute_list = wintypes.LPVOID()
     attribute_list_initialized = False
-    process_created = False
     child_stdin_handle: int | None = None
     primary_error: BaseException | None = None
     try:
@@ -924,7 +921,6 @@ def _create_process_with_owned_output_handles(
             ctypes.byref(process_info)
         ):
             raise _win_error("verifier_process_create")
-        process_created = True
     except BaseException as exc:
         primary_error = exc
         raise
@@ -945,12 +941,11 @@ def _create_process_with_owned_output_handles(
             _close_parent_descriptors_once(descriptors)
         except VerifierProcessError as close_error:
             cleanup_errors.append(close_error)
-        if cleanup_errors:
-            if process_created and process_info.hProcess:
-                if not kernel32.TerminateProcess(process_info.hProcess, 1):
-                    cleanup_errors.append(_win_error("verifier_output_close_process"))
-            if primary_error is None:
-                raise VerifierProcessError("verifier_process_cleanup") from None
+        if cleanup_errors and primary_error is None:
+            # The caller owns pre-assignment child termination and reaping.  Do
+            # not terminate here: otherwise the caller could terminate twice
+            # after this post-CreateProcess cleanup failure.
+            raise VerifierProcessError("verifier_process_cleanup") from None
 
 
 def _terminate_and_reap_child(
@@ -1239,18 +1234,14 @@ def run_contained_verifier(
             except (OSError, ValueError, ImportError, TypeError):
                 raise VerifierProcessError("verifier_input_handle") from None
         try:
-            if expected_executable_size_bytes is not None:
-                pinned_executable = _open_pinned_executable(
-                    kernel32=kernel32,
-                    executable=executable,
-                    expected_executable_size_bytes=expected_executable_size_bytes,
-                    expected_executable_sha256=expected_executable_sha256,  # type: ignore[arg-type]
-                )
-                launch_executable = pinned_executable.canonical_path
-                launch_directory = pinned_executable.canonical_parent
-            else:
-                launch_executable = str(executable)
-                launch_directory = str(executable.parent)
+            pinned_executable = _open_pinned_executable(
+                kernel32=kernel32,
+                executable=executable,
+                expected_executable_size_bytes=expected_executable_size_bytes,
+                expected_executable_sha256=expected_executable_sha256,  # type: ignore[arg-type]
+            )
+            launch_executable = pinned_executable.canonical_path
+            launch_directory = pinned_executable.canonical_parent
             command_line = ctypes.create_unicode_buffer(
                 " ".join(
                     [_quote_argument(launch_executable)]
@@ -1484,6 +1475,10 @@ def run_contained_verifier_stream(
 
     if type(frame) is not bytes or not 0 < len(frame) <= STREAM_MAX_FRAME_BYTES:
         raise VerifierProcessError("verifier_stream_frame_cap")
+    _validate_executable_pin(
+        expected_executable_size_bytes,
+        expected_executable_sha256,
+    )
     try:
         read_descriptor, write_descriptor = os.pipe()
     except OSError:
