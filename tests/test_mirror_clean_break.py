@@ -20,6 +20,7 @@ from app.mirror import operational_owner as operational
 from app.mirror import recovery_v2 as recovery
 from app.mirror import recovery_v2_independent as recovery_independent
 from app.mirror import source_admission
+from app.mirror import writer_authority
 from tests.test_mirror_v2_consolidation import _Custody, _Storage, _hex
 from tests.test_nc_medicaid_fhir_source import _envelope
 
@@ -28,6 +29,7 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(dir=r"C:\Temp", prefix="mirror-cleanbreak-test-")
         self.root = Path(self.temp.name)
+        self.authority = writer_authority.WriterAuthority(self.root)
         self.ingress_path = self.root / "ingress.sqlite"
         self.core_path = self.root / "core.sqlite"
         self.recovery_path = self.root / "recovery.sqlite"
@@ -50,8 +52,14 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
         ).admit(self.raw)
         self.observation = self.admission.observation
         self.verification_receipt = self.admission.verification_receipt
+        legacy_receipt = json.loads(self.verification_receipt.decode("ascii"))
+        legacy_receipt["observation_digest"] = hashlib.sha3_512(
+            b"BL/MIRROR/INGRESS/V5/sanitized-observation\0" + self.observation
+        ).hexdigest()
+        self.legacy_verification_receipt = ingress_independent._canonical(legacy_receipt)
 
     def tearDown(self) -> None:
+        self.authority.close()
         self.temp.cleanup()
 
     @staticmethod
@@ -83,7 +91,7 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
         self.assertNotIn(canary.decode("ascii"), stdout.getvalue() + stderr.getvalue())
         self.assertFalse(self.ingress_path.exists())
 
-        service = ingress.IngressServiceV2(self.ingress_path, self.ingress_config, clock=self.clock)
+        service = ingress.IngressServiceV2(self.ingress_path, self.ingress_config, clock=self.clock, authority=self.authority)
         created = service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
         slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
         lease_token = "cleanbreak-synthetic-lease-token-000000000000"
@@ -96,7 +104,7 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
             lease_token=lease_token,
         )
         self.assertEqual("QUARANTINED", admitted.next_state)
-        self.assertEqual("mirror-ingress-v5", service.verify()["schema"])
+        self.assertEqual("mirror-ingress-v6", service.verify()["schema"])
         before = self._fingerprint(service)
 
         mutated = json.loads(self.observation.decode("ascii"))
@@ -149,7 +157,7 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
         self.assertEqual(admitted.raw, retry.raw)
         self.assertEqual(before, self._fingerprint(service))
 
-        reopened = ingress.IngressServiceV2(self.ingress_path, self.ingress_config, clock=self.clock)
+        reopened = ingress.IngressServiceV2(self.ingress_path, self.ingress_config, clock=self.clock, authority=self.authority)
         self.assertEqual(before, self._fingerprint(reopened))
         retry_after_restart = reopened.admit_observation(
             self.observation, self.verification_receipt,
@@ -180,10 +188,10 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
         finally:
             connection.close()
         with self.assertRaisesRegex(ingress.IngressError, "ingress:legacy-schema"):
-            ingress.IngressServiceV2(old_path, self.ingress_config, clock=self.clock)
+            ingress.IngressServiceV2(old_path, self.ingress_config, clock=self.clock, authority=self.authority)
 
         future_path = self.root / "future.sqlite"
-        future_service = ingress.IngressServiceV2(future_path, self.ingress_config, clock=lambda: profile.FIXTURE_OBSERVATION_TIME - 1)
+        future_service = ingress.IngressServiceV2(future_path, self.ingress_config, clock=lambda: profile.FIXTURE_OBSERVATION_TIME - 1, authority=self.authority)
         future_created = future_service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
         future_slot_id = json.loads(future_created.raw.decode("ascii"))["slot_id"]
         future_before = self._fingerprint(future_service)
@@ -192,7 +200,7 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
         self.assertEqual(future_before, self._fingerprint(future_service))
 
         fault_path = self.root / "precommit-fault.sqlite"
-        fault_service = ingress.IngressServiceV2(fault_path, self.ingress_config, clock=self.clock)
+        fault_service = ingress.IngressServiceV2(fault_path, self.ingress_config, clock=self.clock, authority=self.authority)
         fault_created = fault_service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
         fault_slot_id = json.loads(fault_created.raw.decode("ascii"))["slot_id"]
         fault_service.claim_slot(fault_slot_id, lease_token=lease_token)
@@ -236,7 +244,7 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
             ingress_config_digest=self.ingress_config.digest,
             corrective_action_control_digest=_hex("cleanbreak-corrective-action"),
         )
-        core_service = core.CoreServiceV2(self.core_path, core_config, clock=self.clock)
+        core_service = core.CoreServiceV2(self.core_path, core_config, clock=self.clock, authority=self.authority)
         core_result = core_service.ingest_source(self.ingress_path, admitted.artifact_id or "")
         self.assertEqual("INCOMPLETE", core_result["observation_status"])
         core_verified = core_service.verify(ingress_path=self.ingress_path)
@@ -256,7 +264,7 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
             ingress_config_digest=self.ingress_config.digest,
             core_config_digest=core_config.digest,
         )
-        recovery_service = recovery.RecoveryServiceV2(self.recovery_path, recovery_config, custody, storage)
+        recovery_service = recovery.RecoveryServiceV2(self.recovery_path, recovery_config, custody, storage, authority=self.authority)
         point = recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
         self.assertEqual("VERIFIED", point.state)
         recovery_result = recovery_service.verify()
@@ -283,8 +291,8 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
         for surface in surfaces:
             for value in forbidden:
                 self.assertNotIn(value, surface)
-        self.assertNotIn(b"mirror-ingress-logical-export-v4", logical[0])
-        self.assertIn(b"mirror-ingress-logical-export-v5", logical[0])
+        self.assertNotIn(b"mirror-ingress-logical-export-v5", logical[0])
+        self.assertIn(b"mirror-ingress-logical-export-v6", logical[0])
 
     def test_independent_pair_is_canonical_and_receipt_bound(self) -> None:
         checked = ingress_independent.verify_observation_pair(
@@ -294,7 +302,7 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
         )
         self.assertEqual(
             hashlib.sha3_512(
-                b"BL/MIRROR/INGRESS/V5/sanitized-observation\0" + self.observation
+                b"BL/MIRROR/INGRESS/V6/sanitized-observation\0" + self.observation
             ).hexdigest(),
             checked["verification_receipt"]["observation_digest"],
         )
@@ -303,6 +311,48 @@ class MirrorSanitizedCleanBreakTests(unittest.TestCase):
             ingress_independent.verify_observation_pair(
                 self.observation + b" ", self.verification_receipt,
             )
+        with self.assertRaises(ingress_independent.IngressVerificationError):
+            ingress_independent.verify_observation_pair(
+                self.observation, self.legacy_verification_receipt,
+            )
+
+    def test_v5_database_and_producer_fail_before_mutation(self) -> None:
+        legacy_path = self.root / "legacy-v5.sqlite"
+        service = ingress.IngressServiceV2(
+            legacy_path, self.ingress_config, clock=self.clock, authority=self.authority
+        )
+        before = legacy_path.read_bytes()
+        connection = sqlite3.connect(legacy_path)
+        try:
+            connection.execute(
+                "UPDATE ingress_meta SET schema=?,schema_version=? WHERE meta_id=1",
+                ("mirror-ingress-v5", 5),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        legacy_before = legacy_path.read_bytes()
+        with self.assertRaisesRegex(ingress.IngressError, "ingress:legacy-schema"):
+            ingress.IngressServiceV2(
+                legacy_path, self.ingress_config, clock=self.clock, authority=self.authority
+            )
+        self.assertEqual(legacy_before, legacy_path.read_bytes())
+        self.assertNotEqual(before, legacy_before)
+
+        fresh_path = self.root / "v5-producer.sqlite"
+        fresh = ingress.IngressServiceV2(
+            fresh_path, self.ingress_config, clock=self.clock, authority=self.authority
+        )
+        before = self._fingerprint(fresh)
+        with self.assertRaises(ingress.IngressConflictError):
+            fresh.admit_observation(
+                self.observation,
+                self.legacy_verification_receipt,
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=1,
+                lease_token="cleanbreak-synthetic-lease-token-000000000000",
+            )
+        self.assertEqual(before, self._fingerprint(fresh))
 
 
 if __name__ == "__main__":

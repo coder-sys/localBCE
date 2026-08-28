@@ -323,7 +323,7 @@ def _scoped_observation_digest(raw: bytes) -> str:
     """Bind the receipt to sanitized bytes without exposing source identity."""
 
     digest = hashlib.sha3_512()
-    digest.update(b"BL/MIRROR/INGRESS/V5/sanitized-observation\0")
+    digest.update(b"BL/MIRROR/INGRESS/V6/sanitized-observation\0")
     digest.update(raw)
     return digest.hexdigest()
 

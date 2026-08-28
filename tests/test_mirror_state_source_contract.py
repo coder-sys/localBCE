@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
+from pathlib import Path
+import tempfile
 import traceback
 import unittest
 
 from app.mirror import provider_trust_graph as graph
 from app.mirror import provider_trust_graph_independent as graph_independent
+from app.mirror import ingress_v2 as ingress
+from app.mirror import ingress_v2_independent as ingress_independent
 from app.mirror import nc_medicaid_fhir as nc_transport
 from app.mirror import nc_medicaid_fhir_independent as nc_fhir
 from app.mirror import nc_medicaid_fhir_profile as nc_profile
+from app.mirror import writer_authority
 from app.mirror.source_admission import (
     EvidenceMode,
     SourceAdmissionError,
@@ -117,6 +123,71 @@ def _service(verifier: object | None = None, profile: SourceProfile | None = Non
 
 
 class MirrorSourceAdmissionTests(unittest.TestCase):
+    def test_real_source_output_binds_to_v6_ingress_without_rewrite(self) -> None:
+        from tests.test_nc_medicaid_fhir_source import _envelope
+
+        admission = SourceAdmissionService(
+            nc_profile.NC_MEDICAID_GRAPH_PROFILE,
+            nc_fhir.NcMedicaidFhirVerifier(),
+        ).admit(_envelope())
+        observation = json.loads(admission.observation.decode("ascii"))
+        observation_time = int(observation["observation_time"])
+        checked = ingress_independent.verify_observation_pair(
+            admission.observation,
+            admission.verification_receipt,
+            expected_profile_id=nc_profile.NC_MEDICAID_PROFILE.source_profile_id,
+            expected_profile_version=3,
+        )
+        self.assertEqual(observation["profile_id"], checked["observation"]["profile_id"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with writer_authority.WriterAuthority(root) as authority:
+                config = ingress.IngressConfigV2(
+                    database_id="ingress-source-contract-v6",
+                    chain_id="ingress-source-contract-v6-chain",
+                    policy_digest=hashlib.sha3_512(b"source-contract-policy").hexdigest(),
+                    authorization_digest=hashlib.sha3_512(b"source-contract-authorization").hexdigest(),
+                    terms_digest=hashlib.sha3_512(b"source-contract-terms").hexdigest(),
+                    effective_start=nc_profile.FIXTURE_OBSERVATION_TIME,
+                    effective_end=nc_profile.FIXTURE_OBSERVATION_TIME + 3600,
+                    cadence_seconds=60,
+                    max_slots=8,
+                )
+                service = ingress.IngressServiceV2(
+                    root / "ingress.sqlite",
+                    config,
+                    clock=lambda: nc_profile.FIXTURE_FETCHED_AT + 1,
+                    authority=authority,
+                )
+                before = service.verify()
+                with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:observation-reject"):
+                    service.admit_observation(
+                        admission.observation + b" ",
+                        admission.verification_receipt,
+                        scheduled_at=observation_time,
+                        attempt=1,
+                        lease_token="source-contract-lease-token-000000000000",
+                    )
+                after_reject = service.verify()
+                self.assertEqual(
+                    (before["sequence"], before["head_root"], before["event_count"]),
+                    (after_reject["sequence"], after_reject["head_root"], after_reject["event_count"]),
+                )
+
+                created = service.ensure_slot(observation_time)
+                slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
+                lease_token = "source-contract-lease-token-000000000000"
+                service.claim_slot(slot_id, lease_token=lease_token)
+                admitted = service.admit_observation(
+                    admission.observation,
+                    admission.verification_receipt,
+                    scheduled_at=observation_time,
+                    attempt=1,
+                    lease_token=lease_token,
+                )
+                self.assertEqual("QUARANTINED", admitted.next_state)
+
     def test_configured_verifier_drives_admission_and_graph_is_independent(self) -> None:
         service = _service()
         admission = service.admit(_adapter())

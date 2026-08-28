@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from functools import wraps
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,7 @@ from app.mirror import ingress_v2_independent as ingress
 from app.mirror import recovery_v2_independent as independent
 from app.mirror import restore_publication
 from app.mirror.error_boundary import raise_redacted
+from app.mirror import writer_authority
 
 
 SCHEMA = independent.SCHEMA
@@ -43,6 +45,14 @@ class RecoveryConflictError(RecoveryError):
 
 class RecoveryIndeterminateError(RecoveryError):
     """An external storage/custody result was not safely knowable."""
+
+
+def _mutation(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._authority.mutation_scope(self.path):
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 class StorageNotFound(LookupError):
@@ -462,15 +472,28 @@ def _bounded_image(path: Path, cap: int, label: str) -> bytes:
 
 
 class RecoveryServiceV2:
-    def __init__(self, path: str | Path, config: RecoveryConfigV2, custody: KeyCustodyPort, storage: RecoveryStoragePort) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        config: RecoveryConfigV2,
+        custody: KeyCustodyPort,
+        storage: RecoveryStoragePort,
+        *,
+        authority: writer_authority.WriterAuthority,
+    ) -> None:
         if type(config) is not RecoveryConfigV2:
             raise RecoveryError("recovery:config")
+        if not isinstance(authority, writer_authority.WriterAuthority):
+            raise RecoveryError("recovery:writer")
         self.path = Path(path)
         self.config = config
+        self._authority = authority
+        authority.assert_database_parent(self.path)
         self.custody = custody
         self.storage = storage
         self._assert_port_identity()
-        _init(self.path, config)
+        with authority.mutation_scope(self.path):
+            _init(self.path, config)
         identity = _path_identity(self.path, allow_missing=False)
         if identity is None:
             raise RecoveryError("recovery:database-open")
@@ -478,6 +501,7 @@ class RecoveryServiceV2:
         self._assert_database_identity()
 
     def _assert_database_identity(self, *, allow_journal: bool = False) -> None:
+        self._authority.assert_database_parent(self.path)
         current = _path_identity(self.path, allow_missing=False, allow_journal=allow_journal)
         if current is None or current != self._database_identity:
             raise RecoveryError("recovery:database-open")
@@ -592,7 +616,8 @@ class RecoveryServiceV2:
     def _custody_call(self, method: str, *args: object) -> object:
         self._assert_port_identity()
         try:
-            result = getattr(self.custody, method)(*args)
+            with self._authority.external_scope():
+                result = getattr(self.custody, method)(*args)
         except Exception:
             self._assert_port_identity()
             raise_redacted(RecoveryIndeterminateError, "recovery:custody-indeterminate")
@@ -602,7 +627,8 @@ class RecoveryServiceV2:
     def _storage_call(self, method: str, *args: object, **kwargs: object) -> object:
         self._assert_port_identity()
         try:
-            result = getattr(self.storage, method)(*args, **kwargs)
+            with self._authority.external_scope():
+                result = getattr(self.storage, method)(*args, **kwargs)
         except StorageNotFound as error:
             if type(error) is not StorageNotFound:
                 self._assert_port_identity()
@@ -621,6 +647,7 @@ class RecoveryServiceV2:
         return value
 
     def verify(self) -> dict[str, object]:
+        self._authority.assert_live()
         self._assert_database_identity()
         try:
             return independent.verify_database(self.path, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest)
@@ -854,11 +881,18 @@ class RecoveryServiceV2:
         connection = self._open()
         try:
             self._begin(connection)
+            pending_rows = connection.execute(
+                "SELECT generation FROM recovery_points WHERE state='OBJECT_PENDING' ORDER BY generation"
+            ).fetchall()
+            if len(pending_rows) > 1:
+                raise RecoveryError("recovery:pending")
+            if pending_rows and int(pending_rows[0]["generation"]) != generation:
+                raise RecoveryConflictError("recovery:pending")
             row = connection.execute("SELECT * FROM recovery_points WHERE generation=?", (generation,)).fetchone()
             if row is None and connection.execute("SELECT point_id FROM recovery_points ORDER BY generation,point_id LIMIT 1 OFFSET ?", (MAX_RECOVERY_POINTS - 1,)).fetchone() is not None:
                 raise RecoveryError("recovery:capacity")
             result = dict(row) if row is not None else None
-        except RecoveryError as error:
+        except (RecoveryError, RecoveryConflictError) as error:
             self._finish_transaction(connection, commit=False, error=error)
         except sqlite3.Error as error:
             mapped = RecoveryError("recovery:capacity" if _sqlite_is_capacity(error) else "recovery:database")
@@ -911,7 +945,11 @@ class RecoveryServiceV2:
         self._verify_stored_bundle(stored, point)
         return self._commit_verified(point)
 
+    @_mutation
     def create_point(self, ingress_path: str | Path, core_path: str | Path, *, generation: int) -> RecoveryReceipt:
+        return self._create_point(ingress_path, core_path, generation=generation)
+
+    def _create_point(self, ingress_path: str | Path, core_path: str | Path, *, generation: int) -> RecoveryReceipt:
         if type(generation) is not int or not 1 <= generation <= MAX_RECOVERY_POINTS:
             raise RecoveryError("recovery:input")
         existing = self._capacity_and_existing(generation)
@@ -1074,6 +1112,7 @@ class RecoveryServiceV2:
         if not isinstance(material, dict) or material.get("ingress_target_binding") != ingress_binding or material.get("core_target_binding") != core_binding:
             raise RecoveryConflictError("recovery:publication-claim")
 
+    @_mutation
     def restore_point(self, point_id: str, ingress_target: str | Path, core_target: str | Path) -> RecoveryReceipt:
         try:
             selected = self._select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("VERIFIED", "PUBLICATION_PENDING", "PUBLISHED"))
@@ -1151,24 +1190,25 @@ class RecoveryServiceV2:
         try:
             self._assert_database_identity()
             try:
-                restore_publication.publish_pair_create_only(
-                    ingress_target=ingress_path,
-                    core_target=core_path,
-                    ingress_image=ing_raw,
-                    core_image=core_raw,
-                    pair_operation_id=str(claim["pair_operation_id"]),
-                    ingress_expected={
-                        "database_id": point["ingress_database_id"], "config_digest": point["ingress_config_digest"],
-                        "head_root": point["ingress_head_root"], "sequence": point["ingress_watermark"],
-                    },
-                    core_expected={
-                        "database_id": point["core_database_id"], "config_digest": point["core_config_digest"],
-                        "head_root": point["core_head_root"], "ingress_database_id": point["ingress_database_id"],
-                        "ingress_watermark": point["core_watermark"],
-                    },
-                    verify_ingress=lambda image: ingress.verify_bytes(image, expected_database_id=self.config.ingress_database_id, expected_config_digest=self.config.ingress_config_digest),
-                    verify_core=lambda image, ingress_image: core.verify_bytes(image, expected_database_id=self.config.core_database_id, expected_config_digest=self.config.core_config_digest, ingress_bytes=ingress_image),
-                )
+                with self._authority.external_scope():
+                    restore_publication.publish_pair_create_only(
+                        ingress_target=ingress_path,
+                        core_target=core_path,
+                        ingress_image=ing_raw,
+                        core_image=core_raw,
+                        pair_operation_id=str(claim["pair_operation_id"]),
+                        ingress_expected={
+                            "database_id": point["ingress_database_id"], "config_digest": point["ingress_config_digest"],
+                            "head_root": point["ingress_head_root"], "sequence": point["ingress_watermark"],
+                        },
+                        core_expected={
+                            "database_id": point["core_database_id"], "config_digest": point["core_config_digest"],
+                            "head_root": point["core_head_root"], "ingress_database_id": point["ingress_database_id"],
+                            "ingress_watermark": point["core_watermark"],
+                        },
+                        verify_ingress=lambda image: ingress.verify_bytes(image, expected_database_id=self.config.ingress_database_id, expected_config_digest=self.config.ingress_config_digest),
+                        verify_core=lambda image, ingress_image: core.verify_bytes(image, expected_database_id=self.config.core_database_id, expected_config_digest=self.config.core_config_digest, ingress_bytes=ingress_image),
+                    )
             finally:
                 self._assert_database_identity()
         except restore_publication.RestorePublicationConflict:

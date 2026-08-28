@@ -20,6 +20,8 @@ from typing import Callable
 
 from app.mirror import ingress_v2_independent as independent
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_PROFILE
+from app.mirror.error_boundary import raise_redacted
+from app.mirror import writer_authority
 
 
 SCHEMA = independent.SCHEMA
@@ -89,17 +91,23 @@ def _raw_digest(label: str, raw: bytes) -> str:
 
 
 def _safe_rollback(connection: sqlite3.Connection) -> None:
+    failed = False
     try:
         connection.rollback()
     except BaseException:
-        raise IngressIndeterminateError("ingress:transaction-indeterminate") from None
+        failed = True
+    if failed:
+        raise_redacted(IngressIndeterminateError, "ingress:transaction-indeterminate")
 
 
 def _safe_close(connection: sqlite3.Connection) -> None:
+    failed = False
     try:
         connection.close()
     except BaseException:
-        raise IngressIndeterminateError("ingress:transaction-indeterminate") from None
+        failed = True
+    if failed:
+        raise_redacted(IngressIndeterminateError, "ingress:transaction-indeterminate")
 
 
 @dataclass(frozen=True)
@@ -361,19 +369,35 @@ def _init(path: Path, config: IngressConfigV2) -> tuple[int, int]:
 class IngressServiceV2:
     """Owns only sanitized observation state and its event transaction."""
 
-    def __init__(self, path: str | Path, config: IngressConfigV2, *, clock: Callable[[], int] | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        config: IngressConfigV2,
+        *,
+        clock: Callable[[], int] | None = None,
+        authority: writer_authority.WriterAuthority,
+    ) -> None:
         if clock is not None and not callable(clock):
             raise IngressError("ingress:clock")
+        if not isinstance(authority, writer_authority.WriterAuthority):
+            raise IngressError("ingress:writer")
         self.path = Path(path)
         self.config = config
         self._clock = clock or (lambda: int(time.time()))
-        self._database_identity = _init(self.path, config)
+        self._authority = authority
+        try:
+            authority.assert_database_parent(self.path)
+            with authority.mutation_scope(self.path):
+                self._database_identity = _init(self.path, config)
+        except writer_authority.WriterAuthorityError:
+            raise
         self._assert_database_identity()
 
     def close(self) -> None:
         return None
 
     def _assert_database_identity(self) -> None:
+        self._authority.assert_database_parent(self.path)
         try:
             info = self.path.stat()
             if (int(info.st_dev), int(info.st_ino)) != self._database_identity:
@@ -382,6 +406,7 @@ class IngressServiceV2:
             raise IngressError("ingress:database-identity") from None
 
     def _owner_now(self) -> int:
+        self._authority.assert_live()
         try:
             value = self._clock()
         except Exception:
@@ -429,6 +454,13 @@ class IngressServiceV2:
         meta = connection.execute("SELECT * FROM ingress_meta WHERE meta_id=1").fetchone()
         if meta is None:
             raise IngressError("ingress:meta")
+        if type(observed_at) is not int or observed_at < 0:
+            raise IngressConflictError("ingress:clock")
+        latest = connection.execute(
+            "SELECT observed_at FROM ingress_events ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        if latest is not None and observed_at < int(latest[0]):
+            raise IngressConflictError("ingress:clock-rewind")
         sequence = int(meta["sequence"]) + 1
         stream_id = str(stream_id or slot_id)
         old_head = connection.execute(
@@ -509,9 +541,14 @@ class IngressServiceV2:
         )
 
     def ensure_slot(self, scheduled_at: int) -> IngressReceipt:
+        with self._authority.mutation_scope(self.path):
+            return self._ensure_slot(scheduled_at)
+
+    def _ensure_slot(self, scheduled_at: int) -> IngressReceipt:
         if type(scheduled_at) is not int or not self.config.effective_start <= scheduled_at <= self.config.effective_end or (scheduled_at - self.config.effective_start) % self.config.cadence_seconds != 0:
             raise IngressConflictError("ingress:schedule")
         connection = _connection(self.path)
+        indeterminate = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute("SELECT slot_id FROM ingress_slots WHERE scheduled_at=?", (scheduled_at,)).fetchone()
@@ -526,6 +563,7 @@ class IngressServiceV2:
                 return self._receipt(bytes(event[0]), artifact_id=None, next_state="DUE")
             if int(connection.execute("SELECT COUNT(*) FROM ingress_slots").fetchone()[0]) >= self.config.max_slots:
                 raise IngressConflictError("ingress:capacity")
+            now = self._owner_now()
             slot_id = _digest("slot-id", {"config_digest": self.config.digest, "scheduled_at": scheduled_at})
             operation = _digest("slot-operation", {"slot_id": slot_id})
             request = _digest("request", {"operation_id": operation, "scheduled_at": scheduled_at})
@@ -538,7 +576,7 @@ class IngressServiceV2:
                 connection, kind="CREATE_SLOT", operation_id=operation,
                 request_digest=request, slot_id=slot_id, prior_state="NONE",
                 next_state="DUE", attempt=0, lease_token=None, lease_until=None,
-                observed_at=scheduled_at,
+                observed_at=now,
                 material={"slot_id": slot_id, "scheduled_at": scheduled_at, "operation_id": operation},
                 payload_digest=payload, payload_length=0,
             )
@@ -558,11 +596,17 @@ class IngressServiceV2:
             raise IngressError("ingress:database") from None
         except Exception:
             _safe_rollback(connection)
-            raise IngressIndeterminateError("ingress:transaction-indeterminate") from None
+            indeterminate = True
         finally:
             _safe_close(connection)
+        if indeterminate:
+            raise_redacted(IngressIndeterminateError, "ingress:transaction-indeterminate")
 
     def claim_slot(self, slot_id: str, *, lease_token: str) -> IngressReceipt:
+        with self._authority.mutation_scope(self.path):
+            return self._claim_slot(slot_id, lease_token=lease_token)
+
+    def _claim_slot(self, slot_id: str, *, lease_token: str) -> IngressReceipt:
         if type(slot_id) is not str or len(slot_id) != 128 or any(c not in "0123456789abcdef" for c in slot_id):
             raise IngressConflictError("ingress:slot")
         if type(lease_token) is not str or len(lease_token) > 256:
@@ -574,6 +618,7 @@ class IngressServiceV2:
         if len(token_bytes) < _MIN_LEASE_TOKEN_BYTES:
             raise IngressConflictError("ingress:lease")
         connection = _connection(self.path)
+        indeterminate = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             slot = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
@@ -635,11 +680,35 @@ class IngressServiceV2:
             raise IngressError("ingress:database") from None
         except Exception:
             _safe_rollback(connection)
-            raise IngressIndeterminateError("ingress:transaction-indeterminate") from None
+            indeterminate = True
         finally:
             _safe_close(connection)
+        if indeterminate:
+            raise_redacted(IngressIndeterminateError, "ingress:transaction-indeterminate")
 
     def admit_observation(
+        self,
+        observation_raw: bytes,
+        verification_receipt_raw: bytes,
+        *,
+        scheduled_at: int,
+        attempt: int,
+        lease_token: str,
+        operation_id: str | None = None,
+        **legacy_fields: object,
+    ) -> IngressReceipt:
+        with self._authority.mutation_scope(self.path):
+            return self._admit_observation(
+                observation_raw,
+                verification_receipt_raw,
+                scheduled_at=scheduled_at,
+                attempt=attempt,
+                lease_token=lease_token,
+                operation_id=operation_id,
+                **legacy_fields,
+            )
+
+    def _admit_observation(
         self,
         observation: bytes,
         verification_receipt: bytes,
@@ -687,6 +756,7 @@ class IngressServiceV2:
             raise IngressConflictError("ingress:operation")
         operation_id = expected_operation
         connection = _connection(self.path)
+        indeterminate = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             prior_event = connection.execute(
@@ -754,7 +824,7 @@ class IngressServiceV2:
                 request_digest=capture_request, slot_id=slot_id,
                 prior_state="LEASED", next_state="CAPTURED",
                 attempt=attempt, lease_token=token_digest,
-                lease_until=int(slot["lease_until"]), observed_at=self._owner_now(),
+                lease_until=int(slot["lease_until"]), observed_at=now,
                 material=capture_material, payload_digest=artifact_id,
                 payload_length=len(observation), head_artifact_id=artifact_id,
             )
@@ -764,7 +834,7 @@ class IngressServiceV2:
                 request_digest=_digest("request", {"operation_id": begin_operation, "slot_id": slot_id, "artifact_id": artifact_id}),
                 slot_id=slot_id, prior_state="CAPTURED", next_state="QUARANTINE_PENDING",
                 attempt=attempt, lease_token=token_digest, lease_until=int(slot["lease_until"]),
-                observed_at=self._owner_now(),
+                observed_at=now,
                 material={"artifact_id": artifact_id, "decision": "QUARANTINE_PENDING", "operation_id": begin_operation},
                 payload_digest=artifact_id, payload_length=len(observation),
                 head_artifact_id=artifact_id,
@@ -775,7 +845,7 @@ class IngressServiceV2:
                 request_digest=_digest("request", {"operation_id": admit_operation, "slot_id": slot_id, "artifact_id": artifact_id}),
                 slot_id=slot_id, prior_state="QUARANTINE_PENDING", next_state="QUARANTINED",
                 attempt=attempt, lease_token=token_digest, lease_until=int(slot["lease_until"]),
-                observed_at=self._owner_now(),
+                observed_at=now,
                 material={"artifact_id": artifact_id, "decision": "QUARANTINED", "operation_id": admit_operation},
                 payload_digest=artifact_id, payload_length=len(observation),
                 stream_kind="QUARANTINE", stream_id=self.config.chain_id,
@@ -799,14 +869,17 @@ class IngressServiceV2:
             raise IngressError("ingress:database") from None
         except Exception:
             _safe_rollback(connection)
-            raise IngressIndeterminateError("ingress:transaction-indeterminate") from None
+            indeterminate = True
         finally:
             _safe_close(connection)
+        if indeterminate:
+            raise_redacted(IngressIndeterminateError, "ingress:transaction-indeterminate")
 
     def current(self, *, include_observation: bool = False) -> dict[str, object]:
         return self.verify(include_observation=include_observation)
 
     def _operational_quarantined_artifact_ids(self, limit: int) -> tuple[str, ...]:
+        self._authority.assert_database_parent(self.path)
         if type(limit) is not int or not 1 <= limit <= self.config.max_slots:
             raise IngressConflictError("ingress:projection-limit")
         result = self.verify()
@@ -823,6 +896,7 @@ class IngressServiceV2:
             connection.close()
 
     def eligible_slots(self, limit: int) -> tuple[EligibleSlotV1, ...]:
+        self._authority.assert_database_parent(self.path)
         if type(limit) is not int or not 1 <= limit <= 16:
             raise IngressConflictError("ingress:eligible-limit")
         now = self._owner_now()

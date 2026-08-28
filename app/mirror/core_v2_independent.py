@@ -18,6 +18,7 @@ from typing import Mapping
 
 from app.mirror import ingress_v2_independent as ingress
 from app.mirror import external_corrective_action_independent as corrective_action
+from app.mirror.error_boundary import raise_redacted
 
 
 SCHEMA = "mirror-core-v4"
@@ -220,10 +221,13 @@ def _is_reparse(info: os.stat_result) -> bool:
 def _close(connection: sqlite3.Connection | None) -> None:
     if connection is None:
         return
+    failed = False
     try:
         connection.close()
     except Exception:
-        raise CoreVerificationError("core:database") from None
+        failed = True
+    if failed:
+        raise_redacted(CoreVerificationError, "core:database")
 
 
 def _check_pragmas(connection: sqlite3.Connection, *, require_delete_journal: bool = True) -> None:
@@ -1130,6 +1134,7 @@ def _verify_connection(
         "session_count": int(connection.execute("SELECT COUNT(*) FROM core_sessions").fetchone()[0]),
         "slot_count": int(connection.execute("SELECT COUNT(*) FROM core_slots").fetchone()[0]),
         "event_count": len(events),
+        "latest_observed_at": previous_observed if events else 0,
         "flags": dict(FIXED_FLAGS),
         "current_source_artifact_id": stream_refs.get(("ARTIFACT", "SOURCE_OBSERVATION")),
     }

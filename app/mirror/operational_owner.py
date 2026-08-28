@@ -8,10 +8,8 @@ publication.  All public failures and results are fixed-shape and sanitized.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import secrets
-import stat
 from types import MappingProxyType
 from typing import Callable, Mapping, Protocol
 
@@ -21,6 +19,7 @@ from app.mirror import ingress_v2 as ingress
 from app.mirror import ingress_v2_independent as ingress_independent
 from app.mirror import recovery_v2 as recovery
 from app.mirror import recovery_v2_independent as recovery_independent
+from app.mirror import writer_authority
 
 
 SCHEMA = "mirror-operational-owner-v1"
@@ -41,14 +40,6 @@ OUTCOME_KEYS = (
     "core_pending",
     "recovery_created",
 )
-_EXPECTED_CHILDREN = {
-    "ingress.sqlite",
-    "core.sqlite",
-    "recovery.sqlite",
-    "operational.lock",
-}
-_SIDECARS = ("-wal", "-shm", "-journal")
-_REPARSE_POINT = 0x400
 _HEX = frozenset("0123456789abcdef")
 _MAX_OBSERVATION_BYTES = ingress_independent.MAX_OBSERVATION_BYTES
 _MAX_VERIFICATION_RECEIPT_BYTES = ingress_independent.MAX_VERIFICATION_RECEIPT_BYTES
@@ -166,443 +157,6 @@ class OperationalAggregateV1:
                 raise OperationalOwnerError("mirror:operational-result")
 
 
-def _is_reparse(info: os.stat_result) -> bool:
-    return bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT)
-
-
-def _identity(info: os.stat_result) -> tuple[int, int, int]:
-    return int(info.st_dev), int(info.st_ino), int(info.st_nlink)
-
-
-def _safe_root(root: str | Path) -> Path:
-    if not isinstance(root, (str, Path)):
-        raise OperationalOwnerError("mirror:operational-root")
-    try:
-        path = Path(root)
-        raw = os.fspath(path)
-    except (OSError, TypeError, ValueError, RuntimeError):
-        raise OperationalOwnerError("mirror:operational-root") from None
-    if (
-        not path.is_absolute()
-        or not path.anchor
-        or raw.startswith("\\\\")
-        or path.parent == path
-        or any(part in {".", ".."} for part in path.parts)
-    ):
-        raise OperationalOwnerError("mirror:operational-root")
-    try:
-        resolved = path.resolve(strict=True)
-        info = os.lstat(path)
-    except (OSError, RuntimeError):
-        raise OperationalOwnerError("mirror:operational-root") from None
-    if (
-        os.path.normcase(os.fspath(resolved)) != os.path.normcase(os.fspath(path))
-        or not stat.S_ISDIR(info.st_mode)
-        or stat.S_ISLNK(info.st_mode)
-        or _is_reparse(info)
-    ):
-        raise OperationalOwnerError("mirror:operational-root")
-    cursor = path
-    while True:
-        try:
-            ancestor = os.lstat(cursor)
-        except OSError:
-            raise OperationalOwnerError("mirror:operational-root") from None
-        if stat.S_ISLNK(ancestor.st_mode) or _is_reparse(ancestor):
-            raise OperationalOwnerError("mirror:operational-root")
-        parent = cursor.parent
-        if parent == cursor:
-            break
-        cursor = parent
-    return path
-
-
-def _child_identity(path: Path, *, allow_missing: bool) -> tuple[int, int, int] | None:
-    try:
-        info = os.lstat(path)
-    except FileNotFoundError:
-        if allow_missing:
-            return None
-        raise OperationalOwnerError("mirror:operational-indeterminate") from None
-    except OSError:
-        raise OperationalOwnerError("mirror:operational-indeterminate") from None
-    if (
-        stat.S_ISLNK(info.st_mode)
-        or not stat.S_ISREG(info.st_mode)
-        or _is_reparse(info)
-        or info.st_nlink != 1
-    ):
-        raise OperationalOwnerError("mirror:operational-indeterminate")
-    for suffix in _SIDECARS:
-        if os.path.lexists(os.fspath(path) + suffix):
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-    return _identity(info)
-
-
-def _layout(root: Path, *, allow_missing_stores: bool) -> dict[str, tuple[int, int, int] | None]:
-    try:
-        entries = {entry.name for entry in os.scandir(root)}
-    except OSError:
-        raise OperationalOwnerError("mirror:operational-indeterminate") from None
-    if not entries.issubset(_EXPECTED_CHILDREN):
-        raise OperationalOwnerError("mirror:operational-indeterminate")
-    result: dict[str, tuple[int, int, int] | None] = {}
-    for name in sorted(_EXPECTED_CHILDREN):
-        result[name] = _child_identity(root / name, allow_missing=allow_missing_stores)
-    return result
-
-
-if os.name == "nt":
-    import ctypes
-    from ctypes import wintypes
-
-    _WIN_KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _WIN_GENERIC_READ = 0x80000000
-    _WIN_GENERIC_WRITE = 0x40000000
-    _WIN_FILE_SHARE_READ = 0x00000001
-    _WIN_FILE_SHARE_WRITE = 0x00000002
-    _WIN_OPEN_EXISTING = 3
-    _WIN_CREATE_NEW = 1
-    _WIN_FILE_ATTRIBUTE_NORMAL = 0x00000080
-    _WIN_FILE_ATTRIBUTE_DIRECTORY = 0x00000010
-    _WIN_FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
-    _WIN_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
-    _WIN_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
-    _WIN_FILE_TYPE_DISK = 0x00000001
-    _WIN_LOCKFILE_EXCLUSIVE_LOCK = 0x00000002
-    _WIN_LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
-    _WIN_INVALID_HANDLE = ctypes.c_void_p(-1).value
-    _WIN_ULONG_PTR = getattr(wintypes, "ULONG_PTR", ctypes.c_size_t)
-
-    class _WinFileTime(ctypes.Structure):
-        _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
-
-    class _WinFileInfo(ctypes.Structure):
-        _fields_ = [
-            ("dwFileAttributes", wintypes.DWORD),
-            ("ftCreationTime", _WinFileTime),
-            ("ftLastAccessTime", _WinFileTime),
-            ("ftLastWriteTime", _WinFileTime),
-            ("dwVolumeSerialNumber", wintypes.DWORD),
-            ("nFileSizeHigh", wintypes.DWORD),
-            ("nFileSizeLow", wintypes.DWORD),
-            ("nNumberOfLinks", wintypes.DWORD),
-            ("nFileIndexHigh", wintypes.DWORD),
-            ("nFileIndexLow", wintypes.DWORD),
-        ]
-
-    class _WinOverlapped(ctypes.Structure):
-        _fields_ = [
-            ("Internal", _WIN_ULONG_PTR),
-            ("InternalHigh", _WIN_ULONG_PTR),
-            ("Offset", wintypes.DWORD),
-            ("OffsetHigh", wintypes.DWORD),
-            ("hEvent", wintypes.HANDLE),
-        ]
-
-    _WIN_CreateFileW = _WIN_KERNEL32.CreateFileW
-    _WIN_CreateFileW.argtypes = (
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    )
-    _WIN_CreateFileW.restype = wintypes.HANDLE
-    _WIN_GetFileInformationByHandle = _WIN_KERNEL32.GetFileInformationByHandle
-    _WIN_GetFileInformationByHandle.argtypes = (wintypes.HANDLE, ctypes.POINTER(_WinFileInfo))
-    _WIN_GetFileInformationByHandle.restype = wintypes.BOOL
-    _WIN_GetFileType = _WIN_KERNEL32.GetFileType
-    _WIN_GetFileType.argtypes = (wintypes.HANDLE,)
-    _WIN_GetFileType.restype = wintypes.DWORD
-    _WIN_CloseHandle = _WIN_KERNEL32.CloseHandle
-    _WIN_CloseHandle.argtypes = (wintypes.HANDLE,)
-    _WIN_CloseHandle.restype = wintypes.BOOL
-    _WIN_LockFileEx = _WIN_KERNEL32.LockFileEx
-    _WIN_LockFileEx.argtypes = (
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(_WinOverlapped),
-    )
-    _WIN_LockFileEx.restype = wintypes.BOOL
-    _WIN_UnlockFileEx = _WIN_KERNEL32.UnlockFileEx
-    _WIN_UnlockFileEx.argtypes = (
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(_WinOverlapped),
-    )
-    _WIN_UnlockFileEx.restype = wintypes.BOOL
-
-    def _win_handle_value(handle: object) -> int | None:
-        return ctypes.cast(handle, ctypes.c_void_p).value
-
-    def _win_close(handle: object | None) -> None:
-        if handle is not None and _win_handle_value(handle) not in {None, _WIN_INVALID_HANDLE}:
-            _WIN_CloseHandle(handle)
-
-    def _win_open(path: Path, *, access: int, disposition: int, directory: bool = False) -> object:
-        flags = _WIN_FILE_FLAG_OPEN_REPARSE_POINT
-        if directory:
-            flags |= _WIN_FILE_FLAG_BACKUP_SEMANTICS
-        handle = _WIN_CreateFileW(
-            str(path),
-            access,
-            _WIN_FILE_SHARE_READ | _WIN_FILE_SHARE_WRITE,
-            None,
-            disposition,
-            flags | (_WIN_FILE_ATTRIBUTE_NORMAL if not directory else 0),
-            None,
-        )
-        if _win_handle_value(handle) in {None, _WIN_INVALID_HANDLE}:
-            error = ctypes.get_last_error()
-            raise OSError(error, "CreateFileW")
-        return handle
-
-    def _win_info(handle: object) -> tuple[int, int, int, int, int]:
-        info = _WinFileInfo()
-        if not _WIN_GetFileInformationByHandle(handle, ctypes.byref(info)):
-            error = ctypes.get_last_error()
-            raise OSError(error, "GetFileInformationByHandle")
-        size = (int(info.nFileSizeHigh) << 32) | int(info.nFileSizeLow)
-        index = (int(info.nFileIndexHigh) << 32) | int(info.nFileIndexLow)
-        return (
-            int(info.dwVolumeSerialNumber),
-            index,
-            int(info.nNumberOfLinks),
-            size,
-            int(info.dwFileAttributes),
-        )
-
-    def _win_lock(handle: object) -> _WinOverlapped:
-        overlapped = _WinOverlapped()
-        if not _WIN_LockFileEx(
-            handle,
-            _WIN_LOCKFILE_EXCLUSIVE_LOCK | _WIN_LOCKFILE_FAIL_IMMEDIATELY,
-            0,
-            1,
-            0,
-            ctypes.byref(overlapped),
-        ):
-            error = ctypes.get_last_error()
-            raise OSError(error, "LockFileEx")
-        return overlapped
-
-    def _win_unlock(handle: object, overlapped: _WinOverlapped | None) -> None:
-        if overlapped is not None:
-            _WIN_UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped))
-
-
-class _OwnerLock:
-    def __init__(self, root: Path, path: Path) -> None:
-        self.root = root
-        self.path = path
-        self._descriptor: int | None = None
-        self._root_descriptor: int | None = None
-        self._handle: object | None = None
-        self._root_handle: object | None = None
-        self._overlapped = None
-        self._root_locked = False
-        self._locked = False
-        try:
-            if os.name == "nt":
-                self._init_windows()
-            else:
-                self._init_posix()
-            self._locked = True
-        except OperationalOwnerError:
-            self.close()
-            raise
-        except OSError:
-            self.close()
-            raise OperationalOwnerError("mirror:operational-lock") from None
-        except Exception:
-            self.close()
-            raise OperationalOwnerError("mirror:operational-lock") from None
-
-    def _init_posix(self) -> None:
-        nofollow = getattr(os, "O_NOFOLLOW", None)
-        directory = getattr(os, "O_DIRECTORY", None)
-        if nofollow is None or directory is None:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        root_before = _identity(os.lstat(self.root))
-        root_descriptor = os.open(self.root, os.O_RDONLY | directory | nofollow)
-        self._root_descriptor = root_descriptor
-        root_info = os.fstat(root_descriptor)
-        if not stat.S_ISDIR(root_info.st_mode) or _is_reparse(root_info) or _identity(root_info) != root_before:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        current_root = os.lstat(self.root)
-        if _identity(current_root) != root_before:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        import fcntl
-
-        try:
-            fcntl.flock(root_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            raise OperationalOwnerError("mirror:operational-lock") from None
-        self._root_locked = True
-        if _identity(os.lstat(self.root)) != root_before:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        self.root_identity = root_before
-        name = self.path.name
-        try:
-            descriptor = os.open(
-                name,
-                os.O_RDWR | os.O_CREAT | os.O_EXCL | nofollow,
-                0o600,
-                dir_fd=root_descriptor,
-            )
-        except FileExistsError:
-            descriptor = os.open(name, os.O_RDWR | nofollow, dir_fd=root_descriptor)
-        self._descriptor = descriptor
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or _is_reparse(opened) or opened.st_nlink != 1 or opened.st_size > 1:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        relative = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
-        if (
-            not stat.S_ISREG(relative.st_mode)
-            or _is_reparse(relative)
-            or relative.st_nlink != 1
-            or _identity(relative) != _identity(opened)
-        ):
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        final = _child_identity(self.path, allow_missing=False)
-        if final != _identity(opened):
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            raise OperationalOwnerError("mirror:operational-lock") from None
-        self.identity = final
-
-    def _init_windows(self) -> None:
-        root_before = _identity(os.lstat(self.root))
-        root_handle = _win_open(self.root, access=_WIN_GENERIC_READ, disposition=_WIN_OPEN_EXISTING, directory=True)
-        self._root_handle = root_handle
-        root_info = _win_info(root_handle)
-        if (
-            not root_info[4] & _WIN_FILE_ATTRIBUTE_DIRECTORY
-            or root_info[4] & _WIN_FILE_ATTRIBUTE_REPARSE_POINT
-            or _WIN_GetFileType(root_handle) != _WIN_FILE_TYPE_DISK
-        ):
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        current_root = os.lstat(self.root)
-        if _identity(current_root) != root_before:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        existing = _child_identity(self.path, allow_missing=True)
-        disposition = _WIN_OPEN_EXISTING if existing is not None else _WIN_CREATE_NEW
-        handle = _win_open(
-            self.path,
-            access=_WIN_GENERIC_READ | _WIN_GENERIC_WRITE,
-            disposition=disposition,
-        )
-        self._handle = handle
-        opened = _win_info(handle)
-        if (
-            _WIN_GetFileType(handle) != _WIN_FILE_TYPE_DISK
-            or opened[4] & (_WIN_FILE_ATTRIBUTE_DIRECTORY | _WIN_FILE_ATTRIBUTE_REPARSE_POINT)
-            or opened[2] != 1
-            or opened[3] > 1
-        ):
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        probe = _win_open(self.path, access=_WIN_GENERIC_READ, disposition=_WIN_OPEN_EXISTING)
-        try:
-            probed = _win_info(probe)
-        finally:
-            _win_close(probe)
-        if opened[:3] != probed[:3]:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        final = _child_identity(self.path, allow_missing=False)
-        if final is None or final[2] != 1:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        self.identity = final
-        self._overlapped = _win_lock(handle)
-        if _identity(os.lstat(self.root)) != root_before:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        self.root_identity = root_before
-
-    def assert_identity(self) -> None:
-        if not self._locked:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        if os.name == "nt":
-            if self._handle is None or self._root_handle is None:
-                raise OperationalOwnerError("mirror:operational-indeterminate")
-        elif self._descriptor is None or self._root_descriptor is None:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        current_root = os.lstat(self.root)
-        if _identity(current_root) != self.root_identity:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        current = _child_identity(self.path, allow_missing=False)
-        if current != self.identity:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-        if os.name == "nt":
-            root_info = _win_info(self._root_handle)
-            handle_info = _win_info(self._handle)
-            if (
-                root_info[1] != int(current_root.st_ino)
-                or root_info[2] != int(current_root.st_nlink)
-                or handle_info[0] != root_info[0]
-                or handle_info[1] != current[1]
-                or handle_info[2] != current[2]
-                or root_info[4] & (_WIN_FILE_ATTRIBUTE_REPARSE_POINT | _WIN_FILE_ATTRIBUTE_DIRECTORY) != _WIN_FILE_ATTRIBUTE_DIRECTORY
-                or handle_info[4] & (_WIN_FILE_ATTRIBUTE_DIRECTORY | _WIN_FILE_ATTRIBUTE_REPARSE_POINT)
-                or handle_info[2] != 1
-                or handle_info[3] > 1
-            ):
-                raise OperationalOwnerError("mirror:operational-indeterminate")
-            return
-        try:
-            root_info = os.fstat(self._root_descriptor)
-            opened = os.fstat(self._descriptor)
-        except OSError:
-            raise OperationalOwnerError("mirror:operational-indeterminate") from None
-        if _identity(root_info) != self.root_identity or _identity(opened) != self.identity:
-            raise OperationalOwnerError("mirror:operational-indeterminate")
-
-    def close(self) -> None:
-        descriptor = self._descriptor
-        root_descriptor = self._root_descriptor
-        handle = self._handle
-        root_handle = self._root_handle
-        self._descriptor = None
-        self._root_descriptor = None
-        self._handle = None
-        self._root_handle = None
-        was_locked = self._locked
-        self._locked = False
-        if os.name == "nt":
-            if was_locked and handle is not None:
-                _win_unlock(handle, self._overlapped)
-            _win_close(handle)
-            _win_close(root_handle)
-            self._overlapped = None
-            return
-        try:
-            if descriptor is not None:
-                os.close(descriptor)
-        except OSError:
-            pass
-        try:
-            if was_locked and root_descriptor is not None and self._root_locked:
-                import fcntl
-
-                fcntl.flock(root_descriptor, fcntl.LOCK_UN)
-        except OSError:
-            pass
-        try:
-            if root_descriptor is not None:
-                os.close(root_descriptor)
-        except OSError:
-            pass
-        self._root_locked = False
-
-
 def _admission_is_operational(error: BaseException) -> bool:
     try:
         value = str(error)
@@ -650,7 +204,10 @@ class MirrorOperationalOwnerV1:
             raise OperationalOwnerError("mirror:operational-config")
         if type(operational_config) is not OperationalConfigV1:
             raise OperationalOwnerError("mirror:operational-config")
-        root_path = _safe_root(root)
+        try:
+            root_path = writer_authority.safe_root(root)
+        except writer_authority.WriterAuthorityError:
+            raise OperationalOwnerError("mirror:operational-root") from None
         if type(ingress_config) is not ingress.IngressConfigV2 or type(core_config) is not core.CoreConfigV2 or type(recovery_config) is not recovery.RecoveryConfigV2:
             raise OperationalOwnerError("mirror:operational-config")
         if (
@@ -703,38 +260,36 @@ class MirrorOperationalOwnerV1:
         self.clock = clock
         self.operational_config = operational_config
         self._closed = False
-        self._lock: _OwnerLock | None = None
-        self._root_identity: tuple[int, int, int] | None = None
+        self._authority: writer_authority.WriterAuthority | None = None
         self.ingress: ingress.IngressServiceV2 | None = None
         self.core: core.CoreServiceV2 | None = None
         self.recovery: recovery.RecoveryServiceV2 | None = None
         try:
-            initial_layout = _layout(root_path, allow_missing_stores=True)
-            self._lock = _OwnerLock(root_path, self.lock_path)
-            self._root_identity = self._lock.root_identity
-            locked_layout = _layout(root_path, allow_missing_stores=True)
+            self._authority = writer_authority.WriterAuthority(root_path)
+            initial_layout = self._authority.layout(allow_missing_stores=True)
+            locked_layout = self._authority.layout(allow_missing_stores=True)
             self._assert_layout_transition(initial_layout, locked_layout)
             self._assert_root_lock_identity()
-            before_ingress = _layout(root_path, allow_missing_stores=True)
+            before_ingress = self._authority.layout(allow_missing_stores=True)
             self._assert_root_lock_identity()
-            self.ingress = ingress.IngressServiceV2(self.ingress_path, ingress_config, clock=clock)
-            after_ingress = _layout(root_path, allow_missing_stores=True)
+            self.ingress = ingress.IngressServiceV2(self.ingress_path, ingress_config, clock=self._authority.current_run_time, authority=self._authority)
+            after_ingress = self._authority.layout(allow_missing_stores=True)
             self._assert_layout_transition(before_ingress, after_ingress)
             if after_ingress["ingress.sqlite"] is None:
                 raise OperationalOwnerError("mirror:operational-indeterminate")
             self._assert_root_lock_identity()
-            before_core = _layout(root_path, allow_missing_stores=True)
+            before_core = self._authority.layout(allow_missing_stores=True)
             self._assert_root_lock_identity()
-            self.core = core.CoreServiceV2(self.core_path, core_config, clock=clock)
-            after_core = _layout(root_path, allow_missing_stores=True)
+            self.core = core.CoreServiceV2(self.core_path, core_config, clock=self._authority.current_run_time, authority=self._authority)
+            after_core = self._authority.layout(allow_missing_stores=True)
             self._assert_layout_transition(before_core, after_core)
             if after_core["core.sqlite"] is None:
                 raise OperationalOwnerError("mirror:operational-indeterminate")
             self._assert_root_lock_identity()
-            before_recovery = _layout(root_path, allow_missing_stores=True)
+            before_recovery = self._authority.layout(allow_missing_stores=True)
             self._assert_root_lock_identity()
-            self.recovery = recovery.RecoveryServiceV2(self.recovery_path, recovery_config, custody, storage)
-            after_recovery = _layout(root_path, allow_missing_stores=True)
+            self.recovery = recovery.RecoveryServiceV2(self.recovery_path, recovery_config, custody, storage, authority=self._authority)
+            after_recovery = self._authority.layout(allow_missing_stores=True)
             self._assert_layout_transition(before_recovery, after_recovery)
             if after_recovery["recovery.sqlite"] is None:
                 raise OperationalOwnerError("mirror:operational-indeterminate")
@@ -744,6 +299,14 @@ class MirrorOperationalOwnerV1:
         except OperationalOwnerError:
             self.close()
             raise
+        except writer_authority.WriterAuthorityError as error:
+            self.close()
+            code = {
+                "writer:lock": "mirror:operational-lock",
+                "writer:root": "mirror:operational-root",
+                "writer:indeterminate": "mirror:operational-indeterminate",
+            }.get(str(error), "mirror:operational-initialize")
+            raise OperationalOwnerError(code) from None
         except (ingress.IngressError, core.CoreError, recovery.RecoveryError):
             self.close()
             raise OperationalOwnerError("mirror:operational-indeterminate") from None
@@ -752,7 +315,9 @@ class MirrorOperationalOwnerV1:
             raise OperationalOwnerError("mirror:operational-initialize") from None
 
     def _read_store_identities(self) -> dict[str, tuple[int, int, int]]:
-        result = _layout(self.root, allow_missing_stores=False)
+        if self._authority is None:
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        result = self._authority.layout(allow_missing_stores=False)
         values: dict[str, tuple[int, int, int]] = {}
         for name in ("ingress.sqlite", "core.sqlite", "recovery.sqlite", "operational.lock"):
             value = result.get(name)
@@ -766,21 +331,17 @@ class MirrorOperationalOwnerV1:
         before: Mapping[str, tuple[int, int, int] | None],
         after: Mapping[str, tuple[int, int, int] | None],
     ) -> None:
-        for name in _EXPECTED_CHILDREN:
+        for name in set(before) | set(after):
             if before.get(name) is not None and after.get(name) != before[name]:
                 raise OperationalOwnerError("mirror:operational-indeterminate")
 
     def _assert_root_lock_identity(self) -> None:
-        if self._closed or self._lock is None or self._root_identity is None:
+        if self._closed or self._authority is None:
             raise OperationalOwnerError("mirror:operational-indeterminate")
         try:
-            _safe_root(self.root)
-            self._lock.assert_identity()
-            current_root = os.lstat(self.root)
+            self._authority.assert_identity()
         except Exception:
             raise OperationalOwnerError("mirror:operational-indeterminate") from None
-        if _identity(current_root) != self._root_identity or not stat.S_ISDIR(current_root.st_mode) or _is_reparse(current_root):
-            raise OperationalOwnerError("mirror:operational-indeterminate")
 
     def _assert_port_identity(self) -> None:
         try:
@@ -947,7 +508,9 @@ class MirrorOperationalOwnerV1:
         attempt = slot.attempt + 1
         try:
             self._assert_port_identity()
-            payload = self.acquisition.acquire(slot.slot_id, slot.scheduled_at, attempt)
+            assert self._authority is not None
+            with self._authority.external_scope():
+                payload = self.acquisition.acquire(slot.slot_id, slot.scheduled_at, attempt)
         except Exception:
             self._assert_owner_identity()
             counts["acquisition_rejected"] += 1
@@ -987,7 +550,75 @@ class MirrorOperationalOwnerV1:
         counts["admitted"] += 1
         counts["processed"] += 1
 
+    def _verify_all(self) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        assert self._authority is not None
+        try:
+            self._assert_owner_identity()
+            ingress_result = ingress_independent.verify_database(
+                self.ingress_path,
+                expected_database_id=self.ingress_config.database_id,
+                expected_config_digest=self.ingress_config.digest,
+            )
+            self._assert_owner_identity()
+            core_result = core_independent.verify_database(
+                self.core_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+            )
+            self._assert_owner_identity()
+            recovery_result = recovery_independent.verify_database(
+                self.recovery_path,
+                expected_database_id=self.recovery_config.database_id,
+                expected_config_digest=self.recovery_config.digest,
+            )
+            if core_result.get("ingress_bound") is not True:
+                raise ValueError("core-bound")
+            ingress_latest = ingress_result.get("latest_observed_at")
+            core_latest = core_result.get("latest_observed_at")
+            pending = recovery_result.get("object_pending_generation")
+            if (
+                type(ingress_latest) is not int
+                or ingress_latest < 0
+                or type(core_latest) is not int
+                or core_latest < 0
+                or pending is not None
+                and (type(pending) is not int or not 1 <= pending <= recovery_independent.MAX_RECOVERY_POINTS)
+            ):
+                raise ValueError("chronology-summary")
+            if self._authority.current_run_time() < ingress_latest or self._authority.current_run_time() < core_latest:
+                raise OperationalOwnerError("mirror:operational-indeterminate")
+            return ingress_result, core_result, recovery_result
+        except OperationalOwnerError:
+            raise
+        except Exception:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+
     def run(
+        self,
+        scheduled_at: tuple[int, ...] = (),
+        *,
+        recovery_generation: int | None = None,
+    ) -> OperationalAggregateV1:
+        assert self._authority is not None
+        self._assert_owner_identity()
+        try:
+            with self._authority.run_scope():
+                with self._authority.external_scope():
+                    try:
+                        run_now = self.clock()
+                    except Exception:
+                        raise OperationalOwnerError("mirror:operational-clock") from None
+                    if type(run_now) is not int or run_now < 0:
+                        raise OperationalOwnerError("mirror:operational-clock")
+                    self._authority.set_run_time(run_now)
+                return self._run(scheduled_at, recovery_generation=recovery_generation)
+        except OperationalOwnerError:
+            raise
+        except writer_authority.WriterAuthorityError:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+
+    def _run(
         self,
         scheduled_at: tuple[int, ...] = (),
         *,
@@ -1003,6 +634,20 @@ class MirrorOperationalOwnerV1:
         ):
             raise OperationalOwnerError("mirror:operational-input")
         assert self.ingress is not None and self.core is not None and self.recovery is not None
+        ingress_result, core_result, recovery_result = self._verify_all()
+        pending_generation = recovery_result.get("object_pending_generation")
+        if pending_generation is not None:
+            self._assert_owner_identity()
+            try:
+                self.recovery.create_point(
+                    self.ingress_path,
+                    self.core_path,
+                    generation=int(pending_generation),
+                )
+            except Exception:
+                raise OperationalOwnerError("mirror:operational-indeterminate") from None
+            self._assert_owner_identity()
+            ingress_result, core_result, recovery_result = self._verify_all()
         counts = {key: 0 for key in OUTCOME_KEYS}
         admitted: list[str] = []
         pending = self._reconciliation_pending()
@@ -1076,28 +721,7 @@ class MirrorOperationalOwnerV1:
                 raise OperationalOwnerError("mirror:operational-indeterminate")
             recovery_created = point_delta == 1
             counts["recovery_created"] = point_delta
-        self._assert_owner_identity()
-        try:
-            ingress_result = ingress_independent.verify_database(
-                self.ingress_path,
-                expected_database_id=self.ingress_config.database_id,
-                expected_config_digest=self.ingress_config.digest,
-            )
-            core_result = core_independent.verify_database(
-                self.core_path,
-                expected_database_id=self.core_config.database_id,
-                expected_config_digest=self.core_config.digest,
-                ingress_path=self.ingress_path,
-            )
-            recovery_result = recovery_independent.verify_database(
-                self.recovery_path,
-                expected_database_id=self.recovery_config.database_id,
-                expected_config_digest=self.recovery_config.digest,
-            )
-            if core_result.get("ingress_bound") is not True:
-                raise ValueError("core-bound")
-        except Exception:
-            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+        ingress_result, core_result, recovery_result = self._verify_all()
         final_pending = self._reconciliation_pending()
         counts["core_pending"] = len(final_pending)
         self._assert_owner_identity()
@@ -1134,9 +758,9 @@ class MirrorOperationalOwnerV1:
                     close()
                 except Exception:
                     pass
-        if self._lock is not None:
-            self._lock.close()
-            self._lock = None
+        if self._authority is not None:
+            self._authority.close()
+            self._authority = None
 
     def __enter__(self) -> "MirrorOperationalOwnerV1":
         self._assert_owner_identity()

@@ -15,43 +15,69 @@ from app.mirror import core_v2_independent as core_independent
 from app.mirror import ingress_v2 as ingress
 from app.mirror import ingress_v2_independent as ingress_independent
 from app.mirror import nc_medicaid_fhir as fhir_runtime
+from app.mirror import nc_medicaid_fhir_independent as fhir_independent
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import operational_owner as operational
 from app.mirror import recovery_v2 as recovery
 from app.mirror import recovery_v2_independent as recovery_independent
-from tests.test_mirror_v2_consolidation import _Custody, _Storage, _external_evidence, _hex
+from app.mirror import source_admission
+from app.mirror import writer_authority
+from tests.test_mirror_v2_consolidation import _Custody, _Storage, _hex
 from tests.test_nc_medicaid_fhir_source import _bundle, _envelope, _transport
 
 
 class _Clock:
     def __init__(self, value: int) -> None:
         self.value = value
+        self.calls = 0
+        self.raise_on_read = False
 
     def __call__(self) -> int:
+        self.calls += 1
+        if self.raise_on_read:
+            raise RuntimeError("clock read must not be needed")
         return self.value
+
+
+def _sanitized_payload(
+    envelope: bytes,
+    *,
+    source_profile: object = profile.NC_MEDICAID_GRAPH_PROFILE,
+) -> operational.SanitizedObservationPayloadV1:
+    admission = source_admission.SourceAdmissionService(
+        source_profile,
+        fhir_independent.NcMedicaidFhirVerifier(),
+    ).admit(envelope)
+    receipt = json.loads(admission.verification_receipt.decode("ascii"))
+    receipt["observation_digest"] = ingress_independent._raw_digest(
+        "sanitized-observation", admission.observation
+    )
+    return operational.SanitizedObservationPayloadV1(
+        admission.observation,
+        ingress_independent._canonical(receipt),
+    )
 
 
 class _Port:
     acquisition_identity = "synthetic-acquisition-port"
 
     def __init__(self, config: ingress.IngressConfigV2, *, fail: bool = False) -> None:
-        self.external_policy_digest = config.external_policy().digest
+        self.external_policy_digest = _hex("operational-external-policy")
         self.profile_digest = config.source_contract_digest
         self.config = config
         self.fail = fail
         self.calls: list[tuple[str, int, int]] = []
+        self.payload = _sanitized_payload(_envelope())
 
-    def acquire(self, slot_id: str, scheduled_at: int, attempt: int) -> operational.AcquisitionPayloadV1:
+    def acquire(self, slot_id: str, scheduled_at: int, attempt: int) -> operational.SanitizedObservationPayloadV1:
         self.calls.append((slot_id, scheduled_at, attempt))
         if self.fail:
             raise RuntimeError("CANARY_ACQUISITION_EXCEPTION")
-        envelope = _envelope()
-        evidence = _external_evidence(self.config, envelope)
-        return operational.AcquisitionPayloadV1(envelope, evidence)
+        return self.payload
 
 
 class _ScheduledPort(_Port):
-    def acquire(self, slot_id: str, scheduled_at: int, attempt: int) -> operational.AcquisitionPayloadV1:
+    def acquire(self, slot_id: str, scheduled_at: int, attempt: int) -> operational.SanitizedObservationPayloadV1:
         self.calls.append((slot_id, scheduled_at, attempt))
         context = profile.DynamicCaptureContext(
             profile.DEFAULT_CAPTURE_CONTEXT.subject_id,
@@ -64,15 +90,54 @@ class _ScheduledPort(_Port):
         envelope = fhir_runtime.build_fixture_envelope(
             _transport(_bundle(last_updated=profile.FIXTURE_LAST_UPDATED)), context=context
         )
-        evidence = _external_evidence(self.config, envelope)
-        return operational.AcquisitionPayloadV1(envelope, evidence)
+        return _sanitized_payload(
+            envelope,
+            source_profile=profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context),
+        )
 
 
 class _MalformedPort(_Port):
-    def acquire(self, slot_id: str, scheduled_at: int, attempt: int) -> operational.AcquisitionPayloadV1:
+    def acquire(self, slot_id: str, scheduled_at: int, attempt: int) -> operational.SanitizedObservationPayloadV1:
         self.calls.append((slot_id, scheduled_at, attempt))
         canary = b"CANARY_RAW_CAPTURE_AND_EVIDENCE"
-        return operational.AcquisitionPayloadV1(canary, canary)
+        self.raw_canary_rejected = False
+        try:
+            operational.SanitizedObservationPayloadV1(canary, canary)
+        except operational.OperationalOwnerError:
+            self.raw_canary_rejected = True
+        context = profile.DynamicCaptureContext(
+            profile.DEFAULT_CAPTURE_CONTEXT.subject_id,
+            profile.DEFAULT_CAPTURE_CONTEXT.credential_id,
+            profile.DEFAULT_CAPTURE_CONTEXT.enrollment_id,
+            profile.DEFAULT_CAPTURE_CONTEXT.subject_locator_digest,
+            scheduled_at + self.config.cadence_seconds,
+            scheduled_at + self.config.cadence_seconds + 1,
+        )
+        envelope = fhir_runtime.build_fixture_envelope(
+            _transport(_bundle(last_updated=profile.FIXTURE_LAST_UPDATED)), context=context
+        )
+        return _sanitized_payload(
+            envelope,
+            source_profile=profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context),
+        )
+
+
+class _ReentrantPort(_Port):
+    def __init__(self, config: ingress.IngressConfigV2) -> None:
+        super().__init__(config)
+        self.callback: object | None = None
+        self.errors: list[BaseException] = []
+        self.called = False
+
+    def acquire(self, slot_id: str, scheduled_at: int, attempt: int) -> operational.SanitizedObservationPayloadV1:
+        self.calls.append((slot_id, scheduled_at, attempt))
+        if not self.called and self.callback is not None:
+            self.called = True
+            try:
+                self.callback()
+            except BaseException as error:
+                self.errors.append(error)
+        return self.payload
 
 
 class MirrorOperationalOwnerTests(unittest.TestCase):
@@ -121,7 +186,7 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
         selected = port or _Port(self.ingress_config)
         config = operational.OperationalConfigV1(
             selected.acquisition_identity,
-            self.ingress_config.external_policy().digest,
+            selected.external_policy_digest,
             self.ingress_config.source_contract_digest,
             max_due,
         )
@@ -143,6 +208,7 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
     def test_clean_initialization_exact_paths_counts_and_one_batch(self) -> None:
         owner, port = self._owner()
         try:
+            self.clock.calls = 0
             self.assertEqual(
                 {path.name for path in self.root.iterdir()},
                 {"ingress.sqlite", "core.sqlite", "recovery.sqlite", "operational.lock"},
@@ -165,6 +231,7 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
             result = owner.run((self.time,))
             self.assertEqual("COMPLETE", result.status)
             self.assertEqual(1, result.counts["admitted"])
+            self.assertEqual(1, self.clock.calls)
             self.assertEqual(1, result.counts["core_ingested"])
             self.assertFalse(result.recovery_created)
             for service_result in (owner.ingress.verify(), owner.core.verify(), owner.recovery.verify()):
@@ -207,7 +274,7 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
                 clock=self.clock,
                 operational_config=operational.OperationalConfigV1(
                     "synthetic-acquisition-port",
-                    self.ingress_config.external_policy().digest,
+                    _hex("operational-external-policy"),
                     self.ingress_config.source_contract_digest,
                 ),
             )
@@ -220,6 +287,15 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
             self.assertEqual(1, result.counts["processed"])
             self.assertEqual(3, result.counts["scheduled"])
             self.assertEqual(0, result.counts["admission_rejected"])
+            connection = sqlite3.connect(owner.ingress_path)
+            try:
+                observed = [
+                    int(json.loads(bytes(row[0]).decode("ascii"))["observed_at"])
+                    for row in connection.execute("SELECT event_raw FROM ingress_events ORDER BY sequence")
+                ]
+            finally:
+                connection.close()
+            self.assertEqual({self.time}, set(observed))
         finally:
             owner.close()
 
@@ -239,9 +315,10 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
             owner.close()
 
     def test_admission_failure_is_fixed_and_raw_canary_is_not_persisted(self) -> None:
-        owner, _port = self._owner(port=_MalformedPort(self.ingress_config))
+        owner, port = self._owner(port=_MalformedPort(self.ingress_config))
         try:
             result = owner.run((self.time,))
+            self.assertTrue(port.raw_canary_rejected)
             self.assertEqual(1, result.counts["admission_rejected"])
             self.assertNotIn("CANARY_RAW_CAPTURE_AND_EVIDENCE", repr(result))
             self.assertNotIn(b"CANARY_RAW_CAPTURE_AND_EVIDENCE", owner.ingress_path.read_bytes())
@@ -443,7 +520,9 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
 
     def test_entropy_and_payload_caps_are_fixed_and_sanitized(self) -> None:
         with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-acquisition$"):
-            operational.AcquisitionPayloadV1(b"x" * (operational._MAX_ENVELOPE_BYTES + 1), b"x")
+            operational.SanitizedObservationPayloadV1(
+                b"x" * (operational._MAX_OBSERVATION_BYTES + 1), b"x"
+            )
 
         owner, _port = self._owner()
         try:
@@ -491,9 +570,12 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
         port = _ScheduledPort(self.ingress_config)
         owner, _port = self._owner(port=port, max_due=2)
         try:
-            created = owner.ingress.ensure_slot(self.time)
-            expired_slot = json.loads(created.raw.decode("ascii"))["slot_id"]
-            owner.ingress.claim_slot(expired_slot, lease_token="x" * 32)
+            assert owner._authority is not None
+            with owner._authority.run_scope():
+                owner._authority.set_run_time(self.time)
+                created = owner.ingress.ensure_slot(self.time)
+                expired_slot = json.loads(created.raw.decode("ascii"))["slot_id"]
+                owner.ingress.claim_slot(expired_slot, lease_token="x" * 32)
             self.clock.value = self.time + self.ingress_config.lease_seconds
             scheduled = self.time + self.ingress_config.cadence_seconds
             result = owner.run((scheduled,))
@@ -515,6 +597,84 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
             self.assertEqual(2, result.counts["admitted"])
             self.assertEqual(1, ingest.call_count)
             self.assertEqual(2, len(ingest.call_args.args[1]))
+            self.assertEqual(1, self.clock.calls)
+            connection = sqlite3.connect(owner.ingress_path)
+            try:
+                events = [
+                    json.loads(bytes(row[0]).decode("ascii"))
+                    for row in connection.execute("SELECT event_raw FROM ingress_events ORDER BY sequence")
+                ]
+            finally:
+                connection.close()
+            self.assertEqual({self.time + 120}, {event["observed_at"] for event in events})
+        finally:
+            owner.close()
+
+    def test_pending_recovery_finishes_before_acquisition_after_restart(self) -> None:
+        self.custody.fail_seal = True
+        owner, first_port = self._owner()
+        try:
+            with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                owner.run((self.time,), recovery_generation=1)
+            self.assertEqual(1, len(first_port.calls))
+            self.assertEqual(1, owner.recovery.verify()["object_pending_generation"])
+        finally:
+            owner.close()
+
+        self.custody.fail_seal = False
+        owner, restart_port = self._owner()
+        try:
+            with mock.patch.object(owner.recovery, "create_point", wraps=owner.recovery.create_point) as finish:
+                result = owner.run()
+            self.assertEqual([], restart_port.calls)
+            self.assertEqual(1, finish.call_count)
+            self.assertEqual(0, result.counts["admitted"])
+            self.assertIsNone(owner.recovery.verify()["object_pending_generation"])
+            self.assertEqual(1, owner.recovery.verify()["point_count"])
+        finally:
+            owner.close()
+
+    def test_acquisition_callback_cannot_reenter_service_mutation(self) -> None:
+        port = _ReentrantPort(self.ingress_config)
+        owner, _port = self._owner(port=port)
+        try:
+            port.callback = lambda: owner.ingress.ensure_slot(self.time)
+            result = owner.run((self.time,))
+            self.assertEqual(1, result.counts["admitted"])
+            self.assertEqual(1, len(port.errors))
+            self.assertIsInstance(port.errors[0], writer_authority.WriterAuthorityError)
+            self.assertEqual(1, owner.ingress.verify()["slot_count"])
+        finally:
+            owner.close()
+
+    def test_sequential_sanitized_observations_and_predecessor_mismatch_fail_closed(self) -> None:
+        port = _ScheduledPort(self.ingress_config)
+        owner, _port = self._owner(port=port, max_due=1)
+        try:
+            first = owner.run((self.time,))
+            self.clock.value = self.time + 120
+            second = owner.run((self.time + 60,))
+            self.assertEqual(1, first.counts["core_ingested"])
+            self.assertEqual(1, second.counts["core_ingested"])
+            self.assertEqual(2, owner.ingress.verify()["artifact_count"])
+            core_before = owner.core.verify()["artifact_count"]
+
+            self.clock.value = self.time + 180
+            original = ingress_independent.read_artifact_snapshots
+
+            def tampered_snapshots(path: str | Path, artifact_ids: tuple[str, ...]) -> dict[str, dict[str, object]]:
+                snapshots = dict(original(path, artifact_ids))
+                predecessor_id = artifact_ids[-1]
+                predecessor = dict(snapshots[predecessor_id])
+                predecessor["observation_id"] = "0" * 128
+                snapshots[predecessor_id] = predecessor
+                return snapshots
+
+            with mock.patch.object(ingress_independent, "read_artifact_snapshots", side_effect=tampered_snapshots):
+                with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                    owner.run((self.time + 120,))
+            self.assertEqual(3, owner.ingress.verify()["artifact_count"])
+            self.assertEqual(core_before, owner.core.verify()["artifact_count"])
         finally:
             owner.close()
 
@@ -559,7 +719,7 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
         selected = port or _Port(self.ingress_config)
         config = operational.OperationalConfigV1(
             selected.acquisition_identity,
-            self.ingress_config.external_policy().digest,
+            selected.external_policy_digest,
             self.ingress_config.source_contract_digest,
             max_due,
         )

@@ -530,6 +530,16 @@ def _verify_snapshot(connection: sqlite3.Connection, *, expected_database_id: st
         row = persisted.get(point_id)
         if row is None or dict(row) != point:
             raise RecoveryVerificationError("recovery:point-reconstruction")
+    pending_points = [
+        point for point in points.values() if point["state"] == "OBJECT_PENDING"
+    ]
+    if len(pending_points) > 1:
+        raise RecoveryVerificationError("recovery:pending-count")
+    object_pending_generation = None
+    if pending_points:
+        object_pending_generation = int(pending_points[0]["generation"])
+        if object_pending_generation != int(meta["current_generation"]):
+            raise RecoveryVerificationError("recovery:pending-generation")
     expected_generation = 1
     prior_point: Mapping[str, object] | None = None
     for point in sorted(points.values(), key=lambda item: int(item["generation"])):
@@ -551,6 +561,7 @@ def _verify_snapshot(connection: sqlite3.Connection, *, expected_database_id: st
         "database_id": meta["database_id"], "chain_id": meta["chain_id"], "config_digest": meta["config_digest"], "profile_digest": meta["profile_digest"],
         "key_custody_id_digest": meta["key_custody_id_digest"], "storage_id_digest": meta["storage_id_digest"], "sequence": meta["sequence"], "head_root": meta["head_root"],
         "point_count": len(points), "event_count": len(events), "current_generation": meta["current_generation"],
+        "object_pending_generation": object_pending_generation,
         "states": {key: sum(1 for point in points.values() if point["state"] == key) for key in STATES}, "flags": dict(FIXED_FLAGS),
     }
     return summary, points, receipts

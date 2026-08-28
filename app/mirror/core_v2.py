@@ -9,6 +9,7 @@ only the independently verified sanitized observation and its at-time receipt.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import wraps
 import hashlib
 import json
 import os
@@ -26,6 +27,7 @@ from app.mirror import ingress_v2_independent as ingress
 from app.mirror import external_corrective_action as corrective_action
 from app.mirror import external_corrective_action_independent as corrective_action_independent
 from app.mirror.error_boundary import raise_redacted
+from app.mirror import writer_authority
 
 
 SCHEMA = independent.SCHEMA
@@ -58,6 +60,14 @@ class CoreIndeterminateError(CoreError):
     """The transaction outcome or its finalization cannot be established."""
 
 
+def _mutation(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._authority.mutation_scope(self.path):
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 def _finalize_core_connection(
     connection: sqlite3.Connection | None,
     *,
@@ -74,11 +84,19 @@ def _finalize_core_connection(
     """Own Core rollback/close without exposing cleanup failures."""
 
     active = None if ignore_active else sys.exc_info()[1]
+    active_present = active is not None
+    active_is_core_error = isinstance(active, CoreError)
+    active_is_fatal = isinstance(active, (KeyboardInterrupt, SystemExit, GeneratorExit))
+    if not active_is_core_error:
+        active = None
     if connection is None:
         if transactional and (commit_attempted or commit_succeeded):
+            active = None
             raise_redacted(CoreIndeterminateError, "core:transaction-indeterminate")
-        if active is not None and not isinstance(active, CoreError):
+        if active_present and not active_is_core_error:
+            active = None
             raise_redacted(CoreError, cleanup_code)
+        active = None
         return
     cleanup_failed = False
     try:
@@ -103,28 +121,35 @@ def _finalize_core_connection(
             cleanup_failed = True
     if continue_after_cleanup:
         if cleanup_failed or (commit_attempted and not commit_succeeded):
+            active = None
             raise_redacted(CoreIndeterminateError, "core:transaction-indeterminate")
-        if isinstance(active, CoreError):
+        if active_is_core_error and active is not None:
             active.__cause__ = None
             active.__context__ = None
             active.__suppress_context__ = True
+        active = None
         return
-    if isinstance(active, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+    if active_is_fatal:
+        active = None
         return
     if transactional and (
         cleanup_failed
         or (commit_attempted and not commit_succeeded)
-        or (commit_succeeded and active is not None)
+        or (commit_succeeded and active_present)
     ):
+        active = None
         raise_redacted(CoreIndeterminateError, "core:transaction-indeterminate")
     if not transactional and cleanup_failed:
+        active = None
         raise_redacted(CoreError, cleanup_code)
-    if active is not None and not isinstance(active, CoreError):
+    if active_present and not active_is_core_error:
+        active = None
         raise_redacted(CoreError, cleanup_code)
-    if isinstance(active, CoreError):
+    if active_is_core_error and active is not None:
         active.__cause__ = None
         active.__context__ = None
         active.__suppress_context__ = True
+    active = None
 
 
 def _safe_identifier(value: object, label: str) -> str:
@@ -461,11 +486,16 @@ class CoreServiceV2:
         config: CoreConfigV2,
         *,
         clock: object | None = None,
+        authority: writer_authority.WriterAuthority,
         corrective_action_control: corrective_action.CorrectiveActionControlV1 | None = None,
         corrective_action_verifier: corrective_action.CorrectiveActionVerifier | None = None,
     ) -> None:
+        if not isinstance(authority, writer_authority.WriterAuthority):
+            raise CoreError("core:writer")
         self.path = Path(path)
         self.config = config
+        self._authority = authority
+        authority.assert_database_parent(self.path)
         self.clock = clock if clock is not None else lambda: int(time.time())
         if not callable(self.clock):
             raise CoreError("core:clock")
@@ -475,12 +505,15 @@ class CoreServiceV2:
         self._corrective_action_verifier = corrective_action_verifier
         if corrective_action_control is not None:
             self._require_corrective_action_dependencies()
-        self._database_identity = _init(self.path, config)
+        with authority.mutation_scope(self.path):
+            self._database_identity = _init(self.path, config)
 
     def _open(self) -> sqlite3.Connection:
+        self._authority.assert_database_parent(self.path)
         return _connection(self.path, expected_identity=self._database_identity)
 
     def _assert_database_identity(self) -> None:
+        self._authority.assert_database_parent(self.path)
         _require_path_identity(self.path, self._database_identity)
 
     def _require_corrective_action_dependencies(self) -> tuple[corrective_action.CorrectiveActionControlV1, corrective_action.CorrectiveActionVerifier]:
@@ -588,6 +621,7 @@ class CoreServiceV2:
         return {"schema": "mirror-core-support-v3", "artifact_count": result["artifact_count"], "session_count": result["session_count"], "slot_count": result["slot_count"], "event_count": result["event_count"], "structural_valid": result["structural_valid"], "ingress_bound": result["ingress_bound"], "flags": dict(FIXED_FLAGS)}
 
     def _owner_now(self, connection: sqlite3.Connection) -> int:
+        self._authority.assert_live()
         try:
             value = self.clock()
         except Exception:
@@ -625,6 +659,18 @@ class CoreServiceV2:
         meta = connection.execute("SELECT * FROM core_meta WHERE meta_id=1").fetchone()
         if meta is None:
             raise CoreError("core:meta")
+        if type(observed_at) is not int or observed_at < 0:
+            raise CoreConflictError("core:clock")
+        latest_row = connection.execute(
+            "SELECT event_raw FROM core_events ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        if latest_row is not None:
+            try:
+                latest = independent._parse(latest_row[0], "core:event-raw")["observed_at"]
+            except Exception:
+                raise CoreError("core:event") from None
+            if type(latest) is not int or observed_at < latest:
+                raise CoreConflictError("core:clock-rewind")
         sequence = int(meta["sequence"]) + 1
         stream = connection.execute("SELECT head_root FROM core_heads WHERE stream_kind=? AND stream_id=?", (stream_kind, stream_id)).fetchone()
         stream_before = str(stream[0]) if stream is not None else independent.GENESIS_ROOT
@@ -718,7 +764,7 @@ class CoreServiceV2:
         ):
             if source.get(source_key) != ing.get(ingress_key):
                 return False
-        return source.get("ingress_head_root") == ing.get("event_after_root") and source.get("observation_identity") == ing.get("observation_identity")
+        return source.get("ingress_head_root") == ing.get("event_after_root") and source.get("observation_identity") == ing.get("observation_id")
 
     @staticmethod
     def _authority_staleness(
@@ -847,11 +893,16 @@ class CoreServiceV2:
                 return {"source_artifact_id": source_id, "graph_artifact_id": graph_id, "reconciliation_artifact_id": str(rec[0]) if rec else None, "observation_status": body.get("observation_status"), "receipt": CoreServiceV2._receipt(event_raw)}
         raise CoreError("core:receipt")
 
+    @_mutation
     def ingest_source(self, ingress_path: str | Path, artifact_id: str) -> dict[str, object]:
-        result = self.ingest_sources(ingress_path, (artifact_id,))
+        result = self._ingest_sources(ingress_path, (artifact_id,))
         return result[0]
 
+    @_mutation
     def ingest_sources(self, ingress_path: str | Path, artifact_ids: tuple[str, ...]) -> tuple[dict[str, object], ...]:
+        return self._ingest_sources(ingress_path, artifact_ids)
+
+    def _ingest_sources(self, ingress_path: str | Path, artifact_ids: tuple[str, ...]) -> tuple[dict[str, object], ...]:
         if type(artifact_ids) is not tuple or not artifact_ids or len(artifact_ids) > MAX_BATCH_ARTIFACTS or len(set(artifact_ids)) != len(artifact_ids):
             raise CoreConflictError("core:source-batch")
         for value in artifact_ids:
@@ -1060,6 +1111,7 @@ class CoreServiceV2:
             )
         raise CoreError("core:database")
 
+    @_mutation
     def admit_governance(self, raw: bytes, *, policy: object, evidence_raw: bytes) -> str:
         try:
             result = governance.verify_artifact(raw, policy=policy.material(), evidence_raw=evidence_raw)
@@ -1074,6 +1126,7 @@ class CoreServiceV2:
         except Exception:
             raise_redacted(CoreError, "core:governance")
 
+    @_mutation
     def admit_privacy(self, raw: bytes, *, policy: object, evidence_raw: bytes) -> str:
         try:
             result = privacy.verify_artifact(raw, policy=policy.material(), evidence_raw=evidence_raw)
@@ -1103,6 +1156,7 @@ class CoreServiceV2:
             raise CoreConflictError("core:case-graph")
         return source, graph_value, graph_row
 
+    @_mutation
     def admit_case(self, reconciliation_artifact_id: str) -> str:
         _require_digest(reconciliation_artifact_id, "core:case-input")
         connection = self._open()
@@ -1261,6 +1315,7 @@ class CoreServiceV2:
                 cleanup_code="core:case",
             )
 
+    @_mutation
     def record_case_action(self, current_case_artifact_id: str, *, evidence_raw: bytes) -> CoreReceipt:
         _require_digest(current_case_artifact_id, "core:case-input")
         control, verifier = self._require_corrective_action_dependencies()
@@ -1285,17 +1340,18 @@ class CoreServiceV2:
         if policy is None:
             raise CoreConflictError("core:case")
         try:
-            action_raw = corrective_action.CorrectiveActionService(
-                policy,
-                verifier,
-                control=control,
-            ).observe(evidence_raw)
-            checked = corrective_action_independent.verify_artifact(
-                action_raw,
-                policy=policy.material(),
-                evidence_raw=evidence_raw,
-                control_digest=control.digest,
-            )
+            with self._authority.external_scope():
+                action_raw = corrective_action.CorrectiveActionService(
+                    policy,
+                    verifier,
+                    control=control,
+                ).observe(evidence_raw)
+                checked = corrective_action_independent.verify_artifact(
+                    action_raw,
+                    policy=policy.material(),
+                    evidence_raw=evidence_raw,
+                    control_digest=control.digest,
+                )
         except Exception:
             raise_redacted(CoreConflictError, "core:action-verification")
         self._require_corrective_action_dependencies()
@@ -1365,6 +1421,7 @@ class CoreServiceV2:
             _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core:database")
         raise CoreError("core:database")
 
+    @_mutation
     def evaluate_case(self, current_case_artifact_id: str, later_source_artifact_id: str) -> CoreReceipt:
         _require_digest(current_case_artifact_id, "core:case-input")
         _require_digest(later_source_artifact_id, "core:source-input")
@@ -1460,6 +1517,7 @@ class CoreServiceV2:
             raise CoreConflictError("core:session-missing")
         return row
 
+    @_mutation
     def open_session(self, *, source_artifact_id: str, governance_artifact_id: str, privacy_artifact_id: str) -> CoreReceipt:
         _require_digest(source_artifact_id, "core:authority-head")
         _require_digest(governance_artifact_id, "core:authority-head")
@@ -1538,6 +1596,7 @@ class CoreServiceV2:
             )
         raise CoreError("core:database")
 
+    @_mutation
     def start_session(self, session_id: str) -> CoreReceipt:
         _require_digest(session_id, "core:session-input")
         operation_id = _digest("session-operation", {"session_id": session_id, "action": "START"})
@@ -1617,6 +1676,7 @@ class CoreServiceV2:
             )
         raise CoreError("core:database")
 
+    @_mutation
     def observe(self, session_id: str, slot_number: int, result: str, *, counts: Mapping[str, int] | None = None) -> CoreReceipt:
         _require_digest(session_id, "core:observation-input")
         if type(slot_number) is not int or slot_number < 0 or slot_number >= self.config.max_slots_per_session or result not in independent.OBSERVATION_RESULTS:
@@ -1730,6 +1790,7 @@ class CoreServiceV2:
             )
         raise CoreError("core:database")
 
+    @_mutation
     def pause_if_stale(self, session_id: str) -> CoreReceipt:
         _require_digest(session_id, "core:pause-input")
         operation_id = _digest("pause-operation", {"session_id": session_id, "trigger": "RECONCILE"})

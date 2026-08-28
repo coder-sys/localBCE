@@ -13,12 +13,13 @@ from pathlib import Path
 import sqlite3
 from typing import Mapping
 
+from app.mirror.error_boundary import raise_redacted
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_PROFILE
 
 
-SCHEMA = "mirror-ingress-v5"
-SCHEMA_VERSION = 5
-DOMAIN = "BL/MIRROR/INGRESS/V5/"
+SCHEMA = "mirror-ingress-v6"
+SCHEMA_VERSION = 6
+DOMAIN = "BL/MIRROR/INGRESS/V6/"
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_EVENT_BYTES = 786_432
 MAX_CONFIG_BYTES = 16_384
@@ -315,10 +316,13 @@ def _open(path: str | Path) -> sqlite3.Connection:
 def _close(connection: sqlite3.Connection | None) -> None:
     if connection is None:
         return
+    failed = False
     try:
         connection.close()
     except Exception:
-        raise IngressVerificationError("ingress:database") from None
+        failed = True
+    if failed:
+        raise_redacted(IngressVerificationError, "ingress:database")
 
 
 def _verify_observation(observation_raw: bytes) -> dict[str, object]:
@@ -518,6 +522,7 @@ def _verify_event(
     capture_operations: dict[str, str],
     stream_roots: dict[tuple[str, str], str],
     heads: dict[tuple[str, str], tuple[str | None, str, int]],
+    previous_observed_at: int,
 ) -> str:
     if tuple(row.keys()) != TABLE_COLUMNS["ingress_events"]:
         raise IngressVerificationError("ingress:event-columns")
@@ -537,7 +542,12 @@ def _verify_event(
         _hex(row["lease_token"], "ingress:lease-token")
     if not isinstance(value["material"], dict) or value["material_digest"] != _digest("material", value["material"]):
         raise IngressVerificationError("ingress:material-digest")
-    if row["before_root"] != previous_root or row["event_kind"] not in EVENT_KINDS:
+    if (
+        row["before_root"] != previous_root
+        or row["event_kind"] not in EVENT_KINDS
+        or type(row["observed_at"]) is not int
+        or row["observed_at"] < previous_observed_at
+    ):
         raise IngressVerificationError("ingress:event-order")
     if row["event_id"] != _digest("event-id", {
         key: value[key] for key in EVENT_KEYS
@@ -738,6 +748,7 @@ def _verify_connection(
     stream_roots: dict[tuple[str, str], str] = {}
     heads: dict[tuple[str, str], tuple[str | None, str, int]] = {}
     previous = GENESIS_ROOT
+    previous_observed_at = -1
     events = connection.execute("SELECT * FROM ingress_events ORDER BY sequence").fetchall()
     for expected_sequence, row in enumerate(events, start=1):
         if row["sequence"] != expected_sequence:
@@ -748,8 +759,9 @@ def _verify_connection(
             slot_operations=slot_operations, slot_attempts=slot_attempts,
             slot_leases=slot_leases, artifacts=artifacts,
             capture_operations=capture_operations, stream_roots=stream_roots,
-            heads=heads,
+            heads=heads, previous_observed_at=previous_observed_at,
         )
+        previous_observed_at = int(row["observed_at"])
     for artifact in artifacts.values():
         if artifact["_terminal_event_sequence"] is None or artifact["_stored_event_sequence"] != artifact["_terminal_event_sequence"]:
             raise IngressVerificationError("ingress:artifact-event-sequence")
@@ -821,6 +833,7 @@ def _verify_connection(
         "watermark": int(meta["watermark"]), "slot_count": len(slot_rows),
         "artifact_count": len(artifact_rows), "attestation_count": 0,
         "event_count": len(events),
+        "latest_observed_at": previous_observed_at if events else 0,
         "state_counts": {state: sum(1 for row in slot_rows if row["state"] == state) for state in STATES},
         "flags": dict(FIXED_FLAGS), "selected_artifacts": selected,
         "current_artifact_id": current_id, "current_artifact": current,
@@ -907,8 +920,8 @@ def logical_export(result: Mapping[str, object]) -> bytes:
     if isinstance(current, Mapping):
         current = _public_artifact(current)
     return _canonical({
-        "schema": "mirror-ingress-logical-export-v5",
-        "schema_version": 5, "database_id": result["database_id"],
+        "schema": "mirror-ingress-logical-export-v6",
+        "schema_version": 6, "database_id": result["database_id"],
         "chain_id": result["chain_id"], "config_digest": result["config_digest"],
         "sequence": result["sequence"], "head_root": result["head_root"],
         "watermark": result["watermark"], "current_artifact": current,
