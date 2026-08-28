@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import os
 from pathlib import Path
+import re
 import threading
 import time
 
@@ -48,17 +49,31 @@ _HANDLE_FLAG_INHERIT = 0x00000001
 _DUPLICATE_SAME_ACCESS = 0x00000002
 _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 _GENERIC_READ = 0x80000000
+_FILE_READ_ATTRIBUTES = 0x00000080
 _FILE_SHARE_READ = 0x00000001
+_FILE_SHARE_WRITE = 0x00000002
 _OPEN_EXISTING = 3
 _FILE_ATTRIBUTE_NORMAL = 0x00000080
 _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000
 _FILE_TYPE_DISK = 1
+_FILE_NAME_NORMALIZED = 0x00000000
+_VOLUME_NAME_DOS = 0x00000000
+_VOLUME_NAME_GUID = 0x00000001
+_VOLUME_NAME_NT = 0x00000002
+_FILE_INFO_BY_HANDLE_CLASS_FILE_ID = 18
+_MAX_FINAL_PATH_CHARS = 32768
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 _EXECUTABLE_HASH_CHUNK_BYTES = 1 << 20
 _SHA256_BYTES = 32
+
+_VOLUME_GUID_RE = re.compile(
+    r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+)
 
 
 class _ByHandleFileInformation(ctypes.Structure):
@@ -73,6 +88,13 @@ class _ByHandleFileInformation(ctypes.Structure):
         ("nNumberOfLinks", wintypes.DWORD),
         ("nFileIndexHigh", wintypes.DWORD),
         ("nFileIndexLow", wintypes.DWORD),
+    ]
+
+
+class _FileIdInfo(ctypes.Structure):
+    _fields_ = [
+        ("VolumeSerialNumber", ctypes.c_ulonglong),
+        ("FileId", ctypes.c_ubyte * 16),
     ]
 
 
@@ -249,9 +271,62 @@ class _PinnedExecutableHandle:
             raise VerifierProcessError("verifier_executable_close") from None
 
 
+class _PinnedExecutable:
+    """Single owner for the final files and every pinned ancestor directory."""
+
+    __slots__ = (
+        "canonical_path", "canonical_parent", "volume_guid_path", "nt_path",
+        "native_volume_prefix", "dos_drive",
+        "_handles", "_closed",
+    )
+
+    def __init__(
+        self,
+        *,
+        canonical_path: str,
+        canonical_parent: str,
+        volume_guid_path: str,
+        nt_path: str,
+        native_volume_prefix: str,
+        dos_drive: str,
+        handles: list[_PinnedExecutableHandle],
+    ) -> None:
+        self.canonical_path = canonical_path
+        self.canonical_parent = canonical_parent
+        self.volume_guid_path = volume_guid_path
+        self.nt_path = nt_path
+        self.native_volume_prefix = native_volume_prefix
+        self.dos_drive = dos_drive
+        self._handles = handles
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: BaseException | None = None
+        while self._handles:
+            handle = self._handles.pop()
+            try:
+                handle.close()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            if isinstance(first_error, VerifierProcessError):
+                raise first_error
+            raise VerifierProcessError("verifier_executable_close") from None
+
+
 def _configure_executable_pin_apis(kernel32: object) -> None:
     required = (
         "CreateFileW", "GetFileType", "GetFileInformationByHandle",
+        "GetFinalPathNameByHandleW", "GetFileInformationByHandleEx",
+        "QueryDosDeviceW", "CompareStringOrdinal", "K32GetProcessImageFileNameW",
         "ReadFile", "CloseHandle",
     )
     for name in required:
@@ -268,6 +343,26 @@ def _configure_executable_pin_apis(kernel32: object) -> None:
         wintypes.HANDLE, ctypes.POINTER(_ByHandleFileInformation),
     ]
     kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel32.GetFinalPathNameByHandleW.argtypes = [
+        wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD,
+    ]
+    kernel32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+    kernel32.QueryDosDeviceW.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD,
+    ]
+    kernel32.QueryDosDeviceW.restype = wintypes.DWORD
+    kernel32.CompareStringOrdinal.argtypes = [
+        wintypes.LPCWSTR, wintypes.INT, wintypes.LPCWSTR, wintypes.INT, wintypes.BOOL,
+    ]
+    kernel32.CompareStringOrdinal.restype = wintypes.INT
+    kernel32.K32GetProcessImageFileNameW.argtypes = [
+        wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD,
+    ]
+    kernel32.K32GetProcessImageFileNameW.restype = wintypes.DWORD
+    kernel32.GetFileInformationByHandleEx.argtypes = [
+        wintypes.HANDLE, wintypes.INT, wintypes.LPVOID, wintypes.DWORD,
+    ]
+    kernel32.GetFileInformationByHandleEx.restype = wintypes.BOOL
     kernel32.ReadFile.argtypes = [
         wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
         ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
@@ -292,21 +387,11 @@ def _validate_executable_pin(
         raise VerifierProcessError("verifier_executable_pin")
 
 
-def _open_pinned_executable(
-    *,
-    kernel32: object,
-    executable: Path,
-    expected_executable_size_bytes: int,
-    expected_executable_sha256: bytes,
+def _open_executable_file_handle(
+    *, kernel32: object, path: str, label: str,
 ) -> _PinnedExecutableHandle:
-    """Hash one non-reparse file through a share-denying live handle."""
-
-    _configure_executable_pin_apis(kernel32)
-    _validate_executable_pin(expected_executable_size_bytes, expected_executable_sha256)
-    if not isinstance(executable, Path) or not executable.is_absolute():
-        raise VerifierProcessError("verifier_executable_path")
     handle = kernel32.CreateFileW(
-        str(executable),
+        path,
         _GENERIC_READ,
         _FILE_SHARE_READ,
         None,
@@ -315,53 +400,372 @@ def _open_pinned_executable(
         None,
     )
     if _invalid_handle(handle):
-        raise _win_error("verifier_executable_open")
+        raise _win_error(label)
+    return _PinnedExecutableHandle(kernel32, handle)
+
+
+def _read_regular_file_identity(
+    *,
+    kernel32: object,
+    pinned: _PinnedExecutableHandle,
+    expected_executable_size_bytes: int,
+    expected_executable_sha256: bytes,
+    label: str,
+) -> tuple[int, bytes]:
+    information = _ByHandleFileInformation()
+    if not kernel32.GetFileInformationByHandle(
+        pinned._handle, ctypes.byref(information)
+    ):
+        raise _win_error(f"{label}_stat")
+    attributes = int(information.dwFileAttributes)
+    if (
+        attributes & _FILE_ATTRIBUTE_DIRECTORY
+        or attributes & _FILE_ATTRIBUTE_REPARSE_POINT
+        or int(kernel32.GetFileType(pinned._handle)) != _FILE_TYPE_DISK
+    ):
+        raise VerifierProcessError(f"{label}_not_regular_file")
+    actual_size = (int(information.nFileSizeHigh) << 32) | int(information.nFileSizeLow)
+    if actual_size != expected_executable_size_bytes:
+        raise VerifierProcessError(f"{label}_size")
+
+    digest = hashlib.sha256()
+    buffer = ctypes.create_string_buffer(_EXECUTABLE_HASH_CHUNK_BYTES)
+    total = 0
+    try:
+        while True:
+            read = wintypes.DWORD()
+            if not kernel32.ReadFile(
+                pinned._handle, buffer, _EXECUTABLE_HASH_CHUNK_BYTES,
+                ctypes.byref(read), None,
+            ):
+                raise _win_error(f"{label}_read")
+            count = int(read.value)
+            if count > _EXECUTABLE_HASH_CHUNK_BYTES:
+                raise VerifierProcessError(f"{label}_read")
+            if count == 0:
+                break
+            total += count
+            if total > expected_executable_size_bytes:
+                raise VerifierProcessError(f"{label}_size")
+            digest.update(buffer.raw[:count])
+    finally:
+        ctypes.memset(buffer, 0, _EXECUTABLE_HASH_CHUNK_BYTES)
+    if total != expected_executable_size_bytes:
+        raise VerifierProcessError(f"{label}_size")
+    if not hmac.compare_digest(digest.digest(), expected_executable_sha256):
+        raise VerifierProcessError(f"{label}_identity")
+    return _file_id_info(kernel32=kernel32, handle=pinned._handle, label=label)
+
+
+def _file_id_info(*, kernel32: object, handle: object, label: str) -> tuple[int, bytes]:
+    information = _FileIdInfo()
+    if not kernel32.GetFileInformationByHandleEx(
+        handle,
+        _FILE_INFO_BY_HANDLE_CLASS_FILE_ID,
+        ctypes.byref(information),
+        ctypes.sizeof(information),
+    ):
+        raise _win_error(f"{label}_file_id")
+    return int(information.VolumeSerialNumber), bytes(information.FileId)
+
+
+def _final_path_by_handle(*, kernel32: object, handle: object, flags: int, label: str) -> str:
+    size = 512
+    while True:
+        if size > _MAX_FINAL_PATH_CHARS:
+            raise VerifierProcessError(label)
+        buffer = ctypes.create_unicode_buffer(size)
+        length = int(kernel32.GetFinalPathNameByHandleW(
+            handle, buffer, size, flags,
+        ))
+        if length == 0:
+            raise _win_error(label)
+        if length < size:
+            return buffer.value
+        if size == _MAX_FINAL_PATH_CHARS:
+            raise VerifierProcessError(f"{label}_truncated")
+        size = min(_MAX_FINAL_PATH_CHARS, max(size * 2, length + 1))
+
+
+def _canonical_volume_path(path: str) -> tuple[str, str, list[str]]:
+    marker = r"\\?\Volume{"
+    if not path.startswith(marker) or "/" in path:
+        raise VerifierProcessError("verifier_executable_final_path")
+    guid_start = len(marker)
+    guid_end = path.find("}\\", guid_start)
+    if guid_end < 0:
+        raise VerifierProcessError("verifier_executable_final_path")
+    guid = path[guid_start:guid_end]
+    if not _VOLUME_GUID_RE.fullmatch(guid):
+        raise VerifierProcessError("verifier_executable_final_path")
+    prefix = path[:guid_end + 2]
+    relative = path[guid_end + 2:]
+    components = relative.split("\\")
+    if not components or any(
+        not component or component in {".", ".."} or "\x00" in component
+        for component in components
+    ):
+        raise VerifierProcessError("verifier_executable_final_path")
+    directory_components = components[:-1]
+    directories = [prefix]
+    for index in range(1, len(directory_components) + 1):
+        directories.append(prefix + "\\".join(directory_components[:index]))
+    parent = directories[-1]
+    return path, parent, directories
+
+
+def _canonical_native_path(path: str) -> tuple[str, str]:
+    match = re.fullmatch(
+        r"(\\Device\\HarddiskVolume[0-9]+)\\(.+)",
+        path,
+        re.IGNORECASE,
+    )
+    if match is None or "/" in path:
+        raise VerifierProcessError("verifier_executable_nt_path")
+    native_volume_prefix = match.group(1)
+    relative = match.group(2)
+    components = relative.split("\\")
+    if not components or any(
+        not component or component in {".", ".."} or "\x00" in component
+        for component in components
+    ):
+        raise VerifierProcessError("verifier_executable_nt_path")
+    return path, native_volume_prefix
+
+
+def _canonical_dos_path(path: str) -> tuple[str, str, str]:
+    marker = "\\\\?\\"
+    if not path.startswith(marker) or len(path) < len(marker) + 4:
+        raise VerifierProcessError("verifier_executable_dos_path")
+    drive = path[len(marker)]
+    if not ("A" <= drive <= "Z" or "a" <= drive <= "z"):
+        raise VerifierProcessError("verifier_executable_dos_path")
+    if path[len(marker) + 1:len(marker) + 3] != ":\\":
+        raise VerifierProcessError("verifier_executable_dos_path")
+    relative = path[len(marker) + 3:]
+    components = relative.split("\\")
+    if not components or any(
+        not component or component in {".", ".."} or "\x00" in component
+        for component in components
+    ):
+        raise VerifierProcessError("verifier_executable_dos_path")
+    directory_components = components[:-1]
+    prefix = f"{marker}{drive}:\\"
+    directories = [prefix]
+    for index in range(1, len(directory_components) + 1):
+        directories.append(prefix + "\\".join(directory_components[:index]))
+    return path, directories[-1], f"{drive}:"
+
+
+def _query_dos_device_mapping(
+    *, kernel32: object, drive: str, native_volume_prefix: str,
+) -> None:
+    size = 256
+    while True:
+        if size > _MAX_FINAL_PATH_CHARS:
+            raise VerifierProcessError("verifier_drive_mapping_truncated")
+        buffer = ctypes.create_unicode_buffer(size)
+        length = int(kernel32.QueryDosDeviceW(drive, buffer, size))
+        if length == 0:
+            raise _win_error("verifier_drive_mapping")
+        if length >= size:
+            if size == _MAX_FINAL_PATH_CHARS:
+                raise VerifierProcessError("verifier_drive_mapping_truncated")
+            size = min(_MAX_FINAL_PATH_CHARS, max(size * 2, length + 1))
+            continue
+        mapping = buffer.value
+        raw = ctypes.wstring_at(buffer, size)
+        first_terminator = raw.find("\x00")
+        if (
+            first_terminator < 0
+            or mapping != native_volume_prefix
+            or any(character != "\x00" for character in raw[first_terminator:])
+        ):
+            raise VerifierProcessError("verifier_drive_mapping")
+        return
+
+
+def _process_image_path(*, kernel32: object, process_handle: object) -> str:
+    size = 512
+    while True:
+        if size > _MAX_FINAL_PATH_CHARS:
+            raise VerifierProcessError("verifier_child_image_truncated")
+        buffer = ctypes.create_unicode_buffer(size)
+        length = int(kernel32.K32GetProcessImageFileNameW(process_handle, buffer, size))
+        if length == 0:
+            raise _win_error("verifier_child_image")
+        if length >= size:
+            if size == _MAX_FINAL_PATH_CHARS:
+                raise VerifierProcessError("verifier_child_image_truncated")
+            size = min(_MAX_FINAL_PATH_CHARS, max(size * 2, length + 1))
+            continue
+        path = buffer.value
+        if len(path) != length:
+            raise VerifierProcessError("verifier_child_image_truncated")
+        return path
+
+
+def _ordinal_equal(
+    *, kernel32: object, first: str, second: str, label: str,
+) -> bool:
+    comparison = int(kernel32.CompareStringOrdinal(first, -1, second, -1, True))
+    if comparison == 0:
+        raise _win_error(label)
+    return comparison == 2
+
+
+def _verify_suspended_child_image(
+    *, kernel32: object, process_handle: object, expected_native_path: str,
+    native_volume_prefix: str,
+) -> None:
+    observed = _process_image_path(kernel32=kernel32, process_handle=process_handle)
+    try:
+        _observed_path, observed_prefix = _canonical_native_path(observed)
+    except VerifierProcessError:
+        raise VerifierProcessError("verifier_child_image_path") from None
+    if not _ordinal_equal(
+        kernel32=kernel32,
+        first=observed_prefix,
+        second=native_volume_prefix,
+        label="verifier_child_image_volume_compare",
+    ):
+        raise VerifierProcessError("verifier_child_image_volume")
+    if not _ordinal_equal(
+        kernel32=kernel32,
+        first=observed,
+        second=expected_native_path,
+        label="verifier_child_image_compare",
+    ):
+        raise VerifierProcessError("verifier_child_image_identity")
+
+
+def _open_pinned_directory(
+    *, kernel32: object, path: str,
+) -> _PinnedExecutableHandle:
+    handle = kernel32.CreateFileW(
+        path,
+        _FILE_READ_ATTRIBUTES,
+        _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+        None,
+        _OPEN_EXISTING,
+        _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT,
+        None,
+    )
+    if _invalid_handle(handle):
+        raise _win_error("verifier_executable_directory_open")
     pinned = _PinnedExecutableHandle(kernel32, handle)
     try:
         information = _ByHandleFileInformation()
-        if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(information)):
-            raise _win_error("verifier_executable_stat")
+        if not kernel32.GetFileInformationByHandle(
+            handle, ctypes.byref(information)
+        ):
+            raise _win_error("verifier_executable_directory_stat")
         attributes = int(information.dwFileAttributes)
         if (
-            attributes & _FILE_ATTRIBUTE_DIRECTORY
+            not attributes & _FILE_ATTRIBUTE_DIRECTORY
             or attributes & _FILE_ATTRIBUTE_REPARSE_POINT
             or int(kernel32.GetFileType(handle)) != _FILE_TYPE_DISK
         ):
-            raise VerifierProcessError("verifier_executable_not_regular_file")
-        actual_size = (int(information.nFileSizeHigh) << 32) | int(information.nFileSizeLow)
-        if actual_size != expected_executable_size_bytes:
-            raise VerifierProcessError("verifier_executable_size")
-
-        digest = hashlib.sha256()
-        buffer = ctypes.create_string_buffer(_EXECUTABLE_HASH_CHUNK_BYTES)
-        total = 0
-        try:
-            while True:
-                read = wintypes.DWORD()
-                if not kernel32.ReadFile(
-                    handle, buffer, _EXECUTABLE_HASH_CHUNK_BYTES,
-                    ctypes.byref(read), None,
-                ):
-                    raise _win_error("verifier_executable_read")
-                count = int(read.value)
-                if count > _EXECUTABLE_HASH_CHUNK_BYTES:
-                    raise VerifierProcessError("verifier_executable_read")
-                if count == 0:
-                    break
-                total += count
-                if total > expected_executable_size_bytes:
-                    raise VerifierProcessError("verifier_executable_size")
-                digest.update(buffer.raw[:count])
-        finally:
-            ctypes.memset(buffer, 0, _EXECUTABLE_HASH_CHUNK_BYTES)
-        if total != expected_executable_size_bytes:
-            raise VerifierProcessError("verifier_executable_size")
-        if not hmac.compare_digest(digest.digest(), expected_executable_sha256):
-            raise VerifierProcessError("verifier_executable_identity")
+            raise VerifierProcessError("verifier_executable_directory_not_regular")
         return pinned
     except BaseException as primary_error:
         try:
             pinned.close()
+        except BaseException:
+            raise
+        raise primary_error
+
+
+def _open_pinned_executable(
+    *,
+    kernel32: object,
+    executable: Path,
+    expected_executable_size_bytes: int,
+    expected_executable_sha256: bytes,
+) -> _PinnedExecutable:
+    """Atomically bind the verified executable path to the launched image."""
+
+    _configure_executable_pin_apis(kernel32)
+    _validate_executable_pin(expected_executable_size_bytes, expected_executable_sha256)
+    if not isinstance(executable, Path) or not executable.is_absolute():
+        raise VerifierProcessError("verifier_executable_path")
+    handles: list[_PinnedExecutableHandle] = []
+    try:
+        original = _open_executable_file_handle(
+            kernel32=kernel32, path=str(executable), label="verifier_executable_open",
+        )
+        handles.append(original)
+        original_id = _read_regular_file_identity(
+            kernel32=kernel32,
+            pinned=original,
+            expected_executable_size_bytes=expected_executable_size_bytes,
+            expected_executable_sha256=expected_executable_sha256,
+            label="verifier_executable",
+        )
+        volume_guid_path = _final_path_by_handle(
+            kernel32=kernel32,
+            handle=original._handle,
+            flags=_FILE_NAME_NORMALIZED | _VOLUME_NAME_GUID,
+            label="verifier_executable_final_path",
+        )
+        volume_guid_path, _volume_parent, directory_paths = _canonical_volume_path(
+            volume_guid_path,
+        )
+        nt_path = _final_path_by_handle(
+            kernel32=kernel32,
+            handle=original._handle,
+            flags=_FILE_NAME_NORMALIZED | _VOLUME_NAME_NT,
+            label="verifier_executable_nt_path",
+        )
+        nt_path, native_volume_prefix = _canonical_native_path(nt_path)
+        dos_path = _final_path_by_handle(
+            kernel32=kernel32,
+            handle=original._handle,
+            flags=_FILE_NAME_NORMALIZED | _VOLUME_NAME_DOS,
+            label="verifier_executable_dos_path",
+        )
+        dos_path, canonical_parent, dos_drive = _canonical_dos_path(dos_path)
+        for directory_path in directory_paths:
+            handles.append(_open_pinned_directory(kernel32=kernel32, path=directory_path))
+        reopened = _open_executable_file_handle(
+            kernel32=kernel32, path=dos_path,
+            label="verifier_executable_reopen",
+        )
+        handles.append(reopened)
+        reopened_id = _read_regular_file_identity(
+            kernel32=kernel32,
+            pinned=reopened,
+            expected_executable_size_bytes=expected_executable_size_bytes,
+            expected_executable_sha256=expected_executable_sha256,
+            label="verifier_executable_reopen",
+        )
+        if reopened_id != original_id:
+            raise VerifierProcessError("verifier_executable_file_id")
+        _query_dos_device_mapping(
+            kernel32=kernel32,
+            drive=dos_drive,
+            native_volume_prefix=native_volume_prefix,
+        )
+        return _PinnedExecutable(
+            canonical_path=dos_path,
+            canonical_parent=canonical_parent,
+            volume_guid_path=volume_guid_path,
+            nt_path=nt_path,
+            native_volume_prefix=native_volume_prefix,
+            dos_drive=dos_drive,
+            handles=handles,
+        )
+    except BaseException as primary_error:
+        try:
+            _PinnedExecutable(
+                canonical_path="",
+                canonical_parent="",
+                volume_guid_path="",
+                nt_path="",
+                native_volume_prefix="",
+                dos_drive="",
+                handles=handles,
+            ).close()
         except BaseException:
             raise
         raise primary_error
@@ -444,7 +848,8 @@ def _close_parent_descriptors_once(descriptors: list[int]) -> None:
 def _create_process_with_owned_output_handles(
     *,
     kernel32: object,
-    executable: Path,
+    executable: str | Path,
+    current_directory: str | None = None,
     output_handles: tuple[int, int],
     stdin_handle: int | None = None,
     parent_descriptors: list[int],
@@ -513,7 +918,8 @@ def _create_process_with_owned_output_handles(
         if not kernel32.CreateProcessW(
             str(executable), command_line, None, None, True,
             creation_flags | _EXTENDED_STARTUPINFO_PRESENT,
-            ctypes.cast(environment, wintypes.LPVOID), str(executable.parent),
+            ctypes.cast(environment, wintypes.LPVOID),
+            str(current_directory if current_directory is not None else Path(executable).parent),
             ctypes.cast(ctypes.byref(startup), ctypes.POINTER(_StartupInfo)),
             ctypes.byref(process_info)
         ):
@@ -545,6 +951,20 @@ def _create_process_with_owned_output_handles(
                     cleanup_errors.append(_win_error("verifier_output_close_process"))
             if primary_error is None:
                 raise VerifierProcessError("verifier_process_cleanup") from None
+
+
+def _terminate_and_reap_child(
+    *, kernel32: object, process_handle: object, job_handle: object | None,
+    label: str,
+) -> None:
+    if job_handle is None:
+        if not kernel32.TerminateProcess(process_handle, 1):
+            raise _win_error(f"{label}_terminate")
+    else:
+        if not kernel32.TerminateJobObject(job_handle, 1):
+            raise _win_error(f"{label}_terminate")
+    if kernel32.WaitForSingleObject(process_handle, _INFINITE) != _WAIT_OBJECT_0:
+        raise _win_error(f"{label}_wait")
 
 
 def _drain_pipe(
@@ -623,7 +1043,9 @@ def run_contained_verifier(
         "CloseHandle", "SetHandleInformation", "InitializeProcThreadAttributeList",
         "UpdateProcThreadAttribute", "DeleteProcThreadAttributeList",
         "GetCurrentProcess", "CreateFileW", "GetFileType",
-        "GetFileInformationByHandle", "ReadFile",
+        "GetFileInformationByHandle", "GetFinalPathNameByHandleW",
+        "GetFileInformationByHandleEx", "QueryDosDeviceW",
+        "CompareStringOrdinal", "K32GetProcessImageFileNameW", "ReadFile",
     )
     for name in required_apis:
         if not hasattr(kernel32, name):
@@ -717,7 +1139,7 @@ def run_contained_verifier(
     memory_sampled = False
     child_process_count = 0
     admission_exceeded = False
-    pinned_executable: _PinnedExecutableHandle | None = None
+    pinned_executable: _PinnedExecutable | None = None
 
     def _release_pinned_executable() -> None:
         nonlocal pinned_executable
@@ -792,12 +1214,6 @@ def run_contained_verifier(
         startup.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
         startup.StartupInfo.hStdInput = wintypes.HANDLE(0)
         environment = _environment_block(workspace)
-        command_line = ctypes.create_unicode_buffer(
-            " ".join(
-                [_quote_argument(str(executable))]
-                + [_quote_argument(argument) for argument in arguments]
-            )
-        )
         creation_flags = (
             _CREATE_SUSPENDED | _CREATE_NO_WINDOW | _CREATE_UNICODE_ENVIRONMENT
             | _EXTENDED_STARTUPINFO_PRESENT
@@ -830,9 +1246,21 @@ def run_contained_verifier(
                     expected_executable_size_bytes=expected_executable_size_bytes,
                     expected_executable_sha256=expected_executable_sha256,  # type: ignore[arg-type]
                 )
+                launch_executable = pinned_executable.canonical_path
+                launch_directory = pinned_executable.canonical_parent
+            else:
+                launch_executable = str(executable)
+                launch_directory = str(executable.parent)
+            command_line = ctypes.create_unicode_buffer(
+                " ".join(
+                    [_quote_argument(launch_executable)]
+                    + [_quote_argument(argument) for argument in arguments]
+                )
+            )
             _create_process_with_owned_output_handles(
                 kernel32=kernel32,
-                executable=executable,
+                executable=launch_executable,
+                current_directory=launch_directory,
                 output_handles=(stdout_handle, stderr_handle),
                 stdin_handle=inherited_stdin,
                 parent_descriptors=[stdout_write, stderr_write],  # type: ignore[list-item]
@@ -842,31 +1270,65 @@ def run_contained_verifier(
                 creation_flags=creation_flags,
                 process_info=process_info,
             )
+            if pinned_executable is not None:
+                _query_dos_device_mapping(
+                    kernel32=kernel32,
+                    drive=pinned_executable.dos_drive,
+                    native_volume_prefix=pinned_executable.native_volume_prefix,
+                )
+                _verify_suspended_child_image(
+                    kernel32=kernel32,
+                    process_handle=process_info.hProcess,
+                    expected_native_path=pinned_executable.nt_path,
+                    native_volume_prefix=pinned_executable.native_volume_prefix,
+                )
+        except BaseException:
+            if process_info.hProcess:
+                _terminate_and_reap_child(
+                    kernel32=kernel32,
+                    process_handle=process_info.hProcess,
+                    job_handle=None,
+                    label="verifier_child_binding",
+                )
+            raise
         finally:
             # The helper owns and closes both parent descriptors on every path.
             stdout_write = None
             stderr_write = None
-            if pinned_executable is not None:
-                try:
-                    _release_pinned_executable()
-                except BaseException:
-                    if process_info.hProcess:
-                        try:
-                            kernel32.TerminateProcess(process_info.hProcess, 1)
-                        except BaseException:
-                            pass
-                    raise
         if not kernel32.AssignProcessToJobObject(job, process_info.hProcess):
-            kernel32.TerminateProcess(process_info.hProcess, 1)
+            _terminate_and_reap_child(
+                kernel32=kernel32,
+                process_handle=process_info.hProcess,
+                job_handle=None,
+                label="verifier_job_assign",
+            )
             raise _win_error("verifier_job_assign")
         if not _sample_memory():
-            kernel32.TerminateJobObject(job, 1)
+            _terminate_and_reap_child(
+                kernel32=kernel32,
+                process_handle=process_info.hProcess,
+                job_handle=job,
+                label="verifier_memory_sample",
+            )
             if admission_exceeded:
                 raise VerifierProcessError("verifier_admission_cap")
             raise VerifierProcessError("verifier_memory_sample")
         if kernel32.ResumeThread(process_info.hThread) == 0xFFFFFFFF:
-            kernel32.TerminateJobObject(job, 1)
+            _terminate_and_reap_child(
+                kernel32=kernel32,
+                process_handle=process_info.hProcess,
+                job_handle=job,
+                label="verifier_process_resume",
+            )
             raise _win_error("verifier_process_resume")
+        try:
+            _release_pinned_executable()
+        except BaseException:
+            if not kernel32.TerminateJobObject(job, 1):
+                raise _win_error("verifier_executable_close_terminate") from None
+            if kernel32.WaitForSingleObject(process_info.hProcess, _INFINITE) != _WAIT_OBJECT_0:
+                raise _win_error("verifier_executable_close_wait") from None
+            raise
         reader_threads = [
             threading.Thread(target=_drain_pipe, args=(stdout_read, MAX_STDOUT_BYTES, "stdout", reader_output, reader_failure, reader_overflow), daemon=True),
             threading.Thread(target=_drain_pipe, args=(stderr_read, MAX_STDERR_BYTES, "stderr", reader_output, reader_failure, reader_overflow), daemon=True),
@@ -975,6 +1437,17 @@ def run_contained_verifier(
         )
     finally:
         cleanup_errors: list[BaseException] = []
+        if pinned_executable is not None:
+            try:
+                _release_pinned_executable()
+            except BaseException as error:
+                cleanup_errors.append(error)
+                if job and process_info.hProcess:
+                    try:
+                        if not kernel32.TerminateJobObject(job, 1):
+                            cleanup_errors.append(_win_error("verifier_executable_close_terminate"))
+                    except BaseException:
+                        cleanup_errors.append(VerifierProcessError("verifier_executable_close_terminate"))
         for reader in reader_threads:
             if reader.is_alive():
                 reader.join(timeout=5)

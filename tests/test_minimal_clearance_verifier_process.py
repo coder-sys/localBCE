@@ -5,6 +5,7 @@ import hashlib
 import itertools
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import threading
@@ -30,9 +31,17 @@ class _Kernel:
         self.failure = failure
         self.pin_failure = pin_failure
         self.pin_data = pin_data or b""
-        self.pin_handle = 16000
         self.pin_path: Path | None = None
-        self.pin_offset = 0
+        self.canonical_path = r"\\?\Volume{11111111-2222-3333-4444-555555555555}\synthetic\verifier.exe"
+        self.nt_path = r"\Device\HarddiskVolume3\synthetic\verifier.exe"
+        self.dos_path = r"\\?\C:\synthetic\verifier.exe"
+        self.dos_parent = r"\\?\C:\synthetic"
+        self.native_volume_prefix = r"\Device\HarddiskVolume3"
+        self.child_image_path = self.nt_path
+        self.drive_mapping = self.native_volume_prefix
+        self.query_dos_device_count = 0
+        self.pin_handles: dict[int, dict[str, object]] = {}
+        self._next_pin_handle = 16000
         self.pin_closed = False
         self.pin_close_count = 0
         self.events: list[tuple[str, object]] = []
@@ -60,6 +69,11 @@ class _Kernel:
         self.CreateFileW = _FakeFunction(self._open_file)
         self.GetFileType = _FakeFunction(self._file_type)
         self.GetFileInformationByHandle = _FakeFunction(self._file_information)
+        self.GetFinalPathNameByHandleW = _FakeFunction(self._final_path)
+        self.GetFileInformationByHandleEx = _FakeFunction(self._file_information_ex)
+        self.QueryDosDeviceW = _FakeFunction(self._query_dos_device)
+        self.CompareStringOrdinal = _FakeFunction(self._compare_string_ordinal)
+        self.K32GetProcessImageFileNameW = _FakeFunction(self._process_image)
         self.ReadFile = _FakeFunction(self._read_file)
         self.GetProcessMemoryInfo = _FakeFunction(self._memory_info)
         self.InitializeProcThreadAttributeList = _FakeFunction(self._attrs_init)
@@ -108,39 +122,132 @@ class _Kernel:
 
     def _open_file(self, application, access, share_mode, _security, creation, flags, _template):
         self.events.append(("pin_open", (str(application), int(access), int(share_mode), int(creation), int(flags))))
-        if self.pin_failure == "open":
+        path = str(application)
+        is_directory = bool(int(flags) & process._FILE_FLAG_BACKUP_SEMANTICS)
+        if self.pin_failure == "open" and not is_directory:
             return process._INVALID_HANDLE_VALUE
-        self.pin_path = Path(str(application))
-        if not self.pin_data:
-            self.pin_data = self.pin_path.read_bytes()
-        self.pin_offset = 0
+        if self.pin_failure == "directory_open" and is_directory:
+            return process._INVALID_HANDLE_VALUE
+        if self.pin_failure == "reopen_open" and not is_directory and path == self.dos_path:
+            return process._INVALID_HANDLE_VALUE
+        if not is_directory and self.pin_path is None:
+            self.pin_path = Path(path)
+            if not self.pin_data:
+                self.pin_data = self.pin_path.read_bytes()
+        handle = self._next_pin_handle
+        self._next_pin_handle += 1
+        self.pin_handles[handle] = {
+            "path": path,
+            "directory": is_directory,
+            "data": b"" if is_directory else self.pin_data,
+            "offset": 0,
+            "closed": False,
+        }
         self.pin_closed = False
-        return self.pin_handle
+        return handle
 
     def _file_type(self, _handle):
         return 0 if self.pin_failure == "type" else process._FILE_TYPE_DISK
 
-    def _file_information(self, _handle, information_ptr):
+    def _file_information(self, handle, information_ptr):
         if self.pin_failure == "stat":
             return 0
+        state = self.pin_handles[int(handle)]
         information = ctypes.cast(information_ptr, ctypes.POINTER(process._ByHandleFileInformation)).contents
-        attributes = 0
-        if self.pin_failure == "directory":
+        attributes = process._FILE_ATTRIBUTE_DIRECTORY if state["directory"] else 0
+        if self.pin_failure == "directory" and not state["directory"]:
             attributes |= process._FILE_ATTRIBUTE_DIRECTORY
-        if self.pin_failure == "reparse":
+        if self.pin_failure == "reparse" or (
+            self.pin_failure == "directory_reparse" and state["directory"]
+        ):
             attributes |= process._FILE_ATTRIBUTE_REPARSE_POINT
         information.dwFileAttributes = attributes
-        information.nFileSizeHigh = len(self.pin_data) >> 32
-        information.nFileSizeLow = len(self.pin_data) & 0xFFFFFFFF
+        data = state["data"]
+        information.nFileSizeHigh = len(data) >> 32
+        information.nFileSizeLow = len(data) & 0xFFFFFFFF
         return 1
 
-    def _read_file(self, _handle, buffer, requested, read_ptr, _overlapped):
+    def _final_path(self, _handle, buffer, _size, flags):
+        if self.pin_failure == "final_path":
+            return 0
+        if self.pin_failure == "nt_non_device" and (
+            int(flags) & process._VOLUME_NAME_NT
+        ):
+            path = r"\Device\Mup\synthetic\verifier.exe"
+        elif self.pin_failure == "dos_unc" and not int(flags) & (
+            process._VOLUME_NAME_NT | process._VOLUME_NAME_GUID
+        ):
+            path = r"\\?\UNC\server\share\verifier.exe"
+        elif int(flags) & process._VOLUME_NAME_NT:
+            path = self.nt_path
+        elif int(flags) & process._VOLUME_NAME_GUID:
+            path = self.canonical_path
+        else:
+            path = self.dos_path
+        buffer.value = path
+        self.events.append(("final_path", (int(flags), path)))
+        return len(path)
+
+    def _file_information_ex(self, handle, _class, information_ptr, _size):
+        if self.pin_failure == "file_id":
+            return 0
+        state = self.pin_handles[int(handle)]
+        information = ctypes.cast(information_ptr, ctypes.POINTER(process._FileIdInfo)).contents
+        information.VolumeSerialNumber = 0x123456789ABCDEF0
+        value = b"R" * 16
+        if self.pin_failure == "file_id_mismatch" and state["path"] == self.dos_path:
+            value = b"M" * 16
+        information.FileId[:] = value
+        self.events.append(("file_id", (state["path"], value)))
+        return 1
+
+    def _query_dos_device(self, drive, buffer, _size):
+        if self.pin_failure == "dos_mapping":
+            return 0
+        self.query_dos_device_count += 1
+        mapping = self.drive_mapping
+        if self.pin_failure == "dos_mapping_mismatch" or (
+            self.pin_failure == "dos_mapping_after_create"
+            and self.query_dos_device_count >= 2
+        ):
+            mapping = r"\Device\HarddiskVolume99"
+        buffer.value = mapping
+        self.events.append(("query_dos_device", (str(drive), mapping)))
+        return len(mapping)
+
+    def _compare_string_ordinal(self, first, _first_length, second, _second_length, ignore_case):
+        left = str(first)
+        right = str(second)
+        if ignore_case:
+            left = left.casefold()
+            right = right.casefold()
+        return 2 if left == right else 1
+
+    def _process_image(self, _process, buffer, _size):
+        if self.pin_failure == "image_api":
+            return 0
+        if self.pin_failure == "image_truncated":
+            return process._MAX_FINAL_PATH_CHARS
+        if self.pin_failure == "image_non_device":
+            value = r"C:\synthetic\verifier.exe"
+        elif self.pin_failure == "image_mismatch":
+            value = self.nt_path + r"\other.exe"
+        else:
+            value = self.child_image_path
+        buffer.value = value
+        self.events.append(("child_image", value))
+        return len(value)
+
+    def _read_file(self, handle, buffer, requested, read_ptr, _overlapped):
         if self.pin_failure == "read":
             return 0
-        count = min(int(requested), len(self.pin_data) - self.pin_offset)
+        state = self.pin_handles[int(handle)]
+        data = state["data"]
+        offset = int(state["offset"])
+        count = min(int(requested), len(data) - offset)
         if count > 0:
-            ctypes.memmove(buffer, self.pin_data[self.pin_offset:self.pin_offset + count], count)
-            self.pin_offset += count
+            ctypes.memmove(buffer, data[offset:offset + count], count)
+            state["offset"] = offset + count
         ctypes.cast(read_ptr, ctypes.POINTER(process.wintypes.DWORD)).contents.value = count
         self.events.append(("pin_read", count))
         return 1
@@ -157,9 +264,12 @@ class _Kernel:
         if self.failure == "attribute_delete":
             raise RuntimeError("attribute cleanup canary")
 
-    def _create(self, _application, _command, _p1, _p2, inherit, flags, _env, _directory, startup_ptr, process_ptr):
-        if self.pin_path is not None:
-            self.events.append(("pin_held_during_create", not self.pin_closed))
+    def _create(self, application, command, _p1, _p2, inherit, flags, _env, directory, startup_ptr, process_ptr):
+        if self.pin_handles:
+            self.events.append(("pin_held_during_create", all(not state["closed"] for state in self.pin_handles.values())))
+        self.events.append(("create_application", str(application)))
+        self.events.append(("create_command", command.value))
+        self.events.append(("create_directory", str(directory)))
         self.events.append(("create_args", (bool(inherit), int(flags))))
         startup = ctypes.cast(startup_ptr, ctypes.POINTER(process._StartupInfoEx)).contents
         self.events.append(("startup_cb", int(startup.StartupInfo.cb)))
@@ -207,12 +317,14 @@ class _Kernel:
         return 1
 
     def _close(self, handle):
-        if int(handle) == self.pin_handle:
-            self.pin_closed = True
+        handle_number = int(handle)
+        if handle_number in self.pin_handles:
+            self.pin_handles[handle_number]["closed"] = True
             self.pin_close_count += 1
-            self.events.append(("pin_close", int(handle)))
+            self.pin_closed = all(state["closed"] for state in self.pin_handles.values())
+            self.events.append(("pin_close", handle_number))
             return 0 if self.pin_failure == "close" else 1
-        self.events.append(("close", int(handle)))
+        self.events.append(("close", handle_number))
         return 0 if self.failure == "close" else 1
 
 
@@ -266,13 +378,14 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         self.assertIn(("close", 14000), kernel.events)
         self.assertIn(("startup_input", 14000), kernel.events)
 
-    def test_pinned_handle_is_held_through_suspended_create_then_closed_before_assignment(self):
+    def test_pinned_handles_are_held_through_create_assignment_sample_and_resume(self):
         payload = b"synthetic-pinned-verifier"
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)
             executable = root / "verifier.exe"
             executable.write_bytes(payload)
             kernel = _Kernel(pin_data=payload)
+            kernel.child_image_path = kernel.nt_path.upper()
             with patch.object(process.ctypes, "WinDLL", return_value=kernel):
                 result = process.run_contained_verifier(
                     executable,
@@ -285,7 +398,9 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertTrue(result.measurement_complete)
             self.assertTrue(kernel.pin_closed)
-            self.assertEqual(kernel.pin_close_count, 1)
+            self.assertEqual(kernel.pin_close_count, len(kernel.pin_handles))
+            self.assertGreaterEqual(kernel.pin_close_count, 4)
+            self.assertTrue(all(handle not in kernel.pin_handles for handle in kernel.handles))
             self.assertTrue(next(value for name, value in kernel.events if name == "pin_held_during_create"))
             open_args = next(value for name, value in kernel.events if name == "pin_open")
             self.assertEqual(open_args[1], process._GENERIC_READ)
@@ -293,10 +408,72 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             self.assertEqual(open_args[3], process._OPEN_EXISTING)
             self.assertTrue(open_args[4] & process._FILE_FLAG_OPEN_REPARSE_POINT)
             names = [name for name, _ in kernel.events]
+            self.assertEqual(
+                next(value for name, value in kernel.events if name == "create_application"),
+                kernel.dos_path,
+            )
+            self.assertEqual(
+                next(value for name, value in kernel.events if name == "create_command"),
+                kernel.dos_path,
+            )
+            self.assertEqual(
+                next(value for name, value in kernel.events if name == "create_directory"),
+                kernel.dos_parent,
+            )
+            self.assertIn(("file_id", (str(executable), b"R" * 16)), kernel.events)
+            self.assertIn(("file_id", (kernel.dos_path, b"R" * 16)), kernel.events)
+            self.assertIn(("final_path", (process._FILE_NAME_NORMALIZED | process._VOLUME_NAME_GUID, kernel.canonical_path)), kernel.events)
+            self.assertIn(("final_path", (process._FILE_NAME_NORMALIZED | process._VOLUME_NAME_NT, kernel.nt_path)), kernel.events)
+            self.assertIn(("final_path", (process._FILE_NAME_NORMALIZED | process._VOLUME_NAME_DOS, kernel.dos_path)), kernel.events)
+            self.assertEqual(
+                [value for name, value in kernel.events if name == "query_dos_device"],
+                [("C:", kernel.native_volume_prefix), ("C:", kernel.native_volume_prefix)],
+            )
+            self.assertEqual(
+                next(value for name, value in kernel.events if name == "child_image"),
+                kernel.nt_path.upper(),
+            )
             self.assertLess(names.index("create"), names.index("pin_close"))
-            self.assertLess(names.index("pin_close"), names.index("assign"))
+            query_positions = [index for index, name in enumerate(names) if name == "query_dos_device"]
+            self.assertLess(query_positions[0], names.index("create"))
+            self.assertLess(names.index("create"), query_positions[1])
+            self.assertLess(query_positions[1], names.index("child_image"))
+            self.assertLess(names.index("create"), names.index("child_image"))
+            self.assertLess(names.index("child_image"), names.index("assign"))
+            self.assertLess(names.index("assign"), names.index("pin_close"))
             self.assertLess(names.index("assign"), names.index("memory"))
             self.assertLess(names.index("memory"), names.index("resume"))
+            self.assertLess(names.index("memory"), names.index("pin_close"))
+            self.assertLess(names.index("resume"), names.index("pin_close"))
+
+    def test_suspended_child_binding_failures_kill_and_reap_before_assignment(self):
+        payload = b"synthetic-pinned-verifier"
+        failures = ("dos_mapping_after_create", "image_api", "image_truncated", "image_non_device", "image_mismatch")
+        for failure in failures:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as root_name:
+                root = Path(root_name)
+                executable = root / "verifier.exe"
+                executable.write_bytes(payload)
+                kernel = _Kernel(pin_failure=failure, pin_data=payload)
+                with patch.object(process.ctypes, "WinDLL", return_value=kernel):
+                    with self.assertRaises(process.VerifierProcessError):
+                        process.run_contained_verifier(
+                            executable,
+                            (),
+                            workspace=root,
+                            timeout_seconds=1.0,
+                            expected_executable_size_bytes=len(payload),
+                            expected_executable_sha256=hashlib.sha256(payload).digest(),
+                        )
+                names = [name for name, _ in kernel.events]
+                self.assertIn("terminate_process", names)
+                self.assertIn("wait", names)
+                self.assertNotIn("assign", names)
+                self.assertNotIn("resume", names)
+                self.assertLess(names.index("terminate_process"), names.index("wait"))
+                self.assertLess(names.index("wait"), names.index("pin_close"))
+                self.assertEqual(kernel.pin_close_count, len(kernel.pin_handles))
+                self.assertTrue(all(state["closed"] for state in kernel.pin_handles.values()))
 
     @unittest.skipUnless(os.name == "nt", "Windows share-mode pin test")
     def test_real_pinned_handle_denies_write_delete_and_replace_until_close(self):
@@ -326,6 +503,31 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             self.assertTrue(pinned.closed)
             executable.write_bytes(b"closed")
             self.assertEqual(executable.read_bytes(), b"closed")
+
+    @unittest.skipUnless(os.name == "nt", "Windows namespace pin test")
+    def test_real_pinned_ancestor_denies_parent_rename_until_close(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            root = Path(root_name)
+            parent = root / "private-parent"
+            sibling = root / "renamed-parent"
+            parent.mkdir()
+            executable = parent / "harmless.exe"
+            shutil.copyfile(sys._base_executable, executable)
+            payload = executable.read_bytes()
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            pinned = process._open_pinned_executable(
+                kernel32=kernel32,
+                executable=executable,
+                expected_executable_size_bytes=len(payload),
+                expected_executable_sha256=hashlib.sha256(payload).digest(),
+            )
+            try:
+                with self.assertRaises(OSError):
+                    parent.rename(sibling)
+            finally:
+                pinned.close()
+            parent.rename(sibling)
+            self.assertTrue((sibling / "harmless.exe").is_file())
 
     @unittest.skipUnless(os.name == "nt", "Windows loader share-mode pin test")
     def test_real_pinned_process_creation_succeeds_with_loader_share_semantics(self):
@@ -366,7 +568,13 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
 
     def test_pinned_metadata_and_hash_failures_close_the_validated_handle(self):
         payload = b"synthetic-pinned-verifier"
-        failures = ("stat", "type", "directory", "reparse", "read")
+        failures = (
+            "stat", "type", "directory", "reparse", "read", "final_path",
+            "directory_open", "directory_reparse", "file_id", "file_id_mismatch",
+            "reopen_open", "nt_non_device", "dos_unc", "dos_mapping",
+            "dos_mapping_mismatch", "image_api", "image_truncated",
+            "image_non_device", "image_mismatch",
+        )
         for failure in failures:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as root_name:
                 root = Path(root_name)
@@ -383,7 +591,8 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                             expected_executable_size_bytes=len(payload),
                             expected_executable_sha256=hashlib.sha256(payload).digest(),
                         )
-                self.assertEqual(kernel.pin_close_count, 1)
+                self.assertEqual(kernel.pin_close_count, len(kernel.pin_handles))
+                self.assertTrue(all(state["closed"] for state in kernel.pin_handles.values()))
 
         for expected_size, expected_hash in ((len(payload) + 1, hashlib.sha256(payload).digest()), (len(payload), b"x" * 32)):
             with self.subTest(expected_size=expected_size, expected_hash=expected_hash), tempfile.TemporaryDirectory() as root_name:
@@ -401,9 +610,10 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                             expected_executable_size_bytes=expected_size,
                             expected_executable_sha256=expected_hash,
                         )
-                self.assertEqual(kernel.pin_close_count, 1)
+                self.assertEqual(kernel.pin_close_count, len(kernel.pin_handles))
+                self.assertTrue(all(state["closed"] for state in kernel.pin_handles.values()))
 
-    def test_pinned_create_and_close_failures_still_attempt_exactly_one_handle_close(self):
+    def test_pinned_create_and_close_failures_close_all_owned_handles_once(self):
         payload = b"synthetic-pinned-verifier"
         for failure in ("create", "close"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as root_name:
@@ -421,7 +631,8 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                             expected_executable_size_bytes=len(payload),
                             expected_executable_sha256=hashlib.sha256(payload).digest(),
                         )
-                self.assertEqual(kernel.pin_close_count, 1)
+                self.assertEqual(kernel.pin_close_count, len(kernel.pin_handles))
+                self.assertTrue(all(state["closed"] for state in kernel.pin_handles.values()))
 
     def test_pinned_open_failure_has_no_handle_to_close(self):
         payload = b"synthetic-pinned-verifier"
