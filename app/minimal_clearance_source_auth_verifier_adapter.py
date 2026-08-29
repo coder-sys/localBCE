@@ -1,4 +1,4 @@
-"""Nonactivating Queue adapter shell for the signed Native V4 source boundary.
+"""Nonactivating Queue adapter shell for the signed Native Profile 6 source boundary.
 
 The adapter owns only volatile frame assembly and the narrow process call.  It
 does not parse proof material, select a disposition, or persist source,
@@ -18,6 +18,7 @@ from app.minimal_clearance_resource_limits import (
 from app.minimal_clearance_verification_queue import (
     BatchVerifierResult,
     IssuedVerificationBatch,
+    PROOF_STATEMENT_BYTES,
     QueueConfig,
     QueueHeldError,
     QueueIntegrityError,
@@ -30,11 +31,11 @@ from app.minimal_clearance_verifier_process import (
 )
 
 
-SOURCE_AUTH_FRAME_BYTES: Final[int] = 4_875_387
+SOURCE_AUTH_FRAME_BYTES: Final[int] = 11_912_379
 ML_DSA_87_PUBLIC_KEY_BYTES: Final[int] = 2_592
-SOURCE_AUTH_IPC_BYTES: Final[int] = 4_881_491
+SOURCE_AUTH_IPC_BYTES: Final[int] = 11_918_547
 SOURCE_AUTH_PROCESS_ARGUMENTS: Final[tuple[str, ...]] = ()
-SOURCE_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0 * 60.0
+SOURCE_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0
 _SHA256_BYTES: Final[int] = 32
 
 
@@ -136,8 +137,8 @@ def _build_ipc_input(*, batch: IssuedVerificationBatch, source_key_epoch: int, p
         _hold("batch_binding")
     ipc[offset : offset + 3_200] = refs
     offset += 3_200
-    ipc[offset : offset + 240] = batch.proof_statement
-    offset += 240
+    ipc[offset : offset + PROOF_STATEMENT_BYTES] = batch.proof_statement
+    offset += PROOF_STATEMENT_BYTES
     ipc[offset : offset + ML_DSA_87_PUBLIC_KEY_BYTES] = public_key
     offset += ML_DSA_87_PUBLIC_KEY_BYTES
     ipc[offset:] = frame

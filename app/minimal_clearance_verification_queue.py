@@ -98,7 +98,7 @@ PROFILE_VERSION: Final[int] = 6
 RELATION_VERSION: Final[int] = 1
 POLICY_SCHEMA_VERSION: Final[int] = 1
 PROFILE_VERSION_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V6"
-SOURCE_AUTH_PROFILE_DEFAULT: Final[str] = "synthetic-source-auth-v9-unqualified"
+SOURCE_AUTH_PROFILE_DEFAULT: Final[str] = "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V6-UNQUALIFIED"
 STATEMENT_MAGIC: Final[bytes] = b"BL-R100-STMT-V2\x00"
 # Opaque registered identifiers.  The queue has no proof parser, transcript,
 # or proof-internal fingerprint construction.

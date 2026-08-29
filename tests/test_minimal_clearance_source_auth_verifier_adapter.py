@@ -37,12 +37,12 @@ class _Fixture:
     def __init__(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.executable = self.root / "blind-source-auth-v4.exe"
-        self.executable_bytes = b"synthetic-future-v4-executable"
+        self.executable = self.root / "blind-source-auth-v6.exe"
+        self.executable_bytes = b"synthetic-future-v6-executable"
         self.executable.write_bytes(self.executable_bytes)
         self.key = bytes(range(256)) * (ML_DSA_87_PUBLIC_KEY_BYTES // 256) + bytes(range(ML_DSA_87_PUBLIC_KEY_BYTES % 256))
-        self.queue_config = QueueConfig("queue-v9", 100, source_key_epoch=0x0102030405060708, qualification_flags=("flag-a", "flag-b"))
-        template = OperationTemplate("assertion", 1, "state-profile-v9", 1_700_000_000_000, 1_700_003_600_000, None, self.queue_config.qualification_flags)
+        self.queue_config = QueueConfig("queue-v10", 100, source_key_epoch=0x0102030405060708)
+        template = OperationTemplate("assertion", 1, "state-profile-v6", 1_700_000_000_000, 1_700_003_600_000, None, self.queue_config.qualification_flags)
         refs = tuple(index.to_bytes(32, "little") for index in range(100))
         root = _compute_batch_root_from_refs(template, refs)
         statement = _build_statement(batch_root=root, session_ref=bytes(range(64)), valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
@@ -153,9 +153,9 @@ class SourceAuthAdapterTests(unittest.TestCase):
         return captured, runner
 
     def test_builds_exact_ordered_ipc_and_returns_bound_acceptance(self) -> None:
-        self.assertEqual(SOURCE_AUTH_FRAME_BYTES, 4_875_387)
-        self.assertEqual(SOURCE_AUTH_IPC_BYTES, 4_881_491)
-        self.assertEqual(SOURCE_AUTH_IPC_BYTES, 6_104 + SOURCE_AUTH_FRAME_BYTES)
+        self.assertEqual(SOURCE_AUTH_FRAME_BYTES, 11_912_379)
+        self.assertEqual(SOURCE_AUTH_IPC_BYTES, 11_918_547)
+        self.assertEqual(SOURCE_AUTH_IPC_BYTES, 6_168 + SOURCE_AUTH_FRAME_BYTES)
         captured, runner = self._run()
         handoff = VolatileProofHandoff(io.BytesIO(self.fixture.frame), declared_length=SOURCE_AUTH_FRAME_BYTES)
         with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
@@ -166,6 +166,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
         self.assertEqual(result.proof_statement, self.fixture.batch.proof_statement)
         self.assertEqual(result.batch_root, self.fixture.batch.batch_root)
         self.assertEqual(result.source_auth_profile, self.fixture.queue_config.source_auth_profile)
+        self.assertEqual(result.source_auth_profile, "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V6-UNQUALIFIED")
         self.assertEqual(result.source_key_epoch, self.fixture.queue_config.source_key_epoch)
         self.assertEqual(result.qualification_flags, self.fixture.queue_config.qualification_flags)
         self.assertEqual(result.result_code, "accepted")
@@ -181,9 +182,9 @@ class SourceAuthAdapterTests(unittest.TestCase):
         self.assertEqual(ipc[:8], self.fixture.queue_config.source_key_epoch.to_bytes(8, "little"))
         self.assertEqual(ipc[8:72], self.fixture.batch.batch_root)
         self.assertEqual(ipc[72:3272], b"".join(self.fixture.batch.operation_refs))
-        self.assertEqual(ipc[3272:3512], self.fixture.batch.proof_statement)
-        self.assertEqual(ipc[3512:6104], self.fixture.key)
-        self.assertEqual(ipc[6104:], self.fixture.frame)
+        self.assertEqual(ipc[3272:3576], self.fixture.batch.proof_statement)
+        self.assertEqual(ipc[3576:6168], self.fixture.key)
+        self.assertEqual(ipc[6168:], self.fixture.frame)
         self.assertTrue(handoff.used)
         self.assertTrue(handoff.exhausted)
         with self.assertRaisesRegex(QueueHeldError, "proof_handoff_closed"):
@@ -206,8 +207,8 @@ class SourceAuthAdapterTests(unittest.TestCase):
     def test_changed_epoch_key_and_frame_reach_combined_rejection(self) -> None:
         cases = (
             ("epoch", replace(self.fixture.config, queue_config=replace(self.fixture.queue_config, source_key_epoch=self.fixture.queue_config.source_key_epoch + 1)), self.fixture.batch, self.fixture.frame, slice(0, 8)),
-            ("public_key", replace(self.fixture.config, ml_dsa_87_public_key=bytes([self.fixture.key[0] ^ 1]) + self.fixture.key[1:]), self.fixture.batch, self.fixture.frame, slice(3512, 6104)),
-            ("frame", self.fixture.config, self.fixture.batch, bytes([self.fixture.frame[0] ^ 1]) + self.fixture.frame[1:], slice(6104, SOURCE_AUTH_IPC_BYTES)),
+            ("public_key", replace(self.fixture.config, ml_dsa_87_public_key=bytes([self.fixture.key[0] ^ 1]) + self.fixture.key[1:]), self.fixture.batch, self.fixture.frame, slice(3576, 6168)),
+            ("frame", self.fixture.config, self.fixture.batch, bytes([self.fixture.frame[0] ^ 1]) + self.fixture.frame[1:], slice(6168, SOURCE_AUTH_IPC_BYTES)),
         )
         for name, config, batch, frame, changed_slice in cases:
             with self.subTest(name=name):
@@ -219,10 +220,11 @@ class SourceAuthAdapterTests(unittest.TestCase):
                 baseline = self.fixture.frame if name == "frame" else self.fixture.config.ml_dsa_87_public_key if name == "public_key" else self.fixture.queue_config.source_key_epoch.to_bytes(8, "little")
                 self.assertNotEqual(current[changed_slice], baseline)
 
-    def test_changed_root_ref_and_statement_fail_before_runner(self) -> None:
+    def test_changed_root_ref_session_and_statement_fail_before_runner(self) -> None:
         cases = (
             ("root", self._forged_batch(batch_root=bytes([self.fixture.batch.batch_root[0] ^ 1]) + self.fixture.batch.batch_root[1:])),
             ("ref", self._forged_batch(operation_refs=(bytes([self.fixture.batch.operation_refs[0][0] ^ 1]) + self.fixture.batch.operation_refs[0][1:],) + self.fixture.batch.operation_refs[1:])),
+            ("session_ref", self._forged_batch(session_ref=bytes([self.fixture.batch.session_ref[0] ^ 1]) + self.fixture.batch.session_ref[1:])),
             ("statement", self._forged_batch(proof_statement=bytes([self.fixture.batch.proof_statement[0] ^ 1]) + self.fixture.batch.proof_statement[1:])),
         )
         for name, batch in cases:
