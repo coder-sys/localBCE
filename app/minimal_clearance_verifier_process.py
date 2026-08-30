@@ -861,13 +861,39 @@ def _is_reparse_point(path: Path) -> bool:
     return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
 
 
-def _require_empty_verifier_workspace(workspace: Path) -> None:
-    if not workspace.is_dir() or _is_reparse_point(workspace):
+def _verifier_workspace_snapshot(
+    workspace: Path,
+) -> tuple[tuple[int, int, int, int], tuple[str, ...]]:
+    if not isinstance(workspace, Path) or not workspace.is_absolute():
         raise VerifierProcessError("verifier_workspace") from None
     try:
-        entries = tuple(workspace.iterdir())
+        if not workspace.is_dir() or _is_reparse_point(workspace):
+            raise VerifierProcessError("verifier_workspace") from None
+        metadata = os.lstat(workspace)
+        attributes = int(getattr(metadata, "st_file_attributes", 0))
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or attributes & getattr(
+                stat, "FILE_ATTRIBUTE_REPARSE_POINT", _FILE_ATTRIBUTE_REPARSE_POINT
+            )
+        ):
+            raise VerifierProcessError("verifier_workspace") from None
+        entries = tuple(sorted(entry.name for entry in workspace.iterdir()))
+    except VerifierProcessError:
+        raise
     except OSError:
         raise VerifierProcessError("verifier_workspace") from None
+    identity = (
+        int(metadata.st_dev),
+        int(metadata.st_ino),
+        int(metadata.st_nlink),
+        attributes,
+    )
+    return identity, entries
+
+
+def _require_empty_verifier_workspace(workspace: Path) -> None:
+    _identity, entries = _verifier_workspace_snapshot(workspace)
     if entries:
         raise VerifierProcessError("verifier_workspace_not_empty") from None
 
@@ -1110,8 +1136,7 @@ def run_contained_verifier(
         raise VerifierProcessError("verifier_windows_only")
     if not isinstance(executable, Path) or not executable.is_absolute():
         raise VerifierProcessError("verifier_executable_path")
-    if not workspace.is_dir() or workspace.is_symlink():
-        raise VerifierProcessError("verifier_workspace")
+    workspace_snapshot = _verifier_workspace_snapshot(workspace)
     if type(timeout_seconds) is not float or not 0 < timeout_seconds <= 30 * 60:
         raise VerifierProcessError("verifier_timeout")
     if (
@@ -1347,17 +1372,18 @@ def run_contained_verifier(
                 expected_executable_sha256=expected_executable_sha256,  # type: ignore[arg-type]
             )
             launch_executable = pinned_executable.canonical_path
-            launch_directory = pinned_executable.canonical_parent
             command_line = ctypes.create_unicode_buffer(
                 " ".join(
                     [_quote_argument(launch_executable)]
                     + [_quote_argument(argument) for argument in arguments]
                 )
             )
+            if _verifier_workspace_snapshot(workspace) != workspace_snapshot:
+                raise VerifierProcessError("verifier_workspace_changed") from None
             _create_process_with_owned_output_handles(
                 kernel32=kernel32,
                 executable=launch_executable,
-                current_directory=launch_directory,
+                current_directory=str(workspace),
                 output_handles=(stdout_handle, stderr_handle),
                 stdin_handle=inherited_stdin,
                 parent_descriptors=[stdout_write, stderr_write],  # type: ignore[list-item]

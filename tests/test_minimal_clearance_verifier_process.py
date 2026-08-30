@@ -545,7 +545,7 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             )
             self.assertEqual(
                 next(value for name, value in kernel.events if name == "create_directory"),
-                kernel.dos_parent,
+                str(root),
             )
             self.assertIn(("file_id", (str(executable), b"R" * 16)), kernel.events)
             self.assertIn(("file_id", (kernel.dos_path, b"R" * 16)), kernel.events)
@@ -904,6 +904,50 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                     expected_executable_sha256=hashlib.sha256(payload).digest(),
                 )
             self.assertEqual(tuple(workspace.iterdir()), ())
+
+    @unittest.skipUnless(os.name == "nt", "Windows relative workspace containment test")
+    def test_real_stream_child_relative_file_is_contained_and_removed(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            root = Path(root_name)
+            helper_parent = root / "helper"
+            helper_parent.mkdir()
+            source_executable = Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe"
+            executable = helper_parent / "helper.exe"
+            shutil.copyfile(source_executable, executable)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            spill_name = f"relative-spill-{root.name}.bin"
+            parent_entries = tuple(sorted(entry.name for entry in helper_parent.iterdir()))
+            payload = executable.read_bytes()
+            result = None
+            caught = None
+            try:
+                result = process.run_contained_verifier_stream(
+                    executable,
+                    ("/d", "/c", f"type nul > {spill_name}"),
+                    b"frame",
+                    workspace=workspace,
+                    timeout_seconds=30.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
+            except process.VerifierProcessError as error:
+                caught = error
+            if result is None:
+                self.assertIsNotNone(caught)
+                self.assertRegex(str(caught), "verifier_workspace_contents")
+            else:
+                self.assertEqual(result.exit_code, 0)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(result.stderr, b"")
+                self.assertTrue(result.cleanup_complete)
+            self.assertEqual(tuple(workspace.iterdir()), ())
+            self.assertEqual(
+                tuple(sorted(entry.name for entry in helper_parent.iterdir())),
+                parent_entries,
+            )
+            self.assertFalse((workspace / spill_name).exists())
+            self.assertFalse((helper_parent / spill_name).exists())
 
     def test_failure_boundaries_remain_fixed_and_close_handles(self):
         stages = {"setup", "limits", "attribute_initialize", "attribute_update", "create", "assign", "resume", "wait", "exit", "query", "close"}
