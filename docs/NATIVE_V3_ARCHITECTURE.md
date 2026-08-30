@@ -49,8 +49,11 @@ exists. The current Queue integration candidate is the nonactivating Profile 9 c
 references and one shared immutable allowlisted statement before a volatile handoff; batch positions
 and the ordered batch root are state-computed before handoff.
 
-The inactive handoff boundary does not create a proof workspace or persist proof/source/signature/
-commitment bytes, artifact digests, acceptance bytes, or process-output hashes. An activated profile
+The inactive handoff boundary creates only an exact disposable verifier workspace for the volatile
+process call, which must start and end empty; it does not persist proof/source/signature/commitment,
+frame, statement, exact proof/source digest, PHI, temp/spill, log, acceptance, or process-output
+bytes. Any child-created workspace entry is a containment failure and is removed before the boundary
+returns. Authorized Queue/State DB, WAL, and commit writes remain limited to state-owned fields; an activated profile
 owns its exact proof envelope and complete-path resource profile under the contract below; there is no
 universal input-admission allowance. A consumed, failed, expired, restarted, or ambiguous handoff
 becomes `HELD` and requires a fresh state operation and fresh handoff. These controls do not close the
@@ -67,10 +70,17 @@ encoding 2, circuit fingerprint
 and profile fingerprint
 `609a2a9d66e3d2e3332e86de5be4720699c1ade901c62e6954715abd1cf64e197f315a32eeb972deadaedab4d4e8882e00ae9ea9ee23575cded3498429a802df`.
 The accepted Rust authority is commit `28f9f6765efd22aba2135df842a757f8ef4468a3` with tree
-`99b64f421ec5bd7679f9b44d06e04c745592a390`. Its 24,845,260-byte proof envelope and the
-24,853,179-byte signed source-auth frame are volatile; the 24,859,347-byte IPC is also volatile.
-The final C source-auth process commit and canonical executable size/SHA identity have not yet
-been supplied, so this candidate is not selected, qualified, production-usable, or active.
+`99b64f421ec5bd7679f9b44d06e04c745592a390`; its reproducible producer pin is 385,024 bytes with
+SHA-256 `A2D7EC789F5B8C88631A7D16DCEE6DFBDE6179886AB1F198D5C878228E131834`. Its 24,845,260-byte
+proof envelope and the 24,853,179-byte signed source-auth frame are volatile; the 24,859,347-byte
+IPC is also volatile. The accepted C source-auth boundary is commit
+`acae7b46b555a88b8149e6601d4549955beb7075` with tree `8e59652d31bd1cf6b9f3dc582ea5d7278b5b9a73`;
+its canonical executable is 58,880 bytes with SHA-256
+`855C089EF8E4B23FF4D63B453215FBA2DA31E6B377B49A90DABA08C18F3A1107`. The candidate remains
+unselected, unqualified, `proofSuiteId=null`, `production_usable=false`, and `activation=false`.
+Complete-path p95 and >=128-bit PQ qualification remain open. Proof acceptance yields only an opaque
+scoped verification outcome and never `CLEAR`; State alone owns chronology, `policyResult`,
+`effectiveDirective`, exceptions, disposition, retries, and economic state.
 
 ## Source-auth and private representation contract
 

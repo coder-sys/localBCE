@@ -38,7 +38,10 @@ ML_DSA_87_PUBLIC_KEY_BYTES: Final[int] = 2_592
 SOURCE_AUTH_IPC_BYTES: Final[int] = 24_859_347
 SOURCE_AUTH_PROCESS_ARGUMENTS: Final[tuple[str, ...]] = ()
 SOURCE_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0
-_SHA256_BYTES: Final[int] = 32
+SOURCE_AUTH_EXECUTABLE_SIZE_BYTES: Final[int] = 58_880
+SOURCE_AUTH_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
+    "855C089EF8E4B23FF4D63B453215FBA2DA31E6B377B49A90DABA08C18F3A1107"
+)
 
 
 def _raise_fixed(error: QueueHeldError | QueueIntegrityError) -> NoReturn:
@@ -98,10 +101,10 @@ class SourceAuthVerifierConfig:
             raise ValueError("source_auth_queue_config") from None
         if not isinstance(self.executable_path, Path) or not self.executable_path.is_absolute():
             raise ValueError("source_auth_executable_path") from None
-        if type(self.executable_size_bytes) is not int or self.executable_size_bytes <= 0:
-            raise ValueError("source_auth_executable_size") from None
-        if type(self.executable_sha256) is not bytes or len(self.executable_sha256) != _SHA256_BYTES:
-            raise ValueError("source_auth_executable_sha256") from None
+        if self.executable_size_bytes != SOURCE_AUTH_EXECUTABLE_SIZE_BYTES:
+            raise ValueError("source_auth_executable_identity") from None
+        if self.executable_sha256 != SOURCE_AUTH_EXECUTABLE_SHA256:
+            raise ValueError("source_auth_executable_identity") from None
         if not isinstance(self.workspace, Path) or not self.workspace.is_absolute():
             raise ValueError("source_auth_workspace") from None
         if type(self.ml_dsa_87_public_key) is not bytes or len(self.ml_dsa_87_public_key) != ML_DSA_87_PUBLIC_KEY_BYTES:
@@ -287,6 +290,8 @@ __all__ = (
     "ML_DSA_87_PUBLIC_KEY_BYTES",
     "MinimalClearanceSourceAuthVerifierAdapter",
     "SOURCE_AUTH_FRAME_BYTES",
+    "SOURCE_AUTH_EXECUTABLE_SHA256",
+    "SOURCE_AUTH_EXECUTABLE_SIZE_BYTES",
     "SOURCE_AUTH_IPC_BYTES",
     "SOURCE_AUTH_PROCESS_ARGUMENTS",
     "SOURCE_AUTH_TIMEOUT_SECONDS",

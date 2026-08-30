@@ -81,8 +81,14 @@ non-dispositive, fail-closed semantics do not establish an active backend, quali
 completion, or product-throughput claim. The exact cryptographic, zero-PHI deployment, resource,
 and complete-profile measurement gates remain open under the Native-v3 authority. The accepted Rust
 protocol authority is commit `28f9f6765efd22aba2135df842a757f8ef4468a3` with tree
-`99b64f421ec5bd7679f9b44d06e04c745592a390`; final C source-auth binding and canonical executable
-identity remain a later dependency.
+`99b64f421ec5bd7679f9b44d06e04c745592a390`; the C source-auth boundary and canonical executable
+identity are now pinned by the accepted C boundary: commit `acae7b46b555a88b8149e6601d4549955beb7075`,
+tree `8e59652d31bd1cf6b9f3dc582ea5d7278b5b9a73`, and canonical executable size/SHA
+58,880 / `855C089EF8E4B23FF4D63B453215FBA2DA31E6B377B49A90DABA08C18F3A1107`.
+Complete-path p95 and >=128-bit PQ qualification remain open. The candidate remains
+`proofSuiteId=null`, `production_usable=false`, and `activation=false`; proof acceptance yields only
+an opaque verification outcome and never `CLEAR`. State alone owns chronology, `policyResult`,
+`effectiveDirective`, exceptions, disposition, retries, and economic state.
 
 Before selecting or implementing a private backend, the complete profile must close the exact
 source-binding, privacy/setup, PQ, acceptance-accounting, theorem-composition, zero-PHI deployment,

@@ -1,4 +1,4 @@
-"""Queue V10: one state-owned handoff for exactly one Range100 proof.
+"""Queue V11: one state-owned handoff for exactly one Range100 proof.
 
 The queue owns only the public batch statement, the volatile handoff, one
 lease, one 101-opportunity theorem-relevant proof-attempt reservation, and a
@@ -71,8 +71,8 @@ def _raise_fixed(error: VerificationQueueError) -> NoReturn:
     raise error
 
 
-SCHEMA_VERSION: Final[int] = 10
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v10"
+SCHEMA_VERSION: Final[int] = 11
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v11"
 MAX_QUEUE_CAPACITY: Final[int] = 512
 DATABASE_PAGE_SIZE: Final[int] = 4096
 DATABASE_MAX_PAGE_COUNT: Final[int] = 32768
@@ -240,7 +240,7 @@ def _template_value_check(template: "OperationTemplate") -> None:
 
 @dataclass(frozen=True, slots=True)
 class QueueConfig:
-    """Immutable state-owned V10/Profile 9 queue configuration."""
+    """Immutable state-owned V11/Profile 9 queue configuration."""
 
     queue_id: str
     capacity: int
@@ -259,7 +259,8 @@ class QueueConfig:
             _raise_fixed(VerificationQueueError("queue_profile_epoch"))
         if self.profile_version != PROFILE_VERSION_TOKEN:
             _raise_fixed(VerificationQueueError("queue_profile_version"))
-        _token(self.source_auth_profile, "source_auth_profile", 96)
+        if self.source_auth_profile != SOURCE_AUTH_PROFILE_DEFAULT:
+            _raise_fixed(VerificationQueueError("source_auth_profile"))
         if type(self.source_key_epoch) is not int or not 1 <= self.source_key_epoch <= MAX_SOURCE_KEY_EPOCH:
             _raise_fixed(VerificationQueueError("source_key_epoch"))
         if type(self.qualification_flags) is not tuple or len(self.qualification_flags) > 32 or tuple(sorted(self.qualification_flags)) != self.qualification_flags or len(set(self.qualification_flags)) != len(self.qualification_flags):
@@ -819,21 +820,21 @@ class _QueueRuntimeOwnership:
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "queue_metadata": ("id", "schema_version", "queue_id", "config_json", "config_digest", "admission_cap_bytes", "process_tree_peak_cap_bytes", "active_process_limit", "page_size", "max_page_count", "journal_mode", "synchronous", "head_root", "next_transition_seq", "next_admission_seq", "nonterminal_count", "live_lease_count", "proof_attempts_used", "proof_attempts_cap", "next_attempt_seq"),
-    "queue_batches": ("batch_id", "batch_root", "session_ref", "proof_statement", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "identity_digest", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"),
+    "queue_batches": ("batch_id", "batch_root", "session_ref", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "identity_digest", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"),
     "queue_members": ("batch_id", "batch_position", "operation_ref", "admission_seq"),
     "queue_leases": ("batch_id", "worker_id", "token_digest", "attempt", "claim_sequence", "leased_ms", "expires_ms"),
     "queue_attempts": ("attempt_id", "batch_id", "reservation_before", "reservation_after", "proof_attempts", "source_key_epoch", "status", "reserved_ms", "closed_ms", "result_code"),
-    "queue_results": ("batch_id", "terminal_status", "receipt_id", "receipt_bytes", "proof_accepted", "source_authenticated", "proof_statement", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "completed_ms", "attempt", "error_code"),
+    "queue_results": ("batch_id", "terminal_status", "receipt_id", "receipt_bytes", "proof_accepted", "source_authenticated", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "completed_ms", "attempt", "error_code"),
     "queue_transitions": ("sequence", "transition_kind", "batch_id", "before_root", "after_root", "event_bytes", "event_digest"),
 }
 _TABLES: Final[frozenset[str]] = frozenset(_TABLE_COLUMNS)
 _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
     "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL, queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), admission_cap_bytes INTEGER NOT NULL, process_tree_peak_cap_bytes INTEGER NOT NULL, active_process_limit INTEGER NOT NULL, page_size INTEGER NOT NULL CHECK(page_size=4096), max_page_count INTEGER NOT NULL CHECK(max_page_count=32768), journal_mode TEXT NOT NULL CHECK(journal_mode='delete'), synchronous INTEGER NOT NULL CHECK(synchronous=2), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL, next_admission_seq INTEGER NOT NULL, nonterminal_count INTEGER NOT NULL, live_lease_count INTEGER NOT NULL, proof_attempts_used INTEGER NOT NULL, proof_attempts_cap INTEGER NOT NULL CHECK(proof_attempts_cap=4294967296), next_attempt_seq INTEGER NOT NULL)",
-    "queue_batches": "CREATE TABLE queue_batches (batch_id BLOB PRIMARY KEY CHECK(length(batch_id)=32), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), session_ref BLOB NOT NULL CHECK(length(session_ref)=64), proof_statement BLOB NOT NULL CHECK(length(proof_statement)=304), assertion_identifier TEXT NOT NULL, assertion_version INTEGER NOT NULL, state_profile_version TEXT NOT NULL, valid_from_ms INTEGER NOT NULL, valid_until_ms INTEGER NOT NULL, approved_source_registry_root BLOB, qualification_flags BLOB NOT NULL, identity_digest BLOB NOT NULL CHECK(length(identity_digest)=64), status TEXT NOT NULL CHECK(status IN ('AWAITING_HANDOFF','QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), next_eligible_ms INTEGER NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, last_error_code TEXT, CHECK(approved_source_registry_root IS NULL OR length(approved_source_registry_root)=64), CHECK(valid_from_ms<valid_until_ms))",
+    "queue_batches": "CREATE TABLE queue_batches (batch_id BLOB PRIMARY KEY CHECK(length(batch_id)=32), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), session_ref BLOB NOT NULL CHECK(length(session_ref)=64), assertion_identifier TEXT NOT NULL, assertion_version INTEGER NOT NULL, state_profile_version TEXT NOT NULL, valid_from_ms INTEGER NOT NULL, valid_until_ms INTEGER NOT NULL, approved_source_registry_root BLOB, qualification_flags BLOB NOT NULL, identity_digest BLOB NOT NULL CHECK(length(identity_digest)=64), status TEXT NOT NULL CHECK(status IN ('AWAITING_HANDOFF','QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), next_eligible_ms INTEGER NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, last_error_code TEXT, CHECK(approved_source_registry_root IS NULL OR length(approved_source_registry_root)=64), CHECK(valid_from_ms<valid_until_ms))",
     "queue_members": "CREATE TABLE queue_members (batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), batch_position INTEGER NOT NULL CHECK(batch_position BETWEEN 0 AND 99), operation_ref BLOB NOT NULL CHECK(length(operation_ref)=32), admission_seq INTEGER NOT NULL CHECK(admission_seq>=1), PRIMARY KEY(batch_id,batch_position), UNIQUE(operation_ref), UNIQUE(admission_seq))",
     "queue_leases": "CREATE TABLE queue_leases (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt=1), claim_sequence INTEGER NOT NULL, leased_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms))",
     "queue_attempts": "CREATE TABLE queue_attempts (attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id), reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before), proof_attempts INTEGER NOT NULL CHECK(proof_attempts=101), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL, closed_ms INTEGER, result_code TEXT)",
-    "queue_results": "CREATE TABLE queue_results (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_id BLOB NOT NULL CHECK(length(receipt_id)=32), receipt_bytes BLOB NOT NULL, proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), source_authenticated INTEGER NOT NULL CHECK(source_authenticated IN (0,1)), proof_statement BLOB NOT NULL CHECK(length(proof_statement)=304), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), result_code TEXT NOT NULL, qualification_flags BLOB NOT NULL, completed_ms INTEGER NOT NULL, attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), error_code TEXT)",
+    "queue_results": "CREATE TABLE queue_results (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_id BLOB NOT NULL CHECK(length(receipt_id)=32), receipt_bytes BLOB NOT NULL, proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), source_authenticated INTEGER NOT NULL CHECK(source_authenticated IN (0,1)), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), result_code TEXT NOT NULL, qualification_flags BLOB NOT NULL, completed_ms INTEGER NOT NULL, attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), error_code TEXT)",
     "queue_transitions": "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL, batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL, event_digest BLOB NOT NULL CHECK(length(event_digest)=64))",
 }
 _STATUSES: Final[tuple[str, ...]] = ("AWAITING_HANDOFF", "QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD")
@@ -849,7 +850,7 @@ _LEASE_MS: Final[int] = 60_000
 _MAX_EVENT_BYTES: Final[int] = 4096
 
 _TRIGGER_DEFS: Final[tuple[tuple[str, str], ...]] = (
-    ("queue_batches_identity_guard", "CREATE TRIGGER queue_batches_identity_guard BEFORE UPDATE OF batch_id,batch_root,session_ref,proof_statement,assertion_identifier,assertion_version,state_profile_version,valid_from_ms,valid_until_ms,approved_source_registry_root,qualification_flags,identity_digest,admission_seq,created_ms ON queue_batches BEGIN SELECT RAISE(ABORT,'queue_batch_identity_guard'); END"),
+    ("queue_batches_identity_guard", "CREATE TRIGGER queue_batches_identity_guard BEFORE UPDATE OF batch_id,batch_root,session_ref,assertion_identifier,assertion_version,state_profile_version,valid_from_ms,valid_until_ms,approved_source_registry_root,qualification_flags,identity_digest,admission_seq,created_ms ON queue_batches BEGIN SELECT RAISE(ABORT,'queue_batch_identity_guard'); END"),
     ("queue_batches_no_delete", "CREATE TRIGGER queue_batches_no_delete BEFORE DELETE ON queue_batches BEGIN SELECT RAISE(ABORT,'queue_batch_delete_guard'); END"),
     ("queue_members_no_update", "CREATE TRIGGER queue_members_no_update BEFORE UPDATE ON queue_members BEGIN SELECT RAISE(ABORT,'queue_member_update_guard'); END"),
     ("queue_members_no_delete", "CREATE TRIGGER queue_members_no_delete BEFORE DELETE ON queue_members BEGIN SELECT RAISE(ABORT,'queue_member_delete_guard'); END"),
@@ -891,7 +892,7 @@ def _create_schema(connection: sqlite3.Connection, composition_config: object) -
         CREATE TABLE queue_batches (
             batch_id BLOB PRIMARY KEY CHECK(length(batch_id)=32), batch_root BLOB NOT NULL CHECK(length(batch_root)=64),
             session_ref BLOB NOT NULL CHECK(length(session_ref)=64),
-            proof_statement BLOB NOT NULL CHECK(length(proof_statement)=304), assertion_identifier TEXT NOT NULL,
+            assertion_identifier TEXT NOT NULL,
             assertion_version INTEGER NOT NULL, state_profile_version TEXT NOT NULL, valid_from_ms INTEGER NOT NULL,
             valid_until_ms INTEGER NOT NULL, approved_source_registry_root BLOB,
             qualification_flags BLOB NOT NULL, identity_digest BLOB NOT NULL CHECK(length(identity_digest)=64),
@@ -921,7 +922,7 @@ def _create_schema(connection: sqlite3.Connection, composition_config: object) -
             batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')),
             receipt_id BLOB NOT NULL CHECK(length(receipt_id)=32), receipt_bytes BLOB NOT NULL,
             proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), source_authenticated INTEGER NOT NULL CHECK(source_authenticated IN (0,1)),
-            proof_statement BLOB NOT NULL CHECK(length(proof_statement)=304), batch_root BLOB NOT NULL CHECK(length(batch_root)=64),
+            batch_root BLOB NOT NULL CHECK(length(batch_root)=64),
             source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), result_code TEXT NOT NULL,
             qualification_flags BLOB NOT NULL, completed_ms INTEGER NOT NULL, attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), error_code TEXT
         );
@@ -969,12 +970,15 @@ def _statement_from_batch(connection: sqlite3.Connection, batch_row: tuple[Any, 
         _raise_fixed(QueueIntegrityError("queue_batch_shape"))
     if tuple(int(row[1]) for row in member_rows) != tuple(range(RANGE100_COUNT)):
         _raise_fixed(QueueIntegrityError("queue_batch_order"))
-    admission_start = (int(batch_row[13]) - 1) * RANGE100_COUNT + 1
+    admission_start = (int(batch_row[12]) - 1) * RANGE100_COUNT + 1
     if tuple(int(row[3]) for row in member_rows) != tuple(range(admission_start, admission_start + RANGE100_COUNT)):
         _raise_fixed(QueueIntegrityError("queue_batch_order"))
     refs = tuple(_blob(row[2], MAX_OPERATION_REF_BYTES, "operation_ref") for row in member_rows)
-    template = OperationTemplate(str(batch_row[4]), int(batch_row[5]), str(batch_row[6]), int(batch_row[7]), int(batch_row[8]), None if batch_row[9] is None else _blob(batch_row[9], 64, "source_registry_root"), _parse_flags(bytes(batch_row[10])))
-    return IssuedVerificationBatch(batch_id, template, refs, _blob(batch_row[1], 64, "batch_root"), _blob(batch_row[2], MAX_SESSION_REF_BYTES, "session_ref"), _blob(batch_row[3], PROOF_STATEMENT_BYTES, "proof_statement"), int(batch_row[13]), _blob(batch_row[11], 64, "batch_identity"))
+    batch_root = _blob(batch_row[1], 64, "batch_root")
+    session_ref = _blob(batch_row[2], MAX_SESSION_REF_BYTES, "session_ref")
+    template = OperationTemplate(str(batch_row[3]), int(batch_row[4]), str(batch_row[5]), int(batch_row[6]), int(batch_row[7]), None if batch_row[8] is None else _blob(batch_row[8], 64, "source_registry_root"), _parse_flags(bytes(batch_row[9])))
+    proof_statement = _build_statement(batch_root=batch_root, session_ref=session_ref, valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
+    return IssuedVerificationBatch(batch_id, template, refs, batch_root, session_ref, proof_statement, int(batch_row[12]), _blob(batch_row[10], 64, "batch_identity"))
 
 
 class _VerificationQueueStore:
@@ -1127,7 +1131,7 @@ class _VerificationQueueStore:
         connection.execute("UPDATE queue_metadata SET head_root=?,next_transition_seq=? WHERE id=1", (after, sequence))
 
     def _insert_batch(self, connection: sqlite3.Connection, *, batch: IssuedVerificationBatch, now: int, batch_admission_seq: int) -> None:
-        connection.execute("INSERT INTO queue_batches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (batch.batch_id, batch.batch_root, batch.session_ref, batch.proof_statement, batch.template.assertion_identifier, batch.template.assertion_version, batch.template.state_profile_version, batch.template.valid_from_ms, batch.template.valid_until_ms, batch.template.approved_source_registry_root, _flags_bytes(batch.template.qualification_flags), batch.identity_digest, "AWAITING_HANDOFF", batch_admission_seq, 0, now, now, now, None))
+        connection.execute("INSERT INTO queue_batches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (batch.batch_id, batch.batch_root, batch.session_ref, batch.template.assertion_identifier, batch.template.assertion_version, batch.template.state_profile_version, batch.template.valid_from_ms, batch.template.valid_until_ms, batch.template.approved_source_registry_root, _flags_bytes(batch.template.qualification_flags), batch.identity_digest, "AWAITING_HANDOFF", batch_admission_seq, 0, now, now, now, None))
         for position, operation_ref in enumerate(batch.operation_refs):
             connection.execute("INSERT INTO queue_members VALUES (?,?,?,?)", (batch.batch_id, position, operation_ref, (batch_admission_seq - 1) * RANGE100_COUNT + position + 1))
         self._append_event(connection, kind="BATCH_ISSUED", batch_id=batch.batch_id, status="AWAITING_HANDOFF", error_code=None, attempt=0, at_ms=now, extra={"member_count": RANGE100_COUNT, "identity_digest": _hex(batch.identity_digest)})
@@ -1171,10 +1175,10 @@ class _VerificationQueueStore:
         row = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (batch_id,)).fetchone()
         if row is None:
             return False
-        status = str(row[12])
+        status = str(row[11])
         if status in _TERMINAL:
             return False
-        attempt = int(row[14])
+        attempt = int(row[13])
         if status == "LEASED":
             attempt_row = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (batch_id,)).fetchone()
             if attempt_row is None or str(attempt_row[6]) != "RESERVED":
@@ -1184,7 +1188,7 @@ class _VerificationQueueStore:
         connection.execute("UPDATE queue_batches SET status='HELD',updated_ms=?,last_error_code=? WHERE batch_id=?", (now, code, batch_id))
         batch = _statement_from_batch(connection, tuple(row))
         receipt = self._receipt(batch=batch, proof_accepted=False, source_authenticated=False, result_code=code, error_code=code, qualification_flags=self.config.qualification_flags)
-        connection.execute("INSERT INTO queue_results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (batch_id, "HELD", _sha3(_MATERIAL, b"receipt", batch_id, _u64(attempt))[:32], receipt, 0, 0, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, _u64(self.config.source_key_epoch), code, _flags_bytes(self.config.qualification_flags), now, attempt, code))
+        connection.execute("INSERT INTO queue_results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (batch_id, "HELD", _sha3(_MATERIAL, b"receipt", batch_id, _u64(attempt))[:32], receipt, 0, 0, batch.batch_root, self.config.source_auth_profile, _u64(self.config.source_key_epoch), code, _flags_bytes(self.config.qualification_flags), now, attempt, code))
         self._append_event(connection, kind="BATCH_HELD", batch_id=batch_id, status="HELD", error_code=code, attempt=attempt, at_ms=now, extra={"member_count": RANGE100_COUNT})
         meta = self._meta(connection)
         connection.execute("UPDATE queue_metadata SET nonterminal_count=?,live_lease_count=0 WHERE id=1", (max(0, int(meta[15]) - 1),))
@@ -1217,7 +1221,7 @@ class _VerificationQueueStore:
                             handoff.close()
                         _raise_fixed(QueueConflictError("batch_binding"))
                     now = int(self.clock.now_ms())
-                    if str(row[12]) != "AWAITING_HANDOFF":
+                    if str(row[11]) != "AWAITING_HANDOFF":
                         held = self._hold_batch_locked(connection, batch_id=issued_batch.batch_id, now=now, code="fresh_handoff_required")
                         connection.commit()
                         committed = True
@@ -1342,7 +1346,7 @@ class _VerificationQueueStore:
         row = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
         lease = connection.execute("SELECT * FROM queue_leases WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
         attempt = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
-        if row is None or lease is None or str(row[12]) != "LEASED" or int(row[14]) != work.attempt or str(lease[1]) != work.worker_id or int(lease[3]) != work.attempt or int(lease[4]) != work.claim_sequence or int(lease[6]) != work.lease_expires_ms:
+        if row is None or lease is None or str(row[11]) != "LEASED" or int(row[13]) != work.attempt or str(lease[1]) != work.worker_id or int(lease[3]) != work.attempt or int(lease[4]) != work.claim_sequence or int(lease[6]) != work.lease_expires_ms:
             _raise_fixed(QueueLeaseError("completion_not_live"))
         if attempt is None or int(attempt[0]) <= 0 or bytes(attempt[1]) != work.batch.batch_id or int(attempt[4]) != PROOF_ATTEMPTS_PER_BATCH or bytes(attempt[5]) != _u64(self.config.source_key_epoch) or str(attempt[6]) != "RESERVED":
             _raise_fixed(QueueLeaseError("completion_not_live"))
@@ -1361,7 +1365,7 @@ class _VerificationQueueStore:
         result_code = _code(result_code, "receipt_result_code")
         if error_code is not None:
             error_code = _code(error_code, "receipt_error")
-        value = {"schema": _SCHEMA, "batch_id": _hex(batch.batch_id), "proof_accepted": proof_accepted, "source_authenticated": source_authenticated, "proof_statement": _hex(batch.proof_statement), "batch_root": _hex(batch.batch_root), "source_auth_profile": self.config.source_auth_profile, "source_key_epoch": self.config.source_key_epoch, "result_code": result_code, "qualification_flags": list(qualification_flags), "error_code": error_code, "proof_suite_id": None, "production_usable": False, "activation": False}
+        value = {"schema": _SCHEMA, "batch_id": _hex(batch.batch_id), "proof_accepted": proof_accepted, "source_authenticated": source_authenticated, "batch_root": _hex(batch.batch_root), "source_auth_profile": self.config.source_auth_profile, "source_key_epoch": self.config.source_key_epoch, "result_code": result_code, "qualification_flags": list(qualification_flags), "error_code": error_code, "proof_suite_id": None, "production_usable": False, "activation": False}
         raw = _json_bytes(value)
         if len(raw) > MAX_RECEIPT_BYTES:
             _raise_fixed(QueueIntegrityError("receipt_cap"))
@@ -1373,25 +1377,25 @@ class _VerificationQueueStore:
 
     def _verified_duplicate_result(self, connection: sqlite3.Connection, work: _QueueWorkItem, verifier_result: BatchVerifierResult) -> tuple[Any, ...]:
         existing_batch = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
-        if existing_batch is None or str(existing_batch[12]) != "VERIFIED":
+        if existing_batch is None or str(existing_batch[11]) != "VERIFIED":
             _raise_fixed(QueueLeaseError("completion_not_live"))
         try:
             durable = _statement_from_batch(connection, tuple(existing_batch))
         except VerificationQueueError:
             _raise_fixed(QueueLeaseError("completion_not_live"))
-        if durable != work.batch or _batch_identity_digest(durable, self.config) != durable.identity_digest or type(work.attempt) is not int or work.attempt != int(existing_batch[14]):
+        if durable != work.batch or _batch_identity_digest(durable, self.config) != durable.identity_digest or type(work.attempt) is not int or work.attempt != int(existing_batch[13]):
             _raise_fixed(QueueLeaseError("completion_not_live"))
         if not verifier_result.proof_accepted or not verifier_result.source_authenticated or verifier_result.result_code != "accepted" or verifier_result.proof_statement != durable.proof_statement or verifier_result.batch_root != durable.batch_root or verifier_result.source_auth_profile != self.config.source_auth_profile or verifier_result.source_key_epoch != self.config.source_key_epoch or verifier_result.qualification_flags != self.config.qualification_flags:
             _raise_fixed(QueueIntegrityError("completion_acceptance"))
         existing_result = connection.execute("SELECT * FROM queue_results WHERE batch_id=?", (durable.batch_id,)).fetchone()
         if existing_result is None:
             _raise_fixed(QueueIntegrityError("completion_acceptance"))
-        if type(existing_result[13]) is not int or int(existing_result[13]) != int(existing_batch[14]):
+        if type(existing_result[12]) is not int or int(existing_result[12]) != int(existing_batch[13]):
             _raise_fixed(QueueLeaseError("completion_not_live"))
         expected_receipt = self._receipt(batch=durable, proof_accepted=True, source_authenticated=True, result_code="accepted", error_code=None, qualification_flags=self.config.qualification_flags)
-        expected_receipt_id = _sha3(_MATERIAL, b"receipt", durable.batch_id, _u64(int(existing_batch[14])))[:32]
+        expected_receipt_id = _sha3(_MATERIAL, b"receipt", durable.batch_id, _u64(int(existing_batch[13])))[:32]
         expected_flags = _flags_bytes(self.config.qualification_flags)
-        if type(existing_result[0]) is not bytes or bytes(existing_result[0]) != durable.batch_id or str(existing_result[1]) != "VERIFIED" or type(existing_result[2]) is not bytes or bytes(existing_result[2]) != expected_receipt_id or type(existing_result[3]) is not bytes or bytes(existing_result[3]) != expected_receipt or type(existing_result[4]) is not int or int(existing_result[4]) != 1 or type(existing_result[5]) is not int or int(existing_result[5]) != 1 or type(existing_result[6]) is not bytes or bytes(existing_result[6]) != durable.proof_statement or type(existing_result[7]) is not bytes or bytes(existing_result[7]) != durable.batch_root or str(existing_result[8]) != self.config.source_auth_profile or type(existing_result[9]) is not bytes or bytes(existing_result[9]) != _u64(self.config.source_key_epoch) or str(existing_result[10]) != verifier_result.result_code or type(existing_result[11]) is not bytes or bytes(existing_result[11]) != expected_flags or existing_result[14] is not None:
+        if type(existing_result[0]) is not bytes or bytes(existing_result[0]) != durable.batch_id or str(existing_result[1]) != "VERIFIED" or type(existing_result[2]) is not bytes or bytes(existing_result[2]) != expected_receipt_id or type(existing_result[3]) is not bytes or bytes(existing_result[3]) != expected_receipt or type(existing_result[4]) is not int or int(existing_result[4]) != 1 or type(existing_result[5]) is not int or int(existing_result[5]) != 1 or type(existing_result[6]) is not bytes or bytes(existing_result[6]) != durable.batch_root or str(existing_result[7]) != self.config.source_auth_profile or type(existing_result[8]) is not bytes or bytes(existing_result[8]) != _u64(self.config.source_key_epoch) or str(existing_result[9]) != verifier_result.result_code or type(existing_result[10]) is not bytes or bytes(existing_result[10]) != expected_flags or existing_result[13] is not None:
             _raise_fixed(QueueIntegrityError("completion_acceptance"))
         return tuple(existing_result)
 
@@ -1423,7 +1427,7 @@ class _VerificationQueueStore:
                 existing_batch = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
                 if existing_batch is None:
                     _raise_fixed(QueueLeaseError("completion_not_live"))
-                if str(existing_batch[12]) == "VERIFIED":
+                if str(existing_batch[11]) == "VERIFIED":
                     if status != "VERIFIED" or verifier_result is None:
                         _raise_fixed(QueueLeaseError("completion_not_live"))
                     existing_result = self._verified_duplicate_result(connection, work, verifier_result)
@@ -1431,7 +1435,7 @@ class _VerificationQueueStore:
                     _apply_verified_jobs_in_transaction(connection, config=self.composition_config, jobs=self._composition_jobs(work, verifier_result), state_controls=state_controls, now=int(self.clock.now_ms()))  # type: ignore[arg-type]
                     connection.commit()
                     self._close_handoff_locked(work.batch.batch_id)
-                    return QueueResult(work.batch.batch_id, "VERIFIED", bytes(existing_result[3]), None if existing_result[14] is None else str(existing_result[14]), RANGE100_COUNT)
+                    return QueueResult(work.batch.batch_id, "VERIFIED", bytes(existing_result[3]), None if existing_result[13] is None else str(existing_result[13]), RANGE100_COUNT)
                 row, lease = self._lease_fence(connection, work)
                 # Recheck the clock after the live lease fence, within the
                 # same completion transaction that closes the reservation.
@@ -1454,7 +1458,7 @@ class _VerificationQueueStore:
                 attempt_status = "ACCEPTED" if status == "VERIFIED" else status
                 connection.execute("UPDATE queue_attempts SET status=?,closed_ms=?,result_code=? WHERE batch_id=? AND status='RESERVED'", (attempt_status, now, result_code, work.batch.batch_id))
                 connection.execute("UPDATE queue_batches SET status=?,updated_ms=?,last_error_code=? WHERE batch_id=?", (status, now, final_error, work.batch.batch_id))
-                connection.execute("INSERT INTO queue_results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (work.batch.batch_id, status, _sha3(_MATERIAL, b"receipt", work.batch.batch_id, _u64(work.attempt))[:32], receipt, int(accepted), int(authenticated), work.batch.proof_statement, work.batch.batch_root, self.config.source_auth_profile, _u64(self.config.source_key_epoch), result_code, _flags_bytes(self.config.qualification_flags), now, work.attempt, final_error))
+                connection.execute("INSERT INTO queue_results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (work.batch.batch_id, status, _sha3(_MATERIAL, b"receipt", work.batch.batch_id, _u64(work.attempt))[:32], receipt, int(accepted), int(authenticated), work.batch.batch_root, self.config.source_auth_profile, _u64(self.config.source_key_epoch), result_code, _flags_bytes(self.config.qualification_flags), now, work.attempt, final_error))
                 self._append_event(connection, kind="BATCH_HELD" if status == "HELD" else "BATCH_COMPLETED", batch_id=work.batch.batch_id, status=status, error_code=final_error, attempt=work.attempt, at_ms=now, extra={"member_count": RANGE100_COUNT})
                 meta = self._meta(connection)
                 connection.execute("UPDATE queue_metadata SET live_lease_count=0,nonterminal_count=? WHERE id=1", (max(0, int(meta[15]) - 1),))
@@ -1599,14 +1603,14 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
         value = json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         _raise_fixed(QueueIntegrityError("receipt_encoding"))
-    required = {"schema", "batch_id", "proof_accepted", "source_authenticated", "proof_statement", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "error_code", "proof_suite_id", "production_usable", "activation"}
+    required = {"schema", "batch_id", "proof_accepted", "source_authenticated", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "error_code", "proof_suite_id", "production_usable", "activation"}
     if type(value) is not dict or set(value) != required or raw != _json_bytes(value) or value["schema"] != _SCHEMA:
         _raise_fixed(QueueIntegrityError("receipt_keys"))
     if value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False:
         _raise_fixed(QueueIntegrityError("receipt_flags"))
     if type(value["proof_accepted"]) is not bool or type(value["source_authenticated"]) is not bool:
         _raise_fixed(QueueIntegrityError("receipt_acceptance"))
-    for name, size, code in (("batch_id", 32, "receipt_batch_id"), ("proof_statement", PROOF_STATEMENT_BYTES, "receipt_statement"), ("batch_root", 64, "receipt_root")):
+    for name, size, code in (("batch_id", 32, "receipt_batch_id"), ("batch_root", 64, "receipt_root")):
         if type(value[name]) is not str or value[name] != value[name].upper() or re.fullmatch(rf"[0-9A-F]{{{size * 2}}}\Z", value[name]) is None:
             _raise_fixed(QueueIntegrityError(code))
     _token(value["source_auth_profile"], "source_auth_profile", 96)

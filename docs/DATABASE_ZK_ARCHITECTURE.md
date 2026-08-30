@@ -85,8 +85,10 @@ statement, never an unrelated caller/reference argument. The verifier receives a
 readable binary stream through one volatile single-use handoff. Native-v3 owns each selected
 profile's envelope and process-tree safety constraints; there is no universal input-admission
 allowance, and a not-yet-selected private profile remains inactive. No proof, source, signature,
-commitment, or verifier output bytes are written to a proof workspace, DB, receipt, event, log, export,
-backup, or error. Mutable staging is wiped where technically possible. The exact deployed zero-PHI
+commitment, verifier output, proof/signature/frame/statement bytes, exact proof/source digest, PHI,
+temp/spill, or log bytes are written to a proof workspace, DB, WAL, receipt, event, export, backup,
+or error. Authorized Queue/State DB, WAL, and commit writes remain limited to the state-owned fields
+listed above. Mutable staging is wiped where technically possible. The exact deployed zero-PHI
 recoverability gate is
 owned by Native-v3; current experimental handling does not establish destruction. A timeout, crash,
 lease expiry, restart, transport failure, or ambiguity consumes the handoff and fails closed to
@@ -96,7 +98,7 @@ Before cryptographic acceptance work, the state owner atomically reserves each t
 acceptance unit against the selected security profile's single deployment/authorization-lifetime
 budget. The reservation may record the operative key epoch for nested operational signature, message,
 and query caps and audit, but key rotation never creates, resets, or refunds the statistical budget.
-Retries, post-challenge aborts, malformed candidate verifications, and crashes after reservation
+In Queue V11, one claimed batch reserves exactly 101 units. Retries, post-challenge aborts, malformed candidate verifications, and crashes after reservation
 consume that reservation and never refund it. Loss of trustworthy coordination, overflow, budget or
 cap exhaustion, or ambiguous batch cardinality fails closed. Only a genuinely new, separately
 requalified security profile can establish a separately scoped budget; any cross-profile or
@@ -116,11 +118,17 @@ rows, events, state roots, and outbox rows in one transaction. A mixed APPLIED/H
 is independently rejected.
 
 This Profile 9 boundary remains synthetic/experimental and unqualified: `proofSuiteId=null`,
-`production_usable=false`, `activation=false`, no backend is selected or qualified, the final C
-source-auth process binding and executable identity are pending, and the co-equal Native-v3
-profile gates remain open. The accepted Rust protocol authority is commit
+`production_usable=false`, `activation=false`, no backend is selected or qualified, and the
+co-equal Native-v3 profile gates remain open. The accepted Rust protocol authority is commit
 `28f9f6765efd22aba2135df842a757f8ef4468a3` with tree
-`99b64f421ec5bd7679f9b44d06e04c745592a390`.
+`99b64f421ec5bd7679f9b44d06e04c745592a390`; the reproducible producer pin is 385,024 bytes with
+SHA-256 `A2D7EC789F5B8C88631A7D16DCEE6DFBDE6179886AB1F198D5C878228E131834`. The accepted C
+source-auth boundary is commit `acae7b46b555a88b8149e6601d4549955beb7075` with tree
+`8e59652d31bd1cf6b9f3dc582ea5d7278b5b9a73`; its canonical executable is 58,880 bytes with
+SHA-256 `855C089EF8E4B23FF4D63B453215FBA2DA31E6B377B49A90DABA08C18F3A1107`. Complete-path
+p95 and >=128-bit PQ qualification remain open; proof acceptance yields only an opaque scoped
+verification outcome and never `CLEAR`. State alone owns chronology, `policyResult`,
+`effectiveDirective`, exceptions, disposition, retries, and economic state.
 
 For a future qualified private batch, the service will:
 

@@ -168,7 +168,7 @@ def _counts(path: Path) -> dict[str, int]:
         }
 
 
-class QueueV10Tests(unittest.TestCase):
+class QueueV11Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -180,14 +180,15 @@ class QueueV10Tests(unittest.TestCase):
         self.owner.close()
         self.temp.cleanup()
 
-    def test_state_database_is_unified_v10_and_owns_profile9_statement_bytes(self) -> None:
+    def test_state_database_derives_profile9_statement_without_durable_copy(self) -> None:
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
             self.assertEqual(tables, {"queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions", "composition_meta", "composition_transactions", "composition_events", "composition_outbox"})
-            self.assertEqual(connection.execute("SELECT schema_version FROM queue_metadata").fetchone()[0], 10)
+            self.assertEqual(connection.execute("SELECT schema_version FROM queue_metadata").fetchone()[0], 11)
             self.assertEqual(connection.execute("SELECT schema_version FROM composition_meta").fetchone()[0], 4)
             self.assertEqual(connection.execute("PRAGMA foreign_key_list(composition_transactions)").fetchone()[2], "queue_members")
-            self.assertEqual(tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_batches)")), ("batch_id", "batch_root", "session_ref", "proof_statement", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "identity_digest", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"))
+            self.assertEqual(tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_batches)")), ("batch_id", "batch_root", "session_ref", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "identity_digest", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"))
+            self.assertNotIn("proof_statement", tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_results)")))
         batch = _prepare(self.store, self.config, self.clock)
         expected = (
             b"BL-R100-STMT-V2\x00"
@@ -214,12 +215,15 @@ class QueueV10Tests(unittest.TestCase):
         self.assertEqual(batch.proof_statement[156:160], b"\x01\x00\x00\x00")
         self.assertEqual(self.config.profile_version, "BLIND-ZKBPP-CUNRUH-RANGE100-V9")
         self.assertEqual(self.config.profile_epoch, 9)
+        self.assertNotIn(batch.proof_statement, (self.root / "state.sqlite").read_bytes())
 
     def test_profile9_statement_rejects_old_profile_zero_identity_and_invalid_window(self) -> None:
         with self.assertRaisesRegex(VerificationQueueError, "queue_profile_epoch"):
             QueueConfig("old-profile-epoch", 100, profile_epoch=6)
         with self.assertRaisesRegex(VerificationQueueError, "queue_profile_version"):
             QueueConfig("old-profile-version", 100, profile_version="BLIND-ZKBPP-CUNRUH-RANGE100-V6")
+        with self.assertRaisesRegex(VerificationQueueError, "source_auth_profile"):
+            QueueConfig("old-source-profile", 100, source_auth_profile="BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V6-UNQUALIFIED")
         with self.assertRaisesRegex(VerificationQueueError, "queue_profile_invalid"):
             QueueConfig("legacycfg", 100, profile_digest=bytes.fromhex("D8F4730213839DDF027AF1B122AED5D80F4D8A725E9493C0CED59A59F560B12E97B6BAC28A373FA80CEC1DB4C6E0FBCCFD9ED2E37B3D0086A72D17F32F42EDF2"))
         batch = _prepare(self.store, self.config, self.clock)
@@ -275,6 +279,7 @@ class QueueV10Tests(unittest.TestCase):
             raw += wal.read_bytes()
         for marker in (b"raw_proof", b"raw_signature", b"frame_payload", b"challenge_bytes", b"opening_bytes", b"response_bytes"):
             self.assertNotIn(marker, raw)
+        self.assertNotIn(batch.proof_statement, raw)
         self.assertEqual(verify_database(self.root / "state.sqlite")["accepted_operation_count"], 100)
         reconstructed = read_verified_batch(self.root / "state.sqlite", batch.batch_id)
         self.assertEqual(len(reconstructed.jobs), 100)

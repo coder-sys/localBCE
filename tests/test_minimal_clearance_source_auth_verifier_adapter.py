@@ -12,6 +12,8 @@ from app.minimal_clearance_source_auth_verifier_adapter import (
     ML_DSA_87_PUBLIC_KEY_BYTES,
     MinimalClearanceSourceAuthVerifierAdapter,
     SOURCE_AUTH_FRAME_BYTES,
+    SOURCE_AUTH_EXECUTABLE_SHA256,
+    SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
     SOURCE_AUTH_IPC_BYTES,
     SOURCE_AUTH_PROCESS_ARGUMENTS,
     SourceAuthVerifierConfig,
@@ -52,8 +54,8 @@ class _Fixture:
         self.config = SourceAuthVerifierConfig(
             queue_config=self.queue_config,
             executable_path=self.executable,
-            executable_size_bytes=len(self.executable_bytes),
-            executable_sha256=hashlib.sha256(self.executable_bytes).digest(),
+            executable_size_bytes=SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
+            executable_sha256=SOURCE_AUTH_EXECUTABLE_SHA256,
             workspace=self.workspace,
             ml_dsa_87_public_key=self.key,
             timeout_seconds=30.0,
@@ -178,8 +180,8 @@ class SourceAuthAdapterTests(unittest.TestCase):
         self.assertEqual(captured["workspace"].parent, self.fixture.workspace)
         self.assertFalse(captured["workspace"].exists())
         self.assertEqual(captured["timeout_seconds"], 30.0)
-        self.assertEqual(captured["expected_executable_size_bytes"], len(self.fixture.executable_bytes))
-        self.assertEqual(captured["expected_executable_sha256"], hashlib.sha256(self.fixture.executable_bytes).digest())
+        self.assertEqual(captured["expected_executable_size_bytes"], SOURCE_AUTH_EXECUTABLE_SIZE_BYTES)
+        self.assertEqual(captured["expected_executable_sha256"], SOURCE_AUTH_EXECUTABLE_SHA256)
         ipc = captured["frame"]
         self.assertIs(captured["input_type"], bytearray)
         self.assertIs(type(ipc), bytes)
@@ -283,8 +285,14 @@ class SourceAuthAdapterTests(unittest.TestCase):
             MinimalClearanceSourceAuthVerifierAdapter(self.fixture.config).verify(
                 VolatileProofHandoff(io.BytesIO(self.fixture.frame)), self.fixture.batch
             )
-        self.assertEqual(captured["expected_executable_size_bytes"], self.fixture.config.executable_size_bytes)
+        self.assertEqual(captured["expected_executable_size_bytes"], SOURCE_AUTH_EXECUTABLE_SIZE_BYTES)
         self.assertEqual(captured["expected_executable_sha256"], self.fixture.config.executable_sha256)
+
+    def test_rejects_any_noncanonical_executable_identity(self) -> None:
+        with self.assertRaisesRegex(ValueError, "source_auth_executable_identity"):
+            replace(self.fixture.config, executable_size_bytes=SOURCE_AUTH_EXECUTABLE_SIZE_BYTES - 1)
+        with self.assertRaisesRegex(ValueError, "source_auth_executable_identity"):
+            replace(self.fixture.config, executable_sha256=bytes(32))
 
     def test_public_key_is_not_repr_or_queue_durable_material(self) -> None:
         self.assertNotIn(self.fixture.key.hex(), repr(self.fixture.config))
@@ -324,6 +332,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
             self.assertNotIn(self.fixture.key, durable)
             self.assertNotIn(self.fixture.frame, durable)
             self.assertNotIn(captured["ipc"], durable)
+            self.assertNotIn(self.fixture.batch.proof_statement, durable)
         finally:
             store._close()
             owner.close()

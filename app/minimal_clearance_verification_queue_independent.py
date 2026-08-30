@@ -1,4 +1,4 @@
-"""Independent reconstruction of the durable Queue V10 image.
+"""Independent reconstruction of the durable Queue V11 image.
 
 This module intentionally does not import the queue writer.  It checks the
 clean-break schema, exact guard identity, immutable batch/member image,
@@ -23,8 +23,8 @@ class IndependentQueueError(RuntimeError):
     pass
 
 
-SCHEMA_VERSION: Final[int] = 10
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v10"
+SCHEMA_VERSION: Final[int] = 11
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v11"
 _MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v9\x00"
 _ADMISSION_CAP: Final[int] = 4_500_000_000
 _DATABASE_PAGE_SIZE: Final[int] = 4096
@@ -100,11 +100,11 @@ _ALLOWED_CODES = frozenset({
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "queue_metadata": ("id", "schema_version", "queue_id", "config_json", "config_digest", "admission_cap_bytes", "process_tree_peak_cap_bytes", "active_process_limit", "page_size", "max_page_count", "journal_mode", "synchronous", "head_root", "next_transition_seq", "next_admission_seq", "nonterminal_count", "live_lease_count", "proof_attempts_used", "proof_attempts_cap", "next_attempt_seq"),
-    "queue_batches": ("batch_id", "batch_root", "session_ref", "proof_statement", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "identity_digest", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"),
+    "queue_batches": ("batch_id", "batch_root", "session_ref", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "identity_digest", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"),
     "queue_members": ("batch_id", "batch_position", "operation_ref", "admission_seq"),
     "queue_leases": ("batch_id", "worker_id", "token_digest", "attempt", "claim_sequence", "leased_ms", "expires_ms"),
     "queue_attempts": ("attempt_id", "batch_id", "reservation_before", "reservation_after", "proof_attempts", "source_key_epoch", "status", "reserved_ms", "closed_ms", "result_code"),
-    "queue_results": ("batch_id", "terminal_status", "receipt_id", "receipt_bytes", "proof_accepted", "source_authenticated", "proof_statement", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "completed_ms", "attempt", "error_code"),
+    "queue_results": ("batch_id", "terminal_status", "receipt_id", "receipt_bytes", "proof_accepted", "source_authenticated", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "completed_ms", "attempt", "error_code"),
     "queue_transitions": ("sequence", "transition_kind", "batch_id", "before_root", "after_root", "event_bytes", "event_digest"),
     "composition_meta": ("id", "schema_version", "config_json", "config_digest", "event_head", "next_event_sequence", "state_profile_identity", "state_id", "state_bytes", "state_epoch", "state_sequence", "state_continuity_root", "state_audit_head", "state_clearance_root", "state_clearance_count", "payment_root", "active_dispatch_count"),
     "composition_transactions": ("transaction_id", "operation_ref", "status", "proof_accepted", "policy_result", "effective_directive", "disposition_id", "state_profile_identity", "state_before_id", "state_after_id", "sequence_before", "sequence_after", "state_receipt_bytes", "state_receipt_digest", "error_code", "created_ms", "updated_ms"),
@@ -114,11 +114,11 @@ _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
 _TABLES = frozenset(_TABLE_COLUMNS)
 _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
     "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL, queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), admission_cap_bytes INTEGER NOT NULL, process_tree_peak_cap_bytes INTEGER NOT NULL, active_process_limit INTEGER NOT NULL, page_size INTEGER NOT NULL CHECK(page_size=4096), max_page_count INTEGER NOT NULL CHECK(max_page_count=32768), journal_mode TEXT NOT NULL CHECK(journal_mode='delete'), synchronous INTEGER NOT NULL CHECK(synchronous=2), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL, next_admission_seq INTEGER NOT NULL, nonterminal_count INTEGER NOT NULL, live_lease_count INTEGER NOT NULL, proof_attempts_used INTEGER NOT NULL, proof_attempts_cap INTEGER NOT NULL CHECK(proof_attempts_cap=4294967296), next_attempt_seq INTEGER NOT NULL)",
-    "queue_batches": "CREATE TABLE queue_batches (batch_id BLOB PRIMARY KEY CHECK(length(batch_id)=32), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), session_ref BLOB NOT NULL CHECK(length(session_ref)=64), proof_statement BLOB NOT NULL CHECK(length(proof_statement)=304), assertion_identifier TEXT NOT NULL, assertion_version INTEGER NOT NULL, state_profile_version TEXT NOT NULL, valid_from_ms INTEGER NOT NULL, valid_until_ms INTEGER NOT NULL, approved_source_registry_root BLOB, qualification_flags BLOB NOT NULL, identity_digest BLOB NOT NULL CHECK(length(identity_digest)=64), status TEXT NOT NULL CHECK(status IN ('AWAITING_HANDOFF','QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), next_eligible_ms INTEGER NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, last_error_code TEXT, CHECK(approved_source_registry_root IS NULL OR length(approved_source_registry_root)=64), CHECK(valid_from_ms<valid_until_ms))",
+    "queue_batches": "CREATE TABLE queue_batches (batch_id BLOB PRIMARY KEY CHECK(length(batch_id)=32), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), session_ref BLOB NOT NULL CHECK(length(session_ref)=64), assertion_identifier TEXT NOT NULL, assertion_version INTEGER NOT NULL, state_profile_version TEXT NOT NULL, valid_from_ms INTEGER NOT NULL, valid_until_ms INTEGER NOT NULL, approved_source_registry_root BLOB, qualification_flags BLOB NOT NULL, identity_digest BLOB NOT NULL CHECK(length(identity_digest)=64), status TEXT NOT NULL CHECK(status IN ('AWAITING_HANDOFF','QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), next_eligible_ms INTEGER NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, last_error_code TEXT, CHECK(approved_source_registry_root IS NULL OR length(approved_source_registry_root)=64), CHECK(valid_from_ms<valid_until_ms))",
     "queue_members": "CREATE TABLE queue_members (batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), batch_position INTEGER NOT NULL CHECK(batch_position BETWEEN 0 AND 99), operation_ref BLOB NOT NULL CHECK(length(operation_ref)=32), admission_seq INTEGER NOT NULL CHECK(admission_seq>=1), PRIMARY KEY(batch_id,batch_position), UNIQUE(operation_ref), UNIQUE(admission_seq))",
     "queue_leases": "CREATE TABLE queue_leases (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt=1), claim_sequence INTEGER NOT NULL, leased_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms))",
     "queue_attempts": "CREATE TABLE queue_attempts (attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id), reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before), proof_attempts INTEGER NOT NULL CHECK(proof_attempts=101), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL, closed_ms INTEGER, result_code TEXT)",
-    "queue_results": "CREATE TABLE queue_results (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_id BLOB NOT NULL CHECK(length(receipt_id)=32), receipt_bytes BLOB NOT NULL, proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), source_authenticated INTEGER NOT NULL CHECK(source_authenticated IN (0,1)), proof_statement BLOB NOT NULL CHECK(length(proof_statement)=304), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), result_code TEXT NOT NULL, qualification_flags BLOB NOT NULL, completed_ms INTEGER NOT NULL, attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), error_code TEXT)",
+    "queue_results": "CREATE TABLE queue_results (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_id BLOB NOT NULL CHECK(length(receipt_id)=32), receipt_bytes BLOB NOT NULL, proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), source_authenticated INTEGER NOT NULL CHECK(source_authenticated IN (0,1)), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), result_code TEXT NOT NULL, qualification_flags BLOB NOT NULL, completed_ms INTEGER NOT NULL, attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), error_code TEXT)",
     "queue_transitions": "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL, batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL, event_digest BLOB NOT NULL CHECK(length(event_digest)=64))",
     "composition_meta": "CREATE TABLE composition_meta (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=4), config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), event_head BLOB NOT NULL CHECK(length(event_head)=64), next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence>=0), state_profile_identity BLOB, state_id BLOB, state_bytes BLOB, state_epoch INTEGER, state_sequence INTEGER, state_continuity_root BLOB, state_audit_head BLOB, state_clearance_root BLOB, state_clearance_count INTEGER, payment_root BLOB NOT NULL CHECK(length(payment_root)=64), active_dispatch_count INTEGER NOT NULL CHECK(active_dispatch_count>=0))",
     "composition_transactions": "CREATE TABLE composition_transactions (transaction_id BLOB PRIMARY KEY CHECK(length(transaction_id)=64), operation_ref BLOB NOT NULL UNIQUE CHECK(length(operation_ref)=32) REFERENCES queue_members(operation_ref), status TEXT NOT NULL CHECK(status IN ('APPLIED','HELD')), proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), policy_result TEXT NOT NULL CHECK(policy_result IN ('PASS','MISSING','AMBIGUOUS','FAIL')), effective_directive TEXT NOT NULL CHECK(effective_directive IN ('CLEAR','HOLD','HUMAN_REVIEW','BLOCK','EXCEPTION_APPROVED')), disposition_id BLOB NOT NULL CHECK(length(disposition_id)=64), state_profile_identity BLOB NOT NULL CHECK(length(state_profile_identity)=64), state_before_id BLOB NOT NULL CHECK(length(state_before_id)=64), state_after_id BLOB NOT NULL CHECK(length(state_after_id)=64), sequence_before INTEGER NOT NULL, sequence_after INTEGER NOT NULL, state_receipt_bytes BLOB, state_receipt_digest BLOB, error_code TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)",
@@ -128,7 +128,7 @@ _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
 _STATUSES = frozenset(("AWAITING_HANDOFF", "QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD"))
 _TERMINAL = frozenset(("VERIFIED", "REJECTED", "HELD"))
 _TRIGGER_DEFS: Final[tuple[tuple[str, str], ...]] = (
-    ("queue_batches_identity_guard", "CREATE TRIGGER queue_batches_identity_guard BEFORE UPDATE OF batch_id,batch_root,session_ref,proof_statement,assertion_identifier,assertion_version,state_profile_version,valid_from_ms,valid_until_ms,approved_source_registry_root,qualification_flags,identity_digest,admission_seq,created_ms ON queue_batches BEGIN SELECT RAISE(ABORT,'queue_batch_identity_guard'); END"),
+    ("queue_batches_identity_guard", "CREATE TRIGGER queue_batches_identity_guard BEFORE UPDATE OF batch_id,batch_root,session_ref,assertion_identifier,assertion_version,state_profile_version,valid_from_ms,valid_until_ms,approved_source_registry_root,qualification_flags,identity_digest,admission_seq,created_ms ON queue_batches BEGIN SELECT RAISE(ABORT,'queue_batch_identity_guard'); END"),
     ("queue_batches_no_delete", "CREATE TRIGGER queue_batches_no_delete BEFORE DELETE ON queue_batches BEGIN SELECT RAISE(ABORT,'queue_batch_delete_guard'); END"),
     ("queue_members_no_update", "CREATE TRIGGER queue_members_no_update BEFORE UPDATE ON queue_members BEGIN SELECT RAISE(ABORT,'queue_member_update_guard'); END"),
     ("queue_members_no_delete", "CREATE TRIGGER queue_members_no_delete BEFORE DELETE ON queue_members BEGIN SELECT RAISE(ABORT,'queue_member_delete_guard'); END"),
@@ -287,10 +287,10 @@ def _parse_config(raw: bytes, expected_config: Mapping[str, Any] | None = None) 
 def _template_bytes(row: tuple[Any, ...]) -> bytes:
     if len(row) != len(_TABLE_COLUMNS["queue_batches"]):
         _fail("batch_shape")
-    if type(row[4]) is not str or type(row[5]) is not int or type(row[6]) is not str or type(row[7]) is not int or type(row[8]) is not int or type(row[10]) is not bytes:
+    if type(row[3]) is not str or type(row[4]) is not int or type(row[5]) is not str or type(row[6]) is not int or type(row[7]) is not int or type(row[9]) is not bytes:
         _fail("batch_template")
-    root = None if row[9] is None else _hex(_blob(_db_bytes(row[9], "registry_root"), 64, "registry_root"))
-    return _json_bytes({"assertion_identifier": row[4], "assertion_version": row[5], "state_profile_version": row[6], "valid_from_ms": row[7], "valid_until_ms": row[8], "approved_source_registry_root": root, "qualification_flags": list(_parse_flags(row[10]))})
+    root = None if row[8] is None else _hex(_blob(_db_bytes(row[8], "registry_root"), 64, "registry_root"))
+    return _json_bytes({"assertion_identifier": row[3], "assertion_version": row[4], "state_profile_version": row[5], "valid_from_ms": row[6], "valid_until_ms": row[7], "approved_source_registry_root": root, "qualification_flags": list(_parse_flags(row[9]))})
 
 
 def _expected_batch_root(owner: tuple[Any, ...], members: tuple[tuple[Any, ...], ...]) -> bytes:
@@ -327,7 +327,10 @@ def _parse_statement(statement: bytes, *, batch_root: bytes, session_ref: bytes,
 
 def _identity_digest(batch: tuple[Any, ...], members: tuple[tuple[Any, ...], ...], config: Mapping[str, Any]) -> bytes:
     refs = b"".join(_u64(int(row[1])) + _blob(_db_bytes(row[2], "operation_ref"), 32, "operation_ref") for row in sorted(members, key=lambda row: int(row[1])))
-    return _sha(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v9\x00", _blob(_db_bytes(batch[0], "batch_id"), 32, "batch_id"), _blob(_db_bytes(batch[1], "batch_root"), 64, "batch_root"), _blob(_db_bytes(batch[2], "session_ref"), 64, "session_ref"), _blob(_db_bytes(batch[3], "proof_statement"), _STATEMENT_BYTES, "proof_statement"), _template_bytes(batch), _u64(_COUNT), refs, _u64(int(batch[7])), _u64(int(batch[8])), str(config["source_auth_profile"]).encode("ascii"), _u64(int(config["source_key_epoch"])))
+    root = _blob(_db_bytes(batch[1], "batch_root"), 64, "batch_root")
+    session_ref = _blob(_db_bytes(batch[2], "session_ref"), 64, "session_ref")
+    statement = _build_statement(batch_root=root, session_ref=session_ref, valid_from_ms=int(batch[6]), valid_until_ms=int(batch[7]))
+    return _sha(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v9\x00", _blob(_db_bytes(batch[0], "batch_id"), 32, "batch_id"), root, session_ref, statement, _template_bytes(batch), _u64(_COUNT), refs, _u64(int(batch[6])), _u64(int(batch[7])), str(config["source_auth_profile"]).encode("ascii"), _u64(int(config["source_key_epoch"])))
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,7 +390,7 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
         value = json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         _fail("receipt_encoding")
-    required = {"schema", "batch_id", "proof_accepted", "source_authenticated", "proof_statement", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "error_code", "proof_suite_id", "production_usable", "activation"}
+    required = {"schema", "batch_id", "proof_accepted", "source_authenticated", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "error_code", "proof_suite_id", "production_usable", "activation"}
     if type(value) is not dict or set(value) != required or raw != _json_bytes(value) or value["schema"] != _SCHEMA:
         _fail("receipt_keys")
     if value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False:
@@ -395,7 +398,6 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
     if type(value["proof_accepted"]) is not bool or type(value["source_authenticated"]) is not bool:
         _fail("receipt_acceptance")
     _parse_hex(value["batch_id"], 32, "receipt_batch_id")
-    _parse_hex(value["proof_statement"], _STATEMENT_BYTES, "receipt_statement")
     _parse_hex(value["batch_root"], 64, "receipt_root")
     _token(value["source_auth_profile"], "receipt_source_profile", 96)
     if type(value["source_key_epoch"]) is not int or not 1 <= value["source_key_epoch"] <= _MAX_EPOCH:
@@ -509,7 +511,7 @@ def _verify_composition(connection: sqlite3.Connection, *, config: Mapping[str, 
     verified_refs: set[bytes] = set()
     for batch_id, batch in batch_map.items():
         refs = {bytes(row[2]) for row in member_groups[batch_id]}
-        if str(batch[12]) == "VERIFIED":
+        if str(batch[11]) == "VERIFIED":
             if len(refs) != _COUNT or not refs.issubset(tx_map):
                 _fail("composition_batch_complete")
             verified_refs.update(refs)
@@ -570,7 +572,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
     if len(lease_rows) > 1 or len(member_rows) != len(batch_rows) * _COUNT:
         _fail("batch_cardinality")
     batch_map = {_blob(_db_bytes(row[0], "batch_id"), 32, "batch_id"): row for row in batch_rows}
-    if len(batch_map) != len(batch_rows) or tuple(int(row[13]) for row in batch_rows) != tuple(range(1, len(batch_rows) + 1)):
+    if len(batch_map) != len(batch_rows) or tuple(int(row[12]) for row in batch_rows) != tuple(range(1, len(batch_rows) + 1)):
         _fail("batch_order")
     member_groups: dict[bytes, list[tuple[Any, ...]]] = {batch_id: [] for batch_id in batch_map}
     status_counts = {status: 0 for status in _STATUSES}
@@ -587,7 +589,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         group = tuple(member_groups[batch_id])
         if len(group) != _COUNT or tuple(sorted(int(item[1]) for item in group)) != tuple(range(_COUNT)) or len({bytes(item[2]) for item in group}) != _COUNT:
             _fail("batch_members")
-        expected_admission = {(int(row[13]) - 1) * _COUNT + position + 1 for position in range(_COUNT)}
+        expected_admission = {(int(row[12]) - 1) * _COUNT + position + 1 for position in range(_COUNT)}
         if {int(item[3]) for item in group} != expected_admission:
             _fail("member_binding")
         root = _blob(_db_bytes(row[1], "batch_root"), 64, "batch_root")
@@ -596,56 +598,56 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             _fail("session_ref")
         if _expected_batch_root(row, group) != root:
             _fail("batch_root_binding")
-        if type(row[12]) is not str or row[12] not in _STATUSES or type(row[14]) is not int or row[14] not in (0, 1):
+        if type(row[11]) is not str or row[11] not in _STATUSES or type(row[13]) is not int or row[13] not in (0, 1):
             _fail("batch_status")
-        _token(row[4], "batch_assertion", 96)
-        if type(row[5]) is not int or not 1 <= int(row[5]) <= 2**31 or type(row[6]) is not str:
+        _token(row[3], "batch_assertion", 96)
+        if type(row[4]) is not int or not 1 <= int(row[4]) <= 2**31 or type(row[5]) is not str:
             _fail("batch_template")
-        _token(row[6], "batch_profile", 96)
-        if type(row[7]) is not int or type(row[8]) is not int or not 0 <= int(row[7]) < int(row[8]) or int(row[8]) - int(row[7]) > _MAX_WINDOW:
+        _token(row[5], "batch_profile", 96)
+        if type(row[6]) is not int or type(row[7]) is not int or not 0 <= int(row[6]) < int(row[7]) or int(row[7]) - int(row[6]) > _MAX_WINDOW:
             _fail("batch_window")
-        if row[9] is not None:
-            _blob(_db_bytes(row[9], "registry_root"), 64, "registry_root")
-        flags = _parse_flags(_db_bytes(row[10], "flags"))
-        _blob(_db_bytes(row[11], "identity_digest"), 64, "identity_digest")
-        if _db_bytes(row[11], "identity_digest") != _identity_digest(row, group, config):
+        if row[8] is not None:
+            _blob(_db_bytes(row[8], "registry_root"), 64, "registry_root")
+        flags = _parse_flags(_db_bytes(row[9], "flags"))
+        _blob(_db_bytes(row[10], "identity_digest"), 64, "identity_digest")
+        if _db_bytes(row[10], "identity_digest") != _identity_digest(row, group, config):
             _fail("batch_identity")
-        _parse_statement(_db_bytes(row[3], "proof_statement"), batch_root=root, session_ref=_blob(_db_bytes(row[2], "session_ref"), 64, "session_ref"), valid_from_ms=int(row[7]), valid_until_ms=int(row[8]))
-        status_counts[str(row[12])] += 1
-        _code(row[18], "batch_last_error") if row[18] is not None else None
-        _forbidden_bytes((_db_bytes(row[10], "flags"), str(row[18]).encode("ascii") if row[18] is not None else b""))
+        _build_statement(batch_root=root, session_ref=_blob(_db_bytes(row[2], "session_ref"), 64, "session_ref"), valid_from_ms=int(row[6]), valid_until_ms=int(row[7]))
+        status_counts[str(row[11])] += 1
+        _code(row[17], "batch_last_error") if row[17] is not None else None
+        _forbidden_bytes((_db_bytes(row[9], "flags"), str(row[17]).encode("ascii") if row[17] is not None else b""))
     result_map = {_blob(_db_bytes(row[0], "result_batch_id"), 32, "result_batch_id"): row for row in result_rows}
     if len(result_map) != len(result_rows):
         _fail("result_duplicate")
     for batch_id, row in batch_map.items():
-        status = str(row[12])
+        status = str(row[11])
         result = result_map.get(batch_id)
         if (status in _TERMINAL and result is None) or (status not in _TERMINAL and result is not None):
             _fail("result_set")
         if result is not None:
-            result_epoch = _epoch(result[9], "result_source_epoch")
-            if type(result[1]) is not str or result[1] != status or type(result[13]) is not int or result[13] != row[14] or type(result[4]) is not int or result[4] not in (0, 1) or type(result[5]) is not int or result[5] not in (0, 1) or _db_bytes(result[6], "result_statement") != _db_bytes(row[3], "proof_statement") or _db_bytes(result[7], "result_root") != _db_bytes(row[1], "batch_root") or type(result[8]) is not str or result[8] != config["source_auth_profile"] or result_epoch != config["source_key_epoch"] or _parse_flags(_db_bytes(result[11], "result_flags")) != tuple(config["qualification_flags"]):
+            result_epoch = _epoch(result[8], "result_source_epoch")
+            if type(result[1]) is not str or result[1] != status or type(result[12]) is not int or result[12] != row[13] or type(result[4]) is not int or result[4] not in (0, 1) or type(result[5]) is not int or result[5] not in (0, 1) or _db_bytes(result[6], "result_root") != _db_bytes(row[1], "batch_root") or type(result[7]) is not str or result[7] != config["source_auth_profile"] or result_epoch != config["source_key_epoch"] or _parse_flags(_db_bytes(result[10], "result_flags")) != tuple(config["qualification_flags"]):
                 _fail("result_binding")
             receipt = _parse_receipt(_db_bytes(result[3], "receipt"))
-            if _parse_hex(receipt["batch_id"], 32, "receipt_batch_id") != batch_id or _parse_hex(receipt["proof_statement"], _STATEMENT_BYTES, "receipt_statement") != _db_bytes(row[3], "proof_statement") or _parse_hex(receipt["batch_root"], 64, "receipt_root") != _db_bytes(row[1], "batch_root") or receipt["source_auth_profile"] != config["source_auth_profile"] or int(receipt["source_key_epoch"]) != int(config["source_key_epoch"]):
+            if _parse_hex(receipt["batch_id"], 32, "receipt_batch_id") != batch_id or _parse_hex(receipt["batch_root"], 64, "receipt_root") != _db_bytes(row[1], "batch_root") or receipt["source_auth_profile"] != config["source_auth_profile"] or int(receipt["source_key_epoch"]) != int(config["source_key_epoch"]):
                 _fail("receipt_binding")
-            if bool(result[4]) != bool(receipt["proof_accepted"]) or bool(result[5]) != bool(receipt["source_authenticated"]) or str(result[10]) != receipt["result_code"] or (None if result[14] is None else str(result[14])) != receipt["error_code"]:
+            if bool(result[4]) != bool(receipt["proof_accepted"]) or bool(result[5]) != bool(receipt["source_authenticated"]) or str(result[9]) != receipt["result_code"] or (None if result[13] is None else str(result[13])) != receipt["error_code"]:
                 _fail("receipt_result_binding")
-            _code(result[10], "result_code")
-            if result[14] is not None:
-                _code(result[14], "result_error_code")
+            _code(result[9], "result_code")
+            if result[13] is not None:
+                _code(result[13], "result_error_code")
             if status == "VERIFIED" and not (bool(result[4]) and bool(result[5]) and receipt["error_code"] is None):
                 _fail("verified_acceptance")
             if status != "VERIFIED" and bool(result[4]) and bool(result[5]):
                 _fail("terminal_acceptance")
-            if status == "VERIFIED" and str(result[10]) != "accepted":
+            if status == "VERIFIED" and str(result[9]) != "accepted":
                 _fail("verified_result_code")
-            if status == "REJECTED" and str(result[10]) != "rejected":
+            if status == "REJECTED" and str(result[9]) != "rejected":
                 _fail("rejected_result_code")
-            expected_receipt_id = _sha(_MATERIAL, b"receipt", batch_id, _u64(int(row[14])))[:32]
+            expected_receipt_id = _sha(_MATERIAL, b"receipt", batch_id, _u64(int(row[13])))[:32]
             if _db_bytes(result[2], "receipt_id") != expected_receipt_id:
                 _fail("receipt_id")
-            _forbidden_bytes((_db_bytes(result[3], "receipt"), str(result[10]).encode("ascii"), _db_bytes(result[11], "result_flags"), str(result[14]).encode("ascii") if result[14] is not None else b""))
+            _forbidden_bytes((_db_bytes(result[3], "receipt"), str(result[9]).encode("ascii"), _db_bytes(result[10], "result_flags"), str(result[13]).encode("ascii") if result[13] is not None else b""))
     lease_map = {_blob(_db_bytes(row[0], "lease_batch_id"), 32, "lease_batch_id"): row for row in lease_rows}
     attempt_map = {_blob(_db_bytes(row[1], "attempt_batch_id"), 32, "attempt_batch_id"): row for row in attempt_rows}
     if len(attempt_map) != len(attempt_rows):
@@ -659,21 +661,21 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             _fail("attempt_chain")
         previous_after = after
         batch = batch_map[batch_id]
-        if int(batch[14]) != 1 or attempt_epoch != int(config["source_key_epoch"]):
+        if int(batch[13]) != 1 or attempt_epoch != int(config["source_key_epoch"]):
             _fail("attempt_binding")
-        expected_status = {"LEASED": "RESERVED", "VERIFIED": "ACCEPTED", "REJECTED": "REJECTED", "HELD": "HELD"}.get(str(batch[12]))
+        expected_status = {"LEASED": "RESERVED", "VERIFIED": "ACCEPTED", "REJECTED": "REJECTED", "HELD": "HELD"}.get(str(batch[11]))
         if expected_status is not None and str(row[6]) != expected_status:
             _fail("attempt_status")
         if row[9] is not None:
             _code(row[9], "attempt_result_code")
         result = result_map.get(batch_id)
-        if result is not None and (result[10] is None or str(row[9]) != str(result[10])):
+        if result is not None and (result[9] is None or str(row[9]) != str(result[9])):
             _fail("attempt_result_binding")
     if int(meta[17]) != previous_after or int(meta[18]) != _PROOF_ATTEMPTS_CAP or int(meta[19]) != len(attempt_rows):
         _fail("attempt_ledger")
     for batch_id, row in batch_map.items():
-        status = str(row[12])
-        attempt = int(row[14])
+        status = str(row[11])
+        attempt = int(row[13])
         attempt_row = attempt_map.get(batch_id)
         if attempt == 0 and attempt_row is not None:
             _fail("attempt_unexpected")
@@ -686,9 +688,9 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             _token(lease[1], "lease_worker", 96)
         elif batch_id in lease_map:
             _fail("lease_status")
-    if set(lease_map) != {batch_id for batch_id, row in batch_map.items() if str(row[12]) == "LEASED"}:
+    if set(lease_map) != {batch_id for batch_id, row in batch_map.items() if str(row[11]) == "LEASED"}:
         _fail("lease_set")
-    expected_nonterminal = sum(1 for row in batch_map.values() if str(row[12]) in {"AWAITING_HANDOFF", "QUEUED", "LEASED"})
+    expected_nonterminal = sum(1 for row in batch_map.values() if str(row[11]) in {"AWAITING_HANDOFF", "QUEUED", "LEASED"})
     if int(meta[15]) != expected_nonterminal or int(meta[16]) != len(lease_rows):
         _fail("metadata_counts")
     expected_head = _sha(_GENESIS, str(config["queue_id"]).encode("ascii"), config_digest)
@@ -711,7 +713,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         if event["kind"] == "BATCH_ISSUED":
             if set(event) != {"schema", "sequence", "kind", "batch_id", "status", "error_code", "attempt", "at_ms", "member_count", "identity_digest"}:
                 _fail("transition_fields")
-            if event["identity_digest"] != _hex(batch_map[batch_id][11]):
+            if event["identity_digest"] != _hex(batch_map[batch_id][10]):
                 _fail("batch_identity")
         elif event["kind"] == "ATTEMPT_RESERVED":
             if set(event) != allowed - {"receipt_id", "identity_digest"} or type(event.get("reservation_before")) is not int or type(event.get("reservation_after")) is not int or event["reservation_after"] != event["reservation_before"] + _PROOF_ATTEMPTS_PER_BATCH:
@@ -728,7 +730,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
     if _db_bytes(meta[12], "head_root") != expected_head or int(meta[13]) != len(transition_rows) or int(meta[14]) != len(batch_rows) * _COUNT:
         _fail("head_binding")
     for batch_id, row in batch_map.items():
-        _verify_lifecycle(events_by_batch[batch_id], str(row[12]), int(row[14]))
+        _verify_lifecycle(events_by_batch[batch_id], str(row[11]), int(row[13]))
     composition = _verify_composition(connection, config=config, queue_config_digest=config_digest, batch_map=batch_map, member_groups=member_groups)
     return {"schema": _SCHEMA, "config": config, "config_digest": config_digest, "meta": tuple(meta), "batches": batch_map, "members": member_groups, "results": result_map, "transitions": transition_rows, "events": events_by_batch, "composition": composition, "head_root": _db_bytes(meta[12], "head_root"), "status_counts": status_counts, "transition_count": len(transition_rows), "verified_batch_count": status_counts["VERIFIED"], "accepted_operation_count": status_counts["VERIFIED"] * _COUNT, "verified_count": status_counts["VERIFIED"], "proof_bytes_persisted": False, "path_custody": False, "proof_suite_id": None, "production_usable": False, "activation": False}
 
@@ -753,7 +755,7 @@ def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = N
 def _job_from_rows(config: Mapping[str, Any], config_digest: bytes, owner: tuple[Any, ...], member: tuple[Any, ...], result: tuple[Any, ...]) -> IndependentVerifiedQueueJob:
     receipt_raw = bytes(result[3])
     _parse_receipt(receipt_raw)
-    return IndependentVerifiedQueueJob(str(config["queue_id"]), config_digest, bytes(member[2]), str(owner[12]), bool(result[4]), int(owner[14]), receipt_raw, bytes(result[2]), str(owner[4]), int(owner[5]), str(owner[6]), int(owner[7]), int(owner[8]), int(member[1]), None if owner[1] is None else bytes(owner[1]), None if owner[9] is None else bytes(owner[9]), str(config["profile_version"]), str(result[10]), tuple(_parse_flags(bytes(result[11]))))
+    return IndependentVerifiedQueueJob(str(config["queue_id"]), config_digest, bytes(member[2]), str(owner[11]), bool(result[4]), int(owner[13]), receipt_raw, bytes(result[2]), str(owner[3]), int(owner[4]), str(owner[5]), int(owner[6]), int(owner[7]), int(member[1]), None if owner[1] is None else bytes(owner[1]), None if owner[8] is None else bytes(owner[8]), str(config["profile_version"]), str(result[9]), tuple(_parse_flags(bytes(result[10]))))
 
 
 def _empty_batch(config_digest: bytes, head_root: bytes, transition_count: int) -> IndependentVerifiedQueueBatch:
@@ -764,7 +766,7 @@ def _promotion_batch(verified: dict[str, Any], batch_id: bytes) -> IndependentVe
     row = verified["batches"].get(batch_id)
     if row is None:
         _fail("batch_selector")
-    if str(row[12]) != "VERIFIED":
+    if str(row[11]) != "VERIFIED":
         _fail("batch_incomplete")
     members = tuple(sorted(verified["members"][batch_id], key=lambda item: int(item[1])))
     result = verified["results"].get(batch_id)
@@ -789,7 +791,7 @@ def read_verified_batch(path: Path, selector: bytes | None = None) -> Independen
         _fail("batch_selector")
     if selector is not None:
         return _promotion_batch(verified, selector)
-    candidates = [(int(row[13]), batch_id) for batch_id, row in verified["batches"].items() if str(row[12]) == "VERIFIED" and bool(verified["results"].get(batch_id) and verified["results"][batch_id][4] and verified["results"][batch_id][5])]
+    candidates = [(int(row[12]), batch_id) for batch_id, row in verified["batches"].items() if str(row[11]) == "VERIFIED" and bool(verified["results"].get(batch_id) and verified["results"][batch_id][4] and verified["results"][batch_id][5])]
     if not candidates:
         return _empty_batch(verified["config_digest"], verified["head_root"], verified["transition_count"])
     _admission, batch_id = min(candidates)

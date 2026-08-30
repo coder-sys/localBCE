@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import app.minimal_clearance_composition as composition
 from app.minimal_clearance_composition import CompositionConfigV2, StateDispositionControl
-from app.minimal_clearance_source_auth_verifier_adapter import MinimalClearanceSourceAuthVerifierAdapter, SourceAuthVerifierConfig
+from app.minimal_clearance_source_auth_verifier_adapter import MinimalClearanceSourceAuthVerifierAdapter, SOURCE_AUTH_EXECUTABLE_SHA256, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES, SourceAuthVerifierConfig
 from app.minimal_clearance_verification_queue import BatchVerifierResult, OperationTemplate, QueueConfig, VolatileProofHandoff
 from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime, VerificationRuntimeError
 
@@ -73,9 +73,9 @@ class RuntimeV10Tests(unittest.TestCase):
     def _source_auth_config(self, root: Path) -> SourceAuthVerifierConfig:
         return SourceAuthVerifierConfig(
             queue_config=QueueConfig("runtime-v10-source-auth", 100),
-            executable_path=root / "blind-source-auth-v6.exe",
-            executable_size_bytes=50_688,
-            executable_sha256=bytes.fromhex("68373B03EF32E4FCC9A87B99851C84F4A8158AEB32D189F23DDA3393775AABB2"),
+            executable_path=root / "blind-source-auth-v9.exe",
+            executable_size_bytes=SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
+            executable_sha256=SOURCE_AUTH_EXECUTABLE_SHA256,
             workspace=root,
             ml_dsa_87_public_key=bytes(2_592),
             timeout_seconds=30.0,
