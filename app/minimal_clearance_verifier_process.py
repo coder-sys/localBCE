@@ -17,6 +17,7 @@ import hmac
 import os
 from pathlib import Path
 import re
+import stat
 import threading
 import time
 
@@ -847,6 +848,64 @@ def _environment_block(workspace: Path) -> ctypes.Array:
     return ctypes.create_unicode_buffer(block)
 
 
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if callable(is_junction) and is_junction():
+            return True
+        attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+    except OSError:
+        return True
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _require_empty_verifier_workspace(workspace: Path) -> None:
+    if not workspace.is_dir() or _is_reparse_point(workspace):
+        raise VerifierProcessError("verifier_workspace") from None
+    try:
+        entries = tuple(workspace.iterdir())
+    except OSError:
+        raise VerifierProcessError("verifier_workspace") from None
+    if entries:
+        raise VerifierProcessError("verifier_workspace_not_empty") from None
+
+
+def _remove_verifier_workspace_entry(path: Path) -> None:
+    if _is_reparse_point(path):
+        path.unlink()
+        return
+    if path.is_dir():
+        for child in tuple(path.iterdir()):
+            _remove_verifier_workspace_entry(child)
+        path.rmdir()
+        return
+    path.unlink()
+
+
+def _cleanup_verifier_workspace(workspace: Path) -> None:
+    try:
+        entries = tuple(workspace.iterdir())
+    except OSError:
+        raise VerifierProcessError("verifier_workspace_cleanup") from None
+    cleanup_error: BaseException | None = None
+    for entry in entries:
+        try:
+            _remove_verifier_workspace_entry(entry)
+        except FileNotFoundError:
+            pass
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    try:
+        remaining = tuple(workspace.iterdir())
+    except OSError:
+        raise VerifierProcessError("verifier_workspace_cleanup") from None
+    if entries or cleanup_error is not None or remaining:
+        raise VerifierProcessError("verifier_workspace_contents") from None
+
+
 def _create_output_pipe() -> tuple[int, int, int]:
     try:
         read_descriptor, write_descriptor = os.pipe()
@@ -1527,7 +1586,7 @@ def run_contained_verifier(
 def run_contained_verifier_stream(
     executable: Path,
     arguments: tuple[str, ...],
-    frame: bytes,
+    frame: bytes | bytearray,
     *,
     workspace: Path,
     timeout_seconds: float,
@@ -1536,12 +1595,13 @@ def run_contained_verifier_stream(
 ) -> ContainedVerifierResult:
     """Feed one bounded binary stream through the existing Job Object lane."""
 
-    if type(frame) is not bytes or not 0 < len(frame) <= STREAM_MAX_FRAME_BYTES:
+    if type(frame) not in (bytes, bytearray) or not 0 < len(frame) <= STREAM_MAX_FRAME_BYTES:
         raise VerifierProcessError("verifier_stream_frame_cap")
     _validate_executable_pin(
         expected_executable_size_bytes,
         expected_executable_sha256,
     )
+    _require_empty_verifier_workspace(workspace)
     try:
         read_descriptor, write_descriptor = os.pipe()
     except OSError:
@@ -1589,10 +1649,17 @@ def run_contained_verifier_stream(
         except OSError:
             pass
         writer.join(timeout=5)
+        cleanup_error: VerifierProcessError | None = None
         if writer.is_alive():
-            raise VerifierProcessError("verifier_stream_cleanup")
-        if writer_failure and result is not None:
-            raise VerifierProcessError(writer_failure["code"])
+            cleanup_error = VerifierProcessError("verifier_stream_cleanup")
+        elif writer_failure and result is not None:
+            cleanup_error = VerifierProcessError(writer_failure["code"])
+        try:
+            _cleanup_verifier_workspace(workspace)
+        except VerifierProcessError as error:
+            cleanup_error = error
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 __all__ = (

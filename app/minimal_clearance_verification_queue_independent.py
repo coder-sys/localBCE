@@ -41,14 +41,16 @@ _STATEMENT_BYTES: Final[int] = 304
 _STATEMENT_ENCODING_VERSION: Final[int] = 2
 _MAGIC: Final[bytes] = b"BL-R100-STMT-V2\x00"
 _CIRCUIT: Final[bytes] = bytes.fromhex(
-    "16B1039E4BE0964066B369AD8760CC8580878929FE8ACBE81CF6D540C8BBD7F0"
-    "26789905691164F4287B666BC7E274CCDDBC6C636DC36C1543E34D8D999958BD"
+    "A85A1A5F4AD3E9B777E5F9043F8B43F5C0018F8A6AAB51359AEDFE1264091C0C"
+    "0F973C9D4E3BF9064383F0DB9BEB2606BAD62B92677DB0588006475236BD83CF"
 )
 _PROFILE: Final[bytes] = bytes.fromhex(
-    "D8F4730213839DDF027AF1B122AED5D80F4D8A725E9493C0CED59A59F560B12E"
-    "97B6BAC28A373FA80CEC1DB4C6E0FBCCFD9ED2E37B3D0086A72D17F32F42EDF2"
+    "609A2A9D66E3D2E3332E86DE5BE4720699C1ADE901C62E6954715ABD1CF64E19"
+    "7F315A32EEB972DEADAEDAB4D4E8882E00AE9EA9EE23575CDED3498429A802DF"
 )
-_PROFILE_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V6"
+_PROFILE_EPOCH: Final[int] = 9
+_PROFILE_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V9"
+_SOURCE_AUTH_PROFILE: Final[str] = "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V9-UNQUALIFIED"
 _DIRECTIVES: Final[list[str]] = ["CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"]
 _BATCH_LEAF: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v9\x00"
 _BATCH_ROOT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v9\x00"
@@ -264,9 +266,10 @@ def _parse_config(raw: bytes, expected_config: Mapping[str, Any] | None = None) 
     _token(value["queue_id"], "config_queue_id", 96)
     if value["profile_version"] != _PROFILE_TOKEN or _parse_hex(value["profile_digest"], 64, "config_profile_digest") != _PROFILE:
         _fail("config_profile")
-    if type(value["profile_epoch"]) is not int or value["profile_epoch"] != 6:
+    if type(value["profile_epoch"]) is not int or value["profile_epoch"] != _PROFILE_EPOCH:
         _fail("config_profile_epoch")
-    _token(value["source_auth_profile"], "config_source_profile", 96)
+    if value["source_auth_profile"] != _SOURCE_AUTH_PROFILE:
+        _fail("config_source_profile")
     if type(value["source_key_epoch"]) is not int or not 1 <= value["source_key_epoch"] <= _MAX_EPOCH:
         _fail("config_source_epoch")
     flags = value["qualification_flags"]
@@ -309,7 +312,7 @@ def _build_statement(*, batch_root: bytes, session_ref: bytes, valid_from_ms: in
         _fail("session_ref")
     if type(valid_from_ms) is not int or type(valid_until_ms) is not int or not 0 <= valid_from_ms < valid_until_ms or valid_until_ms - valid_from_ms > _MAX_WINDOW:
         _fail("statement_window")
-    statement = _MAGIC + _STATEMENT_ENCODING_VERSION.to_bytes(2, "little") + _STATEMENT_BYTES.to_bytes(2, "little") + session_ref + batch_root + (6).to_bytes(4, "little") + (1).to_bytes(1, "little") + bytes(3) + (1).to_bytes(4, "little") + _u64le(valid_from_ms) + _u64le(valid_until_ms) + _CIRCUIT + _PROFILE
+    statement = _MAGIC + _STATEMENT_ENCODING_VERSION.to_bytes(2, "little") + _STATEMENT_BYTES.to_bytes(2, "little") + session_ref + batch_root + _PROFILE_EPOCH.to_bytes(4, "little") + (1).to_bytes(1, "little") + bytes(3) + (1).to_bytes(4, "little") + _u64le(valid_from_ms) + _u64le(valid_until_ms) + _CIRCUIT + _PROFILE
     if len(statement) != _STATEMENT_BYTES:
         _fail("statement_length")
     return statement

@@ -1,4 +1,4 @@
-"""Nonactivating Queue adapter shell for the signed Native Profile 6 source boundary.
+"""Nonactivating Queue adapter shell for the signed Native Profile 9 source boundary.
 
 The adapter owns only volatile frame assembly and the narrow process call.  It
 does not parse proof material, select a disposition, or persist source,
@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import shutil
+import tempfile
 from typing import Final, NoReturn
 
 from app.minimal_clearance_resource_limits import (
@@ -31,9 +33,9 @@ from app.minimal_clearance_verifier_process import (
 )
 
 
-SOURCE_AUTH_FRAME_BYTES: Final[int] = 11_912_379
+SOURCE_AUTH_FRAME_BYTES: Final[int] = 24_853_179
 ML_DSA_87_PUBLIC_KEY_BYTES: Final[int] = 2_592
-SOURCE_AUTH_IPC_BYTES: Final[int] = 11_918_547
+SOURCE_AUTH_IPC_BYTES: Final[int] = 24_859_347
 SOURCE_AUTH_PROCESS_ARGUMENTS: Final[tuple[str, ...]] = ()
 SOURCE_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0
 _SHA256_BYTES: Final[int] = 32
@@ -54,6 +56,29 @@ def _wipe(value: bytearray) -> None:
     for index in range(len(value)):
         value[index] = 0
     value.clear()
+
+
+def _new_disposable_workspace(parent: Path) -> Path:
+    if not parent.is_dir() or parent.is_symlink():
+        _hold("verifier_workspace")
+    try:
+        return Path(tempfile.mkdtemp(prefix=".blind-verifier-", dir=str(parent)))
+    except (OSError, ValueError):
+        _hold("verifier_workspace")
+
+
+def _remove_disposable_workspace(workspace: Path) -> None:
+    try:
+        if workspace.is_symlink():
+            workspace.unlink()
+        elif workspace.is_dir():
+            shutil.rmtree(workspace)
+        elif workspace.exists():
+            workspace.unlink()
+    except FileNotFoundError:
+        return
+    except BaseException:
+        _hold("verifier_workspace_cleanup")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +220,7 @@ class MinimalClearanceSourceAuthVerifierAdapter:
             _hold("proof_handoff_stream")
         frame: bytearray | None = None
         ipc: bytearray | None = None
+        workspace: Path | None = None
         try:
             frame = _read_exact_frame(stream)
             ipc = _build_ipc_input(
@@ -203,12 +229,13 @@ class MinimalClearanceSourceAuthVerifierAdapter:
                 public_key=self._config.ml_dsa_87_public_key,
                 frame=frame,
             )
+            workspace = _new_disposable_workspace(self._config.workspace)
             try:
                 contained = run_contained_verifier_stream(
                     self._config.executable_path,
                     SOURCE_AUTH_PROCESS_ARGUMENTS,
-                    bytes(ipc),
-                    workspace=self._config.workspace,
+                    ipc,
+                    workspace=workspace,
                     timeout_seconds=self._config.timeout_seconds,
                     expected_executable_size_bytes=self._config.executable_size_bytes,
                     expected_executable_sha256=self._config.executable_sha256,
@@ -248,6 +275,8 @@ class MinimalClearanceSourceAuthVerifierAdapter:
                 if value is not None:
                     _wipe(value)
             stream.wipe()
+            if workspace is not None:
+                _remove_disposable_workspace(workspace)
 
 
 SourceAuthVerifierAdapterConfig = SourceAuthVerifierConfig

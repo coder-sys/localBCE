@@ -74,12 +74,15 @@ generated vector alone is not deployed formal-verification credit.
 
 ## Current private-proof blocker
 
-The active Queue/Proof Handoff version and contract defer to
-`docs/DATABASE_ZK_ARCHITECTURE.md`; this roadmap records only dependency status. That boundary is
-not a qualified private-proof backend, and its clean-break, state-owned, non-dispositive,
-fail-closed semantics do not establish an active backend, qualification, Lean completion, or
-product-throughput claim. The exact cryptographic, zero-PHI deployment, resource, and complete-profile
-measurement gates remain open under the Native-v3 authority.
+The current Queue/Proof Handoff integration candidate is Profile 9 and defers to
+`docs/DATABASE_ZK_ARCHITECTURE.md`; this roadmap records only dependency status. The candidate is
+not a selected or qualified private-proof backend, and its clean-break, state-owned,
+non-dispositive, fail-closed semantics do not establish an active backend, qualification, Lean
+completion, or product-throughput claim. The exact cryptographic, zero-PHI deployment, resource,
+and complete-profile measurement gates remain open under the Native-v3 authority. The accepted Rust
+protocol authority is commit `28f9f6765efd22aba2135df842a757f8ef4468a3` with tree
+`99b64f421ec5bd7679f9b44d06e04c745592a390`; final C source-auth binding and canonical executable
+identity remain a later dependency.
 
 Before selecting or implementing a private backend, the complete profile must close the exact
 source-binding, privacy/setup, PQ, acceptance-accounting, theorem-composition, zero-PHI deployment,

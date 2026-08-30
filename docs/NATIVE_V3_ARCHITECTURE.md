@@ -45,7 +45,7 @@ pre-admission modes exist: `DIRECT_STATE_OWNED` for state-owned canonical non-PH
 `AUTHORITATIVE_ASSERTION` for an operation-scoped minimally disclosed derived assertion with a
 qualified PQ source signature, and `PRIVATE_ZK` for a proof over a hidden source-bound assertion.
 The verifier-owned control set selects one mode before admission; no runtime fallback or downgrade
-exists. The V8 queue issues a state-generated ordered set of exactly 100 opaque 32-byte operation
+exists. The current Queue integration candidate is the nonactivating Profile 9 contract: it issues a state-generated ordered set of exactly 100 opaque 32-byte operation
 references and one shared immutable allowlisted statement before a volatile handoff; batch positions
 and the ordered batch root are state-computed before handoff.
 
@@ -56,6 +56,21 @@ universal input-admission allowance. A consumed, failed, expired, restarted, or 
 becomes `HELD` and requires a fresh state operation and fresh handoff. These controls do not close the
 profile theorem, malicious-verifier/QROM, grinding, SHA3, Lean, deployment, custody, or
 source-authorization gates.
+
+### Profile 9 Queue integration candidate
+
+The Queue checkout integrates the accepted, nonactivating Profile 9 statement/proof contract as an
+unqualified candidate. Its exact identifiers are `PROFILE_VERSION=9`,
+`PROFILE_ID=BLIND-ZKBPP-CUNRUH-RANGE100-V9`, the 304-byte `BL-R100-STMT-V2\0` statement with
+encoding 2, circuit fingerprint
+`a85a1a5f4ad3e9b777e5f9043f8b43f5c0018f8a6aab51359aedfe1264091c0c0f973c9d4e3bf9064383f0db9beb2606bad62b92677db0588006475236bd83cf`,
+and profile fingerprint
+`609a2a9d66e3d2e3332e86de5be4720699c1ade901c62e6954715abd1cf64e197f315a32eeb972deadaedab4d4e8882e00ae9ea9ee23575cded3498429a802df`.
+The accepted Rust authority is commit `28f9f6765efd22aba2135df842a757f8ef4468a3` with tree
+`99b64f421ec5bd7679f9b44d06e04c745592a390`. Its 24,845,260-byte proof envelope and the
+24,853,179-byte signed source-auth frame are volatile; the 24,859,347-byte IPC is also volatile.
+The final C source-auth process commit and canonical executable size/SHA identity have not yet
+been supplied, so this candidate is not selected, qualified, production-usable, or active.
 
 ## Source-auth and private representation contract
 
@@ -147,7 +162,7 @@ this private-payment plug-in.
    `DIRECT_STATE_OWNED` returns the state-owned evaluation, `AUTHORITATIVE_ASSERTION` returns the
    qualified source-signature/assertion result, and `PRIVATE_ZK` returns proof acceptance plus the
    opaque ordered batch references and bounded shared assertion/profile/version/order/resource fields. For the
-   active V8 private handoff, the independent verifier consumes the volatile stream once; producers,
+   current unqualified Profile 9 private handoff, the independent verifier consumes the volatile stream once; producers,
    transports, logs, and caller booleans have no acceptance authority, and the stream is never
    refetched. None of these results contains policyResult or effectiveDirective.
 4. The state owner separately resolves `PASS`/`MISSING`/`AMBIGUOUS`/`FAIL` plus state exception

@@ -180,7 +180,7 @@ class QueueV10Tests(unittest.TestCase):
         self.owner.close()
         self.temp.cleanup()
 
-    def test_state_database_is_unified_v10_and_owns_profile6_statement_bytes(self) -> None:
+    def test_state_database_is_unified_v10_and_owns_profile9_statement_bytes(self) -> None:
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
             self.assertEqual(tables, {"queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions", "composition_meta", "composition_transactions", "composition_events", "composition_outbox"})
@@ -195,13 +195,13 @@ class QueueV10Tests(unittest.TestCase):
             + (304).to_bytes(2, "little")
             + batch.session_ref
             + batch.batch_root
-            + (6).to_bytes(4, "little")
+            + (9).to_bytes(4, "little")
             + bytes((1, 0, 0, 0))
             + (1).to_bytes(4, "little")
             + batch.template.valid_from_ms.to_bytes(8, "little")
             + batch.template.valid_until_ms.to_bytes(8, "little")
-            + bytes.fromhex("16B1039E4BE0964066B369AD8760CC8580878929FE8ACBE81CF6D540C8BBD7F026789905691164F4287B666BC7E274CCDDBC6C636DC36C1543E34D8D999958BD")
-            + bytes.fromhex("D8F4730213839DDF027AF1B122AED5D80F4D8A725E9493C0CED59A59F560B12E97B6BAC28A373FA80CEC1DB4C6E0FBCCFD9ED2E37B3D0086A72D17F32F42EDF2")
+            + bytes.fromhex("A85A1A5F4AD3E9B777E5F9043F8B43F5C0018F8A6AAB51359AEDFE1264091C0C0F973C9D4E3BF9064383F0DB9BEB2606BAD62B92677DB0588006475236BD83CF")
+            + bytes.fromhex("609A2A9D66E3D2E3332E86DE5BE4720699C1ADE901C62E6954715ABD1CF64E197F315A32EEB972DEADAEDAB4D4E8882E00AE9EA9EE23575CDED3498429A802DF")
         )
         self.assertEqual(len(batch.session_ref), 64)
         self.assertNotEqual(batch.session_ref, bytes(64))
@@ -209,13 +209,19 @@ class QueueV10Tests(unittest.TestCase):
         self.assertEqual(batch.proof_statement, expected)
         self.assertEqual(batch.proof_statement[20:84], batch.session_ref)
         self.assertEqual(batch.proof_statement[84:148], batch.batch_root)
-        self.assertEqual(batch.proof_statement[148:152], b"\x06\x00\x00\x00")
+        self.assertEqual(batch.proof_statement[148:152], b"\x09\x00\x00\x00")
         self.assertEqual(batch.proof_statement[152:156], b"\x01\x00\x00\x00")
         self.assertEqual(batch.proof_statement[156:160], b"\x01\x00\x00\x00")
-        self.assertEqual(self.config.profile_version, "BLIND-ZKBPP-CUNRUH-RANGE100-V6")
-        self.assertEqual(self.config.profile_epoch, 6)
+        self.assertEqual(self.config.profile_version, "BLIND-ZKBPP-CUNRUH-RANGE100-V9")
+        self.assertEqual(self.config.profile_epoch, 9)
 
-    def test_profile6_statement_rejects_zero_identity_and_invalid_window(self) -> None:
+    def test_profile9_statement_rejects_old_profile_zero_identity_and_invalid_window(self) -> None:
+        with self.assertRaisesRegex(VerificationQueueError, "queue_profile_epoch"):
+            QueueConfig("old-profile-epoch", 100, profile_epoch=6)
+        with self.assertRaisesRegex(VerificationQueueError, "queue_profile_version"):
+            QueueConfig("old-profile-version", 100, profile_version="BLIND-ZKBPP-CUNRUH-RANGE100-V6")
+        with self.assertRaisesRegex(VerificationQueueError, "queue_profile_invalid"):
+            QueueConfig("legacycfg", 100, profile_digest=bytes.fromhex("D8F4730213839DDF027AF1B122AED5D80F4D8A725E9493C0CED59A59F560B12E97B6BAC28A373FA80CEC1DB4C6E0FBCCFD9ED2E37B3D0086A72D17F32F42EDF2"))
         batch = _prepare(self.store, self.config, self.clock)
         with self.assertRaisesRegex(QueueIntegrityError, "session_ref"):
             _build_statement(batch_root=batch.batch_root, session_ref=bytes(64), valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)

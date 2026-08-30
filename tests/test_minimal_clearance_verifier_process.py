@@ -885,6 +885,26 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                 )
             self.assertEqual(tuple(workspace.iterdir()), ())
 
+    @unittest.skipUnless(os.name == "nt", "Windows verifier workspace containment test")
+    def test_real_stream_child_workspace_file_fails_closed_and_is_removed(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            executable = Path(sys._base_executable)
+            payload = executable.read_bytes()
+            spill = str(workspace / "spill")
+            script = f"import os;spill={spill!r};os.mkdir(spill);handle=open(os.path.join(spill,'proof.bin'),'wb');handle.write(b'x');handle.close()"
+            with self.assertRaisesRegex(process.VerifierProcessError, "verifier_workspace_contents"):
+                process.run_contained_verifier_stream(
+                    executable,
+                    ("-c", script),
+                    b"frame",
+                    workspace=workspace,
+                    timeout_seconds=30.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
     def test_failure_boundaries_remain_fixed_and_close_handles(self):
         stages = {"setup", "limits", "attribute_initialize", "attribute_update", "create", "assign", "resume", "wait", "exit", "query", "close"}
         executable = Path(sys.executable)

@@ -37,12 +37,14 @@ class _Fixture:
     def __init__(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.executable = self.root / "blind-source-auth-v6.exe"
-        self.executable_bytes = b"synthetic-future-v6-executable"
+        self.executable = self.root / "blind-source-auth-v9.exe"
+        self.executable_bytes = b"synthetic-future-v9-executable"
         self.executable.write_bytes(self.executable_bytes)
+        self.workspace = self.root / "verifier-workspace"
+        self.workspace.mkdir()
         self.key = bytes(range(256)) * (ML_DSA_87_PUBLIC_KEY_BYTES // 256) + bytes(range(ML_DSA_87_PUBLIC_KEY_BYTES % 256))
         self.queue_config = QueueConfig("queue-v10", 100, source_key_epoch=0x0102030405060708)
-        template = OperationTemplate("assertion", 1, "state-profile-v6", 1_700_000_000_000, 1_700_003_600_000, None, self.queue_config.qualification_flags)
+        template = OperationTemplate("assertion", 1, "state-profile-v9", 1_700_000_000_000, 1_700_003_600_000, None, self.queue_config.qualification_flags)
         refs = tuple(index.to_bytes(32, "little") for index in range(100))
         root = _compute_batch_root_from_refs(template, refs)
         statement = _build_statement(batch_root=root, session_ref=bytes(range(64)), valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
@@ -52,7 +54,7 @@ class _Fixture:
             executable_path=self.executable,
             executable_size_bytes=len(self.executable_bytes),
             executable_sha256=hashlib.sha256(self.executable_bytes).digest(),
-            workspace=self.root,
+            workspace=self.workspace,
             ml_dsa_87_public_key=self.key,
             timeout_seconds=30.0,
         )
@@ -132,7 +134,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
         def runner(
             executable: Path,
             arguments: tuple[str, ...],
-            frame: bytes,
+            frame: bytes | bytearray,
             *,
             workspace: Path,
             timeout_seconds: float,
@@ -142,7 +144,8 @@ class SourceAuthAdapterTests(unittest.TestCase):
             captured.update(
                 executable=executable,
                 arguments=arguments,
-                frame=frame,
+                frame=bytes(frame),
+                input_type=type(frame),
                 workspace=workspace,
                 timeout_seconds=timeout_seconds,
                 expected_executable_size_bytes=expected_executable_size_bytes,
@@ -153,8 +156,8 @@ class SourceAuthAdapterTests(unittest.TestCase):
         return captured, runner
 
     def test_builds_exact_ordered_ipc_and_returns_bound_acceptance(self) -> None:
-        self.assertEqual(SOURCE_AUTH_FRAME_BYTES, 11_912_379)
-        self.assertEqual(SOURCE_AUTH_IPC_BYTES, 11_918_547)
+        self.assertEqual(SOURCE_AUTH_FRAME_BYTES, 24_853_179)
+        self.assertEqual(SOURCE_AUTH_IPC_BYTES, 24_859_347)
         self.assertEqual(SOURCE_AUTH_IPC_BYTES, 6_168 + SOURCE_AUTH_FRAME_BYTES)
         captured, runner = self._run()
         handoff = VolatileProofHandoff(io.BytesIO(self.fixture.frame), declared_length=SOURCE_AUTH_FRAME_BYTES)
@@ -166,17 +169,19 @@ class SourceAuthAdapterTests(unittest.TestCase):
         self.assertEqual(result.proof_statement, self.fixture.batch.proof_statement)
         self.assertEqual(result.batch_root, self.fixture.batch.batch_root)
         self.assertEqual(result.source_auth_profile, self.fixture.queue_config.source_auth_profile)
-        self.assertEqual(result.source_auth_profile, "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V6-UNQUALIFIED")
+        self.assertEqual(result.source_auth_profile, "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V9-UNQUALIFIED")
         self.assertEqual(result.source_key_epoch, self.fixture.queue_config.source_key_epoch)
         self.assertEqual(result.qualification_flags, self.fixture.queue_config.qualification_flags)
         self.assertEqual(result.result_code, "accepted")
         self.assertEqual(captured["executable"], self.fixture.executable)
         self.assertEqual(captured["arguments"], SOURCE_AUTH_PROCESS_ARGUMENTS)
-        self.assertEqual(captured["workspace"], self.fixture.root)
+        self.assertEqual(captured["workspace"].parent, self.fixture.workspace)
+        self.assertFalse(captured["workspace"].exists())
         self.assertEqual(captured["timeout_seconds"], 30.0)
         self.assertEqual(captured["expected_executable_size_bytes"], len(self.fixture.executable_bytes))
         self.assertEqual(captured["expected_executable_sha256"], hashlib.sha256(self.fixture.executable_bytes).digest())
         ipc = captured["frame"]
+        self.assertIs(captured["input_type"], bytearray)
         self.assertIs(type(ipc), bytes)
         self.assertEqual(len(ipc), SOURCE_AUTH_IPC_BYTES)
         self.assertEqual(ipc[:8], self.fixture.queue_config.source_key_epoch.to_bytes(8, "little"))
@@ -298,7 +303,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
         def runner(
             _executable: Path,
             _arguments: tuple[str, ...],
-            ipc: bytes,
+            ipc: bytes | bytearray,
             *,
             workspace: Path,
             timeout_seconds: float,
@@ -306,7 +311,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
             expected_executable_sha256: bytes,
         ):
             del workspace, timeout_seconds, expected_executable_size_bytes, expected_executable_sha256
-            captured["ipc"] = ipc
+            captured["ipc"] = bytes(ipc)
             return _contained()
 
         try:
