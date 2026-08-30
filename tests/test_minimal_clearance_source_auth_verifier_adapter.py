@@ -39,14 +39,14 @@ class _Fixture:
     def __init__(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.executable = self.root / "blind-source-auth-v9.exe"
-        self.executable_bytes = b"synthetic-future-v9-executable"
+        self.executable = self.root / "blind-source-auth-v10.exe"
+        self.executable_bytes = b"synthetic-future-v10-executable"
         self.executable.write_bytes(self.executable_bytes)
         self.workspace = self.root / "verifier-workspace"
         self.workspace.mkdir()
         self.key = bytes(range(256)) * (ML_DSA_87_PUBLIC_KEY_BYTES // 256) + bytes(range(ML_DSA_87_PUBLIC_KEY_BYTES % 256))
         self.queue_config = QueueConfig("queue-v10", 100, source_key_epoch=0x0102030405060708)
-        template = OperationTemplate("assertion", 1, "state-profile-v9", 1_700_000_000_000, 1_700_003_600_000, None, self.queue_config.qualification_flags)
+        template = OperationTemplate("assertion", 1, "state-profile-v10", 1_700_000_000_000, 1_700_003_600_000, None, self.queue_config.qualification_flags)
         refs = tuple(index.to_bytes(32, "little") for index in range(100))
         root = _compute_batch_root_from_refs(template, refs)
         statement = _build_statement(batch_root=root, session_ref=bytes(range(64)), valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
@@ -171,7 +171,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
         self.assertEqual(result.proof_statement, self.fixture.batch.proof_statement)
         self.assertEqual(result.batch_root, self.fixture.batch.batch_root)
         self.assertEqual(result.source_auth_profile, self.fixture.queue_config.source_auth_profile)
-        self.assertEqual(result.source_auth_profile, "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V9-UNQUALIFIED")
+        self.assertEqual(result.source_auth_profile, "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-CDG-DIRECT-V1-UNQUALIFIED")
         self.assertEqual(result.source_key_epoch, self.fixture.queue_config.source_key_epoch)
         self.assertEqual(result.qualification_flags, self.fixture.queue_config.qualification_flags)
         self.assertEqual(result.result_code, "accepted")

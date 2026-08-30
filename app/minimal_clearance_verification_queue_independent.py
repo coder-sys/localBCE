@@ -25,7 +25,7 @@ class IndependentQueueError(RuntimeError):
 
 SCHEMA_VERSION: Final[int] = 11
 _SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v11"
-_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v9\x00"
+_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v10\x00"
 _ADMISSION_CAP: Final[int] = 4_500_000_000
 _DATABASE_PAGE_SIZE: Final[int] = 4096
 _DATABASE_MAX_PAGE_COUNT: Final[int] = 32768
@@ -45,19 +45,19 @@ _CIRCUIT: Final[bytes] = bytes.fromhex(
     "0F973C9D4E3BF9064383F0DB9BEB2606BAD62B92677DB0588006475236BD83CF"
 )
 _PROFILE: Final[bytes] = bytes.fromhex(
-    "609A2A9D66E3D2E3332E86DE5BE4720699C1ADE901C62E6954715ABD1CF64E19"
-    "7F315A32EEB972DEADAEDAB4D4E8882E00AE9EA9EE23575CDED3498429A802DF"
+    "8490652F6C69FEB8AC1FA2A8EDADF79A45632F67A73F0D67441321AFBB7369C6D"
+    "2BBE71302626FB4F92EB378B8B35FE24D09F11DF55F4795FFD227D27EC52F9A"
 )
-_PROFILE_EPOCH: Final[int] = 9
-_PROFILE_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V9"
-_SOURCE_AUTH_PROFILE: Final[str] = "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V9-UNQUALIFIED"
+_PROFILE_EPOCH: Final[int] = 10
+_PROFILE_TOKEN: Final[str] = "BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1"
+_SOURCE_AUTH_PROFILE: Final[str] = "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-CDG-DIRECT-V1-UNQUALIFIED"
 _DIRECTIVES: Final[list[str]] = ["CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"]
-_BATCH_LEAF: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v9\x00"
-_BATCH_ROOT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v9\x00"
-_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v9\x00"
-_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v9\x00"
-_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v9\x00"
-_MEMBER_SET: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MEMBER-SET/v9\x00"
+_BATCH_LEAF: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v10\x00"
+_BATCH_ROOT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v10\x00"
+_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v10\x00"
+_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v10\x00"
+_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v10\x00"
+_MEMBER_SET: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MEMBER-SET/v10\x00"
 _COMPOSITION_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v4"
 _COMPOSITION_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v4\x00"
 _COMPOSITION_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v4\x00"
@@ -330,7 +330,7 @@ def _identity_digest(batch: tuple[Any, ...], members: tuple[tuple[Any, ...], ...
     root = _blob(_db_bytes(batch[1], "batch_root"), 64, "batch_root")
     session_ref = _blob(_db_bytes(batch[2], "session_ref"), 64, "session_ref")
     statement = _build_statement(batch_root=root, session_ref=session_ref, valid_from_ms=int(batch[6]), valid_until_ms=int(batch[7]))
-    return _sha(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v9\x00", _blob(_db_bytes(batch[0], "batch_id"), 32, "batch_id"), root, session_ref, statement, _template_bytes(batch), _u64(_COUNT), refs, _u64(int(batch[6])), _u64(int(batch[7])), str(config["source_auth_profile"]).encode("ascii"), _u64(int(config["source_key_epoch"])))
+    return _sha(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v10\x00", _blob(_db_bytes(batch[0], "batch_id"), 32, "batch_id"), root, session_ref, statement, _template_bytes(batch), _u64(_COUNT), refs, _u64(int(batch[6])), _u64(int(batch[7])), str(config["source_auth_profile"]).encode("ascii"), _u64(int(config["source_key_epoch"])))
 
 
 @dataclass(frozen=True, slots=True)
@@ -801,7 +801,7 @@ def read_verified_batch(path: Path, selector: bytes | None = None) -> Independen
 def verify_export_bytes(raw: bytes, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     if type(raw) is not bytes or not raw or len(raw) > _DATABASE_CAP:
         _fail("export_bytes")
-    with tempfile.TemporaryDirectory(prefix="bl-v9-export-") as directory:
+    with tempfile.TemporaryDirectory(prefix="bl-v10-export-") as directory:
         path = Path(directory) / "queue.sqlite"
         path.write_bytes(raw)
         return verify_database(path, expected_config=expected_config)

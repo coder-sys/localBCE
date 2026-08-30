@@ -94,11 +94,11 @@ DIRECTIVES: Final[tuple[str, ...]] = (
 )
 BOOTSTRAP_CAPABILITY_LIMITATION_COUNT: Final[int] = 0
 
-PROFILE_VERSION: Final[int] = 9
+PROFILE_VERSION: Final[int] = 10
 RELATION_VERSION: Final[int] = 1
 POLICY_SCHEMA_VERSION: Final[int] = 1
-PROFILE_VERSION_TOKEN: Final[str] = "BLIND-ZKBPP-CUNRUH-RANGE100-V9"
-SOURCE_AUTH_PROFILE_DEFAULT: Final[str] = "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V9-UNQUALIFIED"
+PROFILE_VERSION_TOKEN: Final[str] = "BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1"
+SOURCE_AUTH_PROFILE_DEFAULT: Final[str] = "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-CDG-DIRECT-V1-UNQUALIFIED"
 STATEMENT_MAGIC: Final[bytes] = b"BL-R100-STMT-V2\x00"
 # Opaque registered identifiers.  The queue has no proof parser, transcript,
 # or proof-internal fingerprint construction.
@@ -107,8 +107,8 @@ CIRCUIT_FINGERPRINT: Final[bytes] = bytes.fromhex(
     "0F973C9D4E3BF9064383F0DB9BEB2606BAD62B92677DB0588006475236BD83CF"
 )
 PROFILE_FINGERPRINT: Final[bytes] = bytes.fromhex(
-    "609A2A9D66E3D2E3332E86DE5BE4720699C1ADE901C62E6954715ABD1CF64E19"
-    "7F315A32EEB972DEADAEDAB4D4E8882E00AE9EA9EE23575CDED3498429A802DF"
+    "8490652F6C69FEB8AC1FA2A8EDADF79A45632F67A73F0D67441321AFBB7369C6D"
+    "2BBE71302626FB4F92EB378B8B35FE24D09F11DF55F4795FFD227D27EC52F9A"
 )
 
 
@@ -240,7 +240,7 @@ def _template_value_check(template: "OperationTemplate") -> None:
 
 @dataclass(frozen=True, slots=True)
 class QueueConfig:
-    """Immutable state-owned V11/Profile 9 queue configuration."""
+    """Immutable state-owned V11/Profile 10 CDG-direct queue configuration."""
 
     queue_id: str
     capacity: int
@@ -317,7 +317,7 @@ class QueueConfig:
 
     @property
     def digest(self) -> bytes:
-        return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v9\x00", self.canonical_bytes)
+        return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v10\x00", self.canonical_bytes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,7 +388,7 @@ class IssuedOperationStatement:
 
 
 def _batch_leaf(position: int, operation_ref: bytes, template: OperationTemplate) -> bytes:
-    return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v9\x00", _u64(position), operation_ref, template.canonical_bytes)
+    return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v10\x00", _u64(position), operation_ref, template.canonical_bytes)
 
 
 def _compute_batch_root_from_refs(template: OperationTemplate, operation_refs: tuple[bytes, ...]) -> bytes:
@@ -398,7 +398,7 @@ def _compute_batch_root_from_refs(template: OperationTemplate, operation_refs: t
     for ref in operation_refs:
         _blob(ref, MAX_OPERATION_REF_BYTES, "operation_ref")
     leaves = tuple(_batch_leaf(position, ref, template) for position, ref in enumerate(operation_refs))
-    return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v9\x00", _u64(RANGE100_COUNT), b"".join(leaves))
+    return _sha3(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v10\x00", _u64(RANGE100_COUNT), b"".join(leaves))
 
 
 def _compute_batch_root(statements: tuple[IssuedOperationStatement, ...]) -> bytes:
@@ -474,7 +474,7 @@ class IssuedVerificationBatch:
 def _batch_identity_digest(batch: IssuedVerificationBatch, config: QueueConfig) -> bytes:
     ordered_refs = b"".join(_u64(position) + ref for position, ref in enumerate(batch.operation_refs))
     return _sha3(
-        b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v9\x00",
+        b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v10\x00",
         batch.batch_id, batch.batch_root, batch.session_ref, batch.proof_statement,
         batch.template.canonical_bytes, _u64(RANGE100_COUNT), ordered_refs,
         _u64(batch.template.valid_from_ms), _u64(batch.template.valid_until_ms),
@@ -840,12 +840,12 @@ _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
 _STATUSES: Final[tuple[str, ...]] = ("AWAITING_HANDOFF", "QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD")
 _TERMINAL: Final[frozenset[str]] = frozenset(("VERIFIED", "REJECTED", "HELD"))
 _ACTIVE: Final[frozenset[str]] = frozenset(("AWAITING_HANDOFF", "QUEUED", "LEASED"))
-_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v9\x00"
-_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v9\x00"
-_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v9\x00"
-_LEASE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/LEASE/v9\x00"
-_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v9\x00"
-_RUNTIME_WORKER: Final[str] = "queue-v9-worker"
+_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v10\x00"
+_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v10\x00"
+_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v10\x00"
+_LEASE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/LEASE/v10\x00"
+_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v10\x00"
+_RUNTIME_WORKER: Final[str] = "queue-v10-worker"
 _LEASE_MS: Final[int] = 60_000
 _MAX_EVENT_BYTES: Final[int] = 4096
 

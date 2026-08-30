@@ -1,4 +1,6 @@
+import hashlib
 import io
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -20,12 +22,22 @@ from app.minimal_clearance_verification_queue import (
     QueueConfig,
     QueueIntegrityError,
     QueueLeaseError,
+    _TRIGGER_DEFS,
     VerificationQueueError,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
     _VerificationQueueStore,
 )
-from app.minimal_clearance_verification_queue_independent import read_verified_batch, verify_database
+from app.minimal_clearance_verification_queue_independent import _build_statement as independent_build_statement, read_verified_batch, verify_database
+
+
+OLD_PROFILE9_TOKEN = "BLIND-ZKBPP-CUNRUH-RANGE100-V9"
+OLD_SOURCE_AUTH_PROFILE9 = "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V9-UNQUALIFIED"
+OLD_PROFILE9_FINGERPRINT = bytes.fromhex(
+    "609A2A9D66E3D2E3332E86DE5BE4720699C1ADE901C62E6954715ABD1CF64E19"
+    "7F315A32EEB972DEADAEDAB4D4E8882E00AE9EA9EE23575CDED3498429A802DF"
+)
+OLD_PROFILE9_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v9\x00"
 
 
 class _Clock:
@@ -180,7 +192,7 @@ class QueueV11Tests(unittest.TestCase):
         self.owner.close()
         self.temp.cleanup()
 
-    def test_state_database_derives_profile9_statement_without_durable_copy(self) -> None:
+    def test_state_database_derives_profile10_statement_without_durable_copy(self) -> None:
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
             self.assertEqual(tables, {"queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions", "composition_meta", "composition_transactions", "composition_events", "composition_outbox"})
@@ -196,13 +208,14 @@ class QueueV11Tests(unittest.TestCase):
             + (304).to_bytes(2, "little")
             + batch.session_ref
             + batch.batch_root
-            + (9).to_bytes(4, "little")
-            + bytes((1, 0, 0, 0))
+            + (10).to_bytes(4, "little")
+            + b"\x01"
+            + b"\x00\x00\x00"
             + (1).to_bytes(4, "little")
             + batch.template.valid_from_ms.to_bytes(8, "little")
             + batch.template.valid_until_ms.to_bytes(8, "little")
             + bytes.fromhex("A85A1A5F4AD3E9B777E5F9043F8B43F5C0018F8A6AAB51359AEDFE1264091C0C0F973C9D4E3BF9064383F0DB9BEB2606BAD62B92677DB0588006475236BD83CF")
-            + bytes.fromhex("609A2A9D66E3D2E3332E86DE5BE4720699C1ADE901C62E6954715ABD1CF64E197F315A32EEB972DEADAEDAB4D4E8882E00AE9EA9EE23575CDED3498429A802DF")
+            + bytes.fromhex("8490652F6C69FEB8AC1FA2A8EDADF79A45632F67A73F0D67441321AFBB7369C6D2BBE71302626FB4F92EB378B8B35FE24D09F11DF55F4795FFD227D27EC52F9A")
         )
         self.assertEqual(len(batch.session_ref), 64)
         self.assertNotEqual(batch.session_ref, bytes(64))
@@ -210,23 +223,32 @@ class QueueV11Tests(unittest.TestCase):
         self.assertEqual(batch.proof_statement, expected)
         self.assertEqual(batch.proof_statement[20:84], batch.session_ref)
         self.assertEqual(batch.proof_statement[84:148], batch.batch_root)
-        self.assertEqual(batch.proof_statement[148:152], b"\x09\x00\x00\x00")
-        self.assertEqual(batch.proof_statement[152:156], b"\x01\x00\x00\x00")
+        self.assertEqual(batch.proof_statement[148:152], b"\x0a\x00\x00\x00")
+        self.assertEqual(batch.proof_statement[152], 1)
+        self.assertEqual(batch.proof_statement[153:156], b"\x00\x00\x00")
         self.assertEqual(batch.proof_statement[156:160], b"\x01\x00\x00\x00")
-        self.assertEqual(self.config.profile_version, "BLIND-ZKBPP-CUNRUH-RANGE100-V9")
-        self.assertEqual(self.config.profile_epoch, 9)
+        self.assertEqual(batch.proof_statement[176:240], bytes.fromhex("A85A1A5F4AD3E9B777E5F9043F8B43F5C0018F8A6AAB51359AEDFE1264091C0C0F973C9D4E3BF9064383F0DB9BEB2606BAD62B92677DB0588006475236BD83CF"))
+        self.assertEqual(batch.proof_statement[240:304], bytes.fromhex("8490652F6C69FEB8AC1FA2A8EDADF79A45632F67A73F0D67441321AFBB7369C6D2BBE71302626FB4F92EB378B8B35FE24D09F11DF55F4795FFD227D27EC52F9A"))
+        self.assertEqual(independent_build_statement(batch_root=batch.batch_root, session_ref=batch.session_ref, valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms), batch.proof_statement)
+        self.assertEqual(self.config.profile_version, "BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1")
+        self.assertEqual(self.config.profile_epoch, 10)
         self.assertNotIn(batch.proof_statement, (self.root / "state.sqlite").read_bytes())
 
-    def test_profile9_statement_rejects_old_profile_zero_identity_and_invalid_window(self) -> None:
+    def test_profile10_statement_rejects_profile9_zero_identity_and_invalid_window(self) -> None:
         with self.assertRaisesRegex(VerificationQueueError, "queue_profile_epoch"):
-            QueueConfig("old-profile-epoch", 100, profile_epoch=6)
+            QueueConfig("old-profile-epoch", 100, profile_epoch=9)
         with self.assertRaisesRegex(VerificationQueueError, "queue_profile_version"):
-            QueueConfig("old-profile-version", 100, profile_version="BLIND-ZKBPP-CUNRUH-RANGE100-V6")
+            QueueConfig("old-profile-version", 100, profile_version=OLD_PROFILE9_TOKEN)
         with self.assertRaisesRegex(VerificationQueueError, "source_auth_profile"):
-            QueueConfig("old-source-profile", 100, source_auth_profile="BLIND-MLDSA87-SOURCE-AUTH-V1-R100-V6-UNQUALIFIED")
+            QueueConfig("old-source-profile", 100, source_auth_profile=OLD_SOURCE_AUTH_PROFILE9)
         with self.assertRaisesRegex(VerificationQueueError, "queue_profile_invalid"):
-            QueueConfig("legacycfg", 100, profile_digest=bytes.fromhex("D8F4730213839DDF027AF1B122AED5D80F4D8A725E9493C0CED59A59F560B12E97B6BAC28A373FA80CEC1DB4C6E0FBCCFD9ED2E37B3D0086A72D17F32F42EDF2"))
+            QueueConfig("legacycfg", 100, profile_digest=OLD_PROFILE9_FINGERPRINT)
         batch = _prepare(self.store, self.config, self.clock)
+        old_statement = bytearray(batch.proof_statement)
+        old_statement[148:152] = (9).to_bytes(4, "little")
+        old_statement[240:304] = OLD_PROFILE9_FINGERPRINT
+        with self.assertRaisesRegex(VerificationQueueError, "statement_binding"):
+            replace(batch, proof_statement=bytes(old_statement))
         with self.assertRaisesRegex(QueueIntegrityError, "session_ref"):
             _build_statement(batch_root=batch.batch_root, session_ref=bytes(64), valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
         with self.assertRaisesRegex(QueueIntegrityError, "batch_root"):
@@ -244,6 +266,36 @@ class QueueV11Tests(unittest.TestCase):
             forged[offset] ^= 1
             with self.subTest(offset=offset), self.assertRaisesRegex(VerificationQueueError, "statement_binding"):
                 replace(batch, proof_statement=bytes(forged))
+
+    def test_profile9_database_is_rejected_without_rewrite(self) -> None:
+        database = self.root / "state.sqlite"
+        self.store._close()
+        self.owner.close()
+        old_config = dict(self.config.as_json)
+        old_config.update(
+            profile_version=OLD_PROFILE9_TOKEN,
+            profile_digest=OLD_PROFILE9_FINGERPRINT.hex().upper(),
+            profile_epoch=9,
+            source_auth_profile=OLD_SOURCE_AUTH_PROFILE9,
+        )
+        old_config_bytes = json.dumps(old_config, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        old_config_digest = hashlib.sha3_512(OLD_PROFILE9_MATERIAL + old_config_bytes).digest()
+        with closing(sqlite3.connect(str(database))) as connection:
+            connection.execute("DROP TRIGGER queue_metadata_config_guard")
+            connection.execute("UPDATE queue_metadata SET config_json=?,config_digest=? WHERE id=1", (old_config_bytes, old_config_digest))
+            trigger_sql = dict(_TRIGGER_DEFS)["queue_metadata_config_guard"]
+            connection.execute(trigger_sql)
+            connection.commit()
+        before = database.read_bytes()
+        with self.assertRaisesRegex(VerificationQueueError, "queue_config_binding"):
+            _VerificationQueueStore(
+                path=database,
+                config=self.config,
+                owner=_QueueRuntimeOwnership(lock_path=self.root / "state.sqlite.runtime-lock", parent=self.root),
+                clock=self.clock,
+                composition_config=self.composition_config,
+            )
+        self.assertEqual(database.read_bytes(), before)
 
     def test_exact_100_members_and_one_101_unit_attempt_record(self) -> None:
         batch = _prepare(self.store, self.config, self.clock)

@@ -73,7 +73,7 @@ class RuntimeV10Tests(unittest.TestCase):
     def _source_auth_config(self, root: Path) -> SourceAuthVerifierConfig:
         return SourceAuthVerifierConfig(
             queue_config=QueueConfig("runtime-v10-source-auth", 100),
-            executable_path=root / "blind-source-auth-v9.exe",
+            executable_path=root / "blind-source-auth-v10.exe",
             executable_size_bytes=SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
             executable_sha256=SOURCE_AUTH_EXECUTABLE_SHA256,
             workspace=root,
