@@ -62,10 +62,10 @@ This seam can qualify for the read-only wedge independently of the private-payme
 
 ## Transaction boundary
 
-### Queue/Proof Handoff Profile 10 clean break
+### Queue/Proof Handoff Profile 11 clean break
 
-The current Queue integration candidate is Profile 10 and remains unqualified, unselected,
-nonactivating, and non-production. Profile 9 and earlier databases, artifact readers, filesystem
+The current Queue integration candidate is Profile 11 and remains unqualified, unselected,
+nonactivating, and non-production. Profile 10 and earlier databases, artifact readers, filesystem
 snapshot/refetch paths, and proof-bound disposition receipts are unsupported and fail closed; no
 migration, compatibility reader, fallback, wrapper, relabeling, or dual path exists. Blind state creates a
 exactly 100 fresh state-generated random 32-byte operation references for each batch. Durable queue
@@ -75,7 +75,7 @@ approved-source registry root, chronology/status/retry data, and qualification f
 artifact/source paths, patient/provider/case identity,
 raw-data digests, acceptance bytes, and process-output hashes are not queue fields.
 
-The Profile 10 candidate ownership chain is source-local prover -> optional aggregator -> independent verifier ->
+The Profile 11 candidate ownership chain is source-local prover -> optional aggregator -> independent verifier ->
 state owner -> opaque-reference/directive outbox and ACK -> audit/recovery. Admission is two phase:
 the state first issues an immutable allowlisted shared template, exactly 100 ordered opaque
 references, and one complete batch statement in `AWAITING_HANDOFF`; it computes one domain-separated
@@ -108,7 +108,7 @@ system-lifetime claim must explicitly bound and union all profiles. Native-v3 ow
 acceptance-unit counting and theorem ledger; this document owns the reservation and state-transaction
 semantics.
 
-For the current unqualified Profile 10 handoff, Native-v3 owns the exact verifier receipt allowlist. The
+For the current unqualified Profile 11 handoff, Native-v3 owns the exact verifier receipt allowlist. The
 database accepts only a mode-specific, non-dispositive evidence result; it never receives a
 `policyResult` or `effectiveDirective` from the verifier or source. `DIRECT_STATE_OWNED` and
 `AUTHORITATIVE_ASSERTION` use their separate mode-specific state-evaluation or qualified
@@ -119,10 +119,10 @@ complete promotion batch is preflighted against one state snapshot and commits a
 rows, events, state roots, and outbox rows in one transaction. A mixed APPLIED/HELD persisted image
 is independently rejected.
 
-The current Profile 10 Queue/Native proof boundary is mechanically interoperable at the handoff but
+The current Profile 11 Queue/Native proof boundary is mechanically interoperable at the handoff but
 cryptographically unqualified: `proofSuiteId=null`, `production_usable=false`,
 `activation=false`, no backend is selected or qualified, and the co-equal Native-v3 profile gates
-remain open. Native-v3 is the sole authority for the exact current Profile 10 identity, statement
+remain open. Native-v3 is the sole authority for the exact current Profile 11 identity, statement
 and fingerprints, artifact pins, and envelope/frame/IPC sizes. Proof acceptance yields only an opaque
 scoped verification outcome and never `CLEAR`; State alone owns chronology, `policyResult`,
 `effectiveDirective`, exceptions, disposition, retries, and economic state.
@@ -156,7 +156,7 @@ system consumes an accepted clearance directive and later returns the actual out
 
 ## Current experimental application chain
 
-The current nonactivating Profile 10 candidate implementation separates the source/prover, optional aggregation,
+The current nonactivating Profile 11 candidate implementation separates the source/prover, optional aggregation,
 independent verifier, state-owned disposition, durable composition/outbox, and audit/recovery
 owners. Queue promotion uses a one-use volatile handoff; it never refetches proof bytes. The
 state owner, not the verifier, preserves `policyResult` separately from `effectiveDirective`, and

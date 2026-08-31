@@ -39,6 +39,9 @@ from app.minimal_clearance_verification_queue import (
 from app.minimal_clearance_verifier_process import ContainedVerifierResult, VerifierProcessError
 
 
+STALE_PROFILE10_FRAME_BYTES = 16_298_779
+
+
 class _Fixture:
     def __init__(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -258,6 +261,14 @@ class SourceAuthAdapterTests(unittest.TestCase):
                     with self.assertRaisesRegex(QueueHeldError, "proof_handoff_length"):
                         self.fixture.adapter.verify(VolatileProofHandoff(bytearray(payload)), self.fixture.batch)
                 runner.assert_not_called()
+
+    def test_stale_profile10_frame_width_is_rejected_before_runner(self) -> None:
+        self.assertLess(STALE_PROFILE10_FRAME_BYTES, SOURCE_AUTH_FRAME_BYTES)
+        stale = self.fixture.frame[:STALE_PROFILE10_FRAME_BYTES]
+        with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream") as runner:
+            with self.assertRaisesRegex(QueueHeldError, "proof_handoff_length"):
+                self.fixture.adapter.verify(VolatileProofHandoff(bytearray(stale)), self.fixture.batch)
+        runner.assert_not_called()
 
     def test_output_exit_two_timeout_and_containment_fail_closed(self) -> None:
         cases = (

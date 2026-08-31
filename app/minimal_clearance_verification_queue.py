@@ -94,10 +94,10 @@ DIRECTIVES: Final[tuple[str, ...]] = (
 )
 BOOTSTRAP_CAPABILITY_LIMITATION_COUNT: Final[int] = 0
 
-PROFILE_VERSION: Final[int] = 10
+PROFILE_VERSION: Final[int] = 11
 RELATION_VERSION: Final[int] = 1
 POLICY_SCHEMA_VERSION: Final[int] = 1
-PROFILE_VERSION_TOKEN: Final[str] = "BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1"
+PROFILE_VERSION_TOKEN: Final[str] = "BLIND-ZKBPP-RANGE100-CDG-DIRECT-SEEDED-V1"
 SOURCE_AUTH_PROFILE_DEFAULT: Final[str] = "BLIND-MLDSA87-SOURCE-AUTH-V1-R100-CDG-DIRECT-V1-UNQUALIFIED"
 STATEMENT_MAGIC: Final[bytes] = b"BL-R100-STMT-V2\x00"
 # Opaque registered identifiers.  The queue has no proof parser, transcript,
@@ -107,8 +107,8 @@ CIRCUIT_FINGERPRINT: Final[bytes] = bytes.fromhex(
     "0F973C9D4E3BF9064383F0DB9BEB2606BAD62B92677DB0588006475236BD83CF"
 )
 PROFILE_FINGERPRINT: Final[bytes] = bytes.fromhex(
-    "8490652F6C69FEB8AC1FA2A8EDADF79A45632F67A73F0D67441321AFBB7369C6D"
-    "2BBE71302626FB4F92EB378B8B35FE24D09F11DF55F4795FFD227D27EC52F9A"
+    "327289A1B8B3F00D7B41745617EC7D64F27122E3451636B2BFEBFC9802213B48"
+    "F821D95FD3C0C5F1B5E8C7E7AB3DD8A638A34B4B7053FC39E0E4DF734201F724"
 )
 
 
@@ -240,7 +240,7 @@ def _template_value_check(template: "OperationTemplate") -> None:
 
 @dataclass(frozen=True, slots=True)
 class QueueConfig:
-    """Immutable state-owned V11/Profile 10 CDG-direct queue configuration."""
+    """Immutable state-owned V11/Profile 11 seeded CDG-direct queue configuration."""
 
     queue_id: str
     capacity: int

@@ -74,11 +74,11 @@ generated vector alone is not deployed formal-verification credit.
 
 ## Current private-proof blocker
 
-The current Queue/Proof Handoff integration candidate is Profile 10 and defers to
+The current Queue/Proof Handoff integration candidate is Profile 11 and defers to
 `docs/DATABASE_ZK_ARCHITECTURE.md` for transaction semantics and
 `docs/NATIVE_V3_ARCHITECTURE.md` for exact profile identity, mechanical pins, and qualification
-gates; this roadmap records only dependency status. Profile 9 and earlier profiles are rejected
-with no fallback, compatibility reader, relabeling, or dual acceptance. The current Profile 10
+gates; this roadmap records only dependency status. Profile 10 and earlier profiles are rejected
+with no fallback, compatibility reader, relabeling, or dual acceptance. The current Profile 11
 Queue/Native proof boundary is mechanically interoperable but cryptographically unqualified; it is
 not a selected private-proof backend, and its clean-break, state-owned, non-dispositive, fail-closed
 semantics do not establish an active backend, qualification, Lean completion, or product-throughput

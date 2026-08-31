@@ -45,7 +45,7 @@ pre-admission modes exist: `DIRECT_STATE_OWNED` for state-owned canonical non-PH
 `AUTHORITATIVE_ASSERTION` for an operation-scoped minimally disclosed derived assertion with a
 qualified PQ source signature, and `PRIVATE_ZK` for a proof over a hidden source-bound assertion.
 The verifier-owned control set selects one mode before admission; no runtime fallback or downgrade
-exists. The current Queue integration candidate is the nonactivating Profile 10 contract: it issues a state-generated ordered set of exactly 100 opaque 32-byte operation
+exists. The current Queue integration candidate is the nonactivating Profile 11 contract: it issues a state-generated ordered set of exactly 100 opaque 32-byte operation
 references and one shared immutable allowlisted statement before a volatile handoff; batch positions
 and the ordered batch root are state-computed before handoff.
 
@@ -63,31 +63,32 @@ restarted, or ambiguous handoff becomes `HELD` and requires a fresh state operat
 These controls do not close the profile theorem, malicious-verifier/QROM, grinding, SHA3, Lean,
 deployment, custody, or source-authorization gates.
 
-### Profile 10 Queue integration candidate
+### Profile 11 Queue integration candidate
 
-The Queue checkout integrates the mechanically interoperable, nonactivating Profile 10 statement/proof
-boundary as an unqualified candidate. Its exact identifiers are `PROFILE_VERSION=10`,
-`BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1`, the 304-byte `BL-R100-STMT-V2\0` statement with
+The Queue checkout integrates the mechanically interoperable, nonactivating Profile 11 statement/proof
+boundary as an unqualified candidate. Its exact identifiers are `PROFILE_VERSION=11`,
+`BLIND-ZKBPP-RANGE100-CDG-DIRECT-SEEDED-V1`, the 304-byte `BL-R100-STMT-V2\0` statement with
 encoding 2, circuit fingerprint
 `a85a1a5f4ad3e9b777e5f9043f8b43f5c0018f8a6aab51359aedfe1264091c0c0f973c9d4e3bf9064383f0db9beb2606bad62b92677db0588006475236bd83cf`,
-and Profile 10 fingerprint
-`8490652f6c69feb8ac1fa2a8edadf79a45632f67a73f0d67441321afbb7369c6d2bbe71302626fb4f92eb378b8b35fe24d09f11df55f4795ffd227d27ec52f9a`.
+and Profile 11 fingerprint
+`327289a1b8b3f00d7b41745617ec7d64f27122e3451636b2bfebfc9802213b48f821d95fd3c0c5f1b5e8c7e7ab3dd8a638a34b4b7053fc39e0e4df734201f724`.
 The source-auth profile is `BLIND-MLDSA87-SOURCE-AUTH-V1-R100-CDG-DIRECT-V1-UNQUALIFIED`.
 One proof covers exactly 100 Queue operations, distinct from its 1,024 cryptographic repetitions
 and the Queue's 101-unit reservation. The Rust producer checkout is commit
-`626d7e200407b91bcd467b3d4973eae7dcab004c` with tree
-`f9631ad1dbc6a6524f8dc3b7d1fc1f38211aafc7`; its mechanical producer-content pin is 403,456 bytes
-with SHA-256 `EF25D66E7AD37CEE2F5B6C93B0D1AEDE5FC8F6D7600BAA88D0AB1651327C9D01`. This carries
-no reproducibility or custody claim. The proof envelope is 16,294,348 bytes, the signed prefix is
+`3108f50dd39933dd2a0b876c86ba5c1cef3d8fc4` with tree
+`49c6d9a3c690fcfd7dcf208f1c4535d40a9489b9`; its Profile 11 producer input is 1,232 bytes
+(`304-byte statement || 800-byte witness || 128-byte seed`), and the Queue never receives or
+persists the seed. This carries no reproducibility or custody claim. The proof envelope is
+16,294,348 bytes, the signed prefix is
 16,297,640 bytes, the ML-DSA-87 public key is 2,592 bytes, the signature is 4,627 bytes, and
 the signed source-auth frame is 16,302,267 bytes. The exact IPC is 16,308,435 bytes
 (6,168 state/config bytes plus the frame). Proof, signature, frame, statement, and IPC bytes remain
 volatile. The C source-auth owner tracked boundary is commit
-`8e56c9dc218e896fa41d22c29bd3acb40d9a5e23` with tree
-`009dc554911a510b6b8256ae24daa76a5f7fcc2c`; the canonical state-side executable is
-`C:\Users\neers\Documents\Codex\2026-08-30\blind-zkbpp-c-cdg-direct-v1\work\build-profile10\Release\blind_source_auth_verify_process_v1.exe`,
-50,176 bytes with SHA-256
-`29294B06F8CAD666DEC2648F3E297BE74BD04830119AC436E420E615E1F6A6EA`. The candidate remains
+`17c75274d66e6b77ee377665c682c961650846d8` with tree
+`2e13b2ad1ac866a3771d2b1e10898ed9c39df91e`; the canonical state-side executable is
+`C:\Users\neers\Documents\Codex\2026-08-31\build-profile11-root-verify\Release\blind_source_auth_verify_process_v1.exe`,
+50,688 bytes with SHA-256
+`EC584750D733FF29F4ED41F141FAA1DA1005E90EA2DE594DBD9844AE01A1669F`. The candidate remains
 unselected, unqualified, `proofSuiteId=null`, `production_usable=false`, and `activation=false`.
 The C process takes no arguments; exit 0 is accepted, exit 1 is a combined rejection, exit 2 is
 malformed/short/extra input, and exit 3 is an internal failure. Any other exit, timeout, nonempty
@@ -118,7 +119,7 @@ null/unactivated until the complete profile qualifies; `DIRECT_STATE_OWNED` and
 source-signature-as-truth claims, and claims that destroyed artifacts remain independently recoverable
 are rejected.
 
-Separately from the Profile 10 private-proof/source-auth process boundary, the smallest current
+Separately from the Profile 11 private-proof/source-auth process boundary, the smallest current
 standardized, nonactivating `AUTHORITATIVE_ASSERTION` candidate is
 `sourceAuthProfileId=ML-DSA-44-PURE-HEDGED-V1`: FIPS 204 ML-DSA-44, pure rather than HashML-DSA,
 hedged signing, and fixed context/domain `BL/SOURCE-AUTH/ASSERTION/v1`. Approved key-generation RBG
@@ -188,7 +189,7 @@ this private-payment plug-in.
    `DIRECT_STATE_OWNED` returns the state-owned evaluation, `AUTHORITATIVE_ASSERTION` returns the
    qualified source-signature/assertion result, and `PRIVATE_ZK` returns proof acceptance plus the
    opaque ordered batch references and bounded shared assertion/profile/version/order/resource fields. For the
-   current unqualified Profile 10 private handoff, the independent verifier consumes the sealed
+   current unqualified Profile 11 private handoff, the independent verifier consumes the sealed
    memory-owned handoff once; producers, transports, logs, and caller booleans have no acceptance
    authority, and the handoff is never
    refetched. None of these results contains policyResult or effectiveDirective.

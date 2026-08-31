@@ -1,4 +1,4 @@
-"""Nonactivating Queue adapter for the signed Native Profile 10 source boundary.
+"""Nonactivating Queue adapter for the signed Native Profile 11 source boundary.
 
 The adapter owns only volatile frame assembly and the narrow process call.  It
 does not parse proof material, select a disposition, or persist source,
@@ -41,9 +41,9 @@ SOURCE_AUTH_IPC_PREFIX_BYTES: Final[int] = 6_168
 SOURCE_AUTH_IPC_BYTES: Final[int] = 16_308_435
 SOURCE_AUTH_PROCESS_ARGUMENTS: Final[tuple[str, ...]] = ()
 SOURCE_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0
-SOURCE_AUTH_EXECUTABLE_SIZE_BYTES: Final[int] = 50_176
+SOURCE_AUTH_EXECUTABLE_SIZE_BYTES: Final[int] = 50_688
 SOURCE_AUTH_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
-    "29294B06F8CAD666DEC2648F3E297BE74BD04830119AC436E420E615E1F6A6EA"
+    "EC584750D733FF29F4ED41F141FAA1DA1005E90EA2DE594DBD9844AE01A1669F"
 )
 _VERIFIER_CALL_LOCK = threading.Lock()
 
@@ -186,7 +186,7 @@ def _validate_contained_result(result: object) -> ContainedVerifierResult:
 
 
 class MinimalClearanceSourceAuthVerifierAdapter:
-    """Direct Queue VerifierPort adapter for the unqualified Profile 10 C process."""
+    """Direct Queue VerifierPort adapter for the unqualified Profile 11 C process."""
 
     __slots__ = ("_config",)
 
