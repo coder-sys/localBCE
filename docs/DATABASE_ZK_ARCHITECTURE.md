@@ -62,10 +62,10 @@ This seam can qualify for the read-only wedge independently of the private-payme
 
 ## Transaction boundary
 
-### Queue/Proof Handoff Profile 9 clean break
+### Queue/Proof Handoff Profile 10 clean break
 
-The current Queue integration candidate is Profile 9 and remains unqualified, unselected,
-nonactivating, and non-production. Profile 6/7/8 databases, artifact readers, filesystem
+The current Queue integration candidate is Profile 10 and remains unqualified, unselected,
+nonactivating, and non-production. Profile 9 and earlier databases, artifact readers, filesystem
 snapshot/refetch paths, and proof-bound disposition receipts are unsupported and fail closed; no
 migration, compatibility reader, fallback, wrapper, relabeling, or dual path exists. Blind state creates a
 exactly 100 fresh state-generated random 32-byte operation references for each batch. Durable queue
@@ -75,7 +75,7 @@ approved-source registry root, chronology/status/retry data, and qualification f
 artifact/source paths, patient/provider/case identity,
 raw-data digests, acceptance bytes, and process-output hashes are not queue fields.
 
-The Profile 9 candidate ownership chain is source-local prover -> optional aggregator -> independent verifier ->
+The Profile 10 candidate ownership chain is source-local prover -> optional aggregator -> independent verifier ->
 state owner -> opaque-reference/directive outbox and ACK -> audit/recovery. Admission is two phase:
 the state first issues an immutable allowlisted shared template, exactly 100 ordered opaque
 references, and one complete batch statement in `AWAITING_HANDOFF`; it computes one domain-separated
@@ -106,7 +106,7 @@ system-lifetime claim must explicitly bound and union all profiles. Native-v3 ow
 acceptance-unit counting and theorem ledger; this document owns the reservation and state-transaction
 semantics.
 
-For the current unqualified Profile 9 handoff, Native-v3 owns the exact verifier receipt allowlist. The
+For the current unqualified Profile 10 handoff, Native-v3 owns the exact verifier receipt allowlist. The
 database accepts only a mode-specific, non-dispositive evidence result; it never receives a
 `policyResult` or `effectiveDirective` from the verifier or source. `DIRECT_STATE_OWNED` and
 `AUTHORITATIVE_ASSERTION` use their separate mode-specific state-evaluation or qualified
@@ -117,18 +117,34 @@ complete promotion batch is preflighted against one state snapshot and commits a
 rows, events, state roots, and outbox rows in one transaction. A mixed APPLIED/HELD persisted image
 is independently rejected.
 
-This Profile 9 boundary remains synthetic/experimental and unqualified: `proofSuiteId=null`,
+This Profile 10 boundary remains synthetic/experimental and unqualified: `proofSuiteId=null`,
 `production_usable=false`, `activation=false`, no backend is selected or qualified, and the
-co-equal Native-v3 profile gates remain open. The accepted Rust protocol authority is commit
-`28f9f6765efd22aba2135df842a757f8ef4468a3` with tree
-`99b64f421ec5bd7679f9b44d06e04c745592a390`; the reproducible producer pin is 385,024 bytes with
-SHA-256 `A2D7EC789F5B8C88631A7D16DCEE6DFBDE6179886AB1F198D5C878228E131834`. The accepted C
-source-auth boundary is commit `acae7b46b555a88b8149e6601d4549955beb7075` with tree
-`8e59652d31bd1cf6b9f3dc582ea5d7278b5b9a73`; its canonical executable is 58,880 bytes with
-SHA-256 `855C089EF8E4B23FF4D63B453215FBA2DA31E6B377B49A90DABA08C18F3A1107`. Complete-path
-p95 and >=128-bit PQ qualification remain open; proof acceptance yields only an opaque scoped
-verification outcome and never `CLEAR`. State alone owns chronology, `policyResult`,
-`effectiveDirective`, exceptions, disposition, retries, and economic state.
+co-equal Native-v3 profile gates remain open. The state-issued statement is exactly 304 bytes,
+`BL-R100-STMT-V2\0`, encoding 2, with circuit fingerprint
+`a85a1a5f4ad3e9b777e5f9043f8b43f5c0018f8a6aab51359aedfe1264091c0c0f973c9d4e3bf9064383f0db9beb2606bad62b92677db0588006475236bd83cf`
+and Profile 10 fingerprint
+`8490652f6c69feb8ac1fa2a8edadf79a45632f67a73f0d67441321afbb7369c6d2bbe71302626fb4f92eb378b8b35fe24d09f11df55f4795ffd227d27ec52f9a`.
+The Profile 10 identifier is `BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1`,
+`PROFILE_VERSION=10`, and the source-auth profile is
+`BLIND-MLDSA87-SOURCE-AUTH-V1-R100-CDG-DIRECT-V1-UNQUALIFIED`. One proof covers exactly 100
+Queue operations; its 1,024 cryptographic repetitions and the Queue's 101-unit reservation are
+distinct accounting quantities. The Rust producer checkout is commit
+`626d7e200407b91bcd467b3d4973eae7dcab004c` with tree
+`f9631ad1dbc6a6524f8dc3b7d1fc1f38211aafc7`; its mechanical producer-content pin is 403,456 bytes
+with SHA-256 `CD16BA905E8C6B9E1135A38AFE29566D22FCB039EDAC5E5018505945F022399`, with no
+reproducibility or custody claim. The proof envelope is 16,294,348 bytes, the signed prefix is
+16,297,640 bytes, the ML-DSA-87 public key is 2,592 bytes, the signature is 4,627 bytes, and
+the signed source-auth frame is 16,302,267 bytes; the exact IPC is 16,308,435 bytes
+(6,168 state/config bytes plus the frame). These proof, signature, frame, statement, and IPC
+bytes are volatile. The C source-auth tracked boundary is commit
+`9bd4d8505361e472547fe59ef4c725530b606fcc` with tree
+`b023af5753c48ea992560c9b6aca8d4280f2b115`; the canonical state-side executable is
+`C:\Users\neers\Documents\Codex\2026-08-30\blind-zkbpp-c-cdg-direct-v1\work\build-profile10\Release\blind_source_auth_verify_process_v1.exe`,
+50,176 bytes with SHA-256
+`AE01234D32D622D5DCCC269AF4FFD094738865F91FF3440DE91C3A37B3522722`. Complete-path p95 and
+>=128-bit PQ qualification remain open; proof acceptance yields only an opaque scoped verification
+outcome and never `CLEAR`. State alone owns chronology, `policyResult`, `effectiveDirective`,
+exceptions, disposition, retries, and economic state.
 
 For a future qualified private batch, the service will:
 
@@ -159,7 +175,7 @@ system consumes an accepted clearance directive and later returns the actual out
 
 ## Current experimental application chain
 
-The current nonactivating Profile 9 candidate implementation separates the source/prover, optional aggregation,
+The current nonactivating Profile 10 candidate implementation separates the source/prover, optional aggregation,
 independent verifier, state-owned disposition, durable composition/outbox, and audit/recovery
 owners. Queue promotion uses a one-use volatile handoff; it never refetches proof bytes. The
 state owner, not the verifier, preserves `policyResult` separately from `effectiveDirective`, and

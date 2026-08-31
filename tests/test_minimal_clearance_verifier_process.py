@@ -868,6 +868,37 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         self.assertEqual(failure["code"], "stdout_cap")
         self.assertEqual(len(output["stdout"]), 33)
 
+    def test_stream_requires_empty_nonreparse_preprovisioned_workspace(self):
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name) / "workspace"
+            workspace.mkdir()
+            stale = workspace / "stale-entry"
+            stale.write_bytes(b"stale")
+            with self.assertRaisesRegex(process.VerifierProcessError, "verifier_workspace_not_empty"):
+                process.run_contained_verifier_stream(
+                    executable,
+                    (),
+                    b"frame",
+                    workspace=workspace,
+                    timeout_seconds=30.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
+            stale.unlink()
+            with patch.object(process, "_is_reparse_point", return_value=True):
+                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_workspace"):
+                    process.run_contained_verifier_stream(
+                        executable,
+                        (),
+                        b"frame",
+                        workspace=workspace,
+                        timeout_seconds=30.0,
+                        expected_executable_size_bytes=len(payload),
+                        expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    )
+
     @unittest.skipUnless(os.name == "nt", "Windows bounded child-output test")
     def test_real_child_output_overflow_is_terminated_without_output_files(self):
         with tempfile.TemporaryDirectory() as root_name:

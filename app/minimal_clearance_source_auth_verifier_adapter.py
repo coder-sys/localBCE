@@ -1,4 +1,4 @@
-"""Nonactivating Queue adapter shell for the signed Native Profile 9 source boundary.
+"""Nonactivating Queue adapter for the signed Native Profile 10 source boundary.
 
 The adapter owns only volatile frame assembly and the narrow process call.  It
 does not parse proof material, select a disposition, or persist source,
@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-import shutil
-import tempfile
+import threading
 from typing import Final, NoReturn
 
 from app.minimal_clearance_resource_limits import (
@@ -33,15 +32,20 @@ from app.minimal_clearance_verifier_process import (
 )
 
 
-SOURCE_AUTH_FRAME_BYTES: Final[int] = 24_853_179
+SOURCE_AUTH_PROOF_ENVELOPE_BYTES: Final[int] = 16_294_348
+SOURCE_AUTH_SIGNED_PREFIX_BYTES: Final[int] = 16_297_640
+SOURCE_AUTH_SIGNATURE_BYTES: Final[int] = 4_627
+SOURCE_AUTH_FRAME_BYTES: Final[int] = 16_302_267
 ML_DSA_87_PUBLIC_KEY_BYTES: Final[int] = 2_592
-SOURCE_AUTH_IPC_BYTES: Final[int] = 24_859_347
+SOURCE_AUTH_IPC_PREFIX_BYTES: Final[int] = 6_168
+SOURCE_AUTH_IPC_BYTES: Final[int] = 16_308_435
 SOURCE_AUTH_PROCESS_ARGUMENTS: Final[tuple[str, ...]] = ()
 SOURCE_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0
-SOURCE_AUTH_EXECUTABLE_SIZE_BYTES: Final[int] = 58_880
+SOURCE_AUTH_EXECUTABLE_SIZE_BYTES: Final[int] = 50_176
 SOURCE_AUTH_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
-    "855C089EF8E4B23FF4D63B453215FBA2DA31E6B377B49A90DABA08C18F3A1107"
+    "AE01234D32D622D5DCCC269AF4FFD094738865F91FF3440DE91C3A37B3522722"
 )
+_VERIFIER_CALL_LOCK = threading.Lock()
 
 
 def _raise_fixed(error: QueueHeldError | QueueIntegrityError) -> NoReturn:
@@ -59,29 +63,6 @@ def _wipe(value: bytearray) -> None:
     for index in range(len(value)):
         value[index] = 0
     value.clear()
-
-
-def _new_disposable_workspace(parent: Path) -> Path:
-    if not parent.is_dir() or parent.is_symlink():
-        _hold("verifier_workspace")
-    try:
-        return Path(tempfile.mkdtemp(prefix=".blind-verifier-", dir=str(parent)))
-    except (OSError, ValueError):
-        _hold("verifier_workspace")
-
-
-def _remove_disposable_workspace(workspace: Path) -> None:
-    try:
-        if workspace.is_symlink():
-            workspace.unlink()
-        elif workspace.is_dir():
-            shutil.rmtree(workspace)
-        elif workspace.exists():
-            workspace.unlink()
-    except FileNotFoundError:
-        return
-    except BaseException:
-        _hold("verifier_workspace_cleanup")
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +186,7 @@ def _validate_contained_result(result: object) -> ContainedVerifierResult:
 
 
 class MinimalClearanceSourceAuthVerifierAdapter:
-    """Direct Queue VerifierPort adapter for the future signed C process."""
+    """Direct Queue VerifierPort adapter for the unqualified Profile 10 C process."""
 
     __slots__ = ("_config",)
 
@@ -223,8 +204,10 @@ class MinimalClearanceSourceAuthVerifierAdapter:
             _hold("proof_handoff_stream")
         frame: bytearray | None = None
         ipc: bytearray | None = None
-        workspace: Path | None = None
+        locked = _VERIFIER_CALL_LOCK.acquire(blocking=False)
         try:
+            if not locked:
+                _hold("verifier_transport")
             frame = _read_exact_frame(stream)
             ipc = _build_ipc_input(
                 batch=issued_batch,
@@ -232,13 +215,12 @@ class MinimalClearanceSourceAuthVerifierAdapter:
                 public_key=self._config.ml_dsa_87_public_key,
                 frame=frame,
             )
-            workspace = _new_disposable_workspace(self._config.workspace)
             try:
                 contained = run_contained_verifier_stream(
                     self._config.executable_path,
                     SOURCE_AUTH_PROCESS_ARGUMENTS,
                     ipc,
-                    workspace=workspace,
+                    workspace=self._config.workspace,
                     timeout_seconds=self._config.timeout_seconds,
                     expected_executable_size_bytes=self._config.executable_size_bytes,
                     expected_executable_sha256=self._config.executable_sha256,
@@ -274,28 +256,36 @@ class MinimalClearanceSourceAuthVerifierAdapter:
                 )
             _hold("verifier_transport")
         finally:
-            for value in (frame, ipc):
-                if value is not None:
-                    _wipe(value)
-            stream.wipe()
-            if workspace is not None:
-                _remove_disposable_workspace(workspace)
-
-
-SourceAuthVerifierAdapterConfig = SourceAuthVerifierConfig
-SourceAuthVerifierAdapter = MinimalClearanceSourceAuthVerifierAdapter
+            cleanup_failed = False
+            try:
+                for value in (frame, ipc):
+                    if value is not None:
+                        _wipe(value)
+            except BaseException:
+                cleanup_failed = True
+            try:
+                stream.close()
+            except BaseException:
+                cleanup_failed = True
+            finally:
+                if locked:
+                    _VERIFIER_CALL_LOCK.release()
+            if cleanup_failed:
+                _hold("verifier_transport")
 
 
 __all__ = (
     "ML_DSA_87_PUBLIC_KEY_BYTES",
     "MinimalClearanceSourceAuthVerifierAdapter",
+    "SOURCE_AUTH_PROOF_ENVELOPE_BYTES",
+    "SOURCE_AUTH_SIGNED_PREFIX_BYTES",
+    "SOURCE_AUTH_SIGNATURE_BYTES",
     "SOURCE_AUTH_FRAME_BYTES",
     "SOURCE_AUTH_EXECUTABLE_SHA256",
     "SOURCE_AUTH_EXECUTABLE_SIZE_BYTES",
+    "SOURCE_AUTH_IPC_PREFIX_BYTES",
     "SOURCE_AUTH_IPC_BYTES",
     "SOURCE_AUTH_PROCESS_ARGUMENTS",
     "SOURCE_AUTH_TIMEOUT_SECONDS",
-    "SourceAuthVerifierAdapter",
-    "SourceAuthVerifierAdapterConfig",
     "SourceAuthVerifierConfig",
 )

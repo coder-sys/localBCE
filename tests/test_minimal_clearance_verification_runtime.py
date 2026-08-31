@@ -71,12 +71,14 @@ class _FailingVerifier:
 
 class RuntimeV10Tests(unittest.TestCase):
     def _source_auth_config(self, root: Path) -> SourceAuthVerifierConfig:
+        workspace = root / "verifier-workspace"
+        workspace.mkdir()
         return SourceAuthVerifierConfig(
             queue_config=QueueConfig("runtime-v10-source-auth", 100),
             executable_path=root / "blind-source-auth-v10.exe",
             executable_size_bytes=SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
             executable_sha256=SOURCE_AUTH_EXECUTABLE_SHA256,
-            workspace=root,
+            workspace=workspace,
             ml_dsa_87_public_key=bytes(2_592),
             timeout_seconds=30.0,
         )

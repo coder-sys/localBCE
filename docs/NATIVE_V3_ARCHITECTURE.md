@@ -45,42 +45,52 @@ pre-admission modes exist: `DIRECT_STATE_OWNED` for state-owned canonical non-PH
 `AUTHORITATIVE_ASSERTION` for an operation-scoped minimally disclosed derived assertion with a
 qualified PQ source signature, and `PRIVATE_ZK` for a proof over a hidden source-bound assertion.
 The verifier-owned control set selects one mode before admission; no runtime fallback or downgrade
-exists. The current Queue integration candidate is the nonactivating Profile 9 contract: it issues a state-generated ordered set of exactly 100 opaque 32-byte operation
+exists. The current Queue integration candidate is the nonactivating Profile 10 contract: it issues a state-generated ordered set of exactly 100 opaque 32-byte operation
 references and one shared immutable allowlisted statement before a volatile handoff; batch positions
 and the ordered batch root are state-computed before handoff.
 
-The inactive handoff boundary creates only an exact disposable verifier workspace for the volatile
-process call, which must start and end empty; it does not persist proof/source/signature/commitment,
-frame, statement, exact proof/source digest, PHI, temp/spill, log, acceptance, or process-output
-bytes. Any child-created workspace entry is a containment failure and is removed before the boundary
-returns. Authorized Queue/State DB, WAL, and commit writes remain limited to state-owned fields; an activated profile
-owns its exact proof envelope and complete-path resource profile under the contract below; there is no
-universal input-admission allowance. A consumed, failed, expired, restarted, or ambiguous handoff
-becomes `HELD` and requires a fresh state operation and fresh handoff. These controls do not close the
-profile theorem, malicious-verifier/QROM, grinding, SHA3, Lean, deployment, custody, or
-source-authorization gates.
+The inactive handoff boundary uses one pre-provisioned absolute empty non-reparse verifier directory
+for the volatile process call; the adapter does not create or remove that directory. The process
+runner owns the empty-before check, no-entry/no-spill containment, and cleanup of child-created
+entries while retaining the directory itself. The boundary does not persist proof/source/signature/
+commitment, frame, statement, exact proof/source digest, PHI, temp/spill, log, acceptance, or
+process-output bytes. Authorized Queue/State DB, WAL, and commit writes remain limited to state-owned
+fields; an activated profile owns its exact proof envelope and complete-path resource profile under
+the contract below; there is no universal input-admission allowance. A consumed, failed, expired,
+restarted, or ambiguous handoff becomes `HELD` and requires a fresh state operation and fresh handoff.
+These controls do not close the profile theorem, malicious-verifier/QROM, grinding, SHA3, Lean,
+deployment, custody, or source-authorization gates.
 
-### Profile 9 Queue integration candidate
+### Profile 10 Queue integration candidate
 
-The Queue checkout integrates the accepted, nonactivating Profile 9 statement/proof contract as an
-unqualified candidate. Its exact identifiers are `PROFILE_VERSION=9`,
-`PROFILE_ID=BLIND-ZKBPP-CUNRUH-RANGE100-V9`, the 304-byte `BL-R100-STMT-V2\0` statement with
+The Queue checkout integrates the accepted mechanical, nonactivating Profile 10 statement/proof
+boundary as an unqualified candidate. Its exact identifiers are `PROFILE_VERSION=10`,
+`BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1`, the 304-byte `BL-R100-STMT-V2\0` statement with
 encoding 2, circuit fingerprint
 `a85a1a5f4ad3e9b777e5f9043f8b43f5c0018f8a6aab51359aedfe1264091c0c0f973c9d4e3bf9064383f0db9beb2606bad62b92677db0588006475236bd83cf`,
-and profile fingerprint
-`609a2a9d66e3d2e3332e86de5be4720699c1ade901c62e6954715abd1cf64e197f315a32eeb972deadaedab4d4e8882e00ae9ea9ee23575cded3498429a802df`.
-The accepted Rust authority is commit `28f9f6765efd22aba2135df842a757f8ef4468a3` with tree
-`99b64f421ec5bd7679f9b44d06e04c745592a390`; its reproducible producer pin is 385,024 bytes with
-SHA-256 `A2D7EC789F5B8C88631A7D16DCEE6DFBDE6179886AB1F198D5C878228E131834`. Its 24,845,260-byte
-proof envelope and the 24,853,179-byte signed source-auth frame are volatile; the 24,859,347-byte
-IPC is also volatile. The accepted C source-auth boundary is commit
-`acae7b46b555a88b8149e6601d4549955beb7075` with tree `8e59652d31bd1cf6b9f3dc582ea5d7278b5b9a73`;
-its canonical executable is 58,880 bytes with SHA-256
-`855C089EF8E4B23FF4D63B453215FBA2DA31E6B377B49A90DABA08C18F3A1107`. The candidate remains
-unselected, unqualified, `proofSuiteId=null`, `production_usable=false`, and `activation=false`.
-Complete-path p95 and >=128-bit PQ qualification remain open. Proof acceptance yields only an opaque
-scoped verification outcome and never `CLEAR`; State alone owns chronology, `policyResult`,
-`effectiveDirective`, exceptions, disposition, retries, and economic state.
+and Profile 10 fingerprint
+`8490652f6c69feb8ac1fa2a8edadf79a45632f67a73f0d67441321afbb7369c6d2bbe71302626fb4f92eb378b8b35fe24d09f11df55f4795ffd227d27ec52f9a`.
+The source-auth profile is `BLIND-MLDSA87-SOURCE-AUTH-V1-R100-CDG-DIRECT-V1-UNQUALIFIED`.
+One proof covers exactly 100 Queue operations, distinct from its 1,024 cryptographic repetitions
+and the Queue's 101-unit reservation. The Rust producer checkout is commit
+`626d7e200407b91bcd467b3d4973eae7dcab004c` with tree
+`f9631ad1dbc6a6524f8dc3b7d1fc1f38211aafc7`; its mechanical producer-content pin is 403,456 bytes
+with SHA-256 `CD16BA905E8C6B9E1135A38AFE29566D22FCB039EDAC5E5018505945F022399`. This carries
+no reproducibility or custody claim. The proof envelope is 16,294,348 bytes, the signed prefix is
+16,297,640 bytes, the ML-DSA-87 public key is 2,592 bytes, the signature is 4,627 bytes, and
+the signed source-auth frame is 16,302,267 bytes. The exact IPC is 16,308,435 bytes
+(6,168 state/config bytes plus the frame). Proof, signature, frame, statement, and IPC bytes remain
+volatile. The C source-auth owner tracked boundary is commit
+`9bd4d8505361e472547fe59ef4c725530b606fcc` with tree
+`b023af5753c48ea992560c9b6aca8d4280f2b115`; the canonical state-side executable is
+`C:\Users\neers\Documents\Codex\2026-08-30\blind-zkbpp-c-cdg-direct-v1\work\build-profile10\Release\blind_source_auth_verify_process_v1.exe`,
+50,176 bytes with SHA-256
+`AE01234D32D622D5DCCC269AF4FFD094738865F91FF3440DE91C3A37B3522722`. The candidate remains
+The C process takes no arguments; exit 0 is accepted, exit 1 is a combined rejection, exit 2 is malformed/short/extra input, and exit 3 is an internal failure. Any other exit, timeout, nonempty output, containment failure, identity mismatch, cleanup failure, workspace change, or concurrent call fails closed to `HELD`.
+unselected, unqualified, `proofSuiteId=null`, `production_usable=false`, and
+`activation=false`. Complete-path p95 and >=128-bit PQ qualification remain open. Proof acceptance
+yields only an opaque scoped verification outcome and never `CLEAR`; State alone owns chronology,
+`policyResult`, `effectiveDirective`, exceptions, disposition, retries, and economic state.
 
 ## Source-auth and private representation contract
 
@@ -103,7 +113,8 @@ null/unactivated until the complete profile qualifies; `DIRECT_STATE_OWNED` and
 source-signature-as-truth claims, and claims that destroyed artifacts remain independently recoverable
 are rejected.
 
-The smallest current standardized, nonactivating `AUTHORITATIVE_ASSERTION` candidate is
+Separately from the Profile 10 private-proof/source-auth process boundary, the smallest current
+standardized, nonactivating `AUTHORITATIVE_ASSERTION` candidate is
 `sourceAuthProfileId=ML-DSA-44-PURE-HEDGED-V1`: FIPS 204 ML-DSA-44, pure rather than HashML-DSA,
 hedged signing, and fixed context/domain `BL/SOURCE-AUTH/ASSERTION/v1`. Approved key-generation RBG
 strength is at least 192 bits so the selected set retains its Category 2 claim. Its body is fixed-
@@ -172,7 +183,7 @@ this private-payment plug-in.
    `DIRECT_STATE_OWNED` returns the state-owned evaluation, `AUTHORITATIVE_ASSERTION` returns the
    qualified source-signature/assertion result, and `PRIVATE_ZK` returns proof acceptance plus the
    opaque ordered batch references and bounded shared assertion/profile/version/order/resource fields. For the
-   current unqualified Profile 9 private handoff, the independent verifier consumes the volatile stream once; producers,
+   current unqualified Profile 10 private handoff, the independent verifier consumes the volatile stream once; producers,
    transports, logs, and caller booleans have no acceptance authority, and the stream is never
    refetched. None of these results contains policyResult or effectiveDirective.
 4. The state owner separately resolves `PASS`/`MISSING`/`AMBIGUOUS`/`FAIL` plus state exception
