@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import errno
 import hashlib
 import json
 import os
@@ -28,8 +29,13 @@ MAX_RECEIPT_BYTES = 8192
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_NAMESPACE_ENTRIES = 8
 MAX_PARENT_ENTRIES = 4096
-LOCK_ATTEMPTS = 80
+LOCK_DEADLINE_SECONDS = 30.0
 LOCK_SLEEP_SECONDS = 0.01
+_LOCK_CONTENTION_ERRNOS = frozenset({
+    errno.EACCES,
+    errno.EAGAIN,
+    getattr(errno, "EWOULDBLOCK", errno.EAGAIN),
+})
 SCHEMA = "mirror-restore-pair-v1"
 SCHEMA_VERSION = 1
 SIDECARS = ("-wal", "-shm", "-journal")
@@ -319,22 +325,33 @@ def _lock_file_check(stream, target: Path, expected: bytes) -> None:
         _fail(RestorePublicationVerification, "restore-publication:lock")
 
 
+def _is_lock_contention(error: OSError) -> bool:
+    return getattr(error, "errno", None) in _LOCK_CONTENTION_ERRNOS
+
+
 def _lock_os(stream) -> None:
-    for attempt in range(LOCK_ATTEMPTS):
+    deadline = time.monotonic() + LOCK_DEADLINE_SECONDS
+    while True:
         try:
             stream.seek(0)
+        except OSError:
+            _fail(RestorePublicationError, "restore-publication:lock")
+        try:
             if os.name == "nt":
                 import msvcrt
                 msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
                 fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return
-        except (OSError, PermissionError):
-            if attempt + 1 == LOCK_ATTEMPTS:
+        except OSError as error:
+            if not _is_lock_contention(error):
+                _fail(RestorePublicationError, "restore-publication:lock")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 _fail(RestorePublicationError, "restore-publication:lock-busy")
-            time.sleep(LOCK_SLEEP_SECONDS)
-    _fail(RestorePublicationError, "restore-publication:lock-busy")
+            time.sleep(min(LOCK_SLEEP_SECONDS, remaining))
+            continue
+        return
 
 
 def _unlock_os(stream) -> None:

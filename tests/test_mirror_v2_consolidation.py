@@ -1931,6 +1931,214 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertEqual(image_b, target_b.read_bytes())
         self.assertEqual([], list(self.root.glob(".mirror-restore-pair-v1-*")))
 
+    def test_restore_publication_contention_waits_past_legacy_window_and_converges(self) -> None:
+        target_a = self.root / "contention-a.db"
+        target_b = self.root / "contention-b.db"
+        image_a = b"contention-image-a"
+        image_b = b"contention-image-b"
+        expected_a = {"database_id": "a", "head_root": "9" * 128}
+        expected_b = {"database_id": "b", "head_root": "a" * 128}
+        operation = _hex("pair-contention-deadline")
+        holder_locked = threading.Event()
+        release_holder = threading.Event()
+        crossed_legacy_window = threading.Event()
+        clock_lock = threading.Lock()
+        clock = [100.0]
+        sleep_calls = [0]
+        results: list[restore_publication.PublicationPairResultV1] = []
+        errors: list[BaseException] = []
+
+        def fake_monotonic() -> float:
+            with clock_lock:
+                return clock[0]
+
+        def fake_sleep(seconds: float) -> None:
+            with clock_lock:
+                clock[0] += seconds
+                sleep_calls[0] += 1
+                reached = sleep_calls[0] >= 81
+                if reached:
+                    crossed_legacy_window.set()
+            if reached:
+                if not release_holder.is_set():
+                    release_holder.wait(timeout=5)
+                threading.Event().wait(0.001)
+            else:
+                threading.Event().wait(0)
+
+        def holder_ingress(raw: bytes) -> dict[str, object]:
+            holder_locked.set()
+            if not release_holder.wait(timeout=5):
+                raise AssertionError("contention holder was not released")
+            return dict(expected_a)
+
+        def publish_holder() -> None:
+            try:
+                results.append(restore_publication.publish_pair_create_only(
+                    ingress_target=target_a,
+                    core_target=target_b,
+                    ingress_image=image_a,
+                    core_image=image_b,
+                    pair_operation_id=operation,
+                    ingress_expected=expected_a,
+                    core_expected=expected_b,
+                    verify_ingress=holder_ingress,
+                    verify_core=lambda raw, exact_ingress: dict(expected_b),
+                ))
+            except BaseException as error:
+                errors.append(error)
+
+        def publish_contender() -> None:
+            try:
+                results.append(restore_publication.publish_pair_create_only(
+                    ingress_target=target_b,
+                    core_target=target_a,
+                    ingress_image=image_b,
+                    core_image=image_a,
+                    pair_operation_id=operation,
+                    ingress_expected=expected_b,
+                    core_expected=expected_a,
+                    verify_ingress=lambda raw: dict(expected_b),
+                    verify_core=lambda raw, exact_ingress: dict(expected_a),
+                ))
+            except BaseException as error:
+                errors.append(error)
+
+        holder = threading.Thread(target=publish_holder)
+        contender = threading.Thread(target=publish_contender)
+        holder_started = False
+        contender_started = False
+        fake_time = mock.Mock(monotonic=fake_monotonic, sleep=fake_sleep)
+        with mock.patch.object(restore_publication, "time", fake_time):
+            holder.start()
+            holder_started = True
+            try:
+                self.assertTrue(holder_locked.wait(timeout=5))
+                contender.start()
+                contender_started = True
+                self.assertTrue(crossed_legacy_window.wait(timeout=5))
+            finally:
+                release_holder.set()
+                if holder_started:
+                    holder.join(timeout=5)
+                if contender_started:
+                    contender.join(timeout=5)
+
+        self.assertFalse(holder.is_alive() or contender.is_alive())
+        self.assertEqual([], errors)
+        self.assertEqual(2, len(results))
+        self.assertGreaterEqual(sleep_calls[0], 81)
+        self.assertGreaterEqual(clock[0] - 100.0, 0.81)
+        self.assertEqual(image_a, target_a.read_bytes())
+        self.assertEqual(image_b, target_b.read_bytes())
+        self.assertEqual([], list(self.root.glob(".mirror-restore-pair-v1-*")))
+
+    def test_restore_publication_short_deadline_lock_busy_without_target_mutation(self) -> None:
+        target_a = self.root / "short-deadline-a.db"
+        target_b = self.root / "short-deadline-b.db"
+        image_a = b"short-deadline-image-a"
+        image_b = b"short-deadline-image-b"
+        expected_a = {"database_id": "a", "head_root": "b" * 128}
+        expected_b = {"database_id": "b", "head_root": "c" * 128}
+        operation = _hex("pair-short-deadline")
+        holder_locked = threading.Event()
+        release_holder = threading.Event()
+        clock_lock = threading.Lock()
+        clock = [200.0]
+        sleep_calls = [0]
+        holder_errors: list[BaseException] = []
+        contender_errors: list[BaseException] = []
+        before_targets = tuple((path.exists(), path.read_bytes() if path.exists() else None) for path in (target_a, target_b))
+        before_namespaces = tuple(sorted(path.name for path in self.root.glob(".mirror-restore-pair-v1-*")))
+        failed_targets: tuple[tuple[bool, bytes | None], ...] | None = None
+        failed_namespaces: tuple[str, ...] | None = None
+
+        def fake_monotonic() -> float:
+            with clock_lock:
+                return clock[0]
+
+        def fake_sleep(seconds: float) -> None:
+            with clock_lock:
+                clock[0] += seconds
+                sleep_calls[0] += 1
+            threading.Event().wait(0)
+
+        def holder_ingress(raw: bytes) -> dict[str, object]:
+            holder_locked.set()
+            if not release_holder.wait(timeout=5):
+                raise AssertionError("short-deadline holder was not released")
+            return dict(expected_a)
+
+        def publish_holder() -> None:
+            try:
+                restore_publication.publish_pair_create_only(
+                    ingress_target=target_a,
+                    core_target=target_b,
+                    ingress_image=image_a,
+                    core_image=image_b,
+                    pair_operation_id=operation,
+                    ingress_expected=expected_a,
+                    core_expected=expected_b,
+                    verify_ingress=holder_ingress,
+                    verify_core=lambda raw, exact_ingress: dict(expected_b),
+                )
+            except BaseException as error:
+                holder_errors.append(error)
+
+        def unexpected_contender_verifier(*args: object) -> dict[str, object]:
+            raise AssertionError("contender verifier ran before lock-busy")
+
+        def publish_contender() -> None:
+            try:
+                restore_publication.publish_pair_create_only(
+                    ingress_target=target_b,
+                    core_target=target_a,
+                    ingress_image=image_b,
+                    core_image=image_a,
+                    pair_operation_id=operation,
+                    ingress_expected=expected_b,
+                    core_expected=expected_a,
+                    verify_ingress=unexpected_contender_verifier,
+                    verify_core=unexpected_contender_verifier,
+                )
+            except BaseException as error:
+                contender_errors.append(error)
+
+        holder = threading.Thread(target=publish_holder)
+        contender = threading.Thread(target=publish_contender)
+        contender_started = False
+        fake_time = mock.Mock(monotonic=fake_monotonic, sleep=fake_sleep)
+        holder.start()
+        try:
+            self.assertTrue(holder_locked.wait(timeout=5))
+            with mock.patch.object(restore_publication, "time", fake_time), mock.patch.object(
+                restore_publication, "LOCK_DEADLINE_SECONDS", 0.05
+            ):
+                contender.start()
+                contender_started = True
+                contender.join(timeout=2)
+            failed_targets = tuple((path.exists(), path.read_bytes() if path.exists() else None) for path in (target_a, target_b))
+            failed_namespaces = tuple(sorted(path.name for path in self.root.glob(".mirror-restore-pair-v1-*")))
+        finally:
+            release_holder.set()
+            holder.join(timeout=5)
+            if contender_started:
+                contender.join(timeout=5)
+
+        self.assertFalse(holder.is_alive() or contender.is_alive())
+        self.assertEqual([], holder_errors)
+        self.assertEqual(1, len(contender_errors))
+        self.assertIs(type(contender_errors[0]), restore_publication.RestorePublicationError)
+        self.assertEqual("restore-publication:lock-busy", str(contender_errors[0]))
+        self.assertGreaterEqual(sleep_calls[0], 5)
+        self.assertLessEqual(sleep_calls[0], 6)
+        self.assertAlmostEqual(0.05, clock[0] - 200.0, places=9)
+        self.assertEqual(before_targets, failed_targets)
+        self.assertEqual(before_namespaces, failed_namespaces)
+        self.assertEqual(image_a, target_a.read_bytes())
+        self.assertEqual(image_b, target_b.read_bytes())
+        self.assertEqual([], list(self.root.glob(".mirror-restore-pair-v1-*")))
+
     def test_recovery_fault_after_first_publish_keeps_target_and_revocation_closes_retry(self) -> None:
         point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
         target_i = self.root / "revoked-after-link-ingress.db"
