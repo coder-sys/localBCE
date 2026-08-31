@@ -119,34 +119,13 @@ complete promotion batch is preflighted against one state snapshot and commits a
 rows, events, state roots, and outbox rows in one transaction. A mixed APPLIED/HELD persisted image
 is independently rejected.
 
-This Profile 10 boundary remains synthetic/experimental and unqualified: `proofSuiteId=null`,
-`production_usable=false`, `activation=false`, no backend is selected or qualified, and the
-co-equal Native-v3 profile gates remain open. The state-issued statement is exactly 304 bytes,
-`BL-R100-STMT-V2\0`, encoding 2, with circuit fingerprint
-`a85a1a5f4ad3e9b777e5f9043f8b43f5c0018f8a6aab51359aedfe1264091c0c0f973c9d4e3bf9064383f0db9beb2606bad62b92677db0588006475236bd83cf`
-and Profile 10 fingerprint
-`8490652f6c69feb8ac1fa2a8edadf79a45632f67a73f0d67441321afbb7369c6d2bbe71302626fb4f92eb378b8b35fe24d09f11df55f4795ffd227d27ec52f9a`.
-The Profile 10 identifier is `BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1`,
-`PROFILE_VERSION=10`, and the source-auth profile is
-`BLIND-MLDSA87-SOURCE-AUTH-V1-R100-CDG-DIRECT-V1-UNQUALIFIED`. One proof covers exactly 100
-Queue operations; its 1,024 cryptographic repetitions and the Queue's 101-unit reservation are
-distinct accounting quantities. The Rust producer checkout is commit
-`626d7e200407b91bcd467b3d4973eae7dcab004c` with tree
-`f9631ad1dbc6a6524f8dc3b7d1fc1f38211aafc7`; its mechanical producer-content pin is 403,456 bytes
-with SHA-256 `CD16BA905E8C6B9E1135A38AFE29566D22FCB039EDAC5E5018505945F022399`, with no
-reproducibility or custody claim. The proof envelope is 16,294,348 bytes, the signed prefix is
-16,297,640 bytes, the ML-DSA-87 public key is 2,592 bytes, the signature is 4,627 bytes, and
-the signed source-auth frame is 16,302,267 bytes; the exact IPC is 16,308,435 bytes
-(6,168 state/config bytes plus the frame). These proof, signature, frame, statement, and IPC
-bytes are volatile. The C source-auth tracked boundary is commit
-`9bd4d8505361e472547fe59ef4c725530b606fcc` with tree
-`b023af5753c48ea992560c9b6aca8d4280f2b115`; the canonical state-side executable is
-`C:\Users\neers\Documents\Codex\2026-08-30\blind-zkbpp-c-cdg-direct-v1\work\build-profile10\Release\blind_source_auth_verify_process_v1.exe`,
-50,176 bytes with SHA-256
-`AE01234D32D622D5DCCC269AF4FFD094738865F91FF3440DE91C3A37B3522722`. Complete-path p95 and
->=128-bit PQ qualification remain open; proof acceptance yields only an opaque scoped verification
-outcome and never `CLEAR`. State alone owns chronology, `policyResult`, `effectiveDirective`,
-exceptions, disposition, retries, and economic state.
+The current Profile 10 Queue/Native proof boundary is mechanically interoperable at the handoff but
+cryptographically unqualified: `proofSuiteId=null`, `production_usable=false`,
+`activation=false`, no backend is selected or qualified, and the co-equal Native-v3 profile gates
+remain open. Native-v3 is the sole authority for the exact current Profile 10 identity, statement
+and fingerprints, artifact pins, and envelope/frame/IPC sizes. Proof acceptance yields only an opaque
+scoped verification outcome and never `CLEAR`; State alone owns chronology, `policyResult`,
+`effectiveDirective`, exceptions, disposition, retries, and economic state.
 
 For a future qualified private batch, the service will:
 

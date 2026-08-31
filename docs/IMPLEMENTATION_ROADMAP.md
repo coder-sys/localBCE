@@ -75,30 +75,16 @@ generated vector alone is not deployed formal-verification credit.
 ## Current private-proof blocker
 
 The current Queue/Proof Handoff integration candidate is Profile 10 and defers to
-`docs/DATABASE_ZK_ARCHITECTURE.md`; this roadmap records only dependency status. Profile 9 and
-earlier profiles are rejected with no fallback, compatibility reader, relabeling, or dual
-acceptance. The candidate is not a selected or qualified private-proof backend, and its
-clean-break, state-owned, non-dispositive, fail-closed semantics do not establish an active
-backend, qualification, Lean completion, or product-throughput claim. Its exact identifier is
-`BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1` (`PROFILE_VERSION=10`) with source-auth profile
-`BLIND-MLDSA87-SOURCE-AUTH-V1-R100-CDG-DIRECT-V1-UNQUALIFIED`, the 304-byte
-`BL-R100-STMT-V2\0` statement using encoding 2, circuit fingerprint
-`a85a1a5f4ad3e9b777e5f9043f8b43f5c0018f8a6aab51359aedfe1264091c0c0f973c9d4e3bf9064383f0db9beb2606bad62b92677db0588006475236bd83cf`,
-and Profile 10 fingerprint
-`8490652f6c69feb8ac1fa2a8edadf79a45632f67a73f0d67441321afbb7369c6d2bbe71302626fb4f92eb378b8b35fe24d09f11df55f4795ffd227d27ec52f9a`.
-The exact proof envelope/frame/IPC sizes are 16,294,348 / 16,302,267 / 16,308,435 bytes;
-proof, signature, frame, statement, digest, and IPC bytes remain volatile; their persistence, along with PHI/temp/spill/log persistence, is forbidden. Authorized DB/WAL/commit writes remain state-owned. The Rust protocol
-authority is commit `626d7e200407b91bcd467b3d4973eae7dcab004c` with tree
-`f9631ad1dbc6a6524f8dc3b7d1fc1f38211aafc7` and a mechanical 403,456-byte producer-content pin
-`CD16BA905E8C6B9E1135A38AFE29566D22FCB039EDAC5E5018505945F022399`; this carries no
-reproducibility or custody claim. The C source-auth tracked boundary is commit
-`9bd4d8505361e472547fe59ef4c725530b606fcc` with tree
-`b023af5753c48ea992560c9b6aca8d4280f2b115`; the canonical executable size/SHA is
-50,176 / `AE01234D32D622D5DCCC269AF4FFD094738865F91FF3440DE91C3A37B3522722`.
-Complete-path p95 and >=128-bit PQ qualification remain open. The candidate remains
-`proofSuiteId=null`, `production_usable=false`, and `activation=false`; proof acceptance yields only
-an opaque verification outcome and never `CLEAR`. State alone owns chronology, `policyResult`,
-`effectiveDirective`, exceptions, disposition, retries, economic state, and outbox.
+`docs/DATABASE_ZK_ARCHITECTURE.md` for transaction semantics and
+`docs/NATIVE_V3_ARCHITECTURE.md` for exact profile identity, mechanical pins, and qualification
+gates; this roadmap records only dependency status. Profile 9 and earlier profiles are rejected
+with no fallback, compatibility reader, relabeling, or dual acceptance. The current Profile 10
+Queue/Native proof boundary is mechanically interoperable but cryptographically unqualified; it is
+not a selected private-proof backend, and its clean-break, state-owned, non-dispositive, fail-closed
+semantics do not establish an active backend, qualification, Lean completion, or product-throughput
+claim. It remains `proofSuiteId=null`, `production_usable=false`, and `activation=false`; proof
+acceptance yields only an opaque verification outcome and never `CLEAR`. State alone owns chronology,
+`policyResult`, `effectiveDirective`, exceptions, disposition, retries, economic state, and outbox.
 
 Before selecting or implementing a private backend, the complete profile must close the exact
 source-binding, privacy/setup, PQ, acceptance-accounting, theorem-composition, zero-PHI deployment,

@@ -65,7 +65,7 @@ deployment, custody, or source-authorization gates.
 
 ### Profile 10 Queue integration candidate
 
-The Queue checkout integrates the accepted mechanical, nonactivating Profile 10 statement/proof
+The Queue checkout integrates the mechanically interoperable, nonactivating Profile 10 statement/proof
 boundary as an unqualified candidate. Its exact identifiers are `PROFILE_VERSION=10`,
 `BLIND-ZKBPP-RANGE100-CDG-DIRECT-V1`, the 304-byte `BL-R100-STMT-V2\0` statement with
 encoding 2, circuit fingerprint
@@ -88,11 +88,14 @@ volatile. The C source-auth owner tracked boundary is commit
 `C:\Users\neers\Documents\Codex\2026-08-30\blind-zkbpp-c-cdg-direct-v1\work\build-profile10\Release\blind_source_auth_verify_process_v1.exe`,
 50,176 bytes with SHA-256
 `AE01234D32D622D5DCCC269AF4FFD094738865F91FF3440DE91C3A37B3522722`. The candidate remains
-The C process takes no arguments; exit 0 is accepted, exit 1 is a combined rejection, exit 2 is malformed/short/extra input, and exit 3 is an internal failure. Any other exit, timeout, nonempty output, containment failure, identity mismatch, cleanup failure, workspace change, or concurrent call fails closed to `HELD`.
-unselected, unqualified, `proofSuiteId=null`, `production_usable=false`, and
-`activation=false`. Complete-path p95 and >=128-bit PQ qualification remain open. Proof acceptance
-yields only an opaque scoped verification outcome and never `CLEAR`; State alone owns chronology,
-`policyResult`, `effectiveDirective`, exceptions, disposition, retries, and economic state.
+unselected, unqualified, `proofSuiteId=null`, `production_usable=false`, and `activation=false`.
+The C process takes no arguments; exit 0 is accepted, exit 1 is a combined rejection, exit 2 is
+malformed/short/extra input, and exit 3 is an internal failure. Any other exit, timeout, nonempty
+output, containment failure, identity mismatch, cleanup failure, workspace change, or concurrent
+call fails closed to `HELD`. Complete-path p95 and >=128-bit PQ qualification remain open. Proof
+acceptance yields only an opaque scoped verification outcome and never `CLEAR`; State alone owns
+chronology, `policyResult`, `effectiveDirective`, exceptions, disposition, retries, and economic
+state.
 
 ## Source-auth and private representation contract
 
