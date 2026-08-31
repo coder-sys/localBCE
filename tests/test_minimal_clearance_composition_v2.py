@@ -1,4 +1,3 @@
-import io
 import sqlite3
 import tempfile
 import unittest
@@ -104,7 +103,7 @@ class CompositionV10Tests(unittest.TestCase):
     def _accepted(self):
         template = OperationTemplate("composition-assertion", 1, self.queue_config.profile_version, self.clock.now - 100, self.clock.now + 60_000)
         batch = self.queue.issue_batch(template=template)
-        self.queue.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"volatile-proof"), declared_length=14)
+        self.queue.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"volatile-proof")))
         result = self.queue._process_one_batch(verifier=_Verifier(self.queue_config), state_disposition_port=_Port())
         self.assertEqual((result.status, result.accepted_count), ("VERIFIED", 100))
         return batch

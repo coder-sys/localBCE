@@ -19,7 +19,7 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
-from typing import Any, BinaryIO, Callable, Final, Mapping, NoReturn, Protocol
+from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
 
 from app.minimal_clearance_resource_limits import (
     ACTIVE_PROCESS_LIMIT,
@@ -155,7 +155,7 @@ _ALLOWED_CODES: Final[frozenset[str]] = frozenset({
     "verifier_result_shape", "verifier_result_flags", "verifier_key_epoch",
     "verifier_result_code", "proof_handoff_stream", "proof_handoff_length",
     "proof_handoff_oversize", "proof_handoff_empty", "proof_handoff_closed",
-    "proof_handoff_bytes", "batch_binding", "batch_unknown", "queue_capacity",
+    "proof_handoff_bytes", "proof_handoff_used", "batch_binding", "batch_unknown", "queue_capacity",
     "computational_budget_exhausted", "queue_database_bounds", "queue_schema_unsupported",
     "queue_profile_mismatch", "queue_config_encoding", "queue_config_binding",
     "queue_integrity_failed", "startup_recovery", "runtime_startup",
@@ -496,27 +496,27 @@ def _generate_operation_refs() -> tuple[bytes, ...]:
 
 
 class VolatileProofHandoff:
-    """Single-use readable stream with bounded mutable staging."""
+    """Single-use, prebuffered handoff with bounded, memory-owned bytes."""
 
-    __slots__ = ("_stream", "declared_length", "_used", "_closed", "_eof", "_total", "_staging")
+    __slots__ = ("_buffer", "_offset", "_used", "_closed", "_eof", "_total")
 
-    def __init__(self, stream: BinaryIO, *, declared_length: int | None = None) -> None:
-        if not hasattr(stream, "read") or not callable(stream.read):
+    def __init__(self, payload: bytearray) -> None:
+        if type(payload) is not bytearray:
             _raise_fixed(QueueHeldError("proof_handoff_stream"))
-        if declared_length is not None and (type(declared_length) is not int or declared_length < 0):
-            _raise_fixed(QueueHeldError("proof_handoff_length"))
-        if declared_length is not None and declared_length > ADMISSION_CAP_BYTES:
-            close = getattr(stream, "close", None)
-            if callable(close):
-                close()
+        if not payload:
+            _raise_fixed(QueueHeldError("proof_handoff_empty"))
+        if len(payload) > ADMISSION_CAP_BYTES:
             _raise_fixed(QueueHeldError("proof_handoff_oversize"))
-        self._stream = stream
-        self.declared_length = declared_length
+        owned = bytearray(payload)
+        for index in range(len(payload)):
+            payload[index] = 0
+        payload.clear()
+        self._buffer = owned
+        self._offset = 0
         self._used = False
         self._closed = False
         self._eof = False
         self._total = 0
-        self._staging = bytearray()
 
     @property
     def total_read(self) -> int:
@@ -551,52 +551,39 @@ class VolatileProofHandoff:
             _raise_fixed(QueueHeldError("proof_handoff_bytes"))
         if size == 0:
             return b""
-        remaining = ADMISSION_CAP_BYTES - self._total
-        request = remaining + 1 if size < 0 else min(size, remaining + 1)
-        try:
-            value = self._stream.read(request)
-        except BaseException:
-            _raise_fixed(QueueRetryableError("verifier_transport"))
-        if type(value) is not bytes:
-            _raise_fixed(QueueHeldError("proof_handoff_bytes"))
-        if len(value) > remaining:
-            _raise_fixed(QueueHeldError("proof_handoff_oversize"))
-        if self.declared_length is not None and self._total + len(value) > self.declared_length:
-            _raise_fixed(QueueHeldError("proof_handoff_length"))
-        if not value:
+        remaining = len(self._buffer) - self._offset
+        if remaining <= 0:
             self._eof = True
-            if self._total == 0:
-                _raise_fixed(QueueHeldError("proof_handoff_empty"))
-            if self.declared_length is not None and self._total != self.declared_length:
-                _raise_fixed(QueueHeldError("proof_handoff_length"))
             return b""
-        self._total += len(value)
-        retained = value[-64 * 1024:]
-        if len(self._staging) + len(retained) > 64 * 1024:
-            del self._staging[:len(self._staging) + len(retained) - 64 * 1024]
-        self._staging.extend(retained)
+        count = remaining if size < 0 else min(size, remaining)
+        start = self._offset
+        self._offset += count
+        self._total += count
+        value = bytes(memoryview(self._buffer)[start:self._offset])
         return value
 
     def drain(self) -> None:
         self._assert_open()
         while not self._eof:
-            self.read(min(1 << 20, ADMISSION_CAP_BYTES - self._total + 1))
+            remaining = len(self._buffer) - self._offset
+            self.read(min(1 << 20, remaining if remaining > 0 else 1))
+
+    def _wipe_buffer(self) -> None:
+        for index in range(len(self._buffer)):
+            self._buffer[index] = 0
+        self._buffer.clear()
+        self._offset = 0
+        self._eof = True
 
     def wipe(self) -> None:
-        for index in range(len(self._staging)):
-            self._staging[index] = 0
-        self._staging.clear()
+        self._used = True
+        self._wipe_buffer()
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        try:
-            close = getattr(self._stream, "close", None)
-            if callable(close):
-                close()
-        finally:
-            self.wipe()
+        self._wipe_buffer()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1161,10 +1148,6 @@ class _VerificationQueueStore:
                 raise
         return batch
 
-    @staticmethod
-    def _coerce_handoff(stream: BinaryIO | VolatileProofHandoff, declared_length: int | None) -> VolatileProofHandoff:
-        return stream if isinstance(stream, VolatileProofHandoff) else VolatileProofHandoff(stream, declared_length=declared_length)
-
     def _close_handoff_locked(self, batch_id: bytes) -> None:
         handoff = self._handoffs.pop(batch_id, None)
         if handoff is not None:
@@ -1194,16 +1177,21 @@ class _VerificationQueueStore:
         connection.execute("UPDATE queue_metadata SET nonterminal_count=?,live_lease_count=0 WHERE id=1", (max(0, int(meta[15]) - 1),))
         return True
 
-    def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: BinaryIO | VolatileProofHandoff, declared_length: int | None = None) -> IssuedVerificationBatch:
+    def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: VolatileProofHandoff) -> IssuedVerificationBatch:
         self._assert_owner()
+        if type(proof_stream) is not VolatileProofHandoff:
+            _raise_fixed(QueueHeldError("proof_handoff_stream"))
+        handoff = proof_stream
+        if handoff.closed:
+            handoff.close()
+            _raise_fixed(QueueHeldError("proof_handoff_closed"))
+        if handoff.used:
+            handoff.close()
+            _raise_fixed(QueueHeldError("proof_handoff_used"))
         if type(issued_batch) is not IssuedVerificationBatch:
-            close = getattr(proof_stream, "close", None)
-            if callable(close):
-                close()
+            handoff.close()
             _raise_fixed(QueueConflictError("batch_required"))
-        handoff = self._coerce_handoff(proof_stream, declared_length)
         stored = False
-        committed = False
         try:
             with closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -1215,7 +1203,6 @@ class _VerificationQueueStore:
                     if durable != issued_batch or _batch_identity_digest(durable, self.config) != durable.identity_digest:
                         held = self._hold_batch_locked(connection, batch_id=issued_batch.batch_id, now=int(self.clock.now_ms()), code="batch_binding")
                         connection.commit()
-                        committed = True
                         if held:
                             self._close_handoff_locked(issued_batch.batch_id)
                             handoff.close()
@@ -1224,7 +1211,6 @@ class _VerificationQueueStore:
                     if str(row[11]) != "AWAITING_HANDOFF":
                         held = self._hold_batch_locked(connection, batch_id=issued_batch.batch_id, now=now, code="fresh_handoff_required")
                         connection.commit()
-                        committed = True
                         if held:
                             self._close_handoff_locked(issued_batch.batch_id)
                             handoff.close()
@@ -1232,7 +1218,6 @@ class _VerificationQueueStore:
                     if issued_batch.template.valid_from_ms > now or issued_batch.template.valid_until_ms <= now:
                         held = self._hold_batch_locked(connection, batch_id=issued_batch.batch_id, now=now, code="validity_expired")
                         connection.commit()
-                        committed = True
                         if held:
                             self._close_handoff_locked(issued_batch.batch_id)
                             handoff.close()
@@ -1242,13 +1227,15 @@ class _VerificationQueueStore:
                     connection.execute("UPDATE queue_batches SET status='QUEUED',next_eligible_ms=?,updated_ms=? WHERE batch_id=?", (now, now, issued_batch.batch_id))
                     self._append_event(connection, kind="HANDOFF_SUBMITTED", batch_id=issued_batch.batch_id, status="QUEUED", error_code=None, attempt=0, at_ms=now, extra={"member_count": RANGE100_COUNT})
                     connection.commit()
-                    committed = True
                 except BaseException:
                     connection.rollback()
                     raise
         except BaseException:
-            # An unconsumed handoff remains available across a failed SQL/COMMIT.
-            if not stored:
+            # A failed submission never leaves a volatile handoff attached to a
+            # rolled-back or otherwise uncommitted queue state.
+            if stored:
+                self._close_handoff_locked(issued_batch.batch_id)
+            else:
                 handoff.close()
             raise
         return issued_batch
@@ -1281,7 +1268,8 @@ class _VerificationQueueStore:
             except BaseException:
                 connection.rollback()
                 raise
-        self._handoffs.clear()
+        for batch_id in tuple(self._handoffs):
+            self._close_handoff_locked(batch_id)
         return recovered
 
     def _claim_next_batch(self) -> _QueueWorkItem | None:

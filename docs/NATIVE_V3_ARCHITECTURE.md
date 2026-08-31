@@ -49,7 +49,9 @@ exists. The current Queue integration candidate is the nonactivating Profile 10 
 references and one shared immutable allowlisted statement before a volatile handoff; batch positions
 and the ordered batch root are state-computed before handoff.
 
-The inactive handoff boundary uses one pre-provisioned absolute empty non-reparse verifier directory
+The Queue handoff accepts only an exact mutable `bytearray`, copies it into a bounded memory-owned
+single-use buffer, clears the caller buffer after transfer, and invokes no caller-owned read or
+close callback. The inactive handoff boundary uses one pre-provisioned absolute empty non-reparse verifier directory
 for the volatile process call; the adapter does not create or remove that directory. The process
 runner owns the empty-before check, no-entry/no-spill containment, and cleanup of child-created
 entries while retaining the directory itself. The boundary does not persist proof/source/signature/
@@ -140,8 +142,8 @@ Current experimental Python/OS handling does not establish destruction. Activati
 the deployed process/module/OS configuration and adversarial evidence show that raw proof,
 signature/body, source material, credentials, paths, stdout/stderr, and linkable fingerprints cannot
 enter or remain recoverable from crash dumps, swap/pagefile, temp files, backups, telemetry, support
-captures, or AI. Mutable staging wipes are best effort; this does not falsely claim byte-zeroization
-that Python can prove.
+captures, or AI. The Queue-owned handoff buffer is wiped in full on close; this does not falsely
+claim byte-zeroization that Python can prove.
 
 The strict public handoff allowlist is the one-time random ordered set of 100 operation references
 and batch challenge, shared assertion and profile versions, bounded validity window, ordered batch
@@ -183,8 +185,9 @@ this private-payment plug-in.
    `DIRECT_STATE_OWNED` returns the state-owned evaluation, `AUTHORITATIVE_ASSERTION` returns the
    qualified source-signature/assertion result, and `PRIVATE_ZK` returns proof acceptance plus the
    opaque ordered batch references and bounded shared assertion/profile/version/order/resource fields. For the
-   current unqualified Profile 10 private handoff, the independent verifier consumes the volatile stream once; producers,
-   transports, logs, and caller booleans have no acceptance authority, and the stream is never
+   current unqualified Profile 10 private handoff, the independent verifier consumes the sealed
+   memory-owned handoff once; producers, transports, logs, and caller booleans have no acceptance
+   authority, and the handoff is never
    refetched. None of these results contains policyResult or effectiveDirective.
 4. The state owner separately resolves `PASS`/`MISSING`/`AMBIGUOUS`/`FAIL` plus state exception
    approval into exactly the five directives, then atomically applies the ordered state chain and

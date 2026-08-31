@@ -80,19 +80,21 @@ state owner -> opaque-reference/directive outbox and ACK -> audit/recovery. Admi
 the state first issues an immutable allowlisted shared template, exactly 100 ordered opaque
 references, and one complete batch statement in `AWAITING_HANDOFF`; it computes one domain-separated
 ordered root from the exact references and shared template. Only after issuance may a caller submit
-the single-use readable binary stream for that exact ordered batch, transitioning it to `QUEUED`. The verifier receives that stream and the complete issued
-statement, never an unrelated caller/reference argument. The verifier receives a
-readable binary stream through one volatile single-use handoff. Native-v3 owns each selected
+one exact mutable bytearray for that exact ordered batch; Queue copies it into a bounded,
+memory-owned single-use handoff, clears the caller buffer, and transitions the batch to `QUEUED`.
+The verifier receives that sealed handoff and the complete issued statement, never an unrelated
+caller/reference argument. Native-v3 owns each selected
 profile's envelope and process-tree safety constraints; there is no universal input-admission
 allowance, and a not-yet-selected private profile remains inactive. No proof, source, signature,
 commitment, verifier output, proof/signature/frame/statement bytes, exact proof/source digest, PHI,
 temp/spill, or log bytes are written to a proof workspace, DB, WAL, receipt, event, export, backup,
 or error. Authorized Queue/State DB, WAL, and commit writes remain limited to the state-owned fields
-listed above. Mutable staging is wiped where technically possible. The exact deployed zero-PHI
+listed above. The owned handoff buffer is wiped in full on close. The exact deployed zero-PHI
 recoverability gate is
 owned by Native-v3; current experimental handling does not establish destruction. A timeout, crash,
 lease expiry, restart, transport failure, or ambiguity consumes the handoff and fails closed to
-`HELD` with bounded `fresh_handoff_required`; retry requires a new state operation and fresh stream.
+`HELD` with bounded `fresh_handoff_required`; retry requires a new state operation and fresh
+bytearray handoff.
 
 Before cryptographic acceptance work, the state owner atomically reserves each theorem-relevant
 acceptance unit against the selected security profile's single deployment/authorization-lifetime

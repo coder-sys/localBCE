@@ -1,4 +1,3 @@
-import io
 import sqlite3
 import subprocess
 import sys
@@ -114,7 +113,7 @@ class RuntimeV10Tests(unittest.TestCase):
             with MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config, state_disposition_port=port) as runtime:
                 now = int(time.time() * 1000)
                 batch = runtime.issue_batch(template=OperationTemplate("shared-runtime", 1, config.profile_version, now - 100, now + 60_000))
-                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"runtime-proof"), declared_length=13)
+                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"runtime-proof")))
                 result = runtime.run()
                 self.assertEqual((result.outcome, result.accepted_operation_count, result.verified_batch_count, result.rejected_batch_count, result.held_batch_count, result.processed, verifier.calls, port.calls), ("PROCESSED", 100, 1, 0, 0, 1, 1, 1))
                 self.assertEqual(result.verified, 100)
@@ -178,7 +177,7 @@ class RuntimeV10Tests(unittest.TestCase):
             try:
                 now = int(time.time() * 1000)
                 batch = runtime.issue_batch(template=OperationTemplate("concurrent-owner", 1, config.profile_version, now - 100, now + 60_000))
-                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"concurrent-proof"), declared_length=16)
+                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"concurrent-proof")))
                 result = runtime.run()
                 self.assertEqual((result.outcome, result.accepted_operation_count), ("PROCESSED", 100))
             finally:
@@ -198,7 +197,7 @@ class RuntimeV10Tests(unittest.TestCase):
             with MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config, state_disposition_port=port) as runtime:
                 now = int(time.time() * 1000)
                 batch = runtime.issue_batch(template=OperationTemplate("failure", 1, config.profile_version, now - 100, now + 60_000))
-                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"failure-proof"), declared_length=13)
+                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"failure-proof")))
                 first = runtime.run()
                 second = runtime.run()
                 self.assertEqual((first.outcome, first.held_batch_count, verifier.calls, port.calls), ("PROCESSED", 1, 1, 0))
@@ -211,10 +210,10 @@ class RuntimeV10Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             child = r'''
-import io, os, sys
+import os, sys
 from pathlib import Path
 sys.path.insert(0, os.getcwd())
-from app.minimal_clearance_verification_queue import BatchVerifierResult, OperationTemplate, QueueConfig, _QueueRuntimeOwnership, _VerificationQueueStore
+from app.minimal_clearance_verification_queue import BatchVerifierResult, OperationTemplate, QueueConfig, VolatileProofHandoff, _QueueRuntimeOwnership, _VerificationQueueStore
 from app.minimal_clearance_composition import CompositionConfigV2
 
 class Clock:
@@ -227,7 +226,7 @@ owner = _QueueRuntimeOwnership(lock_path=root / "state.sqlite.runtime-lock", par
 store = _VerificationQueueStore(path=root / "state.sqlite", config=config, owner=owner, clock=Clock(), composition_config=composition_config, before_fault=lambda label: os._exit(17) if label == "before_queue_commit" else None)
 now = 1700000000000
 batch = store.issue_batch(template=OperationTemplate("crash", 1, config.profile_version, now - 100, now + 60000))
-store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(b"crash-proof"), declared_length=11)
+store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"crash-proof")))
 work = store._claim_next_batch()
 result = BatchVerifierResult(False, False, batch.proof_statement, batch.batch_root, config.source_auth_profile, config.source_key_epoch, "rejected", ())
 store._complete_batch(work, status="REJECTED", verifier_result=result, error_code="proof_or_source_not_accepted")

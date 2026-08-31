@@ -1,5 +1,4 @@
 import hashlib
-import io
 import threading
 import tempfile
 import unittest
@@ -171,7 +170,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
         self.assertEqual(SOURCE_AUTH_IPC_BYTES, 16_308_435)
         self.assertEqual(SOURCE_AUTH_IPC_BYTES, SOURCE_AUTH_IPC_PREFIX_BYTES + SOURCE_AUTH_FRAME_BYTES)
         captured, runner = self._run()
-        handoff = VolatileProofHandoff(io.BytesIO(self.fixture.frame), declared_length=SOURCE_AUTH_FRAME_BYTES)
+        handoff = VolatileProofHandoff(bytearray(self.fixture.frame))
         with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
             result = self.fixture.adapter.verify(handoff, self.fixture.batch)
         self.assertIsInstance(result, BatchVerifierResult)
@@ -211,7 +210,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
     def test_exit_one_is_fail_closed_combined_rejection(self) -> None:
         captured, runner = self._run(_contained(exit_code=1))
         with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
-            result = self.fixture.adapter.verify(VolatileProofHandoff(io.BytesIO(self.fixture.frame)), self.fixture.batch)
+            result = self.fixture.adapter.verify(VolatileProofHandoff(bytearray(self.fixture.frame)), self.fixture.batch)
         self.assertEqual((result.proof_accepted, result.source_authenticated, result.result_code), (False, False, "rejected"))
         self.assertEqual(len(captured["frame"]), SOURCE_AUTH_IPC_BYTES)
 
@@ -232,7 +231,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
             with self.subTest(name=name):
                 captured, runner = self._run(_contained(exit_code=1))
                 with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
-                    result = MinimalClearanceSourceAuthVerifierAdapter(config).verify(VolatileProofHandoff(io.BytesIO(frame)), batch)
+                    result = MinimalClearanceSourceAuthVerifierAdapter(config).verify(VolatileProofHandoff(bytearray(frame)), batch)
                 self.assertEqual((result.proof_accepted, result.source_authenticated, result.result_code), (False, False, "rejected"))
                 current = captured["frame"]
                 baseline = self.fixture.frame if name == "frame" else self.fixture.config.ml_dsa_87_public_key if name == "public_key" else self.fixture.queue_config.source_key_epoch.to_bytes(8, "little")
@@ -249,7 +248,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
             with self.subTest(name=name):
                 with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream") as runner:
                     with self.assertRaisesRegex(QueueHeldError, "batch_binding"):
-                        self.fixture.adapter.verify(VolatileProofHandoff(io.BytesIO(self.fixture.frame)), batch)
+                        self.fixture.adapter.verify(VolatileProofHandoff(bytearray(self.fixture.frame)), batch)
                 runner.assert_not_called()
 
     def test_short_and_trailing_handoffs_fail_before_runner(self) -> None:
@@ -257,7 +256,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
             with self.subTest(length=len(payload)):
                 with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream") as runner:
                     with self.assertRaisesRegex(QueueHeldError, "proof_handoff_length"):
-                        self.fixture.adapter.verify(VolatileProofHandoff(io.BytesIO(payload)), self.fixture.batch)
+                        self.fixture.adapter.verify(VolatileProofHandoff(bytearray(payload)), self.fixture.batch)
                 runner.assert_not_called()
 
     def test_output_exit_two_timeout_and_containment_fail_closed(self) -> None:
@@ -282,20 +281,20 @@ class SourceAuthAdapterTests(unittest.TestCase):
                 captured, runner = self._run(contained)
                 with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
                     with self.assertRaisesRegex(QueueHeldError, code):
-                        self.fixture.adapter.verify(VolatileProofHandoff(io.BytesIO(self.fixture.frame)), self.fixture.batch)
+                        self.fixture.adapter.verify(VolatileProofHandoff(bytearray(self.fixture.frame)), self.fixture.batch)
 
     def test_runner_timeout_and_containment_errors_are_held(self) -> None:
         for error, code in ((VerifierProcessError("verifier_timeout"), "verifier_timeout"), (VerifierProcessError("verifier_job_assign"), "verifier_transport"), (RuntimeError("internal"), "verifier_transport")):
             with self.subTest(code=code):
                 with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=error):
                     with self.assertRaisesRegex(QueueHeldError, code):
-                        self.fixture.adapter.verify(VolatileProofHandoff(io.BytesIO(self.fixture.frame)), self.fixture.batch)
+                        self.fixture.adapter.verify(VolatileProofHandoff(bytearray(self.fixture.frame)), self.fixture.batch)
 
     def test_forwards_artifact_pin_to_contained_runner(self) -> None:
         captured, runner = self._run()
         with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
             MinimalClearanceSourceAuthVerifierAdapter(self.fixture.config).verify(
-                VolatileProofHandoff(io.BytesIO(self.fixture.frame)), self.fixture.batch
+                VolatileProofHandoff(bytearray(self.fixture.frame)), self.fixture.batch
             )
         self.assertEqual(captured["expected_executable_size_bytes"], SOURCE_AUTH_EXECUTABLE_SIZE_BYTES)
         self.assertEqual(captured["expected_executable_sha256"], self.fixture.config.executable_sha256)
@@ -320,7 +319,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
             try:
                 first_result.append(
                     self.fixture.adapter.verify(
-                        VolatileProofHandoff(io.BytesIO(self.fixture.frame)),
+                        VolatileProofHandoff(bytearray(self.fixture.frame)),
                         self.fixture.batch,
                     )
                 )
@@ -331,7 +330,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
             worker = threading.Thread(target=first_call)
             worker.start()
             self.assertTrue(entered.wait(5))
-            second_handoff = VolatileProofHandoff(io.BytesIO(self.fixture.frame))
+            second_handoff = VolatileProofHandoff(bytearray(self.fixture.frame))
             with self.assertRaisesRegex(QueueHeldError, "verifier_transport"):
                 self.fixture.adapter.verify(second_handoff, self.fixture.batch)
             self.assertTrue(second_handoff.closed)
@@ -348,7 +347,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
 
         def runner(*args: object, **kwargs: object) -> ContainedVerifierResult:
             del args, kwargs
-            nested = VolatileProofHandoff(io.BytesIO(self.fixture.frame))
+            nested = VolatileProofHandoff(bytearray(self.fixture.frame))
             recursive_handoff.append(nested)
             try:
                 self.fixture.adapter.verify(nested, self.fixture.batch)
@@ -358,7 +357,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
 
         with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
             result = self.fixture.adapter.verify(
-                VolatileProofHandoff(io.BytesIO(self.fixture.frame)),
+                VolatileProofHandoff(bytearray(self.fixture.frame)),
                 self.fixture.batch,
             )
         self.assertEqual(result.result_code, "accepted")
@@ -366,33 +365,15 @@ class SourceAuthAdapterTests(unittest.TestCase):
         self.assertEqual(len(recursive_handoff), 1)
         self.assertTrue(recursive_handoff[0].closed)
 
-    def test_handoff_close_failure_is_fail_closed(self) -> None:
-        class _CloseFailureStream:
-            def __init__(self, value: bytes) -> None:
-                self._value = value
-                self._offset = 0
-
-            def read(self, size: int = -1) -> bytes:
-                if size < 0:
-                    size = len(self._value) - self._offset
-                start = self._offset
-                self._offset = min(len(self._value), start + size)
-                return self._value[start:self._offset]
-
-            def close(self) -> None:
-                raise OSError("close failure")
-
-        handoff = VolatileProofHandoff(
-            _CloseFailureStream(self.fixture.frame),
-            declared_length=SOURCE_AUTH_FRAME_BYTES,
-        )
-        with patch(
-            "app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream",
-            return_value=_contained(),
-        ):
-            with self.assertRaisesRegex(QueueHeldError, "verifier_transport"):
-                self.fixture.adapter.verify(handoff, self.fixture.batch)
+    def test_handoff_close_is_local_and_idempotent(self) -> None:
+        handoff = VolatileProofHandoff(bytearray(self.fixture.frame))
+        handoff.read(1)
+        handoff.close()
+        handoff.close()
         self.assertTrue(handoff.closed)
+        self.assertEqual(handoff.total_read, 1)
+        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_closed"):
+            handoff.read(1)
 
     def test_rejects_any_noncanonical_executable_identity(self) -> None:
         with self.assertRaisesRegex(ValueError, "source_auth_executable_identity"):
@@ -430,7 +411,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
 
         try:
             batch = store.issue_batch(template=self.fixture.batch.template)
-            store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(self.fixture.frame), declared_length=SOURCE_AUTH_FRAME_BYTES)
+            store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(self.fixture.frame)))
             with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=runner):
                 self.assertEqual(store._process_one_batch(verifier=self.fixture.adapter, state_disposition_port=_StateDispositionPort()).status, "VERIFIED")
             store._verify_integrity()

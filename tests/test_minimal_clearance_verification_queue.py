@@ -1,5 +1,4 @@
 import hashlib
-import io
 import json
 import sqlite3
 import tempfile
@@ -7,6 +6,7 @@ import unittest
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import app.minimal_clearance_composition as composition
 from app.minimal_clearance_verification_queue import _build_statement, _compute_batch_root_from_refs
@@ -20,6 +20,8 @@ from app.minimal_clearance_verification_queue import (
     BatchVerifierResult,
     OperationTemplate,
     QueueConfig,
+    QueueConflictError,
+    QueueHeldError,
     QueueIntegrityError,
     QueueLeaseError,
     _TRIGGER_DEFS,
@@ -48,6 +50,34 @@ class _Clock:
         return self.now
 
 
+class _CallbackTrap:
+    def __init__(self) -> None:
+        self.read_calls = 0
+        self.close_calls = 0
+
+    def read(self, _size: int = -1) -> bytes:
+        self.read_calls += 1
+        raise AssertionError("callback must not run")
+
+    def close(self) -> None:
+        self.close_calls += 1
+        raise AssertionError("callback must not run")
+
+
+class _ByteArraySubclass(bytearray):
+    pass
+
+
+class _HandoffSubclass(VolatileProofHandoff):
+    def __init__(self, payload: bytearray) -> None:
+        super().__init__(payload)
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        raise AssertionError("handoff subclass must not be closed")
+
+
 def _new_store(root: Path, clock: _Clock, *, capacity: int = 100, before_fault=None):
     config = QueueConfig("state-test-v10", capacity)
     composition_config = CompositionConfigV2(config.queue_id, config.digest, capacity=capacity)
@@ -72,7 +102,7 @@ def _prepare(store: _VerificationQueueStore, config: QueueConfig, clock: _Clock,
         clock.now + duration,
     )
     batch = store.issue_batch(template=template)
-    store.submit_batch_handoff(issued_batch=batch, proof_stream=io.BytesIO(proof), declared_length=len(proof))
+    store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(proof)))
     return batch
 
 
@@ -191,6 +221,127 @@ class QueueV11Tests(unittest.TestCase):
         self.store._close()
         self.owner.close()
         self.temp.cleanup()
+
+    def test_handoff_is_memory_owned_bounded_and_fully_wiped(self) -> None:
+        caller = bytearray(b"secret-proof")
+        handoff = VolatileProofHandoff(caller)
+        self.assertEqual(caller, bytearray())
+        caller.extend(b"caller-mutation")
+        self.assertEqual(handoff.read(6), b"secret")
+        self.assertEqual(handoff.read(), b"-proof")
+        self.assertFalse(handoff.exhausted)
+        self.assertEqual(handoff.read(1), b"")
+        self.assertTrue(handoff.exhausted)
+        self.assertEqual(handoff.total_read, len(b"secret-proof"))
+        self.assertTrue(handoff.consumed)
+        handoff.close()
+        handoff.close()
+        self.assertTrue(handoff.closed)
+        self.assertEqual(len(handoff._buffer), 0)
+        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_closed"):
+            handoff.read(1)
+
+        drained = VolatileProofHandoff(bytearray(b"drain-me"))
+        drained.drain()
+        self.assertTrue(drained.exhausted)
+        self.assertEqual(drained.total_read, len(b"drain-me"))
+        drained.close()
+
+    def test_handoff_rejects_callbacks_and_nonexact_types_before_sql(self) -> None:
+        template = OperationTemplate("handoff-boundary", 1, self.config.profile_version, self.clock.now - 100, self.clock.now + 60_000)
+        batch = self.store.issue_batch(template=template)
+        trap = _CallbackTrap()
+        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_stream"):
+            self.store.submit_batch_handoff(issued_batch=batch, proof_stream=trap)
+        self.assertEqual((trap.read_calls, trap.close_calls), (0, 0))
+
+        raw = b"raw-proof"
+        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_stream"):
+            self.store.submit_batch_handoff(issued_batch=batch, proof_stream=raw)
+
+        used_handoff = VolatileProofHandoff(bytearray(b"already-used"))
+        used_handoff.read(1)
+        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_used"):
+            self.store.submit_batch_handoff(issued_batch=batch, proof_stream=used_handoff)
+        self.assertTrue(used_handoff.closed)
+        self.assertEqual(len(used_handoff._buffer), 0)
+
+        subclass_payload = _ByteArraySubclass(b"subclass-proof")
+        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_stream"):
+            VolatileProofHandoff(subclass_payload)
+        self.assertEqual(subclass_payload, _ByteArraySubclass(b"subclass-proof"))
+
+        handoff_subclass = _HandoffSubclass(bytearray(b"handoff-subclass"))
+        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_stream"):
+            self.store.submit_batch_handoff(issued_batch=batch, proof_stream=handoff_subclass)
+        self.assertEqual(handoff_subclass.close_calls, 0)
+        VolatileProofHandoff.close(handoff_subclass)
+
+        with self.assertRaisesRegex(QueueHeldError, "proof_handoff_empty"):
+            VolatileProofHandoff(bytearray())
+        with patch("app.minimal_clearance_verification_queue.ADMISSION_CAP_BYTES", 3):
+            oversized = bytearray(b"1234")
+            with self.assertRaisesRegex(QueueHeldError, "proof_handoff_oversize"):
+                VolatileProofHandoff(oversized)
+            self.assertEqual(oversized, bytearray(b"1234"))
+
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "AWAITING_HANDOFF")
+            self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (0, 0))
+        counts = _counts(self.root / "state.sqlite")
+        self.assertEqual((counts["queue_attempts"], counts["queue_leases"], counts["queue_results"]), (0, 0, 0))
+        self.assertEqual(self.store._handoffs, {})
+
+    def test_binding_and_expiry_rejections_close_and_wipe_handoffs(self) -> None:
+        template = OperationTemplate("binding-handoff", 1, self.config.profile_version, self.clock.now - 100, self.clock.now + 60_000)
+        batch = self.store.issue_batch(template=template)
+        forged = replace(batch, identity_digest=bytes(64))
+        binding_handoff = VolatileProofHandoff(bytearray(b"binding-proof"))
+        with self.assertRaisesRegex(QueueConflictError, "batch_binding"):
+            self.store.submit_batch_handoff(issued_batch=forged, proof_stream=binding_handoff)
+        self.assertTrue(binding_handoff.closed)
+        self.assertEqual(len(binding_handoff._buffer), 0)
+        self.assertEqual(self.store._handoffs, {})
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clock = _Clock()
+            config, _composition_config, owner, store = _new_store(root, clock)
+            try:
+                expiring = store.issue_batch(template=OperationTemplate("expired-handoff", 1, config.profile_version, clock.now - 100, clock.now + 100))
+                clock.now = expiring.template.valid_until_ms
+                expiry_handoff = VolatileProofHandoff(bytearray(b"expiry-proof"))
+                with self.assertRaisesRegex(QueueConflictError, "validity_expired"):
+                    store.submit_batch_handoff(issued_batch=expiring, proof_stream=expiry_handoff)
+                self.assertTrue(expiry_handoff.closed)
+                self.assertEqual(len(expiry_handoff._buffer), 0)
+                self.assertEqual(store._handoffs, {})
+                with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                    self.assertEqual(connection.execute("SELECT status FROM queue_batches").fetchone()[0], "HELD")
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_attempts").fetchone()[0], 0)
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0], 0)
+                    self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (0, 0))
+            finally:
+                store._close()
+                owner.close()
+
+    def test_submission_sql_rollback_closes_and_wipes_handoff_without_queue_mutation(self) -> None:
+        template = OperationTemplate("rollback-handoff", 1, self.config.profile_version, self.clock.now - 100, self.clock.now + 60_000)
+        batch = self.store.issue_batch(template=template)
+        handoff = VolatileProofHandoff(bytearray(b"rollback-proof"))
+        with patch.object(self.store, "_append_event", side_effect=RuntimeError("submit rollback")):
+            with self.assertRaisesRegex(RuntimeError, "submit rollback"):
+                self.store.submit_batch_handoff(issued_batch=batch, proof_stream=handoff)
+        self.assertTrue(handoff.closed)
+        self.assertEqual(len(handoff._buffer), 0)
+        self.assertEqual(self.store._handoffs, {})
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "AWAITING_HANDOFF")
+            self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (0, 0))
+        counts = _counts(self.root / "state.sqlite")
+        self.assertEqual((counts["queue_attempts"], counts["queue_leases"], counts["queue_results"]), (0, 0, 0))
+
+        self.store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"retry-proof")))
 
     def test_state_database_derives_profile10_statement_without_durable_copy(self) -> None:
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:

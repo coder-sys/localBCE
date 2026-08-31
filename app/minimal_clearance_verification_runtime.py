@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, Mapping, Protocol
+from typing import Any, Mapping, Protocol
 
 from app.minimal_clearance_source_auth_verifier_adapter import (
     MinimalClearanceSourceAuthVerifierAdapter,
@@ -180,9 +180,9 @@ class MinimalClearanceVerificationRuntime:
         self._assert_open()
         return self._store.issue_batch(template=template)
 
-    def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: BinaryIO | VolatileProofHandoff, declared_length: int | None = None) -> IssuedVerificationBatch:
+    def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: VolatileProofHandoff) -> IssuedVerificationBatch:
         self._assert_open()
-        return self._store.submit_batch_handoff(issued_batch=issued_batch, proof_stream=proof_stream, declared_length=declared_length)
+        return self._store.submit_batch_handoff(issued_batch=issued_batch, proof_stream=proof_stream)
 
     def _verify_integrity(self) -> None:
         self._assert_open()
