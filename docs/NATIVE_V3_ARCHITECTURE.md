@@ -77,17 +77,17 @@ One proof covers exactly 100 Queue operations, distinct from its 1,024 cryptogra
 and the Queue's 101-unit reservation. The Rust producer checkout is commit
 `626d7e200407b91bcd467b3d4973eae7dcab004c` with tree
 `f9631ad1dbc6a6524f8dc3b7d1fc1f38211aafc7`; its mechanical producer-content pin is 403,456 bytes
-with SHA-256 `CD16BA905E8C6B9E1135A38AFE29566D22FCB039EDAC5E5018505945F022399`. This carries
+with SHA-256 `EF25D66E7AD37CEE2F5B6C93B0D1AEDE5FC8F6D7600BAA88D0AB1651327C9D01`. This carries
 no reproducibility or custody claim. The proof envelope is 16,294,348 bytes, the signed prefix is
 16,297,640 bytes, the ML-DSA-87 public key is 2,592 bytes, the signature is 4,627 bytes, and
 the signed source-auth frame is 16,302,267 bytes. The exact IPC is 16,308,435 bytes
 (6,168 state/config bytes plus the frame). Proof, signature, frame, statement, and IPC bytes remain
 volatile. The C source-auth owner tracked boundary is commit
-`9bd4d8505361e472547fe59ef4c725530b606fcc` with tree
-`b023af5753c48ea992560c9b6aca8d4280f2b115`; the canonical state-side executable is
+`8e56c9dc218e896fa41d22c29bd3acb40d9a5e23` with tree
+`009dc554911a510b6b8256ae24daa76a5f7fcc2c`; the canonical state-side executable is
 `C:\Users\neers\Documents\Codex\2026-08-30\blind-zkbpp-c-cdg-direct-v1\work\build-profile10\Release\blind_source_auth_verify_process_v1.exe`,
 50,176 bytes with SHA-256
-`AE01234D32D622D5DCCC269AF4FFD094738865F91FF3440DE91C3A37B3522722`. The candidate remains
+`29294B06F8CAD666DEC2648F3E297BE74BD04830119AC436E420E615E1F6A6EA`. The candidate remains
 unselected, unqualified, `proofSuiteId=null`, `production_usable=false`, and `activation=false`.
 The C process takes no arguments; exit 0 is accepted, exit 1 is a combined rejection, exit 2 is
 malformed/short/extra input, and exit 3 is an internal failure. Any other exit, timeout, nonempty
