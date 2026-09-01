@@ -83,12 +83,14 @@ persists the seed. This carries no reproducibility or custody claim. The proof e
 16,297,640 bytes, the ML-DSA-87 public key is 2,592 bytes, the signature is 4,627 bytes, and
 the signed source-auth frame is 16,302,267 bytes. The exact IPC is 16,308,435 bytes
 (6,168 state/config bytes plus the frame). Proof, signature, frame, statement, and IPC bytes remain
-volatile. The C source-auth owner tracked boundary is commit
-`17c75274d66e6b77ee377665c682c961650846d8` with tree
-`2e13b2ad1ac866a3771d2b1e10898ed9c39df91e`; the canonical state-side executable is
-`C:\Users\neers\Documents\Codex\2026-08-31\build-profile11-root-verify\Release\blind_source_auth_verify_process_v1.exe`,
-50,688 bytes with SHA-256
-`EC584750D733FF29F4ED41F141FAA1DA1005E90EA2DE594DBD9844AE01A1669F`. The candidate remains
+volatile. The C source-auth owner is the accepted 8-worker row-parallel implementation from source checkout
+`C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-c-profile11-throughput-v1`, at clean commit
+`5d1a53238747540029a740ee8e305121efadaedb` with tree
+`4b0dc25fab9417842548bd1c695577e43f21807f`; the canonical state-side executable is
+`C:\Users\neers\Documents\Codex\2026-08-31\build-profile11-throughput-v1\Release\blind_source_auth_verify_process_v1.exe`,
+52,736 bytes with SHA-256
+`4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C`. This is one newer verifier only;
+the Profile 11 wire and acceptance contract are unchanged, with no dual pin or fallback. The candidate remains
 unselected, unqualified, `proofSuiteId=null`, `production_usable=false`, and `activation=false`.
 The C process takes no arguments; exit 0 is accepted, exit 1 is a combined rejection, exit 2 is
 malformed/short/extra input, and exit 3 is an internal failure. Any other exit, timeout, nonempty
