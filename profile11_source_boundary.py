@@ -2,8 +2,11 @@
 
 This module is evidence plumbing, not Queue production code.  The caller owns
 the appliance provision record and source-only witness/seed/randomizer bytes.
-It transfers one complete frame to Queue and never serializes or logs source
-material.  OS-level process-tree and filesystem tracing remain external gates.
+For this E2E exercise it serializes the 4,896-byte secret and source inputs to
+the accepted appliance's stdin, does not expose them to Queue or intentionally
+persist/log them, and is not the production no-serialization/custody boundary.
+It transfers one complete frame to Queue.  OS-level process-tree and
+filesystem tracing remain external gates.
 """
 
 from __future__ import annotations
