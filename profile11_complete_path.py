@@ -399,38 +399,275 @@ _ETW_TOKEN_QUERY: Final[int] = 0x0008
 _ETW_TOKEN_PRIVILEGES: Final[int] = 3
 _ETW_SE_PRIVILEGE_ENABLED: Final[int] = 0x00000002
 _ETW_PROCESS_QUERY_LIMITED_INFORMATION: Final[int] = 0x00001000
-_ETW_FILE_TASK_OPERATIONS: Final[dict[int, str]] = {
-    10: "create",              # NameCreate
-    11: "delete",              # NameDelete
-    12: "create",              # Create
-    16: "write",               # Write
-    17: "directory_metadata",  # SetInformation
-    18: "delete",              # SetDelete
-    19: "rename",              # Rename
-    20: "directory_metadata",  # DirEnum
-    21: "directory_metadata",  # Flush
-    23: "directory_metadata",  # FSCTL
-    25: "directory_metadata",  # DirNotify
-    26: "delete",              # DeletePath
-    27: "rename",              # RenamePath
-    28: "rename",              # SetLinkPath
-    29: "rename",              # SetLink
-    30: "create",              # CreateNewFile
-    31: "directory_metadata",  # SetSecurity
-    33: "directory_metadata",  # SetEA
-}
-# The installed Kernel-File manifest does not expose a decodable, directory-only
-# metadata mutation event. Keep the decoder table for diagnosis, but never let
-# this backend report a complete observer until every required operation class
-# has an independently verified schema and path correlation.
-_ETW_REQUIRED_FILE_OPERATION_SCHEMA_COMPLETE: Final[bool] = False
-_ETW_FILE_TASKS_IGNORED: Final[frozenset[int]] = frozenset({13, 14, 15, 22, 24, 32, 34})
-_ETW_PROCESS_START_TASKS: Final[frozenset[int]] = frozenset({1, 15})
-_ETW_PROCESS_STOP_TASKS: Final[frozenset[int]] = frozenset({2})
 _ETW_KERNEL_FILE_PROVIDER_GUID: Final[bytes] = uuid.UUID("edd08927-9cc4-4e65-b970-c2560fb5c289").bytes_le
 _ETW_KERNEL_PROCESS_PROVIDER_GUID: Final[bytes] = uuid.UUID("22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716").bytes_le
 _ETW_LEGACY_FILE_CLASS_GUID: Final[bytes] = uuid.UUID("90cbdc39-4a3e-11d1-84f4-0000f80464e3").bytes_le
 _ETW_LEGACY_PROCESS_CLASS_GUID: Final[bytes] = uuid.UUID("3d6fa8d0-fe05-11d0-9dda-00c04fd7ba7c").bytes_le
+
+_ETW_TDH_INTYPE_UNICODESTRING: Final[int] = 1
+_ETW_TDH_INTYPE_UINT32: Final[int] = 8
+_ETW_TDH_INTYPE_UINT64: Final[int] = 10
+_ETW_TDH_INTYPE_POINTER: Final[int] = 16
+_ETW_TDH_INTYPE_FILETIME: Final[int] = 17
+_ETW_PROPERTY_STRUCT: Final[int] = 0x1
+_ETW_ROOT_CAPTURE_TIMEOUT_SECONDS: Final[float] = 5.0
+
+_ETW_FILE_MUTATION_OPERATIONS: Final[frozenset[str]] = frozenset({
+    "write", "create", "delete", "rename", "link", "metadata", "flush", "fsctl",
+})
+_ETW_FILE_NONMUTATION_IDS: Final[frozenset[int]] = frozenset({10, 11, 12, 13, 14, 15, 20, 22, 24, 25, 32, 34})
+_ETW_FILE_MUTATION_IDS: Final[frozenset[int]] = frozenset({16, 17, 18, 19, 21, 23, 26, 27, 28, 29, 30, 31, 33})
+_ETW_FILE_TASK_OPERATIONS: Final[dict[int, str]] = {
+    16: "write",
+    17: "metadata",
+    18: "delete",
+    19: "rename",
+    21: "flush",
+    23: "fsctl",
+    26: "delete",
+    27: "rename",
+    28: "link",
+    29: "link",
+    30: "create",
+    31: "metadata",
+    33: "metadata",
+}
+_ETW_FILE_TASKS_IGNORED: Final[frozenset[int]] = _ETW_FILE_NONMUTATION_IDS
+_ETW_PROCESS_START_TASKS: Final[frozenset[int]] = frozenset({1, 15})
+_ETW_PROCESS_STOP_TASKS: Final[frozenset[int]] = frozenset({2})
+
+
+@dataclass(frozen=True, slots=True)
+class _EtwEventSchemaSpec:
+    provider: bytes
+    event_id: int
+    versions: frozenset[int]
+    task: int
+    opcode: int
+    properties: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _EtwSchemaFact:
+    provider: bytes
+    event_id: int
+    version: int
+    task: int
+    opcode: int
+    properties: tuple[tuple[str, int], ...]
+
+
+def _etw_file_spec(event_id: int, versions: frozenset[int], task: int, properties: tuple[tuple[str, int], ...] = ()) -> _EtwEventSchemaSpec:
+    return _EtwEventSchemaSpec(_ETW_KERNEL_FILE_PROVIDER_GUID, event_id, versions, task, 0, properties)
+
+
+def _etw_process_spec(event_id: int, versions: frozenset[int], task: int, opcode: int, properties: tuple[tuple[str, int], ...]) -> _EtwEventSchemaSpec:
+    return _EtwEventSchemaSpec(_ETW_KERNEL_PROCESS_PROVIDER_GUID, event_id, versions, task, opcode, properties)
+
+
+_PTR: Final[int] = _ETW_TDH_INTYPE_POINTER
+_U32: Final[int] = _ETW_TDH_INTYPE_UINT32
+_U64: Final[int] = _ETW_TDH_INTYPE_UINT64
+_TEXT: Final[int] = _ETW_TDH_INTYPE_UNICODESTRING
+_TIME: Final[int] = _ETW_TDH_INTYPE_FILETIME
+_FILE_OBJECT_KEY: Final[tuple[tuple[str, int], ...]] = (("FileObject", _PTR), ("FileKey", _PTR))
+_FILE_IRP_KEY: Final[tuple[tuple[str, int], ...]] = _FILE_OBJECT_KEY + (("Irp", _PTR),)
+_INFO_PROPERTIES: Final[tuple[tuple[str, int], ...]] = _FILE_IRP_KEY + (("ExtraInformation", _PTR), ("InfoClass", _U32))
+_PATH_PROPERTIES: Final[tuple[tuple[str, int], ...]] = _FILE_IRP_KEY + (("ExtraInformation", _PTR), ("InfoClass", _U32), ("FilePath", _TEXT))
+_CREATE_PROPERTIES: Final[tuple[tuple[str, int], ...]] = (("FileObject", _PTR), ("FileName", _TEXT), ("CreateOptions", _U32), ("CreateAttributes", _U32), ("ShareAccess", _U32))
+_NAME_PROPERTIES: Final[tuple[tuple[str, int], ...]] = (("FileKey", _PTR), ("FileName", _TEXT))
+_END_PROPERTIES: Final[tuple[tuple[str, int], ...]] = (("Irp", _PTR), ("ExtraInformation", _PTR), ("Status", _U32))
+
+_ETW_FILE_SCHEMA_SPECS: Final[dict[tuple[int, int], _EtwEventSchemaSpec]] = {
+    (10, 0): _etw_file_spec(10, frozenset({0}), 10, _NAME_PROPERTIES),
+    (11, 0): _etw_file_spec(11, frozenset({0}), 11, _NAME_PROPERTIES),
+    (12, 0): _etw_file_spec(12, frozenset({0, 1}), 12, _CREATE_PROPERTIES),
+    (13, 0): _etw_file_spec(13, frozenset({0, 1}), 13, _FILE_OBJECT_KEY),
+    (14, 0): _etw_file_spec(14, frozenset({0, 1}), 14, _FILE_OBJECT_KEY),
+    (15, 0): _etw_file_spec(15, frozenset({0, 1}), 15, _FILE_OBJECT_KEY),
+    (16, 0): _etw_file_spec(16, frozenset({0, 1}), 16, _FILE_IRP_KEY + (("ByteOffset", _U64), ("IOSize", _U32), ("IOFlags", _U32))),
+    (17, 0): _etw_file_spec(17, frozenset({0, 1}), 17, _INFO_PROPERTIES),
+    (18, 0): _etw_file_spec(18, frozenset({0, 1}), 18, _INFO_PROPERTIES),
+    (19, 0): _etw_file_spec(19, frozenset({0, 1}), 19, _INFO_PROPERTIES),
+    (20, 0): _etw_file_spec(20, frozenset({0, 1}), 20, _FILE_OBJECT_KEY + (("Length", _U32), ("InfoClass", _U32), ("FileIndex", _U32), ("FileName", _TEXT))),
+    (21, 0): _etw_file_spec(21, frozenset({0, 1}), 21, _FILE_OBJECT_KEY),
+    (22, 0): _etw_file_spec(22, frozenset({0, 1}), 22),
+    (23, 0): _etw_file_spec(23, frozenset({0, 1}), 23, _INFO_PROPERTIES),
+    (24, 0): _etw_file_spec(24, frozenset({0}), 24, _END_PROPERTIES),
+    (25, 0): _etw_file_spec(25, frozenset({0, 1}), 25, _FILE_OBJECT_KEY + (("Length", _U32), ("InfoClass", _U32), ("FileIndex", _U32), ("FileName", _TEXT))),
+    (26, 0): _etw_file_spec(26, frozenset({0, 1}), 26, _PATH_PROPERTIES),
+    (27, 0): _etw_file_spec(27, frozenset({0, 1}), 27, _PATH_PROPERTIES),
+    (28, 0): _etw_file_spec(28, frozenset({0, 1}), 28, _PATH_PROPERTIES),
+    (29, 0): _etw_file_spec(29, frozenset({0, 1}), 19, _INFO_PROPERTIES),
+    (30, 0): _etw_file_spec(30, frozenset({0, 1}), 30, _CREATE_PROPERTIES),
+    (31, 0): _etw_file_spec(31, frozenset({1}), 31, _INFO_PROPERTIES),
+    (32, 0): _etw_file_spec(32, frozenset({1}), 32),
+    (33, 0): _etw_file_spec(33, frozenset({1}), 33, _INFO_PROPERTIES),
+    (34, 0): _etw_file_spec(34, frozenset({1}), 34),
+}
+_ETW_PROCESS_SCHEMA_SPECS: Final[dict[tuple[int, int], _EtwEventSchemaSpec]] = {
+    (1, 0): _etw_process_spec(1, frozenset({0, 1, 2, 3, 4}), 1, 1, (("ProcessID", _U32), ("CreateTime", _TIME), ("ParentProcessID", _U32))),
+    (2, 0): _etw_process_spec(2, frozenset({0, 1, 2}), 2, 2, (("ProcessID", _U32), ("CreateTime", _TIME))),
+    (15, 0): _etw_process_spec(15, frozenset({0, 1, 2}), 15, 0, (("ProcessID", _U32), ("CreateTime", _TIME), ("ParentProcessID", _U32))),
+}
+_ETW_SCHEMA_SPECS: Final[tuple[_EtwEventSchemaSpec, ...]] = tuple(_ETW_FILE_SCHEMA_SPECS.values()) + tuple(_ETW_PROCESS_SCHEMA_SPECS.values())
+_ETW_SCHEMA_BY_PROVIDER_ID: Final[dict[tuple[bytes, int], _EtwEventSchemaSpec]] = {
+    (spec.provider, spec.event_id): spec for spec in _ETW_SCHEMA_SPECS
+}
+_ETW_SCHEMA_KEYS: Final[frozenset[tuple[bytes, int, int]]] = frozenset(
+    (spec.provider, spec.event_id, version)
+    for spec in _ETW_SCHEMA_SPECS
+    for version in spec.versions
+)
+
+_FILE_IO_V0: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("ThreadId", _PTR), ("FileObject", _PTR), ("FileKey", _PTR),
+)
+_FILE_IO_V1: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("FileObject", _PTR), ("FileKey", _PTR), ("IssuingThreadId", _U32),
+)
+_FILE_CREATE_V0: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("ThreadId", _PTR), ("FileObject", _PTR),
+    ("CreateOptions", _U32), ("CreateAttributes", _U32), ("ShareAccess", _U32), ("FileName", _TEXT),
+)
+_FILE_CREATE_V1: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("FileObject", _PTR), ("IssuingThreadId", _U32),
+    ("CreateOptions", _U32), ("CreateAttributes", _U32), ("ShareAccess", _U32), ("FileName", _TEXT),
+)
+_FILE_READ_WRITE_V0: Final[tuple[tuple[str, int], ...]] = (
+    ("ByteOffset", _U64), ("Irp", _PTR), ("ThreadId", _PTR), ("FileObject", _PTR), ("FileKey", _PTR),
+    ("IOSize", _U32), ("IOFlags", _U32),
+)
+_FILE_READ_WRITE_V1: Final[tuple[tuple[str, int], ...]] = (
+    ("ByteOffset", _U64), ("Irp", _PTR), ("FileObject", _PTR), ("FileKey", _PTR),
+    ("IssuingThreadId", _U32), ("IOSize", _U32), ("IOFlags", _U32), ("ExtraFlags", _U32),
+)
+_FILE_INFO_V0: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("ThreadId", _PTR), ("FileObject", _PTR), ("FileKey", _PTR),
+    ("ExtraInformation", _PTR), ("InfoClass", _U32),
+)
+_FILE_INFO_V1: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("FileObject", _PTR), ("FileKey", _PTR), ("ExtraInformation", _PTR),
+    ("IssuingThreadId", _U32), ("InfoClass", _U32),
+)
+_FILE_DIRECTORY_V0: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("ThreadId", _PTR), ("FileObject", _PTR), ("FileKey", _PTR),
+    ("Length", _U32), ("InfoClass", _U32), ("FileIndex", _U32), ("FileName", _TEXT),
+)
+_FILE_DIRECTORY_V1: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("FileObject", _PTR), ("FileKey", _PTR), ("IssuingThreadId", _U32),
+    ("Length", _U32), ("InfoClass", _U32), ("FileIndex", _U32), ("FileName", _TEXT),
+)
+_FILE_PATH_V0: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("ThreadId", _PTR), ("FileObject", _PTR), ("FileKey", _PTR),
+    ("ExtraInformation", _PTR), ("InfoClass", _U32), ("FilePath", _TEXT),
+)
+_FILE_PATH_V1: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("FileObject", _PTR), ("FileKey", _PTR), ("ExtraInformation", _PTR),
+    ("IssuingThreadId", _U32), ("InfoClass", _U32), ("FilePath", _TEXT),
+)
+_FILE_OPERATION_END: Final[tuple[tuple[str, int], ...]] = (
+    ("Irp", _PTR), ("ExtraInformation", _PTR), ("Status", _U32),
+)
+
+_ETW_FILE_SCHEMA_PROPERTIES: Final[dict[tuple[int, int], tuple[tuple[str, int], ...]]] = {
+    (10, 0): _NAME_PROPERTIES, (11, 0): _NAME_PROPERTIES,
+    (12, 0): _FILE_CREATE_V0, (12, 1): _FILE_CREATE_V1,
+    (13, 0): _FILE_IO_V0, (13, 1): _FILE_IO_V1,
+    (14, 0): _FILE_IO_V0, (14, 1): _FILE_IO_V1,
+    (15, 0): _FILE_READ_WRITE_V0, (15, 1): _FILE_READ_WRITE_V1,
+    (16, 0): _FILE_READ_WRITE_V0, (16, 1): _FILE_READ_WRITE_V1,
+    (17, 0): _FILE_INFO_V0, (17, 1): _FILE_INFO_V1,
+    (18, 0): _FILE_INFO_V0, (18, 1): _FILE_INFO_V1,
+    (19, 0): _FILE_INFO_V0, (19, 1): _FILE_INFO_V1,
+    (20, 0): _FILE_DIRECTORY_V0, (20, 1): _FILE_DIRECTORY_V1,
+    (21, 0): _FILE_IO_V0, (21, 1): _FILE_IO_V1,
+    (22, 0): _FILE_INFO_V0, (22, 1): _FILE_INFO_V1,
+    (23, 0): _FILE_INFO_V0, (23, 1): _FILE_INFO_V1,
+    (24, 0): _FILE_OPERATION_END,
+    (25, 0): _FILE_DIRECTORY_V0, (25, 1): _FILE_DIRECTORY_V1,
+    (26, 0): _FILE_PATH_V0, (26, 1): _FILE_PATH_V1,
+    (27, 0): _FILE_PATH_V0, (27, 1): _FILE_PATH_V1,
+    (28, 0): _FILE_PATH_V0, (28, 1): _FILE_PATH_V1,
+    (29, 0): _FILE_INFO_V0, (29, 1): _FILE_INFO_V1,
+    (30, 0): _FILE_CREATE_V0, (30, 1): _FILE_CREATE_V1,
+    (31, 1): _FILE_INFO_V1, (32, 1): _FILE_INFO_V1,
+    (33, 1): _FILE_INFO_V1, (34, 1): _FILE_INFO_V1,
+}
+
+_PROCESS_START_V0: Final[tuple[tuple[str, int], ...]] = (
+    ("ProcessID", _U32), ("CreateTime", _TIME), ("ParentProcessID", _U32), ("SessionID", _U32), ("ImageName", _TEXT),
+)
+_PROCESS_START_V1: Final[tuple[tuple[str, int], ...]] = _PROCESS_START_V0[:-1] + (("Flags", _U32), ("ImageName", _TEXT))
+_PROCESS_START_V2: Final[tuple[tuple[str, int], ...]] = _PROCESS_START_V1 + (
+    ("ImageChecksum", _U32), ("TimeDateStamp", _U32), ("PackageFullName", _TEXT), ("PackageRelativeAppId", _TEXT),
+)
+_PROCESS_START_V3: Final[tuple[tuple[str, int], ...]] = (
+    ("ProcessID", _U32), ("ProcessSequenceNumber", _U64), ("CreateTime", _TIME),
+    ("ParentProcessID", _U32), ("ParentProcessSequenceNumber", _U64), ("SessionID", _U32),
+    ("Flags", _U32), ("ProcessTokenElevationType", _U32), ("ProcessTokenIsElevated", _U32),
+    ("MandatoryLabel", 19), ("ImageName", _TEXT), ("ImageChecksum", _U32), ("TimeDateStamp", _U32),
+    ("PackageFullName", _TEXT), ("PackageRelativeAppId", _TEXT),
+)
+_PROCESS_START_V4: Final[tuple[tuple[str, int], ...]] = _PROCESS_START_V3 + (("SecurityMitigations", _U32),)
+_PROCESS_STOP_V0: Final[tuple[tuple[str, int], ...]] = (
+    ("ProcessID", _U32), ("CreateTime", _TIME), ("ExitTime", _TIME), ("ExitCode", _U32),
+    ("TokenElevationType", _U32), ("HandleCount", _U32), ("CommitCharge", _U64), ("CommitPeak", _U64), ("ImageName", 2),
+)
+_PROCESS_STOP_V1: Final[tuple[tuple[str, int], ...]] = _PROCESS_STOP_V0[:-1] + (
+    ("CPUCycleCount", _U64), ("ReadOperationCount", _U32), ("WriteOperationCount", _U32),
+    ("ReadTransferKiloBytes", _U32), ("WriteTransferKiloBytes", _U32), ("HardFaultCount", _U32), ("ImageName", 2),
+)
+_PROCESS_STOP_V2: Final[tuple[tuple[str, int], ...]] = (
+    ("ProcessID", _U32), ("ProcessSequenceNumber", _U64),
+) + _PROCESS_STOP_V1[1:]
+_PROCESS_RUNDOWN_V0: Final[tuple[tuple[str, int], ...]] = (
+    ("ProcessID", _U32), ("CreateTime", _TIME), ("ParentProcessID", _U32), ("SessionID", _U32),
+    ("Flags", _U32), ("ImageName", _TEXT), ("ImageChecksum", _U32), ("TimeDateStamp", _U32),
+    ("PackageFullName", _TEXT), ("PackageRelativeAppId", _TEXT),
+)
+_PROCESS_RUNDOWN_V1: Final[tuple[tuple[str, int], ...]] = (
+    ("ProcessID", _U32), ("ProcessSequenceNumber", _U64), ("CreateTime", _TIME),
+    ("ParentProcessID", _U32), ("ParentProcessSequenceNumber", _U64), ("SessionID", _U32),
+    ("Flags", _U32), ("ProcessTokenElevationType", _U32), ("ProcessTokenIsElevated", _U32),
+    ("MandatoryLabel", 19), ("ImageName", _TEXT), ("ImageChecksum", _U32), ("TimeDateStamp", _U32),
+    ("PackageFullName", _TEXT), ("PackageRelativeAppId", _TEXT),
+)
+_PROCESS_RUNDOWN_V2: Final[tuple[tuple[str, int], ...]] = _PROCESS_RUNDOWN_V1 + (("SecurityMitigations", _U32),)
+
+_ETW_PROCESS_SCHEMA_PROPERTIES: Final[dict[tuple[int, int], tuple[tuple[str, int], ...]]] = {
+    (1, 0): _PROCESS_START_V0, (1, 1): _PROCESS_START_V1, (1, 2): _PROCESS_START_V2,
+    (1, 3): _PROCESS_START_V3, (1, 4): _PROCESS_START_V4,
+    (2, 0): _PROCESS_STOP_V0, (2, 1): _PROCESS_STOP_V1, (2, 2): _PROCESS_STOP_V2,
+    (15, 0): _PROCESS_RUNDOWN_V0, (15, 1): _PROCESS_RUNDOWN_V1, (15, 2): _PROCESS_RUNDOWN_V2,
+}
+_ETW_SCHEMA_PROPERTIES: Final[dict[tuple[bytes, int, int], tuple[tuple[str, int], ...]]] = {
+    (_ETW_KERNEL_FILE_PROVIDER_GUID, event_id, version): properties
+    for (event_id, version), properties in _ETW_FILE_SCHEMA_PROPERTIES.items()
+} | {
+    (_ETW_KERNEL_PROCESS_PROVIDER_GUID, event_id, version): properties
+    for (event_id, version), properties in _ETW_PROCESS_SCHEMA_PROPERTIES.items()
+}
+
+
+def _etw_schema_fact_matches(fact: _EtwSchemaFact) -> bool:
+    if type(fact) is not _EtwSchemaFact:
+        return False
+    spec = _ETW_SCHEMA_BY_PROVIDER_ID.get((fact.provider, fact.event_id))
+    if spec is None or fact.version not in spec.versions or fact.task != spec.task or fact.opcode != spec.opcode:
+        return False
+    expected = _ETW_SCHEMA_PROPERTIES.get((fact.provider, fact.event_id, fact.version))
+    if expected is None or tuple(fact.properties) != expected:
+        return False
+    return True
+
+
+def _etw_schema_facts_complete(facts: Iterable[_EtwSchemaFact]) -> bool:
+    values = tuple(facts)
+    keys = tuple((fact.provider, fact.event_id, fact.version) for fact in values if type(fact) is _EtwSchemaFact)
+    if len(keys) != len(values) or len(set(keys)) != len(keys) or frozenset(keys) != _ETW_SCHEMA_KEYS:
+        return False
+    return all(_etw_schema_fact_matches(fact) for fact in values)
 
 
 class _EtwGuid(ctypes.Structure):
@@ -528,6 +765,64 @@ class _EtwEventRecord(ctypes.Structure):
         ("ExtendedData", ctypes.POINTER(_EtwEventHeaderExtendedDataItem)),
         ("UserData", ctypes.c_void_p),
         ("UserContext", ctypes.c_void_p),
+    )
+
+
+class _EtwEventPropertyNonStruct(ctypes.Structure):
+    _fields_ = (
+        ("InType", ctypes.c_ushort),
+        ("OutType", ctypes.c_ushort),
+        ("MapNameOffset", ctypes.c_ulong),
+    )
+
+
+class _EtwEventPropertyStruct(ctypes.Structure):
+    _fields_ = (
+        ("StructStartIndex", ctypes.c_ushort),
+        ("NumOfStructMembers", ctypes.c_ushort),
+        ("Padding", ctypes.c_ulong),
+    )
+
+
+class _EtwEventPropertyUnion(ctypes.Union):
+    _fields_ = (
+        ("nonStructType", _EtwEventPropertyNonStruct),
+        ("structType", _EtwEventPropertyStruct),
+    )
+
+
+class _EtwEventPropertyInfo(ctypes.Structure):
+    _fields_ = (
+        ("Flags", ctypes.c_ulong),
+        ("NameOffset", ctypes.c_ulong),
+        ("Type", _EtwEventPropertyUnion),
+        ("Count", ctypes.c_ushort),
+        ("Length", ctypes.c_ushort),
+        ("Reserved", ctypes.c_ulong),
+    )
+
+
+class _EtwTraceEventInfoHeader(ctypes.Structure):
+    _fields_ = (
+        ("ProviderGuid", _EtwGuid),
+        ("EventGuid", _EtwGuid),
+        ("EventDescriptor", _EtwEventDescriptor),
+        ("DecodingSource", ctypes.c_ulong),
+        ("ProviderNameOffset", ctypes.c_ulong),
+        ("LevelNameOffset", ctypes.c_ulong),
+        ("ChannelNameOffset", ctypes.c_ulong),
+        ("KeywordsNameOffset", ctypes.c_ulong),
+        ("TaskNameOffset", ctypes.c_ulong),
+        ("OpcodeNameOffset", ctypes.c_ulong),
+        ("EventMessageOffset", ctypes.c_ulong),
+        ("ProviderMessageOffset", ctypes.c_ulong),
+        ("BinaryXMLOffset", ctypes.c_ulong),
+        ("BinaryXMLSize", ctypes.c_ulong),
+        ("EventNameOffset", ctypes.c_ulong),
+        ("EventAttributesOffset", ctypes.c_ulong),
+        ("PropertyCount", ctypes.c_ulong),
+        ("TopLevelPropertyCount", ctypes.c_ulong),
+        ("Flags", ctypes.c_ulong),
     )
 
 
@@ -637,6 +932,24 @@ class _EtwSidIdentifierAuthority(ctypes.Structure):
     _fields_ = (("Value", ctypes.c_ubyte * 6),)
 
 
+def _etw_bounded_wstring(storage: ctypes.Array[ctypes.c_char], offset: int) -> str:
+    size = len(storage)
+    if type(offset) is not int or offset <= 0 or offset >= size or offset % 2:
+        raise _EtwMalformedEvent()
+    raw = ctypes.string_at(ctypes.addressof(storage) + offset, size - offset)
+    end = None
+    for index in range(0, len(raw) - 1, 2):
+        if raw[index:index + 2] == b"\x00\x00":
+            end = index
+            break
+    if end is None:
+        raise _EtwMalformedEvent()
+    try:
+        return raw[:end].decode("utf-16-le", errors="strict")
+    except UnicodeDecodeError as error:
+        raise _EtwMalformedEvent() from error
+
+
 class _EtwWindowsApi:
     """Small ctypes binding; it never supplies a logfile path to ETW."""
 
@@ -665,6 +978,8 @@ class _EtwWindowsApi:
         self.tdh.TdhGetPropertySize.restype = ctypes.c_ulong
         self.tdh.TdhGetProperty.argtypes = [ctypes.POINTER(_EtwEventRecord), ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(_EtwPropertyDataDescriptor), ctypes.c_ulong, ctypes.c_void_p]
         self.tdh.TdhGetProperty.restype = ctypes.c_ulong
+        self.tdh.TdhGetEventInformation.argtypes = [ctypes.POINTER(_EtwEventRecord), ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        self.tdh.TdhGetEventInformation.restype = ctypes.c_ulong
         self.kernel32.OpenProcess.argtypes = [ctypes.c_ulong, wintypes.BOOL, ctypes.c_ulong]
         self.kernel32.OpenProcess.restype = wintypes.HANDLE
         self.kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME)]
@@ -704,6 +1019,66 @@ class _EtwWindowsApi:
         if count > 100_000 or 8 + count * 24 > len(raw):
             return frozenset()
         return frozenset(raw[8 + index * 24:8 + index * 24 + 16] for index in range(count))
+
+    def event_schema(self, record: _EtwEventRecord) -> _EtwSchemaFact:
+        size = ctypes.c_ulong(0)
+        status = int(self.tdh.TdhGetEventInformation(ctypes.byref(record), 0, None, None, ctypes.byref(size)))
+        if status != _ETW_ERROR_INSUFFICIENT_BUFFER or size.value < ctypes.sizeof(_EtwTraceEventInfoHeader) or size.value > 4 * 1024 * 1024:
+            raise _EtwMalformedEvent()
+        storage = ctypes.create_string_buffer(size.value)
+        status = int(self.tdh.TdhGetEventInformation(ctypes.byref(record), 0, None, storage, ctypes.byref(size)))
+        if status != _ETW_ERROR_SUCCESS:
+            raise _EtwMalformedEvent()
+        info = ctypes.cast(storage, ctypes.POINTER(_EtwTraceEventInfoHeader)).contents
+        header = record.EventHeader
+        descriptor = info.EventDescriptor
+        if bytes(info.ProviderGuid) != bytes(header.ProviderId):
+            raise _EtwMalformedEvent()
+        if (int(descriptor.Id), int(descriptor.Version), int(descriptor.Task), int(descriptor.Opcode)) != (
+            int(header.EventDescriptor.Id), int(header.EventDescriptor.Version), int(header.EventDescriptor.Task), int(header.EventDescriptor.Opcode),
+        ):
+            raise _EtwMalformedEvent()
+        count = int(info.PropertyCount)
+        property_size = ctypes.sizeof(_EtwEventPropertyInfo)
+        if count < 0 or count > 1024 or ctypes.sizeof(_EtwTraceEventInfoHeader) + count * property_size > len(storage):
+            raise _EtwMalformedEvent()
+        array_address = ctypes.addressof(storage) + ctypes.sizeof(_EtwTraceEventInfoHeader)
+        array = ctypes.cast(array_address, ctypes.POINTER(_EtwEventPropertyInfo))
+        properties: list[tuple[str, int]] = []
+        for index in range(count):
+            property_info = array[index]
+            name = _etw_bounded_wstring(storage, int(property_info.NameOffset))
+            if not name or any(existing == name for existing, _ in properties):
+                raise _EtwMalformedEvent()
+            if int(property_info.Flags) & _ETW_PROPERTY_STRUCT:
+                property_type = -1
+            else:
+                property_type = int(property_info.Type.nonStructType.InType)
+            properties.append((name, property_type))
+        return _EtwSchemaFact(
+            bytes(header.ProviderId),
+            int(header.EventDescriptor.Id),
+            int(header.EventDescriptor.Version),
+            int(header.EventDescriptor.Task),
+            int(header.EventDescriptor.Opcode),
+            tuple(properties),
+        )
+
+    def installed_schema_facts(self) -> tuple[_EtwSchemaFact, ...]:
+        facts: list[_EtwSchemaFact] = []
+        for provider, properties_by_event in (
+            (_ETW_KERNEL_FILE_PROVIDER_GUID, _ETW_FILE_SCHEMA_PROPERTIES),
+            (_ETW_KERNEL_PROCESS_PROVIDER_GUID, _ETW_PROCESS_SCHEMA_PROPERTIES),
+        ):
+            for event_id, version in sorted(properties_by_event):
+                spec = _ETW_SCHEMA_BY_PROVIDER_ID[(provider, event_id)]
+                record = _EtwEventRecord()
+                record.EventHeader.ProviderId = _EtwGuid.from_buffer_copy(provider)
+                record.EventHeader.EventDescriptor = _EtwEventDescriptor(
+                    event_id, version, 16, 4, spec.opcode, spec.task, 0,
+                )
+                facts.append(self.event_schema(record))
+        return tuple(facts)
 
     def has_builtin_alias(self, rid: int) -> bool:
         authority = _EtwSidIdentifierAuthority((0, 0, 0, 0, 0, 5))
@@ -778,6 +1153,12 @@ class _EtwMalformedEvent(RuntimeError):
     pass
 
 
+@dataclass(slots=True)
+class _EtwPendingMutation:
+    source_path: Path | None = None
+    target_path: Path | None = None
+
+
 class _EtwTraceState:
     """Volatile lineage and file-event state; it has no serialization path."""
 
@@ -789,10 +1170,16 @@ class _EtwTraceState:
         self._root_key: int | None = None
         self.root_start_seen = False
         self.root_stop_seen = False
+        self.root_creation_match = False
+        self.root_observed = threading.Event()
         self.malformed = False
         self.loss_detected = False
         self.events: list[FileWriteEvent] = []
-        self.file_names: dict[int, Path] = {}
+        self._file_objects: dict[int, Path] = {}
+        self._file_keys: dict[int, Path] = {}
+        self.file_names = self._file_keys
+        self._pending: dict[tuple[int, int, int, str], _EtwPendingMutation] = {}
+        self._completed_pairs: set[tuple[int, int, int, str]] = set()
 
     def mark_malformed(self) -> None:
         self.malformed = True
@@ -829,16 +1216,36 @@ class _EtwTraceState:
             return False
         return True
 
-    def record_process(self, *, pid: int, key: int, parent_pid: int, started: bool) -> None:
-        if type(pid) is not int or pid <= 0 or type(key) is not int or key <= 0 or type(parent_pid) is not int or parent_pid < 0:
+    def record_process(self, *, event_id: int, pid: int, key: int, parent_pid: int, create_time: int) -> None:
+        if (
+            type(event_id) is not int
+            or event_id not in _ETW_PROCESS_START_TASKS | _ETW_PROCESS_STOP_TASKS
+            or type(pid) is not int
+            or pid <= 0
+            or type(key) is not int
+            or key <= 0
+            or type(parent_pid) is not int
+            or parent_pid < 0
+            or type(create_time) is not int
+            or create_time <= 0
+        ):
             self.mark_malformed()
             return
+        started = event_id in _ETW_PROCESS_START_TASKS
         if pid == self.root_pid:
+            if create_time != self.root_creation_filetime:
+                self.mark_malformed()
+                return
             if not self._bind_root_key(key):
                 return
+            self.root_creation_match = True
             if started:
                 self.root_start_seen = True
+                self.root_observed.set()
             else:
+                if self._active.get(pid) != key:
+                    self.mark_malformed()
+                    return
                 self._active.pop(pid, None)
                 self.root_stop_seen = True
             return
@@ -852,9 +1259,11 @@ class _EtwTraceState:
                 parent_history.discard(0)
                 if len(parent_history) == 0:
                     return  # unrelated process; no trusted parent edge
-                if len(parent_history) != 1:
-                    self.mark_malformed()
-                    return
+                self.mark_malformed()
+                return
+            if parent_pid <= 0:
+                self.mark_malformed()
+                return
             if key in self._history.get(pid, set()):
                 self.mark_malformed()
                 return
@@ -868,22 +1277,105 @@ class _EtwTraceState:
             self.mark_malformed()
             return
         self._active.pop(pid, None)
-        if pid == self.root_pid:
-            self.root_stop_seen = True
+        if key not in self._history.get(pid, set()):
+            self.mark_malformed()
+            return
+
+    @staticmethod
+    def _merge_path(existing: Path | None, candidate: Path | None) -> Path | None:
+        if existing is not None and candidate is not None and existing != candidate:
+            return None
+        return existing or candidate
+
+    def update_file_correlation(self, *, file_object: int | None, file_key: int | None, path: Path | None) -> Path | None:
+        if (file_object is None and file_key is None) or (file_object is not None and (type(file_object) is not int or file_object <= 0)) or (file_key is not None and (type(file_key) is not int or file_key <= 0)):
+            self.mark_malformed()
+            return None
+        if path is not None and (not isinstance(path, Path) or not path.is_absolute()):
+            self.mark_malformed()
+            return None
+        resolved = path
+        for candidate in (
+            self._file_objects.get(file_object) if file_object is not None else None,
+            self._file_keys.get(file_key) if file_key is not None else None,
+        ):
+            if resolved is not None and candidate is not None and resolved != candidate:
+                self.mark_malformed()
+                return None
+            if resolved is None:
+                resolved = candidate
+        if resolved is None:
+            self.mark_malformed()
+            return None
+        if file_object is not None:
+            self._file_objects[file_object] = resolved
+        if file_key is not None:
+            self._file_keys[file_key] = resolved
+        return resolved
+
+    def cleanup_file_correlation(self, *, file_object: int | None, file_key: int | None, path: Path | None = None) -> None:
+        if file_object is None and file_key is None:
+            self.mark_malformed()
+            return
+        resolved = self.update_file_correlation(file_object=file_object, file_key=file_key, path=path)
+        if resolved is None:
+            return
+        if file_object is not None:
+            self._file_objects.pop(file_object, None)
+        if file_key is not None:
+            self._file_keys.pop(file_key, None)
+
+    def delete_file_name(self, *, file_key: int, path: Path | None = None) -> None:
+        if type(file_key) is not int or file_key <= 0:
+            self.mark_malformed()
+            return
+        known = self._file_keys.get(file_key)
+        if path is not None and (not isinstance(path, Path) or not path.is_absolute() or (known is not None and known != path)):
+            self.mark_malformed()
+            return
+        self._file_keys.pop(file_key, None)
 
     def remember_file_name(self, key: int, path: Path) -> None:
-        if type(key) is not int or key <= 0 or not isinstance(path, Path) or not path.is_absolute():
-            self.mark_malformed()
-            return
-        self.file_names[key] = path
+        self.update_file_correlation(file_object=None, file_key=key, path=path)
 
-    def record_file(self, *, pid: int, key: int, path: Path, operation: str) -> None:
+    def record_file(self, *, pid: int, key: int, path: Path, operation: str, source_path: Path | None = None, target_path: Path | None = None) -> None:
         if not self.actor_is_traced(pid, key):
             return
-        if operation not in {"write", "create", "rename", "delete", "directory_metadata"} or not isinstance(path, Path) or not path.is_absolute():
+        if operation not in _ETW_FILE_MUTATION_OPERATIONS or not isinstance(path, Path) or not path.is_absolute():
             self.mark_malformed()
             return
-        self.events.append(FileWriteEvent(path, operation, pid, True))
+        if operation in {"rename", "link"}:
+            if source_path is None or target_path is None or not source_path.is_absolute() or not target_path.is_absolute() or path != target_path:
+                self.mark_malformed()
+                return
+        self.events.append(FileWriteEvent(path, operation, pid, True, key, source_path, target_path))
+
+    def record_paired_mutation(self, *, pid: int, key: int, irp: int, operation: str, source_path: Path | None, target_path: Path | None) -> None:
+        if not self.actor_is_traced(pid, key) or operation not in {"rename", "link"} or type(irp) is not int or irp <= 0:
+            self.mark_malformed()
+            return
+        if source_path is not None and (not isinstance(source_path, Path) or not source_path.is_absolute()):
+            self.mark_malformed()
+            return
+        if target_path is not None and (not isinstance(target_path, Path) or not target_path.is_absolute()):
+            self.mark_malformed()
+            return
+        pending_key = (pid, key, irp, operation)
+        if pending_key in self._completed_pairs:
+            self.mark_malformed()
+            return
+        pending = self._pending.setdefault(pending_key, _EtwPendingMutation())
+        merged_source = self._merge_path(pending.source_path, source_path)
+        merged_target = self._merge_path(pending.target_path, target_path)
+        if (pending.source_path is not None and source_path is not None and merged_source is None) or (pending.target_path is not None and target_path is not None and merged_target is None):
+            self.mark_malformed()
+            return
+        pending.source_path = merged_source
+        pending.target_path = merged_target
+        if pending.source_path is not None and pending.target_path is not None:
+            self.events.append(FileWriteEvent(pending.target_path, operation, pid, True, key, pending.source_path, pending.target_path))
+            del self._pending[pending_key]
+            self._completed_pairs.add(pending_key)
 
     def complete_lineage(self) -> bool:
         return (
@@ -893,18 +1385,30 @@ class _EtwTraceState:
             and self.root_stop_seen
             and self._root_key is not None
             and not self._active
+            and not self._pending
+            and not self._file_objects
+            and not self._file_keys
         )
 
     def wipe(self) -> None:
-        self.file_names.clear()
+        self._active.clear()
+        self._history.clear()
+        self._root_key = None
+        self._file_objects.clear()
+        self._file_keys.clear()
+        self._pending.clear()
+        self._completed_pairs.clear()
+        self.events.clear()
+        self.root_start_seen = False
+        self.root_stop_seen = False
+        self.root_creation_match = False
+        self.root_observed.clear()
 
 
 def _etw_event_task(record: _EtwEventRecord, known: frozenset[int]) -> int | None:
     descriptor = record.EventHeader.EventDescriptor
-    for value in (int(descriptor.Task), int(descriptor.Id), int(descriptor.Opcode)):
-        if value in known:
-            return value
-    return None
+    event_id = int(descriptor.Id)
+    return event_id if event_id in known else None
 
 
 def _etw_process_start_key(record: _EtwEventRecord) -> int | None:
@@ -912,12 +1416,18 @@ def _etw_process_start_key(record: _EtwEventRecord) -> int | None:
     pointer = record.ExtendedData
     if count <= 0 or not pointer:
         return None
+    found: int | None = None
     for index in range(count):
         item = pointer[index]
-        if int(item.ExtType) != _ETW_EVENT_HEADER_EXT_TYPE_PROCESS_START_KEY or int(item.DataSize) < 8 or not int(item.DataPtr):
+        if int(item.ExtType) != _ETW_EVENT_HEADER_EXT_TYPE_PROCESS_START_KEY:
             continue
-        return int(ctypes.c_ulonglong.from_address(int(item.DataPtr)).value)
-    return None
+        if int(item.DataSize) != 8 or not int(item.DataPtr):
+            raise _EtwMalformedEvent()
+        value = int(ctypes.c_ulonglong.from_address(int(item.DataPtr)).value)
+        if value <= 0 or (found is not None and found != value):
+            raise _EtwMalformedEvent()
+        found = value
+    return found
 
 
 def _etw_property_bytes(api: _EtwWindowsApi, record: _EtwEventRecord, name: str) -> bytes | None:
@@ -999,10 +1509,10 @@ class WindowsEtwWriteTraceBackend:
     __slots__ = (
         "_api", "_session_name", "_session_id", "_properties_storage", "_properties",
         "_logger_name", "_trace_handle", "_trace_thread", "_trace_status", "_state",
-        "_devices", "_event_callback", "_buffer_callback", "_event_callback_c", "_buffer_callback_c",
+        "_devices", "_schema_facts", "_event_callback", "_buffer_callback", "_event_callback_c", "_buffer_callback_c",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, *, schema_facts: Iterable[_EtwSchemaFact] | None = None) -> None:
         self._api: _EtwWindowsApi | None = None
         self._session_name: str | None = None
         self._session_id = 0
@@ -1014,6 +1524,7 @@ class WindowsEtwWriteTraceBackend:
         self._trace_status: int | None = None
         self._state: _EtwTraceState | None = None
         self._devices: tuple[tuple[str, str], ...] = ()
+        self._schema_facts = None if schema_facts is None else tuple(schema_facts)
         self._event_callback = None
         self._buffer_callback = None
         self._event_callback_c = None
@@ -1028,12 +1539,17 @@ class WindowsEtwWriteTraceBackend:
 
     def capability(self) -> tuple[bool, bool, bool, bool]:
         try:
+            if ctypes.sizeof(ctypes.c_void_p) != 8:
+                return False, False, False, False
             api = self._ensure_api()
             providers = api.providers()
+            schema_complete = _etw_schema_facts_complete(
+                self._schema_facts if self._schema_facts is not None else api.installed_schema_facts()
+            )
             provider_available = (
-                _ETW_REQUIRED_FILE_OPERATION_SCHEMA_COMPLETE
-                and _ETW_KERNEL_FILE_PROVIDER_GUID in providers
+                _ETW_KERNEL_FILE_PROVIDER_GUID in providers
                 and _ETW_KERNEL_PROCESS_PROVIDER_GUID in providers
+                and schema_complete
             )
             privilege_available = api.has_enabled_profile_privilege() or api.has_builtin_alias(544) or api.has_builtin_alias(559)
             lineage_available = all(hasattr(api.kernel32, name) for name in ("OpenProcess", "GetProcessTimes", "IsProcessInJob"))
@@ -1061,18 +1577,23 @@ class WindowsEtwWriteTraceBackend:
         ctypes.memmove(ctypes.addressof(storage) + property_size, name_bytes, len(name_bytes))
         return storage, properties
 
-    def _enable(self, provider_bytes: bytes, keywords: int) -> None:
+    def _enable(self, provider_bytes: bytes, keywords: int, *, control_code: int = _ETW_EVENT_CONTROL_ENABLE) -> None:
         assert self._api is not None and self._session_id
         provider = _EtwGuid.from_buffer_copy(provider_bytes)
-        params = _EtwEnableTraceParameters(
-            2, _ETW_ENABLE_PROPERTY_PROCESS_START_KEY, 0, _EtwGuid(), None, 0,
-        )
+        params = None
+        if control_code in {_ETW_EVENT_CONTROL_ENABLE, _ETW_EVENT_CONTROL_CAPTURE_STATE}:
+            params = _EtwEnableTraceParameters(
+                2, _ETW_ENABLE_PROPERTY_PROCESS_START_KEY, 0, _EtwGuid(), None, 0,
+            )
         status = int(self._api.advapi32.EnableTraceEx2(
-            self._session_id, ctypes.byref(provider), _ETW_EVENT_CONTROL_ENABLE,
-            _ETW_TRACE_LEVEL_VERBOSE, keywords, 0, 5000, ctypes.byref(params),
+            self._session_id, ctypes.byref(provider), control_code,
+            _ETW_TRACE_LEVEL_VERBOSE, keywords, 0, 5000, ctypes.byref(params) if params is not None else None,
         ))
         if status != _ETW_ERROR_SUCCESS:
             raise RuntimeError("etw_provider_enable")
+
+    def _capture_process_state(self) -> None:
+        self._enable(_ETW_KERNEL_PROCESS_PROVIDER_GUID, 0x10, control_code=_ETW_EVENT_CONTROL_CAPTURE_STATE)
 
     def start(self, root_pid: int) -> None:
         if self._trace_handle or self._session_id:
@@ -1118,6 +1639,11 @@ class WindowsEtwWriteTraceBackend:
             file_keywords = 0x10 | 0x20 | 0x80 | 0x200 | 0x400 | 0x800 | 0x1000
             self._enable(_ETW_KERNEL_PROCESS_PROVIDER_GUID, 0x10)
             self._enable(_ETW_KERNEL_FILE_PROVIDER_GUID, file_keywords)
+            self._capture_process_state()
+            if not self._state.root_observed.wait(_ETW_ROOT_CAPTURE_TIMEOUT_SECONDS):
+                raise RuntimeError("etw_root_capture_timeout")
+            if self._state.malformed or self._state.loss_detected or not self._state.root_creation_match:
+                raise RuntimeError("etw_root_capture_invalid")
         except BaseException:
             self._abort_start()
             raise
@@ -1144,54 +1670,124 @@ class WindowsEtwWriteTraceBackend:
             raise _EtwMalformedEvent()
         return key
 
-    def _on_process_event(self, record: _EtwEventRecord) -> None:
+    def _validate_record_schema(self, record: _EtwEventRecord, provider: bytes) -> _EtwEventSchemaSpec | None:
+        assert self._api is not None
+        event_id = int(record.EventHeader.EventDescriptor.Id)
+        spec = _ETW_SCHEMA_BY_PROVIDER_ID.get((provider, event_id))
+        if spec is None:
+            raise _EtwMalformedEvent()
+        fact = self._api.event_schema(record)
+        if not _etw_schema_fact_matches(fact):
+            raise _EtwMalformedEvent()
+        return spec
+
+    def _on_process_event(self, record: _EtwEventRecord, event_id: int) -> None:
         state = self._state
         api = self._api
         if state is None or api is None:
             return
-        task = _etw_event_task(record, frozenset({1, 2, 15}))
-        if task is None:
+        if event_id not in {1, 2, 15}:
             state.mark_malformed()
             return
-        pid = _etw_property_int(api, record, ("ProcessId", "ProcessID"))
-        parent = _etw_property_int(api, record, ("ParentId", "ParentProcessID"))
-        if pid is None:
-            pid = int(record.EventHeader.ProcessId)
-        started = task in _ETW_PROCESS_START_TASKS
-        if parent is None:
-            if started and pid != state.root_pid:
-                raise _EtwMalformedEvent()
-            parent = 0
-        if pid <= 0:
+        pid = _etw_property_int(api, record, ("ProcessID",))
+        create_time = _etw_property_int(api, record, ("CreateTime",))
+        parent = _etw_property_int(api, record, ("ParentProcessID",))
+        if pid is None or create_time is None or (event_id in _ETW_PROCESS_START_TASKS and parent is None):
             raise _EtwMalformedEvent()
+        if parent is None:
+            parent = 0
         key = self._provider_process_key(record)
-        state.record_process(pid=pid, key=key, parent_pid=parent, started=started)
+        state.record_process(event_id=event_id, pid=pid, key=key, parent_pid=parent, create_time=create_time)
 
-    def _on_file_event(self, record: _EtwEventRecord) -> None:
+    def _on_file_event(self, record: _EtwEventRecord, event_id: int) -> None:
         state = self._state
         api = self._api
         if state is None or api is None:
             return
-        task = _etw_event_task(record, frozenset(set(_ETW_FILE_TASK_OPERATIONS) | set(_ETW_FILE_TASKS_IGNORED)))
-        if task is None:
+        if event_id not in _ETW_FILE_NONMUTATION_IDS | _ETW_FILE_MUTATION_IDS:
             state.mark_malformed()
             return
         pid = int(record.EventHeader.ProcessId)
         key = self._provider_process_key(record)
-        if task in _ETW_FILE_TASKS_IGNORED:
-            state.actor_is_traced(pid, key)
-            return
         if not state.actor_is_traced(pid, key):
             return
-        object_key = _etw_property_int(api, record, ("FileObject", "FileKey"))
-        raw_path = _etw_property_text(api, record, ("FilePath", "FileName", "OpenPath"))
-        path = _etw_path_from_provider(raw_path, self._devices) if raw_path is not None else None
-        if path is None and object_key is not None:
-            path = state.file_names.get(object_key)
-        if path is None or object_key is None:
+        if event_id == 10:
+            file_key = _etw_property_int(api, record, ("FileKey",))
+            raw_path = _etw_property_text(api, record, ("FileName",))
+            if file_key is None or raw_path is None:
+                raise _EtwMalformedEvent()
+            state.update_file_correlation(file_object=None, file_key=file_key, path=_etw_path_from_provider(raw_path, self._devices))
+            return
+        if event_id == 11:
+            file_key = _etw_property_int(api, record, ("FileKey",))
+            raw_path = _etw_property_text(api, record, ("FileName",))
+            if file_key is None or raw_path is None:
+                raise _EtwMalformedEvent()
+            state.delete_file_name(file_key=file_key, path=_etw_path_from_provider(raw_path, self._devices))
+            return
+        if event_id in {12, 30}:
+            file_object = _etw_property_int(api, record, ("FileObject",))
+            raw_path = _etw_property_text(api, record, ("FileName",))
+            if file_object is None or raw_path is None:
+                raise _EtwMalformedEvent()
+            path = state.update_file_correlation(file_object=file_object, file_key=None, path=_etw_path_from_provider(raw_path, self._devices))
+            if event_id == 30:
+                if path is None:
+                    raise _EtwMalformedEvent()
+                state.record_file(pid=pid, key=key, path=path, operation="create")
+            return
+        if event_id in {13, 14}:
+            file_object = _etw_property_int(api, record, ("FileObject",))
+            file_key = _etw_property_int(api, record, ("FileKey",))
+            if file_object is None or file_key is None:
+                raise _EtwMalformedEvent()
+            state.cleanup_file_correlation(file_object=file_object, file_key=file_key)
+            return
+        if event_id in {15, 22, 24, 32, 34}:
+            return
+        file_object = _etw_property_int(api, record, ("FileObject",))
+        file_key = _etw_property_int(api, record, ("FileKey",))
+        if file_object is None or file_key is None:
             raise _EtwMalformedEvent()
-        state.remember_file_name(object_key, path)
-        state.record_file(pid=pid, key=key, path=path, operation=_ETW_FILE_TASK_OPERATIONS[task])
+        if event_id in {20, 25}:
+            raw_path = _etw_property_text(api, record, ("FileName",))
+            if raw_path is None:
+                raise _EtwMalformedEvent()
+            state.update_file_correlation(file_object=file_object, file_key=file_key, path=_etw_path_from_provider(raw_path, self._devices))
+            return
+        if event_id in {27, 28}:
+            source_path = state.update_file_correlation(file_object=file_object, file_key=file_key, path=None)
+            raw_path = _etw_property_text(api, record, ("FilePath",))
+            irp = _etw_property_int(api, record, ("Irp",))
+            if source_path is None or raw_path is None or irp is None:
+                raise _EtwMalformedEvent()
+            target_path = _etw_path_from_provider(raw_path, self._devices)
+            state.record_paired_mutation(
+                pid=pid,
+                key=key,
+                irp=irp,
+                operation=_ETW_FILE_TASK_OPERATIONS[event_id],
+                source_path=source_path,
+                target_path=target_path,
+            )
+            return
+        direct_path = None
+        if event_id == 26:
+            raw_path = _etw_property_text(api, record, ("FilePath",))
+            if raw_path is None:
+                raise _EtwMalformedEvent()
+            direct_path = _etw_path_from_provider(raw_path, self._devices)
+        path = state.update_file_correlation(file_object=file_object, file_key=file_key, path=direct_path)
+        if path is None:
+            raise _EtwMalformedEvent()
+        operation = _ETW_FILE_TASK_OPERATIONS[event_id]
+        if event_id in {19, 29}:
+            irp = _etw_property_int(api, record, ("Irp",))
+            if irp is None:
+                raise _EtwMalformedEvent()
+            state.record_paired_mutation(pid=pid, key=key, irp=irp, operation=operation, source_path=path, target_path=None)
+            return
+        state.record_file(pid=pid, key=key, path=path, operation=operation)
 
     def _on_event(self, record_pointer: ctypes.POINTER(_EtwEventRecord)) -> None:
         state = self._state
@@ -1202,10 +1798,13 @@ class WindowsEtwWriteTraceBackend:
         try:
             record = record_pointer.contents
             provider = bytes(record.EventHeader.ProviderId)
-            if provider in {_ETW_KERNEL_PROCESS_PROVIDER_GUID, _ETW_LEGACY_PROCESS_CLASS_GUID}:
-                self._on_process_event(record)
-            elif provider in {_ETW_KERNEL_FILE_PROVIDER_GUID, _ETW_LEGACY_FILE_CLASS_GUID}:
-                self._on_file_event(record)
+            event_id = int(record.EventHeader.EventDescriptor.Id)
+            if provider == _ETW_KERNEL_PROCESS_PROVIDER_GUID:
+                if self._validate_record_schema(record, provider) is not None:
+                    self._on_process_event(record, event_id)
+            elif provider == _ETW_KERNEL_FILE_PROVIDER_GUID:
+                if self._validate_record_schema(record, provider) is not None:
+                    self._on_file_event(record, event_id)
         except BaseException:
             state.mark_malformed()
 
@@ -1237,6 +1836,8 @@ class WindowsEtwWriteTraceBackend:
             self._close_consumer()
         except BaseException:
             pass
+        if self._state is not None:
+            self._state.wipe()
         self._session_id = 0
         self._trace_handle = 0
         self._trace_thread = None
@@ -1303,6 +1904,9 @@ class FileWriteEvent:
     operation: str
     pid: int
     lineage_complete: bool = True
+    process_generation: int | None = None
+    source_path: Path | None = None
+    target_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1398,7 +2002,7 @@ def evaluate_disk_gate(
         return str(error)
     state_root = state_workspace.resolve()
     for event in observation.events:
-        if type(event) is not FileWriteEvent or type(event.pid) is not int or event.pid <= 0 or event.operation not in {"write", "create", "rename", "delete", "directory_metadata"}:
+        if type(event) is not FileWriteEvent or type(event.pid) is not int or event.pid <= 0 or type(event.process_generation) is not int or event.process_generation <= 0 or event.operation not in _ETW_FILE_MUTATION_OPERATIONS | {"directory_metadata"}:
             return "observer_incomplete"
         if not event.lineage_complete:
             return "observer_incomplete"
@@ -1406,9 +2010,21 @@ def evaluate_disk_gate(
             path = event.path.resolve()
         except OSError:
             return "observer_incomplete"
-        if event.operation == "directory_metadata":
+        if event.operation in {"rename", "link"}:
+            if event.source_path is None or event.target_path is None or not event.source_path.is_absolute() or not event.target_path.is_absolute() or event.target_path != event.path:
+                return "observer_incomplete"
+            try:
+                source_path = event.source_path.resolve()
+                target_path = event.target_path.resolve()
+            except OSError:
+                return "observer_incomplete"
+            if source_path not in allowlist or target_path not in allowlist:
+                return "unauthorized_write"
+        elif event.operation == "directory_metadata":
             if path != state_root:
                 return "unauthorized_write"
+        elif event.operation == "metadata" and path == state_root:
+            continue
         elif path not in allowlist:
             return "unauthorized_write"
     return "disk_gate_pass"
@@ -2118,7 +2734,7 @@ def _read_pipe(fd: int, cap: int, output: dict[str, bytes], key: str, failed: di
 def _configure_kernel32(kernel32: Any) -> None:
     required = (
         "CreateJobObjectW", "SetInformationJobObject", "CreateProcessW", "AssignProcessToJobObject",
-        "ResumeThread", "WaitForSingleObject", "TerminateJobObject", "GetExitCodeProcess",
+        "ResumeThread", "WaitForSingleObject", "TerminateProcess", "TerminateJobObject", "GetExitCodeProcess",
         "QueryInformationJobObject", "CloseHandle", "InitializeProcThreadAttributeList",
         "UpdateProcThreadAttribute", "DeleteProcThreadAttributeList", "GetCurrentProcess", "GetSystemInfo",
     )
@@ -2136,6 +2752,8 @@ def _configure_kernel32(kernel32: Any) -> None:
     kernel32.ResumeThread.restype = wintypes.DWORD
     kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
     kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
     kernel32.TerminateJobObject.restype = wintypes.BOOL
     kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
@@ -2175,6 +2793,7 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
     effective_cap = effective_outer_cap(requested_cap, page_size)
     stdout_read = stdout_write = stderr_read = stderr_write = None
     job = process_handle = thread_handle = None
+    job_assigned = False
     reader_threads: list[threading.Thread] = []
     output: dict[str, bytes] = {}
     failed: dict[str, str] = {}
@@ -2237,12 +2856,14 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
         process_handle, thread_handle = process_info.hProcess, process_info.hThread
         if not kernel32.AssignProcessToJobObject(job, process_handle):
             _fixed("outer_job_assign")
+        job_assigned = True
         if on_assigned is not None:
             try:
                 on_assigned(int(process_info.dwProcessId))
             except BaseException:
                 _fixed("outer_observer_start")
-        if kernel32.ResumeThread(thread_handle) == 0xFFFFFFFF:
+        resume_count = int(kernel32.ResumeThread(thread_handle))
+        if resume_count in {0, 0xFFFFFFFF}:
             _fixed("outer_process_resume")
         os.close(stdout_write); stdout_write = None
         os.close(stderr_write); stderr_write = None
@@ -2329,9 +2950,13 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
         return CoordinatorRun(payload, observation, error_code)
     except CompletePathError as error:
         error_code = str(error)
-        if process_handle and job:
+        if process_handle:
             try:
-                kernel32.TerminateJobObject(job, 1)
+                if job_assigned and job:
+                    if not kernel32.TerminateJobObject(job, 1):
+                        cleanup_complete = False
+                elif not kernel32.TerminateProcess(process_handle, 1):
+                    cleanup_complete = False
                 kernel32.WaitForSingleObject(process_handle, _INFINITE)
             except BaseException:
                 cleanup_complete = False

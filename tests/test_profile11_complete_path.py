@@ -42,6 +42,21 @@ class Profile11CompletePathTests(unittest.TestCase):
         total = source + verify_state + ack + total_unbucketed
         return screen.StageSample(source, verify_state, ack, total, breakdown, total_unbucketed)
 
+    @staticmethod
+    def _schema_facts() -> tuple[screen._EtwSchemaFact, ...]:
+        return tuple(
+            screen._EtwSchemaFact(
+                spec.provider,
+                spec.event_id,
+                version,
+                spec.task,
+                spec.opcode,
+                screen._ETW_SCHEMA_PROPERTIES[(spec.provider, spec.event_id, version)],
+            )
+            for spec in screen._ETW_SCHEMA_SPECS
+            for version in sorted(spec.versions)
+        )
+
     def test_manifest_and_exact_pins(self) -> None:
         manifest = json.loads(screen.MANIFEST_PATH.read_text(encoding="utf-8"))
         self.assertEqual(manifest["topology"], {"batch_operations": 100, "proofs": 1, "source_frames": 1, "verifier_batches": 1, "outbox_acks": 100})
@@ -135,20 +150,57 @@ class Profile11CompletePathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="profile11-observer-") as directory:
             self.assertEqual(screen.evaluate_disk_gate(result, state_workspace=Path(directory)), "observer_unavailable")
 
-    def test_native_etw_schema_and_abi_fail_closed(self) -> None:
-        self.assertFalse(screen._ETW_REQUIRED_FILE_OPERATION_SCHEMA_COMPLETE)
+    def test_native_etw_schema_and_abi_gate_is_exact(self) -> None:
+        facts = self._schema_facts()
+        self.assertTrue(screen._etw_schema_facts_complete(facts))
+        self.assertEqual(len(facts), len(screen._ETW_SCHEMA_KEYS))
         self.assertEqual(screen._ETW_FILE_TASK_OPERATIONS[16], "write")
         self.assertEqual(screen._ETW_FILE_TASK_OPERATIONS[19], "rename")
         self.assertEqual(screen._ETW_FILE_TASK_OPERATIONS[26], "delete")
+        self.assertEqual(screen._ETW_FILE_TASK_OPERATIONS[29], "link")
+        for index, bad in (
+            (0, screen._EtwSchemaFact(facts[0].provider, facts[0].event_id, facts[0].version, facts[0].task + 1, facts[0].opcode, facts[0].properties)),
+            (1, screen._EtwSchemaFact(facts[1].provider, facts[1].event_id, facts[1].version, facts[1].task, facts[1].opcode, facts[1].properties + (("Unknown", screen._U32),))),
+            (2, screen._EtwSchemaFact(facts[2].provider, facts[2].event_id, facts[2].version, facts[2].task, facts[2].opcode, ((facts[2].properties[0][0], screen._U32),) + facts[2].properties[1:])),
+        ):
+            with self.subTest(index=index):
+                invalid = facts[:index] + (bad,) + facts[index + 1:]
+                self.assertFalse(screen._etw_schema_facts_complete(invalid))
+        self.assertFalse(screen._etw_schema_facts_complete(facts[:-1]))
+        self.assertFalse(screen._etw_schema_facts_complete(facts + (facts[0],)))
+        unknown = screen._EtwSchemaFact(b"unknown-provider", 999, 0, 999, 0, ())
+        self.assertFalse(screen._etw_schema_fact_matches(unknown))
         if ctypes.sizeof(ctypes.c_void_p) == 8:
             self.assertEqual(ctypes.sizeof(screen._EtwEventTraceProperties), 120)
             self.assertEqual(ctypes.sizeof(screen._EtwEventRecord), 112)
             self.assertEqual(ctypes.sizeof(screen._EtwTraceLogfileHeader), 280)
             self.assertEqual(ctypes.sizeof(screen._EtwEventTraceLogfileW), 448)
-        backend = screen.WindowsEtwWriteTraceBackend()
+        backend = screen.WindowsEtwWriteTraceBackend(schema_facts=facts)
         capability = backend.capability()
-        self.assertFalse(capability[0])
-        self.assertEqual(screen.WindowsEtwFileWriteObserver(backend).probe().status, "observer_unavailable")
+        if os.name == "nt":
+            self.assertTrue(capability[0])
+        else:
+            self.assertFalse(capability[0])
+        invalid_backend = screen.WindowsEtwWriteTraceBackend(schema_facts=facts[:-1])
+        self.assertFalse(invalid_backend.capability()[0])
+
+    def test_installed_tdh_schema_matches_every_allowlisted_descriptor(self) -> None:
+        if os.name != "nt":
+            self.skipTest("Windows TDH is unavailable")
+        api = screen._EtwWindowsApi()
+        facts = []
+        for provider, table in (
+            (screen._ETW_KERNEL_FILE_PROVIDER_GUID, screen._ETW_FILE_SCHEMA_PROPERTIES),
+            (screen._ETW_KERNEL_PROCESS_PROVIDER_GUID, screen._ETW_PROCESS_SCHEMA_PROPERTIES),
+        ):
+            for event_id, version in sorted(table):
+                spec = screen._ETW_SCHEMA_BY_PROVIDER_ID[(provider, event_id)]
+                record = screen._EtwEventRecord()
+                record.EventHeader.ProviderId = screen._EtwGuid.from_buffer_copy(provider)
+                record.EventHeader.EventDescriptor = screen._EtwEventDescriptor(event_id, version, 16, 4, spec.opcode, spec.task, 0)
+                facts.append(api.event_schema(record))
+        self.assertEqual(len(facts), 54)
+        self.assertTrue(screen._etw_schema_facts_complete(facts))
 
     def test_native_etw_realtime_session_has_no_logfile(self) -> None:
         backend = screen.WindowsEtwWriteTraceBackend()
@@ -166,38 +218,48 @@ class Profile11CompletePathTests(unittest.TestCase):
 
     def test_etw_trace_state_requires_causal_lineage_and_generation(self) -> None:
         state = screen._EtwTraceState(100, 123)
-        state.record_process(pid=100, key=1000, parent_pid=1, started=True)
-        state.record_process(pid=101, key=1001, parent_pid=100, started=True)
-        state.record_process(pid=102, key=1002, parent_pid=101, started=True)
+        state.record_process(event_id=1, pid=100, key=1000, parent_pid=1, create_time=123)
+        state.record_process(event_id=1, pid=101, key=1001, parent_pid=100, create_time=124)
+        state.record_process(event_id=1, pid=102, key=1002, parent_pid=101, create_time=125)
         state.record_file(pid=101, key=1001, path=Path(r"C:\state\state.sqlite"), operation="write")
-        state.record_process(pid=102, key=1002, parent_pid=101, started=False)
-        state.record_process(pid=101, key=1001, parent_pid=100, started=False)
-        state.record_process(pid=100, key=1000, parent_pid=1, started=False)
+        state.record_process(event_id=2, pid=102, key=1002, parent_pid=101, create_time=125)
+        state.record_process(event_id=2, pid=101, key=1001, parent_pid=100, create_time=124)
+        state.record_process(event_id=2, pid=100, key=1000, parent_pid=1, create_time=123)
         self.assertTrue(state.complete_lineage())
         self.assertEqual(len(state.events), 1)
+        self.assertTrue(state.root_observed.is_set())
 
         reused = screen._EtwTraceState(100, 123)
-        reused.record_process(pid=100, key=1000, parent_pid=1, started=True)
-        reused.record_process(pid=101, key=1001, parent_pid=100, started=True)
-        reused.record_process(pid=101, key=1001, parent_pid=100, started=False)
-        reused.record_process(pid=101, key=2001, parent_pid=100, started=True)
+        reused.record_process(event_id=1, pid=100, key=1000, parent_pid=1, create_time=123)
+        reused.record_process(event_id=1, pid=101, key=1001, parent_pid=100, create_time=124)
+        reused.record_process(event_id=2, pid=101, key=1001, parent_pid=100, create_time=124)
+        reused.record_process(event_id=1, pid=101, key=2001, parent_pid=100, create_time=124)
         reused.record_file(pid=101, key=1001, path=Path(r"C:\state\proof.bin"), operation="write")
         self.assertTrue(reused.malformed)
         self.assertFalse(reused.complete_lineage())
 
     def test_etw_trace_state_rejects_missing_termination_and_bad_paths(self) -> None:
         state = screen._EtwTraceState(100, 123)
-        state.record_process(pid=100, key=1000, parent_pid=1, started=True)
-        state.record_process(pid=101, key=1001, parent_pid=100, started=True)
+        state.record_process(event_id=1, pid=100, key=1000, parent_pid=1, create_time=123)
+        state.record_process(event_id=1, pid=101, key=1001, parent_pid=100, create_time=124)
         state.record_file(pid=101, key=1001, path=Path(r"relative.tmp"), operation="write")
         self.assertTrue(state.malformed)
         self.assertFalse(state.complete_lineage())
 
         missing_stop = screen._EtwTraceState(100, 123)
-        missing_stop.record_process(pid=100, key=1000, parent_pid=1, started=True)
-        missing_stop.record_process(pid=101, key=1001, parent_pid=100, started=True)
-        missing_stop.record_process(pid=100, key=1000, parent_pid=1, started=False)
+        missing_stop.record_process(event_id=1, pid=100, key=1000, parent_pid=1, create_time=123)
+        missing_stop.record_process(event_id=1, pid=101, key=1001, parent_pid=100, create_time=124)
+        missing_stop.record_process(event_id=2, pid=100, key=1000, parent_pid=1, create_time=123)
         self.assertFalse(missing_stop.complete_lineage())
+
+        wrong_root_time = screen._EtwTraceState(100, 123)
+        wrong_root_time.record_process(event_id=1, pid=100, key=1000, parent_pid=1, create_time=124)
+        self.assertTrue(wrong_root_time.malformed)
+        unrelated_parent = screen._EtwTraceState(100, 123)
+        unrelated_parent.record_process(event_id=1, pid=100, key=1000, parent_pid=1, create_time=123)
+        unrelated_parent.record_process(event_id=1, pid=101, key=1001, parent_pid=999, create_time=124)
+        self.assertFalse(unrelated_parent.malformed)
+        self.assertNotIn(101, unrelated_parent._active)
 
     def test_etw_device_path_mapping_fails_closed_for_unknown_devices(self) -> None:
         self.assertEqual(
@@ -208,6 +270,62 @@ class Profile11CompletePathTests(unittest.TestCase):
             screen._etw_path_from_provider(r"\Device\UnknownVolume\state.sqlite", ())
         with self.assertRaises(screen._EtwMalformedEvent):
             screen._etw_path_from_provider(r"relative\state.sqlite", ())
+
+    def test_file_event_id_allowlist_and_pair_correlation_are_fail_closed(self) -> None:
+        self.assertEqual(
+            screen._ETW_FILE_NONMUTATION_IDS,
+            frozenset({10, 11, 12, 13, 14, 15, 20, 22, 24, 25, 32, 34}),
+        )
+        self.assertEqual(
+            screen._ETW_FILE_MUTATION_IDS,
+            frozenset({16, 17, 18, 19, 21, 23, 26, 27, 28, 29, 30, 31, 33}),
+        )
+        self.assertEqual(screen._ETW_FILE_TASK_OPERATIONS[29], "link")
+        state = screen._EtwTraceState(100, 123)
+        state.record_process(event_id=1, pid=100, key=1000, parent_pid=1, create_time=123)
+        source = Path(r"C:\state\source.sqlite")
+        target = Path(r"C:\state\target.sqlite")
+        state.update_file_correlation(file_object=7, file_key=8, path=source)
+        state.record_paired_mutation(pid=100, key=1000, irp=9, operation="link", source_path=source, target_path=None)
+        self.assertEqual(state.events, [])
+        self.assertFalse(state.complete_lineage())
+        state.record_paired_mutation(pid=100, key=1000, irp=9, operation="link", source_path=None, target_path=target)
+        self.assertEqual(len(state.events), 1)
+        self.assertEqual(state.events[0].operation, "link")
+        self.assertEqual(state.events[0].source_path, source)
+        self.assertEqual(state.events[0].target_path, target)
+        state.record_paired_mutation(pid=100, key=1000, irp=9, operation="link", source_path=source, target_path=target)
+        self.assertTrue(state.malformed)
+        conflict = screen._EtwTraceState(100, 123)
+        conflict.record_process(event_id=1, pid=100, key=1000, parent_pid=1, create_time=123)
+        conflict.update_file_correlation(file_object=7, file_key=8, path=source)
+        conflict.update_file_correlation(file_object=7, file_key=8, path=target)
+        self.assertTrue(conflict.malformed)
+
+    def test_event_id_first_dispatch_does_not_relabel_set_link(self) -> None:
+        backend = screen.WindowsEtwWriteTraceBackend()
+        backend._state = screen._EtwTraceState(100, 123)
+        record = screen._EtwEventRecord()
+        record.EventHeader.ProviderId = screen._EtwGuid.from_buffer_copy(screen._ETW_KERNEL_FILE_PROVIDER_GUID)
+        record.EventHeader.EventDescriptor = screen._EtwEventDescriptor(29, 0, 16, 4, 0, 19, 0)
+        with mock.patch.object(screen.WindowsEtwWriteTraceBackend, "_validate_record_schema", autospec=True, return_value=screen._ETW_SCHEMA_BY_PROVIDER_ID[(screen._ETW_KERNEL_FILE_PROVIDER_GUID, 29)]) as validate, mock.patch.object(screen.WindowsEtwWriteTraceBackend, "_on_file_event", autospec=True) as dispatch:
+            backend._on_event(ctypes.pointer(record))
+        validate.assert_called_once_with(backend, mock.ANY, screen._ETW_KERNEL_FILE_PROVIDER_GUID)
+        dispatch.assert_called_once_with(backend, mock.ANY, 29)
+
+    def test_capture_state_uses_process_start_key_and_waits_for_root_marker(self) -> None:
+        backend = screen.WindowsEtwWriteTraceBackend()
+        calls: list[tuple[int, int]] = []
+        api = mock.Mock()
+        api.advapi32.EnableTraceEx2.return_value = 0
+        backend._api = api
+        backend._session_id = 7
+        backend._capture_process_state()
+        args = api.advapi32.EnableTraceEx2.call_args.args
+        calls.append((args[2], args[3]))
+        self.assertEqual(calls, [(screen._ETW_EVENT_CONTROL_CAPTURE_STATE, screen._ETW_TRACE_LEVEL_VERBOSE)])
+        parameters = ctypes.cast(args[7], ctypes.POINTER(screen._EtwEnableTraceParameters)).contents
+        self.assertEqual(parameters.EnableProperty, screen._ETW_ENABLE_PROPERTY_PROCESS_START_KEY)
 
     def test_screen_does_not_launch_without_ready_observer(self) -> None:
         observer = screen.WindowsEtwFileWriteObserver()
@@ -252,26 +370,33 @@ class Profile11CompletePathTests(unittest.TestCase):
     def test_disk_allowlist_allows_configured_state_durability_only(self) -> None:
         with tempfile.TemporaryDirectory(prefix="profile11-disk-") as directory:
             root = Path(directory)
-            events = tuple(screen.FileWriteEvent(path, op, 100 + index) for index, (path, op) in enumerate((
+            events = tuple(screen.FileWriteEvent(path, op, 100 + index, True, 1) for index, (path, op) in enumerate((
                 (root / "state.sqlite", "write"),
                 (root / "state.sqlite-journal", "create"),
                 (root / "state.sqlite-journal", "delete"),
                 (root / "state.sqlite.runtime-lock", "write"),
+                (root / "state.sqlite", "metadata"),
+                (root / "state.sqlite", "flush"),
+                (root / "state.sqlite", "fsctl"),
+                (root, "metadata"),
                 (root, "directory_metadata"),
             )))
             ready = screen.FileWriteObservation("observer_ready", True, True, True, False, events)
             self.assertEqual(screen.evaluate_disk_gate(ready, state_workspace=root), "disk_gate_pass")
-            forbidden = screen.FileWriteObservation("observer_ready", True, True, True, False, (screen.FileWriteEvent(root / "deleted-proof.tmp", "delete", 101),))
+            forbidden = screen.FileWriteObservation("observer_ready", True, True, True, False, (screen.FileWriteEvent(root / "deleted-proof.tmp", "delete", 101, True, 1),))
             self.assertEqual(screen.evaluate_disk_gate(forbidden, state_workspace=root), "unauthorized_write")
-            nonconfigured = screen.FileWriteObservation("observer_ready", True, True, True, False, (screen.FileWriteEvent(root / "state.sqlite-wal", "write", 101),))
+            nonconfigured = screen.FileWriteObservation("observer_ready", True, True, True, False, (screen.FileWriteEvent(root / "state.sqlite-wal", "write", 101, True, 1),))
             self.assertEqual(screen.evaluate_disk_gate(nonconfigured, state_workspace=root), "unauthorized_write")
             for filename in (
                 "proof.bin", "signature.bin", "frame.bin", "statement.bin", "digest.bin", "phi.bin",
                 "temp.tmp", "spill.bin", "stdout.log", "stderr.log", "crash.dmp", "core",
             ):
-                for operation in ("create", "write", "rename", "delete"):
+                for operation in ("create", "write", "delete", "rename", "link", "metadata", "flush", "fsctl"):
                     with self.subTest(filename=filename, operation=operation):
-                        event = screen.FileWriteEvent(root / filename, operation, 101)
+                        path = root / filename
+                        source_path = root / "state.sqlite" if operation in {"rename", "link"} else None
+                        target_path = path if operation in {"rename", "link"} else None
+                        event = screen.FileWriteEvent(path, operation, 101, True, 1, source_path, target_path)
                         self.assertEqual(
                             screen.evaluate_disk_gate(screen.FileWriteObservation("observer_ready", True, True, True, False, (event,)), state_workspace=root),
                             "unauthorized_write",

@@ -116,18 +116,27 @@ ETW/provider, privilege, PID-lineage, loss, and stop evidence it reports `observ
 
 The native implementation uses a realtime, memory-only `StartTraceW`/`OpenTraceW`/`ProcessTrace`
 session for the registered Kernel-File and Kernel-Process providers; it supplies no ETL/PML/log
-filename. It remains fail-closed here because the installed Kernel-File schema does not provide a
-decodable directory-only metadata mutation event, and file-name correlation can be lost. Provider
-presence alone therefore cannot establish complete observation: until an independently verified
-schema and external trace/isolation evidence cover every required event class, the backend must not
-report `observer_ready` or support a complete-path run. See Microsoft's [system provider]
-documentation for the provider/session boundary.
+filename. At runtime it requires the exact TDH schema allowlist (ID, version, task, opcode, property
+names, order, and types), dispatches by event ID first, treats NameCreate/NameDelete/Create/DirEnum/
+DirNotify as correlation-only, and records the distinct Write, SetInformation, SetDelete, Rename,
+Flush, FSCTL, DeletePath, RenamePath, SetLinkPath, SetLink, CreateNewFile, SetSecurity, and SetEA
+mutation attempts. Event 29 is SetLink (task 19), never Rename. FileObject/FileKey correlation is
+volatile; incomplete, conflicting, relative, unknown-device, or unpaired paths fail closed. The
+root is created suspended, assigned to the containment Job, and resumed only after the observer has
+enabled both providers, requested process capture state, and matched the root PID, process-start key,
+and `CreateTime` to `GetProcessTimes`. Every descendant must terminate cleanly and ETW loss or schema
+failure makes the observation incomplete. Provider presence alone is not readiness; this host's
+non-elevated capability probe therefore remains unavailable until the required privilege and external
+trace/isolation evidence exist. See Microsoft's [system provider] documentation for the provider/session
+boundary.
 
 [system provider]: https://learn.microsoft.com/en-us/windows/win32/etw/system-providers
 
 Only the selected State DB, configured SQLite DELETE journal, State runtime lock, and necessary
-State-directory metadata are authorized. Proof, signature, frame, statement, digest, PHI, temporary,
-witness/nonce, spill, stdout/stderr log, crash-dump, and core writes—including files later deleted—are forbidden.
+State-directory metadata are authorized; metadata, flush, and FSCTL attempts on the exact selected
+State DB are included. An unconfigured WAL/SHM path is not authorized. Proof, signature, frame,
+statement, digest, PHI, temporary, witness/nonce, spill, stdout/stderr log, crash-dump, and core
+writes—including files later deleted—are forbidden.
 
 The schedule is one untimed warmup followed by exactly five measured samples; nearest-rank p95 is the
 maximum of those five samples. The aggregate contains only fixed counts, timings, peak bytes, fixed
