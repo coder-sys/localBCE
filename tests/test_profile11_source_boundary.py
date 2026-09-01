@@ -360,25 +360,31 @@ class Profile11SourceBoundaryTests(unittest.TestCase):
     def test_source_caller_fails_before_accepting_on_pinned_runner_failure(self) -> None:
         batch = self._batch()
         witness, seed, randomizer = self._source_values()
-        payload_ref: list[bytearray] = []
+        for runner_error, source_code in (
+            ("verifier_child_image_identity", "source_process"),
+            ("verifier_timeout", "source_timeout"),
+            ("verifier_stream_input_incomplete", "source_process"),
+        ):
+            with self.subTest(runner_error=runner_error):
+                payload_ref: list[bytearray] = []
 
-        def runner(*args: object, **kwargs: object) -> ContainedVerifierResult:
-            del kwargs
-            payload_ref.append(args[2])  # type: ignore[arg-type]
-            raise VerifierProcessError("verifier_child_image_identity")
+                def runner(*args: object, **kwargs: object) -> ContainedVerifierResult:
+                    del kwargs
+                    payload_ref.append(args[2])  # type: ignore[arg-type]
+                    raise VerifierProcessError(runner_error)
 
-        with patch("profile11_source_boundary.run_contained_verifier_stream", side_effect=runner):
-            with self.assertRaisesRegex(SourceBoundaryError, "source_process"):
-                self.caller.prove_one(
-                    batch=batch,
-                    source_key_epoch=self.queue_config.source_key_epoch,
-                    secret_key=self.secret_key,
-                    witness=witness,
-                    seed=seed,
-                    randomizer=randomizer,
-                )
-        self.assertEqual(len(payload_ref), 1)
-        self.assertEqual(payload_ref[0], bytearray())
+                with patch("profile11_source_boundary.run_contained_verifier_stream", side_effect=runner):
+                    with self.assertRaisesRegex(SourceBoundaryError, source_code):
+                        self.caller.prove_one(
+                            batch=batch,
+                            source_key_epoch=self.queue_config.source_key_epoch,
+                            secret_key=self.secret_key,
+                            witness=witness,
+                            seed=seed,
+                            randomizer=randomizer,
+                        )
+                self.assertEqual(len(payload_ref), 1)
+                self.assertEqual(payload_ref[0], bytearray())
 
     def test_one_queue_batch_uses_one_appliance_frame_one_c_call_and_settles_100(self) -> None:
         verifier_config = source_auth_adapter.SourceAuthVerifierConfig(

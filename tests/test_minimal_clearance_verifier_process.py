@@ -1016,17 +1016,21 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             workspace = Path(root_name)
             executable = Path(sys._base_executable)
             payload = executable.read_bytes()
-            with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_input_incomplete"):
-                process.run_contained_verifier_stream(
-                    executable,
-                    ("-c", "import time;time.sleep(60)"),
-                    b"x" * 9_468,
-                    workspace=workspace,
-                    timeout_seconds=1.0,
-                    expected_executable_size_bytes=len(payload),
-                    expected_executable_sha256=hashlib.sha256(payload).digest(),
-                    expected_input_bytes=9_468,
-                )
+            result = process.run_contained_verifier_stream(
+                executable,
+                ("-c", "import time;time.sleep(60)"),
+                b"x" * 9_468,
+                workspace=workspace,
+                timeout_seconds=1.0,
+                expected_executable_size_bytes=len(payload),
+                expected_executable_sha256=hashlib.sha256(payload).digest(),
+                expected_input_bytes=9_468,
+            )
+            self.assertTrue(result.timed_out)
+            self.assertEqual(result.stdout, b"")
+            self.assertEqual(result.stderr, b"")
+            self.assertTrue(result.process_tree_complete)
+            self.assertTrue(result.cleanup_complete)
             self.assertEqual(tuple(workspace.iterdir()), ())
 
     @unittest.skipUnless(os.name == "nt", "Windows bounded child-output test")

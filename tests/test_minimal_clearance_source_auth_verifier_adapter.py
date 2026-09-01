@@ -356,7 +356,7 @@ class SourceAuthAdapterTests(unittest.TestCase):
                         self.fixture.adapter.verify(VolatileProofHandoff(bytearray(self.fixture.frame)), self.fixture.batch)
 
     def test_runner_timeout_and_containment_errors_are_held(self) -> None:
-        for error, code in ((VerifierProcessError("verifier_timeout"), "verifier_timeout"), (VerifierProcessError("verifier_job_assign"), "verifier_transport"), (RuntimeError("internal"), "verifier_transport")):
+        for error, code in ((VerifierProcessError("verifier_timeout"), "verifier_timeout"), (VerifierProcessError("verifier_stream_input_incomplete"), "verifier_transport"), (VerifierProcessError("verifier_job_assign"), "verifier_transport"), (RuntimeError("internal"), "verifier_transport")):
             with self.subTest(code=code):
                 with patch("app.minimal_clearance_source_auth_verifier_adapter.run_contained_verifier_stream", side_effect=error):
                     with self.assertRaisesRegex(QueueHeldError, code):

@@ -1719,7 +1719,7 @@ def run_contained_verifier_stream(
         cleanup_error: VerifierProcessError | None = None
         if writer.is_alive():
             cleanup_error = VerifierProcessError("verifier_stream_cleanup")
-        elif writer_failure and result is not None:
+        elif writer_failure and result is not None and result.timed_out is not True:
             cleanup_error = VerifierProcessError(writer_failure["code"])
         try:
             _cleanup_verifier_workspace(workspace)
