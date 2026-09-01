@@ -1,0 +1,100 @@
+{
+  "schema": "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH-MANIFEST/v1",
+  "profile": "BLIND-ZKBPP-RANGE100-CDG-DIRECT-SEEDED-V1",
+  "topology": {
+    "batch_operations": 100,
+    "proofs": 1,
+    "source_frames": 1,
+    "verifier_batches": 1,
+    "outbox_acks": 100
+  },
+  "limits": {
+    "component_admission_bytes": 4500000000,
+    "complete_tree_hard_peak_bytes": 4999999999,
+    "outer_active_process_limit": 8,
+    "product_target_complete_operations_p95_ms": 35000
+  },
+  "git_pins": {
+    "source": {
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-zkbpp-range100-profile11-source-appliance-v1",
+      "head": "0027e9048471dde0b86bf08d3b7cf6b20db234d4",
+      "tree": "5073d194aa6adb721903eb6084f19479ff8efaa4"
+    },
+    "c": {
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-zkbpp-c-profile11-extmu-v1",
+      "head": "9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2",
+      "tree": "178a5f20c6738f7272cd38f77315da83650bbac0"
+    },
+    "queue": {
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-queue-profile11-outbox-batch-v1",
+      "head": "412b53e68091561657106345a22a772699761945",
+      "tree": "72746eb68e667698fdb0a72c8aea7c9bf027076a"
+    }
+  },
+  "file_pins": {
+    "source_host": {
+      "path": "experiments/profile11_source_host/target/release/profile11_source_host.exe",
+      "bytes": 471552,
+      "sha256": "C205CEBEA6C84B94D710F240D13808920980DF9CA2FC3AF2FCCAF900CACD3369"
+    },
+    "c_verifier": {
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\build-profile11-throughput-v1\\Release\\blind_source_auth_verify_process_v1.exe",
+      "bytes": 52736,
+      "sha256": "4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C"
+    },
+    "c_source_library": {
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-09-01\\blind-zkbpp-c-profile11-extmu-v1-prod-msvc\\Release\\blind_source_auth_v1.lib",
+      "bytes": 152624,
+      "sha256": "D4F5FD22F80CB1ECA9BAEF944E18F5427AB6F8192BB210278D69EBBB05B28841"
+    },
+    "c_range_library": {
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-09-01\\blind-zkbpp-c-profile11-extmu-v1-prod-msvc\\Release\\blind_range100_cdg_direct_v1.lib",
+      "bytes": 109342,
+      "sha256": "1B190B727D612CCC53C37E211BDC04C7BB1EA971D9E694FDD9B97C67549A7C30"
+    }
+  },
+  "synthetic_key": {
+    "source": "tests/test_profile11_source_boundary.py:SOURCE_TEST_PUBLIC_KEY",
+    "bytes": 2592,
+    "sha256": "3D1F0F47DF60B4E2F31F82A99E32B42776837D974CF798CCFDAD98D617026F32"
+  },
+  "workspaces": {
+    "source": "fresh absolute empty non-reparse directory",
+    "verifier": "fresh absolute empty non-reparse directory",
+    "state": "fresh absolute directory containing only State DB and configured SQLite durability files"
+  },
+  "disk_gate": {
+    "authorized": [
+      "state.sqlite",
+      "state.sqlite-journal when configured/observed",
+      "state.sqlite.runtime-lock",
+      "necessary state-directory metadata"
+    ],
+    "forbidden": [
+      "proof",
+      "signature",
+      "source capture",
+      "statement",
+      "digest",
+      "PHI",
+      "temporary",
+      "spill",
+      "stdout/stderr log",
+      "crash dump/core"
+    ],
+    "observer_failure": ["observer_unavailable", "observer_incomplete"]
+  },
+  "schedule": {
+    "warmup": 1,
+    "measured": 5,
+    "p95": "nearest-rank; maximum of five"
+  },
+  "qualification": {
+    "proofSuiteId": null,
+    "production_usable": false,
+    "activation": false,
+    "source_authority": "synthetic",
+    "receiver": "synthetic",
+    "direct_file_write_observation": "conditional; fail closed when unavailable"
+  }
+}

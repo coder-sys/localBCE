@@ -1,0 +1,202 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+
+import profile11_complete_path as screen
+
+
+class _Backend:
+    def __init__(self, *, capability=(True, True, True, True), result=None) -> None:
+        self._capability = capability
+        self._result = result
+        self.started_with: int | None = None
+
+    def capability(self):
+        return self._capability
+
+    def start(self, root_pid: int) -> None:
+        self.started_with = root_pid
+
+    def stop(self):
+        return self._result or screen.FileWriteObservation("observer_ready", True, True, True, False)
+
+
+class Profile11CompletePathTests(unittest.TestCase):
+    def test_manifest_and_exact_pins(self) -> None:
+        manifest = json.loads(screen.MANIFEST_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["topology"], {"batch_operations": 100, "proofs": 1, "source_frames": 1, "verifier_batches": 1, "outbox_acks": 100})
+        self.assertEqual(manifest["limits"]["component_admission_bytes"], 4_500_000_000)
+        self.assertEqual(manifest["limits"]["complete_tree_hard_peak_bytes"], 4_999_999_999)
+        self.assertEqual(manifest["git_pins"]["c"]["head"], screen.C_HEAD)
+        self.assertEqual(manifest["git_pins"]["c"]["tree"], screen.C_TREE)
+        self.assertEqual(manifest["file_pins"]["source_host"]["bytes"], screen.SOURCE_HOST_SIZE_BYTES)
+        self.assertEqual(manifest["file_pins"]["c_verifier"]["bytes"], screen.SOURCE_AUTH_EXECUTABLE_SIZE_BYTES)
+        self.assertIsNone(manifest["qualification"]["proofSuiteId"])
+        self.assertFalse(manifest["qualification"]["production_usable"])
+        self.assertFalse(manifest["qualification"]["activation"])
+
+    def test_dependency_pins_and_empty_workspaces(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="profile11-preflight-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            verifier = root / "verifier"
+            state = root / "state"
+            source.mkdir()
+            verifier.mkdir()
+            state.mkdir()
+            report = screen.validate_dependencies(source_workspace=source, verifier_workspace=verifier, state_workspace=state)
+        self.assertTrue(report.ready, (report.missing, report.mismatched))
+        self.assertEqual(report.failure_count, 0)
+
+    def test_topology_is_exactly_one_proof_and_100_operations(self) -> None:
+        screen.validate_topology(proof_count=1, operation_count=100, frame_count=1, verifier_batch_count=1, ack_count=100)
+        for values in ((2, 100, 1, 1, 100), (1, 99, 1, 1, 100), (1, 100, 2, 1, 100), (1, 100, 1, 2, 100), (1, 100, 1, 1, 99)):
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(screen.CompletePathError, "topology_mismatch"):
+                    screen.validate_topology(proof_count=values[0], operation_count=values[1], frame_count=values[2], verifier_batch_count=values[3], ack_count=values[4])
+
+    def test_state_port_advances_persisted_sequence_between_batches(self) -> None:
+        port = screen._ScreenStatePort()
+        first_refs = tuple(index.to_bytes(32, "big") for index in range(100))
+        second_refs = tuple((100 + index).to_bytes(32, "big") for index in range(100))
+        first = port.controls_for(batch_id=bytes(32), operation_refs=first_refs, verification_outcome=object())
+        second = port.controls_for(batch_id=bytes([1]) * 32, operation_refs=second_refs, verification_outcome=object())
+        self.assertEqual((first[first_refs[0]].sequence_before, first[first_refs[-1]].sequence_before), (0, 99))
+        self.assertEqual((second[second_refs[0]].sequence_before, second[second_refs[-1]].sequence_before), (100, 199))
+        self.assertEqual(second[second_refs[0]].predecessor_state_id, first[first_refs[-1]].state_after_id)
+        self.assertEqual(second[second_refs[0]].predecessor_continuity_root, first[first_refs[-1]].state_after_continuity_root)
+
+    def test_outer_cap_is_strict_and_readback_is_exact(self) -> None:
+        effective = screen.effective_outer_cap(screen.PROCESS_TREE_PEAK_CAP_BYTES, 4096)
+        self.assertLess(effective, screen.OUTER_HARD_CAP_BYTES)
+        with self.assertRaisesRegex(screen.CompletePathError, "outer_cap_invalid"):
+            screen.effective_outer_cap(screen.OUTER_HARD_CAP_BYTES, 4096)
+        good = screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 3, True, True, True)
+        screen.validate_job_observation(good)
+        for bad, code in (
+            (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective + 4096, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 3, True, True, True), "outer_cap_readback"),
+            (screen.JobObservation(screen.OUTER_HARD_CAP_BYTES, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 3, True, True, True), "outer_memory_cap"),
+            (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT - 1, 2, 3, True, True, True), "outer_process_limit_readback"),
+            (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 0, True, True, True), "outer_process_lineage"),
+        ):
+            with self.subTest(code=code):
+                with self.assertRaisesRegex(screen.CompletePathError, code):
+                    screen.validate_job_observation(bad)
+
+    def test_outer_job_probe_contains_child_and_grandchild(self) -> None:
+        if os.name != "nt":
+            self.skipTest("Windows Job Object ABI is unavailable")
+        with tempfile.TemporaryDirectory(prefix="profile11-job-") as directory:
+            run = screen._launch_coordinator(Path(directory), timeout_seconds=5.0, arguments=("--probe-coordinator", "0.15"))
+        self.assertIsNone(run.error_code, run.error_code)
+        self.assertIsNotNone(run.payload)
+        self.assertGreaterEqual(run.observation.total_processes, 2)
+        self.assertGreaterEqual(run.observation.peak_active_processes, 1)
+        screen.validate_job_observation(run.observation)
+
+    def test_outer_job_timeout_terminates_and_reaps(self) -> None:
+        if os.name != "nt":
+            self.skipTest("Windows Job Object ABI is unavailable")
+        with tempfile.TemporaryDirectory(prefix="profile11-timeout-") as directory:
+            run = screen._launch_coordinator(Path(directory), timeout_seconds=0.2, arguments=("--probe-coordinator", "3.0"))
+        self.assertEqual(run.error_code, "outer_timeout")
+        self.assertTrue(run.observation.timed_out)
+        self.assertTrue(run.observation.cleanup_complete)
+        self.assertTrue(run.observation.process_tree_complete)
+
+    def test_default_observer_fails_closed_without_verified_backend(self) -> None:
+        observer = screen.WindowsEtwFileWriteObserver()
+        result = observer.probe()
+        self.assertEqual(result.status, "observer_unavailable")
+        with tempfile.TemporaryDirectory(prefix="profile11-observer-") as directory:
+            self.assertEqual(screen.evaluate_disk_gate(result, state_workspace=Path(directory)), "observer_unavailable")
+
+    def test_observer_capability_loss_and_lineage_fail_closed(self) -> None:
+        observer = screen.WindowsEtwFileWriteObserver(_Backend(capability=(True, True, True, False)))
+        self.assertEqual(observer.probe().status, "observer_unavailable")
+        with tempfile.TemporaryDirectory(prefix="profile11-observer-") as directory:
+            root = Path(directory)
+            result = screen.FileWriteObservation("observer_ready", True, True, True, True)
+            self.assertEqual(screen.evaluate_disk_gate(result, state_workspace=root), "observer_incomplete")
+            result = screen.FileWriteObservation("observer_ready", True, True, False, False)
+            self.assertEqual(screen.evaluate_disk_gate(result, state_workspace=root), "observer_incomplete")
+
+    def test_disk_allowlist_allows_configured_state_durability_only(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="profile11-disk-") as directory:
+            root = Path(directory)
+            events = tuple(screen.FileWriteEvent(path, op, 100 + index) for index, (path, op) in enumerate((
+                (root / "state.sqlite", "write"),
+                (root / "state.sqlite-journal", "create"),
+                (root / "state.sqlite-journal", "delete"),
+                (root / "state.sqlite.runtime-lock", "write"),
+                (root, "directory_metadata"),
+            )))
+            ready = screen.FileWriteObservation("observer_ready", True, True, True, False, events)
+            self.assertEqual(screen.evaluate_disk_gate(ready, state_workspace=root), "disk_gate_pass")
+            forbidden = screen.FileWriteObservation("observer_ready", True, True, True, False, (screen.FileWriteEvent(root / "deleted-proof.tmp", "delete", 101),))
+            self.assertEqual(screen.evaluate_disk_gate(forbidden, state_workspace=root), "unauthorized_write")
+            nonconfigured = screen.FileWriteObservation("observer_ready", True, True, True, False, (screen.FileWriteEvent(root / "state.sqlite-wal", "write", 101),))
+            self.assertEqual(screen.evaluate_disk_gate(nonconfigured, state_workspace=root), "unauthorized_write")
+
+    def test_observer_backend_stop_loss_becomes_incomplete(self) -> None:
+        backend = _Backend(result=screen.FileWriteObservation("observer_ready", True, True, True, True))
+        observer = screen.WindowsEtwFileWriteObserver(backend)
+        with tempfile.TemporaryDirectory(prefix="profile11-observer-") as directory:
+            started = observer.start(1234)
+            self.assertEqual(started.status, "observer_ready")
+            self.assertEqual(backend.started_with, 1234)
+            stopped = observer.stop()
+            self.assertEqual(stopped.status, "observer_incomplete")
+
+    def test_measurement_schedule_is_one_warmup_and_five_measured(self) -> None:
+        calls = 0
+        def sample() -> screen.StageSample:
+            nonlocal calls
+            calls += 1
+            return screen.StageSample(float(calls), float(calls + 1), float(calls + 2), float(calls + 3))
+        values = screen.run_measurement_schedule(sample)
+        self.assertEqual(calls, 6)
+        self.assertEqual(len(values), 5)
+        p95 = screen.nearest_rank_p95(values)
+        self.assertEqual(p95, screen.StageSample(6.0, 7.0, 8.0, 9.0))
+
+    def test_measurement_schedule_does_not_silently_skip(self) -> None:
+        calls = 0
+        def sample():
+            nonlocal calls
+            calls += 1
+            return None if calls == 4 else screen.StageSample(1.0, 1.0, 1.0, 1.0)
+        with self.assertRaisesRegex(screen.CompletePathError, "sample_shape"):
+            screen.run_measurement_schedule(sample)
+        self.assertEqual(calls, 4)
+
+    def test_aggregate_is_zero_phi_and_nonactivating(self) -> None:
+        timings = tuple(screen.StageSample(1.0 + index, 2.0 + index, 3.0 + index, 4.0 + index) for index in range(5))
+        value = screen.build_test_aggregate(completed_samples=5, timings=timings, peak_job_commit_bytes=1024, effective_cap_bytes=screen.effective_outer_cap(screen.PROCESS_TREE_PEAK_CAP_BYTES, 4096), peak_active_processes=2, total_processes=7)
+        encoded = screen._aggregate_json(value)
+        self.assertNotIn("statement", encoded.lower())
+        self.assertNotIn("operation_ref", encoded.lower())
+        self.assertNotIn("stdout", encoded.lower())
+        self.assertIsNone(value["proofSuiteId"])
+        self.assertFalse(value["production_usable"])
+        self.assertFalse(value["activation"])
+        self.assertEqual(value["proof_count"], 1)
+        self.assertEqual(value["operation_count"], 100)
+
+    def test_aggregate_rejects_sensitive_or_wrong_shape_fields(self) -> None:
+        value = screen.build_test_aggregate()
+        value["unexpected"] = 1
+        with self.assertRaisesRegex(screen.CompletePathError, "aggregate_fields"):
+            screen._validate_aggregate_mapping(value)
+        value = screen.build_test_aggregate()
+        value["proof_count"] = 2
+        with self.assertRaisesRegex(screen.CompletePathError, "topology_mismatch"):
+            screen._validate_aggregate_mapping(value)
+
+
+if __name__ == "__main__":
+    unittest.main()

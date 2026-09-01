@@ -86,3 +86,50 @@ Git is the history for retired source and narrative. A retained source archive i
 publication artifact, not a substitute for the live authority hierarchy. Archive selection is
 controlled by the deterministic release-manifest gate and builder; this documentation stage does
 not rebuild or publish archives.
+
+## Profile 11 complete-path screen
+
+This is a nonactivating, test-only preparation harness. Per warmup/measured sample it enforces one
+Profile 11 Range100 proof and one source-auth frame for one ordered batch of 100 operations, one
+contained C verification batch, one atomic State/outbox batch, and 100 acknowledgements. Proof
+acceptance is not CLEAR; State owns policy, directive, chronology, exceptions, disposition, recovery,
+and outbox.
+
+The pinned source boundary is repository `0027e9048471dde0b86bf08d3b7cf6b20db234d4` (tree
+`5073d194aa6adb721903eb6084f19479ff8efaa4`) with source-host executable SHA-256
+`C205CEBEA6C84B94D710F240D13808920980DF9CA2FC3AF2FCCAF900CACD3369` and size 471,552 bytes.
+The pinned C repository is `9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2` (tree
+`178a5f20c6738f7272cd38f77315da83650bbac0`); its verifier is 52,736 bytes, SHA-256
+`4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C`. The Queue pin is
+`412b53e68091561657106345a22a772699761945` (tree `72746eb68e667698fdb0a72c8aea7c9bf027076a`).
+The manifest also pins both C libraries and the synthetic public-key fixture; no production key is used.
+
+The outer coordinator is placed in a Windows Job before resume. The complete tree is capped below
+5,000,000,000 bytes (requested cap 4,999,999,999, with page-floor readback), and component admission
+is 4,500,000,000 bytes. Timeouts terminate and reap the Job. Missing containment or descendant
+accounting is a failure. The native file-write observer is capability-based: without complete
+ETW/provider, privilege, PID-lineage, loss, and stop evidence it reports `observer_unavailable` or
+`observer_incomplete`; directory snapshots are never treated as complete filesystem-write observation.
+
+Only the selected State DB, configured SQLite DELETE journal, State runtime lock, and necessary
+State-directory metadata are authorized. Proof, signature, frame, statement, digest, PHI, temporary,
+witness/nonce, spill, stdout/stderr log, crash-dump, and core writes—including files later deleted—are forbidden.
+
+The schedule is one untimed warmup followed by exactly five measured samples; nearest-rank p95 is the
+maximum of those five samples. The aggregate contains only fixed counts, timings, peak bytes, fixed
+codes, and qualification flags. `proofSuiteId` is null, `production_usable` is false, and `activation`
+is false; the harness makes no production or performance qualification claim.
+
+Run from this directory with Python 3.14:
+
+```powershell
+py -3.14 -B -m py_compile profile11_complete_path.py tests\test_profile11_complete_path.py
+py -3.14 -B -m unittest -v tests.test_profile11_complete_path
+py -3.14 -B -m unittest -v tests.test_profile11_source_boundary
+py -3.14 -B -m unittest -v -k stream tests.test_minimal_clearance_verifier_process
+py -3.14 -B -m profile11_complete_path --prepare
+py -3.14 -B -m profile11_complete_path --screen
+```
+
+`--prepare` launches nothing and reports every missing dependency. Run `--screen` only after the
+checks above pass; it uses the already pinned source/C binaries and never compiles them.
