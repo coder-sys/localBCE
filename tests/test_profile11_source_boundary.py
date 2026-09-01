@@ -1,6 +1,5 @@
 import hashlib
 import sqlite3
-import subprocess
 import tempfile
 import time
 import unittest
@@ -27,7 +26,11 @@ from app.minimal_clearance_verification_queue import (
     _build_statement,
     _compute_batch_root_from_refs,
 )
-from app.minimal_clearance_verifier_process import ContainedVerifierResult
+from app.minimal_clearance_verifier_process import (
+    ContainedVerifierResult,
+    VerifierProcessError,
+    run_contained_verifier_stream,
+)
 from profile11_source_boundary import (
     Profile11SourceBoundaryCaller,
     SourceApplianceConfig,
@@ -37,14 +40,18 @@ from profile11_source_boundary import (
     SOURCE_APPLIANCE_PROTOCOL_VERSION,
     SOURCE_APPLIANCE_REQUEST_MAGIC,
     SOURCE_AUTH_FRAME_BYTES,
+    SOURCE_AUTH_INPUT_BYTES,
     SOURCE_AUTH_LOWER,
     SOURCE_AUTH_PROVISION_BYTES,
     SOURCE_AUTH_RANDOMIZER_BYTES,
     SOURCE_AUTH_REQUEST_BYTES,
     SOURCE_AUTH_SECRET_KEY_BYTES,
     SOURCE_AUTH_SEED_BYTES,
+    SOURCE_AUTH_STDERR_CAP_BYTES,
+    SOURCE_AUTH_STDOUT_CAP_BYTES,
     SOURCE_AUTH_WITNESS_BYTES,
     SOURCE_AUTH_WITNESS_COUNT,
+    SourceBoundaryError,
     build_provision_record,
     build_request_record,
 )
@@ -69,6 +76,34 @@ def _wipe(value: bytearray) -> None:
     for index in range(len(value)):
         value[index] = 0
     value.clear()
+
+
+def _contained(
+    *,
+    stdout: bytes = b"",
+    stderr: bytes = b"",
+    exit_code: int = 0,
+    timed_out: bool = False,
+    cap_enforced: bool = True,
+    process_tree_complete: bool = True,
+    measurement_complete: bool = True,
+    cleanup_complete: bool = True,
+) -> ContainedVerifierResult:
+    return ContainedVerifierResult(
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+        peak_job_commit_bytes=1024,
+        cap_bytes=ADMISSION_CAP_BYTES,
+        cap_enforced=cap_enforced,
+        active_process_limit=ACTIVE_PROCESS_LIMIT,
+        timed_out=timed_out,
+        child_process_count=1,
+        process_tree_complete=process_tree_complete,
+        measurement_complete=measurement_complete,
+        cleanup_complete=cleanup_complete,
+        pagefile_growth_evidence="unavailable",
+    )
 
 
 class _StateDispositionPort:
@@ -172,22 +207,25 @@ class Profile11SourceBoundaryTests(unittest.TestCase):
         return witness, seed, randomizer
 
     def _run_appliance(self, payload: bytearray) -> tuple[int, bytes, bytes]:
-        process = subprocess.Popen(
-            [str(SOURCE_AUTH_APPLIANCE)],
-            cwd=self.source_workspace,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
         try:
-            stdout, stderr = process.communicate(bytes(payload), timeout=180)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.communicate(timeout=10)
-            self.fail("source appliance timeout")
+            result = run_contained_verifier_stream(
+                SOURCE_AUTH_APPLIANCE,
+                (),
+                payload,
+                workspace=self.source_workspace,
+                timeout_seconds=180.0,
+                expected_executable_size_bytes=SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
+                expected_executable_sha256=SOURCE_APPLIANCE_EXECUTABLE_SHA256,
+                stdout_cap_bytes=2 * SOURCE_AUTH_FRAME_BYTES + 1,
+                stderr_cap_bytes=SOURCE_AUTH_STDERR_CAP_BYTES,
+                stdout_ascii=False,
+            )
+            self.assertTrue(result.process_tree_complete)
+            self.assertTrue(result.measurement_complete)
+            self.assertTrue(result.cleanup_complete)
+            return result.exit_code, result.stdout, result.stderr
         finally:
             _wipe(payload)
-        return process.returncode, stdout, stderr
 
     def _assert_empty_workspace(self) -> None:
         self.assertEqual(list(self.source_workspace.iterdir()), [])
@@ -209,6 +247,138 @@ class Profile11SourceBoundaryTests(unittest.TestCase):
         finally:
             _wipe(provision)
             _wipe(request)
+
+    def test_source_caller_uses_exact_pinned_contained_runner_and_one_frame(self) -> None:
+        batch = self._batch()
+        witness, seed, randomizer = self._source_values()
+        expected_frame = b"f" * SOURCE_AUTH_FRAME_BYTES
+        provision = build_provision_record(
+            source_key_epoch=self.queue_config.source_key_epoch,
+            secret_key=self.secret_key,
+        )
+        request = build_request_record(
+            batch=batch,
+            witness=witness,
+            seed=seed,
+            randomizer=randomizer,
+        )
+        expected_payload = bytes(provision) + bytes(request)
+        _wipe(provision)
+        _wipe(request)
+        captured: dict[str, object] = {}
+
+        def runner(
+            executable: Path,
+            arguments: tuple[str, ...],
+            payload: bytes | bytearray,
+            *,
+            workspace: Path,
+            timeout_seconds: float,
+            expected_executable_size_bytes: int,
+            expected_executable_sha256: bytes,
+            stdout_cap_bytes: int,
+            stderr_cap_bytes: int,
+            stdout_ascii: bool,
+            expected_input_bytes: int,
+        ) -> ContainedVerifierResult:
+            captured.update(
+                executable=executable,
+                arguments=arguments,
+                payload=bytes(payload),
+                payload_type=type(payload),
+                workspace=workspace,
+                timeout_seconds=timeout_seconds,
+                expected_executable_size_bytes=expected_executable_size_bytes,
+                expected_executable_sha256=expected_executable_sha256,
+                stdout_cap_bytes=stdout_cap_bytes,
+                stderr_cap_bytes=stderr_cap_bytes,
+                stdout_ascii=stdout_ascii,
+                expected_input_bytes=expected_input_bytes,
+            )
+            return _contained(stdout=expected_frame)
+
+        with patch("profile11_source_boundary.run_contained_verifier_stream", side_effect=runner):
+            frame = self.caller.prove_one(
+                batch=batch,
+                source_key_epoch=self.queue_config.source_key_epoch,
+                secret_key=self.secret_key,
+                witness=witness,
+                seed=seed,
+                randomizer=randomizer,
+            )
+        self.assertEqual(frame, bytearray(expected_frame))
+        self.assertEqual(captured["executable"], SOURCE_AUTH_APPLIANCE)
+        self.assertEqual(captured["arguments"], ())
+        self.assertEqual(captured["payload"], expected_payload)
+        self.assertIs(captured["payload_type"], bytearray)
+        self.assertEqual(captured["workspace"], self.source_workspace)
+        self.assertEqual(captured["timeout_seconds"], 180.0)
+        self.assertEqual(captured["expected_executable_size_bytes"], SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES)
+        self.assertEqual(captured["expected_executable_sha256"], SOURCE_APPLIANCE_EXECUTABLE_SHA256)
+        self.assertEqual(captured["stdout_cap_bytes"], SOURCE_AUTH_STDOUT_CAP_BYTES)
+        self.assertEqual(captured["stderr_cap_bytes"], SOURCE_AUTH_STDERR_CAP_BYTES)
+        self.assertIs(captured["stdout_ascii"], False)
+        self.assertEqual(captured["expected_input_bytes"], SOURCE_AUTH_INPUT_BYTES)
+
+    def test_source_caller_rejects_timeout_shape_output_and_containment_failures(self) -> None:
+        batch = self._batch()
+        witness, seed, randomizer = self._source_values()
+        complete = b"f" * SOURCE_AUTH_FRAME_BYTES
+        cases = (
+            ("timeout", _contained(timed_out=True), "source_timeout"),
+            ("truncation", _contained(stdout=complete[:-1]), "source_frame_truncated"),
+            ("trailing", _contained(stdout=complete + b"x"), "source_frame_trailing"),
+            ("stderr", _contained(stdout=complete, stderr=b"x"), "source_stderr"),
+            ("exit", _contained(stdout=complete, exit_code=1), "source_process"),
+            ("containment", _contained(stdout=complete, process_tree_complete=False), "source_process"),
+            ("measurement", _contained(stdout=complete, measurement_complete=False), "source_process"),
+            ("cleanup", _contained(stdout=complete, cleanup_complete=False), "source_process"),
+            ("cap", _contained(stdout=complete, cap_enforced=False), "source_process"),
+        )
+        for name, contained, error_code in cases:
+            with self.subTest(name=name):
+                payload_ref: list[bytearray] = []
+
+                def runner(*args: object, **kwargs: object) -> ContainedVerifierResult:
+                    del kwargs
+                    payload_ref.append(args[2])  # type: ignore[arg-type]
+                    return contained
+
+                with patch("profile11_source_boundary.run_contained_verifier_stream", side_effect=runner):
+                    with self.assertRaisesRegex(SourceBoundaryError, error_code):
+                        self.caller.prove_one(
+                            batch=batch,
+                            source_key_epoch=self.queue_config.source_key_epoch,
+                            secret_key=self.secret_key,
+                            witness=witness,
+                            seed=seed,
+                            randomizer=randomizer,
+                        )
+                self.assertEqual(len(payload_ref), 1)
+                self.assertEqual(payload_ref[0], bytearray())
+
+    def test_source_caller_fails_before_accepting_on_pinned_runner_failure(self) -> None:
+        batch = self._batch()
+        witness, seed, randomizer = self._source_values()
+        payload_ref: list[bytearray] = []
+
+        def runner(*args: object, **kwargs: object) -> ContainedVerifierResult:
+            del kwargs
+            payload_ref.append(args[2])  # type: ignore[arg-type]
+            raise VerifierProcessError("verifier_child_image_identity")
+
+        with patch("profile11_source_boundary.run_contained_verifier_stream", side_effect=runner):
+            with self.assertRaisesRegex(SourceBoundaryError, "source_process"):
+                self.caller.prove_one(
+                    batch=batch,
+                    source_key_epoch=self.queue_config.source_key_epoch,
+                    secret_key=self.secret_key,
+                    witness=witness,
+                    seed=seed,
+                    randomizer=randomizer,
+                )
+        self.assertEqual(len(payload_ref), 1)
+        self.assertEqual(payload_ref[0], bytearray())
 
     def test_one_queue_batch_uses_one_appliance_frame_one_c_call_and_settles_100(self) -> None:
         verifier_config = source_auth_adapter.SourceAuthVerifierConfig(

@@ -12,13 +12,17 @@ filesystem tracing remain external gates.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import hashlib
 from pathlib import Path
-import subprocess
 from typing import Final, NoReturn
 
+from app.minimal_clearance_resource_limits import ACTIVE_PROCESS_LIMIT, ADMISSION_CAP_BYTES
 from app.minimal_clearance_source_auth_verifier_adapter import SOURCE_AUTH_FRAME_BYTES
 from app.minimal_clearance_verification_queue import IssuedVerificationBatch
+from app.minimal_clearance_verifier_process import (
+    ContainedVerifierResult,
+    VerifierProcessError,
+    run_contained_verifier_stream,
+)
 
 
 SOURCE_APPLIANCE_PROVISION_MAGIC: Final[bytes] = b"BL-SRC-HOST-V1\0\0"
@@ -32,6 +36,9 @@ SOURCE_AUTH_REQUEST_BYTES: Final[int] = 4_544
 SOURCE_AUTH_WITNESS_COUNT: Final[int] = 100
 SOURCE_AUTH_WITNESS_BYTES: Final[int] = 800
 SOURCE_AUTH_SEED_BYTES: Final[int] = 128
+SOURCE_AUTH_INPUT_BYTES: Final[int] = SOURCE_AUTH_PROVISION_BYTES + SOURCE_AUTH_REQUEST_BYTES
+SOURCE_AUTH_STDOUT_CAP_BYTES: Final[int] = SOURCE_AUTH_FRAME_BYTES + 1
+SOURCE_AUTH_STDERR_CAP_BYTES: Final[int] = 1
 SOURCE_AUTH_LOWER: Final[int] = 0x1122_3344_5566_7788
 SOURCE_AUTH_UPPER: Final[int] = 0xDD_EE_FF_00_1122_3344
 SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES: Final[int] = 458_240
@@ -163,6 +170,52 @@ class SourceApplianceConfig:
             _fail("source_timeout")
 
 
+def _validate_contained_result(result: object) -> bytearray:
+    if type(result) is not ContainedVerifierResult:
+        _fail("source_process")
+    if type(result.timed_out) is not bool:
+        _fail("source_process")
+    if result.timed_out:
+        _fail("source_timeout")
+    numeric_fields = (
+        result.peak_job_commit_bytes,
+        result.peak_working_set_bytes,
+        result.peak_private_commit_bytes,
+        result.parent_peak_working_set_bytes,
+        result.parent_peak_private_commit_bytes,
+        result.private_commit_delta_bytes,
+        result.scratch_peak_bytes,
+    )
+    if (
+        type(result.exit_code) is not int
+        or result.exit_code != 0
+        or type(result.stdout) is not bytes
+        or type(result.stderr) is not bytes
+        or result.cap_enforced is not True
+        or type(result.cap_bytes) is not int
+        or result.cap_bytes != ADMISSION_CAP_BYTES
+        or type(result.active_process_limit) is not int
+        or result.active_process_limit != ACTIVE_PROCESS_LIMIT
+        or type(result.child_process_count) is not int
+        or result.child_process_count < 1
+        or result.process_tree_complete is not True
+        or result.measurement_complete is not True
+        or result.cleanup_complete is not True
+        or type(result.pagefile_growth_evidence) is not str
+        or result.pagefile_growth_evidence != "unavailable"
+        or any(type(value) is not int or value < 0 for value in numeric_fields)
+        or result.peak_job_commit_bytes > result.cap_bytes
+    ):
+        _fail("source_process")
+    if result.stderr:
+        _fail("source_stderr")
+    if len(result.stdout) < SOURCE_AUTH_FRAME_BYTES:
+        _fail("source_frame_truncated")
+    if len(result.stdout) > SOURCE_AUTH_FRAME_BYTES:
+        _fail("source_frame_trailing")
+    return bytearray(result.stdout)
+
+
 class Profile11SourceBoundaryCaller:
     """Source-owned one-request caller for the accepted persistent appliance."""
 
@@ -206,88 +259,34 @@ class Profile11SourceBoundaryCaller:
             _wipe(payload)
 
     def _run_one_request(self, payload: bytearray) -> bytearray:
+        contained: ContainedVerifierResult | None = None
         try:
-            if (
-                not self._config.executable_path.is_file()
-                or self._config.executable_path.stat().st_size != self._config.executable_size_bytes
-            ):
-                _fail("source_executable_identity")
-            actual_sha256 = hashlib.sha256(self._config.executable_path.read_bytes()).digest()
-        except SourceBoundaryError:
-            raise
-        except BaseException:
-            _fail("source_executable_identity")
-        if actual_sha256 != self._config.executable_sha256:
-            _fail("source_executable_identity")
-        try:
-            if any(self._config.workspace.iterdir()):
-                _fail("source_workspace_not_empty")
-        except SourceBoundaryError:
-            raise
-        except BaseException:
-            _fail("source_workspace")
-
-        process: subprocess.Popen[bytes] | None = None
-        frame = bytearray()
-        try:
-            process = subprocess.Popen(
-                [str(self._config.executable_path)],
-                cwd=self._config.workspace,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            contained = run_contained_verifier_stream(
+                self._config.executable_path,
+                (),
+                payload,
+                workspace=self._config.workspace,
+                timeout_seconds=self._config.timeout_seconds,
+                expected_executable_size_bytes=self._config.executable_size_bytes,
+                expected_executable_sha256=self._config.executable_sha256,
+                stdout_cap_bytes=SOURCE_AUTH_STDOUT_CAP_BYTES,
+                stderr_cap_bytes=SOURCE_AUTH_STDERR_CAP_BYTES,
+                stdout_ascii=False,
+                expected_input_bytes=SOURCE_AUTH_INPUT_BYTES,
             )
-            if process.stdin is None or process.stdout is None or process.stderr is None:
-                _fail("source_process")
-            process.stdin.write(payload)
-            process.stdin.flush()
-            process.stdin.close()
-            while len(frame) < SOURCE_AUTH_FRAME_BYTES:
-                chunk = process.stdout.read(min(64 * 1024, SOURCE_AUTH_FRAME_BYTES - len(frame)))
-                if not chunk:
-                    break
-                frame.extend(chunk)
-            if process.poll() is None:
-                try:
-                    process.wait(timeout=self._config.timeout_seconds)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=10)
-                    _fail("source_timeout")
-            trailing = process.stdout.read(1)
-            stderr = process.stderr.read()
-            if process.returncode != 0:
-                _fail("source_process")
-            if stderr:
-                _fail("source_stderr")
-            if len(frame) != SOURCE_AUTH_FRAME_BYTES:
-                _fail("source_frame_truncated")
-            if trailing:
-                _fail("source_frame_trailing")
-            return frame
+            return _validate_contained_result(contained)
         except SourceBoundaryError:
-            _wipe(frame)
             raise
-        except (BrokenPipeError, OSError):
-            _wipe(frame)
+        except VerifierProcessError as error:
+            if str(error).startswith("verifier_timeout"):
+                _fail("source_timeout")
+            if str(error).startswith("verifier_workspace"):
+                _fail("source_workspace")
             _fail("source_process")
         except BaseException:
-            _wipe(frame)
             _fail("source_process")
         finally:
-            if process is not None:
-                if process.poll() is None:
-                    try:
-                        process.kill()
-                        process.wait(timeout=10)
-                    except BaseException:
-                        pass
-                for stream in (process.stdin, process.stdout, process.stderr):
-                    if stream is not None:
-                        try:
-                            stream.close()
-                        except BaseException:
-                            pass
+            del contained
 
 
 __all__ = (
@@ -300,12 +299,15 @@ __all__ = (
     "SOURCE_APPLIANCE_EXECUTABLE_SHA256",
     "SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES",
     "SOURCE_AUTH_FRAME_BYTES",
+    "SOURCE_AUTH_INPUT_BYTES",
     "SOURCE_AUTH_LOWER",
     "SOURCE_AUTH_PROVISION_BYTES",
     "SOURCE_AUTH_RANDOMIZER_BYTES",
     "SOURCE_AUTH_REQUEST_BYTES",
     "SOURCE_AUTH_SECRET_KEY_BYTES",
     "SOURCE_AUTH_SEED_BYTES",
+    "SOURCE_AUTH_STDERR_CAP_BYTES",
+    "SOURCE_AUTH_STDOUT_CAP_BYTES",
     "SOURCE_AUTH_UPPER",
     "SOURCE_AUTH_WITNESS_BYTES",
     "SOURCE_AUTH_WITNESS_COUNT",

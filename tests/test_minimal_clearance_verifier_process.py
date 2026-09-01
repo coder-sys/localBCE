@@ -446,6 +446,66 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                                 expected_executable_sha256=expected_hash,
                             )
 
+    def test_per_call_output_caps_are_validated_before_windows_boundary(self):
+        payload = b"output-cap-validation"
+        digest = hashlib.sha256(payload).digest()
+        with tempfile.TemporaryDirectory() as root_name:
+            root = Path(root_name)
+            executable = root / "verifier.exe"
+            executable.write_bytes(payload)
+            for name, keyword, value in (
+                ("stdout", "stdout_cap_bytes", 0),
+                ("stderr", "stderr_cap_bytes", 0),
+                ("stdout_bool", "stdout_cap_bytes", True),
+                ("stderr_large", "stderr_cap_bytes", process.STREAM_MAX_AGGREGATE_BYTES + 1),
+            ):
+                with self.subTest(name=name):
+                    with patch.object(
+                        process.ctypes,
+                        "WinDLL",
+                        side_effect=AssertionError("invalid output cap reached Win32 boundary"),
+                    ):
+                        with self.assertRaisesRegex(process.VerifierProcessError, f"verifier_{keyword[:-6]}"):
+                            process.run_contained_verifier(
+                                executable,
+                                (),
+                                workspace=root,
+                                timeout_seconds=1.0,
+                                expected_executable_size_bytes=len(payload),
+                                expected_executable_sha256=digest,
+                                **{keyword: value},
+                            )
+            with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stdout_cap"):
+                process.run_contained_verifier_stream(
+                    executable,
+                    (),
+                    b"frame",
+                    workspace=root,
+                    timeout_seconds=1.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=digest,
+                    stdout_cap_bytes=0,
+                )
+
+    def test_stream_expected_input_length_rejects_off_by_one_before_pipe(self):
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            for length in (9_467, 9_469):
+                with self.subTest(length=length):
+                    with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_input_length"):
+                        process.run_contained_verifier_stream(
+                            executable,
+                            (),
+                            b"x" * length,
+                            workspace=workspace,
+                            timeout_seconds=1.0,
+                            expected_executable_size_bytes=len(payload),
+                            expected_executable_sha256=hashlib.sha256(payload).digest(),
+                            expected_input_bytes=9_468,
+                        )
+
     def test_resource_limit_contract_rejects_five_gib_and_keeps_five_gib_minus_one(self):
         payload = b"resource-limited-verifier"
         with tempfile.TemporaryDirectory() as root_name:
@@ -899,6 +959,76 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                         expected_executable_sha256=hashlib.sha256(payload).digest(),
                     )
 
+    @unittest.skipUnless(os.name == "nt", "Windows stream writer completion test")
+    def test_stream_requires_writer_completion_after_early_runner_return(self):
+        executable = Path(sys.executable)
+        executable_bytes = executable.read_bytes()
+        contained = process.ContainedVerifierResult(
+            exit_code=0,
+            stdout=b"",
+            stderr=b"",
+            peak_job_commit_bytes=1,
+            cap_bytes=process.ADMISSION_CAP_BYTES,
+            cap_enforced=True,
+            active_process_limit=process.ACTIVE_PROCESS_LIMIT,
+            timed_out=False,
+            child_process_count=1,
+            process_tree_complete=True,
+            measurement_complete=True,
+            cleanup_complete=True,
+        )
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            with patch.object(process, "run_contained_verifier", return_value=contained):
+                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_input_incomplete"):
+                    process.run_contained_verifier_stream(
+                        executable,
+                        (),
+                        b"x" * (1 << 20),
+                        workspace=workspace,
+                        timeout_seconds=1.0,
+                        expected_executable_size_bytes=len(executable_bytes),
+                        expected_executable_sha256=hashlib.sha256(executable_bytes).digest(),
+                    )
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    @unittest.skipUnless(os.name == "nt", "Windows early-child-exit stream test")
+    def test_real_stream_child_exit_before_read_cannot_accept_partial_input(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            executable = Path(sys._base_executable)
+            payload = executable.read_bytes()
+            with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_input_incomplete"):
+                process.run_contained_verifier_stream(
+                    executable,
+                    ("-c", "import sys;sys.exit(0)"),
+                    b"x" * (1 << 20),
+                    workspace=workspace,
+                    timeout_seconds=30.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    @unittest.skipUnless(os.name == "nt", "Windows never-read stream timeout test")
+    def test_real_stream_never_read_timeout_has_no_surviving_writer_or_child(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            executable = Path(sys._base_executable)
+            payload = executable.read_bytes()
+            with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_input_incomplete"):
+                process.run_contained_verifier_stream(
+                    executable,
+                    ("-c", "import time;time.sleep(60)"),
+                    b"x" * 9_468,
+                    workspace=workspace,
+                    timeout_seconds=1.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    expected_input_bytes=9_468,
+                )
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
     @unittest.skipUnless(os.name == "nt", "Windows bounded child-output test")
     def test_real_child_output_overflow_is_terminated_without_output_files(self):
         with tempfile.TemporaryDirectory() as root_name:
@@ -914,6 +1044,51 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                     expected_executable_size_bytes=len(payload),
                     expected_executable_sha256=hashlib.sha256(payload).digest(),
                 )
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    @unittest.skipUnless(os.name == "nt", "Windows per-call child-output cap test")
+    def test_real_child_per_call_stdout_and_stderr_caps_are_enforced(self):
+        cases = (
+            ("stdout", "import sys;sys.stdout.write('x'*64);sys.stdout.flush()", "stdout_cap"),
+            ("stderr", "import sys;sys.stderr.write('x'*64);sys.stderr.flush()", "stderr_cap"),
+        )
+        for name, script, expected_code in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root_name:
+                workspace = Path(root_name)
+                executable = Path(sys._base_executable)
+                payload = executable.read_bytes()
+                with self.assertRaisesRegex(process.VerifierProcessError, expected_code):
+                    process.run_contained_verifier(
+                        executable,
+                        ("-c", script),
+                        workspace=workspace,
+                        timeout_seconds=30.0,
+                        expected_executable_size_bytes=len(payload),
+                        expected_executable_sha256=hashlib.sha256(payload).digest(),
+                        stdout_cap_bytes=8,
+                        stderr_cap_bytes=8,
+                    )
+                self.assertEqual(tuple(workspace.iterdir()), ())
+
+    @unittest.skipUnless(os.name == "nt", "Windows contained timeout test")
+    def test_real_child_timeout_before_output_is_terminated_and_reaped(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            executable = Path(sys._base_executable)
+            payload = executable.read_bytes()
+            result = process.run_contained_verifier(
+                executable,
+                ("-c", "import time;time.sleep(60)"),
+                workspace=workspace,
+                timeout_seconds=1.0,
+                expected_executable_size_bytes=len(payload),
+                expected_executable_sha256=hashlib.sha256(payload).digest(),
+            )
+            self.assertTrue(result.timed_out)
+            self.assertEqual(result.stdout, b"")
+            self.assertEqual(result.stderr, b"")
+            self.assertTrue(result.process_tree_complete)
+            self.assertTrue(result.cleanup_complete)
             self.assertEqual(tuple(workspace.iterdir()), ())
 
     @unittest.skipUnless(os.name == "nt", "Windows verifier workspace containment test")

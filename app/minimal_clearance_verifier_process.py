@@ -410,6 +410,16 @@ def _validate_executable_pin(
         raise VerifierProcessError("verifier_executable_pin")
 
 
+def _validate_output_cap(value: int, label: str) -> None:
+    if type(value) is not int or not 0 < value <= STREAM_MAX_AGGREGATE_BYTES:
+        raise VerifierProcessError(label)
+
+
+def _validate_output_encoding(value: bool, label: str) -> None:
+    if type(value) is not bool:
+        raise VerifierProcessError(label)
+
+
 def _effective_job_memory_limit(requested: int, page_size: int) -> int:
     if (
         type(requested) is not int
@@ -1092,6 +1102,7 @@ def _drain_pipe(
     output: dict[str, bytes],
     failure: dict[str, str],
     overflow: threading.Event,
+    require_ascii: bool = True,
 ) -> None:
     data = bytearray()
     try:
@@ -1104,7 +1115,7 @@ def _drain_pipe(
                 overflow.set()
                 failure.setdefault("code", f"{label}_cap")
                 break
-        if "code" not in failure:
+        if require_ascii and "code" not in failure:
             try:
                 bytes(data).decode("ascii")
             except UnicodeDecodeError:
@@ -1129,6 +1140,10 @@ def run_contained_verifier(
     _stdin_descriptor: int | None = None,
     expected_executable_size_bytes: int | None = None,
     expected_executable_sha256: bytes | None = None,
+    stdout_cap_bytes: int = MAX_STDOUT_BYTES,
+    stderr_cap_bytes: int = MAX_STDERR_BYTES,
+    stdout_ascii: bool = True,
+    stderr_ascii: bool = True,
 ) -> ContainedVerifierResult:
     """Run one native verifier form under the required suspended Job Object."""
 
@@ -1154,6 +1169,10 @@ def run_contained_verifier(
         expected_executable_size_bytes,
         expected_executable_sha256,
     )
+    _validate_output_cap(stdout_cap_bytes, "verifier_stdout_cap")
+    _validate_output_cap(stderr_cap_bytes, "verifier_stderr_cap")
+    _validate_output_encoding(stdout_ascii, "verifier_stdout_encoding")
+    _validate_output_encoding(stderr_ascii, "verifier_stderr_encoding")
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     required_apis = (
@@ -1453,8 +1472,8 @@ def run_contained_verifier(
                 raise _win_error("verifier_executable_close_wait") from None
             raise
         reader_threads = [
-            threading.Thread(target=_drain_pipe, args=(stdout_read, MAX_STDOUT_BYTES, "stdout", reader_output, reader_failure, reader_overflow), daemon=True),
-            threading.Thread(target=_drain_pipe, args=(stderr_read, MAX_STDERR_BYTES, "stderr", reader_output, reader_failure, reader_overflow), daemon=True),
+            threading.Thread(target=_drain_pipe, args=(stdout_read, stdout_cap_bytes, "stdout", reader_output, reader_failure, reader_overflow, stdout_ascii), daemon=True),
+            threading.Thread(target=_drain_pipe, args=(stderr_read, stderr_cap_bytes, "stderr", reader_output, reader_failure, reader_overflow, stderr_ascii), daemon=True),
         ]
         for reader in reader_threads:
             reader.start()
@@ -1618,6 +1637,11 @@ def run_contained_verifier_stream(
     timeout_seconds: float,
     expected_executable_size_bytes: int | None = None,
     expected_executable_sha256: bytes | None = None,
+    stdout_cap_bytes: int = MAX_STDOUT_BYTES,
+    stderr_cap_bytes: int = MAX_STDERR_BYTES,
+    stdout_ascii: bool = True,
+    stderr_ascii: bool = True,
+    expected_input_bytes: int | None = None,
 ) -> ContainedVerifierResult:
     """Feed one bounded binary stream through the existing Job Object lane."""
 
@@ -1627,27 +1651,41 @@ def run_contained_verifier_stream(
         expected_executable_size_bytes,
         expected_executable_sha256,
     )
+    _validate_output_cap(stdout_cap_bytes, "verifier_stdout_cap")
+    _validate_output_cap(stderr_cap_bytes, "verifier_stderr_cap")
+    _validate_output_encoding(stdout_ascii, "verifier_stdout_encoding")
+    _validate_output_encoding(stderr_ascii, "verifier_stderr_encoding")
+    if (
+        expected_input_bytes is not None
+        and (
+            type(expected_input_bytes) is not int
+            or not 0 < expected_input_bytes <= STREAM_MAX_FRAME_BYTES
+        )
+    ):
+        raise VerifierProcessError("verifier_stream_input_length")
+    if expected_input_bytes is not None and len(frame) != expected_input_bytes:
+        raise VerifierProcessError("verifier_stream_input_length")
     _require_empty_verifier_workspace(workspace)
     try:
         read_descriptor, write_descriptor = os.pipe()
     except OSError:
         raise VerifierProcessError("verifier_stream_pipe") from None
-    stop = threading.Event()
     writer_failure: dict[str, str] = {}
 
     def _write_frame() -> None:
         offset = 0
         try:
-            while offset < len(frame) and not stop.is_set():
+            while offset < len(frame):
                 chunk = frame[offset : offset + 64 * 1024]
                 written = os.write(write_descriptor, chunk)
                 if written <= 0:
                     raise OSError("verifier_stream_write")
                 offset += written
         except BaseException:
-            if not stop.is_set():
-                writer_failure["code"] = "verifier_stream_write"
+            writer_failure["code"] = "verifier_stream_write"
         finally:
+            if offset != len(frame):
+                writer_failure["code"] = "verifier_stream_input_incomplete"
             try:
                 os.close(write_descriptor)
             except OSError:
@@ -1666,10 +1704,13 @@ def run_contained_verifier_stream(
             _stdin_descriptor=read_descriptor,
             expected_executable_size_bytes=expected_executable_size_bytes,
             expected_executable_sha256=expected_executable_sha256,
+            stdout_cap_bytes=stdout_cap_bytes,
+            stderr_cap_bytes=stderr_cap_bytes,
+            stdout_ascii=stdout_ascii,
+            stderr_ascii=stderr_ascii,
         )
         return result
     finally:
-        stop.set()
         try:
             os.close(read_descriptor)
         except OSError:
