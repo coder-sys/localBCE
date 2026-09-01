@@ -62,14 +62,61 @@ class Profile11CompletePathTests(unittest.TestCase):
         self.assertEqual(manifest["topology"], {"batch_operations": 100, "proofs": 1, "source_frames": 1, "verifier_batches": 1, "outbox_acks": 100})
         self.assertEqual(manifest["limits"]["component_admission_bytes"], 4_500_000_000)
         self.assertEqual(manifest["limits"]["complete_tree_hard_peak_bytes"], 4_999_999_999)
-        self.assertEqual(manifest["git_pins"]["producer"]["head"], screen.PRODUCER_HEAD)
-        self.assertEqual(manifest["git_pins"]["producer"]["tree"], screen.PRODUCER_TREE)
-        self.assertEqual(manifest["git_pins"]["c"]["head"], screen.C_HEAD)
-        self.assertEqual(manifest["git_pins"]["c"]["tree"], screen.C_TREE)
-        self.assertEqual(manifest["file_pins"]["producer_executable"]["bytes"], screen.PRODUCER_EXECUTABLE_SIZE_BYTES)
-        self.assertEqual(manifest["file_pins"]["producer_executable"]["sha256"], screen.PRODUCER_EXECUTABLE_SHA256)
-        self.assertEqual(manifest["file_pins"]["source_host"]["bytes"], screen.SOURCE_HOST_SIZE_BYTES)
-        self.assertEqual(manifest["file_pins"]["c_verifier"]["bytes"], screen.SOURCE_AUTH_EXECUTABLE_SIZE_BYTES)
+        self.assertEqual(
+            manifest["git_pins"],
+            {
+                "producer": {
+                    "path": str(screen.PRODUCER_REPO),
+                    "head": screen.PRODUCER_HEAD,
+                    "tree": screen.PRODUCER_TREE,
+                },
+                "source": {
+                    "path": str(screen.SOURCE_REPO),
+                    "head": screen.SOURCE_HEAD,
+                    "tree": screen.SOURCE_TREE,
+                },
+                "c": {
+                    "path": str(screen.C_REPO),
+                    "head": screen.C_HEAD,
+                    "tree": screen.C_TREE,
+                },
+                "queue": {
+                    "path": str(screen.QUEUE_REPO),
+                    "head": screen.QUEUE_HEAD,
+                    "tree": screen.QUEUE_TREE,
+                },
+            },
+        )
+        self.assertEqual(
+            manifest["file_pins"],
+            {
+                "producer_executable": {
+                    "path": str(screen.PRODUCER_EXECUTABLE),
+                    "bytes": screen.PRODUCER_EXECUTABLE_SIZE_BYTES,
+                    "sha256": screen.PRODUCER_EXECUTABLE_SHA256,
+                },
+                "source_host": {
+                    "path": "experiments/profile11_source_host/target/release/profile11_source_host.exe",
+                    "bytes": screen.SOURCE_HOST_SIZE_BYTES,
+                    "sha256": screen.SOURCE_HOST_SHA256.hex().upper(),
+                },
+                "c_verifier": {
+                    "path": str(screen.C_VERIFIER),
+                    "bytes": source_auth_adapter.SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
+                    "sha256": source_auth_adapter.SOURCE_AUTH_EXECUTABLE_SHA256.hex().upper(),
+                },
+                "c_source_library": {
+                    "path": str(screen.C_SOURCE_LIBRARY),
+                    "bytes": screen.C_SOURCE_LIBRARY_SIZE_BYTES,
+                    "sha256": screen.C_SOURCE_LIBRARY_SHA256,
+                },
+                "c_range_library": {
+                    "path": str(screen.C_RANGE_LIBRARY),
+                    "bytes": screen.C_RANGE_LIBRARY_SIZE_BYTES,
+                    "sha256": screen.C_RANGE_LIBRARY_SHA256,
+                },
+            },
+        )
         self.assertIsNone(manifest["qualification"]["proofSuiteId"])
         self.assertFalse(manifest["qualification"]["production_usable"])
         self.assertFalse(manifest["qualification"]["activation"])
