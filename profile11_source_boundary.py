@@ -1,12 +1,13 @@
-"""E2E-only Profile 11 source-boundary caller.
+"""E2E-only Profile 11 public source-request boundary.
 
-This module is evidence plumbing, not Queue production code.  The caller owns
-the appliance provision record and source-only witness/seed/randomizer bytes.
-For this E2E exercise it serializes the 4,896-byte secret and source inputs to
-the accepted appliance's stdin, does not expose them to Queue or intentionally
-persist/log them, and is not the production no-serialization/custody boundary.
-It transfers one complete frame to Queue.  OS-level process-tree and
-filesystem tracing remain external gates.
+The Queue sends one exact V2 request containing only the expected source epoch,
+batch root, ordered opaque references, and the canonical 304-byte statement.
+The test-only Rust host owns the source authority, witness, entropy, ML-DSA
+secret key, randomizer, proof, signature, and complete frame. None of those
+private values crosses this Python boundary or is written to disk. The host
+returns exactly one 16,302,267-byte frame; the independently pinned C process
+then verifies it. This module makes no production, qualification, or
+filesystem-observation claim.
 """
 
 from __future__ import annotations
@@ -25,25 +26,27 @@ from app.minimal_clearance_verifier_process import (
 )
 
 
-SOURCE_APPLIANCE_PROVISION_MAGIC: Final[bytes] = b"BL-SRC-HOST-V1\0\0"
-SOURCE_APPLIANCE_REQUEST_MAGIC: Final[bytes] = b"BL-SRC-REQ-V1\0\0\0"
-SOURCE_APPLIANCE_PROTOCOL_VERSION: Final[int] = 1
+SOURCE_APPLIANCE_REQUEST_MAGIC: Final[bytes] = b"BL-SRC-REQ-V2\0\0\0"
+SOURCE_APPLIANCE_PROTOCOL_VERSION: Final[int] = 2
+SOURCE_AUTH_REQUEST_BYTES: Final[int] = 3_596
+SOURCE_AUTH_INPUT_BYTES: Final[int] = SOURCE_AUTH_REQUEST_BYTES
 SOURCE_AUTH_ORDERED_REFS_BYTES: Final[int] = 3_200
-SOURCE_AUTH_SECRET_KEY_BYTES: Final[int] = 4_896
-SOURCE_AUTH_RANDOMIZER_BYTES: Final[int] = 32
-SOURCE_AUTH_PROVISION_BYTES: Final[int] = 4_924
-SOURCE_AUTH_REQUEST_BYTES: Final[int] = 4_544
-SOURCE_AUTH_WITNESS_COUNT: Final[int] = 100
-SOURCE_AUTH_WITNESS_BYTES: Final[int] = 800
-SOURCE_AUTH_SEED_BYTES: Final[int] = 128
-SOURCE_AUTH_INPUT_BYTES: Final[int] = SOURCE_AUTH_PROVISION_BYTES + SOURCE_AUTH_REQUEST_BYTES
+SOURCE_AUTH_STATEMENT_BYTES: Final[int] = 304
+SOURCE_AUTH_OPERATION_COUNT: Final[int] = 100
+SOURCE_AUTH_REQUEST_VERSION_OFFSET: Final[int] = 16
+SOURCE_AUTH_REQUEST_RESERVED_OFFSET: Final[int] = 18
+SOURCE_AUTH_REQUEST_EPOCH_OFFSET: Final[int] = 20
+SOURCE_AUTH_REQUEST_ROOT_OFFSET: Final[int] = 28
+SOURCE_AUTH_REQUEST_REFS_OFFSET: Final[int] = 92
+SOURCE_AUTH_REQUEST_STATEMENT_OFFSET: Final[int] = 3_292
 SOURCE_AUTH_STDOUT_CAP_BYTES: Final[int] = SOURCE_AUTH_FRAME_BYTES + 1
 SOURCE_AUTH_STDERR_CAP_BYTES: Final[int] = 1
-SOURCE_AUTH_LOWER: Final[int] = 0x1122_3344_5566_7788
-SOURCE_AUTH_UPPER: Final[int] = 0xDD_EE_FF_00_1122_3344
-SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES: Final[int] = 458_240
+
+# This is the measured test-only host release built from the source below
+# against the accepted C libraries. It is not a production artifact.
+SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES: Final[int] = 471_552
 SOURCE_APPLIANCE_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
-    "CC367F04BB2E9519DED8AA393C05ACE209C4952A4AE4BD8E433D8CB0619B90B8"
+    "C205CEBEA6C84B94D710F240D13808920980DF9CA2FC3AF2FCCAF900CACD3369"
 )
 
 
@@ -72,81 +75,33 @@ def _validate_batch(batch: IssuedVerificationBatch) -> None:
         batch.__post_init__()
     except BaseException:
         _fail("source_batch_binding")
+    if len(batch.operation_refs) != SOURCE_AUTH_OPERATION_COUNT:
+        _fail("source_operation_count")
 
 
-def _validate_source_values(
-    *,
-    witness: tuple[int, ...],
-    seed: bytes,
-    randomizer: bytes,
-) -> None:
-    if type(witness) is not tuple or len(witness) != SOURCE_AUTH_WITNESS_COUNT:
-        _fail("source_witness")
-    if any(type(value) is not int or not SOURCE_AUTH_LOWER <= value <= SOURCE_AUTH_UPPER for value in witness):
-        _fail("source_witness")
-    if type(seed) is not bytes or len(seed) != SOURCE_AUTH_SEED_BYTES:
-        _fail("source_seed")
-    if type(randomizer) is not bytes or len(randomizer) != SOURCE_AUTH_RANDOMIZER_BYTES:
-        _fail("source_randomizer")
+def build_request_record(*, batch: IssuedVerificationBatch, source_key_epoch: int) -> bytearray:
+    """Serialize only the exact public V2 request; private material is impossible here."""
 
-
-def _validate_material(
-    *,
-    secret_key: bytes,
-    witness: tuple[int, ...],
-    seed: bytes,
-    randomizer: bytes,
-) -> None:
-    if type(secret_key) is not bytes or len(secret_key) != SOURCE_AUTH_SECRET_KEY_BYTES:
-        _fail("source_secret_key")
-    _validate_source_values(witness=witness, seed=seed, randomizer=randomizer)
-
-
-def build_provision_record(*, source_key_epoch: int, secret_key: bytes) -> bytearray:
+    _validate_batch(batch)
     if type(source_key_epoch) is not int or not 1 <= source_key_epoch <= 2**64 - 1:
         _fail("source_key_epoch")
-    if type(secret_key) is not bytes or len(secret_key) != SOURCE_AUTH_SECRET_KEY_BYTES:
-        _fail("source_secret_key")
-    record = bytearray(SOURCE_AUTH_PROVISION_BYTES)
-    record[:16] = SOURCE_APPLIANCE_PROVISION_MAGIC
-    record[16:18] = SOURCE_APPLIANCE_PROTOCOL_VERSION.to_bytes(2, "little")
-    record[20:28] = source_key_epoch.to_bytes(8, "little")
-    record[28:] = secret_key
-    return record
-
-
-def build_request_record(
-    *,
-    batch: IssuedVerificationBatch,
-    witness: tuple[int, ...],
-    seed: bytes,
-    randomizer: bytes,
-) -> bytearray:
-    _validate_batch(batch)
-    _validate_source_values(witness=witness, seed=seed, randomizer=randomizer)
-    record = bytearray(SOURCE_AUTH_REQUEST_BYTES)
-    cursor = 0
-    record[cursor:cursor + 16] = SOURCE_APPLIANCE_REQUEST_MAGIC
-    cursor += 16
-    record[cursor:cursor + 64] = batch.batch_root
-    cursor += 64
     ordered_refs = b"".join(batch.operation_refs)
     if len(ordered_refs) != SOURCE_AUTH_ORDERED_REFS_BYTES:
         _fail("source_batch_binding")
-    record[cursor:cursor + SOURCE_AUTH_ORDERED_REFS_BYTES] = ordered_refs
-    cursor += SOURCE_AUTH_ORDERED_REFS_BYTES
-    record[cursor:cursor + len(batch.proof_statement)] = batch.proof_statement
-    cursor += len(batch.proof_statement)
-    for value in witness:
-        record[cursor:cursor + 8] = value.to_bytes(8, "little")
-        cursor += 8
-    record[cursor:cursor + SOURCE_AUTH_SEED_BYTES] = seed
-    cursor += SOURCE_AUTH_SEED_BYTES
-    record[cursor:cursor + SOURCE_AUTH_RANDOMIZER_BYTES] = randomizer
-    cursor += SOURCE_AUTH_RANDOMIZER_BYTES
-    if cursor != SOURCE_AUTH_REQUEST_BYTES:
+    statement = batch.proof_statement
+    if type(statement) is not bytes or len(statement) != SOURCE_AUTH_STATEMENT_BYTES:
+        _fail("source_statement")
+    request = bytearray(SOURCE_AUTH_REQUEST_BYTES)
+    request[:16] = SOURCE_APPLIANCE_REQUEST_MAGIC
+    request[SOURCE_AUTH_REQUEST_VERSION_OFFSET:SOURCE_AUTH_REQUEST_VERSION_OFFSET + 2] = SOURCE_APPLIANCE_PROTOCOL_VERSION.to_bytes(2, "little")
+    request[SOURCE_AUTH_REQUEST_RESERVED_OFFSET:SOURCE_AUTH_REQUEST_RESERVED_OFFSET + 2] = b"\0\0"
+    request[SOURCE_AUTH_REQUEST_EPOCH_OFFSET:SOURCE_AUTH_REQUEST_EPOCH_OFFSET + 8] = source_key_epoch.to_bytes(8, "little")
+    request[SOURCE_AUTH_REQUEST_ROOT_OFFSET:SOURCE_AUTH_REQUEST_ROOT_OFFSET + 64] = batch.batch_root
+    request[SOURCE_AUTH_REQUEST_REFS_OFFSET:SOURCE_AUTH_REQUEST_REFS_OFFSET + SOURCE_AUTH_ORDERED_REFS_BYTES] = ordered_refs
+    request[SOURCE_AUTH_REQUEST_STATEMENT_OFFSET:] = statement
+    if len(request) != SOURCE_AUTH_REQUEST_BYTES:
         _fail("source_request_shape")
-    return record
+    return request
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,10 +128,10 @@ class SourceApplianceConfig:
 def _validate_contained_result(result: object) -> bytearray:
     if type(result) is not ContainedVerifierResult:
         _fail("source_process")
-    if type(result.timed_out) is not bool:
-        _fail("source_process")
-    if result.timed_out:
+    if result.timed_out is True:
         _fail("source_timeout")
+    if result.timed_out is not False:
+        _fail("source_process")
     numeric_fields = (
         result.peak_job_commit_bytes,
         result.peak_working_set_bytes,
@@ -192,16 +147,12 @@ def _validate_contained_result(result: object) -> bytearray:
         or type(result.stdout) is not bytes
         or type(result.stderr) is not bytes
         or result.cap_enforced is not True
-        or type(result.cap_bytes) is not int
         or result.cap_bytes != ADMISSION_CAP_BYTES
-        or type(result.active_process_limit) is not int
         or result.active_process_limit != ACTIVE_PROCESS_LIMIT
-        or type(result.child_process_count) is not int
         or result.child_process_count < 1
         or result.process_tree_complete is not True
         or result.measurement_complete is not True
         or result.cleanup_complete is not True
-        or type(result.pagefile_growth_evidence) is not str
         or result.pagefile_growth_evidence != "unavailable"
         or any(type(value) is not int or value < 0 for value in numeric_fields)
         or result.peak_job_commit_bytes > result.cap_bytes
@@ -217,7 +168,7 @@ def _validate_contained_result(result: object) -> bytearray:
 
 
 class Profile11SourceBoundaryCaller:
-    """Source-owned one-request caller for the accepted persistent appliance."""
+    """One public V2 request to the source-owned test host."""
 
     __slots__ = ("_config",)
 
@@ -230,41 +181,20 @@ class Profile11SourceBoundaryCaller:
     def config(self) -> SourceApplianceConfig:
         return self._config
 
-    def prove_one(
-        self,
-        *,
-        batch: IssuedVerificationBatch,
-        source_key_epoch: int,
-        secret_key: bytes,
-        witness: tuple[int, ...],
-        seed: bytes,
-        randomizer: bytes,
-    ) -> bytearray:
-        _validate_batch(batch)
-        _validate_material(
-            secret_key=secret_key,
-            witness=witness,
-            seed=seed,
-            randomizer=randomizer,
-        )
-        provision = build_provision_record(source_key_epoch=source_key_epoch, secret_key=secret_key)
-        request = build_request_record(batch=batch, witness=witness, seed=seed, randomizer=randomizer)
-        payload = bytearray(provision)
-        payload.extend(request)
-        _wipe(provision)
-        _wipe(request)
+    def prove_one(self, *, batch: IssuedVerificationBatch, source_key_epoch: int) -> bytearray:
+        request = build_request_record(batch=batch, source_key_epoch=source_key_epoch)
         try:
-            return self._run_one_request(payload)
+            return self._run_one_request(request)
         finally:
-            _wipe(payload)
+            _wipe(request)
 
-    def _run_one_request(self, payload: bytearray) -> bytearray:
+    def _run_one_request(self, request: bytearray) -> bytearray:
         contained: ContainedVerifierResult | None = None
         try:
             contained = run_contained_verifier_stream(
                 self._config.executable_path,
                 (),
-                payload,
+                request,
                 workspace=self._config.workspace,
                 timeout_seconds=self._config.timeout_seconds,
                 expected_executable_size_bytes=self._config.executable_size_bytes,
@@ -293,24 +223,23 @@ __all__ = (
     "Profile11SourceBoundaryCaller",
     "SourceApplianceConfig",
     "SourceBoundaryError",
-    "SOURCE_APPLIANCE_PROVISION_MAGIC",
-    "SOURCE_APPLIANCE_PROTOCOL_VERSION",
-    "SOURCE_APPLIANCE_REQUEST_MAGIC",
     "SOURCE_APPLIANCE_EXECUTABLE_SHA256",
     "SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES",
+    "SOURCE_APPLIANCE_PROTOCOL_VERSION",
+    "SOURCE_APPLIANCE_REQUEST_MAGIC",
     "SOURCE_AUTH_FRAME_BYTES",
     "SOURCE_AUTH_INPUT_BYTES",
-    "SOURCE_AUTH_LOWER",
-    "SOURCE_AUTH_PROVISION_BYTES",
-    "SOURCE_AUTH_RANDOMIZER_BYTES",
+    "SOURCE_AUTH_OPERATION_COUNT",
+    "SOURCE_AUTH_ORDERED_REFS_BYTES",
     "SOURCE_AUTH_REQUEST_BYTES",
-    "SOURCE_AUTH_SECRET_KEY_BYTES",
-    "SOURCE_AUTH_SEED_BYTES",
+    "SOURCE_AUTH_REQUEST_EPOCH_OFFSET",
+    "SOURCE_AUTH_REQUEST_REFS_OFFSET",
+    "SOURCE_AUTH_REQUEST_ROOT_OFFSET",
+    "SOURCE_AUTH_REQUEST_STATEMENT_OFFSET",
+    "SOURCE_AUTH_REQUEST_VERSION_OFFSET",
+    "SOURCE_AUTH_REQUEST_RESERVED_OFFSET",
+    "SOURCE_AUTH_STATEMENT_BYTES",
     "SOURCE_AUTH_STDERR_CAP_BYTES",
     "SOURCE_AUTH_STDOUT_CAP_BYTES",
-    "SOURCE_AUTH_UPPER",
-    "SOURCE_AUTH_WITNESS_BYTES",
-    "SOURCE_AUTH_WITNESS_COUNT",
-    "build_provision_record",
     "build_request_record",
 )
