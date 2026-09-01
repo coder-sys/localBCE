@@ -58,12 +58,12 @@ from profile11_source_boundary import (
 
 
 E2E_ROOT = Path(r"C:\Users\neers\Documents\Codex\2026-08-31\blind-profile11-e2e-v1")
-SOURCE_REPO = Path(r"C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-range100-profile11-source-appliance-v1")
+SOURCE_REPO = Path(r"C:\Users\neers\Documents\Codex\2026-09-01\blind-profile11-source-transaction-v1")
 SOURCE_C_REPO = Path(r"C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-c-profile11-extmu-v1")
 QUEUE_REPO = Path(r"C:\Users\neers\Documents\Codex\2026-08-31\blind-queue-profile11-outbox-batch-v1")
 SOURCE_HOST = E2E_ROOT / "experiments" / "profile11_source_host" / "target" / "release" / "profile11_source_host.exe"
-SOURCE_HOST_SIZE = 471_552
-SOURCE_HOST_SHA256 = "C205CEBEA6C84B94D710F240D13808920980DF9CA2FC3AF2FCCAF900CACD3369"
+SOURCE_HOST_SIZE = 480_768
+SOURCE_HOST_SHA256 = "3D2C0A468303E68AA63B2A6A52BA922422231695D589ED1562E4F1CA3A8F5562"
 SOURCE_AUTH_C_BUILD = Path(r"C:\Users\neers\Documents\Codex\2026-09-01\blind-zkbpp-c-profile11-extmu-v1-prod-msvc\Release")
 SOURCE_AUTH_C_VERIFIER = Path(r"C:\Users\neers\Documents\Codex\2026-08-31\build-profile11-throughput-v1\Release\blind_source_auth_verify_process_v1.exe")
 SOURCE_AUTH_C_LIBRARIES = (
@@ -74,8 +74,8 @@ SOURCE_AUTH_C_HEAD = "9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2"
 SOURCE_AUTH_C_TREE = "178a5f20c6738f7272cd38f77315da83650bbac0"
 SOURCE_AUTH_C_VERIFIER_SIZE = 52_736
 SOURCE_AUTH_C_VERIFIER_SHA256 = "4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C"
-SOURCE_RUST_HEAD = "0027e9048471dde0b86bf08d3b7cf6b20db234d4"
-SOURCE_RUST_TREE = "5073d194aa6adb721903eb6084f19479ff8efaa4"
+SOURCE_RUST_HEAD = "0538862de4b7580bf0a5613ee8f86d71de032cf8"
+SOURCE_RUST_TREE = "fa18bfd8aec72643ad1d494c63fdbe1ede5245de"
 QUEUE_HEAD = "412b53e68091561657106345a22a772699761945"
 QUEUE_TREE = "72746eb68e667698fdb0a72c8aea7c9bf027076a"
 SOURCE_TEST_PUBLIC_KEY = bytes.fromhex(
@@ -242,6 +242,35 @@ class Profile11SourceBoundaryTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["expected_input_bytes"], SOURCE_AUTH_INPUT_BYTES)  # type: ignore[index]
         self.assertEqual(captured["kwargs"]["stdout_cap_bytes"], SOURCE_AUTH_STDOUT_CAP_BYTES)  # type: ignore[index]
         self.assertEqual(captured["kwargs"]["stderr_cap_bytes"], SOURCE_AUTH_STDERR_CAP_BYTES)  # type: ignore[index]
+
+    def test_real_host_emits_exact_frame_only_stdout_and_empty_stderr(self) -> None:
+        batch = self._batch()
+        request = build_request_record(batch=batch, source_key_epoch=self.queue_config.source_key_epoch)
+        try:
+            result = run_contained_verifier_stream(
+                SOURCE_HOST,
+                (),
+                request,
+                workspace=self.source_workspace,
+                timeout_seconds=180.0,
+                expected_executable_size_bytes=SOURCE_HOST_SIZE,
+                expected_executable_sha256=bytes.fromhex(SOURCE_HOST_SHA256),
+                stdout_cap_bytes=SOURCE_AUTH_STDOUT_CAP_BYTES,
+                stderr_cap_bytes=SOURCE_AUTH_STDERR_CAP_BYTES,
+                stdout_ascii=False,
+                expected_input_bytes=SOURCE_AUTH_INPUT_BYTES,
+            )
+            self.assertEqual(result.exit_code, 0)
+            self.assertEqual(len(result.stdout), SOURCE_AUTH_FRAME_BYTES)
+            self.assertEqual(result.stderr, b"")
+            self.assertTrue(result.process_tree_complete)
+            self.assertTrue(result.measurement_complete)
+            self.assertTrue(result.cleanup_complete)
+            self.assertEqual(list(self.source_workspace.iterdir()), [])
+        finally:
+            for index in range(len(request)):
+                request[index] = 0
+            request.clear()
 
     def test_source_caller_fails_closed_on_timeout_shape_or_containment(self) -> None:
         batch = self._batch()

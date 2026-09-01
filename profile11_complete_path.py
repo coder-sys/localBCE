@@ -67,10 +67,10 @@ PROFILE_SCHEMA: Final[str] = "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH/v1"
 MANIFEST_PATH: Final[Path] = Path(__file__).with_name("profile11_complete_path_manifest.json")
 
 SOURCE_REPO: Final[Path] = Path(
-    r"C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-range100-profile11-source-appliance-v1"
+    r"C:\Users\neers\Documents\Codex\2026-09-01\blind-profile11-source-transaction-v1"
 )
-SOURCE_HEAD: Final[str] = "0027e9048471dde0b86bf08d3b7cf6b20db234d4"
-SOURCE_TREE: Final[str] = "5073d194aa6adb721903eb6084f19479ff8efaa4"
+SOURCE_HEAD: Final[str] = "0538862de4b7580bf0a5613ee8f86d71de032cf8"
+SOURCE_TREE: Final[str] = "fa18bfd8aec72643ad1d494c63fdbe1ede5245de"
 
 PRODUCER_REPO: Final[Path] = Path(
     r"C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-range100-profile11-seeded-v1"
@@ -94,9 +94,9 @@ QUEUE_HEAD: Final[str] = "412b53e68091561657106345a22a772699761945"
 QUEUE_TREE: Final[str] = "72746eb68e667698fdb0a72c8aea7c9bf027076a"
 
 SOURCE_HOST: Final[Path] = Path(__file__).parent / "experiments" / "profile11_source_host" / "target" / "release" / "profile11_source_host.exe"
-SOURCE_HOST_SIZE_BYTES: Final[int] = 471_552
+SOURCE_HOST_SIZE_BYTES: Final[int] = 480_768
 SOURCE_HOST_SHA256: Final[bytes] = bytes.fromhex(
-    "C205CEBEA6C84B94D710F240D13808920980DF9CA2FC3AF2FCCAF900CACD3369"
+    "3D2C0A468303E68AA63B2A6A52BA922422231695D589ED1562E4F1CA3A8F5562"
 )
 
 C_BUILD: Final[Path] = Path(

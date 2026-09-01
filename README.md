@@ -95,9 +95,9 @@ contained C verification batch, one atomic State/outbox batch, and 100 acknowled
 acceptance is not CLEAR; State owns policy, directive, chronology, exceptions, disposition, recovery,
 and outbox.
 
-The pinned source boundary is repository `0027e9048471dde0b86bf08d3b7cf6b20db234d4` (tree
-`5073d194aa6adb721903eb6084f19479ff8efaa4`) with source-host executable SHA-256
-`C205CEBEA6C84B94D710F240D13808920980DF9CA2FC3AF2FCCAF900CACD3369` and size 471,552 bytes.
+The pinned source boundary is repository `0538862de4b7580bf0a5613ee8f86d71de032cf8` (tree
+`fa18bfd8aec72643ad1d494c63fdbe1ede5245de`) with source-host executable SHA-256
+`3D2C0A468303E68AA63B2A6A52BA922422231695D589ED1562E4F1CA3A8F5562` and size 480,768 bytes.
 The underlying Rust producer pin is repository `2bfabac2738d546e75063fd77081cbfd8ff604b3` (tree
 `9689987cf6854c7553f5792c9d6f15bddf13446a`) with release executable SHA-256
 `C4BD6BC6D5399149010E100D5F9737412F4CC5EF6AAAC2B187486BE0DEEBFB4E` and size 423,936 bytes.
@@ -106,6 +106,14 @@ The pinned C repository is `9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2` (tree
 `4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C`. The Queue pin is
 `412b53e68091561657106345a22a772699761945` (tree `72746eb68e667698fdb0a72c8aea7c9bf027076a`).
 The manifest also pins both C libraries and the synthetic public-key fixture; no production key is used.
+
+The host calls the accepted four-argument `SourceAppliance::new` and supplies one synthetic,
+volatile, non-durable, non-qualified `SourceTransactionAuthority`. Its single consume atomically
+returns one opaque launch containing the fixed test witness/seed; terminal marking, exact-Mu frame
+binding, receipt, and status remain source-owned lifecycle state. `SourceAuthResult` is consumed by
+the host and only its exact 16,302,267-byte frame is written to stdout; launch, receipt, and status
+bytes never cross the process boundary. A deployed authority must replace this test authority with
+durable source-record burn, real entropy, and qualified custody.
 
 The outer coordinator is placed in a Windows Job before resume. The complete tree is capped below
 5,000,000,000 bytes (requested cap 4,999,999,999, with page-floor readback), and component admission

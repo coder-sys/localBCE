@@ -21,9 +21,9 @@
       "tree": "9689987cf6854c7553f5792c9d6f15bddf13446a"
     },
     "source": {
-      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-zkbpp-range100-profile11-source-appliance-v1",
-      "head": "0027e9048471dde0b86bf08d3b7cf6b20db234d4",
-      "tree": "5073d194aa6adb721903eb6084f19479ff8efaa4"
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-09-01\\blind-profile11-source-transaction-v1",
+      "head": "0538862de4b7580bf0a5613ee8f86d71de032cf8",
+      "tree": "fa18bfd8aec72643ad1d494c63fdbe1ede5245de"
     },
     "c": {
       "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-zkbpp-c-profile11-extmu-v1",
@@ -44,8 +44,8 @@
     },
     "source_host": {
       "path": "experiments/profile11_source_host/target/release/profile11_source_host.exe",
-      "bytes": 471552,
-      "sha256": "C205CEBEA6C84B94D710F240D13808920980DF9CA2FC3AF2FCCAF900CACD3369"
+      "bytes": 480768,
+      "sha256": "3D2C0A468303E68AA63B2A6A52BA922422231695D589ED1562E4F1CA3A8F5562"
     },
     "c_verifier": {
       "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\build-profile11-throughput-v1\\Release\\blind_source_auth_verify_process_v1.exe",

@@ -6,4 +6,4 @@ publish = false
 
 [dependencies]
 zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
-zkboo = { path = "C:/Users/neers/Documents/Codex/2026-08-31/blind-zkbpp-range100-profile11-source-appliance-v1", features = ["source-appliance"] }
+zkboo = { path = "C:/Users/neers/Documents/Codex/2026-09-01/blind-profile11-source-transaction-v1", features = ["source-appliance"] }

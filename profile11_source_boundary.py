@@ -2,12 +2,13 @@
 
 The Queue sends one exact V2 request containing only the expected source epoch,
 batch root, ordered opaque references, and the canonical 304-byte statement.
-The test-only Rust host owns the source authority, witness, entropy, ML-DSA
-secret key, randomizer, proof, signature, and complete frame. None of those
-private values crosses this Python boundary or is written to disk. The host
-returns exactly one 16,302,267-byte frame; the independently pinned C process
-then verifies it. This module makes no production, qualification, or
-filesystem-observation claim.
+The test-only Rust host owns one synthetic SourceTransactionAuthority lifecycle,
+the fixed test witness/seed, ML-DSA secret key, randomizer, proof, signature, and
+complete frame. None of those private values crosses this Python boundary or is
+written to disk. The host returns exactly one 16,302,267-byte frame; launch,
+receipt, and status remain source-owned opaque state, and the independently pinned
+C process then verifies the frame. This module makes no production,
+qualification, or filesystem-observation claim.
 """
 
 from __future__ import annotations
@@ -44,9 +45,9 @@ SOURCE_AUTH_STDERR_CAP_BYTES: Final[int] = 1
 
 # This is the measured test-only host release built from the source below
 # against the accepted C libraries. It is not a production artifact.
-SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES: Final[int] = 471_552
+SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES: Final[int] = 480_768
 SOURCE_APPLIANCE_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
-    "C205CEBEA6C84B94D710F240D13808920980DF9CA2FC3AF2FCCAF900CACD3369"
+    "3D2C0A468303E68AA63B2A6A52BA922422231695D589ED1562E4F1CA3A8F5562"
 )
 
 

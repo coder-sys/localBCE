@@ -1,9 +1,10 @@
 //! Test-only Profile 11 source host.
 //!
-//! Its stdin is exactly the public 3,596-byte V2 request. The fixed synthetic
-//! authority, entropy, ML-DSA secret key and randomizer stay inside this
-//! process. Successful stdout is exactly one complete source-auth frame;
-//! every error is silent and bounded by exit code 1.
+//! Its stdin is exactly the public 3,596-byte V2 request. The fixed synthetic,
+//! volatile SourceTransactionAuthority owns one consume, one test witness/seed,
+//! and the opaque launch/receipt lifecycle; ML-DSA secret key and randomizer stay
+//! inside this process. Successful stdout is exactly one complete source-auth
+//! frame; every error is silent and bounded by exit code 1.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -14,10 +15,12 @@ use zeroize::Zeroizing;
 use zkboo::{
     screening::{LOWER, SEED_BYTES, ScreeningSeed, VALUE_COUNT},
     source_appliance::{
-        EntropyProvider, EntropyProviderError, ExternalMuSigner, ExternalMuSignerError,
-        SOURCE_AUTH_FRAME_BYTES, SOURCE_AUTH_PUBLIC_KEY_BYTES, SOURCE_AUTH_SIGNATURE_BYTES,
-        SOURCE_APPLIANCE_REQUEST_BYTES, SourceAppliance, SourceAuthRequest,
-        SourceItemAuthority, SourceItemAuthorityError, SourceWitness,
+        ExternalMuSigner, ExternalMuSignerError, SOURCE_APPLIANCE_REQUEST_BYTES,
+        SOURCE_AUTH_FRAME_BYTES, SOURCE_AUTH_MU_BYTES, SOURCE_AUTH_PUBLIC_KEY_BYTES,
+        SOURCE_AUTH_SIGNATURE_BYTES, SourceAppliance, SourceAuthRequest, SourceLaunchReference,
+        SourceReceiptReference, SourceTransactionAuthority, SourceTransactionAuthorityError,
+        SourceTransactionLaunch, SourceTransactionLifecycleError, SourceTransactionStatus,
+        SourceWitness,
     },
 };
 
@@ -27,6 +30,16 @@ const SECRET_KEY_BYTES: usize = 4_896;
 const RANDOMIZER_BYTES: usize = 32;
 const SIGN_OK: i32 = 0;
 const KEY_EPOCH: u64 = 0x0102_0304_0506_0708;
+const TEST_LAUNCH_REFERENCE_BYTES: [u8; 32] = [0xa7; 32];
+const TEST_RECEIPT_REFERENCE_BYTES: [u8; 32] = [0xc3; 32];
+
+fn test_launch_reference() -> SourceLaunchReference {
+    SourceLaunchReference::from_bytes(TEST_LAUNCH_REFERENCE_BYTES)
+}
+
+fn test_receipt_reference() -> SourceReceiptReference {
+    SourceReceiptReference::from_bytes(TEST_RECEIPT_REFERENCE_BYTES)
+}
 
 unsafe extern "C" {
     fn blind_source_auth_mldsa87_v1_keypair_from_seed(
@@ -49,34 +62,119 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+// This authority is deliberately synthetic, volatile, non-durable, and non-qualified. It exists
+// only to exercise the source-owned transaction seam; a deployed authority must provide durable
+// source-record burn, real entropy, and qualified custody behind the same API.
 struct FixedAuthority {
-    consumed: bool,
+    status: SourceTransactionStatus,
+    request_bytes: Option<Zeroizing<Vec<u8>>>,
+    bound_mu: Option<Zeroizing<[u8; SOURCE_AUTH_MU_BYTES]>>,
 }
 
-impl SourceItemAuthority for FixedAuthority {
-    fn consume(
-        &mut self,
-        _request: &SourceAuthRequest,
-    ) -> Result<SourceWitness, SourceItemAuthorityError> {
-        if self.consumed {
-            return Err(SourceItemAuthorityError::ConsumedOrAmbiguous);
+impl FixedAuthority {
+    fn new() -> Self {
+        Self {
+            status: SourceTransactionStatus::Unknown,
+            request_bytes: None,
+            bound_mu: None,
         }
-        self.consumed = true;
-        Ok(SourceWitness::from_array([LOWER; VALUE_COUNT]))
+    }
+
+    fn request_matches(&self, request: &SourceAuthRequest) -> bool {
+        let bytes = request.to_bytes();
+        self.request_bytes
+            .as_ref()
+            .is_some_and(|stored| stored.as_slice() == bytes.as_slice())
     }
 }
 
-struct FixedEntropy {
-    consumed: bool,
-}
-
-impl EntropyProvider for FixedEntropy {
-    fn fill_seed(&mut self) -> Result<ScreeningSeed, EntropyProviderError> {
-        if self.consumed {
-            return Err(EntropyProviderError::Failed);
+impl SourceTransactionAuthority for FixedAuthority {
+    fn consume(
+        &mut self,
+        request: &SourceAuthRequest,
+    ) -> Result<SourceTransactionLaunch, SourceTransactionAuthorityError> {
+        if request.expected_epoch() != KEY_EPOCH {
+            return Err(SourceTransactionAuthorityError::GuaranteedNoCommit);
         }
-        self.consumed = true;
-        Ok(ScreeningSeed::from_bytes([0x41; SEED_BYTES]))
+        if self.status != SourceTransactionStatus::Unknown {
+            return Err(SourceTransactionAuthorityError::ConsumedOrAmbiguous);
+        }
+        let request_bytes = request.to_bytes();
+        self.request_bytes = Some(Zeroizing::new(request_bytes.as_slice().to_vec()));
+        self.status = SourceTransactionStatus::ConsumedLaunching;
+        Ok(SourceTransactionLaunch::new(
+            test_launch_reference(),
+            SourceWitness::from_array([LOWER; VALUE_COUNT]),
+            ScreeningSeed::from_bytes([0x41; SEED_BYTES]),
+        ))
+    }
+
+    fn mark_launch_terminal(
+        &mut self,
+        launch_reference: &SourceLaunchReference,
+    ) -> Result<(), SourceTransactionLifecycleError> {
+        if launch_reference != &test_launch_reference() {
+            return Err(SourceTransactionLifecycleError::UnknownLaunch);
+        }
+        match self.status {
+            SourceTransactionStatus::ConsumedLaunching => {
+                self.status = SourceTransactionStatus::TerminalFailed;
+                Ok(())
+            }
+            SourceTransactionStatus::TerminalFailed => Ok(()),
+            SourceTransactionStatus::SignedFrameBound { .. } => {
+                Err(SourceTransactionLifecycleError::AlreadyBound)
+            }
+            SourceTransactionStatus::Unknown | SourceTransactionStatus::NoCommit => {
+                Err(SourceTransactionLifecycleError::UnknownLaunch)
+            }
+        }
+    }
+
+    fn bind_signed_frame(
+        &mut self,
+        launch_reference: &SourceLaunchReference,
+        mu: &[u8; SOURCE_AUTH_MU_BYTES],
+    ) -> Result<SourceReceiptReference, SourceTransactionLifecycleError> {
+        if launch_reference != &test_launch_reference() {
+            return Err(SourceTransactionLifecycleError::UnknownLaunch);
+        }
+        match self.status {
+            SourceTransactionStatus::ConsumedLaunching => {
+                self.bound_mu = Some(Zeroizing::new(*mu));
+                let receipt_reference = test_receipt_reference();
+                self.status = SourceTransactionStatus::SignedFrameBound { receipt_reference };
+                Ok(receipt_reference)
+            }
+            SourceTransactionStatus::TerminalFailed => {
+                Err(SourceTransactionLifecycleError::AlreadyTerminal)
+            }
+            SourceTransactionStatus::SignedFrameBound { .. } => {
+                Err(SourceTransactionLifecycleError::AlreadyBound)
+            }
+            SourceTransactionStatus::Unknown | SourceTransactionStatus::NoCommit => {
+                Err(SourceTransactionLifecycleError::InvalidBinding)
+            }
+        }
+    }
+
+    fn status_for_request(&self, request: &SourceAuthRequest) -> SourceTransactionStatus {
+        if self.request_matches(request) {
+            self.status
+        } else {
+            SourceTransactionStatus::Unknown
+        }
+    }
+
+    fn status_for_launch(
+        &self,
+        launch_reference: &SourceLaunchReference,
+    ) -> SourceTransactionStatus {
+        if launch_reference == &test_launch_reference() {
+            self.status
+        } else {
+            SourceTransactionStatus::Unknown
+        }
     }
 }
 
@@ -116,10 +214,14 @@ impl FixedSigner {
 impl ExternalMuSigner for FixedSigner {
     fn sign(
         &mut self,
-        _key_epoch: u64,
+        key_epoch: u64,
         mu: &[u8; 64],
         signature: &mut [u8; SOURCE_AUTH_SIGNATURE_BYTES],
     ) -> Result<(), ExternalMuSignerError> {
+        if key_epoch != KEY_EPOCH {
+            signature.fill(0);
+            return Err(ExternalMuSignerError::Failed);
+        }
         let status = unsafe {
             blind_source_auth_mldsa87_v1_sign_hedged_extmu(
                 signature.as_mut_ptr(),
@@ -152,15 +254,12 @@ fn run_once() -> Result<(), ()> {
         return Err(());
     }
     let (signer, public_key) = FixedSigner::new()?;
-    let mut appliance = SourceAppliance::new(
-        KEY_EPOCH,
-        public_key,
-        FixedAuthority { consumed: false },
-        FixedEntropy { consumed: false },
-        signer,
-    )
-    .map_err(|_| ())?;
-    let frame = appliance.process_request_bytes(&request[..]).map_err(|_| ())?;
+    let mut appliance = SourceAppliance::new(KEY_EPOCH, public_key, FixedAuthority::new(), signer)
+        .map_err(|_| ())?;
+    let result = appliance
+        .process_request_bytes(&request[..])
+        .map_err(|_| ())?;
+    let (frame, _launch_reference, _receipt_reference) = result.into_parts();
     if frame.len() != SOURCE_AUTH_FRAME_BYTES {
         return Err(());
     }
@@ -190,6 +289,82 @@ mod tests {
     fn fixed_public_key_shape_is_stable() {
         let (_signer, public_key) = FixedSigner::new().expect("pinned C ML-DSA keypair");
         assert_eq!(public_key.len(), SOURCE_AUTH_PUBLIC_KEY_BYTES);
-        println!("{}", public_key.iter().map(|byte| format!("{byte:02X}")).collect::<String>());
+    }
+
+    fn request() -> SourceAuthRequest {
+        let root = [0xa5; 64];
+        let mut ordered_refs = [0u8; 3_200];
+        for index in 0..VALUE_COUNT {
+            let start = index * 32;
+            ordered_refs[start..start + 32].fill((index + 1) as u8);
+        }
+        let statement = zkboo::screening::Statement::new(&[0x3c; 64], &root, 1, 2)
+            .expect("canonical statement");
+        SourceAuthRequest::new(KEY_EPOCH, root, ordered_refs, statement)
+            .expect("canonical source request")
+    }
+
+    #[test]
+    fn synthetic_authority_consumes_once_and_reports_opaque_lifecycle() {
+        assert!(PROFILE11_TEST_ONLY);
+        let request = request();
+        let mut authority = FixedAuthority::new();
+        let launch = authority.consume(&request).expect("one synthetic consume");
+        assert_eq!(launch.launch_reference(), test_launch_reference());
+        assert_eq!(
+            authority.status_for_request(&request),
+            SourceTransactionStatus::ConsumedLaunching
+        );
+        assert_eq!(
+            authority.status_for_launch(&test_launch_reference()),
+            SourceTransactionStatus::ConsumedLaunching
+        );
+        assert!(matches!(
+            authority.consume(&request),
+            Err(SourceTransactionAuthorityError::ConsumedOrAmbiguous)
+        ));
+        assert_eq!(
+            authority.mark_launch_terminal(&test_launch_reference()),
+            Ok(())
+        );
+        assert_eq!(
+            authority.status_for_request(&request),
+            SourceTransactionStatus::TerminalFailed
+        );
+        assert!(matches!(
+            authority.consume(&request),
+            Err(SourceTransactionAuthorityError::ConsumedOrAmbiguous)
+        ));
+    }
+
+    #[test]
+    fn synthetic_authority_binds_exact_mu_once_and_never_retries() {
+        let request = request();
+        let mut authority = FixedAuthority::new();
+        let launch = authority.consume(&request).expect("one synthetic consume");
+        let mu = [0x5d; SOURCE_AUTH_MU_BYTES];
+        let receipt = authority
+            .bind_signed_frame(&launch.launch_reference(), &mu)
+            .expect("exact Mu binding");
+        assert_eq!(receipt, test_receipt_reference());
+        assert_eq!(authority.bound_mu.as_deref(), Some(&mu));
+        assert_eq!(
+            authority.status_for_launch(&test_launch_reference()),
+            SourceTransactionStatus::SignedFrameBound {
+                receipt_reference: test_receipt_reference()
+            }
+        );
+        assert_eq!(
+            authority.bind_signed_frame(&test_launch_reference(), &mu),
+            Err(SourceTransactionLifecycleError::AlreadyBound)
+        );
+        assert_eq!(
+            authority.mark_launch_terminal(&test_launch_reference()),
+            Err(SourceTransactionLifecycleError::AlreadyBound)
+        );
+        assert!(matches!(
+            authority.consume(&request),
+            Err(SourceTransactionAuthorityError::ConsumedOrAmbiguous)
+        ));
     }
 }
