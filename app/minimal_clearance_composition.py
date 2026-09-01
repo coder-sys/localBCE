@@ -69,6 +69,7 @@ _CODE = re.compile(r"[a-z][a-z0-9_]{0,95}\Z")
 _ZERO = bytes(64)
 _INITIAL_PAYMENT = bytes(64)
 _LEASE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/LEASE/v4\x00"
+_OUTBOX_BATCH_CAPACITY: Final[int] = 100
 _EVENT_PAYLOAD_KEYS = {"APPLIED": frozenset({"operation_ref", "proof_accepted", "policy_result", "effective_directive", "state_receipt_digest", "sequence_before", "sequence_after"})}
 
 
@@ -324,6 +325,7 @@ class CompositionReconciliationWorkV2:
     worker_id: str
     lease_token: bytes
     lease_expires_ms: int
+    effective_directive: str
     envelope_digest: bytes
     idempotency_key: bytes
 
@@ -341,6 +343,31 @@ class CompositionDeliveryResultV2:
     acknowledgment_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CompositionOutboxBatchWorkV2:
+    composition_id: str
+    worker_id: str
+    works: tuple[CompositionOutboxWorkV2, ...]
+    has_more: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CompositionReconciliationBatchWorkV2:
+    composition_id: str
+    worker_id: str
+    works: tuple[CompositionReconciliationWorkV2, ...]
+    has_more: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CompositionBatchDeliveryResultV2:
+    composition_id: str
+    worker_id: str
+    operation: str
+    results: tuple[CompositionDeliveryResultV2, ...]
+    has_more: bool
+
+
 class CompositionClock(Protocol):
     def now_ms(self) -> int: ...
 
@@ -351,12 +378,21 @@ class _SystemClock:
 
 
 class OfficialStateReceiverPort(Protocol):
+    """The receiver must durably deduplicate the supplied idempotency key.
+
+    The local outbox preserves a stable key across retries but cannot prove that
+    an external receiver has durable idempotency. Lease expiry during an in-flight
+    call therefore remains an acknowledged ambiguity at this boundary.
+    """
+
     def identity_sha256(self) -> bytes: ...
     def epoch(self) -> int: ...
     def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes: ...
 
 
 class OfficialStateReceiverLookupPort(Protocol):
+    """Lookup port for reconciling an externally durable acknowledgment."""
+
     def acknowledgment_profile(self) -> SyntheticAckEvidenceProfileV2: ...
     def lookup_acknowledgment(self, **query: Any) -> bytes | None: ...
 
@@ -666,131 +702,196 @@ class ClearanceCompositionStoreV2:
             next_status = "DELIVERY_UNCONFIRMED" if int(attempt) >= self.config.max_attempts else "READY"
             connection.execute("UPDATE composition_outbox SET status=?,worker_id=NULL,lease_token=NULL,lease_expires_ms=NULL,updated_ms=? WHERE operation_ref=? AND status='LEASED'", (next_status, now, bytes(ref)))
 
-    def _outbox_work_matches(self, row: tuple[Any, ...], work: CompositionOutboxWorkV2, now: int) -> bool:
+    def _outbox_work_matches(self, row: tuple[Any, ...] | None, work: CompositionOutboxWorkV2, now: int) -> bool:
         if row is None or str(row[2]) != "LEASED" or bytes(row[0]) != work.operation_id or str(row[1]) != work.effective_directive or int(row[3]) != work.attempt or str(row[4]) != work.worker_id or row[5] is None or bytes(row[5]) != _sha(_LEASE, work.lease_token) or row[6] is None or int(row[6]) <= now:
             return False
         expected_envelope = _envelope(work.operation_id, work.effective_directive, self.config)
         return work.envelope_bytes == expected_envelope and work.idempotency_key == _sha(_MATERIAL, work.operation_id, work.effective_directive.encode("ascii"))
 
-    def _reconciliation_work_matches(self, row: tuple[Any, ...] | None, work: CompositionReconciliationWorkV2, directive: str, now: int) -> bool:
-        if row is None or str(row[2]) != "LEASED" or bytes(row[0]) != work.operation_id or str(row[1]) != directive or int(row[3]) != work.attempt or str(row[4]) != work.worker_id or row[5] is None or bytes(row[5]) != _sha(_LEASE, work.lease_token) or row[6] is None or int(row[6]) <= now:
+    def _reconciliation_work_matches(self, row: tuple[Any, ...] | None, work: CompositionReconciliationWorkV2, now: int) -> bool:
+        if row is None or str(row[2]) != "LEASED" or bytes(row[0]) != work.operation_id or str(row[1]) != work.effective_directive or int(row[3]) != work.attempt or str(row[4]) != work.worker_id or row[5] is None or bytes(row[5]) != _sha(_LEASE, work.lease_token) or row[6] is None or int(row[6]) <= now:
             return False
-        envelope = _envelope(work.operation_id, directive, self.config)
-        return work.envelope_digest == _sha(_MATERIAL, envelope) and work.idempotency_key == _sha(_MATERIAL, work.operation_id, directive.encode("ascii"))
+        envelope = _envelope(work.operation_id, work.effective_directive, self.config)
+        return work.envelope_digest == _sha(_MATERIAL, envelope) and work.idempotency_key == _sha(_MATERIAL, work.operation_id, work.effective_directive.encode("ascii"))
 
-    def claim_next_outbox(self, worker_id: str) -> CompositionOutboxWorkV2 | None:
-        _token(worker_id, "worker_id")
-        now = int(self.clock.now_ms())
+    def _work_is_live(self, work: CompositionOutboxWorkV2 | CompositionReconciliationWorkV2, now: int | None = None) -> bool:
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            self._expire_outbox_locked(connection, now)
-            row = connection.execute("SELECT operation_ref,effective_directive,attempt FROM composition_outbox WHERE status='READY' ORDER BY updated_ms,operation_ref LIMIT 1").fetchone()
-            if row is None:
-                connection.execute("COMMIT")
-                return None
-            ref, directive, attempt = bytes(row[0]), str(row[1]), int(row[2]) + 1
-            token = secrets.token_bytes(32)
-            expires = now + self.config.lease_seconds * 1000
-            connection.execute("UPDATE composition_outbox SET status='LEASED',attempt=?,worker_id=?,lease_token=?,lease_expires_ms=?,updated_ms=? WHERE operation_ref=? AND status='READY' AND attempt<?", (attempt, worker_id, _sha(_LEASE, token), expires, now, ref, self.config.max_attempts))
-            connection.execute("COMMIT")
-        return CompositionOutboxWorkV2(self.config.composition_id, _hex(ref), ref, attempt, worker_id, token, expires, _envelope(ref, directive, self.config), _sha(_MATERIAL, ref, directive.encode("ascii")), directive)
-
-    def dispatch(self, work: CompositionOutboxWorkV2, *, receiver: OfficialStateReceiverPort) -> CompositionDeliveryResultV2:
-        if type(work) is not CompositionOutboxWorkV2:
-            _fail(CompositionLeaseError, "outbox_work")
-        now = int(self.clock.now_ms())
-        with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM composition_outbox WHERE operation_ref=?", (work.operation_id,)).fetchone()
-            if not self._outbox_work_matches(tuple(row) if row is not None else None, work, now):
-                connection.execute("ROLLBACK")
-                _fail(CompositionLeaseError, "outbox_lease_fence")
-            connection.execute("COMMIT")
+        check_now = int(self.clock.now_ms()) if now is None else now
+        if type(work) is CompositionOutboxWorkV2:
+            return self._outbox_work_matches(tuple(row) if row is not None else None, work, check_now)
+        if type(work) is CompositionReconciliationWorkV2:
+            return self._reconciliation_work_matches(tuple(row) if row is not None else None, work, check_now)
+        _fail(CompositionLeaseError, "outbox_work")
+
+    def _claim_outbox_batch(self, worker_id: str) -> CompositionOutboxBatchWorkV2 | None:
+        """Claim at most 100 direct-delivery rows and return no persisted batch identity."""
+        _token(worker_id, "worker_id")
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                now = int(self.clock.now_ms())
+                self._expire_outbox_locked(connection, now)
+                rows = connection.execute("SELECT operation_ref,effective_directive,attempt FROM composition_outbox WHERE status='READY' ORDER BY updated_ms,operation_ref LIMIT ?", (_OUTBOX_BATCH_CAPACITY,)).fetchall()
+                if not rows:
+                    connection.execute("COMMIT")
+                    return None
+                works: list[CompositionOutboxWorkV2] = []
+                for row in rows:
+                    ref, directive, attempt = bytes(row[0]), str(row[1]), int(row[2]) + 1
+                    token = secrets.token_bytes(32)
+                    expires = now + self.config.lease_seconds * 1000
+                    updated = connection.execute("UPDATE composition_outbox SET status='LEASED',attempt=?,worker_id=?,lease_token=?,lease_expires_ms=?,updated_ms=? WHERE operation_ref=? AND status='READY' AND attempt<?", (attempt, worker_id, _sha(_LEASE, token), expires, now, ref, self.config.max_attempts))
+                    if updated.rowcount != 1:
+                        _fail(CompositionLeaseError, "outbox_claim_conflict")
+                    self._fault("after_outbox_claim_update")
+                    works.append(CompositionOutboxWorkV2(self.config.composition_id, _hex(ref), ref, attempt, worker_id, token, expires, _envelope(ref, directive, self.config), _sha(_MATERIAL, ref, directive.encode("ascii")), directive))
+                has_more = connection.execute("SELECT 1 FROM composition_outbox WHERE status='READY' LIMIT 1").fetchone() is not None
+                self._fault("before_outbox_claim_commit")
+                connection.execute("COMMIT")
+                self._after_fault("after_outbox_claim_commit")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        return CompositionOutboxBatchWorkV2(self.config.composition_id, worker_id, tuple(works), has_more)
+
+    def _claim_reconciliation_batch(self, worker_id: str) -> CompositionReconciliationBatchWorkV2 | None:
+        """Claim at most 100 reconciliation rows with independent lease material."""
+        _token(worker_id, "worker_id")
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                now = int(self.clock.now_ms())
+                self._expire_outbox_locked(connection, now)
+                rows = connection.execute("SELECT operation_ref,effective_directive,attempt FROM composition_outbox WHERE status='DELIVERY_UNCONFIRMED' AND attempt<? ORDER BY updated_ms,operation_ref LIMIT ?", (self.config.max_attempts, _OUTBOX_BATCH_CAPACITY)).fetchall()
+                if not rows:
+                    connection.execute("COMMIT")
+                    return None
+                works: list[CompositionReconciliationWorkV2] = []
+                for row in rows:
+                    ref, directive, attempt = bytes(row[0]), str(row[1]), int(row[2]) + 1
+                    token = secrets.token_bytes(32)
+                    expires = now + self.config.reconciliation_lease_seconds * 1000
+                    updated = connection.execute("UPDATE composition_outbox SET status='LEASED',attempt=?,worker_id=?,lease_token=?,lease_expires_ms=?,updated_ms=? WHERE operation_ref=? AND status='DELIVERY_UNCONFIRMED' AND attempt<?", (attempt, worker_id, _sha(_LEASE, token), expires, now, ref, self.config.max_attempts))
+                    if updated.rowcount != 1:
+                        _fail(CompositionLeaseError, "reconciliation_claim_conflict")
+                    self._fault("after_reconciliation_claim_update")
+                    envelope = _envelope(ref, directive, self.config)
+                    works.append(CompositionReconciliationWorkV2(self.config.composition_id, _hex(ref), ref, attempt, worker_id, token, expires, directive, _sha(_MATERIAL, envelope), _sha(_MATERIAL, ref, directive.encode("ascii"))))
+                has_more = connection.execute("SELECT 1 FROM composition_outbox WHERE status='DELIVERY_UNCONFIRMED' AND attempt<? LIMIT 1", (self.config.max_attempts,)).fetchone() is not None
+                self._fault("before_reconciliation_claim_commit")
+                connection.execute("COMMIT")
+                self._after_fault("after_reconciliation_claim_commit")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        return CompositionReconciliationBatchWorkV2(self.config.composition_id, worker_id, tuple(works), has_more)
+
+    @staticmethod
+    def _unconfirmed_result(work: CompositionOutboxWorkV2 | CompositionReconciliationWorkV2) -> CompositionDeliveryResultV2:
+        return CompositionDeliveryResultV2(work.job_id, work.operation_id, "DELIVERY_UNCONFIRMED", None, None, "delivery_unconfirmed")
+
+    def _attempt_direct_delivery(self, work: CompositionOutboxWorkV2, *, receiver: OfficialStateReceiverPort) -> bytes | None:
+        # This check is deliberately outside any database write transaction. A
+        # clock that reaches the deadline before this point must not start I/O.
+        if not self._work_is_live(work) or int(self.clock.now_ms()) >= work.lease_expires_ms:
+            return None
         try:
             ack = receiver.dispatch(work.envelope_bytes, work.idempotency_key)
-            _parse_acknowledgment(ack, envelope_bytes=work.envelope_bytes, idempotency_key=work.idempotency_key, operation_ref=work.operation_id, directive=work.effective_directive)
-        except CompositionError:
-            ack = None
-        except BaseException:
-            ack = None
-        if ack is None:
-            with closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                row = connection.execute("SELECT * FROM composition_outbox WHERE operation_ref=?", (work.operation_id,)).fetchone()
-                if row is not None and self._outbox_work_matches(tuple(row), work, int(self.clock.now_ms())):
-                    connection.execute("UPDATE composition_outbox SET status='DELIVERY_UNCONFIRMED',worker_id=NULL,lease_token=NULL,lease_expires_ms=NULL,updated_ms=? WHERE operation_ref=? AND status='LEASED'", (int(self.clock.now_ms()), work.operation_id))
-                connection.execute("COMMIT")
-            return CompositionDeliveryResultV2(work.job_id, work.operation_id, "DELIVERY_UNCONFIRMED", None, None, "delivery_unconfirmed")
+            return _parse_acknowledgment(ack, envelope_bytes=work.envelope_bytes, idempotency_key=work.idempotency_key, operation_ref=work.operation_id, directive=work.effective_directive)
+        except Exception:
+            # A process-level crash (BaseException) intentionally escapes here,
+            # leaving every claimed row for lease-expiry recovery.
+            return None
+
+    def _attempt_reconciliation(self, work: CompositionReconciliationWorkV2, *, lookup: OfficialStateReceiverLookupPort) -> bytes | None:
+        if not self._work_is_live(work) or int(self.clock.now_ms()) >= work.lease_expires_ms:
+            return None
+        envelope = _envelope(work.operation_id, work.effective_directive, self.config)
+        try:
+            ack = lookup.lookup_acknowledgment(receiver_identity=self.config.receiver_identity, receiver_epoch=self.config.receiver_epoch, job_id=work.job_id, operation_id=work.operation_id, idempotency_key=work.idempotency_key, envelope_digest=work.envelope_digest)
+            if ack is None:
+                return None
+            return _parse_acknowledgment(ack, envelope_bytes=envelope, idempotency_key=work.idempotency_key, operation_ref=work.operation_id, directive=work.effective_directive)
+        except Exception:
+            return None
+
+    def _settle_delivery_batch(self, *, worker_id: str, operation: str, works: tuple[CompositionOutboxWorkV2 | CompositionReconciliationWorkV2, ...], acknowledgments: tuple[bytes | None, ...], has_more: bool) -> CompositionBatchDeliveryResultV2:
+        if len(works) != len(acknowledgments):
+            _fail(CompositionIntegrityError, "outbox_batch_result")
+        if operation not in {"DIRECT_DELIVERY", "RECONCILIATION"}:
+            _fail(CompositionIntegrityError, "outbox_operation")
+        results: list[CompositionDeliveryResultV2] = []
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT * FROM composition_outbox WHERE operation_ref=?", (work.operation_id,)).fetchone()
-            if row is None or not self._outbox_work_matches(tuple(row), work, int(self.clock.now_ms())):
-                connection.execute("ROLLBACK")
-                return CompositionDeliveryResultV2(work.job_id, work.operation_id, "DELIVERY_UNCONFIRMED", None, None, "delivery_unconfirmed")
-            connection.execute("UPDATE composition_outbox SET status='ACKNOWLEDGED',worker_id=NULL,lease_token=NULL,lease_expires_ms=NULL,updated_ms=? WHERE operation_ref=? AND status='LEASED'", (int(self.clock.now_ms()), work.operation_id))
-            connection.execute("UPDATE composition_meta SET active_dispatch_count=max(0,active_dispatch_count-1) WHERE id=1")
-            connection.execute("COMMIT")
-        return CompositionDeliveryResultV2(work.job_id, work.operation_id, "ACKNOWLEDGED", ack, _sha(_MATERIAL, ack), None)
-
-    def claim_reconciliation_next(self, worker_id: str) -> CompositionReconciliationWorkV2 | None:
-        _token(worker_id, "worker_id")
-        now = int(self.clock.now_ms())
-        with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            self._expire_outbox_locked(connection, now)
-            row = connection.execute("SELECT operation_ref,effective_directive,attempt FROM composition_outbox WHERE status='DELIVERY_UNCONFIRMED' AND attempt<? ORDER BY updated_ms,operation_ref LIMIT 1", (self.config.max_attempts,)).fetchone()
-            if row is None:
+            try:
+                settlement_now = int(self.clock.now_ms())
+                self._expire_outbox_locked(connection, settlement_now)
+                self._fault("before_outbox_settlement")
+                for work, acknowledgment in zip(works, acknowledgments):
+                    row = connection.execute("SELECT * FROM composition_outbox WHERE operation_ref=?", (work.operation_id,)).fetchone()
+                    if type(work) is CompositionOutboxWorkV2:
+                        live = self._outbox_work_matches(tuple(row) if row is not None else None, work, settlement_now)
+                    elif type(work) is CompositionReconciliationWorkV2:
+                        live = self._reconciliation_work_matches(tuple(row) if row is not None else None, work, settlement_now)
+                    else:
+                        _fail(CompositionLeaseError, "outbox_work")
+                    fence = (settlement_now, work.operation_id, work.attempt, work.worker_id, _sha(_LEASE, work.lease_token), settlement_now)
+                    if acknowledgment is not None and live:
+                        updated = connection.execute("UPDATE composition_outbox SET status='ACKNOWLEDGED',worker_id=NULL,lease_token=NULL,lease_expires_ms=NULL,updated_ms=? WHERE operation_ref=? AND status='LEASED' AND attempt=? AND worker_id=? AND lease_token=? AND lease_expires_ms>?", fence)
+                        if updated.rowcount == 1:
+                            meta_updated = connection.execute("UPDATE composition_meta SET active_dispatch_count=active_dispatch_count-1 WHERE id=1 AND active_dispatch_count>0")
+                            if meta_updated.rowcount != 1:
+                                _fail(CompositionIntegrityError, "active_dispatch_count")
+                            results.append(CompositionDeliveryResultV2(work.job_id, work.operation_id, "ACKNOWLEDGED", acknowledgment, _sha(_MATERIAL, acknowledgment), None))
+                        else:
+                            results.append(self._unconfirmed_result(work))
+                    elif live:
+                        updated = connection.execute("UPDATE composition_outbox SET status='DELIVERY_UNCONFIRMED',worker_id=NULL,lease_token=NULL,lease_expires_ms=NULL,updated_ms=? WHERE operation_ref=? AND status='LEASED' AND attempt=? AND worker_id=? AND lease_token=? AND lease_expires_ms>?", fence)
+                        if updated.rowcount != 1:
+                            _fail(CompositionLeaseError, "outbox_settlement_conflict")
+                        results.append(self._unconfirmed_result(work))
+                    else:
+                        results.append(self._unconfirmed_result(work))
+                    self._fault("after_outbox_settlement_update")
+                if operation == "DIRECT_DELIVERY":
+                    remaining = connection.execute("SELECT 1 FROM composition_outbox WHERE status='READY' LIMIT 1").fetchone() is not None
+                else:
+                    remaining = connection.execute("SELECT 1 FROM composition_outbox WHERE status='DELIVERY_UNCONFIRMED' AND attempt<? LIMIT 1", (self.config.max_attempts,)).fetchone() is not None
+                has_more = has_more or remaining
+                self._fault("before_outbox_settlement_commit")
                 connection.execute("COMMIT")
-                return None
-            ref, directive, attempt = bytes(row[0]), str(row[1]), int(row[2]) + 1
-            token = secrets.token_bytes(32)
-            expires = now + self.config.reconciliation_lease_seconds * 1000
-            updated = connection.execute("UPDATE composition_outbox SET status='LEASED',attempt=?,worker_id=?,lease_token=?,lease_expires_ms=?,updated_ms=? WHERE operation_ref=? AND status='DELIVERY_UNCONFIRMED' AND attempt<?", (attempt, worker_id, _sha(_LEASE, token), expires, now, ref, self.config.max_attempts))
-            if updated.rowcount != 1:
-                connection.execute("ROLLBACK")
-                return None
-            connection.execute("COMMIT")
-        envelope = _envelope(ref, directive, self.config)
-        return CompositionReconciliationWorkV2(self.config.composition_id, _hex(ref), ref, attempt, worker_id, token, expires, _sha(_MATERIAL, envelope), _sha(_MATERIAL, ref, directive.encode("ascii")))
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        return CompositionBatchDeliveryResultV2(self.config.composition_id, worker_id, operation, tuple(results), has_more)
 
-    def reconcile_next(self, worker_id: str, *, lookup: OfficialStateReceiverLookupPort | None = None) -> CompositionDeliveryResultV2 | None:
+    def dispatch_outbox_batch(self, worker_id: str, *, receiver: OfficialStateReceiverPort) -> CompositionBatchDeliveryResultV2 | None:
+        """Claim, deliver sequentially, and settle one direct batch.
+
+        The external receiver is required to durably deduplicate the stable
+        per-operation idempotency keys. This store preserves those keys but does
+        not prove that external prerequisite; in-flight lease expiry remains
+        indeterminate and is reconciled through the separate batch operation.
+        """
+        batch = self._claim_outbox_batch(worker_id)
+        if batch is None:
+            return None
+        acknowledgments = tuple(self._attempt_direct_delivery(work, receiver=receiver) for work in batch.works)
+        return self._settle_delivery_batch(worker_id=worker_id, operation="DIRECT_DELIVERY", works=batch.works, acknowledgments=acknowledgments, has_more=batch.has_more)
+
+    def reconcile_outbox_batch(self, worker_id: str, *, lookup: OfficialStateReceiverLookupPort | None = None) -> CompositionBatchDeliveryResultV2 | None:
+        """Claim, look up sequentially, and settle one reconciliation batch."""
         if lookup is None:
             _fail(CompositionLeaseError, "reconciliation_lookup_required")
-        work = self.claim_reconciliation_next(worker_id)
-        if work is None:
+        batch = self._claim_reconciliation_batch(worker_id)
+        if batch is None:
             return None
-        with closing(self._connect()) as connection:
-            row = connection.execute("SELECT effective_directive FROM composition_outbox WHERE operation_ref=?", (work.operation_id,)).fetchone()
-        if row is None:
-            _fail(CompositionLeaseError, "reconciliation_work")
-        directive = str(row[0])
-        envelope = _envelope(work.operation_id, directive, self.config)
-        with closing(self._connect()) as connection:
-            row = connection.execute("SELECT * FROM composition_outbox WHERE operation_ref=?", (work.operation_id,)).fetchone()
-            if not self._reconciliation_work_matches(tuple(row) if row is not None else None, work, directive, int(self.clock.now_ms())):
-                _fail(CompositionLeaseError, "outbox_lease_fence")
-        try:
-            ack = lookup.lookup_acknowledgment(operation_ref=work.operation_id, idempotency_key=work.idempotency_key)
-            if ack is not None:
-                _parse_acknowledgment(ack, envelope_bytes=envelope, idempotency_key=work.idempotency_key, operation_ref=work.operation_id, directive=directive)
-        except BaseException:
-            ack = None
-        with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT * FROM composition_outbox WHERE operation_ref=?", (work.operation_id,)).fetchone()
-            live = self._reconciliation_work_matches(tuple(row) if row is not None else None, work, directive, int(self.clock.now_ms()))
-            if ack is None:
-                if live:
-                    connection.execute("UPDATE composition_outbox SET status='DELIVERY_UNCONFIRMED',worker_id=NULL,lease_token=NULL,lease_expires_ms=NULL,updated_ms=? WHERE operation_ref=? AND status='LEASED'", (int(self.clock.now_ms()), work.operation_id))
-                connection.execute("COMMIT")
-                return CompositionDeliveryResultV2(work.job_id, work.operation_id, "DELIVERY_UNCONFIRMED", None, None, "delivery_unconfirmed")
-            if not live:
-                connection.execute("COMMIT")
-                return CompositionDeliveryResultV2(work.job_id, work.operation_id, "DELIVERY_UNCONFIRMED", None, None, "delivery_unconfirmed")
-            connection.execute("UPDATE composition_outbox SET status='ACKNOWLEDGED',worker_id=NULL,lease_token=NULL,lease_expires_ms=NULL,updated_ms=? WHERE operation_ref=? AND status='LEASED'", (int(self.clock.now_ms()), work.operation_id))
-            connection.execute("UPDATE composition_meta SET active_dispatch_count=max(0,active_dispatch_count-1) WHERE id=1")
-            connection.execute("COMMIT")
-        return CompositionDeliveryResultV2(work.job_id, work.operation_id, "ACKNOWLEDGED", ack, _sha(_MATERIAL, ack), None)
+        acknowledgments = tuple(self._attempt_reconciliation(work, lookup=lookup) for work in batch.works)
+        return self._settle_delivery_batch(worker_id=worker_id, operation="RECONCILIATION", works=batch.works, acknowledgments=acknowledgments, has_more=batch.has_more)
 
     def snapshot(self) -> dict[str, Any]:
         with closing(self._connect()) as connection:
@@ -831,4 +932,4 @@ def _apply_verified_jobs_in_transaction(connection: sqlite3.Connection, *, confi
     return writer._apply_verified_jobs_in_transaction(connection, jobs, state_controls=state_controls, now=now)
 
 
-__all__ = ("ClearanceCompositionStoreV2", "CompositionBackpressureError", "CompositionClock", "CompositionConflictError", "CompositionConfigV2", "CompositionDeliveryResultV2", "CompositionError", "CompositionIndeterminateError", "CompositionIntegrityError", "CompositionLeaseError", "CompositionOutboxWorkV2", "CompositionProcessResultV2", "CompositionReconciliationWorkV2", "OfficialStateReceiverLookupPort", "OfficialStateReceiverPort", "StateDispositionControl", "SyntheticAckEvidenceProfileV2", "build_synthetic_acknowledgment", "resolve_effective_directive")
+__all__ = ("ClearanceCompositionStoreV2", "CompositionBackpressureError", "CompositionBatchDeliveryResultV2", "CompositionClock", "CompositionConflictError", "CompositionConfigV2", "CompositionDeliveryResultV2", "CompositionError", "CompositionIndeterminateError", "CompositionIntegrityError", "CompositionLeaseError", "CompositionOutboxBatchWorkV2", "CompositionOutboxWorkV2", "CompositionProcessResultV2", "CompositionReconciliationBatchWorkV2", "CompositionReconciliationWorkV2", "OfficialStateReceiverLookupPort", "OfficialStateReceiverPort", "StateDispositionControl", "SyntheticAckEvidenceProfileV2", "build_synthetic_acknowledgment", "resolve_effective_directive")
