@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout
+import ctypes
 import io
 import json
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+import uuid
 
 import profile11_complete_path as screen
 import app.minimal_clearance_source_auth_verifier_adapter as source_auth_adapter
@@ -133,6 +135,80 @@ class Profile11CompletePathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="profile11-observer-") as directory:
             self.assertEqual(screen.evaluate_disk_gate(result, state_workspace=Path(directory)), "observer_unavailable")
 
+    def test_native_etw_schema_and_abi_fail_closed(self) -> None:
+        self.assertFalse(screen._ETW_REQUIRED_FILE_OPERATION_SCHEMA_COMPLETE)
+        self.assertEqual(screen._ETW_FILE_TASK_OPERATIONS[16], "write")
+        self.assertEqual(screen._ETW_FILE_TASK_OPERATIONS[19], "rename")
+        self.assertEqual(screen._ETW_FILE_TASK_OPERATIONS[26], "delete")
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(screen._EtwEventTraceProperties), 120)
+            self.assertEqual(ctypes.sizeof(screen._EtwEventRecord), 112)
+            self.assertEqual(ctypes.sizeof(screen._EtwTraceLogfileHeader), 280)
+            self.assertEqual(ctypes.sizeof(screen._EtwEventTraceLogfileW), 448)
+        backend = screen.WindowsEtwWriteTraceBackend()
+        capability = backend.capability()
+        self.assertFalse(capability[0])
+        self.assertEqual(screen.WindowsEtwFileWriteObserver(backend).probe().status, "observer_unavailable")
+
+    def test_native_etw_realtime_session_has_no_logfile(self) -> None:
+        backend = screen.WindowsEtwWriteTraceBackend()
+        name = "BLProfile11Etw-self-test"
+        storage, properties = backend._properties_for_session(name, uuid.uuid4())
+        self.assertEqual(properties.contents.LogFileNameOffset, 0)
+        self.assertEqual(properties.contents.LoggerNameOffset, ctypes.sizeof(screen._EtwEventTraceProperties))
+        self.assertTrue(properties.contents.LogFileMode & screen._ETW_EVENT_TRACE_REAL_TIME_MODE)
+        self.assertTrue(properties.contents.LogFileMode & screen._ETW_EVENT_TRACE_NO_PER_PROCESSOR_BUFFERING)
+        self.assertEqual(properties.contents.Wnode.Flags, screen._ETW_WNODE_FLAG_TRACED_GUID)
+        self.assertEqual(
+            ctypes.wstring_at(ctypes.addressof(storage) + properties.contents.LoggerNameOffset),
+            name,
+        )
+
+    def test_etw_trace_state_requires_causal_lineage_and_generation(self) -> None:
+        state = screen._EtwTraceState(100, 123)
+        state.record_process(pid=100, key=1000, parent_pid=1, started=True)
+        state.record_process(pid=101, key=1001, parent_pid=100, started=True)
+        state.record_process(pid=102, key=1002, parent_pid=101, started=True)
+        state.record_file(pid=101, key=1001, path=Path(r"C:\state\state.sqlite"), operation="write")
+        state.record_process(pid=102, key=1002, parent_pid=101, started=False)
+        state.record_process(pid=101, key=1001, parent_pid=100, started=False)
+        state.record_process(pid=100, key=1000, parent_pid=1, started=False)
+        self.assertTrue(state.complete_lineage())
+        self.assertEqual(len(state.events), 1)
+
+        reused = screen._EtwTraceState(100, 123)
+        reused.record_process(pid=100, key=1000, parent_pid=1, started=True)
+        reused.record_process(pid=101, key=1001, parent_pid=100, started=True)
+        reused.record_process(pid=101, key=1001, parent_pid=100, started=False)
+        reused.record_process(pid=101, key=2001, parent_pid=100, started=True)
+        reused.record_file(pid=101, key=1001, path=Path(r"C:\state\proof.bin"), operation="write")
+        self.assertTrue(reused.malformed)
+        self.assertFalse(reused.complete_lineage())
+
+    def test_etw_trace_state_rejects_missing_termination_and_bad_paths(self) -> None:
+        state = screen._EtwTraceState(100, 123)
+        state.record_process(pid=100, key=1000, parent_pid=1, started=True)
+        state.record_process(pid=101, key=1001, parent_pid=100, started=True)
+        state.record_file(pid=101, key=1001, path=Path(r"relative.tmp"), operation="write")
+        self.assertTrue(state.malformed)
+        self.assertFalse(state.complete_lineage())
+
+        missing_stop = screen._EtwTraceState(100, 123)
+        missing_stop.record_process(pid=100, key=1000, parent_pid=1, started=True)
+        missing_stop.record_process(pid=101, key=1001, parent_pid=100, started=True)
+        missing_stop.record_process(pid=100, key=1000, parent_pid=1, started=False)
+        self.assertFalse(missing_stop.complete_lineage())
+
+    def test_etw_device_path_mapping_fails_closed_for_unknown_devices(self) -> None:
+        self.assertEqual(
+            screen._etw_path_from_provider(r"\Device\HarddiskVolume3\state.sqlite", ((r"\Device\HarddiskVolume3", "C:"),)),
+            Path(r"C:\state.sqlite"),
+        )
+        with self.assertRaises(screen._EtwMalformedEvent):
+            screen._etw_path_from_provider(r"\Device\UnknownVolume\state.sqlite", ())
+        with self.assertRaises(screen._EtwMalformedEvent):
+            screen._etw_path_from_provider(r"relative\state.sqlite", ())
+
     def test_screen_does_not_launch_without_ready_observer(self) -> None:
         observer = screen.WindowsEtwFileWriteObserver()
         with mock.patch.object(screen, "_launch_coordinator", side_effect=AssertionError("screen launch must be gated")):
@@ -189,6 +265,17 @@ class Profile11CompletePathTests(unittest.TestCase):
             self.assertEqual(screen.evaluate_disk_gate(forbidden, state_workspace=root), "unauthorized_write")
             nonconfigured = screen.FileWriteObservation("observer_ready", True, True, True, False, (screen.FileWriteEvent(root / "state.sqlite-wal", "write", 101),))
             self.assertEqual(screen.evaluate_disk_gate(nonconfigured, state_workspace=root), "unauthorized_write")
+            for filename in (
+                "proof.bin", "signature.bin", "frame.bin", "statement.bin", "digest.bin", "phi.bin",
+                "temp.tmp", "spill.bin", "stdout.log", "stderr.log", "crash.dmp", "core",
+            ):
+                for operation in ("create", "write", "rename", "delete"):
+                    with self.subTest(filename=filename, operation=operation):
+                        event = screen.FileWriteEvent(root / filename, operation, 101)
+                        self.assertEqual(
+                            screen.evaluate_disk_gate(screen.FileWriteObservation("observer_ready", True, True, True, False, (event,)), state_workspace=root),
+                            "unauthorized_write",
+                        )
 
     def test_observer_backend_stop_loss_becomes_incomplete(self) -> None:
         backend = _Backend(result=screen.FileWriteObservation("observer_ready", True, True, True, True))

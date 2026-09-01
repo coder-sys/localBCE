@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Callable, Final, Iterable, Protocol
+import uuid
 
 import app.minimal_clearance_composition as composition
 import app.minimal_clearance_source_auth_verifier_adapter as source_auth_adapter
@@ -378,6 +379,918 @@ def validate_job_observation(observation: JobObservation) -> None:
         _fixed("outer_cleanup")
 
 
+_ETW_ERROR_SUCCESS: Final[int] = 0
+_ETW_ERROR_INSUFFICIENT_BUFFER: Final[int] = 122
+_ETW_ERROR_CTX_CLOSE_PENDING: Final[int] = 592
+_ETW_INVALID_PROCESS_TRACE_HANDLE: Final[int] = (1 << 64) - 1
+_ETW_PROCESS_TRACE_MODE_REAL_TIME: Final[int] = 0x00000100
+_ETW_PROCESS_TRACE_MODE_EVENT_RECORD: Final[int] = 0x10000000
+_ETW_EVENT_TRACE_REAL_TIME_MODE: Final[int] = 0x00000100
+_ETW_EVENT_TRACE_NO_PER_PROCESSOR_BUFFERING: Final[int] = 0x10000000
+_ETW_WNODE_FLAG_TRACED_GUID: Final[int] = 0x00020000
+_ETW_EVENT_CONTROL_ENABLE: Final[int] = 1
+_ETW_EVENT_CONTROL_CAPTURE_STATE: Final[int] = 2
+_ETW_EVENT_CONTROL_FLUSH: Final[int] = 3
+_ETW_EVENT_CONTROL_STOP: Final[int] = 1
+_ETW_TRACE_LEVEL_VERBOSE: Final[int] = 5
+_ETW_ENABLE_PROPERTY_PROCESS_START_KEY: Final[int] = 0x00000080
+_ETW_EVENT_HEADER_EXT_TYPE_PROCESS_START_KEY: Final[int] = 0x000D
+_ETW_TOKEN_QUERY: Final[int] = 0x0008
+_ETW_TOKEN_PRIVILEGES: Final[int] = 3
+_ETW_SE_PRIVILEGE_ENABLED: Final[int] = 0x00000002
+_ETW_PROCESS_QUERY_LIMITED_INFORMATION: Final[int] = 0x00001000
+_ETW_FILE_TASK_OPERATIONS: Final[dict[int, str]] = {
+    10: "create",              # NameCreate
+    11: "delete",              # NameDelete
+    12: "create",              # Create
+    16: "write",               # Write
+    17: "directory_metadata",  # SetInformation
+    18: "delete",              # SetDelete
+    19: "rename",              # Rename
+    20: "directory_metadata",  # DirEnum
+    21: "directory_metadata",  # Flush
+    23: "directory_metadata",  # FSCTL
+    25: "directory_metadata",  # DirNotify
+    26: "delete",              # DeletePath
+    27: "rename",              # RenamePath
+    28: "rename",              # SetLinkPath
+    29: "rename",              # SetLink
+    30: "create",              # CreateNewFile
+    31: "directory_metadata",  # SetSecurity
+    33: "directory_metadata",  # SetEA
+}
+# The installed Kernel-File manifest does not expose a decodable, directory-only
+# metadata mutation event. Keep the decoder table for diagnosis, but never let
+# this backend report a complete observer until every required operation class
+# has an independently verified schema and path correlation.
+_ETW_REQUIRED_FILE_OPERATION_SCHEMA_COMPLETE: Final[bool] = False
+_ETW_FILE_TASKS_IGNORED: Final[frozenset[int]] = frozenset({13, 14, 15, 22, 24, 32, 34})
+_ETW_PROCESS_START_TASKS: Final[frozenset[int]] = frozenset({1, 15})
+_ETW_PROCESS_STOP_TASKS: Final[frozenset[int]] = frozenset({2})
+_ETW_KERNEL_FILE_PROVIDER_GUID: Final[bytes] = uuid.UUID("edd08927-9cc4-4e65-b970-c2560fb5c289").bytes_le
+_ETW_KERNEL_PROCESS_PROVIDER_GUID: Final[bytes] = uuid.UUID("22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716").bytes_le
+_ETW_LEGACY_FILE_CLASS_GUID: Final[bytes] = uuid.UUID("90cbdc39-4a3e-11d1-84f4-0000f80464e3").bytes_le
+_ETW_LEGACY_PROCESS_CLASS_GUID: Final[bytes] = uuid.UUID("3d6fa8d0-fe05-11d0-9dda-00c04fd7ba7c").bytes_le
+
+
+class _EtwGuid(ctypes.Structure):
+    _fields_ = (
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    )
+
+
+class _EtwWnodeHeader(ctypes.Structure):
+    _fields_ = (
+        ("BufferSize", ctypes.c_ulong),
+        ("ProviderId", ctypes.c_ulong),
+        ("HistoricalContext", ctypes.c_ulonglong),
+        ("TimeStamp", ctypes.c_longlong),
+        ("Guid", _EtwGuid),
+        ("ClientContext", ctypes.c_ulong),
+        ("Flags", ctypes.c_ulong),
+    )
+
+
+class _EtwEventTraceProperties(ctypes.Structure):
+    _fields_ = (
+        ("Wnode", _EtwWnodeHeader),
+        ("BufferSize", ctypes.c_ulong),
+        ("MinimumBuffers", ctypes.c_ulong),
+        ("MaximumBuffers", ctypes.c_ulong),
+        ("MaximumFileSize", ctypes.c_ulong),
+        ("LogFileMode", ctypes.c_ulong),
+        ("FlushTimer", ctypes.c_ulong),
+        ("EnableFlags", ctypes.c_ulong),
+        ("FlushThreshold", ctypes.c_long),
+        ("NumberOfBuffers", ctypes.c_ulong),
+        ("FreeBuffers", ctypes.c_ulong),
+        ("EventsLost", ctypes.c_ulong),
+        ("BuffersWritten", ctypes.c_ulong),
+        ("LogBuffersLost", ctypes.c_ulong),
+        ("RealTimeBuffersLost", ctypes.c_ulong),
+        ("LoggerThreadId", ctypes.c_void_p),
+        ("LogFileNameOffset", ctypes.c_ulong),
+        ("LoggerNameOffset", ctypes.c_ulong),
+    )
+
+
+class _EtwEventDescriptor(ctypes.Structure):
+    _fields_ = (
+        ("Id", ctypes.c_ushort),
+        ("Version", ctypes.c_ubyte),
+        ("Channel", ctypes.c_ubyte),
+        ("Level", ctypes.c_ubyte),
+        ("Opcode", ctypes.c_ubyte),
+        ("Task", ctypes.c_ushort),
+        ("Keyword", ctypes.c_ulonglong),
+    )
+
+
+class _EtwEventHeader(ctypes.Structure):
+    _fields_ = (
+        ("Size", ctypes.c_ushort),
+        ("HeaderType", ctypes.c_ushort),
+        ("Flags", ctypes.c_ushort),
+        ("EventProperty", ctypes.c_ushort),
+        ("ThreadId", ctypes.c_ulong),
+        ("ProcessId", ctypes.c_ulong),
+        ("TimeStamp", ctypes.c_longlong),
+        ("ProviderId", _EtwGuid),
+        ("EventDescriptor", _EtwEventDescriptor),
+        ("ProcessorTime", ctypes.c_ulonglong),
+        ("ActivityId", _EtwGuid),
+    )
+
+
+class _EtwBufferContext(ctypes.Structure):
+    _fields_ = (("ProcessorNumber", ctypes.c_ubyte), ("Alignment", ctypes.c_ubyte), ("LoggerId", ctypes.c_ushort))
+
+
+class _EtwEventHeaderExtendedDataItem(ctypes.Structure):
+    _fields_ = (
+        ("Reserved1", ctypes.c_ushort),
+        ("ExtType", ctypes.c_ushort),
+        ("LinkageAndReserved", ctypes.c_ushort),
+        ("DataSize", ctypes.c_ushort),
+        ("DataPtr", ctypes.c_ulonglong),
+    )
+
+
+class _EtwEventRecord(ctypes.Structure):
+    _fields_ = (
+        ("EventHeader", _EtwEventHeader),
+        ("BufferContext", _EtwBufferContext),
+        ("ExtendedDataCount", ctypes.c_ushort),
+        ("UserDataLength", ctypes.c_ushort),
+        ("ExtendedData", ctypes.POINTER(_EtwEventHeaderExtendedDataItem)),
+        ("UserData", ctypes.c_void_p),
+        ("UserContext", ctypes.c_void_p),
+    )
+
+
+class _EtwEventTraceHeader(ctypes.Structure):
+    _fields_ = (
+        ("Size", ctypes.c_ushort),
+        ("FieldTypeFlags", ctypes.c_ushort),
+        ("Version", ctypes.c_ulong),
+        ("ThreadId", ctypes.c_ulong),
+        ("ProcessId", ctypes.c_ulong),
+        ("TimeStamp", ctypes.c_longlong),
+        ("Guid", _EtwGuid),
+        ("ProcessorTime", ctypes.c_ulonglong),
+    )
+
+
+class _EtwEventTrace(ctypes.Structure):
+    _fields_ = (
+        ("Header", _EtwEventTraceHeader),
+        ("InstanceId", ctypes.c_ulong),
+        ("ParentInstanceId", ctypes.c_ulong),
+        ("ParentGuid", _EtwGuid),
+        ("MofData", ctypes.c_void_p),
+        ("MofLength", ctypes.c_ulong),
+        ("ClientContext", ctypes.c_ulong),
+    )
+
+
+class _EtwTimeZoneInformation(ctypes.Structure):
+    _fields_ = (
+        ("Bias", ctypes.c_long),
+        ("StandardName", ctypes.c_ushort * 32),
+        ("StandardDate", ctypes.c_ushort * 8),
+        ("StandardBias", ctypes.c_long),
+        ("DaylightName", ctypes.c_ushort * 32),
+        ("DaylightDate", ctypes.c_ushort * 8),
+        ("DaylightBias", ctypes.c_long),
+    )
+
+
+class _EtwTraceLogfileHeader(ctypes.Structure):
+    _fields_ = (
+        ("BufferSize", ctypes.c_ulong),
+        ("Version", ctypes.c_ulong),
+        ("ProviderVersion", ctypes.c_ulong),
+        ("NumberOfProcessors", ctypes.c_ulong),
+        ("EndTime", ctypes.c_longlong),
+        ("TimerResolution", ctypes.c_ulong),
+        ("MaximumFileSize", ctypes.c_ulong),
+        ("LogFileMode", ctypes.c_ulong),
+        ("BuffersWritten", ctypes.c_ulong),
+        ("LogInstanceGuid", _EtwGuid),
+        ("LoggerName", ctypes.c_void_p),
+        ("LogFileName", ctypes.c_void_p),
+        ("TimeZone", _EtwTimeZoneInformation),
+        ("BootTime", ctypes.c_longlong),
+        ("PerfFreq", ctypes.c_longlong),
+        ("StartTime", ctypes.c_longlong),
+        ("ReservedFlags", ctypes.c_ulong),
+        ("BuffersLost", ctypes.c_ulong),
+    )
+
+
+class _EtwEventTraceLogfileW(ctypes.Structure):
+    _fields_ = (
+        ("LogFileName", ctypes.c_void_p),
+        ("LoggerName", ctypes.c_void_p),
+        ("CurrentTime", ctypes.c_longlong),
+        ("BuffersRead", ctypes.c_ulong),
+        ("ProcessTraceMode", ctypes.c_ulong),
+        ("CurrentEvent", _EtwEventTrace),
+        ("LogfileHeader", _EtwTraceLogfileHeader),
+        ("BufferCallback", ctypes.c_void_p),
+        ("BufferSize", ctypes.c_ulong),
+        ("Filled", ctypes.c_ulong),
+        ("EventsLost", ctypes.c_ulong),
+        ("EventRecordCallback", ctypes.c_void_p),
+        ("IsKernelTrace", ctypes.c_ulong),
+        ("Context", ctypes.c_void_p),
+    )
+
+
+class _EtwEnableTraceParameters(ctypes.Structure):
+    _fields_ = (
+        ("Version", ctypes.c_ulong),
+        ("EnableProperty", ctypes.c_ulong),
+        ("ControlFlags", ctypes.c_ulong),
+        ("SourceId", _EtwGuid),
+        ("EnableFilterDesc", ctypes.c_void_p),
+        ("FilterDescCount", ctypes.c_ulong),
+    )
+
+
+class _EtwPropertyDataDescriptor(ctypes.Structure):
+    _fields_ = (
+        ("PropertyName", ctypes.c_ulonglong),
+        ("ArrayIndex", ctypes.c_ulong),
+        ("Reserved", ctypes.c_ulong),
+    )
+
+
+class _EtwLuid(ctypes.Structure):
+    _fields_ = (("LowPart", ctypes.c_ulong), ("HighPart", ctypes.c_long))
+
+
+class _EtwSidIdentifierAuthority(ctypes.Structure):
+    _fields_ = (("Value", ctypes.c_ubyte * 6),)
+
+
+class _EtwWindowsApi:
+    """Small ctypes binding; it never supplies a logfile path to ETW."""
+
+    def __init__(self) -> None:
+        self.advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.tdh = ctypes.WinDLL("tdh", use_last_error=True)
+        self._configure()
+
+    def _configure(self) -> None:
+        self.advapi32.StartTraceW.argtypes = [ctypes.POINTER(ctypes.c_ulonglong), ctypes.c_wchar_p, ctypes.POINTER(_EtwEventTraceProperties)]
+        self.advapi32.StartTraceW.restype = ctypes.c_ulong
+        self.advapi32.ControlTraceW.argtypes = [ctypes.c_ulonglong, ctypes.c_wchar_p, ctypes.POINTER(_EtwEventTraceProperties), ctypes.c_ulong]
+        self.advapi32.ControlTraceW.restype = ctypes.c_ulong
+        self.advapi32.EnableTraceEx2.argtypes = [ctypes.c_ulonglong, ctypes.POINTER(_EtwGuid), ctypes.c_ulong, ctypes.c_ubyte, ctypes.c_ulonglong, ctypes.c_ulonglong, ctypes.c_ulong, ctypes.POINTER(_EtwEnableTraceParameters)]
+        self.advapi32.EnableTraceEx2.restype = ctypes.c_ulong
+        self.advapi32.OpenTraceW.argtypes = [ctypes.POINTER(_EtwEventTraceLogfileW)]
+        self.advapi32.OpenTraceW.restype = ctypes.c_ulonglong
+        self.advapi32.ProcessTrace.argtypes = [ctypes.POINTER(ctypes.c_ulonglong), ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p]
+        self.advapi32.ProcessTrace.restype = ctypes.c_ulong
+        self.advapi32.CloseTrace.argtypes = [ctypes.c_ulonglong]
+        self.advapi32.CloseTrace.restype = ctypes.c_ulong
+        self.tdh.TdhEnumerateProviders.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        self.tdh.TdhEnumerateProviders.restype = ctypes.c_ulong
+        self.tdh.TdhGetPropertySize.argtypes = [ctypes.POINTER(_EtwEventRecord), ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(_EtwPropertyDataDescriptor), ctypes.POINTER(ctypes.c_ulong)]
+        self.tdh.TdhGetPropertySize.restype = ctypes.c_ulong
+        self.tdh.TdhGetProperty.argtypes = [ctypes.POINTER(_EtwEventRecord), ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(_EtwPropertyDataDescriptor), ctypes.c_ulong, ctypes.c_void_p]
+        self.tdh.TdhGetProperty.restype = ctypes.c_ulong
+        self.kernel32.OpenProcess.argtypes = [ctypes.c_ulong, wintypes.BOOL, ctypes.c_ulong]
+        self.kernel32.OpenProcess.restype = wintypes.HANDLE
+        self.kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME)]
+        self.kernel32.GetProcessTimes.restype = wintypes.BOOL
+        self.kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+        self.kernel32.IsProcessInJob.restype = wintypes.BOOL
+        self.kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.kernel32.CloseHandle.restype = wintypes.BOOL
+        self.kernel32.GetCurrentProcess.argtypes = []
+        self.kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        self.kernel32.QueryDosDeviceW.argtypes = [ctypes.c_wchar_p, wintypes.LPWSTR, ctypes.c_ulong]
+        self.kernel32.QueryDosDeviceW.restype = ctypes.c_ulong
+        self.advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, ctypes.c_ulong, ctypes.POINTER(wintypes.HANDLE)]
+        self.advapi32.OpenProcessToken.restype = wintypes.BOOL
+        self.advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong)]
+        self.advapi32.GetTokenInformation.restype = wintypes.BOOL
+        self.advapi32.LookupPrivilegeValueW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.POINTER(_EtwLuid)]
+        self.advapi32.LookupPrivilegeValueW.restype = wintypes.BOOL
+        self.advapi32.AllocateAndInitializeSid.argtypes = [ctypes.POINTER(_EtwSidIdentifierAuthority), ctypes.c_ubyte, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.POINTER(ctypes.c_void_p)]
+        self.advapi32.AllocateAndInitializeSid.restype = wintypes.BOOL
+        self.advapi32.CheckTokenMembership.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL)]
+        self.advapi32.CheckTokenMembership.restype = wintypes.BOOL
+        self.advapi32.FreeSid.argtypes = [ctypes.c_void_p]
+        self.advapi32.FreeSid.restype = ctypes.c_void_p
+
+    def providers(self) -> frozenset[bytes]:
+        size = ctypes.c_ulong(0)
+        status = int(self.tdh.TdhEnumerateProviders(None, ctypes.byref(size)))
+        if status != _ETW_ERROR_INSUFFICIENT_BUFFER or size.value < 8 or size.value > 16 * 1024 * 1024:
+            return frozenset()
+        storage = ctypes.create_string_buffer(size.value)
+        status = int(self.tdh.TdhEnumerateProviders(storage, ctypes.byref(size)))
+        if status != _ETW_ERROR_SUCCESS:
+            return frozenset()
+        raw = bytes(storage)
+        count = int.from_bytes(raw[:4], "little")
+        if count > 100_000 or 8 + count * 24 > len(raw):
+            return frozenset()
+        return frozenset(raw[8 + index * 24:8 + index * 24 + 16] for index in range(count))
+
+    def has_builtin_alias(self, rid: int) -> bool:
+        authority = _EtwSidIdentifierAuthority((0, 0, 0, 0, 0, 5))
+        sid = ctypes.c_void_p()
+        if not self.advapi32.AllocateAndInitializeSid(ctypes.byref(authority), 2, 32, rid, 0, 0, 0, 0, 0, 0, ctypes.byref(sid)):
+            return False
+        try:
+            member = wintypes.BOOL(False)
+            return bool(self.advapi32.CheckTokenMembership(None, sid, ctypes.byref(member)) and member.value)
+        finally:
+            self.advapi32.FreeSid(sid)
+
+    def has_enabled_profile_privilege(self) -> bool:
+        token = wintypes.HANDLE()
+        if not self.advapi32.OpenProcessToken(self.kernel32.GetCurrentProcess(), _ETW_TOKEN_QUERY, ctypes.byref(token)):
+            return False
+        try:
+            size = ctypes.c_ulong(0)
+            self.advapi32.GetTokenInformation(token, _ETW_TOKEN_PRIVILEGES, None, 0, ctypes.byref(size))
+            if not size.value or size.value > 1024 * 1024:
+                return False
+            storage = ctypes.create_string_buffer(size.value)
+            if not self.advapi32.GetTokenInformation(token, _ETW_TOKEN_PRIVILEGES, storage, size.value, ctypes.byref(size)):
+                return False
+            target = _EtwLuid()
+            if not self.advapi32.LookupPrivilegeValueW(None, "SeSystemProfilePrivilege", ctypes.byref(target)):
+                return False
+            raw = bytes(storage)
+            count = int.from_bytes(raw[:4], "little")
+            for index in range(count):
+                offset = 4 + index * 12
+                if offset + 12 > len(raw):
+                    return False
+                if raw[offset:offset + 8] == bytes(target) and int.from_bytes(raw[offset + 8:offset + 12], "little") & _ETW_SE_PRIVILEGE_ENABLED:
+                    return True
+            return False
+        finally:
+            self.kernel32.CloseHandle(token)
+
+    def root_identity(self, pid: int) -> tuple[int | None, bool]:
+        handle = self.kernel32.OpenProcess(_ETW_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None, False
+        try:
+            creation = wintypes.FILETIME()
+            exit_time = wintypes.FILETIME()
+            kernel_time = wintypes.FILETIME()
+            user_time = wintypes.FILETIME()
+            if not self.kernel32.GetProcessTimes(handle, ctypes.byref(creation), ctypes.byref(exit_time), ctypes.byref(kernel_time), ctypes.byref(user_time)):
+                return None, False
+            in_job = wintypes.BOOL(False)
+            if not self.kernel32.IsProcessInJob(handle, None, ctypes.byref(in_job)) or not in_job.value:
+                return None, False
+            value = (int(creation.dwHighDateTime) << 32) | int(creation.dwLowDateTime)
+            return value, True
+        finally:
+            self.kernel32.CloseHandle(handle)
+
+    def device_map(self) -> tuple[tuple[str, str], ...]:
+        values: list[tuple[str, str]] = []
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            target = ctypes.create_unicode_buffer(32_768)
+            length = int(self.kernel32.QueryDosDeviceW(f"{letter}:", target, len(target)))
+            if length:
+                first = target.value.split("\x00", 1)[0]
+                if first:
+                    values.append((first, f"{letter}:"))
+        return tuple(sorted(values, key=lambda item: len(item[0]), reverse=True))
+
+
+class _EtwMalformedEvent(RuntimeError):
+    pass
+
+
+class _EtwTraceState:
+    """Volatile lineage and file-event state; it has no serialization path."""
+
+    def __init__(self, root_pid: int, root_creation_filetime: int) -> None:
+        self.root_pid = root_pid
+        self.root_creation_filetime = root_creation_filetime
+        self._active: dict[int, int] = {root_pid: 0}
+        self._history: dict[int, set[int]] = {root_pid: {0}}
+        self._root_key: int | None = None
+        self.root_start_seen = False
+        self.root_stop_seen = False
+        self.malformed = False
+        self.loss_detected = False
+        self.events: list[FileWriteEvent] = []
+        self.file_names: dict[int, Path] = {}
+
+    def mark_malformed(self) -> None:
+        self.malformed = True
+
+    def mark_loss(self) -> None:
+        self.loss_detected = True
+
+    def _bind_root_key(self, key: int) -> bool:
+        if type(key) is not int or key <= 0:
+            self.mark_malformed()
+            return False
+        if self._root_key is None:
+            self._root_key = key
+            self._active[self.root_pid] = key
+            self._history[self.root_pid].discard(0)
+            self._history[self.root_pid].add(key)
+            return True
+        if self._root_key != key:
+            self.mark_malformed()
+            return False
+        return True
+
+    def actor_is_traced(self, pid: int, key: int) -> bool:
+        if type(pid) is not int or pid <= 0 or type(key) is not int or key <= 0:
+            self.mark_malformed()
+            return False
+        active = self._active.get(pid)
+        if active is None:
+            return False
+        if pid == self.root_pid and active == 0:
+            return self._bind_root_key(key)
+        if active != key:
+            self.mark_malformed()
+            return False
+        return True
+
+    def record_process(self, *, pid: int, key: int, parent_pid: int, started: bool) -> None:
+        if type(pid) is not int or pid <= 0 or type(key) is not int or key <= 0 or type(parent_pid) is not int or parent_pid < 0:
+            self.mark_malformed()
+            return
+        if pid == self.root_pid:
+            if not self._bind_root_key(key):
+                return
+            if started:
+                self.root_start_seen = True
+            else:
+                self._active.pop(pid, None)
+                self.root_stop_seen = True
+            return
+        if started:
+            if pid in self._active:
+                self.mark_malformed()
+                return
+            parent_active = self._active.get(parent_pid)
+            if parent_active is None:
+                parent_history = self._history.get(parent_pid, set())
+                parent_history.discard(0)
+                if len(parent_history) == 0:
+                    return  # unrelated process; no trusted parent edge
+                if len(parent_history) != 1:
+                    self.mark_malformed()
+                    return
+            if key in self._history.get(pid, set()):
+                self.mark_malformed()
+                return
+            self._active[pid] = key
+            self._history.setdefault(pid, set()).add(key)
+            return
+        active = self._active.get(pid)
+        if active is None:
+            return
+        if active != key:
+            self.mark_malformed()
+            return
+        self._active.pop(pid, None)
+        if pid == self.root_pid:
+            self.root_stop_seen = True
+
+    def remember_file_name(self, key: int, path: Path) -> None:
+        if type(key) is not int or key <= 0 or not isinstance(path, Path) or not path.is_absolute():
+            self.mark_malformed()
+            return
+        self.file_names[key] = path
+
+    def record_file(self, *, pid: int, key: int, path: Path, operation: str) -> None:
+        if not self.actor_is_traced(pid, key):
+            return
+        if operation not in {"write", "create", "rename", "delete", "directory_metadata"} or not isinstance(path, Path) or not path.is_absolute():
+            self.mark_malformed()
+            return
+        self.events.append(FileWriteEvent(path, operation, pid, True))
+
+    def complete_lineage(self) -> bool:
+        return (
+            not self.malformed
+            and not self.loss_detected
+            and self.root_start_seen
+            and self.root_stop_seen
+            and self._root_key is not None
+            and not self._active
+        )
+
+    def wipe(self) -> None:
+        self.file_names.clear()
+
+
+def _etw_event_task(record: _EtwEventRecord, known: frozenset[int]) -> int | None:
+    descriptor = record.EventHeader.EventDescriptor
+    for value in (int(descriptor.Task), int(descriptor.Id), int(descriptor.Opcode)):
+        if value in known:
+            return value
+    return None
+
+
+def _etw_process_start_key(record: _EtwEventRecord) -> int | None:
+    count = int(record.ExtendedDataCount)
+    pointer = record.ExtendedData
+    if count <= 0 or not pointer:
+        return None
+    for index in range(count):
+        item = pointer[index]
+        if int(item.ExtType) != _ETW_EVENT_HEADER_EXT_TYPE_PROCESS_START_KEY or int(item.DataSize) < 8 or not int(item.DataPtr):
+            continue
+        return int(ctypes.c_ulonglong.from_address(int(item.DataPtr)).value)
+    return None
+
+
+def _etw_property_bytes(api: _EtwWindowsApi, record: _EtwEventRecord, name: str) -> bytes | None:
+    name_buffer = ctypes.create_unicode_buffer(name)
+    descriptor = _EtwPropertyDataDescriptor(ctypes.cast(name_buffer, ctypes.c_void_p).value or 0, 0, 0)
+    size = ctypes.c_ulong(0)
+    status = int(api.tdh.TdhGetPropertySize(ctypes.byref(record), 0, None, 1, ctypes.byref(descriptor), ctypes.byref(size)))
+    if status != _ETW_ERROR_SUCCESS:
+        return None
+    if not size.value or size.value > 1_048_576:
+        raise _EtwMalformedEvent()
+    storage = ctypes.create_string_buffer(size.value)
+    status = int(api.tdh.TdhGetProperty(ctypes.byref(record), 0, None, 1, ctypes.byref(descriptor), size.value, storage))
+    if status != _ETW_ERROR_SUCCESS:
+        raise _EtwMalformedEvent()
+    return bytes(storage)
+
+
+def _etw_property_int(api: _EtwWindowsApi, record: _EtwEventRecord, names: tuple[str, ...]) -> int | None:
+    for name in names:
+        raw = _etw_property_bytes(api, record, name)
+        if raw is None:
+            continue
+        if len(raw) not in {4, 8}:
+            raise _EtwMalformedEvent()
+        value = int.from_bytes(raw, "little", signed=False)
+        return value if value > 0 else None
+    return None
+
+
+def _etw_property_text(api: _EtwWindowsApi, record: _EtwEventRecord, names: tuple[str, ...]) -> str | None:
+    for name in names:
+        raw = _etw_property_bytes(api, record, name)
+        if raw is None:
+            continue
+        if len(raw) % 2:
+            raise _EtwMalformedEvent()
+        try:
+            value = raw.decode("utf-16-le", errors="strict").split("\x00", 1)[0]
+        except UnicodeDecodeError as error:
+            raise _EtwMalformedEvent() from error
+        return value or None
+    return None
+
+
+def _etw_path_from_provider(raw: str, devices: tuple[tuple[str, str], ...]) -> Path:
+    value = raw.strip()
+    if not value:
+        raise _EtwMalformedEvent()
+    if value.startswith("\\??\\"):
+        value = value[4:]
+    if value.startswith("\\\\?\\") or (len(value) >= 3 and value[1:3] == ":\\"):
+        path = Path(value)
+    elif value.casefold().startswith("\\device\\mup\\"):
+        path = Path("\\\\" + value[len("\\Device\\Mup\\"):])
+    elif value.casefold().startswith("\\device\\"):
+        path = None
+        folded = value.casefold()
+        for device, drive in devices:
+            if folded == device.casefold() or folded.startswith(device.casefold() + "\\"):
+                path = Path(drive + value[len(device):])
+                break
+        if path is None:
+            raise _EtwMalformedEvent()
+    else:
+        raise _EtwMalformedEvent()
+    if not path.is_absolute():
+        raise _EtwMalformedEvent()
+    return path
+
+
+class WindowsEtwWriteTraceBackend:
+    """Direct real-time Kernel-File/Kernel-Process ETW consumer.
+
+    The session is memory-backed and real-time only.  It has no ETL/PML/log
+    filename and retains only lineage plus relevant paths until ``stop``.
+    """
+
+    __slots__ = (
+        "_api", "_session_name", "_session_id", "_properties_storage", "_properties",
+        "_logger_name", "_trace_handle", "_trace_thread", "_trace_status", "_state",
+        "_devices", "_event_callback", "_buffer_callback", "_event_callback_c", "_buffer_callback_c",
+    )
+
+    def __init__(self) -> None:
+        self._api: _EtwWindowsApi | None = None
+        self._session_name: str | None = None
+        self._session_id = 0
+        self._properties_storage: ctypes.Array[ctypes.c_char] | None = None
+        self._properties: ctypes.POINTER(_EtwEventTraceProperties) | None = None
+        self._logger_name: ctypes.Array[ctypes.c_wchar] | None = None
+        self._trace_handle = 0
+        self._trace_thread: threading.Thread | None = None
+        self._trace_status: int | None = None
+        self._state: _EtwTraceState | None = None
+        self._devices: tuple[tuple[str, str], ...] = ()
+        self._event_callback = None
+        self._buffer_callback = None
+        self._event_callback_c = None
+        self._buffer_callback_c = None
+
+    def _ensure_api(self) -> _EtwWindowsApi:
+        if os.name != "nt":
+            raise RuntimeError("etw_windows_only")
+        if self._api is None:
+            self._api = _EtwWindowsApi()
+        return self._api
+
+    def capability(self) -> tuple[bool, bool, bool, bool]:
+        try:
+            api = self._ensure_api()
+            providers = api.providers()
+            provider_available = (
+                _ETW_REQUIRED_FILE_OPERATION_SCHEMA_COMPLETE
+                and _ETW_KERNEL_FILE_PROVIDER_GUID in providers
+                and _ETW_KERNEL_PROCESS_PROVIDER_GUID in providers
+            )
+            privilege_available = api.has_enabled_profile_privilege() or api.has_builtin_alias(544) or api.has_builtin_alias(559)
+            lineage_available = all(hasattr(api.kernel32, name) for name in ("OpenProcess", "GetProcessTimes", "IsProcessInJob"))
+            loss_available = all(hasattr(api.advapi32, name) for name in ("ControlTraceW", "CloseTrace"))
+            return provider_available, privilege_available, lineage_available, loss_available
+        except BaseException:
+            return False, False, False, False
+
+    def _properties_for_session(self, name: str, session_guid: uuid.UUID) -> tuple[ctypes.Array[ctypes.c_char], ctypes.POINTER(_EtwEventTraceProperties)]:
+        property_size = ctypes.sizeof(_EtwEventTraceProperties)
+        name_bytes = name.encode("utf-16-le") + b"\x00\x00"
+        storage = ctypes.create_string_buffer(property_size + len(name_bytes))
+        properties = ctypes.cast(storage, ctypes.POINTER(_EtwEventTraceProperties))
+        properties.contents.Wnode.BufferSize = len(storage)
+        properties.contents.Wnode.Guid = _EtwGuid.from_buffer_copy(session_guid.bytes_le)
+        properties.contents.Wnode.ClientContext = 1
+        properties.contents.Wnode.Flags = _ETW_WNODE_FLAG_TRACED_GUID
+        properties.contents.BufferSize = 64
+        properties.contents.MinimumBuffers = 4
+        properties.contents.MaximumBuffers = 128
+        properties.contents.FlushTimer = 1
+        properties.contents.LogFileMode = _ETW_EVENT_TRACE_REAL_TIME_MODE | _ETW_EVENT_TRACE_NO_PER_PROCESSOR_BUFFERING
+        properties.contents.LogFileNameOffset = 0
+        properties.contents.LoggerNameOffset = property_size
+        ctypes.memmove(ctypes.addressof(storage) + property_size, name_bytes, len(name_bytes))
+        return storage, properties
+
+    def _enable(self, provider_bytes: bytes, keywords: int) -> None:
+        assert self._api is not None and self._session_id
+        provider = _EtwGuid.from_buffer_copy(provider_bytes)
+        params = _EtwEnableTraceParameters(
+            2, _ETW_ENABLE_PROPERTY_PROCESS_START_KEY, 0, _EtwGuid(), None, 0,
+        )
+        status = int(self._api.advapi32.EnableTraceEx2(
+            self._session_id, ctypes.byref(provider), _ETW_EVENT_CONTROL_ENABLE,
+            _ETW_TRACE_LEVEL_VERBOSE, keywords, 0, 5000, ctypes.byref(params),
+        ))
+        if status != _ETW_ERROR_SUCCESS:
+            raise RuntimeError("etw_provider_enable")
+
+    def start(self, root_pid: int) -> None:
+        if self._trace_handle or self._session_id:
+            raise RuntimeError("etw_already_started")
+        api = self._ensure_api()
+        if type(root_pid) is not int or root_pid <= 0:
+            raise RuntimeError("etw_root_pid")
+        creation, in_job = api.root_identity(root_pid)
+        if creation is None or not in_job:
+            raise RuntimeError("etw_root_identity")
+        provider, privilege, lineage, loss = self.capability()
+        if not all((provider, privilege, lineage, loss)):
+            raise RuntimeError("etw_capability")
+        self._devices = api.device_map()
+        if not self._devices:
+            raise RuntimeError("etw_device_map")
+        self._state = _EtwTraceState(root_pid, creation)
+        session_guid = uuid.uuid4()
+        self._session_name = f"BLProfile11Etw-{session_guid.hex}"
+        self._properties_storage, self._properties = self._properties_for_session(self._session_name, session_guid)
+        session_id = ctypes.c_ulonglong(0)
+        status = int(api.advapi32.StartTraceW(ctypes.byref(session_id), self._session_name, self._properties))
+        if status != _ETW_ERROR_SUCCESS:
+            self._abort_start()
+            raise RuntimeError("etw_session_start")
+        self._session_id = int(session_id.value)
+        self._logger_name = ctypes.create_unicode_buffer(self._session_name)
+        logfile = _EtwEventTraceLogfileW()
+        logfile.LogFileName = None
+        logfile.LoggerName = ctypes.cast(self._logger_name, ctypes.c_void_p).value
+        logfile.ProcessTraceMode = _ETW_PROCESS_TRACE_MODE_REAL_TIME | _ETW_PROCESS_TRACE_MODE_EVENT_RECORD
+        self._event_callback_c = ctypes.WINFUNCTYPE(None, ctypes.POINTER(_EtwEventRecord))(self._on_event)
+        self._buffer_callback_c = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.POINTER(_EtwEventTraceLogfileW))(self._on_buffer)
+        logfile.EventRecordCallback = ctypes.cast(self._event_callback_c, ctypes.c_void_p).value
+        logfile.BufferCallback = ctypes.cast(self._buffer_callback_c, ctypes.c_void_p).value
+        self._trace_handle = int(api.advapi32.OpenTraceW(ctypes.byref(logfile)))
+        if self._trace_handle == _ETW_INVALID_PROCESS_TRACE_HANDLE:
+            self._abort_start()
+            raise RuntimeError("etw_consumer_open")
+        self._trace_thread = threading.Thread(target=self._consume, name="profile11-etw-consumer", daemon=False)
+        self._trace_thread.start()
+        try:
+            file_keywords = 0x10 | 0x20 | 0x80 | 0x200 | 0x400 | 0x800 | 0x1000
+            self._enable(_ETW_KERNEL_PROCESS_PROVIDER_GUID, 0x10)
+            self._enable(_ETW_KERNEL_FILE_PROVIDER_GUID, file_keywords)
+        except BaseException:
+            self._abort_start()
+            raise
+
+    def _consume(self) -> None:
+        assert self._api is not None
+        handle_array = (ctypes.c_ulonglong * 1)(self._trace_handle)
+        try:
+            self._trace_status = int(self._api.advapi32.ProcessTrace(handle_array, 1, None, None))
+        except BaseException:
+            self._trace_status = -1
+            if self._state is not None:
+                self._state.mark_loss()
+
+    def _on_buffer(self, logfile: ctypes.POINTER(_EtwEventTraceLogfileW)) -> int:
+        state = self._state
+        if state is not None and logfile and int(logfile.contents.EventsLost):
+            state.mark_loss()
+        return 1
+
+    def _provider_process_key(self, record: _EtwEventRecord) -> int:
+        key = _etw_process_start_key(record)
+        if key is None:
+            raise _EtwMalformedEvent()
+        return key
+
+    def _on_process_event(self, record: _EtwEventRecord) -> None:
+        state = self._state
+        api = self._api
+        if state is None or api is None:
+            return
+        task = _etw_event_task(record, frozenset({1, 2, 15}))
+        if task is None:
+            state.mark_malformed()
+            return
+        pid = _etw_property_int(api, record, ("ProcessId", "ProcessID"))
+        parent = _etw_property_int(api, record, ("ParentId", "ParentProcessID"))
+        if pid is None:
+            pid = int(record.EventHeader.ProcessId)
+        started = task in _ETW_PROCESS_START_TASKS
+        if parent is None:
+            if started and pid != state.root_pid:
+                raise _EtwMalformedEvent()
+            parent = 0
+        if pid <= 0:
+            raise _EtwMalformedEvent()
+        key = self._provider_process_key(record)
+        state.record_process(pid=pid, key=key, parent_pid=parent, started=started)
+
+    def _on_file_event(self, record: _EtwEventRecord) -> None:
+        state = self._state
+        api = self._api
+        if state is None or api is None:
+            return
+        task = _etw_event_task(record, frozenset(set(_ETW_FILE_TASK_OPERATIONS) | set(_ETW_FILE_TASKS_IGNORED)))
+        if task is None:
+            state.mark_malformed()
+            return
+        pid = int(record.EventHeader.ProcessId)
+        key = self._provider_process_key(record)
+        if task in _ETW_FILE_TASKS_IGNORED:
+            state.actor_is_traced(pid, key)
+            return
+        if not state.actor_is_traced(pid, key):
+            return
+        object_key = _etw_property_int(api, record, ("FileObject", "FileKey"))
+        raw_path = _etw_property_text(api, record, ("FilePath", "FileName", "OpenPath"))
+        path = _etw_path_from_provider(raw_path, self._devices) if raw_path is not None else None
+        if path is None and object_key is not None:
+            path = state.file_names.get(object_key)
+        if path is None or object_key is None:
+            raise _EtwMalformedEvent()
+        state.remember_file_name(object_key, path)
+        state.record_file(pid=pid, key=key, path=path, operation=_ETW_FILE_TASK_OPERATIONS[task])
+
+    def _on_event(self, record_pointer: ctypes.POINTER(_EtwEventRecord)) -> None:
+        state = self._state
+        if state is None or not record_pointer:
+            if state is not None:
+                state.mark_malformed()
+            return
+        try:
+            record = record_pointer.contents
+            provider = bytes(record.EventHeader.ProviderId)
+            if provider in {_ETW_KERNEL_PROCESS_PROVIDER_GUID, _ETW_LEGACY_PROCESS_CLASS_GUID}:
+                self._on_process_event(record)
+            elif provider in {_ETW_KERNEL_FILE_PROVIDER_GUID, _ETW_LEGACY_FILE_CLASS_GUID}:
+                self._on_file_event(record)
+        except BaseException:
+            state.mark_malformed()
+
+    def _stop_session(self) -> tuple[bool, bool]:
+        api = self._api
+        if api is None or not self._session_id or self._properties is None or self._session_name is None:
+            return False, False
+        flush_ok = int(api.advapi32.ControlTraceW(self._session_id, self._session_name, self._properties, _ETW_EVENT_CONTROL_FLUSH)) == _ETW_ERROR_SUCCESS
+        stop_ok = int(api.advapi32.ControlTraceW(self._session_id, self._session_name, self._properties, _ETW_EVENT_CONTROL_STOP)) == _ETW_ERROR_SUCCESS
+        return flush_ok, stop_ok
+
+    def _close_consumer(self) -> bool:
+        api = self._api
+        if api is None or not self._trace_handle:
+            return True
+        status = int(api.advapi32.CloseTrace(self._trace_handle))
+        if self._trace_thread is not None:
+            self._trace_thread.join(timeout=10.0)
+        if self._trace_thread is not None and self._trace_thread.is_alive():
+            return False
+        return status in {_ETW_ERROR_SUCCESS, _ETW_ERROR_CTX_CLOSE_PENDING}
+
+    def _abort_start(self) -> None:
+        try:
+            self._stop_session()
+        except BaseException:
+            pass
+        try:
+            self._close_consumer()
+        except BaseException:
+            pass
+        self._session_id = 0
+        self._trace_handle = 0
+        self._trace_thread = None
+        self._properties = None
+        self._properties_storage = None
+        self._logger_name = None
+        self._session_name = None
+        self._trace_status = None
+        self._state = None
+        self._devices = ()
+        self._event_callback = None
+        self._buffer_callback = None
+        self._event_callback_c = None
+        self._buffer_callback_c = None
+
+    def stop(self) -> "FileWriteObservation":
+        state = self._state
+        if state is None or not self._session_id:
+            return FileWriteObservation("observer_incomplete", True, True, False, True)
+        try:
+            flush_ok, stop_ok = self._stop_session()
+            close_ok = self._close_consumer()
+            trace_ok = self._trace_status == _ETW_ERROR_SUCCESS
+            properties = self._properties.contents if self._properties is not None else None
+            loss = state.loss_detected or not flush_ok or not stop_ok or not close_ok or not trace_ok
+            if properties is not None:
+                loss = loss or bool(properties.EventsLost or properties.LogBuffersLost or properties.RealTimeBuffersLost)
+            lineage = state.complete_lineage()
+            ready = not loss and lineage
+            events = tuple(state.events) if ready else ()
+            state.wipe()
+            result = FileWriteObservation("observer_ready" if ready else "observer_incomplete", True, True, lineage, bool(loss), events)
+        except BaseException:
+            state.mark_loss()
+            state.wipe()
+            result = FileWriteObservation("observer_incomplete", True, True, False, True)
+        finally:
+            self._session_id = 0
+            self._trace_handle = 0
+            self._trace_thread = None
+            self._properties = None
+            self._properties_storage = None
+            self._logger_name = None
+            self._session_name = None
+            self._trace_status = None
+            self._state = None
+            self._devices = ()
+            self._event_callback = None
+            self._buffer_callback = None
+            self._event_callback_c = None
+            self._buffer_callback_c = None
+        return result
+
+
 class WriteTraceBackend(Protocol):
     def capability(self) -> tuple[bool, bool, bool, bool]: ...
     def start(self, root_pid: int) -> None: ...
@@ -414,7 +1327,7 @@ class WindowsEtwFileWriteObserver:
     __slots__ = ("_backend", "_started")
 
     def __init__(self, backend: WriteTraceBackend | None = None) -> None:
-        self._backend = backend
+        self._backend = backend if backend is not None else (WindowsEtwWriteTraceBackend() if os.name == "nt" else None)
         self._started = False
 
     def probe(self) -> FileWriteObservation:
@@ -1583,7 +2496,7 @@ __all__ = (
     "C_BUILD", "C_HEAD", "C_RANGE_LIBRARY", "C_REPO", "C_SOURCE_LIBRARY", "C_VERIFIER", "C_TREE",
     "CompletePathError", "DependencyReport", "FileWriteEvent", "FileWriteObservation", "GitPin",
     "JobObservation", "MANIFEST_PATH", "MEASURED_SAMPLE_COUNT", "OUTER_ACTIVE_PROCESS_LIMIT",
-    "OUTER_HARD_CAP_BYTES", "PROFILE_ID", "PROFILE_SCHEMA", "PRODUCER_EXECUTABLE", "PRODUCER_EXECUTABLE_SHA256", "PRODUCER_EXECUTABLE_SIZE_BYTES", "PRODUCER_HEAD", "PRODUCER_REPO", "PRODUCER_TREE", "MeasurementSchedule", "StageSample", "VerifyStateBreakdown", "WindowsEtwFileWriteObserver",
+    "OUTER_HARD_CAP_BYTES", "PROFILE_ID", "PROFILE_SCHEMA", "PRODUCER_EXECUTABLE", "PRODUCER_EXECUTABLE_SHA256", "PRODUCER_EXECUTABLE_SIZE_BYTES", "PRODUCER_HEAD", "PRODUCER_REPO", "PRODUCER_TREE", "MeasurementSchedule", "StageSample", "VerifyStateBreakdown", "WindowsEtwFileWriteObserver", "WindowsEtwWriteTraceBackend",
     "build_test_aggregate", "configured_state_allowlist", "effective_outer_cap", "evaluate_disk_gate",
     "nearest_rank_p95", "prepare_report", "run_falsification_screen", "run_measurement_schedule", "run_measurement_schedule_with_warmup", "validate_dependencies",
     "validate_job_observation", "validate_topology",

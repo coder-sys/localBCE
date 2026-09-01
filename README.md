@@ -114,6 +114,17 @@ accounting is a failure. The native file-write observer is capability-based: wit
 ETW/provider, privilege, PID-lineage, loss, and stop evidence it reports `observer_unavailable` or
 `observer_incomplete`; directory snapshots are never treated as complete filesystem-write observation.
 
+The native implementation uses a realtime, memory-only `StartTraceW`/`OpenTraceW`/`ProcessTrace`
+session for the registered Kernel-File and Kernel-Process providers; it supplies no ETL/PML/log
+filename. It remains fail-closed here because the installed Kernel-File schema does not provide a
+decodable directory-only metadata mutation event, and file-name correlation can be lost. Provider
+presence alone therefore cannot establish complete observation: until an independently verified
+schema and external trace/isolation evidence cover every required event class, the backend must not
+report `observer_ready` or support a complete-path run. See Microsoft's [system provider]
+documentation for the provider/session boundary.
+
+[system provider]: https://learn.microsoft.com/en-us/windows/win32/etw/system-providers
+
 Only the selected State DB, configured SQLite DELETE journal, State runtime lock, and necessary
 State-directory metadata are authorized. Proof, signature, frame, statement, digest, PHI, temporary,
 witness/nonce, spill, stdout/stderr log, crash-dump, and core writes—including files later deleted—are forbidden.
