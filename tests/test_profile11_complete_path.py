@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -140,6 +142,26 @@ class Profile11CompletePathTests(unittest.TestCase):
         self.assertEqual(result["completed_samples"], 0)
         self.assertEqual(result["observer_status"], "observer_unavailable")
         self.assertEqual(result["disk_gate"], "observer_unavailable")
+
+    def test_main_screen_failure_returns_nonzero_and_preserves_json(self) -> None:
+        failed = screen.build_test_aggregate(completed_samples=0, error_code="observer_unavailable")
+        output = io.StringIO()
+        with mock.patch.object(screen, "run_falsification_screen", return_value=failed) as run_screen, redirect_stdout(output):
+            code = screen.main(["--screen"])
+        self.assertEqual(code, 1)
+        run_screen.assert_called_once_with()
+        self.assertEqual(json.loads(output.getvalue()), failed)
+
+    def test_main_screen_complete_aggregate_returns_zero(self) -> None:
+        warmup = self._timed_sample()
+        timings = tuple(self._timed_sample(index + 1) for index in range(5))
+        complete = screen.build_test_aggregate(completed_samples=5, timings=timings, warmup=warmup, observer_status="observer_ready", disk_gate="disk_gate_pass")
+        output = io.StringIO()
+        with mock.patch.object(screen, "run_falsification_screen", return_value=complete) as run_screen, redirect_stdout(output):
+            code = screen.main(["--screen"])
+        self.assertEqual(code, 0)
+        run_screen.assert_called_once_with()
+        self.assertEqual(json.loads(output.getvalue()), complete)
 
     def test_observer_capability_loss_and_lineage_fail_closed(self) -> None:
         observer = screen.WindowsEtwFileWriteObserver(_Backend(capability=(True, True, True, False)))

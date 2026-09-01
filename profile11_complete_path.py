@@ -1564,8 +1564,11 @@ def main(argv: list[str] | None = None) -> int:
             print(_aggregate_json(value), end="")
             return 0
         if args.screen:
-            print(_aggregate_json(run_falsification_screen()), end="")
-            return 0
+            value = run_falsification_screen()
+            print(_aggregate_json(value), end="")
+            if value["status"] == "complete" and value["error_code"] is None and value["completed_samples"] == MEASURED_SAMPLE_COUNT and value["observer_status"] == "observer_ready" and value["disk_gate"] == "disk_gate_pass":
+                return 0
+            return 1
         _fixed("mode_required")
     except CompletePathError as error:
         print(json.dumps({"schema": PROFILE_SCHEMA, "mode": "error", "error_code": str(error), "proofSuiteId": None, "production_usable": False, "activation": False}, sort_keys=True, separators=(",", ":")))
