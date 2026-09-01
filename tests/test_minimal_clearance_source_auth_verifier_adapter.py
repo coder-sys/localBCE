@@ -1,4 +1,5 @@
 import hashlib
+import subprocess
 import threading
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app.minimal_clearance_composition as composition
+import app.minimal_clearance_source_auth_verifier_adapter as source_auth_adapter
 from app.minimal_clearance_composition import StateDispositionControl
 from app.minimal_clearance_source_auth_verifier_adapter import (
     ML_DSA_87_PUBLIC_KEY_BYTES,
@@ -40,6 +42,65 @@ from app.minimal_clearance_verifier_process import ContainedVerifierResult, Veri
 
 
 STALE_PROFILE10_FRAME_BYTES = 16_298_779
+SOURCE_AUTH_C_REPO_HEAD = "5d1a53238747540029a740ee8e305121efadaedb"
+SOURCE_AUTH_C_REPO_TREE = "4b0dc25fab9417842548bd1c695577e43f21807f"
+SOURCE_AUTH_C_BUILD = Path(r"C:\Users\neers\Documents\Codex\2026-08-31\build-profile11-throughput-v1\Release")
+SOURCE_AUTH_C_VERIFIER = SOURCE_AUTH_C_BUILD / "blind_source_auth_verify_process_v1.exe"
+SOURCE_AUTH_C_VERIFIER_BYTES = 52_736
+SOURCE_AUTH_C_VERIFIER_SHA256 = "4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C"
+SOURCE_AUTH_C_SIGNER = SOURCE_AUTH_C_BUILD / "blind_source_auth_test_signer_v1.exe"
+SOURCE_AUTH_C_SIGNER_BYTES = 42_496
+SOURCE_AUTH_C_SIGNER_SHA256 = "80ECF74C5D68380BDE4577866028C9BB5DC8FFCB97E6164FD41F442FF1588B43"
+SOURCE_AUTH_C_LIBRARIES = (
+    (SOURCE_AUTH_C_BUILD / "blind_source_auth_v1.lib", 146_952, "DDF3B811A9D558E147C49175D45A3B28ED226A39AC5E87546DBADB38D8DD7EF5"),
+    (SOURCE_AUTH_C_BUILD / "blind_range100_cdg_direct_v1.lib", 111_148, "C0F9A0772556FFBABC4FE3D8E66AB5677ECAE67A9E03435D685F69FA378BE183"),
+)
+SOURCE_AUTH_RUST_REPO_HEAD = "62c03aa34dc1f4a42fa3fe2f37c381d6b8d13867"
+SOURCE_AUTH_RUST_REPO_TREE = "41efb7be2a7268243a7465ad4fa94729b6829224"
+SOURCE_AUTH_RUST_PRODUCER = Path(r"C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-range100-profile11-source-appliance-v1\target\release\blind_range100_prove_cdg_direct.exe")
+SOURCE_AUTH_RUST_PRODUCER_BYTES = 412_160
+SOURCE_AUTH_RUST_PRODUCER_SHA256 = "8F87EE677FBE66E5B6039BADED105E740318D2FE383B40582B02865C35D9EB46"
+SOURCE_AUTH_APPLIANCE = Path(r"C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-range100-profile11-source-appliance-v1\target\release\blind_source_auth_profile11_appliance.exe")
+SOURCE_AUTH_APPLIANCE_BYTES = 458_240
+SOURCE_AUTH_APPLIANCE_SHA256 = "CC367F04BB2E9519DED8AA393C05ACE209C4952A4AE4BD8E433D8CB0619B90B8"
+
+
+def _assert_pinned_file(test: unittest.TestCase, path: Path, expected_bytes: int, expected_sha256: str) -> None:
+    test.assertTrue(path.is_file(), path)
+    test.assertEqual(path.stat().st_size, expected_bytes, path)
+    test.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest().upper(), expected_sha256, path)
+
+
+def _run_pinned_process(
+    test: unittest.TestCase,
+    executable: Path,
+    payload: bytearray,
+    expected_stdout_bytes: int,
+    workdir: Path,
+) -> bytearray:
+    process = subprocess.Popen(
+        [str(executable)],
+        cwd=workdir,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout: bytes
+    stderr: bytes
+    try:
+        stdout, stderr = process.communicate(bytes(payload), timeout=180)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate(timeout=10)
+        test.fail(f"pinned process timeout: {executable}")
+    finally:
+        for index in range(len(payload)):
+            payload[index] = 0
+        payload.clear()
+    test.assertEqual(process.returncode, 0, executable)
+    test.assertEqual(len(stdout), expected_stdout_bytes, executable)
+    test.assertEqual(stderr, b"", executable)
+    return bytearray(stdout)
 
 
 class _Fixture:
@@ -392,6 +453,16 @@ class SourceAuthAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source_auth_executable_identity"):
             replace(self.fixture.config, executable_sha256=bytes(32))
 
+    def test_rejects_stale_profile10_verifier_pin(self) -> None:
+        with self.assertRaisesRegex(ValueError, "source_auth_executable_identity"):
+            replace(
+                self.fixture.config,
+                executable_size_bytes=50_688,
+                executable_sha256=bytes.fromhex(
+                    "EC584750D733FF29F4ED41F141FAA1DA1005E90EA2DE594DBD9844AE01A1669F"
+                ),
+            )
+
     def test_public_key_is_not_repr_or_queue_durable_material(self) -> None:
         self.assertNotIn(self.fixture.key.hex(), repr(self.fixture.config))
         self.assertNotIn(self.fixture.key.hex(), repr(self.fixture.adapter))
@@ -434,6 +505,272 @@ class SourceAuthAdapterTests(unittest.TestCase):
         finally:
             store._close()
             owner.close()
+
+
+class SourceAuthContainedProcessTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.temp = tempfile.TemporaryDirectory(prefix="blind-profile11-adapter-process-")
+        cls.root = Path(cls.temp.name)
+        cls.workspace = cls.root / "verifier-workspace"
+        cls.workspace.mkdir()
+        checker = unittest.TestCase()
+        _assert_pinned_file(checker, SOURCE_AUTH_C_VERIFIER, SOURCE_AUTH_C_VERIFIER_BYTES, SOURCE_AUTH_C_VERIFIER_SHA256)
+        _assert_pinned_file(checker, SOURCE_AUTH_C_SIGNER, SOURCE_AUTH_C_SIGNER_BYTES, SOURCE_AUTH_C_SIGNER_SHA256)
+        _assert_pinned_file(checker, SOURCE_AUTH_RUST_PRODUCER, SOURCE_AUTH_RUST_PRODUCER_BYTES, SOURCE_AUTH_RUST_PRODUCER_SHA256)
+        _assert_pinned_file(checker, SOURCE_AUTH_APPLIANCE, SOURCE_AUTH_APPLIANCE_BYTES, SOURCE_AUTH_APPLIANCE_SHA256)
+        for path, expected_bytes, expected_sha256 in SOURCE_AUTH_C_LIBRARIES:
+            _assert_pinned_file(checker, path, expected_bytes, expected_sha256)
+
+        queue_config = QueueConfig("queue-profile11-process", 100, source_key_epoch=0x0102030405060708)
+        template = OperationTemplate(
+            "assertion",
+            1,
+            "state-profile-v11",
+            1_700_000_000_000,
+            1_700_003_600_000,
+            None,
+            queue_config.qualification_flags,
+        )
+        refs = tuple(index.to_bytes(32, "little") for index in range(100))
+        batch_root = _compute_batch_root_from_refs(template, refs)
+        statement = _build_statement(
+            batch_root=batch_root,
+            session_ref=bytes(range(64)),
+            valid_from_ms=template.valid_from_ms,
+            valid_until_ms=template.valid_until_ms,
+        )
+        cls.batch = IssuedVerificationBatch(
+            b"b" * 32,
+            template,
+            refs,
+            batch_root,
+            bytes(range(64)),
+            statement,
+            1,
+            b"i" * 64,
+        )
+        cls.queue_config = queue_config
+        cls.frame, cls.public_key = cls._make_valid_frame()
+        cls.config = SourceAuthVerifierConfig(
+            queue_config=queue_config,
+            executable_path=SOURCE_AUTH_C_VERIFIER,
+            executable_size_bytes=SOURCE_AUTH_C_VERIFIER_BYTES,
+            executable_sha256=bytes.fromhex(SOURCE_AUTH_C_VERIFIER_SHA256),
+            workspace=cls.workspace,
+            ml_dsa_87_public_key=bytes(cls.public_key),
+            timeout_seconds=30.0,
+        )
+
+    @classmethod
+    def _make_valid_frame(cls) -> tuple[bytearray, bytearray]:
+        proof_seed = bytearray((index * 13 + 7) % 256 for index in range(128))
+        producer_input = bytearray(cls.batch.proof_statement)
+        witness = (0x1122_3344_5566_7788).to_bytes(8, "little")
+        producer_input.extend(witness * 100)
+        producer_input.extend(proof_seed)
+        envelope = _run_pinned_process(
+            unittest.TestCase(),
+            SOURCE_AUTH_RUST_PRODUCER,
+            producer_input,
+            SOURCE_AUTH_PROOF_ENVELOPE_BYTES,
+            cls.root,
+        )
+
+        prefix = bytearray(b"BL-SAUTH-FRM-V1\x00")
+        prefix.extend((1).to_bytes(2, "little"))
+        prefix.extend((100).to_bytes(2, "little"))
+        prefix.extend(cls.queue_config.source_key_epoch.to_bytes(8, "little"))
+        prefix.extend(cls.batch.batch_root)
+        prefix.extend(b"".join(cls.batch.operation_refs))
+        prefix.extend(envelope)
+        if len(prefix) != SOURCE_AUTH_SIGNED_PREFIX_BYTES:
+            raise AssertionError(f"source-auth signed prefix width: {len(prefix)}")
+
+        key_seed = bytearray([0xA5] * 32)
+        randomizer = bytearray([0x5A] * 32)
+        signer_input = bytearray(key_seed)
+        signer_input.extend(randomizer)
+        signer_input.extend(prefix)
+        signer_output = _run_pinned_process(
+            unittest.TestCase(),
+            SOURCE_AUTH_C_SIGNER,
+            signer_input,
+            ML_DSA_87_PUBLIC_KEY_BYTES + SOURCE_AUTH_SIGNATURE_BYTES,
+            cls.root,
+        )
+        public_key = bytearray(signer_output[:ML_DSA_87_PUBLIC_KEY_BYTES])
+        signature = signer_output[ML_DSA_87_PUBLIC_KEY_BYTES:]
+        frame = bytearray(prefix)
+        frame.extend(signature)
+        if len(frame) != SOURCE_AUTH_FRAME_BYTES:
+            raise AssertionError(f"source-auth frame width: {len(frame)}")
+        for value in (proof_seed, envelope, prefix, key_seed, randomizer, signer_output, signature):
+            for index in range(len(value)):
+                value[index] = 0
+            value.clear()
+        return frame, public_key
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        for name in ("frame", "public_key"):
+            value = getattr(cls, name, None)
+            if isinstance(value, bytearray):
+                for index in range(len(value)):
+                    value[index] = 0
+                value.clear()
+        cls.config = None
+        cls.temp.cleanup()
+
+    def _adapter(self, *, public_key: bytes | None = None) -> MinimalClearanceSourceAuthVerifierAdapter:
+        config = self.config
+        if public_key is not None:
+            config = replace(config, ml_dsa_87_public_key=public_key)
+        return MinimalClearanceSourceAuthVerifierAdapter(config)
+
+    def test_exact_frame_is_accepted_by_real_contained_verifier(self) -> None:
+        observed: list[ContainedVerifierResult] = []
+        real_runner = source_auth_adapter.run_contained_verifier_stream
+
+        def runner(*args: object, **kwargs: object) -> ContainedVerifierResult:
+            result = real_runner(*args, **kwargs)
+            observed.append(result)
+            return result
+
+        handoff = VolatileProofHandoff(bytearray(self.frame))
+        with patch.object(source_auth_adapter, "run_contained_verifier_stream", side_effect=runner):
+            result = self._adapter().verify(handoff, self.batch)
+        self.assertEqual((result.proof_accepted, result.source_authenticated, result.result_code), (True, True, "accepted"))
+        self.assertEqual(result.proof_statement, self.batch.proof_statement)
+        self.assertEqual(result.batch_root, self.batch.batch_root)
+        self.assertNotIn("policyResult", result.as_json)
+        self.assertNotIn("effectiveDirective", result.as_json)
+        self.assertEqual(len(observed), 1)
+        contained = observed[0]
+        self.assertEqual(contained.exit_code, 0)
+        self.assertEqual(contained.stdout, b"")
+        self.assertEqual(contained.stderr, b"")
+        self.assertFalse(contained.timed_out)
+        self.assertTrue(contained.cap_enforced)
+        self.assertEqual(contained.cap_bytes, ADMISSION_CAP_BYTES)
+        self.assertEqual(contained.active_process_limit, ACTIVE_PROCESS_LIMIT)
+        self.assertGreaterEqual(contained.child_process_count, 1)
+        self.assertTrue(contained.process_tree_complete)
+        self.assertTrue(contained.measurement_complete)
+        self.assertTrue(contained.cleanup_complete)
+        self.assertGreaterEqual(contained.peak_job_commit_bytes, 0)
+        self.assertLessEqual(contained.peak_job_commit_bytes, ADMISSION_CAP_BYTES)
+        self.assertTrue(handoff.closed)
+        self.assertEqual(handoff.total_read, SOURCE_AUTH_FRAME_BYTES)
+        self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_outer_binding_rejection_allows_only_a_fresh_retry(self) -> None:
+        forged = bytearray(self.frame)
+        forged[28] ^= 1
+        rejected_handoff = VolatileProofHandoff(forged)
+        observed: list[ContainedVerifierResult] = []
+        real_runner = source_auth_adapter.run_contained_verifier_stream
+
+        def runner(*args: object, **kwargs: object) -> ContainedVerifierResult:
+            result = real_runner(*args, **kwargs)
+            observed.append(result)
+            return result
+
+        with patch.object(source_auth_adapter, "run_contained_verifier_stream", side_effect=runner):
+            rejected = self._adapter().verify(rejected_handoff, self.batch)
+            accepted = self._adapter().verify(VolatileProofHandoff(bytearray(self.frame)), self.batch)
+        self.assertEqual((rejected.proof_accepted, rejected.source_authenticated, rejected.result_code), (False, False, "rejected"))
+        self.assertEqual((accepted.proof_accepted, accepted.source_authenticated, accepted.result_code), (True, True, "accepted"))
+        self.assertEqual([item.exit_code for item in observed], [1, 0])
+        self.assertTrue(rejected_handoff.closed)
+        self.assertEqual(rejected_handoff.total_read, SOURCE_AUTH_FRAME_BYTES)
+        self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_statement_and_public_key_rejections_are_non_dispositive(self) -> None:
+        forged_statement = bytearray(self.frame)
+        forged_statement[3_292 + 20] ^= 1
+        bad_key = bytearray(self.public_key)
+        bad_key[0] ^= 1
+        for frame, config_key in ((forged_statement, bytes(self.public_key)), (bytearray(self.frame), bytes(bad_key))):
+            with self.subTest(material="statement" if frame is forged_statement else "public_key"):
+                real_runner = source_auth_adapter.run_contained_verifier_stream
+
+                def runner(*args: object, **kwargs: object) -> ContainedVerifierResult:
+                    return real_runner(*args, **kwargs)
+
+                with patch.object(source_auth_adapter, "run_contained_verifier_stream", side_effect=runner) as patched_runner:
+                    result = self._adapter(public_key=config_key).verify(VolatileProofHandoff(frame), self.batch)
+                self.assertEqual((result.proof_accepted, result.source_authenticated, result.result_code), (False, False, "rejected"))
+                patched_runner.assert_called_once()
+                self.assertEqual(list(self.workspace.iterdir()), [])
+        for index in range(len(bad_key)):
+            bad_key[index] = 0
+        bad_key.clear()
+
+    def test_real_process_classifies_binding_signature_and_structural_mutations(self) -> None:
+        cases = (
+            ("epoch", 20, None, "rejected", 1),
+            ("root", 28, None, "rejected", 1),
+            ("ordered_ref_position", 92, None, "rejected", 1),
+            ("statement", 3_292 + 20, None, "rejected", 1),
+            ("signature", SOURCE_AUTH_SIGNED_PREFIX_BYTES, None, "rejected", 1),
+            ("proof", 3_292 + 460, None, "rejected", 1),
+            ("magic", 0, None, "held", 2),
+        )
+        for name, offset, config_key, expected, expected_exit in cases:
+            with self.subTest(name=name):
+                forged = bytearray(self.frame)
+                if name == "ordered_ref_position":
+                    first = bytes(forged[92:124])
+                    forged[92:124] = forged[124:156]
+                    forged[124:156] = first
+                else:
+                    forged[offset] ^= 1
+                observed: list[ContainedVerifierResult] = []
+                real_runner = source_auth_adapter.run_contained_verifier_stream
+
+                def runner(*args: object, **kwargs: object) -> ContainedVerifierResult:
+                    result = real_runner(*args, **kwargs)
+                    observed.append(result)
+                    return result
+
+                handoff = VolatileProofHandoff(forged)
+                with patch.object(source_auth_adapter, "run_contained_verifier_stream", side_effect=runner):
+                    if expected == "rejected":
+                        result = self._adapter(public_key=config_key).verify(handoff, self.batch)
+                        self.assertEqual((result.proof_accepted, result.source_authenticated, result.result_code), (False, False, "rejected"))
+                    else:
+                        with self.assertRaisesRegex(QueueHeldError, "verifier_transport"):
+                            self._adapter(public_key=config_key).verify(handoff, self.batch)
+                self.assertEqual(len(observed), 1)
+                self.assertEqual(observed[0].exit_code, expected_exit)
+                self.assertTrue(handoff.closed)
+                self.assertEqual(handoff.total_read, SOURCE_AUTH_FRAME_BYTES)
+                self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_real_frame_minus_one_plus_one_and_two_frames_never_reach_c(self) -> None:
+        payloads = (
+            bytearray(self.frame[:-1]),
+            bytearray(self.frame) + b"x",
+            bytearray(self.frame) + self.frame,
+        )
+        for payload in payloads:
+            handoff = VolatileProofHandoff(payload)
+            with patch.object(source_auth_adapter, "run_contained_verifier_stream") as runner:
+                with self.assertRaisesRegex(QueueHeldError, "proof_handoff_length"):
+                    self._adapter().verify(handoff, self.batch)
+            runner.assert_not_called()
+            self.assertTrue(handoff.closed)
+            self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_trailing_partial_frame_is_rejected_before_process(self) -> None:
+        handoff = VolatileProofHandoff(bytearray(self.frame) + b"partial")
+        with patch.object(source_auth_adapter, "run_contained_verifier_stream") as runner:
+            with self.assertRaisesRegex(QueueHeldError, "proof_handoff_length"):
+                self._adapter().verify(handoff, self.batch)
+        runner.assert_not_called()
+        self.assertTrue(handoff.closed)
+        self.assertEqual(list(self.workspace.iterdir()), [])
 
 
 if __name__ == "__main__":
