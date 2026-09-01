@@ -5,8 +5,10 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import profile11_complete_path as screen
+import app.minimal_clearance_source_auth_verifier_adapter as source_auth_adapter
 
 
 class _Backend:
@@ -26,13 +28,27 @@ class _Backend:
 
 
 class Profile11CompletePathTests(unittest.TestCase):
+    @staticmethod
+    def _timed_sample(index: int = 0) -> screen.StageSample:
+        breakdown = screen.VerifyStateBreakdown(1.0 + index, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+        source = 1.0 + index
+        verify_state = 2.0 + index
+        ack = 3.0 + index
+        total_unbucketed = 1.0
+        total = source + verify_state + ack + total_unbucketed
+        return screen.StageSample(source, verify_state, ack, total, breakdown, total_unbucketed)
+
     def test_manifest_and_exact_pins(self) -> None:
         manifest = json.loads(screen.MANIFEST_PATH.read_text(encoding="utf-8"))
         self.assertEqual(manifest["topology"], {"batch_operations": 100, "proofs": 1, "source_frames": 1, "verifier_batches": 1, "outbox_acks": 100})
         self.assertEqual(manifest["limits"]["component_admission_bytes"], 4_500_000_000)
         self.assertEqual(manifest["limits"]["complete_tree_hard_peak_bytes"], 4_999_999_999)
+        self.assertEqual(manifest["git_pins"]["producer"]["head"], screen.PRODUCER_HEAD)
+        self.assertEqual(manifest["git_pins"]["producer"]["tree"], screen.PRODUCER_TREE)
         self.assertEqual(manifest["git_pins"]["c"]["head"], screen.C_HEAD)
         self.assertEqual(manifest["git_pins"]["c"]["tree"], screen.C_TREE)
+        self.assertEqual(manifest["file_pins"]["producer_executable"]["bytes"], screen.PRODUCER_EXECUTABLE_SIZE_BYTES)
+        self.assertEqual(manifest["file_pins"]["producer_executable"]["sha256"], screen.PRODUCER_EXECUTABLE_SHA256)
         self.assertEqual(manifest["file_pins"]["source_host"]["bytes"], screen.SOURCE_HOST_SIZE_BYTES)
         self.assertEqual(manifest["file_pins"]["c_verifier"]["bytes"], screen.SOURCE_AUTH_EXECUTABLE_SIZE_BYTES)
         self.assertIsNone(manifest["qualification"]["proofSuiteId"])
@@ -115,6 +131,16 @@ class Profile11CompletePathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="profile11-observer-") as directory:
             self.assertEqual(screen.evaluate_disk_gate(result, state_workspace=Path(directory)), "observer_unavailable")
 
+    def test_screen_does_not_launch_without_ready_observer(self) -> None:
+        observer = screen.WindowsEtwFileWriteObserver()
+        with mock.patch.object(screen, "_launch_coordinator", side_effect=AssertionError("screen launch must be gated")):
+            result = screen.run_falsification_screen(observer=observer)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_code"], "observer_unavailable")
+        self.assertEqual(result["completed_samples"], 0)
+        self.assertEqual(result["observer_status"], "observer_unavailable")
+        self.assertEqual(result["disk_gate"], "observer_unavailable")
+
     def test_observer_capability_loss_and_lineage_fail_closed(self) -> None:
         observer = screen.WindowsEtwFileWriteObserver(_Backend(capability=(True, True, True, False)))
         self.assertEqual(observer.probe().status, "observer_unavailable")
@@ -158,8 +184,10 @@ class Profile11CompletePathTests(unittest.TestCase):
             nonlocal calls
             calls += 1
             return screen.StageSample(float(calls), float(calls + 1), float(calls + 2), float(calls + 3))
-        values = screen.run_measurement_schedule(sample)
+        schedule = screen.run_measurement_schedule_with_warmup(sample)
         self.assertEqual(calls, 6)
+        self.assertEqual(schedule.warmup, screen.StageSample(1.0, 2.0, 3.0, 4.0))
+        values = schedule.measured
         self.assertEqual(len(values), 5)
         p95 = screen.nearest_rank_p95(values)
         self.assertEqual(p95, screen.StageSample(6.0, 7.0, 8.0, 9.0))
@@ -175,8 +203,9 @@ class Profile11CompletePathTests(unittest.TestCase):
         self.assertEqual(calls, 4)
 
     def test_aggregate_is_zero_phi_and_nonactivating(self) -> None:
-        timings = tuple(screen.StageSample(1.0 + index, 2.0 + index, 3.0 + index, 4.0 + index) for index in range(5))
-        value = screen.build_test_aggregate(completed_samples=5, timings=timings, peak_job_commit_bytes=1024, effective_cap_bytes=screen.effective_outer_cap(screen.PROCESS_TREE_PEAK_CAP_BYTES, 4096), peak_active_processes=2, total_processes=7)
+        warmup = self._timed_sample()
+        timings = tuple(self._timed_sample(index + 1) for index in range(5))
+        value = screen.build_test_aggregate(completed_samples=5, timings=timings, warmup=warmup, peak_job_commit_bytes=1024, effective_cap_bytes=screen.effective_outer_cap(screen.PROCESS_TREE_PEAK_CAP_BYTES, 4096), peak_active_processes=2, total_processes=7)
         encoded = screen._aggregate_json(value)
         self.assertNotIn("statement", encoded.lower())
         self.assertNotIn("operation_ref", encoded.lower())
@@ -186,6 +215,33 @@ class Profile11CompletePathTests(unittest.TestCase):
         self.assertFalse(value["activation"])
         self.assertEqual(value["proof_count"], 1)
         self.assertEqual(value["operation_count"], 100)
+        self.assertEqual(value["warmup_count"], 1)
+        self.assertEqual(len(value["verify_state_substages_ms"]), 5)
+        self.assertEqual(value["p95_verify_state_substages_ms"]["handoff"], 6.0)
+
+    def test_verifier_timing_wrapper_restores_and_records_inclusive_scope(self) -> None:
+        timing = screen._VerifierTiming()
+        with mock.patch.object(source_auth_adapter, "_read_exact_frame", lambda *args, **kwargs: bytearray(b"frame")), mock.patch.object(source_auth_adapter, "_build_ipc_input", lambda *args, **kwargs: bytearray(b"ipc")), mock.patch.object(source_auth_adapter, "run_contained_verifier_stream", lambda *args, **kwargs: "result"):
+            patched_read = source_auth_adapter._read_exact_frame
+            with screen._timed_verifier_functions(timing):
+                self.assertEqual(source_auth_adapter._read_exact_frame(None), bytearray(b"frame"))
+                self.assertEqual(source_auth_adapter._build_ipc_input(None), bytearray(b"ipc"))
+                self.assertEqual(source_auth_adapter.run_contained_verifier_stream(None), "result")
+            self.assertIs(source_auth_adapter._read_exact_frame, patched_read)
+        self.assertIsNotNone(timing.verifier_finished_at)
+        self.assertGreaterEqual(timing.frame_read_ms, 0.0)
+        self.assertGreaterEqual(timing.ipc_prepare_ms, 0.0)
+        self.assertGreaterEqual(timing.contained_verifier_ms, 0.0)
+
+    def test_aggregate_rejects_unreconciled_timing(self) -> None:
+        value = screen.build_test_aggregate(completed_samples=5, timings=tuple(self._timed_sample(index + 1) for index in range(5)), warmup=self._timed_sample())
+        value["verify_state_substages_ms"][0]["unbucketed"] += 1.0
+        with self.assertRaisesRegex(screen.CompletePathError, "aggregate_timing_reconciliation"):
+            screen._validate_aggregate_mapping(value)
+        value = screen.build_test_aggregate(completed_samples=5, timings=tuple(self._timed_sample(index + 1) for index in range(5)), warmup=self._timed_sample())
+        value["p95_timings_ms"]["total"] += 1.0
+        with self.assertRaisesRegex(screen.CompletePathError, "aggregate_p95"):
+            screen._validate_aggregate_mapping(value)
 
     def test_aggregate_rejects_sensitive_or_wrong_shape_fields(self) -> None:
         value = screen.build_test_aggregate()

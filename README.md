@@ -98,6 +98,9 @@ and outbox.
 The pinned source boundary is repository `0027e9048471dde0b86bf08d3b7cf6b20db234d4` (tree
 `5073d194aa6adb721903eb6084f19479ff8efaa4`) with source-host executable SHA-256
 `C205CEBEA6C84B94D710F240D13808920980DF9CA2FC3AF2FCCAF900CACD3369` and size 471,552 bytes.
+The underlying Rust producer pin is repository `2bfabac2738d546e75063fd77081cbfd8ff604b3` (tree
+`9689987cf6854c7553f5792c9d6f15bddf13446a`) with release executable SHA-256
+`C4BD6BC6D5399149010E100D5F9737412F4CC5EF6AAAC2B187486BE0DEEBFB4E` and size 423,936 bytes.
 The pinned C repository is `9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2` (tree
 `178a5f20c6738f7272cd38f77315da83650bbac0`); its verifier is 52,736 bytes, SHA-256
 `4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C`. The Queue pin is
@@ -120,6 +123,12 @@ maximum of those five samples. The aggregate contains only fixed counts, timings
 codes, and qualification flags. `proofSuiteId` is null, `production_usable` is false, and `activation`
 is false; the harness makes no production or performance qualification claim.
 
+Each retained sample keeps the complete `verify_state_ms` boundary: handoff, frame read, IPC preparation,
+an inclusive contained-verifier/process/Job/C-wall/output-drain proxy, post-verifier Queue/State work,
+integrity, close, and an explicit unbucketed residual. `total_unbucketed_ms` reconciles total time with
+source, verify/state, and acknowledgement stages. The contained-verifier value is not a C-internal
+timer, and p95 substage fields are component-wise maxima of the five measured samples.
+
 Run from this directory with Python 3.14:
 
 ```powershell
@@ -131,5 +140,7 @@ py -3.14 -B -m profile11_complete_path --prepare
 py -3.14 -B -m profile11_complete_path --screen
 ```
 
-`--prepare` launches nothing and reports every missing dependency. Run `--screen` only after the
-checks above pass; it uses the already pinned source/C binaries and never compiles them.
+`--prepare` launches nothing and reports every missing dependency. `--screen` first requires a ready
+complete file-write observer; otherwise it returns a zero-sample failed aggregate without launching
+the coordinator. With that gate open, it uses the already pinned source/C binaries and never compiles
+them.

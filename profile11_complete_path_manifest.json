@@ -15,6 +15,11 @@
     "product_target_complete_operations_p95_ms": 35000
   },
   "git_pins": {
+    "producer": {
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-zkbpp-range100-profile11-seeded-v1",
+      "head": "2bfabac2738d546e75063fd77081cbfd8ff604b3",
+      "tree": "9689987cf6854c7553f5792c9d6f15bddf13446a"
+    },
     "source": {
       "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-zkbpp-range100-profile11-source-appliance-v1",
       "head": "0027e9048471dde0b86bf08d3b7cf6b20db234d4",
@@ -32,6 +37,11 @@
     }
   },
   "file_pins": {
+    "producer_executable": {
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-zkbpp-range100-profile11-seeded-v1\\target\\release\\blind_range100_prove_cdg_direct.exe",
+      "bytes": 423936,
+      "sha256": "C4BD6BC6D5399149010E100D5F9737412F4CC5EF6AAAC2B187486BE0DEEBFB4E"
+    },
     "source_host": {
       "path": "experiments/profile11_source_host/target/release/profile11_source_host.exe",
       "bytes": 471552,
@@ -87,7 +97,20 @@
   "schedule": {
     "warmup": 1,
     "measured": 5,
-    "p95": "nearest-rank; maximum of five"
+    "p95": "nearest-rank; maximum of five",
+    "persisted_tuples": "one warmup plus five measured",
+    "verify_state_components_ms": [
+      "handoff",
+      "frame_read",
+      "ipc_prepare",
+      "contained_verifier_inclusive",
+      "queue_state",
+      "integrity",
+      "close",
+      "unbucketed"
+    ],
+    "reconciliation_tolerance_ms": 0.01,
+    "reconciliation": "each verify_state equals its component sum; each total equals source plus verify_state plus ack plus total_unbucketed"
   },
   "qualification": {
     "proofSuiteId": null,

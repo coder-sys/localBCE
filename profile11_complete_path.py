@@ -11,6 +11,7 @@ zero-PHI observation claim is made here.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 import hashlib
@@ -25,6 +26,7 @@ import time
 from typing import Any, Callable, Final, Iterable, Protocol
 
 import app.minimal_clearance_composition as composition
+import app.minimal_clearance_source_auth_verifier_adapter as source_auth_adapter
 from app.minimal_clearance_composition import (
     ClearanceCompositionStoreV2,
     StateDispositionControl,
@@ -69,6 +71,15 @@ SOURCE_REPO: Final[Path] = Path(
 SOURCE_HEAD: Final[str] = "0027e9048471dde0b86bf08d3b7cf6b20db234d4"
 SOURCE_TREE: Final[str] = "5073d194aa6adb721903eb6084f19479ff8efaa4"
 
+PRODUCER_REPO: Final[Path] = Path(
+    r"C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-range100-profile11-seeded-v1"
+)
+PRODUCER_HEAD: Final[str] = "2bfabac2738d546e75063fd77081cbfd8ff604b3"
+PRODUCER_TREE: Final[str] = "9689987cf6854c7553f5792c9d6f15bddf13446a"
+PRODUCER_EXECUTABLE: Final[Path] = PRODUCER_REPO / "target" / "release" / "blind_range100_prove_cdg_direct.exe"
+PRODUCER_EXECUTABLE_SIZE_BYTES: Final[int] = 423_936
+PRODUCER_EXECUTABLE_SHA256: Final[str] = "C4BD6BC6D5399149010E100D5F9737412F4CC5EF6AAAC2B187486BE0DEEBFB4E"
+
 C_REPO: Final[Path] = Path(
     r"C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-c-profile11-extmu-v1"
 )
@@ -108,6 +119,7 @@ COORDINATOR_STDERR_CAP_BYTES: Final[int] = 4 * 1024
 MEASURED_SAMPLE_COUNT: Final[int] = 5
 WARMUP_SAMPLE_COUNT: Final[int] = 1
 PRODUCT_TARGET_MS: Final[float] = 35_000.0
+TIMING_RECONCILIATION_TOLERANCE_MS: Final[float] = 0.01
 SOURCE_KEY_EPOCH: Final[int] = 0x0102_0304_0506_0708
 PUBLIC_KEY_BYTES: Final[int] = ML_DSA_87_PUBLIC_KEY_BYTES
 PUBLIC_KEY_SHA256: Final[str] = "3D1F0F47DF60B4E2F31F82A99E32B42776837D974CF798CCFDAD98D617026F32"
@@ -116,6 +128,7 @@ AGGREGATE_ERROR_CODES: Final[frozenset[str]] = frozenset({
     "coordinator_stderr", "coordinator_output_cap", "coordinator_output_read",
     "coordinator_output_close", "outer_timeout", "outer_job_assign",
     "outer_observer_start", "probe_only",
+    "observer_unavailable", "observer_incomplete", "unauthorized_write",
 })
 
 FIXED_QUALIFICATION_FLAGS: Final[tuple[str, ...]] = (
@@ -198,6 +211,7 @@ class DependencyReport:
 
 def _file_pins() -> tuple[FilePin, ...]:
     return (
+        FilePin("producer_executable", PRODUCER_EXECUTABLE, PRODUCER_EXECUTABLE_SIZE_BYTES, PRODUCER_EXECUTABLE_SHA256),
         FilePin("source_host", SOURCE_HOST, SOURCE_HOST_SIZE_BYTES, SOURCE_HOST_SHA256.hex().upper()),
         FilePin("c_verifier", C_VERIFIER, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES, SOURCE_AUTH_EXECUTABLE_SHA256.hex().upper()),
         FilePin("c_source_library", C_SOURCE_LIBRARY, C_SOURCE_LIBRARY_SIZE_BYTES, C_SOURCE_LIBRARY_SHA256),
@@ -207,6 +221,7 @@ def _file_pins() -> tuple[FilePin, ...]:
 
 def _git_pins() -> tuple[GitPin, ...]:
     return (
+        GitPin("producer_repo", PRODUCER_REPO, PRODUCER_HEAD, PRODUCER_TREE),
         GitPin("source_repo", SOURCE_REPO, SOURCE_HEAD, SOURCE_TREE),
         GitPin("c_repo", C_REPO, C_HEAD, C_TREE),
         GitPin("queue_repo", QUEUE_REPO, QUEUE_HEAD, QUEUE_TREE),
@@ -487,11 +502,101 @@ def evaluate_disk_gate(
 
 
 @dataclass(frozen=True, slots=True)
+class VerifyStateBreakdown:
+    handoff_ms: float
+    frame_read_ms: float
+    ipc_prepare_ms: float
+    contained_verifier_ms: float
+    queue_state_ms: float
+    integrity_ms: float
+    close_ms: float
+    unbucketed_ms: float
+
+
+@dataclass(frozen=True, slots=True)
 class StageSample:
     source_ms: float
     verify_state_ms: float
     ack_ms: float
     total_ms: float
+    verify_state_breakdown: VerifyStateBreakdown | None = None
+    total_unbucketed_ms: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementSchedule:
+    warmup: StageSample
+    measured: tuple[StageSample, ...]
+
+
+@dataclass(slots=True)
+class _VerifierTiming:
+    frame_read_ms: float = 0.0
+    ipc_prepare_ms: float = 0.0
+    contained_verifier_ms: float = 0.0
+    verifier_finished_at: float | None = None
+    handoff_ms: float = 0.0
+    queue_state_ms: float = 0.0
+    integrity_ms: float = 0.0
+    close_ms: float = 0.0
+
+
+@contextmanager
+def _timed_verifier_functions(timing: _VerifierTiming) -> Iterable[None]:
+    original_read = source_auth_adapter._read_exact_frame
+    original_build = source_auth_adapter._build_ipc_input
+    original_run = source_auth_adapter.run_contained_verifier_stream
+
+    def timed_read(*args: Any, **kwargs: Any) -> bytearray:
+        started = time.perf_counter()
+        try:
+            return original_read(*args, **kwargs)
+        finally:
+            timing.frame_read_ms += (time.perf_counter() - started) * 1000.0
+
+    def timed_build(*args: Any, **kwargs: Any) -> bytearray:
+        started = time.perf_counter()
+        try:
+            return original_build(*args, **kwargs)
+        finally:
+            timing.ipc_prepare_ms += (time.perf_counter() - started) * 1000.0
+
+    def timed_run(*args: Any, **kwargs: Any) -> Any:
+        started = time.perf_counter()
+        try:
+            return original_run(*args, **kwargs)
+        finally:
+            timing.contained_verifier_ms += (time.perf_counter() - started) * 1000.0
+            timing.verifier_finished_at = time.perf_counter()
+
+    source_auth_adapter._read_exact_frame = timed_read
+    source_auth_adapter._build_ipc_input = timed_build
+    source_auth_adapter.run_contained_verifier_stream = timed_run
+    try:
+        yield
+    finally:
+        source_auth_adapter._read_exact_frame = original_read
+        source_auth_adapter._build_ipc_input = original_build
+        source_auth_adapter.run_contained_verifier_stream = original_run
+
+
+def _max_breakdown(samples: tuple[StageSample, ...]) -> VerifyStateBreakdown | None:
+    values = tuple(sample.verify_state_breakdown for sample in samples)
+    if not values or all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        _fixed("sample_breakdown")
+    assert all(value is not None for value in values)
+    return VerifyStateBreakdown(
+        max(value.handoff_ms for value in values),
+        max(value.frame_read_ms for value in values),
+        max(value.ipc_prepare_ms for value in values),
+        max(value.contained_verifier_ms for value in values),
+        max(value.queue_state_ms for value in values),
+        max(value.integrity_ms for value in values),
+        max(value.close_ms for value in values),
+        max(value.unbucketed_ms for value in values),
+    )
 
 
 def nearest_rank_p95(samples: Iterable[StageSample]) -> StageSample:
@@ -500,28 +605,37 @@ def nearest_rank_p95(samples: Iterable[StageSample]) -> StageSample:
         _fixed("sample_count")
     if any(type(item) is not StageSample for item in values):
         _fixed("sample_shape")
+    breakdown = _max_breakdown(values)
+    unbucketed = tuple(item.total_unbucketed_ms for item in values)
+    if any(item is None for item in unbucketed) and not all(item is None for item in unbucketed):
+        _fixed("sample_reconciliation")
     return StageSample(
         max(item.source_ms for item in values),
         max(item.verify_state_ms for item in values),
         max(item.ack_ms for item in values),
         max(item.total_ms for item in values),
+        breakdown,
+        None if all(item is None for item in unbucketed) else max(item for item in unbucketed if item is not None),
     )
 
 
-def run_measurement_schedule(sample: Callable[[], StageSample]) -> tuple[StageSample, ...]:
+def run_measurement_schedule_with_warmup(sample: Callable[[], StageSample]) -> MeasurementSchedule:
     if not callable(sample):
         _fixed("sample_factory")
     warmup = sample()
     if type(warmup) is not StageSample:
         _fixed("sample_shape")
-    del warmup
     measured: list[StageSample] = []
     for _ in range(MEASURED_SAMPLE_COUNT):
         value = sample()
         if type(value) is not StageSample:
             _fixed("sample_shape")
         measured.append(value)
-    return tuple(measured)
+    return MeasurementSchedule(warmup, tuple(measured))
+
+
+def run_measurement_schedule(sample: Callable[[], StageSample]) -> tuple[StageSample, ...]:
+    return run_measurement_schedule_with_warmup(sample).measured
 
 
 def validate_topology(*, proof_count: int, operation_count: int, frame_count: int, verifier_batch_count: int, ack_count: int) -> None:
@@ -535,6 +649,57 @@ def _safe_number(value: object) -> float:
     return round(float(value), 3)
 
 
+_VERIFY_STATE_BREAKDOWN_KEYS: Final[tuple[str, ...]] = (
+    "handoff", "frame_read", "ipc_prepare", "contained_verifier",
+    "queue_state", "integrity", "close", "unbucketed",
+)
+
+
+def _stage_timing_mapping(value: StageSample) -> dict[str, float]:
+    return {
+        "source": _safe_number(value.source_ms),
+        "verify_state": _safe_number(value.verify_state_ms),
+        "ack": _safe_number(value.ack_ms),
+        "total": _safe_number(value.total_ms),
+    }
+
+
+def _breakdown_mapping(value: VerifyStateBreakdown) -> dict[str, float]:
+    return {
+        "handoff": _safe_number(value.handoff_ms),
+        "frame_read": _safe_number(value.frame_read_ms),
+        "ipc_prepare": _safe_number(value.ipc_prepare_ms),
+        "contained_verifier": _safe_number(value.contained_verifier_ms),
+        "queue_state": _safe_number(value.queue_state_ms),
+        "integrity": _safe_number(value.integrity_ms),
+        "close": _safe_number(value.close_ms),
+        "unbucketed": _safe_number(value.unbucketed_ms),
+    }
+
+
+def _validate_stage_timing_mapping(value: object) -> None:
+    if type(value) is not dict or set(value) != {"source", "verify_state", "ack", "total"}:
+        _fixed("aggregate_timing")
+    for item in value.values():
+        _safe_number(item)
+
+
+def _validate_breakdown_mapping(value: object) -> dict[str, float]:
+    if type(value) is not dict or set(value) != set(_VERIFY_STATE_BREAKDOWN_KEYS):
+        _fixed("aggregate_timing")
+    return {key: _safe_number(value[key]) for key in _VERIFY_STATE_BREAKDOWN_KEYS}
+
+
+def _validate_verify_state_reconciliation(verify_state: float, breakdown: dict[str, float]) -> None:
+    if abs(verify_state - sum(breakdown.values())) > TIMING_RECONCILIATION_TOLERANCE_MS:
+        _fixed("aggregate_timing_reconciliation")
+
+
+def _validate_total_reconciliation(stage: dict[str, float], unbucketed: float) -> None:
+    if abs(stage["total"] - (stage["source"] + stage["verify_state"] + stage["ack"] + unbucketed)) > TIMING_RECONCILIATION_TOLERANCE_MS:
+        _fixed("aggregate_timing_reconciliation")
+
+
 def _validate_aggregate_mapping(value: object) -> dict[str, Any]:
     if type(value) is not dict:
         _fixed("aggregate_shape")
@@ -545,6 +710,10 @@ def _validate_aggregate_mapping(value: object) -> dict[str, Any]:
         "stage_timings_ms", "p95_timings_ms", "peak_job_commit_bytes",
         "effective_cap_bytes", "peak_active_processes", "total_processes",
         "observer_status", "disk_gate", "error_code", "qualification_flags",
+        "warmup_timing_ms", "warmup_verify_state_substages_ms",
+        "warmup_total_unbucketed_ms", "verify_state_substages_ms",
+        "total_unbucketed_ms", "p95_verify_state_substages_ms",
+        "p95_total_unbucketed_ms",
     }
     if set(value) != allowed:
         _fixed("aggregate_fields")
@@ -566,14 +735,60 @@ def _validate_aggregate_mapping(value: object) -> dict[str, Any]:
     if type(value["stage_timings_ms"]) is not list or len(value["stage_timings_ms"]) not in {0, value["completed_samples"]}:
         _fixed("aggregate_timing")
     for sample in value["stage_timings_ms"]:
-        if type(sample) is not dict or set(sample) != {"source", "verify_state", "ack", "total"}:
-            _fixed("aggregate_timing")
-        for item in sample.values():
-            _safe_number(item)
+        _validate_stage_timing_mapping(sample)
     if type(value["p95_timings_ms"]) is not dict or set(value["p95_timings_ms"]) != {"source", "verify_state", "ack", "total"}:
         _fixed("aggregate_timing")
     for item in value["p95_timings_ms"].values():
         _safe_number(item)
+    measured_breakdowns = value["verify_state_substages_ms"]
+    measured_unbucketed = value["total_unbucketed_ms"]
+    if type(measured_breakdowns) is not list or type(measured_unbucketed) is not list:
+        _fixed("aggregate_timing")
+    if len(measured_breakdowns) != value["completed_samples"] or len(measured_unbucketed) != value["completed_samples"]:
+        _fixed("aggregate_timing")
+    validated_stages: list[dict[str, float]] = []
+    validated_breakdowns: list[dict[str, float]] = []
+    validated_unbucketed: list[float] = []
+    for stage, raw_breakdown, raw_unbucketed in zip(value["stage_timings_ms"], measured_breakdowns, measured_unbucketed):
+        validated_stage = {
+            "source": _safe_number(stage["source"]),
+            "verify_state": _safe_number(stage["verify_state"]),
+            "ack": _safe_number(stage["ack"]),
+            "total": _safe_number(stage["total"]),
+        }
+        validated_breakdown = _validate_breakdown_mapping(raw_breakdown)
+        validated_total_unbucketed = _safe_number(raw_unbucketed)
+        _validate_verify_state_reconciliation(validated_stage["verify_state"], validated_breakdown)
+        _validate_total_reconciliation(validated_stage, validated_total_unbucketed)
+        validated_stages.append(validated_stage)
+        validated_breakdowns.append(validated_breakdown)
+        validated_unbucketed.append(validated_total_unbucketed)
+    warmup_timing = value["warmup_timing_ms"]
+    warmup_breakdown = value["warmup_verify_state_substages_ms"]
+    warmup_unbucketed = value["warmup_total_unbucketed_ms"]
+    p95_breakdown = value["p95_verify_state_substages_ms"]
+    p95_unbucketed = value["p95_total_unbucketed_ms"]
+    if value["completed_samples"] == MEASURED_SAMPLE_COUNT:
+        _validate_stage_timing_mapping(warmup_timing)
+        validated_warmup_breakdown = _validate_breakdown_mapping(warmup_breakdown)
+        validated_warmup_unbucketed = _safe_number(warmup_unbucketed)
+        validated_warmup = {key: _safe_number(warmup_timing[key]) for key in ("source", "verify_state", "ack", "total")}
+        _validate_verify_state_reconciliation(validated_warmup["verify_state"], validated_warmup_breakdown)
+        _validate_total_reconciliation(validated_warmup, validated_warmup_unbucketed)
+        validated_p95_breakdown = _validate_breakdown_mapping(p95_breakdown)
+        validated_p95_unbucketed = _safe_number(p95_unbucketed)
+        validated_p95_stage = {key: _safe_number(value["p95_timings_ms"][key]) for key in ("source", "verify_state", "ack", "total")}
+        if validated_stages and any(validated_p95_stage[key] != max(item[key] for item in validated_stages) for key in validated_p95_stage):
+            _fixed("aggregate_p95")
+        if validated_breakdowns and any(
+            validated_p95_breakdown[key] != max(item[key] for item in validated_breakdowns)
+            for key in _VERIFY_STATE_BREAKDOWN_KEYS
+        ):
+            _fixed("aggregate_p95")
+        if validated_unbucketed and validated_p95_unbucketed != max(validated_unbucketed):
+            _fixed("aggregate_p95")
+    elif any(item is not None for item in (warmup_timing, warmup_breakdown, warmup_unbucketed, p95_breakdown, p95_unbucketed)) or measured_breakdowns or measured_unbucketed:
+        _fixed("aggregate_timing")
     if type(value["peak_job_commit_bytes"]) is not int or value["peak_job_commit_bytes"] < 0 or value["peak_job_commit_bytes"] >= OUTER_HARD_CAP_BYTES:
         _fixed("aggregate_peak")
     if type(value["effective_cap_bytes"]) is not int or value["effective_cap_bytes"] >= OUTER_HARD_CAP_BYTES:
@@ -599,12 +814,19 @@ def _aggregate_json(value: dict[str, Any]) -> str:
         _fixed("aggregate_encoding")
 
 
-def build_test_aggregate(*, completed_samples: int = 0, timings: tuple[StageSample, ...] = (), peak_job_commit_bytes: int = 0, effective_cap_bytes: int = PROCESS_TREE_PEAK_CAP_BYTES, peak_active_processes: int = 1, total_processes: int = 1, observer_status: str = "observer_unavailable", disk_gate: str = "observer_unavailable", error_code: str | None = None) -> dict[str, Any]:
+def build_test_aggregate(*, completed_samples: int = 0, timings: tuple[StageSample, ...] = (), warmup: StageSample | None = None, peak_job_commit_bytes: int = 0, effective_cap_bytes: int = PROCESS_TREE_PEAK_CAP_BYTES, peak_active_processes: int = 1, total_processes: int = 1, observer_status: str = "observer_unavailable", disk_gate: str = "observer_unavailable", error_code: str | None = None) -> dict[str, Any]:
     if completed_samples == MEASURED_SAMPLE_COUNT and len(timings) != MEASURED_SAMPLE_COUNT:
         _fixed("aggregate_samples")
     if completed_samples != MEASURED_SAMPLE_COUNT and timings:
         _fixed("aggregate_samples")
+    if completed_samples == MEASURED_SAMPLE_COUNT:
+        if warmup is None or warmup.verify_state_breakdown is None or warmup.total_unbucketed_ms is None or any(item.verify_state_breakdown is None or item.total_unbucketed_ms is None for item in timings):
+            _fixed("aggregate_timing")
+    elif warmup is not None:
+        _fixed("aggregate_samples")
     p95 = nearest_rank_p95(timings) if timings else StageSample(0.0, 0.0, 0.0, 0.0)
+    has_breakdowns = bool(timings) and all(item.verify_state_breakdown is not None for item in timings)
+    has_total_unbucketed = bool(timings) and all(item.total_unbucketed_ms is not None for item in timings)
     value = {
         "schema": PROFILE_SCHEMA,
         "status": "complete" if completed_samples == MEASURED_SAMPLE_COUNT and error_code is None else "failed",
@@ -620,10 +842,17 @@ def build_test_aggregate(*, completed_samples: int = 0, timings: tuple[StageSamp
         "verifier_batch_count": 1,
         "ack_count": SOURCE_AUTH_OPERATION_COUNT,
         "stage_timings_ms": [
-            {"source": _safe_number(item.source_ms), "verify_state": _safe_number(item.verify_state_ms), "ack": _safe_number(item.ack_ms), "total": _safe_number(item.total_ms)}
+            _stage_timing_mapping(item)
             for item in timings
         ],
         "p95_timings_ms": {"source": _safe_number(p95.source_ms), "verify_state": _safe_number(p95.verify_state_ms), "ack": _safe_number(p95.ack_ms), "total": _safe_number(p95.total_ms)},
+        "warmup_timing_ms": None if warmup is None else _stage_timing_mapping(warmup),
+        "warmup_verify_state_substages_ms": None if warmup is None or warmup.verify_state_breakdown is None else _breakdown_mapping(warmup.verify_state_breakdown),
+        "warmup_total_unbucketed_ms": None if warmup is None or warmup.total_unbucketed_ms is None else _safe_number(warmup.total_unbucketed_ms),
+        "verify_state_substages_ms": [] if not has_breakdowns else [_breakdown_mapping(item.verify_state_breakdown) for item in timings if item.verify_state_breakdown is not None],
+        "total_unbucketed_ms": [] if not has_total_unbucketed else [_safe_number(item.total_unbucketed_ms) for item in timings if item.total_unbucketed_ms is not None],
+        "p95_verify_state_substages_ms": None if p95.verify_state_breakdown is None else _breakdown_mapping(p95.verify_state_breakdown),
+        "p95_total_unbucketed_ms": None if p95.total_unbucketed_ms is None else _safe_number(p95.total_unbucketed_ms),
         "peak_job_commit_bytes": peak_job_commit_bytes,
         "effective_cap_bytes": effective_cap_bytes,
         "peak_active_processes": peak_active_processes,
@@ -724,6 +953,8 @@ def _run_one_sample(*, root: Path, source_workspace: Path, verifier_workspace: P
         state_disposition_port=state_port,
     )
     frame: bytearray | None = None
+    timing = _VerifierTiming()
+    verify_start: float | None = None
     try:
         batch = runtime.issue_batch(template=_template(queue_config))
         source_start = time.perf_counter()
@@ -732,18 +963,55 @@ def _run_one_sample(*, root: Path, source_workspace: Path, verifier_workspace: P
         if len(frame) != SOURCE_AUTH_FRAME_BYTES:
             _fixed("source_frame_shape")
         verify_start = time.perf_counter()
+        handoff_start = time.perf_counter()
         runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(frame))
+        timing.handoff_ms = (time.perf_counter() - handoff_start) * 1000.0
         frame = None
-        run_result = runtime.run(max_batches=1)
-        verify_state_ms = (time.perf_counter() - verify_start) * 1000.0
+        with _timed_verifier_functions(timing):
+            run_result = runtime.run(max_batches=1)
+            run_end = time.perf_counter()
+        if timing.verifier_finished_at is None:
+            _fixed("timing_verifier_scope")
+        timing.queue_state_ms = (run_end - timing.verifier_finished_at) * 1000.0
         if (run_result.outcome, run_result.verified_batch_count, run_result.accepted_operation_count) != ("PROCESSED", 1, SOURCE_AUTH_OPERATION_COUNT):
             _fixed("state_batch_shape")
+        integrity_start = time.perf_counter()
         runtime._verify_integrity()
+        timing.integrity_ms = (time.perf_counter() - integrity_start) * 1000.0
         database = runtime._database_path
         composition_config = runtime._composition_config
     finally:
         _wipe(frame)
-        runtime.close()
+        close_start = time.perf_counter()
+        try:
+            runtime.close()
+        finally:
+            timing.close_ms = (time.perf_counter() - close_start) * 1000.0
+    if verify_start is None:
+        _fixed("timing_verify_scope")
+    verify_state_ms = (time.perf_counter() - verify_start) * 1000.0
+    measured_verify_ms = (
+        timing.handoff_ms
+        + timing.frame_read_ms
+        + timing.ipc_prepare_ms
+        + timing.contained_verifier_ms
+        + timing.queue_state_ms
+        + timing.integrity_ms
+        + timing.close_ms
+    )
+    verify_unbucketed_ms = verify_state_ms - measured_verify_ms
+    if verify_unbucketed_ms < 0.0:
+        _fixed("timing_reconciliation")
+    breakdown = VerifyStateBreakdown(
+        timing.handoff_ms,
+        timing.frame_read_ms,
+        timing.ipc_prepare_ms,
+        timing.contained_verifier_ms,
+        timing.queue_state_ms,
+        timing.integrity_ms,
+        timing.close_ms,
+        verify_unbucketed_ms,
+    )
     ack_start = time.perf_counter()
     store = ClearanceCompositionStoreV2(path=database, config=composition_config)
     try:
@@ -763,7 +1031,11 @@ def _run_one_sample(*, root: Path, source_workspace: Path, verifier_workspace: P
                 _fixed("workspace_changed")
         except OSError:
             _fixed("workspace_changed")
-    return StageSample(source_ms, verify_state_ms, ack_ms, (time.perf_counter() - total_start) * 1000.0)
+    total_ms = (time.perf_counter() - total_start) * 1000.0
+    total_unbucketed_ms = total_ms - source_ms - verify_state_ms - ack_ms
+    if total_unbucketed_ms < 0.0:
+        _fixed("timing_total_reconciliation")
+    return StageSample(source_ms, verify_state_ms, ack_ms, total_ms, breakdown, total_unbucketed_ms)
 
 
 def _run_coordinator(run_root: Path) -> dict[str, Any]:
@@ -812,9 +1084,10 @@ def _run_coordinator(run_root: Path) -> dict[str, Any]:
         )
 
     try:
-        timings = run_measurement_schedule(sample)
+        schedule = run_measurement_schedule_with_warmup(sample)
+        timings = schedule.measured
         validate_topology(proof_count=1, operation_count=100, frame_count=1, verifier_batch_count=1, ack_count=100)
-        return build_test_aggregate(completed_samples=len(timings), timings=timings, peak_job_commit_bytes=0, effective_cap_bytes=PROCESS_TREE_PEAK_CAP_BYTES, peak_active_processes=1, total_processes=1, observer_status="observer_unavailable", disk_gate="observer_unavailable")
+        return build_test_aggregate(completed_samples=len(timings), timings=timings, warmup=schedule.warmup, peak_job_commit_bytes=0, effective_cap_bytes=PROCESS_TREE_PEAK_CAP_BYTES, peak_active_processes=1, total_processes=1, observer_status="observer_unavailable", disk_gate="observer_unavailable")
     except CompletePathError as error:
         return build_test_aggregate(completed_samples=0, timings=(), error_code=str(error), observer_status="observer_unavailable", disk_gate="observer_unavailable")
     except BaseException:
@@ -1186,6 +1459,10 @@ def _parse_payload(payload: bytes | None) -> dict[str, Any] | None:
 
 def run_falsification_screen(*, observer: WindowsEtwFileWriteObserver | None = None) -> dict[str, Any]:
     observer = observer or WindowsEtwFileWriteObserver()
+    capability = observer.probe()
+    if capability.status != "observer_ready":
+        error_code = capability.status if capability.status in {"observer_unavailable", "observer_incomplete"} else "observer_incomplete"
+        return build_test_aggregate(completed_samples=0, error_code=error_code, observer_status=capability.status if capability.status in {"observer_unavailable", "observer_incomplete"} else "observer_incomplete", disk_gate=capability.status if capability.status in {"observer_unavailable", "observer_incomplete"} else "observer_incomplete")
     with tempfile.TemporaryDirectory(prefix="blind-profile11-screen-") as directory:
         run_root = Path(directory)
         source_workspace = run_root / "source-workspace"
@@ -1197,7 +1474,12 @@ def run_falsification_screen(*, observer: WindowsEtwFileWriteObserver | None = N
         report = validate_dependencies(source_workspace=source_workspace, verifier_workspace=verifier_workspace, state_workspace=state_workspace)
         if not report.ready:
             return build_test_aggregate(completed_samples=0, error_code="dependency_unavailable", observer_status="observer_unavailable", disk_gate="observer_unavailable")
-        run = _launch_coordinator(run_root, on_assigned=lambda pid: observer.start(pid))
+        def start_observation(pid: int) -> None:
+            started = observer.start(pid)
+            if started.status != "observer_ready":
+                _fixed("outer_observer_start")
+
+        run = _launch_coordinator(run_root, on_assigned=start_observation)
         observed_after = observer.stop()
         disk_gate = evaluate_disk_gate(observed_after, state_workspace=state_workspace)
         try:
@@ -1216,6 +1498,9 @@ def run_falsification_screen(*, observer: WindowsEtwFileWriteObserver | None = N
             if run.error_code is not None:
                 payload["status"] = "failed"
                 payload["error_code"] = run.error_code
+            elif observed_after.status != "observer_ready" or disk_gate != "disk_gate_pass":
+                payload["status"] = "failed"
+                payload["error_code"] = observed_after.status if observed_after.status in {"observer_unavailable", "observer_incomplete"} else disk_gate
             _validate_aggregate_mapping(payload)
             result = payload
         return result
@@ -1295,8 +1580,8 @@ __all__ = (
     "C_BUILD", "C_HEAD", "C_RANGE_LIBRARY", "C_REPO", "C_SOURCE_LIBRARY", "C_VERIFIER", "C_TREE",
     "CompletePathError", "DependencyReport", "FileWriteEvent", "FileWriteObservation", "GitPin",
     "JobObservation", "MANIFEST_PATH", "MEASURED_SAMPLE_COUNT", "OUTER_ACTIVE_PROCESS_LIMIT",
-    "OUTER_HARD_CAP_BYTES", "PROFILE_ID", "PROFILE_SCHEMA", "StageSample", "WindowsEtwFileWriteObserver",
+    "OUTER_HARD_CAP_BYTES", "PROFILE_ID", "PROFILE_SCHEMA", "PRODUCER_EXECUTABLE", "PRODUCER_EXECUTABLE_SHA256", "PRODUCER_EXECUTABLE_SIZE_BYTES", "PRODUCER_HEAD", "PRODUCER_REPO", "PRODUCER_TREE", "MeasurementSchedule", "StageSample", "VerifyStateBreakdown", "WindowsEtwFileWriteObserver",
     "build_test_aggregate", "configured_state_allowlist", "effective_outer_cap", "evaluate_disk_gate",
-    "nearest_rank_p95", "prepare_report", "run_falsification_screen", "run_measurement_schedule", "validate_dependencies",
+    "nearest_rank_p95", "prepare_report", "run_falsification_screen", "run_measurement_schedule", "run_measurement_schedule_with_warmup", "validate_dependencies",
     "validate_job_observation", "validate_topology",
 )
