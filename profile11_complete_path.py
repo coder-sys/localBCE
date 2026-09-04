@@ -2261,7 +2261,7 @@ def _validated_number(value: object) -> float:
 
 
 def _safe_number(value: object) -> float:
-    return round(_validated_number(value), 3)
+    return _validated_number(value)
 
 
 _VERIFY_STATE_BREAKDOWN_KEYS: Final[tuple[str, ...]] = (
@@ -2429,17 +2429,23 @@ def _validate_aggregate_mapping(value: object) -> dict[str, Any]:
         raw_stage_total = max(_validated_number(stage["total"]) for stage in value["stage_timings_ms"])
         target_exceeded = raw_p95_total > PRODUCT_TARGET_MS or raw_stage_total > PRODUCT_TARGET_MS
         if target_exceeded:
-            if value["status"] != "failed" or error_code != "product_target_exceeded":
+            if value["status"] != "failed" or error_code is None:
                 _fixed("aggregate_p95_target")
     elif any(item is not None for item in (p95_timings, p95_breakdown, p95_unbucketed)):
         _fixed("aggregate_timing")
     if error_code == "product_target_exceeded" and not target_exceeded:
         _fixed("aggregate_status")
-    if type(value["peak_job_commit_bytes"]) is not int or value["peak_job_commit_bytes"] < 0 or value["peak_job_commit_bytes"] >= OUTER_HARD_CAP_BYTES:
-        if value["status"] != "failed" or error_code != "outer_memory_cap":
-            _fixed("aggregate_peak")
-    if type(value["effective_cap_bytes"]) is not int or value["effective_cap_bytes"] <= 0 or value["effective_cap_bytes"] >= OUTER_HARD_CAP_BYTES:
+    peak_job_commit_bytes = value["peak_job_commit_bytes"]
+    if type(peak_job_commit_bytes) is not int or peak_job_commit_bytes < 0:
+        _fixed("aggregate_peak")
+    effective_cap_bytes = value["effective_cap_bytes"]
+    if type(effective_cap_bytes) is not int or effective_cap_bytes <= 0 or effective_cap_bytes >= OUTER_HARD_CAP_BYTES:
         _fixed("aggregate_cap")
+    numeric_memory_cap_violation = peak_job_commit_bytes >= OUTER_HARD_CAP_BYTES or peak_job_commit_bytes > effective_cap_bytes
+    if numeric_memory_cap_violation and (value["status"] != "failed" or error_code != "outer_memory_cap"):
+        _fixed("aggregate_peak")
+    if error_code == "outer_memory_cap" and not numeric_memory_cap_violation:
+        _fixed("aggregate_status")
     if type(value["peak_active_processes"]) is not int or type(value["total_processes"]) is not int or value["peak_active_processes"] < 0 or value["total_processes"] < 0 or value["peak_active_processes"] > value["total_processes"]:
         _fixed("aggregate_processes")
     if value["peak_active_processes"] > OUTER_ACTIVE_PROCESS_LIMIT and (value["status"] != "failed" or error_code not in {"outer_process_limit", "outer_process_limit_configuration"}):
@@ -2481,7 +2487,7 @@ def build_test_aggregate(*, completed_samples: int = 0, timings: tuple[StageSamp
     has_breakdowns = bool(timings) and all(item.verify_state_breakdown is not None for item in timings)
     has_total_unbucketed = bool(timings) and all(item.total_unbucketed_ms is not None for item in timings)
     p95 = nearest_rank_p95(timings) if completed_samples == MEASURED_SAMPLE_COUNT else None
-    if p95 is not None and p95.total_ms > PRODUCT_TARGET_MS:
+    if p95 is not None and p95.total_ms > PRODUCT_TARGET_MS and error_code is None:
         error_code = "product_target_exceeded"
     value = {
         "schema": PROFILE_SCHEMA,

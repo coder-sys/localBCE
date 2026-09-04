@@ -190,6 +190,12 @@ class Profile11CompletePathTests(unittest.TestCase):
             with self.subTest(code=code):
                 with self.assertRaisesRegex(screen.CompletePathError, code):
                     screen.validate_job_observation(bad)
+        for bad_peak in (-1, "SYNTHETIC_UNTRUSTED_TEXT"):
+            with self.subTest(bad_peak=bad_peak):
+                with self.assertRaisesRegex(screen.CompletePathError, "aggregate_peak"):
+                    screen.build_test_aggregate(peak_job_commit_bytes=bad_peak, error_code="outer_memory_cap")
+        numeric_failure = screen.build_test_aggregate(peak_job_commit_bytes=screen.OUTER_HARD_CAP_BYTES, error_code="outer_memory_cap")
+        self.assertEqual(numeric_failure["peak_job_commit_bytes"], screen.OUTER_HARD_CAP_BYTES)
 
     def test_outer_job_probe_contains_child_and_grandchild(self) -> None:
         if os.name != "nt":
@@ -552,7 +558,29 @@ class Profile11CompletePathTests(unittest.TestCase):
                 )
                 self.assertEqual(value["status"], expected_status)
                 self.assertEqual(value["error_code"], expected_error)
-                self.assertEqual(value["p95_timings_ms"]["total"], round(total_ms, 3))
+                self.assertEqual(value["p95_timings_ms"]["total"], total_ms)
+
+        sub_millisecond_overrun = screen.PRODUCT_TARGET_MS + 0.0001
+        precise = screen.build_test_aggregate(
+            completed_samples=5,
+            timings=tuple(sample_with_total(sub_millisecond_overrun) for _ in range(5)),
+            warmup=sample_with_total(4.0),
+        )
+        self.assertEqual(precise["status"], "failed")
+        self.assertEqual(precise["error_code"], "product_target_exceeded")
+        self.assertEqual(precise["p95_timings_ms"]["total"], sub_millisecond_overrun)
+        screen._validate_aggregate_mapping(precise)
+
+        explicit_failure = screen.build_test_aggregate(
+            completed_samples=5,
+            timings=tuple(sample_with_total(sub_millisecond_overrun) for _ in range(5)),
+            warmup=sample_with_total(4.0),
+            error_code="unauthorized_write",
+        )
+        self.assertEqual(explicit_failure["status"], "failed")
+        self.assertEqual(explicit_failure["error_code"], "unauthorized_write")
+        self.assertEqual(explicit_failure["p95_timings_ms"]["total"], sub_millisecond_overrun)
+        screen._validate_aggregate_mapping(explicit_failure)
 
         partial = screen.build_test_aggregate(
             completed_samples=2,
@@ -565,6 +593,30 @@ class Profile11CompletePathTests(unittest.TestCase):
         self.assertEqual(len(partial["stage_timings_ms"]), 2)
         self.assertIsNone(partial["p95_timings_ms"])
         screen._validate_aggregate_mapping(partial)
+
+    def test_outer_observer_failure_preserves_timing_overrun_evidence(self) -> None:
+        def sample_with_total(total_ms: float) -> screen.StageSample:
+            return screen.StageSample(1.0, 2.0, 1.0, total_ms, screen.VerifyStateBreakdown(2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), total_ms - 4.0)
+
+        overrun = screen.PRODUCT_TARGET_MS + 0.0001
+        aggregate = screen.build_test_aggregate(
+            completed_samples=5,
+            timings=tuple(sample_with_total(overrun) for _ in range(5)),
+            warmup=sample_with_total(4.0),
+        )
+        payload = json.dumps(aggregate, sort_keys=True, separators=(",", ":")).encode("ascii")
+        run = screen.CoordinatorRun(
+            payload,
+            screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, screen.PROCESS_TREE_PEAK_CAP_BYTES, screen.PROCESS_TREE_PEAK_CAP_BYTES, 8, 8, 1, 1, True, True, True),
+            None,
+        )
+        observer = screen.WindowsEtwFileWriteObserver(_Backend(result=screen.FileWriteObservation("observer_ready", True, True, True, False)))
+        with mock.patch.object(screen, "validate_dependencies", return_value=screen.DependencyReport((), ())), mock.patch.object(screen, "_launch_coordinator", return_value=run), mock.patch.object(screen, "evaluate_disk_gate", return_value="unauthorized_write"):
+            result = screen.run_falsification_screen(observer=observer)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_code"], "unauthorized_write")
+        self.assertEqual(result["p95_timings_ms"]["total"], overrun)
+        screen._validate_aggregate_mapping(result)
 
     def test_aggregate_rejects_missing_rows_and_status_inconsistency(self) -> None:
         complete = screen.build_test_aggregate(
