@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -57,11 +58,29 @@ class Profile11CompletePathTests(unittest.TestCase):
             for version in sorted(spec.versions)
         )
 
+    @staticmethod
+    def _create_state_database(root: Path, journal_mode: str = "delete") -> str:
+        database = root / "state.sqlite"
+        connection = sqlite3.connect(database)
+        try:
+            actual = str(connection.execute(f"PRAGMA journal_mode={journal_mode.upper()}").fetchone()[0]).lower()
+        finally:
+            connection.close()
+        return actual
+
     def test_manifest_and_exact_pins(self) -> None:
         manifest = json.loads(screen.MANIFEST_PATH.read_text(encoding="utf-8"))
         self.assertEqual(manifest["topology"], {"batch_operations": 100, "proofs": 1, "source_frames": 1, "verifier_batches": 1, "outbox_acks": 100})
         self.assertEqual(manifest["limits"]["component_admission_bytes"], 4_500_000_000)
         self.assertEqual(manifest["limits"]["complete_tree_hard_peak_bytes"], 4_999_999_999)
+        self.assertEqual(manifest["disk_gate"]["sqlite"], {
+            "live_journal_mode": "delete",
+            "mode_allowlist": {
+                "delete": ["state.sqlite", "state.sqlite-journal", "state.sqlite.runtime-lock"],
+                "wal": ["state.sqlite", "state.sqlite-wal", "state.sqlite-shm", "state.sqlite.runtime-lock"],
+            },
+            "live_binding": "QueueConfig.as_json.database_journal_mode plus read-only PRAGMA journal_mode readback",
+        })
         self.assertEqual(
             manifest["git_pins"],
             {
@@ -157,13 +176,16 @@ class Profile11CompletePathTests(unittest.TestCase):
         self.assertLess(effective, screen.OUTER_HARD_CAP_BYTES)
         with self.assertRaisesRegex(screen.CompletePathError, "outer_cap_invalid"):
             screen.effective_outer_cap(screen.OUTER_HARD_CAP_BYTES, 4096)
-        good = screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 3, True, True, True)
+        good = screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 8, 8, True, True, True)
         screen.validate_job_observation(good)
         for bad, code in (
             (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective + 4096, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 3, True, True, True), "outer_cap_readback"),
             (screen.JobObservation(screen.OUTER_HARD_CAP_BYTES, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 3, True, True, True), "outer_memory_cap"),
             (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT - 1, 2, 3, True, True, True), "outer_process_limit_readback"),
             (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 0, True, True, True), "outer_process_lineage"),
+            (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, 9, 9, 1, 1, True, True, True), "outer_process_limit_configuration"),
+            (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 9, 9, True, True, True), "outer_process_limit"),
+            (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 8, 7, True, True, True), "outer_process_lineage"),
         ):
             with self.subTest(code=code):
                 with self.assertRaisesRegex(screen.CompletePathError, code):
@@ -183,9 +205,10 @@ class Profile11CompletePathTests(unittest.TestCase):
     def test_outer_job_timeout_terminates_and_reaps(self) -> None:
         if os.name != "nt":
             self.skipTest("Windows Job Object ABI is unavailable")
-        with tempfile.TemporaryDirectory(prefix="profile11-timeout-") as directory:
+        with tempfile.TemporaryDirectory(prefix="profile11-timeout-") as directory, mock.patch.object(screen, "validate_job_observation", wraps=screen.validate_job_observation) as validator:
             run = screen._launch_coordinator(Path(directory), timeout_seconds=0.2, arguments=("--probe-coordinator", "3.0"))
         self.assertEqual(run.error_code, "outer_timeout")
+        validator.assert_called_once()
         self.assertTrue(run.observation.timed_out)
         self.assertTrue(run.observation.cleanup_complete)
         self.assertTrue(run.observation.process_tree_complete)
@@ -417,6 +440,7 @@ class Profile11CompletePathTests(unittest.TestCase):
     def test_disk_allowlist_allows_configured_state_durability_only(self) -> None:
         with tempfile.TemporaryDirectory(prefix="profile11-disk-") as directory:
             root = Path(directory)
+            self.assertEqual(self._create_state_database(root), "delete")
             events = tuple(screen.FileWriteEvent(path, op, 100 + index, True, 1) for index, (path, op) in enumerate((
                 (root / "state.sqlite", "write"),
                 (root / "state.sqlite-journal", "create"),
@@ -448,6 +472,32 @@ class Profile11CompletePathTests(unittest.TestCase):
                             screen.evaluate_disk_gate(screen.FileWriteObservation("observer_ready", True, True, True, False, (event,)), state_workspace=root),
                             "unauthorized_write",
                         )
+
+    def test_disk_allowlist_is_mode_aware_and_live_mode_is_bound(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="profile11-durability-") as directory:
+            root = Path(directory)
+            self.assertEqual(
+                screen.configured_state_allowlist(root, journal_mode="delete"),
+                frozenset((root.resolve() / "state.sqlite", root.resolve() / "state.sqlite-journal", root.resolve() / "state.sqlite.runtime-lock")),
+            )
+            self.assertEqual(
+                screen.configured_state_allowlist(root, journal_mode="wal"),
+                frozenset((root.resolve() / "state.sqlite", root.resolve() / "state.sqlite-wal", root.resolve() / "state.sqlite-shm", root.resolve() / "state.sqlite.runtime-lock")),
+            )
+            delete_events = tuple(screen.FileWriteEvent(root / name, "write", 100 + index, True, 1) for index, name in enumerate(("state.sqlite", "state.sqlite-journal", "state.sqlite.runtime-lock")))
+            ready = screen.FileWriteObservation("observer_ready", True, True, True, False, delete_events)
+            self.assertEqual(self._create_state_database(root, "delete"), "delete")
+            self.assertEqual(screen.evaluate_disk_gate(ready, state_workspace=root), "disk_gate_pass")
+            wal_events = tuple(screen.FileWriteEvent(root / name, "write", 200 + index, True, 1) for index, name in enumerate(("state.sqlite", "state.sqlite-wal", "state.sqlite-shm", "state.sqlite.runtime-lock")))
+            wal_ready = screen.FileWriteObservation("observer_ready", True, True, True, False, wal_events)
+            self.assertEqual(screen._evaluate_disk_gate_for_mode(wal_ready, state_workspace=root, journal_mode="wal"), "disk_gate_pass")
+            self.assertEqual(screen._evaluate_disk_gate_for_mode(wal_ready, state_workspace=root, journal_mode="delete"), "unauthorized_write")
+            self.assertEqual(self._create_state_database(root, "wal"), "wal")
+            self.assertEqual(screen.evaluate_disk_gate(wal_ready, state_workspace=root), "state_durability_configuration")
+            self.assertEqual(screen._evaluate_disk_gate_for_mode(ready, state_workspace=root, journal_mode="wal"), "unauthorized_write")
+            outside = root.parent / "profile11-cross-directory-proof.tmp"
+            cross_directory = screen.FileWriteObservation("observer_ready", True, True, True, False, (screen.FileWriteEvent(outside, "delete", 301, True, 1),))
+            self.assertEqual(screen._evaluate_disk_gate_for_mode(cross_directory, state_workspace=root, journal_mode="delete"), "unauthorized_write")
 
     def test_observer_backend_stop_loss_becomes_incomplete(self) -> None:
         backend = _Backend(result=screen.FileWriteObservation("observer_ready", True, True, True, True))
@@ -482,6 +532,77 @@ class Profile11CompletePathTests(unittest.TestCase):
         with self.assertRaisesRegex(screen.CompletePathError, "sample_shape"):
             screen.run_measurement_schedule(sample)
         self.assertEqual(calls, 4)
+
+    def test_complete_aggregate_enforces_p95_target_and_preserves_partial_failure(self) -> None:
+        def sample_with_total(total_ms: float) -> screen.StageSample:
+            return screen.StageSample(1.0, 2.0, 1.0, total_ms, screen.VerifyStateBreakdown(2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), total_ms - 4.0)
+
+        for total_ms, expected_status, expected_error in (
+            (screen.PRODUCT_TARGET_MS - 0.001, "complete", None),
+            (screen.PRODUCT_TARGET_MS, "complete", None),
+            (screen.PRODUCT_TARGET_MS + 0.001, "failed", "product_target_exceeded"),
+        ):
+            with self.subTest(total_ms=total_ms):
+                value = screen.build_test_aggregate(
+                    completed_samples=5,
+                    timings=tuple(sample_with_total(total_ms) for _ in range(5)),
+                    warmup=sample_with_total(4.0),
+                    observer_status="observer_ready",
+                    disk_gate="disk_gate_pass",
+                )
+                self.assertEqual(value["status"], expected_status)
+                self.assertEqual(value["error_code"], expected_error)
+                self.assertEqual(value["p95_timings_ms"]["total"], round(total_ms, 3))
+
+        partial = screen.build_test_aggregate(
+            completed_samples=2,
+            timings=tuple(self._timed_sample(index + 1) for index in range(2)),
+            warmup=self._timed_sample(),
+            error_code="coordinator_failure",
+        )
+        self.assertEqual(partial["status"], "failed")
+        self.assertEqual(partial["completed_samples"], 2)
+        self.assertEqual(len(partial["stage_timings_ms"]), 2)
+        self.assertIsNone(partial["p95_timings_ms"])
+        screen._validate_aggregate_mapping(partial)
+
+    def test_aggregate_rejects_missing_rows_and_status_inconsistency(self) -> None:
+        complete = screen.build_test_aggregate(
+            completed_samples=5,
+            timings=tuple(self._timed_sample(index + 1) for index in range(5)),
+            warmup=self._timed_sample(),
+            observer_status="observer_ready",
+            disk_gate="disk_gate_pass",
+        )
+        complete["stage_timings_ms"] = []
+        complete["verify_state_substages_ms"] = []
+        complete["total_unbucketed_ms"] = []
+        with self.assertRaisesRegex(screen.CompletePathError, "aggregate_timing"):
+            screen._validate_aggregate_mapping(complete)
+
+        failed = screen.build_test_aggregate(completed_samples=0, error_code="observer_unavailable")
+        failed["status"] = "complete"
+        with self.assertRaisesRegex(screen.CompletePathError, "aggregate_status"):
+            screen._validate_aggregate_mapping(failed)
+        failed["status"] = "failed"
+        failed["error_code"] = None
+        with self.assertRaisesRegex(screen.CompletePathError, "aggregate_status"):
+            screen._validate_aggregate_mapping(failed)
+
+        below_target = screen.build_test_aggregate(
+            completed_samples=5,
+            timings=tuple(self._timed_sample(index + 1) for index in range(5)),
+            warmup=self._timed_sample(),
+        )
+        below_target["status"] = "failed"
+        below_target["error_code"] = "product_target_exceeded"
+        with self.assertRaisesRegex(screen.CompletePathError, "aggregate_status"):
+            screen._validate_aggregate_mapping(below_target)
+
+        process_mismatch = screen.build_test_aggregate(error_code="coordinator_failure")
+        process_mismatch["error_code"] = "outer_process_limit"
+        with self.assertRaisesRegex(screen.CompletePathError, "aggregate_status"):
+            screen._validate_aggregate_mapping(process_mismatch)
 
     def test_aggregate_is_zero_phi_and_nonactivating(self) -> None:
         warmup = self._timed_sample()
@@ -525,11 +646,11 @@ class Profile11CompletePathTests(unittest.TestCase):
             screen._validate_aggregate_mapping(value)
 
     def test_aggregate_rejects_sensitive_or_wrong_shape_fields(self) -> None:
-        value = screen.build_test_aggregate()
+        value = screen.build_test_aggregate(error_code="observer_unavailable")
         value["unexpected"] = 1
         with self.assertRaisesRegex(screen.CompletePathError, "aggregate_fields"):
             screen._validate_aggregate_mapping(value)
-        value = screen.build_test_aggregate()
+        value = screen.build_test_aggregate(error_code="observer_unavailable")
         value["proof_count"] = 2
         with self.assertRaisesRegex(screen.CompletePathError, "topology_mismatch"):
             screen._validate_aggregate_mapping(value)

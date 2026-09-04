@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -121,6 +122,9 @@ MEASURED_SAMPLE_COUNT: Final[int] = 5
 WARMUP_SAMPLE_COUNT: Final[int] = 1
 PRODUCT_TARGET_MS: Final[float] = 35_000.0
 TIMING_RECONCILIATION_TOLERANCE_MS: Final[float] = 0.01
+STATE_SQLITE_JOURNAL_MODE: Final[str] = "delete"
+STATE_SQLITE_JOURNAL_MODES: Final[frozenset[str]] = frozenset({"delete", "wal"})
+STATE_SQLITE_RUNTIME_LOCK_NAME: Final[str] = "state.sqlite.runtime-lock"
 SOURCE_KEY_EPOCH: Final[int] = 0x0102_0304_0506_0708
 PUBLIC_KEY_BYTES: Final[int] = ML_DSA_87_PUBLIC_KEY_BYTES
 PUBLIC_KEY_SHA256: Final[str] = "3D1F0F47DF60B4E2F31F82A99E32B42776837D974CF798CCFDAD98D617026F32"
@@ -130,6 +134,11 @@ AGGREGATE_ERROR_CODES: Final[frozenset[str]] = frozenset({
     "coordinator_output_close", "outer_timeout", "outer_job_assign",
     "outer_observer_start", "probe_only",
     "observer_unavailable", "observer_incomplete", "unauthorized_write",
+    "state_durability_configuration", "state_durability_readback",
+    "outer_process_limit", "outer_process_limit_configuration", "outer_cleanup",
+    "outer_observation_shape", "outer_cap_configuration", "outer_cap_invalid", "outer_cap_readback",
+    "outer_memory_cap", "outer_process_limit_readback", "outer_process_lineage", "aggregate_p95_target",
+    "product_target_exceeded",
 })
 
 FIXED_QUALIFICATION_FLAGS: Final[tuple[str, ...]] = (
@@ -351,6 +360,18 @@ class JobObservation:
 
 
 def validate_job_observation(observation: JobObservation) -> None:
+    _validate_job_observation_safety(observation)
+    if observation.total_processes < 1 or observation.peak_active_processes < 1 or observation.peak_active_processes > observation.total_processes:
+        _fixed("outer_process_lineage")
+    if observation.timed_out:
+        _fixed("outer_timeout")
+    if observation.process_tree_complete is not True or observation.measurement_complete is not True or observation.cleanup_complete is not True:
+        _fixed("outer_cleanup")
+
+
+def _validate_job_observation_safety(observation: JobObservation) -> None:
+    if type(observation) is not JobObservation:
+        _fixed("outer_observation_shape")
     values = (
         observation.peak_job_commit_bytes,
         observation.requested_cap_bytes,
@@ -363,20 +384,24 @@ def validate_job_observation(observation: JobObservation) -> None:
     )
     if any(type(value) is not int or value < 0 for value in values):
         _fixed("outer_observation_shape")
+    if any(type(value) is not bool for value in (observation.process_tree_complete, observation.measurement_complete, observation.cleanup_complete, observation.timed_out)):
+        _fixed("outer_observation_shape")
+    if observation.requested_cap_bytes != PROCESS_TREE_PEAK_CAP_BYTES:
+        _fixed("outer_cap_configuration")
     if observation.requested_cap_bytes >= OUTER_HARD_CAP_BYTES:
         _fixed("outer_cap_invalid")
     if observation.cap_readback_bytes != observation.effective_cap_bytes:
         _fixed("outer_cap_readback")
     if observation.active_process_limit_readback != observation.active_process_limit:
         _fixed("outer_process_limit_readback")
+    if observation.active_process_limit != OUTER_ACTIVE_PROCESS_LIMIT or observation.active_process_limit_readback != OUTER_ACTIVE_PROCESS_LIMIT:
+        _fixed("outer_process_limit_configuration")
     if observation.peak_job_commit_bytes >= OUTER_HARD_CAP_BYTES or observation.peak_job_commit_bytes > observation.effective_cap_bytes:
         _fixed("outer_memory_cap")
-    if observation.total_processes < 1 or observation.peak_active_processes < 1:
+    if observation.peak_active_processes > OUTER_ACTIVE_PROCESS_LIMIT:
+        _fixed("outer_process_limit")
+    if observation.peak_active_processes > observation.total_processes:
         _fixed("outer_process_lineage")
-    if observation.timed_out:
-        _fixed("outer_timeout")
-    if observation.process_tree_complete is not True or observation.measurement_complete is not True or observation.cleanup_complete is not True:
-        _fixed("outer_cleanup")
 
 
 _ETW_ERROR_SUCCESS: Final[int] = 0
@@ -1971,36 +1996,75 @@ class WindowsEtwFileWriteObserver:
         return result
 
 
-def configured_state_allowlist(state_workspace: Path, *, journal_mode: str = "delete") -> frozenset[Path]:
-    if not isinstance(state_workspace, Path) or not state_workspace.is_absolute():
+def _state_workspace_root(state_workspace: Path) -> Path:
+    if not isinstance(state_workspace, Path) or not state_workspace.is_absolute() or state_workspace.is_symlink() or not state_workspace.is_dir():
         _fixed("state_workspace")
-    if journal_mode.lower() != "delete":
+    try:
+        return state_workspace.resolve()
+    except OSError:
+        _fixed("state_workspace")
+
+
+def _normalize_state_journal_mode(journal_mode: object) -> str:
+    if type(journal_mode) is not str or journal_mode.lower() not in STATE_SQLITE_JOURNAL_MODES:
         _fixed("state_durability_configuration")
-    database = state_workspace / "state.sqlite"
-    return frozenset((
-        database,
-        state_workspace / "state.sqlite-journal",
-        state_workspace / "state.sqlite.runtime-lock",
-    ))
+    return journal_mode.lower()
 
 
-def evaluate_disk_gate(
+def configured_state_allowlist(state_workspace: Path, *, journal_mode: str = STATE_SQLITE_JOURNAL_MODE) -> frozenset[Path]:
+    root = _state_workspace_root(state_workspace)
+    mode = _normalize_state_journal_mode(journal_mode)
+    database = root / "state.sqlite"
+    allowed = {database, root / STATE_SQLITE_RUNTIME_LOCK_NAME}
+    if mode == "delete":
+        allowed.add(root / "state.sqlite-journal")
+    else:
+        allowed.update((root / "state.sqlite-wal", root / "state.sqlite-shm"))
+    return frozenset(allowed)
+
+
+def _read_state_journal_mode(state_workspace: Path) -> str:
+    root = _state_workspace_root(state_workspace)
+    database = root / "state.sqlite"
+    if not database.is_file() or database.is_symlink():
+        _fixed("state_durability_readback")
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1.0)
+        row = connection.execute("PRAGMA journal_mode").fetchone()
+        mode = _normalize_state_journal_mode(None if row is None else row[0])
+    except (OSError, ValueError, sqlite3.Error):
+        _fixed("state_durability_readback")
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                _fixed("state_durability_readback")
+    if mode != STATE_SQLITE_JOURNAL_MODE:
+        _fixed("state_durability_configuration")
+    return mode
+
+
+def _assert_state_producer_journal_mode(config: object) -> str:
+    try:
+        mode = config.as_json["database_journal_mode"]  # type: ignore[attr-defined]
+    except (AttributeError, KeyError, TypeError):
+        _fixed("state_durability_configuration")
+    normalized = _normalize_state_journal_mode(mode)
+    if normalized != STATE_SQLITE_JOURNAL_MODE:
+        _fixed("state_durability_configuration")
+    return normalized
+
+
+def _evaluate_disk_gate_for_mode(
     observation: FileWriteObservation,
     *,
     state_workspace: Path,
-    journal_mode: str = "delete",
+    journal_mode: str,
 ) -> str:
-    if type(observation) is not FileWriteObservation:
-        return "observer_incomplete"
-    if observation.status == "observer_unavailable":
-        return "observer_unavailable"
-    if observation.status != "observer_ready" or not observation.provider_available or not observation.privilege_available or not observation.lineage_complete or observation.loss_detected:
-        return "observer_incomplete"
-    try:
-        allowlist = configured_state_allowlist(state_workspace, journal_mode=journal_mode)
-    except CompletePathError as error:
-        return str(error)
-    state_root = state_workspace.resolve()
+    allowlist = configured_state_allowlist(state_workspace, journal_mode=journal_mode)
+    state_root = _state_workspace_root(state_workspace)
     for event in observation.events:
         if type(event) is not FileWriteEvent or type(event.pid) is not int or event.pid <= 0 or type(event.process_generation) is not int or event.process_generation <= 0 or event.operation not in _ETW_FILE_MUTATION_OPERATIONS | {"directory_metadata"}:
             return "observer_incomplete"
@@ -2028,6 +2092,24 @@ def evaluate_disk_gate(
         elif path not in allowlist:
             return "unauthorized_write"
     return "disk_gate_pass"
+
+
+def evaluate_disk_gate(
+    observation: FileWriteObservation,
+    *,
+    state_workspace: Path,
+) -> str:
+    if type(observation) is not FileWriteObservation:
+        return "observer_incomplete"
+    if observation.status == "observer_unavailable":
+        return "observer_unavailable"
+    if observation.status != "observer_ready" or not observation.provider_available or not observation.privilege_available or not observation.lineage_complete or observation.loss_detected:
+        return "observer_incomplete"
+    try:
+        journal_mode = _read_state_journal_mode(state_workspace)
+    except CompletePathError as error:
+        return str(error)
+    return _evaluate_disk_gate_for_mode(observation, state_workspace=state_workspace, journal_mode=journal_mode)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2172,10 +2254,14 @@ def validate_topology(*, proof_count: int, operation_count: int, frame_count: in
         _fixed("topology_mismatch")
 
 
-def _safe_number(value: object) -> float:
+def _validated_number(value: object) -> float:
     if type(value) not in (int, float) or isinstance(value, bool) or not 0 <= float(value) < 10**12:
         _fixed("aggregate_timing")
-    return round(float(value), 3)
+    return float(value)
+
+
+def _safe_number(value: object) -> float:
+    return round(_validated_number(value), 3)
 
 
 _VERIFY_STATE_BREAKDOWN_KEYS: Final[tuple[str, ...]] = (
@@ -2261,19 +2347,27 @@ def _validate_aggregate_mapping(value: object) -> dict[str, Any]:
     )
     if type(value["completed_samples"]) is not int or not 0 <= value["completed_samples"] <= 5:
         _fixed("aggregate_samples")
-    if type(value["stage_timings_ms"]) is not list or len(value["stage_timings_ms"]) not in {0, value["completed_samples"]}:
+    error_code = value["error_code"]
+    if error_code is not None and (type(error_code) is not str or error_code not in AGGREGATE_ERROR_CODES):
+        _fixed("aggregate_error")
+    if value["status"] == "complete":
+        if error_code is not None or value["completed_samples"] != MEASURED_SAMPLE_COUNT:
+            _fixed("aggregate_status")
+    elif error_code is None:
+        _fixed("aggregate_status")
+    if type(value["stage_timings_ms"]) is not list or len(value["stage_timings_ms"]) != value["completed_samples"]:
         _fixed("aggregate_timing")
     for sample in value["stage_timings_ms"]:
         _validate_stage_timing_mapping(sample)
-    if type(value["p95_timings_ms"]) is not dict or set(value["p95_timings_ms"]) != {"source", "verify_state", "ack", "total"}:
-        _fixed("aggregate_timing")
-    for item in value["p95_timings_ms"].values():
-        _safe_number(item)
     measured_breakdowns = value["verify_state_substages_ms"]
     measured_unbucketed = value["total_unbucketed_ms"]
     if type(measured_breakdowns) is not list or type(measured_unbucketed) is not list:
         _fixed("aggregate_timing")
-    if len(measured_breakdowns) != value["completed_samples"] or len(measured_unbucketed) != value["completed_samples"]:
+    if len(measured_breakdowns) not in {0, value["completed_samples"]} or len(measured_unbucketed) not in {0, value["completed_samples"]}:
+        _fixed("aggregate_timing")
+    if (len(measured_breakdowns) == 0) != (len(measured_unbucketed) == 0):
+        _fixed("aggregate_timing")
+    if value["completed_samples"] == MEASURED_SAMPLE_COUNT and (len(measured_breakdowns) != MEASURED_SAMPLE_COUNT or len(measured_unbucketed) != MEASURED_SAMPLE_COUNT):
         _fixed("aggregate_timing")
     validated_stages: list[dict[str, float]] = []
     validated_breakdowns: list[dict[str, float]] = []
@@ -2295,41 +2389,69 @@ def _validate_aggregate_mapping(value: object) -> dict[str, Any]:
     warmup_timing = value["warmup_timing_ms"]
     warmup_breakdown = value["warmup_verify_state_substages_ms"]
     warmup_unbucketed = value["warmup_total_unbucketed_ms"]
+    if warmup_timing is None:
+        if warmup_breakdown is not None or warmup_unbucketed is not None or value["completed_samples"] > 0 or value["status"] == "complete":
+            _fixed("aggregate_timing")
+    else:
+        _validate_stage_timing_mapping(warmup_timing)
+        if (warmup_breakdown is None) != (warmup_unbucketed is None):
+            _fixed("aggregate_timing")
+        if warmup_breakdown is not None:
+            validated_warmup_breakdown = _validate_breakdown_mapping(warmup_breakdown)
+            validated_warmup_unbucketed = _safe_number(warmup_unbucketed)
+            validated_warmup = {key: _safe_number(warmup_timing[key]) for key in ("source", "verify_state", "ack", "total")}
+            _validate_verify_state_reconciliation(validated_warmup["verify_state"], validated_warmup_breakdown)
+            _validate_total_reconciliation(validated_warmup, validated_warmup_unbucketed)
+        if value["completed_samples"] == MEASURED_SAMPLE_COUNT and warmup_breakdown is None:
+            _fixed("aggregate_timing")
     p95_breakdown = value["p95_verify_state_substages_ms"]
     p95_unbucketed = value["p95_total_unbucketed_ms"]
+    p95_timings = value["p95_timings_ms"]
+    target_exceeded = False
     if value["completed_samples"] == MEASURED_SAMPLE_COUNT:
-        _validate_stage_timing_mapping(warmup_timing)
-        validated_warmup_breakdown = _validate_breakdown_mapping(warmup_breakdown)
-        validated_warmup_unbucketed = _safe_number(warmup_unbucketed)
-        validated_warmup = {key: _safe_number(warmup_timing[key]) for key in ("source", "verify_state", "ack", "total")}
-        _validate_verify_state_reconciliation(validated_warmup["verify_state"], validated_warmup_breakdown)
-        _validate_total_reconciliation(validated_warmup, validated_warmup_unbucketed)
+        if type(p95_timings) is not dict or set(p95_timings) != {"source", "verify_state", "ack", "total"}:
+            _fixed("aggregate_timing")
+        if p95_breakdown is None or p95_unbucketed is None:
+            _fixed("aggregate_timing")
         validated_p95_breakdown = _validate_breakdown_mapping(p95_breakdown)
         validated_p95_unbucketed = _safe_number(p95_unbucketed)
-        validated_p95_stage = {key: _safe_number(value["p95_timings_ms"][key]) for key in ("source", "verify_state", "ack", "total")}
-        if validated_stages and any(validated_p95_stage[key] != max(item[key] for item in validated_stages) for key in validated_p95_stage):
+        validated_p95_stage = {key: _safe_number(p95_timings[key]) for key in ("source", "verify_state", "ack", "total")}
+        if any(validated_p95_stage[key] != max(item[key] for item in validated_stages) for key in validated_p95_stage):
             _fixed("aggregate_p95")
-        if validated_breakdowns and any(
+        if any(
             validated_p95_breakdown[key] != max(item[key] for item in validated_breakdowns)
             for key in _VERIFY_STATE_BREAKDOWN_KEYS
         ):
             _fixed("aggregate_p95")
-        if validated_unbucketed and validated_p95_unbucketed != max(validated_unbucketed):
+        if validated_p95_unbucketed != max(validated_unbucketed):
             _fixed("aggregate_p95")
-    elif any(item is not None for item in (warmup_timing, warmup_breakdown, warmup_unbucketed, p95_breakdown, p95_unbucketed)) or measured_breakdowns or measured_unbucketed:
+        raw_p95_total = _validated_number(p95_timings["total"])
+        raw_stage_total = max(_validated_number(stage["total"]) for stage in value["stage_timings_ms"])
+        target_exceeded = raw_p95_total > PRODUCT_TARGET_MS or raw_stage_total > PRODUCT_TARGET_MS
+        if target_exceeded:
+            if value["status"] != "failed" or error_code != "product_target_exceeded":
+                _fixed("aggregate_p95_target")
+    elif any(item is not None for item in (p95_timings, p95_breakdown, p95_unbucketed)):
         _fixed("aggregate_timing")
+    if error_code == "product_target_exceeded" and not target_exceeded:
+        _fixed("aggregate_status")
     if type(value["peak_job_commit_bytes"]) is not int or value["peak_job_commit_bytes"] < 0 or value["peak_job_commit_bytes"] >= OUTER_HARD_CAP_BYTES:
-        _fixed("aggregate_peak")
-    if type(value["effective_cap_bytes"]) is not int or value["effective_cap_bytes"] >= OUTER_HARD_CAP_BYTES:
+        if value["status"] != "failed" or error_code != "outer_memory_cap":
+            _fixed("aggregate_peak")
+    if type(value["effective_cap_bytes"]) is not int or value["effective_cap_bytes"] <= 0 or value["effective_cap_bytes"] >= OUTER_HARD_CAP_BYTES:
         _fixed("aggregate_cap")
-    if type(value["peak_active_processes"]) is not int or type(value["total_processes"]) is not int:
+    if type(value["peak_active_processes"]) is not int or type(value["total_processes"]) is not int or value["peak_active_processes"] < 0 or value["total_processes"] < 0 or value["peak_active_processes"] > value["total_processes"]:
+        _fixed("aggregate_processes")
+    if value["peak_active_processes"] > OUTER_ACTIVE_PROCESS_LIMIT and (value["status"] != "failed" or error_code not in {"outer_process_limit", "outer_process_limit_configuration"}):
+        _fixed("aggregate_processes")
+    if error_code == "outer_process_limit" and value["peak_active_processes"] <= OUTER_ACTIVE_PROCESS_LIMIT:
+        _fixed("aggregate_status")
+    if value["status"] == "complete" and (value["peak_active_processes"] < 1 or value["total_processes"] < 1):
         _fixed("aggregate_processes")
     if value["observer_status"] not in {"observer_ready", "observer_unavailable", "observer_incomplete"}:
         _fixed("aggregate_observer")
-    if value["disk_gate"] not in {"disk_gate_pass", "observer_unavailable", "observer_incomplete", "unauthorized_write"}:
+    if value["disk_gate"] not in {"disk_gate_pass", "observer_unavailable", "observer_incomplete", "unauthorized_write", "state_durability_configuration", "state_durability_readback"}:
         _fixed("aggregate_disk")
-    if value["error_code"] is not None and (type(value["error_code"]) is not str or value["error_code"] not in AGGREGATE_ERROR_CODES):
-        _fixed("aggregate_error")
     if type(value["qualification_flags"]) is not list or tuple(value["qualification_flags"]) != FIXED_QUALIFICATION_FLAGS:
         _fixed("aggregate_flags")
     return value
@@ -2344,18 +2466,23 @@ def _aggregate_json(value: dict[str, Any]) -> str:
 
 
 def build_test_aggregate(*, completed_samples: int = 0, timings: tuple[StageSample, ...] = (), warmup: StageSample | None = None, peak_job_commit_bytes: int = 0, effective_cap_bytes: int = PROCESS_TREE_PEAK_CAP_BYTES, peak_active_processes: int = 1, total_processes: int = 1, observer_status: str = "observer_unavailable", disk_gate: str = "observer_unavailable", error_code: str | None = None) -> dict[str, Any]:
-    if completed_samples == MEASURED_SAMPLE_COUNT and len(timings) != MEASURED_SAMPLE_COUNT:
+    if type(completed_samples) is not int or not 0 <= completed_samples <= MEASURED_SAMPLE_COUNT or len(timings) != completed_samples:
         _fixed("aggregate_samples")
-    if completed_samples != MEASURED_SAMPLE_COUNT and timings:
+    if warmup is not None and type(warmup) is not StageSample:
+        _fixed("aggregate_timing")
+    if completed_samples > 0 and warmup is None:
         _fixed("aggregate_samples")
-    if completed_samples == MEASURED_SAMPLE_COUNT:
-        if warmup is None or warmup.verify_state_breakdown is None or warmup.total_unbucketed_ms is None or any(item.verify_state_breakdown is None or item.total_unbucketed_ms is None for item in timings):
-            _fixed("aggregate_timing")
-    elif warmup is not None:
-        _fixed("aggregate_samples")
-    p95 = nearest_rank_p95(timings) if timings else StageSample(0.0, 0.0, 0.0, 0.0)
+    if completed_samples == MEASURED_SAMPLE_COUNT and (warmup is None or warmup.verify_state_breakdown is None or warmup.total_unbucketed_ms is None):
+        _fixed("aggregate_timing")
+    if any(item.verify_state_breakdown is not None for item in timings) and not all(item.verify_state_breakdown is not None for item in timings):
+        _fixed("aggregate_timing")
+    if any(item.total_unbucketed_ms is not None for item in timings) and not all(item.total_unbucketed_ms is not None for item in timings):
+        _fixed("aggregate_timing")
     has_breakdowns = bool(timings) and all(item.verify_state_breakdown is not None for item in timings)
     has_total_unbucketed = bool(timings) and all(item.total_unbucketed_ms is not None for item in timings)
+    p95 = nearest_rank_p95(timings) if completed_samples == MEASURED_SAMPLE_COUNT else None
+    if p95 is not None and p95.total_ms > PRODUCT_TARGET_MS:
+        error_code = "product_target_exceeded"
     value = {
         "schema": PROFILE_SCHEMA,
         "status": "complete" if completed_samples == MEASURED_SAMPLE_COUNT and error_code is None else "failed",
@@ -2374,14 +2501,14 @@ def build_test_aggregate(*, completed_samples: int = 0, timings: tuple[StageSamp
             _stage_timing_mapping(item)
             for item in timings
         ],
-        "p95_timings_ms": {"source": _safe_number(p95.source_ms), "verify_state": _safe_number(p95.verify_state_ms), "ack": _safe_number(p95.ack_ms), "total": _safe_number(p95.total_ms)},
+        "p95_timings_ms": None if p95 is None else {"source": _safe_number(p95.source_ms), "verify_state": _safe_number(p95.verify_state_ms), "ack": _safe_number(p95.ack_ms), "total": _safe_number(p95.total_ms)},
         "warmup_timing_ms": None if warmup is None else _stage_timing_mapping(warmup),
         "warmup_verify_state_substages_ms": None if warmup is None or warmup.verify_state_breakdown is None else _breakdown_mapping(warmup.verify_state_breakdown),
         "warmup_total_unbucketed_ms": None if warmup is None or warmup.total_unbucketed_ms is None else _safe_number(warmup.total_unbucketed_ms),
         "verify_state_substages_ms": [] if not has_breakdowns else [_breakdown_mapping(item.verify_state_breakdown) for item in timings if item.verify_state_breakdown is not None],
         "total_unbucketed_ms": [] if not has_total_unbucketed else [_safe_number(item.total_unbucketed_ms) for item in timings if item.total_unbucketed_ms is not None],
-        "p95_verify_state_substages_ms": None if p95.verify_state_breakdown is None else _breakdown_mapping(p95.verify_state_breakdown),
-        "p95_total_unbucketed_ms": None if p95.total_unbucketed_ms is None else _safe_number(p95.total_unbucketed_ms),
+        "p95_verify_state_substages_ms": None if p95 is None or p95.verify_state_breakdown is None else _breakdown_mapping(p95.verify_state_breakdown),
+        "p95_total_unbucketed_ms": None if p95 is None or p95.total_unbucketed_ms is None else _safe_number(p95.total_unbucketed_ms),
         "peak_job_commit_bytes": peak_job_commit_bytes,
         "effective_cap_bytes": effective_cap_bytes,
         "peak_active_processes": peak_active_processes,
@@ -2582,6 +2709,7 @@ def _run_coordinator(run_root: Path) -> dict[str, Any]:
     if not report.ready:
         return build_test_aggregate(completed_samples=0, error_code="dependency_unavailable", observer_status="observer_unavailable", disk_gate="observer_unavailable")
     queue_config = QueueConfig("queue-profile11-process", SOURCE_AUTH_OPERATION_COUNT, source_key_epoch=SOURCE_KEY_EPOCH)
+    _assert_state_producer_journal_mode(queue_config)
     public_key = _load_synthetic_public_key()
     source_caller = Profile11SourceBoundaryCaller(
         SourceApplianceConfig(SOURCE_HOST, source_workspace, SOURCE_HOST_SIZE_BYTES, SOURCE_HOST_SHA256, 180.0)
@@ -2612,15 +2740,25 @@ def _run_coordinator(run_root: Path) -> dict[str, Any]:
             expected_acknowledged_count=sample_number * SOURCE_AUTH_OPERATION_COUNT,
         )
 
+    warmup: StageSample | None = None
+    timings: list[StageSample] = []
     try:
-        schedule = run_measurement_schedule_with_warmup(sample)
-        timings = schedule.measured
+        candidate = sample()
+        if type(candidate) is not StageSample:
+            _fixed("sample_shape")
+        warmup = candidate
+        for _ in range(MEASURED_SAMPLE_COUNT):
+            candidate = sample()
+            if type(candidate) is not StageSample:
+                _fixed("sample_shape")
+            timings.append(candidate)
         validate_topology(proof_count=1, operation_count=100, frame_count=1, verifier_batch_count=1, ack_count=100)
-        return build_test_aggregate(completed_samples=len(timings), timings=timings, warmup=schedule.warmup, peak_job_commit_bytes=0, effective_cap_bytes=PROCESS_TREE_PEAK_CAP_BYTES, peak_active_processes=1, total_processes=1, observer_status="observer_unavailable", disk_gate="observer_unavailable")
+        return build_test_aggregate(completed_samples=len(timings), timings=tuple(timings), warmup=warmup, peak_job_commit_bytes=0, effective_cap_bytes=PROCESS_TREE_PEAK_CAP_BYTES, peak_active_processes=1, total_processes=1, observer_status="observer_unavailable", disk_gate="observer_unavailable")
     except CompletePathError as error:
-        return build_test_aggregate(completed_samples=0, timings=(), error_code=str(error), observer_status="observer_unavailable", disk_gate="observer_unavailable")
+        error_code = str(error) if str(error) in AGGREGATE_ERROR_CODES else "coordinator_failure"
+        return build_test_aggregate(completed_samples=len(timings), timings=tuple(timings), warmup=warmup, error_code=error_code, observer_status="observer_unavailable", disk_gate="observer_unavailable")
     except BaseException:
-        return build_test_aggregate(completed_samples=0, timings=(), error_code="coordinator_failure", observer_status="observer_unavailable", disk_gate="observer_unavailable")
+        return build_test_aggregate(completed_samples=len(timings), timings=tuple(timings), warmup=warmup, error_code="coordinator_failure", observer_status="observer_unavailable", disk_gate="observer_unavailable")
     finally:
         del public_key, source_config, source_caller, queue_config, state_port
 
@@ -2943,10 +3081,17 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
             error_code = "coordinator_failure"
         else:
             error_code = None
-        payload = output.get("stdout", b"") if error_code is None else None
         observation = JobObservation(peak_commit, requested_cap, effective_cap, observed_limit, OUTER_ACTIVE_PROCESS_LIMIT, observed_basic, peak_active, total_processes, process_tree_complete, measurement_complete, cleanup_complete, timed_out)
-        if error_code is None:
+        try:
+            _validate_job_observation_safety(observation)
+        except CompletePathError as error:
+            error_code = str(error)
+        try:
             validate_job_observation(observation)
+        except CompletePathError as error:
+            if error_code is None:
+                error_code = str(error)
+        payload = output.get("stdout", b"") if error_code is None else None
         return CoordinatorRun(payload, observation, error_code)
     except CompletePathError as error:
         error_code = str(error)

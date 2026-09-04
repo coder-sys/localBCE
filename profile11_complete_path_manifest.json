@@ -74,9 +74,18 @@
     "state": "fresh absolute directory containing only State DB and configured SQLite durability files"
   },
   "disk_gate": {
+    "sqlite": {
+      "live_journal_mode": "delete",
+      "mode_allowlist": {
+        "delete": ["state.sqlite", "state.sqlite-journal", "state.sqlite.runtime-lock"],
+        "wal": ["state.sqlite", "state.sqlite-wal", "state.sqlite-shm", "state.sqlite.runtime-lock"]
+      },
+      "live_binding": "QueueConfig.as_json.database_journal_mode plus read-only PRAGMA journal_mode readback"
+    },
     "authorized": [
       "state.sqlite",
-      "state.sqlite-journal when configured/observed",
+      "state.sqlite-journal only for selected DELETE mode",
+      "state.sqlite-wal and state.sqlite-shm only for selected WAL mode",
       "state.sqlite.runtime-lock",
       "necessary state-directory metadata"
     ],
