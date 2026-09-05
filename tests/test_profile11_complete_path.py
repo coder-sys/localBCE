@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 import uuid
@@ -578,12 +579,24 @@ runpy.run_path(sys.argv[0], run_name="__main__")
         self.assertTrue(run.observation.cleanup_complete)
         self.assertTrue(run.observation.process_tree_complete)
 
-    def test_default_observer_fails_closed_without_verified_backend(self) -> None:
-        observer = screen.WindowsEtwFileWriteObserver()
+    def test_observer_fails_closed_with_explicit_unavailable_backend(self) -> None:
+        observer = screen.WindowsEtwFileWriteObserver(_Backend(capability=(False, False, False, False)))
         result = observer.probe()
         self.assertEqual(result.status, "observer_unavailable")
         with tempfile.TemporaryDirectory(prefix="profile11-observer-") as directory:
             self.assertEqual(screen.evaluate_disk_gate(result, state_workspace=Path(directory)), "observer_unavailable")
+
+    def test_default_observer_wires_native_backend_and_maps_capability(self) -> None:
+        observer = screen.WindowsEtwFileWriteObserver()
+        if os.name == "nt":
+            self.assertIsInstance(observer._backend, screen.WindowsEtwWriteTraceBackend)
+        ready = screen.WindowsEtwFileWriteObserver(_Backend(capability=(True, True, True, True)))
+        unavailable = screen.WindowsEtwFileWriteObserver(_Backend(capability=(True, True, True, False)))
+        with mock.patch.object(screen, "os", types.SimpleNamespace(name="nt")):
+            self.assertEqual(ready.probe().status, "observer_ready")
+            self.assertEqual(unavailable.probe().status, "observer_unavailable")
+        with mock.patch.object(screen, "os", types.SimpleNamespace(name="posix")):
+            self.assertEqual(ready.probe().status, "observer_unavailable")
 
     def test_native_etw_schema_and_abi_gate_is_exact(self) -> None:
         facts = self._schema_facts()
@@ -762,8 +775,8 @@ runpy.run_path(sys.argv[0], run_name="__main__")
         parameters = ctypes.cast(args[7], ctypes.POINTER(screen._EtwEnableTraceParameters)).contents
         self.assertEqual(parameters.EnableProperty, screen._ETW_ENABLE_PROPERTY_PROCESS_START_KEY)
 
-    def test_screen_does_not_launch_without_ready_observer(self) -> None:
-        observer = screen.WindowsEtwFileWriteObserver()
+    def test_screen_does_not_launch_with_explicit_unavailable_observer(self) -> None:
+        observer = screen.WindowsEtwFileWriteObserver(_Backend(capability=(False, False, False, False)))
         with mock.patch.object(screen, "_launch_coordinator", side_effect=AssertionError("screen launch must be gated")):
             result = screen.run_falsification_screen(observer=observer)
         self.assertEqual(result["status"], "failed")
