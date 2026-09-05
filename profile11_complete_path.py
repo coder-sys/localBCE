@@ -15,6 +15,8 @@ from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -27,32 +29,177 @@ import time
 from typing import Any, Callable, Final, Iterable, Protocol
 import uuid
 
-import app.minimal_clearance_composition as composition
-import app.minimal_clearance_source_auth_verifier_adapter as source_auth_adapter
-from app.minimal_clearance_composition import (
-    ClearanceCompositionStoreV2,
-    StateDispositionControl,
-    build_synthetic_acknowledgment,
-)
-from app.minimal_clearance_resource_limits import (
-    ADMISSION_CAP_BYTES,
-    PROCESS_TREE_PEAK_CAP_BYTES,
-)
-from app.minimal_clearance_source_auth_verifier_adapter import (
-    ML_DSA_87_PUBLIC_KEY_BYTES,
-    SOURCE_AUTH_EXECUTABLE_SHA256,
-    SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
-    SourceAuthVerifierConfig,
-)
-from app.minimal_clearance_verification_queue import (
-    IssuedVerificationBatch,
-    OperationTemplate,
-    QueueConfig,
-    VolatileProofHandoff,
-    _build_statement,
-    _compute_batch_root_from_refs,
-)
-from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime
+# Execution-only Queue source binding.  Library imports deliberately retain the
+# checkout selected by the test collector; only direct script execution binds
+# the coordinator to the accepted Queue checkout.
+_QUEUE_SOURCE_PATH = Path(r"C:\Users\neers\Documents\Codex\2026-09-04\blind-queue-receiver-binding-v1")
+_QUEUE_SOURCE_HEAD = "1cc7c092a42140d99a3b8e6e52ba419fc770c7fd"
+_QUEUE_SOURCE_TREE = "b058d3d77c483f8b71e50bcba22c28d6cd403c81"
+_QUEUE_SOURCE_BOUND = False
+_QUEUE_CACHE_PREFIX: Path | None = None
+_QUEUE_BINDING_SCHEMA = "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH/v1"
+_QUEUE_MODULE_SOURCES: Final[dict[str, Path]] = {
+    "app": Path("app/__init__.py"),
+    "app.minimal_clearance_composition": Path("app/minimal_clearance_composition.py"),
+    "app.minimal_clearance_composition_independent": Path("app/minimal_clearance_composition_independent.py"),
+    "app.minimal_clearance_resource_limits": Path("app/minimal_clearance_resource_limits.py"),
+    "app.minimal_clearance_source_auth_verifier_adapter": Path("app/minimal_clearance_source_auth_verifier_adapter.py"),
+    "app.minimal_clearance_verification_queue": Path("app/minimal_clearance_verification_queue.py"),
+    "app.minimal_clearance_verification_queue_independent": Path("app/minimal_clearance_verification_queue_independent.py"),
+    "app.minimal_clearance_verification_runtime": Path("app/minimal_clearance_verification_runtime.py"),
+    "app.minimal_clearance_verifier_process": Path("app/minimal_clearance_verifier_process.py"),
+}
+
+
+def _queue_binding_failure() -> None:
+    print(json.dumps({"schema": _QUEUE_BINDING_SCHEMA, "mode": "error", "error_code": "queue_source_binding", "proofSuiteId": None, "production_usable": False, "activation": False}, sort_keys=True, separators=(",", ":")))
+    raise SystemExit(2)
+
+
+def _run_queue_binding_preflight() -> None:
+    global _QUEUE_CACHE_PREFIX
+    try:
+        if any(name == "app" or name.startswith("app.") for name in sys.modules):
+            _queue_binding_failure()
+        if not _QUEUE_SOURCE_PATH.is_absolute() or not _QUEUE_SOURCE_PATH.is_dir() or _QUEUE_SOURCE_PATH.is_symlink():
+            _queue_binding_failure()
+        def git(*args: str) -> str:
+            result = subprocess.run(["git", "-C", str(_QUEUE_SOURCE_PATH), *args], capture_output=True, text=True, timeout=10.0, check=False)
+            if result.returncode != 0:
+                _queue_binding_failure()
+            return result.stdout.strip()
+        if git("rev-parse", "HEAD") != _QUEUE_SOURCE_HEAD or git("rev-parse", "HEAD^{tree}") != _QUEUE_SOURCE_TREE or git("status", "--porcelain=v1", "--untracked-files=all") != "":
+            _queue_binding_failure()
+        cache_prefix = Path(tempfile.gettempdir()) / ("blind-queue-pycache-" + uuid.uuid4().hex)
+        if cache_prefix.exists() or not cache_prefix.is_absolute():
+            _queue_binding_failure()
+        sys.dont_write_bytecode = True
+        sys.pycache_prefix = str(cache_prefix)
+        _QUEUE_CACHE_PREFIX = cache_prefix
+        queue_root = (_QUEUE_SOURCE_PATH / "app").resolve()
+        if not queue_root.is_dir() or queue_root.is_symlink():
+            _queue_binding_failure()
+        sys.path.insert(0, str(_QUEUE_SOURCE_PATH))
+    except SystemExit:
+        raise
+    except BaseException:
+        _queue_binding_failure()
+
+
+def _finalize_queue_binding() -> None:
+    global _QUEUE_SOURCE_BOUND
+    queue_root = (_QUEUE_SOURCE_PATH / "app").resolve()
+    cache_prefix = _QUEUE_CACHE_PREFIX
+    app_package = sys.modules.get("app")
+    if (
+        cache_prefix is None
+        or cache_prefix.exists()
+        or sys.pycache_prefix != str(cache_prefix)
+        or sys.dont_write_bytecode is not True
+        or app_package is None
+    ):
+        _queue_binding_failure()
+    if tuple(Path(item).resolve() for item in getattr(app_package, "__path__", ())) != (queue_root,):
+        _queue_binding_failure()
+    loaded = {name for name in sys.modules if name == "app" or name.startswith("app.")}
+    if loaded != set(_QUEUE_MODULE_SOURCES):
+        _queue_binding_failure()
+    for name, relative_source in _QUEUE_MODULE_SOURCES.items():
+        module = sys.modules.get(name)
+        expected_source = (_QUEUE_SOURCE_PATH / relative_source).resolve()
+        spec = getattr(module, "__spec__", None)
+        loader = getattr(spec, "loader", None)
+        source_file = getattr(module, "__file__", None)
+        cached_file = getattr(module, "__cached__", None)
+        if (
+            module is None
+            or not expected_source.is_file()
+            or expected_source.is_symlink()
+            or source_file is None
+            or Path(source_file).resolve() != expected_source
+            or spec is None
+            or spec.origin is None
+            or Path(spec.origin).resolve() != expected_source
+            or not isinstance(loader, importlib.machinery.SourceFileLoader)
+            or Path(loader.path).resolve() != expected_source
+            or cached_file is None
+        ):
+            _queue_binding_failure()
+        expected_cache = Path(importlib.util.cache_from_source(str(expected_source))).resolve()
+        if Path(cached_file).resolve() != expected_cache or cache_prefix not in expected_cache.parents or expected_cache.exists():
+            _queue_binding_failure()
+    import app.minimal_clearance_composition as _composition
+    import app.minimal_clearance_source_auth_verifier_adapter as _source_auth
+    import app.minimal_clearance_verification_queue as _queue
+    import app.minimal_clearance_verification_runtime as _runtime
+    if not (
+        _queue.QueueConfig is _source_auth.QueueConfig is _runtime.QueueConfig
+        and _queue.IssuedVerificationBatch is _source_auth.IssuedVerificationBatch is _runtime.IssuedVerificationBatch
+        and _queue.VolatileProofHandoff is _source_auth.VolatileProofHandoff is _runtime.VolatileProofHandoff
+        and _source_auth.SourceAuthVerifierConfig is _runtime.SourceAuthVerifierConfig
+        and _composition.CompositionConfigV2 is _runtime.CompositionConfigV2
+        and _composition.StateDispositionControl is _runtime.StateDispositionControl
+    ):
+        _queue_binding_failure()
+    _QUEUE_SOURCE_BOUND = True
+
+
+if __name__ == "__main__":
+    _run_queue_binding_preflight()
+
+def _import_queue_dependencies() -> tuple[Any, ...]:
+    import app.minimal_clearance_composition as imported_composition
+    import app.minimal_clearance_composition_independent
+    import app.minimal_clearance_source_auth_verifier_adapter as imported_source_auth_adapter
+    from app.minimal_clearance_composition import ClearanceCompositionStoreV2 as imported_composition_store
+    from app.minimal_clearance_composition import StateDispositionControl as imported_state_control
+    from app.minimal_clearance_composition import build_synthetic_acknowledgment as imported_build_ack
+    from app.minimal_clearance_resource_limits import ADMISSION_CAP_BYTES as imported_admission_cap
+    from app.minimal_clearance_resource_limits import PROCESS_TREE_PEAK_CAP_BYTES as imported_tree_cap
+    from app.minimal_clearance_source_auth_verifier_adapter import ML_DSA_87_PUBLIC_KEY_BYTES as imported_key_bytes
+    from app.minimal_clearance_source_auth_verifier_adapter import SOURCE_AUTH_EXECUTABLE_SHA256 as imported_verifier_sha256
+    from app.minimal_clearance_source_auth_verifier_adapter import SOURCE_AUTH_EXECUTABLE_SIZE_BYTES as imported_verifier_size
+    from app.minimal_clearance_source_auth_verifier_adapter import SourceAuthVerifierConfig as imported_source_config
+    from app.minimal_clearance_verification_queue import IssuedVerificationBatch as imported_issued_batch
+    from app.minimal_clearance_verification_queue import OperationTemplate as imported_operation_template
+    from app.minimal_clearance_verification_queue import QueueConfig as imported_queue_config
+    from app.minimal_clearance_verification_queue import VolatileProofHandoff as imported_handoff
+    from app.minimal_clearance_verification_queue import _build_statement as imported_build_statement
+    from app.minimal_clearance_verification_queue import _compute_batch_root_from_refs as imported_batch_root
+    from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime as imported_runtime
+    return (
+        imported_composition, imported_source_auth_adapter, imported_composition_store,
+        imported_state_control, imported_build_ack, imported_admission_cap, imported_tree_cap,
+        imported_key_bytes, imported_verifier_sha256, imported_verifier_size, imported_source_config,
+        imported_issued_batch, imported_operation_template, imported_queue_config, imported_handoff,
+        imported_build_statement, imported_batch_root, imported_runtime,
+    )
+
+
+if __name__ == "__main__":
+    try:
+        (
+            composition, source_auth_adapter, ClearanceCompositionStoreV2, StateDispositionControl,
+            build_synthetic_acknowledgment, ADMISSION_CAP_BYTES, PROCESS_TREE_PEAK_CAP_BYTES,
+            ML_DSA_87_PUBLIC_KEY_BYTES, SOURCE_AUTH_EXECUTABLE_SHA256, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
+            SourceAuthVerifierConfig, IssuedVerificationBatch, OperationTemplate, QueueConfig,
+            VolatileProofHandoff, _build_statement, _compute_batch_root_from_refs,
+            MinimalClearanceVerificationRuntime,
+        ) = _import_queue_dependencies()
+        _finalize_queue_binding()
+    except SystemExit:
+        raise
+    except BaseException:
+        _queue_binding_failure()
+else:
+    (
+        composition, source_auth_adapter, ClearanceCompositionStoreV2, StateDispositionControl,
+        build_synthetic_acknowledgment, ADMISSION_CAP_BYTES, PROCESS_TREE_PEAK_CAP_BYTES,
+        ML_DSA_87_PUBLIC_KEY_BYTES, SOURCE_AUTH_EXECUTABLE_SHA256, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
+        SourceAuthVerifierConfig, IssuedVerificationBatch, OperationTemplate, QueueConfig,
+        VolatileProofHandoff, _build_statement, _compute_batch_root_from_refs,
+        MinimalClearanceVerificationRuntime,
+    ) = _import_queue_dependencies()
 from profile11_source_boundary import (
     Profile11SourceBoundaryCaller,
     SourceApplianceConfig,
@@ -61,7 +208,6 @@ from profile11_source_boundary import (
     SOURCE_AUTH_FRAME_BYTES,
     SOURCE_AUTH_OPERATION_COUNT,
 )
-
 
 PROFILE_ID: Final[str] = "BLIND-ZKBPP-RANGE100-CDG-DIRECT-SEEDED-V1"
 PROFILE_SCHEMA: Final[str] = "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH/v1"
@@ -88,11 +234,9 @@ C_REPO: Final[Path] = Path(
 C_HEAD: Final[str] = "9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2"
 C_TREE: Final[str] = "178a5f20c6738f7272cd38f77315da83650bbac0"
 
-QUEUE_REPO: Final[Path] = Path(
-    r"C:\Users\neers\Documents\Codex\2026-08-31\blind-queue-profile11-outbox-batch-v1"
-)
-QUEUE_HEAD: Final[str] = "412b53e68091561657106345a22a772699761945"
-QUEUE_TREE: Final[str] = "72746eb68e667698fdb0a72c8aea7c9bf027076a"
+QUEUE_REPO: Final[Path] = _QUEUE_SOURCE_PATH
+QUEUE_HEAD: Final[str] = _QUEUE_SOURCE_HEAD
+QUEUE_TREE: Final[str] = _QUEUE_SOURCE_TREE
 
 SOURCE_HOST: Final[Path] = Path(__file__).parent / "experiments" / "profile11_source_host" / "target" / "release" / "profile11_source_host.exe"
 SOURCE_HOST_SIZE_BYTES: Final[int] = 480_768
@@ -2701,6 +2845,8 @@ def _run_one_sample(*, root: Path, source_workspace: Path, verifier_workspace: P
 
 
 def _run_coordinator(run_root: Path) -> dict[str, Any]:
+    if not _QUEUE_SOURCE_BOUND:
+        _fixed("queue_source_binding")
     source_workspace = run_root / "source-workspace"
     verifier_workspace = run_root / "verifier-workspace"
     state_workspace = run_root / "state"

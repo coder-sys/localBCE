@@ -31,10 +31,16 @@
       "tree": "178a5f20c6738f7272cd38f77315da83650bbac0"
     },
     "queue": {
-      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-queue-profile11-outbox-batch-v1",
-      "head": "412b53e68091561657106345a22a772699761945",
-      "tree": "72746eb68e667698fdb0a72c8aea7c9bf027076a"
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-09-04\\blind-queue-receiver-binding-v1",
+      "head": "1cc7c092a42140d99a3b8e6e52ba419fc770c7fd",
+      "tree": "b058d3d77c483f8b71e50bcba22c28d6cd403c81"
     }
+  },
+  "python_source_binding": {
+    "references_git_pin": "queue",
+    "canonical_package": "app",
+    "source_only_cache_handling": true,
+    "fallback": false
   },
   "file_pins": {
     "producer_executable": {

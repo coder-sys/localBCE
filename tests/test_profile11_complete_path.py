@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -33,6 +35,263 @@ class _Backend:
 
 
 class Profile11CompletePathTests(unittest.TestCase):
+    _SCRIPT = Path(screen.__file__).resolve()
+    _QUEUE_ROOT = Path(screen.QUEUE_REPO).resolve()
+    _BINDING_ERROR = json.dumps(
+        {
+            "activation": False,
+            "error_code": "queue_source_binding",
+            "mode": "error",
+            "production_usable": False,
+            "proofSuiteId": None,
+            "schema": screen.PROFILE_SCHEMA,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ) + "\n"
+
+    @classmethod
+    def _run_direct(cls, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-B", str(cls._SCRIPT), *arguments],
+            cwd=cls._SCRIPT.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    @classmethod
+    def _run_modified(cls, replacements: tuple[tuple[str, str], ...], *arguments: str) -> subprocess.CompletedProcess[str]:
+        source = cls._SCRIPT.read_text(encoding="utf-8")
+        for old, new in replacements:
+            if source.count(old) != 1:
+                raise AssertionError(f"replacement cardinality: {old!r}")
+            source = source.replace(old, new)
+        with tempfile.TemporaryDirectory(prefix="profile11-binding-script-") as directory:
+            script = Path(directory) / cls._SCRIPT.name
+            script.write_text(source, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, "-B", str(script), *arguments],
+                cwd=cls._SCRIPT.parent,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+    @classmethod
+    def _run_bootstrap(cls, source: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-B", "-c", source, str(cls._SCRIPT), *arguments],
+            cwd=cls._SCRIPT.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def _assert_binding_rejection(self, result: subprocess.CompletedProcess[str]) -> None:
+        self.assertEqual(result.returncode, 2, (result.stdout, result.stderr))
+        self.assertEqual(result.stdout, self._BINDING_ERROR)
+        self.assertEqual(result.stderr, "")
+
+    def test_execution_binding_rejects_missing_transitive_import_before_launch(self) -> None:
+        bootstrap = r'''import importlib.abc, runpy, sys
+class Missing(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "app.minimal_clearance_composition_independent":
+            raise ModuleNotFoundError(fullname)
+        return None
+sys.meta_path.insert(0, Missing())
+sys.argv = [sys.argv[1], "--prepare"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+        self._assert_binding_rejection(self._run_bootstrap(bootstrap))
+
+    def test_execution_binding_rejects_wrong_fullname_source_inside_queue_before_launch(self) -> None:
+        wrong_source = self._QUEUE_ROOT / "app" / "minimal_clearance_verification_queue_independent.py"
+        bootstrap = r'''import importlib.abc, importlib.machinery, importlib.util, runpy, sys
+class WrongSource(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "app.minimal_clearance_composition_independent":
+            loader = importlib.machinery.SourceFileLoader(fullname, sys.argv[2])
+            return importlib.util.spec_from_loader(fullname, loader)
+        return None
+sys.meta_path.insert(0, WrongSource())
+sys.argv = [sys.argv[1], "--prepare"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+        self._assert_binding_rejection(self._run_bootstrap(bootstrap, str(wrong_source)))
+
+    def test_execution_binding_rejects_wrong_head_before_launch(self) -> None:
+        old = f'_QUEUE_SOURCE_HEAD = "{screen.QUEUE_HEAD}"'
+        self._assert_binding_rejection(self._run_modified(((old, '_QUEUE_SOURCE_HEAD = "' + "0" * 40 + '"'),), "--prepare"))
+
+    def test_execution_binding_rejects_wrong_tree_before_launch(self) -> None:
+        old = f'_QUEUE_SOURCE_TREE = "{screen.QUEUE_TREE}"'
+        self._assert_binding_rejection(self._run_modified(((old, '_QUEUE_SOURCE_TREE = "' + "0" * 40 + '"'),), "--prepare"))
+
+    def test_execution_binding_rejects_dirty_queue_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="profile11-dirty-queue-") as directory:
+            clone = Path(directory) / "queue"
+            cloned = subprocess.run(
+                ["git", "clone", "--quiet", "--no-hardlinks", str(self._QUEUE_ROOT), str(clone)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(cloned.returncode, 0, cloned.stderr)
+            (clone / "binding-dirty-sentinel").write_text("dirty", encoding="ascii")
+            old = f'_QUEUE_SOURCE_PATH = Path(r"{self._QUEUE_ROOT}")'
+            new = f'_QUEUE_SOURCE_PATH = Path(r"{clone}")'
+            self._assert_binding_rejection(self._run_modified(((old, new),), "--prepare"))
+
+    def test_execution_binding_rejects_preloaded_app_before_launch(self) -> None:
+        bootstrap = r'''import app, runpy, sys
+sys.argv = [sys.argv[1], "--prepare"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+        self._assert_binding_rejection(self._run_bootstrap(bootstrap))
+
+    def test_execution_binding_rejects_split_class_identity_before_launch(self) -> None:
+        runtime_source = self._QUEUE_ROOT / "app" / "minimal_clearance_verification_runtime.py"
+        bootstrap = r'''import importlib.abc, importlib.machinery, importlib.util, runpy, sys
+class SplitLoader(importlib.machinery.SourceFileLoader):
+    def exec_module(self, module):
+        super().exec_module(module)
+        module.StateDispositionControl = object()
+class SplitIdentity(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "app.minimal_clearance_verification_runtime":
+            loader = SplitLoader(fullname, sys.argv[2])
+            return importlib.util.spec_from_loader(fullname, loader)
+        return None
+sys.meta_path.insert(0, SplitIdentity())
+sys.argv = [sys.argv[1], "--prepare"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+        self._assert_binding_rejection(self._run_bootstrap(bootstrap, str(runtime_source)))
+
+    def test_execution_binding_has_exact_origins_loaders_caches_and_classes(self) -> None:
+        bootstrap = r'''import contextlib, importlib.machinery, importlib.util, io, json, pathlib, runpy, sys
+captured = io.StringIO()
+sys.argv = [sys.argv[1], "--prepare"]
+with contextlib.redirect_stdout(captured):
+    try:
+        runpy.run_path(sys.argv[0], run_name="__main__")
+    except SystemExit as error:
+        exit_code = error.code
+names = (
+    "app",
+    "app.minimal_clearance_composition",
+    "app.minimal_clearance_composition_independent",
+    "app.minimal_clearance_resource_limits",
+    "app.minimal_clearance_source_auth_verifier_adapter",
+    "app.minimal_clearance_verification_queue",
+    "app.minimal_clearance_verification_queue_independent",
+    "app.minimal_clearance_verification_runtime",
+    "app.minimal_clearance_verifier_process",
+)
+modules = {name: sys.modules[name] for name in names}
+queue = modules["app.minimal_clearance_verification_queue"]
+source = modules["app.minimal_clearance_source_auth_verifier_adapter"]
+runtime = modules["app.minimal_clearance_verification_runtime"]
+composition = modules["app.minimal_clearance_composition"]
+prefix = pathlib.Path(sys.pycache_prefix).resolve()
+payload = {
+    "exit_code": exit_code,
+    "prepare": json.loads(captured.getvalue()),
+    "loaded": sorted(name for name in sys.modules if name == "app" or name.startswith("app.")),
+    "prefix_exists": prefix.exists(),
+    "modules": {
+        name: {
+            "file": str(pathlib.Path(module.__file__).resolve()),
+            "origin": str(pathlib.Path(module.__spec__.origin).resolve()),
+            "loader": isinstance(module.__spec__.loader, importlib.machinery.SourceFileLoader),
+            "loader_path": str(pathlib.Path(module.__spec__.loader.path).resolve()),
+            "cached": str(pathlib.Path(module.__cached__).resolve()),
+            "expected_cache": str(pathlib.Path(importlib.util.cache_from_source(module.__file__)).resolve()),
+            "cache_exists": pathlib.Path(module.__cached__).exists(),
+            "cache_under_prefix": prefix in pathlib.Path(module.__cached__).resolve().parents,
+        }
+        for name, module in modules.items()
+    },
+    "classes": {
+        "QueueConfig": queue.QueueConfig is source.QueueConfig is runtime.QueueConfig,
+        "SourceAuthVerifierConfig": source.SourceAuthVerifierConfig is runtime.SourceAuthVerifierConfig,
+        "CompositionConfigV2": composition.CompositionConfigV2 is runtime.CompositionConfigV2,
+        "StateDispositionControl": composition.StateDispositionControl is runtime.StateDispositionControl,
+        "IssuedVerificationBatch": queue.IssuedVerificationBatch is source.IssuedVerificationBatch is runtime.IssuedVerificationBatch,
+        "VolatileProofHandoff": queue.VolatileProofHandoff is source.VolatileProofHandoff is runtime.VolatileProofHandoff,
+    },
+}
+print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+'''
+        result = self._run_bootstrap(bootstrap)
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+        self.assertEqual(result.stderr, "")
+        value = json.loads(result.stdout)
+        self.assertEqual(value["exit_code"], 0)
+        self._assert_prepare_shape(value["prepare"])
+        expected_sources = {
+            "app": "app/__init__.py",
+            "app.minimal_clearance_composition": "app/minimal_clearance_composition.py",
+            "app.minimal_clearance_composition_independent": "app/minimal_clearance_composition_independent.py",
+            "app.minimal_clearance_resource_limits": "app/minimal_clearance_resource_limits.py",
+            "app.minimal_clearance_source_auth_verifier_adapter": "app/minimal_clearance_source_auth_verifier_adapter.py",
+            "app.minimal_clearance_verification_queue": "app/minimal_clearance_verification_queue.py",
+            "app.minimal_clearance_verification_queue_independent": "app/minimal_clearance_verification_queue_independent.py",
+            "app.minimal_clearance_verification_runtime": "app/minimal_clearance_verification_runtime.py",
+            "app.minimal_clearance_verifier_process": "app/minimal_clearance_verifier_process.py",
+        }
+        self.assertEqual(value["loaded"], sorted(expected_sources))
+        self.assertFalse(value["prefix_exists"])
+        self.assertTrue(all(value["classes"].values()), value["classes"])
+        for name, relative in expected_sources.items():
+            facts = value["modules"][name]
+            expected = str((self._QUEUE_ROOT / relative).resolve())
+            self.assertEqual((facts["file"], facts["origin"], facts["loader_path"]), (expected, expected, expected))
+            self.assertTrue(facts["loader"])
+            self.assertEqual(facts["cached"], facts["expected_cache"])
+            self.assertTrue(facts["cache_under_prefix"])
+            self.assertFalse(facts["cache_exists"])
+
+    def _assert_prepare_shape(self, value: dict[str, object]) -> None:
+        self.assertEqual(value, {
+            "activation": False,
+            "full_mode": "fail_closed",
+            "launches": 0,
+            "mismatch_count": 1,
+            "mismatched": ["public_key_missing"],
+            "missing": ["source_workspace", "verifier_workspace", "state_workspace"],
+            "missing_count": 3,
+            "mode": "prepare",
+            "production_usable": False,
+            "proofSuiteId": None,
+            "schema": "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH/v1",
+        })
+
+    def test_library_import_remains_unbound_and_coordinator_rejects(self) -> None:
+        bootstrap = r'''import json, pathlib, sys
+import profile11_complete_path as candidate
+try:
+    candidate._run_coordinator(pathlib.Path(sys.argv[2]))
+except candidate.CompletePathError as error:
+    result = {"bound": candidate._QUEUE_SOURCE_BOUND, "error_code": str(error)}
+else:
+    result = {"bound": candidate._QUEUE_SOURCE_BOUND, "error_code": None}
+print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+'''
+        with tempfile.TemporaryDirectory(prefix="profile11-library-unbound-") as directory:
+            result = self._run_bootstrap(bootstrap, directory)
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(json.loads(result.stdout), {"bound": False, "error_code": "queue_source_binding"})
+
+    def test_direct_prepare_binds_fresh_and_preserves_non_readiness(self) -> None:
+        result = self._run_direct("--prepare")
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+        self.assertEqual(result.stderr, "")
+        self._assert_prepare_shape(json.loads(result.stdout))
+
     @staticmethod
     def _timed_sample(index: int = 0) -> screen.StageSample:
         breakdown = screen.VerifyStateBreakdown(1.0 + index, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
@@ -70,6 +329,16 @@ class Profile11CompletePathTests(unittest.TestCase):
 
     def test_manifest_and_exact_pins(self) -> None:
         manifest = json.loads(screen.MANIFEST_PATH.read_text(encoding="utf-8"))
+        readme = (screen.MANIFEST_PATH.parent / "README.md").read_text(encoding="utf-8")
+        for field, value in manifest["git_pins"]["queue"].items():
+            with self.subTest(readme_queue_pin=field):
+                self.assertIn(value, readme)
+        for retired_pin in (
+            "412b53e68091561657106345a22a772699761945",
+            "72746eb68e667698fdb0a72c8aea7c9bf027076a",
+        ):
+            with self.subTest(retired_queue_pin=retired_pin):
+                self.assertNotIn(retired_pin, readme)
         self.assertEqual(manifest["topology"], {"batch_operations": 100, "proofs": 1, "source_frames": 1, "verifier_batches": 1, "outbox_acks": 100})
         self.assertEqual(manifest["limits"]["component_admission_bytes"], 4_500_000_000)
         self.assertEqual(manifest["limits"]["complete_tree_hard_peak_bytes"], 4_999_999_999)
@@ -104,6 +373,15 @@ class Profile11CompletePathTests(unittest.TestCase):
                     "head": screen.QUEUE_HEAD,
                     "tree": screen.QUEUE_TREE,
                 },
+            },
+        )
+        self.assertEqual(
+            manifest["python_source_binding"],
+            {
+                "references_git_pin": "queue",
+                "canonical_package": "app",
+                "source_only_cache_handling": True,
+                "fallback": False,
             },
         )
         self.assertEqual(

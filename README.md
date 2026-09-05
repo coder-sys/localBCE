@@ -104,7 +104,10 @@ The underlying Rust producer pin is repository `2bfabac2738d546e75063fd77081cbfd
 The pinned C repository is `9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2` (tree
 `178a5f20c6738f7272cd38f77315da83650bbac0`); its verifier is 52,736 bytes, SHA-256
 `4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C`. The Queue pin is
-`412b53e68091561657106345a22a772699761945` (tree `72746eb68e667698fdb0a72c8aea7c9bf027076a`).
+`1cc7c092a42140d99a3b8e6e52ba419fc770c7fd` (tree `b058d3d77c483f8b71e50bcba22c28d6cd403c81`)
+at `C:\Users\neers\Documents\Codex\2026-09-04\blind-queue-receiver-binding-v1`.
+Direct script execution binds the canonical `app` package to that exact clean source checkout,
+with no fallback.
 The manifest also pins both C libraries and the synthetic public-key fixture; no production key is used.
 
 The host calls the accepted four-argument `SourceAppliance::new` and supplies one synthetic,
@@ -164,8 +167,8 @@ py -3.14 -B -m py_compile profile11_complete_path.py tests\test_profile11_comple
 py -3.14 -B -m unittest -v tests.test_profile11_complete_path
 py -3.14 -B -m unittest -v tests.test_profile11_source_boundary
 py -3.14 -B -m unittest -v -k stream tests.test_minimal_clearance_verifier_process
-py -3.14 -B -m profile11_complete_path --prepare
-py -3.14 -B -m profile11_complete_path --screen
+py -3.14 -B profile11_complete_path.py --prepare
+py -3.14 -B profile11_complete_path.py --screen
 ```
 
 `--prepare` launches nothing and reports every missing dependency. `--screen` first requires a ready
