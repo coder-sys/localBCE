@@ -7,8 +7,8 @@ Updated: 2026-09-05
 The current candidate source base is commit `be4f1d565033dd57e0101af6f5bfcb0868bb1db6`, tree
 `746fcbbd314e16bed96e50b52a1f586bfa8ec50a`. The isolated operator worktree now contains the
 in-scope privacy/helper, release-policy, documentation-governance, and authority-record delta as
-one clean immutable operator commit `cf616eeee99fe3dcbfc19a7063926f21ae99970b`
-(tree `031aea92f03c0075848b3a3a9599f82314bddb03`). That commit is handed off separately
+one clean immutable operator commit `653999300d4d974bbe7ddce28cda7ff0ef3bbcd6`
+(tree `321db1fe97aeee79b7d961fbe4024c8ef4fdbb05`). That commit is handed off separately
 for source integration; it does not claim that Cleanup's source changes have been integrated.
 
 The README boundary correction is accepted in the candidate: source-checkout commands are

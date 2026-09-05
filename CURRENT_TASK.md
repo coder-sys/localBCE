@@ -42,7 +42,7 @@ must be reconciled against the policy before a final manifest is generated.
   `STRUCTURAL_PRIVACY_SELECTED=248` and `STRUCTURAL_PRIVACY_FAILURES=0`; the shared detector
   helper is included as a runtime release dependency, with its path-regex vocabulary assembled
   without self-triggering source literals.
-- The corrected commit `cf616eeee99fe3dcbfc19a7063926f21ae99970b` passed the extracted-source
+- The final operator commit `653999300d4d974bbe7ddce28cda7ff0ef3bbcd6` passed the extracted-source
   dependency gate: the manifest selected 248 payload files and the archive contained
   `tools/privacy_primitives.py`; an extracted builder built a benign archive and rejected an
   encoded-container payload without creating an output archive.
