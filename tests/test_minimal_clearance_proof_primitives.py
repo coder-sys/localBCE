@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import minimal_clearance_proof_primitives as proof
+from app.canonical_encoding import stable_private_hash
 
 
 def _metadata(*, inode: int = 7, size: int = 3, mtime: int = 11, mode: int | None = None):
@@ -66,6 +67,13 @@ def test_stable_read_is_descriptor_owned_and_bounded(tmp_path: Path) -> None:
     assert proof._read_bounded_regular_file(
         source, maximum=16, label="proof_artifact"
     ) == b"stable"
+
+
+def test_stable_private_hash_rejects_top_level_and_nested_float() -> None:
+    with pytest.raises(ValueError, match="^float_not_canonical$"):
+        stable_private_hash(1.005)
+    with pytest.raises(ValueError, match="^float_not_canonical$"):
+        stable_private_hash({"amount": 1.005})
 
 
 @pytest.mark.parametrize("mode", [stat.S_IFLNK, stat.S_IFDIR])
