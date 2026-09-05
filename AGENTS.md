@@ -67,73 +67,27 @@ Do not edit these unless the owner explicitly authorizes the exact change:
 - `app/public_inputs.py`
 - `app/canonical_encoding.py`
 
-## Scoped owner authorization — Mirror boundary proposal
+## Protected-path delegation status
 
-On 2026-09-05, the owner explicitly authorized an isolated candidate implementation from baseline
-`bf71b9cba3c55f35398d7aacde4d29e9ed35ac4d` for exactly these protected paths:
+The protected list above is the active default and remains owner-gated. This documentation-only
+child authorizes no protected implementation or test edits. The four bounded Mirror grants issued
+on 2026-09-05 and consumed by the sealed `0607a275bb5158dd4b4c70dfcd95d0967c80b839` candidate are
+closed historical permissions; their exact scopes and evidence remain in Git history. This cleanup
+neither extends nor revokes a separate owner packet in another task. Future protected changes need a
+new owner delegation naming the exact paths, tests, invariants, and evidence; no grant is inferred
+from a prior task.
 
-- `app/mirror/core_v2_independent.py`
-- `app/mirror/ingress_v2_independent.py`
-- `app/mirror/writer_authority.py`
-
-This scoped exception covers the previously evidenced Core session/slot reconstruction and Ingress
-lease/artifact bindings, plus the complete writer shutdown/native-resource-release correction now
-required by the audit. It supersedes approval of the earlier proposal artifact only; it does not
-approve any other protected path, source promotion, archive publication, production deployment,
-payment, PHI, or activation change.
-
-Required invariants are: independent Core/Ingress reconstruction remains fail-closed; every native
-release result is checked; partial release retains exact ownership state; retry never reuses an
-ambiguous POSIX descriptor after `EINTR`/unspecified close state; Windows unlock/handle failures
-remain observable and retryable only while the handle identity is safe; constructor failures clean
-up all acquired resources; and WriterAuthority is not reported closed until physical release is
-resolved. Required evidence is exact patch application, syntax, native release fault injection,
-normal close/reopen, the existing scope/concurrency lifecycle matrix, Ingress/Core diagnostics, and
-the connected regression/direct-dependent suites on disposable candidates. The accepted source
-workspace remains untouched.
-
-On 2026-09-05, the owner also authorized directly corresponding tracked regressions in exactly
-these test modules:
-
-- `tests/test_mirror_operational_owner.py`
-- `tests/test_mirror_v2_consolidation.py`
-
-This test scope covers native release and constructor failures, active-scope quiescence and
-close retry, independent Core projection reconstruction, and independent Ingress lease/artifact
-bindings. It does not authorize any other test or protected implementation path.
-
-On 2026-09-05, the owner additionally authorized a bounded, read-only operational provider-evidence
-export bridge from the committed candidate baseline. Its exact implementation scope is:
-
-- `app/mirror/operational_owner.py`
-- `app/mirror/core_v2_independent.py` (only the independent current SOURCE_OBSERVATION selector needed by the bridge)
-- `app/mirror/provider_evidence_export_v1.py`
-
-Its exact directly corresponding test scope is:
-
-- `tests/test_mirror_operational_owner.py`
-- `tests/test_mirror_provider_evidence_export_v1.py`
-
-This scope does not authorize changes to the external V1 request/response grammar, the independent
-export verifier, source adapters, raw capture, any new owner/table/daemon/authentication/payment
-authority, PHI, production activation, or promotion of the candidate into the accepted source
-workspace. The bridge must select only the independently verified current Core SOURCE_OBSERVATION
-head, rebind it to the exact current Ingress artifact/receipt/profile, keep the existing exporter as
-the sole response producer, and fail closed without mutation or raw-data leakage.
-
-On 2026-09-05, the owner additionally authorized a bounded shutdown-state correction in exactly
-these protected paths:
-
-- `app/mirror/operational_owner.py`
-- `tests/test_mirror_operational_owner.py`
-
-The correction may make owner close a retryable lifecycle state: a close request blocks new owner
-operations, waits for active WriterAuthority scopes to quiesce, retains the authority and
-non-terminal state when physical or service release fails, and only reports closed after every
-release is resolved. It may not edit `writer_authority.py`, service implementations, the export
-grammar/verifier, or any other protected path. Public failures remain fixed and sanitized, and
-constructor cleanup, concurrent/reentrant close, normal/repeated close, and active run/export
-behavior require direct regression evidence.
+The completed Mirror boundary remains governed by these invariants: independent Core/Ingress
+reconstruction is fail-closed; every native and service release result is checked; partial release
+retains exact ownership; an ambiguous POSIX descriptor is never retried; Windows unlock/handle
+failures are observable and retryable only while handle identity is safe; constructor failures
+release every acquired resource; and WriterAuthority is not reported closed until physical release
+is resolved. The read-only export bridge selects only the independently verified current Core
+`SOURCE_OBSERVATION`, rebinds it to the exact current Ingress artifact/receipt/profile, keeps the
+existing exporter as sole response producer, and fails closed without mutation or raw-data leakage.
+Native-release fault injection, normal close/reopen, scope/concurrency lifecycle, constructor and
+close-retry regressions, independent Core/Ingress diagnostics, and export/privacy checks remain the
+required evidence for any future delegated change.
 
 ## Operational authority
 

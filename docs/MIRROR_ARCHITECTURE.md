@@ -18,22 +18,23 @@ synthetic acquisition port (production authorization remains external)
 Operational owner V1 -- one lock, bounded due/retry/recovery composition
         |
         v
-Ingress V5 -- one bounded sanitized observation owner
+Ingress service V2 / schema V6 -- one bounded sanitized-observation owner
         |
         v
-Core V2 ---- derived graph, reconciliation, and case state
+Core service V2 / schema V4 ---- derived graph, reconciliation, and case state
         |
         v
-Recovery V2 - explicit export, restore, and publication recovery points
+Recovery service V2 / schema V3 - explicit export, restore, and publication recovery points
 ```
 
 The synthetic source-side adapter and its independent verifier consume raw source bytes only at the
-source boundary and emit one canonical allowlisted observation plus an opaque verification-at-time
-receipt. Ingress owns scheduling, leases, attempts, quarantine, and the sole durable sanitized
-observation. Core independently reconstructs derived artifacts, events, heads, reconciliation, and
-case progression from that observation. Recovery owns encrypted sanitized-state bundle identity,
-key/storage binding, restore, and explicit publication recovery. No layer may create a second raw
-capture owner, persist source bytes, or mutate another layer's tables.
+source boundary. They emit one canonical allowlisted observation and one opaque verification-at-time
+receipt; those sanitized outputs are the only source-side data admitted to Ingress. Ingress owns
+scheduling, leases, attempts, quarantine, and the sole durable sanitized observation. Core
+independently reconstructs derived artifacts, events, heads, reconciliation, and case progression
+from that observation. Recovery owns encrypted sanitized-state bundle identity, key/storage
+binding, restore, and explicit publication recovery. No layer may create a second raw-capture owner,
+persist source bytes, or mutate another layer's tables.
 
 The operational owner is the exact `mirror-operational-owner-v1` composition boundary, not a new
 data owner. It pins one ordinary local root, the three existing stores, one nonblocking operational
@@ -134,10 +135,9 @@ any of those dependencies.
 Live source authorization, legal terms, authentication, completeness, cadence, failure behavior,
 state privacy/support approval, production persistence/custody, monitoring, disaster recovery, and
 controlled shadow-pilot authority remain external evidence dependencies. Until they are closed,
-`production_usable=false`, activation is false, and all payment, clearance, settlement,
-adjudication, and production claims remain false. Mirror has no `proofSuiteId` field and no
-private-proof backend dependency; a private-proof profile belongs to Blind Ledger's separate
-clearance authority.
+Mirror remains synthetic, nonactivating, and nonpayment: `production_usable=false` and activation
+is false. Mirror has no `proofSuiteId` field or private-proof backend dependency; that profile
+belongs to Blind Ledger's separate clearance authority.
 
 `ARCHITECTURE.md` owns Mirror's product role and separation from Blind Ledger. This document owns
 Mirror's internal technical boundary. `STATE.md` owns accepted evidence and nonclaims;

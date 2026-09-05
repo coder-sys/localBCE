@@ -5,60 +5,32 @@ Updated: 2026-09-05
 Owner: this document defines the verifier-to-database, retry, recovery, migration, and
 anti-rollback boundary. It does not select a backend or claim production persistence.
 
-## Product rule
+## Boundary
 
-Blind Ledger controls a state-local clearance decision; it does not adjudicate the full claim or
-move money. The official processor and payment system retain those functions.
-No payment state transition occurs inside Blind Ledger; it owns clearance state only.
+Blind Ledger owns state-local clearance state; the incumbent adjudicates claims and the official
+payment system moves money. Exactly three evidence modes are selected by a verifier-owned,
+state-approved control set before admission, with no caller-selected downgrade or runtime fallback:
+`DIRECT_STATE_OWNED` for lawfully held canonical plaintext, `AUTHORITATIVE_ASSERTION` for a
+qualified operation-scoped source assertion, and `PRIVATE_ZK` for a hidden source-bound predicate.
 
-Exactly three pre-admission evidence modes exist, selected by the state-approved verifier-owned
-control set before request admission. There is no runtime fallback or downgrade between them:
+This transaction boundary consumes only the mode-specific, non-dispositive evidence result. It
+retains no source, proof, signature, or stable digest; it does not select a backend, reverify
+destroyed artifacts, or treat a source signature as truth. The exact source-auth, representation,
+zero-PHI, privacy, PQ, and resource contract is owned by
+`docs/NATIVE_V3_ARCHITECTURE.md`. Hidden payment-relevant evidence requires the qualified
+`PRIVATE_ZK` path; lawfully held plaintext uses `DIRECT_STATE_OWNED` without purposeless ceremony.
 
-1. `DIRECT_STATE_OWNED` evaluates canonical non-PHI facts that the state owner already lawfully
-   holds; no signature or ZK wrapper is required merely to re-prove the state's own facts.
-2. `AUTHORITATIVE_ASSERTION` consumes an operation-scoped, minimally disclosed derived assertion
-   and its qualified source-signature result. That result establishes no disposition authority.
-3. `PRIVATE_ZK` consumes a non-dispositive proof result for a hidden source-bound predicate under
-   the Native-v3 source, statement, and representation contract.
+Provider App preflight and the read-only Mirror/Provider Trust Graph wedge may emit bounded evidence
+artifacts, but neither creates a Blind Ledger clearance receipt or authorizes payment.
 
-The exact source-auth candidate/profile, private representation and raw-record link contract, source
-artifact custody, and deployed zero-PHI recoverability gate are normative in
-`docs/NATIVE_V3_ARCHITECTURE.md`. This transaction authority consumes only the resulting
-mode-specific, non-dispositive evidence result and retains no source/proof/signature bytes or stable
-digest. It does not select a backend, reverify destroyed source artifacts, or treat a source signature
-as truth; signed unrelated dual commitments are not an equality bridge.
+## Replacement boundary
 
-When an undisclosed payment-relevant assertion crosses the clearance trust boundary and affects
-automation, only `PRIVATE_ZK` can satisfy that hidden-evidence requirement; no clearance-state
-transition occurs unless the qualified verifier accepts the narrow assertion and the resulting
-state-owned update commits in one atomic database transaction. When the state clearance service
-already lawfully holds all required evidence in plaintext, `DIRECT_STATE_OWNED` uses the approved
-deterministic rule artifact and atomic state machine without adding a purposeless ZK wrapper.
-`AUTHORITATIVE_ASSERTION` has its own qualified source-signature profile and does not wait on a
-private-proof backend. A caller cannot select a weaker mode, and a failed mode cannot retry under a
-different mode by changing a flag.
-
-Ordinary Provider App preflight may check completeness and formatting locally and may emit a small
-state-verifiable receipt. It does not create a Blind Ledger clearance receipt and cannot authorize
-payment.
-
-The first commercial provider-continuity wedge is likewise read-only, but it belongs externally to
-Mirror's Provider Trust Graph. It emits evidence findings, source coverage, remediation/retest,
-parity, and transition artifacts rather than an operative Blind Ledger directive. The five-directive
-continuity module is an internal clearance-semantics harness, not that external API.
-
-## Production-shaped patch-in contract
-
-The local database, export/restore, and support seams are production-shaped candidates for a
-state-owned persistence and custody adapter. Their invariant interface is the canonical artifact
-grammar, derived logical chain identity, immutable event/receipt roots, exact retry and recovery,
-state-owned export/restore, and zero-PHI support boundary. A production adapter substitutes durable
-custody, deployment, key/authentication, and operational controls while preserving those identities,
-ordering, transactions, and fail-closed behavior. Qualification reruns the same independent
-artifact/database checks, mutation/replay/recovery tests, resource gates, and canonical KATs; a
-semantic or state-interface rewrite is architecture review, not integration.
-
-This seam can qualify for the read-only wedge independently of the private-payment backend; the private clearance path still requires the later Lean, ZK, and custody gates. Status is in `STATE.md`.
+The local database, export/restore, and support seams are production-shaped candidates for
+state-owned persistence and custody adapters. A replacement must preserve canonical artifacts,
+roots/order, exact retry/recovery, transactions, and zero-PHI support behavior; it must pass the
+independent artifact/database, mutation, replay, recovery, resource, and KAT gates. This seam may
+qualify for Mirror independently; private clearance still requires the Lean, Native-v3, and custody
+gates recorded by their owners.
 
 ## Transaction boundary
 
@@ -67,7 +39,7 @@ This seam can qualify for the read-only wedge independently of the private-payme
 The current Queue integration candidate is Profile 11 and remains unqualified, unselected,
 nonactivating, and non-production. Profile 10 and earlier databases, artifact readers, filesystem
 snapshot/refetch paths, and proof-bound disposition receipts are unsupported and fail closed; no
-migration, compatibility reader, fallback, wrapper, relabeling, or dual path exists. Blind state creates a
+migration, compatibility reader, fallback, wrapper, relabeling, or dual path exists. Blind state creates
 exactly 100 fresh state-generated random 32-byte operation references for each batch. Durable queue
 data contains only those opaque references, their immutable positions, the shared state-issued
 allowlisted assertion/profile/version, bounded validity window, ordered batch root, optional
@@ -243,45 +215,28 @@ reader. This is an intentional nonactivating clean break. V3 source/backup byte 
 rejection and V4 retry/recovery are required integration evidence; no cross-version storage
 compatibility, operational migration, production persistence, or real-data upgrade is claimed.
 
-## What the selected proof must establish
+## Evidence and proof boundary
 
-No production proof is selected: the live verifier-selection sentinel is `proofSuiteId=null`,
-`production_usable=false`, and `selection_status=UNSELECTED`. `DIRECT_STATE_OWNED` is a
-verifier-owned synthetic continuity control-set identity, not a selected production evaluator.
+No production proof is selected: `proofSuiteId=null`, `production_usable=false`, and
+`selection_status=UNSELECTED`. A future private proof may establish only its hidden assertion and
+state-issued challenge; the verifier returns an opaque receipt. Policy/disposition, exception
+approval, ordered reads/writes, replay, value conservation, and legal transition remain state/Lean
+responsibilities, and no source identity or witness material may be revealed. Governed ingestion
+checks source signatures over canonical bytes before registry publication; a prover-supplied root is
+not authoritative. Retired backends remain history, not current release or readiness inputs.
 
-The complete selected proof must eventually establish the hidden assertion and its authenticated
-state-issued challenge under the future qualified contract. The verifier returns only proof
-acceptance and a narrow opaque receipt; state-owned policy/disposition control, exception approval,
-ordered state reads/writes, replay protection, value conservation, and the legal transition remain
-state/Lean responsibilities. It may reveal no source identity or raw witness material.
+## Native-v3 handoff
 
-Governed ingestion verifies source signatures over exact canonical bytes once, before registry
-publication. Repeating public signature verification inside every proof is unnecessary when private
-membership in that authenticated registry is proved. A prover-supplied registry root is forbidden.
-
-Retired backend implementations and detailed migration narratives remain available through Git
-history and retained source archives. No current release or readiness path selects them; the live
-verifier-selection contract remains explicitly `UNSELECTED` until an independently reviewed backend
-is selected.
-
-It cannot establish that an authorized source told the truth, that the policy was wise or lawful, or that database operators preserved availability. Those are governance and operational trust boundaries.
-
-## Native-v3 cryptographic authority
-
-`docs/NATIVE_V3_ARCHITECTURE.md` is the sole authority for source-auth profiles, private
-representation and raw-record linking, the strict public allowlist, cryptographic privacy/setup/PQ
-requirements, finite acceptance accounting, theorem composition, exact resource limits, and the
-deployed zero-PHI recoverability gate. This document does not restate those profile or mathematical
-rules. The database instead enforces their state-side consequences: one mode-specific,
-non-dispositive evidence result, atomic reservation before acceptance work, one atomic state
-transaction, and fail-closed retry/recovery.
+`docs/NATIVE_V3_ARCHITECTURE.md` is the sole authority for source-auth profiles, representation,
+public allowlist, privacy/PQ, acceptance accounting, theorem composition, resource limits, and
+zero-PHI recoverability. This document enforces their state-side consequences: one non-dispositive
+evidence result, reservation before acceptance work, one atomic transaction, and fail-closed retry.
 
 ## Qualification measurement handoff
 
-Native-v3 owns the complete-profile measurement boundary and exact SLO/resource rules. This
-document supplies independently attributable evidence for the state-transaction and outbox/ACK
-stages, while preserving atomicity, recovery, and zero-PHI semantics. Component or cached results
-cannot be promoted to complete-profile credit.
+Native-v3 owns complete-profile measurement and exact resource rules. This boundary supplies only
+independently attributable state-transaction and outbox/ACK evidence; component or cached results
+cannot become complete-profile credit.
 
 ## External-chain boundary
 
@@ -302,15 +257,9 @@ the transparent post-quantum or non-ECC root of trust for Blind Ledger. The chec
 carry PHI, be the only durable copy, replace the operational database, authorize payment, or weaken
 mandatory application verification.
 
-## Phase boundary
+## Dependency boundary
 
-- Phase 0: freeze native-v3 statement, typed five-directive receipt, source/exception-registry and
-  state interfaces, threat model, and the declared laptop-class state-side reference/resource
-  baseline.
-- Phase 1: accept the smallest complete native-v3 clearance proof and independent negative-test
-  boundary, including wrong-directive and exception-authorization attacks.
-- Phase 2: qualify fixed-profile batching and the atomic database transition locally with adversarial
-  tests and reproducible complete-process evidence.
-- Later: production database/custody integration, independent audit, operator activation, and
-  optional L1 checkpoint design after its persistence, cost, verifier, key, and PQ-claim boundaries
-  are separately qualified.
+The next semantic dependency is the authorized Lean workstream described in
+`docs/LEAN_FORMAL_KERNEL.md`; the roadmap owns its order. This document owns the database
+transaction, retry, recovery, migration, and checkpoint consequences and does not make a
+production, proof-backend, payment, or activation claim.

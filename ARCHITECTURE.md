@@ -45,7 +45,9 @@ suite. Native-v3 remains a parallel synthetic R&D boundary for later narrow paym
 Mirror is one of RightRail's three customer-facing products. It is the umbrella evidence,
 reconciliation, and operational-visibility product that answers: what actually happened, who was
 responsible, and what money moved? Mirror works from state-held data and state-controlled
-boundaries first. Deep incumbent or vendor telemetry is optional precision, never a V1 dependency.
+boundaries first. Raw source bytes are inspected only at the source boundary; durable Mirror state
+begins with a sanitized observation and opaque verification receipt. Deep incumbent or vendor
+telemetry is optional precision, never a V1 dependency.
 
 Mirror asks six questions:
 
@@ -73,7 +75,7 @@ internal capability views are not separate products:
 | Transition Mirror | Compare incumbent and challenger behavior, unresolved differences, coverage, interface compatibility, export, continuity, and rollback readiness. |
 | Denominator Ledger | Preserve the complete population before later systems narrow it. |
 | Responsibility Graph and corrective-action runtime | Connect obligation to plan/delegate, interface, transaction, failure, corrective action, retest, evidence, and closure. |
-| Provider Trust Graph | Maintain an authoritative evidence-backed view of provider identity, license, sanction/exclusion, ownership, affiliation, taxonomy, location, accreditation, credential, enrollment, effective dates, termination, and reverification. |
+| Provider Trust Graph | Maintain an evidence-backed view of provider identity, license, sanction/exclusion, ownership, affiliation, taxonomy, location, accreditation, credential, enrollment, effective dates, termination, and reverification. |
 | State Value Ledger | Keep one evidence-backed baseline, intervention, calculation, category, and owner for each claimed dollar, counted once. |
 
 North Carolina Provider Enrollment and Credential Continuity is the recommended read-only first
@@ -122,152 +124,62 @@ Behavioral Twin output enters only as a candidate. Historical incumbent behavior
 behavior, ambiguity, or a suspected defect cannot become state policy or automatic enforcement
 without the explicit approval path above.
 
-## Production-shaped patch-in contract
+## Qualification and replacement seams
 
-Blind Ledger and the Mirror/provider-continuity wedge are production-shaped, integration-ready
-candidates. Their canonical business semantics and narrow artifact interfaces are intended to remain
-invariant while production components are qualified and substituted: the five directives,
-`policyResult`/`effectiveDirective` separation, verifier-owned control-set identity and rule order,
-authoritative absence, the four distinct times, decision/access joins, exception identity, canonical
-roots and ordering, immutable state transitions, retry/recovery behavior, and fail-closed parsing.
-Productionization is qualification and adapter substitution, not an architectural replacement.
+Blind Ledger and the Mirror/provider-continuity wedge are production-shaped candidates, not
+qualified deployments. Productionization substitutes authenticated inputs, custody, persistence,
+support, Lean, and the private-proof backend behind fixed interfaces; it does not rewrite the
+five directives, result separation, ownership, roots/order, chronology, state transition, or
+fail-closed behavior. The exact gates live with their component owners.
 
-The fixed production plug-in seams are authenticated source adapters; real governance and
-post-quantum signatures; production persistence and custody; state-owned deployment and support;
-the executable Lean semantic kernel; and a theorem-qualified private-proof backend. The read-only
-provider-continuity wedge may adopt the first four relevant Mirror seams without waiting for the
-private-payment ZK backend. Blind Ledger's private clearance path still requires Lean, ZK, and
-database/custody qualification. Every plug-in must pass the same canonical KATs, independent
-verification, mutation/replay/recovery, and resource gates. An integration that changes the
-canonical directives, result separation, roots/order, authoritative absence, four-time model,
-decision/access join, exception identity, or fail-closed state semantics is not a patch-in and
-requires architecture review.
-
-| Current candidate seam | Production plug-in | Invariant interface | Qualification evidence |
-| --- | --- | --- | --- |
-| Mirror Provider Trust Graph source intake | Authenticated credential/enrollment source adapters | Canonical source coverage, provenance, completeness/nonmembership, findings, snapshots, and transitions | Graph independent verifier and focused mutation/rebound KATs |
-| Governance Control Pack approval/withdrawal | Real governance custody and PQ signatures | External approval bytes, stage/root chain, source-contract and suite roots, observation-only flags | Governance KATs; Withdrawal V1 and lifecycle-head evidence is accepted as synthetic, local/current-Windows candidate evidence |
-| Mirror Continuity V2/Restore V1 | Production database, custody, and deployment state store | Derived chain ID, immutable artifact/event/receipt roots, exact retry, export/restore, heads, and durable approval lifecycle head | 34/34 lifecycle/operational suite; local/current-Windows evidence is not a POSIX claim |
-| Sanitized support boundary | State-owned deployment/support adapter | Allowlist-only diagnostics, bounded telemetry, zero-raw-identifier output | Support isolation and canary tests |
-| Deferred Lean semantic target | Lean executable kernel and narrow native adapter | Canonical semantics, legal transition, replay, decision/access join, and after-state | Theorem/build/axiom and independent-kernel gates defined in `docs/LEAN_FORMAL_KERNEL.md` |
-| Native-v3 private-proof seam | Theorem-qualified transparent PQ backend | Exact hidden-assertion statement, scoped receipt, state-owner binding, and complete security ledger | Six unresolved theorem/composition terms remain in the authoritative status record |
-| Committed later checkpoint | Qualified Ethereum L1 checkpoint adapter | Additive ordered root/checkpoint binding only; no authority or payment mutation | Separate later cadence, verifier, key, custody, and PQ qualification; cadence is not fixed |
+| Current boundary | Future replacement | Contract owner |
+| --- | --- | --- |
+| Mirror source observation, graph, export, and recovery | Authenticated source, state custody, support, and pilot operations | `docs/MIRROR_ARCHITECTURE.md` |
+| Blind Ledger state transaction | Qualified database/custody adapter | `docs/DATABASE_ZK_ARCHITECTURE.md` |
+| Lean semantic target | Pinned executable Lean artifact and narrow native adapter | `docs/LEAN_FORMAL_KERNEL.md` |
+| Native-v3 private-proof boundary | Theorem-qualified PQ backend | `docs/NATIVE_V3_ARCHITECTURE.md` |
+| Later public checkpoint | Governed Ethereum L1 checkpoint adapter | Database boundary owner; not a current dependency |
 
 The term `Continuity State` is reserved for the broad state-owned operational handoff package:
 in-flight claims, authorizations, appeals, provider applications, balances, exceptions,
-configurations, interfaces, and unresolved work. A narrow provider-continuity audit root or
-assessment state must not claim to implement that larger product capability.
+configurations, interfaces, and unresolved work. A narrow provider-continuity assessment must not
+claim to implement that larger capability.
 
-## Pre-admission evidence modes
+## Authority and clearance boundaries
 
-The verifier-owned control set selects exactly one evidence mode before admission. There is no
-runtime fallback, caller-selected downgrade, or failed-proof conversion between modes.
+The state-approved control set selects exactly one evidence mode before admission: `DIRECT_STATE_OWNED`
+for lawfully held canonical plaintext, `AUTHORITATIVE_ASSERTION` for a qualified operation-scoped
+source assertion, or `PRIVATE_ZK` for a hidden source-bound predicate. There is no caller-selected
+downgrade or runtime fallback. A signature or proof establishes only its scoped evidence result;
+`policyResult`, `effectiveDirective`, exceptions, chronology, state mutation, and payment remain
+state-owned. The exact private statement, source binding, privacy, PQ, and resource gates are owned by
+`docs/NATIVE_V3_ARCHITECTURE.md`.
 
-| Mode | Evidence boundary and authority | Proof/signature meaning |
-| --- | --- | --- |
-| `DIRECT_STATE_OWNED` | The state owner evaluates canonical, non-PHI facts that it already lawfully holds. | No signature or ZK wrapper is required merely to re-prove the state's own facts. |
-| `AUTHORITATIVE_ASSERTION` | A government-delegated authoritative source emits an operation-scoped, minimally disclosed derived assertion. | A qualified NIST-PQ signature authenticates source authority, provenance, and scope; it does not establish independent truth or source honesty and never selects disposition. |
-| `PRIVATE_ZK` | The state independently verifies a predicate over hidden source-bound data under a source-attested proof-native representation and a fresh operation reference. | Proof acceptance establishes only the hidden assertion/predicate. It does not establish policy, state transition, chronology, directive, exception authority, outbox, or ACK. |
-
-The state-approved control set fixes the mode, evaluator identity, profile, and source boundary before
-a request is admitted. `policyResult` and `effectiveDirective` remain state-owned and distinct in all
-three modes. Proof or signature acceptance never equals `CLEAR`. `proofSuiteId` belongs only to
-`PRIVATE_ZK`; it remains null and unactivated until that complete private profile qualifies.
-
-An undisclosed payment-relevant assertion affecting automation cannot receive authority from a
-caller Boolean, host comparison, commitment alone, or a classical-only fallback. In
-`AUTHORITATIVE_ASSERTION`, the genuine source signs the narrow operation-scoped assertion when its
-contract delegates canonicalization or derivation to that source; the signature establishes
-authority, provenance, and scope, not source truth. In `PRIVATE_ZK`, a source-attested proof-native
-representation is linked to the hidden predicate under the current operation reference; an
-independent raw-record link, if required by the source contract, remains part of the proof relation.
-Signed unrelated dual commitments are not an equality bridge. The exact source-binding, custody,
-zero-PHI recoverability, and cryptographic qualification rules are normative in
-`docs/NATIVE_V3_ARCHITECTURE.md`; this system-boundary document does not restate them.
-
-## Clearance contract
-
-The state-local verified receipt carries both the underlying deterministic result and the effective
-directive. The fixed directive set is:
+The fixed state-local directives are:
 
 | Directive | Meaning | Automatic economic effect |
 | --- | --- | --- |
-| `CLEAR` | Every selected deterministic check passed. | May release exactly the committed amount to the official payment system. |
+| `CLEAR` | Every selected deterministic check passed. | May release the committed amount to the official payment system. |
 | `HOLD` | A fixable deterministic requirement is missing. | No release. |
-| `HUMAN_REVIEW` | Judgment, ambiguity, unavailable authority, or additional evidence is required. | No automatic release. |
+| `HUMAN_REVIEW` | Judgment, ambiguity, unavailable authority, or more evidence is required. | No automatic release. |
 | `BLOCK` | A clear state-approved deterministic condition failed. | No release. |
-| `EXCEPTION_APPROVED` | A scoped, current, authorized state override permits the payment despite the underlying result. | May release only within the override's exact scope, amount, and expiry. |
+| `EXCEPTION_APPROVED` | A separately governed current override authorizes a scoped exception. | May release only within its exact scope, amount, and expiry. |
 
-`EXCEPTION_APPROVED` is not a prover-selected escape hatch. It requires a separately governed,
-signed, immutable exception-authorization record. The receipt preserves the underlying policy
-result, rule, reason, approver authority, scope, and expiry so an override never erases the original
-decision trail.
-
-Every admitted attempt advances replay/audit state with one fixed observable shape, including
-`HOLD`, `HUMAN_REVIEW`, and `BLOCK`. Economic clearance state changes only for `CLEAR` or a valid
-`EXCEPTION_APPROVED`. A missing, malformed, stale, or failed proof produces no directive. A state
-may operate a separately authorized emergency bypass for continuity, but that is a signed human
+Every admitted attempt advances replay/audit state. Only `CLEAR` or a valid
+`EXCEPTION_APPROVED` may advance economic clearance state. A missing, malformed, stale, or failed
+evidence result produces no directive. An emergency continuity action is a separately signed human
 override recorded by Mirror, never a verifier failure relabelled as `CLEAR`.
 
-## Private-proof path
+The authority chain is:
 
-```text
-operation-scoped signed source assertion or source-bound commitment
-        |
-source-local custody and fixed-profile public statement
-        |
-fresh operation reference/challenge plus strict public allowlist
-        |
-private proof of the hidden source-bound assertion/predicate only
-        |
-independent native verifier
-        |
-opaque scoped verification receipt/outcome
-        |
-state-owned policy and transition evaluation
-        |
-one atomic clearance-state transaction and opaque outbox/ACK
-```
-
-The private proof relation does not own or emit policy result, effective directive, the five-directive
-mapping, exception approval, state transition, chronology, outbox, or ACK. Lean and the clearance-state
-transaction own those semantics. The exact strict public handoff allowlist and its zero-PHI exclusions
-are normative in `docs/NATIVE_V3_ARCHITECTURE.md`; state-side context and audit identities remain
-outside that handoff.
-
-## Executable formal kernel
-
-Lean 4 is the authorized next formal workstream for the smallest executable semantic and legal
-state-transition kernel; it is not implemented or linked in the current candidate. It owns the five-directive evaluator, `policyResult`/`effectiveDirective` separation,
-control-set semantics, authoritative absence, chronology, governed exceptions, observation-only
-separation, bounded canonical semantic decoding, replay, the exact decision/access join, and
-allowed after-state.
-
-Rust retains cryptographic proof acceptance, transcript and proof-envelope verification, and the
-native operating boundary. The database retains concurrency, durability, recovery, and committed
-operational state. For the private path, Rust proof acceptance and Lean semantic acceptance are
-both necessary before the database may commit. For the direct path, the Lean kernel evaluates the
-canonical governed plaintext input. Any disagreement rejects.
-
-The Lean kernel is a future production plug-in, not a replacement for the canonical semantics.
-Current qualification status is authoritative in `STATE.md` and `CURRENT_TASK.md`;
-`docs/LEAN_FORMAL_KERNEL.md` defines the theorem manifest, executable correspondence, admitted
-assumptions, CI gates, and implementation order.
-
-## Authority boundaries
-
-| Component | Establishes | Does not establish |
+| Owner | Provides | Cannot provide |
 | --- | --- | --- |
-| State Control Pack governance | Which deterministic rules and exceptions are approved, scoped, effective, tested, and eligible for automatic enforcement | That a source fact is honest or that an ambiguous policy question has one mechanical answer |
-| Governed ingestion | Signature validity, signer authority, canonical bytes, validity interval, typed immutable registry membership | Real-world truth or policy wisdom |
-| ZK proof | One hidden source-bound assertion/predicate opens its operation-scoped hiding commitment and is independently verified | Policy, state transition, chronology, directive, exception authority, outbox/ACK, source honesty, database durability, actual funds movement, or activation |
-| Authoritative assertion | A qualified PQ signature authenticates an operation-scoped source assertion's authority, provenance, and scope | Independent truth, source honesty, policy, directive, state transition, or payment |
-| Native verifier | Canonical parsing, transcript reconstruction, proof acceptance, and the narrow typed evidence receipt | Policy, directive, state transition, payment, or activation without the state owner and database |
-| Blind Ledger database | Clearance state, concurrency, idempotency, recovery, and the accepted transition | Bank-account settlement or cryptographic truth without the native receipt |
+| State Control Pack | Approved rules, scope, effective interval, tests, and exceptions | Source truth or an answer to an ambiguous policy question |
+| Native verifier / source assertion | Canonical parsing and scoped evidence acceptance | Policy, directive, transition, payment, or activation |
+| Lean target | Deterministic semantic meaning and legal local transition once implemented and linked | Source truth, cryptographic soundness, database durability, or funds movement |
+| Blind Ledger database | Atomic clearance state, concurrency, idempotency, and recovery | Bank settlement or cryptographic truth without its evidence input |
+| Mirror | Evidence-backed observation, reconciliation, responsibility, and RightRail failure records | Facts beyond received evidence or clearance authority |
 | Official payment system | Actual disbursement under state authority | Proof correctness or independent operating truth |
-| Mirror | Evidence-backed observation, reconciliation, responsibility attribution, and Blind Ledger's own failures | Facts beyond the evidence it actually receives |
-| Lean semantic kernel target | Exact deterministic clearance meaning and legal local transition once implemented and linked | Source truth, policy wisdom, cryptographic soundness, database durability, or funds movement |
-| Optional future checkpoint | Timestamped public commitment | Operational authority, source honesty, availability, or money movement |
 
 ## Operating, deployment, and commercial isolation
 
@@ -314,25 +226,8 @@ current-source lanes plus an explicit three-file compatibility closure; no retai
 keep map. Markdown under retired experiment or protected-proof lanes is forbidden; current
 prohibitions live only in `docs/REJECTED_ARCHITECTURES.md`.
 
-## Active target
-
-- `docs/NATIVE_V3_ARCHITECTURE.md` is the private-proof, security, state, and resource qualification
-  authority.
-- `docs/DATABASE_ZK_ARCHITECTURE.md` owns the verifier-to-clearance-database transaction boundary.
-- `docs/LEAN_FORMAL_KERNEL.md` owns the approved formal semantic/state-transition target and
-  theorem gates; it is not implemented evidence yet.
-- `app/transactional_database_boundary.py` is the retained local, synthetic transaction reference;
-  it is not a production selection.
-- Full-width SHA3-512 identifiers remain externally authoritative.
-- `docs/NATIVE_V3_ARCHITECTURE.md` is the sole authority for the exact source-auth profile, private
-  representation and link relation, cryptographic theorem/accounting, PQ/privacy/setup, zero-PHI
-  deployment, resource, and complete-profile measurement gates. This system boundary remains
-  nonactivating until those Native-v3 gates are closed; no component or profile is selected here.
-- RightRail corporate, routine support, monitoring, analytics, and AI systems receive zero PHI.
-
-The rejected directions and their governing reasons are recorded once in
+Rejected directions and their governing reasons are recorded once in
 [`docs/REJECTED_ARCHITECTURES.md`](docs/REJECTED_ARCHITECTURES.md); they are not active owners,
-release inputs, or qualification evidence.
-
-Current qualification status, nonactivation flags, the process-tree ceiling, and the private-proof
-blocker are authoritative in `STATE.md`; the current bounded phase is recorded in `CURRENT_TASK.md`.
+release inputs, or qualification evidence. Exact technical gates and current qualification status
+remain in their named owner documents, `STATE.md`, and `CURRENT_TASK.md`; this file does not create
+a second readiness record.

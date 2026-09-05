@@ -33,82 +33,42 @@ being misread as a universal private-proof gate:
 | `BL-OFFICIAL-RECEIVER` | Activation of any mode that emits an operative clearance directive |
 | `BL-GOVERNMENT-CONNECTORS` | Activation of any mode using official external authority |
 
-## Current integrated workstream
+## Current position
 
-The integrated candidate now contains Cleanup's reviewed source closure and the operator's shared
-privacy, release-policy, and documentation-governance delta. The final source reduction removes
-five unreachable legacy money-chain modules and two obsolete money tests; the surviving proof-
-primitives test retains top-level and nested float rejection. The executable map is 218 tracked
-paths: 186 current source, 3 explicitly retained compatibility modules, 3 source-only, and 26
-excluded generated/private paths. The default selection is 189 (186 + 3); 29 remain unselected.
-Prefix membership is a classification hint only, and deleted compatibility entries are not retained
-in a blanket keep map.
-
-The final bounded gates are the privacy, builder, manifest, documentation, active-core/security,
-direct-state, native boundary, operations-authority, qualification, strict-compilation, structural
-privacy, and extracted-builder/readback checks. This workstream does not change application trust
-boundaries, operations bytes, verifier semantics, activation, or the read-only/nonpayment claim.
-Source-only harnesses, generated/private artifacts, and failed privacy gates remain excluded.
+The current candidate is a nonactivating, unselected integration of the reviewed source/release
+closure and Mirror observation boundary. `STATE.md` owns the measured release counts and retained
+gate evidence; `CURRENT_TASK.md` owns the active bounded work and unresolved identities. This
+roadmap does not create a second readiness record or change application trust boundaries, operations
+bytes, verifier semantics, activation, or the read-only/nonpayment claim. Source-only harnesses and
+generated/private artifacts remain outside release selection.
 
 ## Completed foundation
 
-1. Freeze the five directives and ten verifier-facing statement fields in the strict public
-   allowlist; state-side context and audit identities remain outside that handoff.
-2. Preserve `policyResult` separately from `effectiveDirective`.
-3. Bind governed exception identity, event/observation/rule-effective/decision times, replay and
-   retry identity, before/after state, and the exact decision/access join.
-4. Implement cross-language Phase-0 KATs and fourteen negative mutation classes.
-5. Implement the synthetic trust-boundary protocol profile and independent Rust parser/verifier.
-6. Implement the synthetic read-only provider credential/enrollment continuity wedge with a fixed
-   verifier-owned `DIRECT_STATE_OWNED` control set, authoritative absence evidence, all five
-   directives, focused tests, independent parsing, and bounded direct-path telemetry.
+The foundation freezes the five directives, separates `policyResult` from `effectiveDirective`,
+binds governed exceptions/times/roots/retry/access joins, and retains cross-language KATs plus
+negative mutation coverage. It also contains the synthetic Native-v3 boundary and the read-only
+Mirror/Provider Trust Graph continuity candidate. Their exact contracts and evidence belong to
+their owner documents and `STATE.md`.
 
-## Authorized formal-kernel workstream
+## Next formal dependency
 
-The formal-kernel workstream is the next authorized semantic-authority dependency after the current
-documentation/release integrity pass. No Lean implementation or deployed link exists in the current
-candidate. Lean remains mandatory before a production direct evaluator or private proof can authorize
-a clearance transition; this roadmap records the dependency and its gates without claiming that they
-have passed.
+The authorized next semantic dependency is the Lean formal kernel. No implementation or deployed
+link exists. Before any production direct evaluator or private proof can authorize a clearance
+transition, the workstream must pin the project and theorem statements, implement the evaluator and
+bounded decoder, prove the required semantic/state properties, compile one pinned artifact behind a
+narrow Rust adapter, and pass theorem-manifest, axiom, independent-kernel, KAT, mutation, and
+resource gates. `docs/LEAN_FORMAL_KERNEL.md` is the exact authority; a separate model, differential
+test, or generated vector is not formal-verification credit.
 
-Before a production direct evaluator or private proof can authorize a clearance transition:
+## Current private-proof position
 
-1. Pin a small Lean 4 project and freeze the semantic types and theorem statements against the
-   existing Phase-0 and continuity V2 vectors.
-2. Implement the executable five-directive evaluator, control-set selection, authoritative
-   absence, chronology, exception, observation-only separation, replay, exact decision/access join,
-   and legal state transition.
-3. Implement bounded canonical semantic decoding and prove round-trip and injectivity properties.
-4. Prove determinism, proof-acceptance separation, non-clear nonmutation, exact exception scope,
-   wrong-control-set rejection, replay preservation, join uniqueness, and append-only checkpoint
-   chaining.
-5. Compile the Lean kernel to one pinned native artifact behind a narrow Rust adapter. Any
-   Rust/Lean mismatch rejects.
-6. Gate clean builds on the theorem manifest, admitted-axiom inventory, independent kernel check,
-   cross-language KATs, mutation tests, and resource measurements.
-
-`docs/LEAN_FORMAL_KERNEL.md` is the exact authority. A separate model, differential test, or
-generated vector alone is not deployed formal-verification credit.
-
-## Current private-proof blocker
-
-The current Queue/Proof Handoff integration candidate is Profile 11 and defers to
-`docs/DATABASE_ZK_ARCHITECTURE.md` for transaction semantics and
-`docs/NATIVE_V3_ARCHITECTURE.md` for exact profile identity, mechanical pins, and qualification
-gates; this roadmap records only dependency status. Profile 10 and earlier profiles are rejected
-with no fallback, compatibility reader, relabeling, or dual acceptance. The current Profile 11
-Queue/Native proof boundary is mechanically interoperable but cryptographically unqualified; it is
-not a selected private-proof backend, and its clean-break, state-owned, non-dispositive, fail-closed
-semantics do not establish an active backend, qualification, Lean completion, or product-throughput
-claim. It remains `proofSuiteId=null`, `production_usable=false`, and `activation=false`; proof
-acceptance yields only an opaque verification outcome and never `CLEAR`. State alone owns chronology,
-`policyResult`, `effectiveDirective`, exceptions, disposition, retries, economic state, and outbox.
-
-Before selecting or implementing a private backend, the complete profile must close the exact
-source-binding, privacy/setup, PQ, acceptance-accounting, theorem-composition, zero-PHI deployment,
-resource, and measurement gates defined normatively in `docs/NATIVE_V3_ARCHITECTURE.md`. This roadmap
-owns their applicability and dependency order, not a second copy of their arithmetic or profile
-requirements.
+The Queue/Proof Handoff candidate is Profile 11. It is mechanically interoperable but
+cryptographically unqualified, unselected, nonactivating, and non-production; proof acceptance is
+opaque evidence and never `CLEAR`. Profile 10 and earlier paths are rejected without fallback,
+compatibility readers, relabeling, or dual acceptance. State owns disposition and transition
+semantics; the database document owns transaction behavior; `docs/NATIVE_V3_ARCHITECTURE.md` owns
+the exact Profile 11 identity, source binding, privacy/PQ, resource, and complete-profile gates.
+`proofSuiteId=null`, `production_usable=false`, and `activation=false` remain fixed.
 
 ## Next implementation after theorem closure
 

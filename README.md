@@ -16,8 +16,8 @@ transition atomically. Lawfully state-owned plaintext may use the verifier-owned
 control set without a purposeless ZK wrapper. Proof or signature acceptance is never `CLEAR`, and
 `policyResult` remains distinct from `effectiveDirective`.
 
-This is a production-shaped, integration-ready candidate, but current evidence is synthetic,
-local/current-Windows, and nonactivating: `proofSuiteId=null`, `production_usable=false`, and
+This is a production-shaped candidate, but current evidence is synthetic, local/current-Windows,
+and nonactivating: `proofSuiteId=null`, `production_usable=false`, and
 `activation=false`. No real PHI, live credentials, payment movement, production proof backend, or
 deployed Lean kernel is authorized. Productionization is qualification and adapter substitution,
 not a semantic rewrite.
