@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import replace
 import hashlib
 from pathlib import Path
+import shutil
 import sqlite3
 from threading import Lock
 
@@ -241,6 +243,92 @@ def _direct_state_values(path: Path) -> tuple[bytes, int, bytes, int, int, str]:
         int(direct[1]),
         int(direct[3]),
         str(transition[0]),
+    )
+
+
+def _make_v3_direct_only_fixture(path: Path) -> bytes:
+    """Build a direct-only schema-3 image for the intentional clean-break gate."""
+
+    current = DirectStateOwnedAtomicClearanceV1(path=path)
+    current.close()
+    with closing(sqlite3.connect(path)) as connection:
+        metadata_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='metadata'"
+        ).fetchone()
+        assert metadata_sql is not None
+        sql = str(metadata_sql[0])
+        old_clause = "schema_version INTEGER NOT NULL CHECK (schema_version = 4)"
+        new_clause = "schema_version INTEGER NOT NULL CHECK (schema_version = 3)"
+        assert sql.count(old_clause) == 1
+        connection.execute("PRAGMA writable_schema=ON")
+        connection.execute(
+            "UPDATE sqlite_master SET sql=? WHERE type='table' AND name='metadata'",
+            (sql.replace(old_clause, new_clause),),
+        )
+        connection.execute("PRAGMA writable_schema=OFF")
+        connection.commit()
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("UPDATE metadata SET schema_version=3 WHERE id=1")
+        connection.commit()
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+    with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        assert connection.execute("PRAGMA journal_mode=DELETE").fetchone() == ("delete",)
+    assert tables == {
+        "audit_events",
+        "configuration",
+        "database_genesis",
+        "direct_clearance_requests",
+        "direct_clearance_state",
+        "governance_authorities",
+        "metadata",
+        "state",
+        "transition_records",
+    }
+    assert not any(
+        Path(f"{path}{suffix}").exists()
+        for suffix in ("-wal", "-shm", "-journal")
+    )
+    return path.read_bytes()
+
+
+def test_schema_v3_clean_break_rejects_without_mutation(tmp_path: Path) -> None:
+    v3_path = tmp_path / "schema-v3.sqlite3"
+    v3_before = _make_v3_direct_only_fixture(v3_path)
+
+    with pytest.raises(ProductionBoundaryError, match="database_schema_version_mismatch"):
+        DirectStateOwnedAtomicClearanceV1(path=v3_path)
+    assert v3_path.read_bytes() == v3_before
+    assert not any(
+        Path(f"{v3_path}{suffix}").exists()
+        for suffix in ("-wal", "-shm", "-journal")
+    )
+
+    backup_path = tmp_path / "schema-v3-backup.sqlite3"
+    shutil.copyfile(v3_path, backup_path)
+    backup_before = backup_path.read_bytes()
+    recovered_path = tmp_path / "schema-v3-recovered.sqlite3"
+    current_v4 = DirectStateOwnedAtomicClearanceV1(
+        path=tmp_path / "schema-v4-source.sqlite3"
+    )
+    with pytest.raises(ProductionBoundaryError, match="database_schema_version_mismatch"):
+        current_v4.recover_from_backup(
+            backup_path=backup_path,
+            recovered_path=recovered_path,
+        )
+    current_v4.close()
+    assert backup_path.read_bytes() == backup_before
+    assert not recovered_path.exists()
+    assert not any(
+        Path(f"{recovered_path}{suffix}").exists()
+        for suffix in ("-wal", "-shm", "-journal")
     )
 
 
