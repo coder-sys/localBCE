@@ -26,9 +26,9 @@ operator commit `f5eb205962ec8285b4b5764429535b9f506041ff`).
 
 ## Current release closure
 
-The integrated tracked tree contains 225 paths. The executable policy classifies 193 as current
+The integrated tracked tree contains 218 paths. The executable policy classifies 186 as current
 source, 3 as retained compatibility, 3 as source-only, and 26 as excluded generated/private;
-unknown, retired, and legacy lanes are empty. The default selection is 196 paths (193 current +
+unknown, retired, and legacy lanes are empty. The default selection is 189 paths (186 current +
 the following three reviewed compatibility modules), leaving 29 unselected:
 
 - `app/batch/__init__.py`
@@ -38,6 +38,13 @@ the following three reviewed compatibility modules), leaving 29 unselected:
 Cleanup deleted the formerly listed compatibility inputs. The policy now contains no stale deleted
 dependency entries and no obsolete `LEGACY_NONCURRENT` registry; retained-prefix hints never select
 by themselves, and unknown or retired paths still fail closed.
+
+The integrated source-reduction successor is `d9220535a68d652dd491fdcaa184b04068014016`, the
+rebased eight-file change from immutable Cleanup input `52b441c138b9577122303aaf1d1769fca2d82e4b`.
+It removes the five unreachable legacy money-chain modules and two obsolete money tests, while
+retaining top-level and nested float rejection in
+`tests/test_minimal_clearance_proof_primitives.py`. A repository caller search found no remaining
+imports or references to the deleted modules.
 
 ## Verified integration work
 

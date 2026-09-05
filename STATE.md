@@ -15,13 +15,13 @@ The current release map is executable and rooted in the actual integrated tree:
 
 | Lane | Count | Selection |
 | --- | ---: | --- |
-| Current source | 193 | selected |
+| Current source | 186 | selected |
 | Retained compatibility | 3 | selected only by explicit closure |
 | Source-only | 3 | unselected |
 | Excluded generated/private | 26 | unselected |
 | Unknown/retired/legacy | 0 | fail-closed if introduced |
-| Tracked total | 225 | — |
-| Default selection | 196 | 193 current + 3 retained |
+| Tracked total | 218 | — |
+| Default selection | 189 | 186 current + 3 retained |
 | Unselected total | 29 | — |
 
 The retained compatibility closure is exactly `app/batch/__init__.py`, `app/batch/poseidon.py`,
@@ -78,6 +78,13 @@ current evidence.
   with SHA-256 `466A704DD9CE3F812FB19A73EABC44EB922113922C805B7AD17DEEB29D52A1DD`. This is an
   unresolved trust-critical source identity, not a failed predicate to weaken; no protected
   native-v3 source fix was applied.
+- The integrated source-reduction successor `d9220535a68d652dd491fdcaa184b04068014016` removes
+  five unreachable legacy money-chain modules and two obsolete money tests from immutable Cleanup
+  input `52b441c138b9577122303aaf1d1769fca2d82e4b`. The surviving proof-primitives test retains
+  both top-level and nested float rejection; repository-wide caller search found no remaining
+  imports or references to the deleted modules. The executable release map is now 218 tracked,
+  186 current source, 3 retained compatibility, 3 source-only, 26 excluded generated/private,
+  and 189 selected.
 
 ## Database V4 clean break
 

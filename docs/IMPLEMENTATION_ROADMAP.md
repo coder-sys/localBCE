@@ -36,11 +36,13 @@ being misread as a universal private-proof gate:
 ## Current integrated workstream
 
 The integrated candidate now contains Cleanup's reviewed source closure and the operator's shared
-privacy, release-policy, and documentation-governance delta. The executable map is 225 tracked paths:
-193 current source, 3 explicitly retained compatibility modules, 3 source-only, and 26 excluded
-generated/private paths. The default selection is 196 (193 + 3); 29 remain unselected. Prefix
-membership is a classification hint only, and deleted compatibility entries are not retained in a
-blanket keep map.
+privacy, release-policy, and documentation-governance delta. The final source reduction removes
+five unreachable legacy money-chain modules and two obsolete money tests; the surviving proof-
+primitives test retains top-level and nested float rejection. The executable map is 218 tracked
+paths: 186 current source, 3 explicitly retained compatibility modules, 3 source-only, and 26
+excluded generated/private paths. The default selection is 189 (186 + 3); 29 remain unselected.
+Prefix membership is a classification hint only, and deleted compatibility entries are not retained
+in a blanket keep map.
 
 The final bounded gates are the privacy, builder, manifest, documentation, active-core/security,
 direct-state, native boundary, operations-authority, qualification, strict-compilation, structural
