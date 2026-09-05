@@ -1,5 +1,5 @@
 {
-  "schema": "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH-MANIFEST/v1",
+  "schema": "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH-MANIFEST/v2",
   "profile": "BLIND-ZKBPP-RANGE100-CDG-DIRECT-SEEDED-V1",
   "topology": {
     "batch_operations": 100,
@@ -29,29 +29,63 @@
       "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-zkbpp-c-profile11-extmu-v1",
       "head": "9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2",
       "tree": "178a5f20c6738f7272cd38f77315da83650bbac0"
-    },
-    "queue": {
-      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-09-04\\blind-queue-receiver-binding-v1",
-      "head": "1cc7c092a42140d99a3b8e6e52ba419fc770c7fd",
-      "tree": "b058d3d77c483f8b71e50bcba22c28d6cd403c81"
     }
   },
   "python_source_binding": {
-    "references_git_pin": "queue",
     "canonical_package": "app",
+    "content_hash": "git-blob-sha1",
+    "source_root": {
+      "relative_to": "manifest_parent",
+      "relative_path": ".",
+      "max_depth": 0
+    },
+    "git_clean_required": true,
     "source_only_cache_handling": true,
-    "fallback": false
+    "fallback": false,
+    "required_modules": {
+      "app": {
+        "path": "app/__init__.py",
+        "git_blob": "75bbf4ba2446feb54ba8516abe2a135925215320"
+      },
+      "app.minimal_clearance_composition": {
+        "path": "app/minimal_clearance_composition.py",
+        "git_blob": "131e6e9649483791b6799c0eefa48d54e5293cf5"
+      },
+      "app.minimal_clearance_composition_independent": {
+        "path": "app/minimal_clearance_composition_independent.py",
+        "git_blob": "466a27bbc9a3aee21333d210c824d938876b0072"
+      },
+      "app.minimal_clearance_resource_limits": {
+        "path": "app/minimal_clearance_resource_limits.py",
+        "git_blob": "56e57ebb3618b5ab090165f6a8ab93be70cd9c7c"
+      },
+      "app.minimal_clearance_source_auth_verifier_adapter": {
+        "path": "app/minimal_clearance_source_auth_verifier_adapter.py",
+        "git_blob": "f4ae20452717683c1182631c5b0c5850d9c78c6f"
+      },
+      "app.minimal_clearance_verification_queue": {
+        "path": "app/minimal_clearance_verification_queue.py",
+        "git_blob": "6f941f638873ad505c30aa1bf862e083e7019762"
+      },
+      "app.minimal_clearance_verification_queue_independent": {
+        "path": "app/minimal_clearance_verification_queue_independent.py",
+        "git_blob": "f700e2036f851a98f77382bb08dda7e728403fea"
+      },
+      "app.minimal_clearance_verification_runtime": {
+        "path": "app/minimal_clearance_verification_runtime.py",
+        "git_blob": "4d1858211e7d3bbf814c571ca6b38715ecf0315d"
+      },
+      "app.minimal_clearance_verifier_process": {
+        "path": "app/minimal_clearance_verifier_process.py",
+        "git_blob": "f8b35e452c94f539c3ba002fb1e7510752d6d2a5"
+      }
+    }
   },
   "file_pins": {
     "producer_executable": {
       "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\blind-zkbpp-range100-profile11-seeded-v1\\target\\release\\blind_range100_prove_cdg_direct.exe",
       "bytes": 423936,
       "sha256": "C4BD6BC6D5399149010E100D5F9737412F4CC5EF6AAAC2B187486BE0DEEBFB4E"
-    },
-    "source_host": {
-      "path": "experiments/profile11_source_host/target/release/profile11_source_host.exe",
-      "bytes": 480768,
-      "sha256": "3D2C0A468303E68AA63B2A6A52BA922422231695D589ED1562E4F1CA3A8F5562"
     },
     "c_verifier": {
       "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-31\\build-profile11-throughput-v1\\Release\\blind_source_auth_verify_process_v1.exe",

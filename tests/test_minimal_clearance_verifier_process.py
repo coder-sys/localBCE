@@ -373,6 +373,23 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         second = os.pipe()
         return [first[1], second[1]], [first[0], second[0]]
 
+    @staticmethod
+    def _contained_result(*, timed_out: bool = False) -> process.ContainedVerifierResult:
+        return process.ContainedVerifierResult(
+            exit_code=0,
+            stdout=b"",
+            stderr=b"",
+            peak_job_commit_bytes=1,
+            cap_bytes=process.ADMISSION_CAP_BYTES,
+            cap_enforced=True,
+            active_process_limit=process.ACTIVE_PROCESS_LIMIT,
+            timed_out=timed_out,
+            child_process_count=1,
+            process_tree_complete=True,
+            measurement_complete=True,
+            cleanup_complete=True,
+        )
+
     def test_handle_list_is_exact_and_attribute_cleanup_is_ordered(self):
         kernel = _Kernel()
         parent, readers = self._descriptors()
@@ -446,26 +463,29 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                                 expected_executable_sha256=expected_hash,
                             )
 
-    def test_per_call_output_caps_are_validated_before_windows_boundary(self):
+    def test_per_call_output_caps_and_encodings_are_validated_before_windows_boundary(self):
         payload = b"output-cap-validation"
         digest = hashlib.sha256(payload).digest()
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)
             executable = root / "verifier.exe"
             executable.write_bytes(payload)
-            for name, keyword, value in (
-                ("stdout", "stdout_cap_bytes", 0),
-                ("stderr", "stderr_cap_bytes", 0),
-                ("stdout_bool", "stdout_cap_bytes", True),
-                ("stderr_large", "stderr_cap_bytes", process.STREAM_MAX_AGGREGATE_BYTES + 1),
-            ):
+            cases = (
+                ("stdout_zero", "stdout_cap_bytes", 0, "verifier_stdout_cap"),
+                ("stderr_zero", "stderr_cap_bytes", 0, "verifier_stderr_cap"),
+                ("stdout_bool", "stdout_cap_bytes", True, "verifier_stdout_cap"),
+                ("stderr_large", "stderr_cap_bytes", process.STREAM_MAX_AGGREGATE_BYTES + 1, "verifier_stderr_cap"),
+                ("stdout_encoding", "stdout_ascii", 1, "verifier_stdout_encoding"),
+                ("stderr_encoding", "stderr_ascii", None, "verifier_stderr_encoding"),
+            )
+            for name, keyword, value, error_code in cases:
                 with self.subTest(name=name):
                     with patch.object(
                         process.ctypes,
                         "WinDLL",
-                        side_effect=AssertionError("invalid output cap reached Win32 boundary"),
+                        side_effect=AssertionError("invalid stream parameter reached Win32 boundary"),
                     ):
-                        with self.assertRaisesRegex(process.VerifierProcessError, f"verifier_{keyword[:-6]}"):
+                        with self.assertRaisesRegex(process.VerifierProcessError, error_code):
                             process.run_contained_verifier(
                                 executable,
                                 (),
@@ -475,17 +495,26 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                                 expected_executable_sha256=digest,
                                 **{keyword: value},
                             )
-            with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stdout_cap"):
-                process.run_contained_verifier_stream(
-                    executable,
-                    (),
-                    b"frame",
-                    workspace=root,
-                    timeout_seconds=1.0,
-                    expected_executable_size_bytes=len(payload),
-                    expected_executable_sha256=digest,
-                    stdout_cap_bytes=0,
-                )
+            stream_cases = (
+                ("stream_stdout_cap", {"stdout_cap_bytes": 0}, "verifier_stdout_cap"),
+                ("stream_stderr_encoding", {"stderr_ascii": 1}, "verifier_stderr_encoding"),
+                ("stream_input_type", {"expected_input_bytes": True}, "verifier_stream_input_length"),
+                ("stream_input_zero", {"expected_input_bytes": 0}, "verifier_stream_input_length"),
+                ("stream_input_large", {"expected_input_bytes": process.STREAM_MAX_FRAME_BYTES + 1}, "verifier_stream_input_length"),
+            )
+            for name, kwargs, error_code in stream_cases:
+                with self.subTest(name=name):
+                    with self.assertRaisesRegex(process.VerifierProcessError, error_code):
+                        process.run_contained_verifier_stream(
+                            executable,
+                            (),
+                            b"frame",
+                            workspace=root,
+                            timeout_seconds=1.0,
+                            expected_executable_size_bytes=len(payload),
+                            expected_executable_sha256=digest,
+                            **kwargs,
+                        )
 
     def test_stream_expected_input_length_rejects_off_by_one_before_pipe(self):
         executable = Path(sys.executable)
@@ -505,6 +534,504 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                             expected_executable_sha256=hashlib.sha256(payload).digest(),
                             expected_input_bytes=9_468,
                         )
+
+    def test_stream_forwards_caller_bounds_and_encoding_to_contained_runner(self):
+        captured: dict[str, object] = {}
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+        contained = process.ContainedVerifierResult(
+            exit_code=0,
+            stdout=b"\x00\xff",
+            stderr=b"",
+            peak_job_commit_bytes=1,
+            cap_bytes=process.ADMISSION_CAP_BYTES,
+            cap_enforced=True,
+            active_process_limit=process.ACTIVE_PROCESS_LIMIT,
+            timed_out=False,
+            child_process_count=1,
+            process_tree_complete=True,
+            measurement_complete=True,
+            cleanup_complete=True,
+        )
+
+        def runner(*args: object, **kwargs: object) -> process.ContainedVerifierResult:
+            captured["args"] = args
+            captured.update(kwargs)
+            return contained
+
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            with patch.object(process, "run_contained_verifier", side_effect=runner):
+                result = process.run_contained_verifier_stream(
+                    executable,
+                    (),
+                    b"frame",
+                    workspace=workspace,
+                    timeout_seconds=1.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    stdout_cap_bytes=64,
+                    stderr_cap_bytes=8,
+                    stdout_ascii=False,
+                    stderr_ascii=True,
+                    expected_input_bytes=5,
+                )
+            self.assertIs(result, contained)
+            self.assertEqual(captured["stdout_cap_bytes"], 64)
+            self.assertEqual(captured["stderr_cap_bytes"], 8)
+            self.assertIs(captured["stdout_ascii"], False)
+            self.assertIs(captured["stderr_ascii"], True)
+            self.assertIsInstance(captured["_stdin_descriptor"], int)
+            self.assertGreaterEqual(captured["_stdin_descriptor"], 0)
+            self.assertEqual(captured["expected_executable_size_bytes"], len(payload))
+            self.assertEqual(captured["expected_executable_sha256"], hashlib.sha256(payload).digest())
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    def test_stream_writer_start_failure_releases_known_open_descriptors(self):
+        real_pipe = os.pipe
+        descriptors: list[int] = []
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+
+        def pipe_factory():
+            pair = real_pipe()
+            descriptors.extend(pair)
+            return pair
+
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
+                 patch.object(process.threading.Thread, "start", side_effect=RuntimeError("start")), \
+                 patch.object(process, "run_contained_verifier", side_effect=AssertionError("runner reached")):
+                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_start"):
+                    process.run_contained_verifier_stream(
+                        executable,
+                        (),
+                        b"frame",
+                        workspace=workspace,
+                        timeout_seconds=1.0,
+                        expected_executable_size_bytes=len(payload),
+                        expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    )
+            self.assertEqual(len(descriptors), 2)
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    def test_stream_writer_accounts_for_partial_and_zero_writes(self):
+        real_pipe = os.pipe
+        real_write = os.write
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+        frame = b"abcdef"
+
+        for mode in ("partial", "zero"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as root_name:
+                workspace = Path(root_name)
+                descriptors: list[int] = []
+                write_descriptor: int | None = None
+                write_complete = threading.Event()
+                write_total = 0
+
+                def pipe_factory():
+                    nonlocal write_descriptor
+                    pair = real_pipe()
+                    descriptors.extend(pair)
+                    write_descriptor = pair[1]
+                    return pair
+
+                def write_wrapper(descriptor, data):
+                    nonlocal write_total
+                    if descriptor != write_descriptor:
+                        return real_write(descriptor, data)
+                    if mode == "zero":
+                        write_complete.set()
+                        return 0
+                    count = real_write(descriptor, data[:1])
+                    write_total += count
+                    if write_total == len(frame):
+                        write_complete.set()
+                    return count
+
+                def runner(*args: object, **kwargs: object):
+                    if not write_complete.wait(2):
+                        raise AssertionError("writer did not reach its terminal write")
+                    return self._contained_result()
+
+                with patch.object(process.os, "pipe", side_effect=pipe_factory), \
+                     patch.object(process.os, "write", side_effect=write_wrapper), \
+                     patch.object(process, "run_contained_verifier", side_effect=runner):
+                    if mode == "partial":
+                        result = process.run_contained_verifier_stream(
+                            executable,
+                            (),
+                            frame,
+                            workspace=workspace,
+                            timeout_seconds=1.0,
+                            expected_executable_size_bytes=len(payload),
+                            expected_executable_sha256=hashlib.sha256(payload).digest(),
+                            expected_input_bytes=len(frame),
+                        )
+                        self.assertEqual(result.exit_code, 0)
+                    else:
+                        with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_input_incomplete"):
+                            process.run_contained_verifier_stream(
+                                executable,
+                                (),
+                                frame,
+                                workspace=workspace,
+                                timeout_seconds=1.0,
+                                expected_executable_size_bytes=len(payload),
+                                expected_executable_sha256=hashlib.sha256(payload).digest(),
+                                expected_input_bytes=len(frame),
+                            )
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+                self.assertEqual(tuple(workspace.iterdir()), ())
+
+    def test_stream_verifier_exception_is_preserved_after_stream_cleanup(self):
+        real_pipe = os.pipe
+        real_write = os.write
+        descriptors: list[int] = []
+        write_descriptor: int | None = None
+        write_complete = threading.Event()
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+
+        def pipe_factory():
+            nonlocal write_descriptor
+            pair = real_pipe()
+            descriptors.extend(pair)
+            write_descriptor = pair[1]
+            return pair
+
+        def write_wrapper(descriptor, data):
+            count = real_write(descriptor, data)
+            if descriptor == write_descriptor:
+                write_complete.set()
+            return count
+
+        def runner(*args: object, **kwargs: object):
+            if not write_complete.wait(2):
+                raise AssertionError("writer did not finish")
+            raise process.VerifierProcessError("verifier_runner_failure")
+
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
+                 patch.object(process.os, "write", side_effect=write_wrapper), \
+                 patch.object(process, "run_contained_verifier", side_effect=runner):
+                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_runner_failure"):
+                    process.run_contained_verifier_stream(
+                        executable,
+                        (),
+                        b"frame",
+                        workspace=workspace,
+                        timeout_seconds=1.0,
+                        expected_executable_size_bytes=len(payload),
+                        expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    )
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    def test_stream_timeout_precedes_broken_pipe_writer_failure(self):
+        real_pipe = os.pipe
+        real_write = os.write
+        descriptors: list[int] = []
+        write_descriptor: int | None = None
+        write_started = threading.Event()
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+        frame = b"x" * (256 * 1024)
+
+        def pipe_factory():
+            nonlocal write_descriptor
+            pair = real_pipe()
+            descriptors.extend(pair)
+            write_descriptor = pair[1]
+            return pair
+
+        def write_wrapper(descriptor, data):
+            if descriptor == write_descriptor:
+                write_started.set()
+            return real_write(descriptor, data)
+
+        def runner(*args: object, **kwargs: object):
+            if not write_started.wait(2):
+                raise AssertionError("writer did not start")
+            return self._contained_result(timed_out=True)
+
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
+                 patch.object(process.os, "write", side_effect=write_wrapper), \
+                 patch.object(process, "run_contained_verifier", side_effect=runner):
+                result = process.run_contained_verifier_stream(
+                    executable,
+                    (),
+                    frame,
+                    workspace=workspace,
+                    timeout_seconds=1.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    expected_input_bytes=len(frame),
+                )
+            self.assertTrue(result.timed_out)
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    def test_stream_blocked_writer_is_bounded_when_read_release_is_unknown(self):
+        real_pipe = os.pipe
+        real_close = os.close
+        descriptors: list[int] = []
+        read_descriptor: int | None = None
+        write_descriptor: int | None = None
+        write_started = threading.Event()
+        release_writer = threading.Event()
+        writer_released = threading.Event()
+        close_counts: dict[int, int] = {}
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+
+        def pipe_factory():
+            nonlocal read_descriptor, write_descriptor
+            pair = real_pipe()
+            descriptors.extend(pair)
+            read_descriptor, write_descriptor = pair
+            return pair
+
+        def write_wrapper(descriptor, data):
+            if descriptor == write_descriptor:
+                write_started.set()
+                release_writer.wait(10)
+                writer_released.set()
+                raise OSError("blocked writer released")
+            return os.write(descriptor, data)
+
+        def close_wrapper(descriptor):
+            close_counts[descriptor] = close_counts.get(descriptor, 0) + 1
+            if descriptor == read_descriptor:
+                raise OSError("read release unknown")
+            return real_close(descriptor)
+
+        def runner(*args: object, **kwargs: object):
+            if not write_started.wait(2):
+                raise AssertionError("writer did not block")
+            return self._contained_result()
+
+        try:
+            with tempfile.TemporaryDirectory() as root_name:
+                workspace = Path(root_name)
+                with patch.object(process.os, "pipe", side_effect=pipe_factory), \
+                     patch.object(process.os, "write", side_effect=write_wrapper), \
+                     patch.object(process.os, "close", side_effect=close_wrapper), \
+                     patch.object(process, "run_contained_verifier", side_effect=runner):
+                    with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_cleanup"):
+                        process.run_contained_verifier_stream(
+                            executable,
+                            (),
+                            b"frame",
+                            workspace=workspace,
+                            timeout_seconds=1.0,
+                            expected_executable_size_bytes=len(payload),
+                            expected_executable_sha256=hashlib.sha256(payload).digest(),
+                        )
+                self.assertEqual(tuple(workspace.iterdir()), ())
+        finally:
+            release_writer.set()
+            if read_descriptor is not None:
+                try:
+                    real_close(read_descriptor)
+                except OSError:
+                    pass
+            self.assertTrue(writer_released.wait(2))
+            if write_descriptor is not None:
+                try:
+                    real_close(write_descriptor)
+                except OSError:
+                    pass
+        self.assertEqual(close_counts.get(read_descriptor), 1)
+
+    def test_stream_write_descriptor_close_failure_never_returns_success_or_retries(self):
+        real_pipe = os.pipe
+        real_close = os.close
+        real_write = os.write
+        descriptors: list[int] = []
+        write_descriptor: int | None = None
+        write_complete = threading.Event()
+        close_counts: dict[int, int] = {}
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+
+        def pipe_factory():
+            nonlocal write_descriptor
+            pair = real_pipe()
+            descriptors.extend(pair)
+            write_descriptor = pair[1]
+            return pair
+
+        def write_wrapper(descriptor, data):
+            count = real_write(descriptor, data)
+            if descriptor == write_descriptor:
+                write_complete.set()
+            return count
+
+        def close_wrapper(descriptor):
+            close_counts[descriptor] = close_counts.get(descriptor, 0) + 1
+            if descriptor == write_descriptor:
+                raise OSError("write release unknown")
+            return real_close(descriptor)
+
+        def runner(*args: object, **kwargs: object):
+            if not write_complete.wait(2):
+                raise AssertionError("writer did not finish")
+            return self._contained_result()
+
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
+                 patch.object(process.os, "write", side_effect=write_wrapper), \
+                 patch.object(process.os, "close", side_effect=close_wrapper), \
+                 patch.object(process, "run_contained_verifier", side_effect=runner):
+                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_cleanup"):
+                    process.run_contained_verifier_stream(
+                        executable,
+                        (),
+                        b"frame",
+                        workspace=workspace,
+                        timeout_seconds=1.0,
+                        expected_executable_size_bytes=len(payload),
+                        expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    )
+            self.assertEqual(close_counts.get(write_descriptor), 1)
+            self.assertIsNotNone(write_descriptor)
+            try:
+                os.fstat(write_descriptor)
+            except OSError:
+                pass
+            else:
+                real_close(write_descriptor)
+            for descriptor in descriptors:
+                if descriptor == write_descriptor:
+                    continue
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    def test_stream_read_descriptor_close_failure_never_returns_success_or_retries(self):
+        real_pipe = os.pipe
+        real_close = os.close
+        real_write = os.write
+        descriptors: list[int] = []
+        read_descriptor: int | None = None
+        write_descriptor: int | None = None
+        write_complete = threading.Event()
+        close_counts: dict[int, int] = {}
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+
+        def pipe_factory():
+            nonlocal read_descriptor, write_descriptor
+            pair = real_pipe()
+            descriptors.extend(pair)
+            read_descriptor, write_descriptor = pair
+            return pair
+
+        def write_wrapper(descriptor, data):
+            count = real_write(descriptor, data)
+            if descriptor == write_descriptor:
+                write_complete.set()
+            return count
+
+        def close_wrapper(descriptor):
+            close_counts[descriptor] = close_counts.get(descriptor, 0) + 1
+            if descriptor == read_descriptor:
+                raise OSError("read release unknown")
+            return real_close(descriptor)
+
+        def runner(*args: object, **kwargs: object):
+            if not write_complete.wait(2):
+                raise AssertionError("writer did not finish")
+            return self._contained_result()
+
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
+                 patch.object(process.os, "write", side_effect=write_wrapper), \
+                 patch.object(process.os, "close", side_effect=close_wrapper), \
+                 patch.object(process, "run_contained_verifier", side_effect=runner):
+                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_cleanup"):
+                    process.run_contained_verifier_stream(
+                        executable,
+                        (),
+                        b"frame",
+                        workspace=workspace,
+                        timeout_seconds=1.0,
+                        expected_executable_size_bytes=len(payload),
+                        expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    )
+            self.assertEqual(close_counts.get(read_descriptor), 1)
+            self.assertIsNotNone(read_descriptor)
+            try:
+                os.fstat(read_descriptor)
+            except OSError:
+                pass
+            else:
+                real_close(read_descriptor)
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    def test_stream_cleanup_exception_is_fixed_and_never_returns_success(self):
+        real_pipe = os.pipe
+        real_write = os.write
+        descriptors: list[int] = []
+        write_descriptor: int | None = None
+        write_complete = threading.Event()
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+
+        def pipe_factory():
+            nonlocal write_descriptor
+            pair = real_pipe()
+            descriptors.extend(pair)
+            write_descriptor = pair[1]
+            return pair
+
+        def write_wrapper(descriptor, data):
+            count = real_write(descriptor, data)
+            if descriptor == write_descriptor:
+                write_complete.set()
+            return count
+
+        def runner(*args: object, **kwargs: object):
+            if not write_complete.wait(2):
+                raise AssertionError("writer did not finish")
+            return self._contained_result()
+
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
+                 patch.object(process.os, "write", side_effect=write_wrapper), \
+                 patch.object(process, "run_contained_verifier", side_effect=runner), \
+                 patch.object(process, "_cleanup_verifier_workspace", side_effect=RuntimeError("cleanup fault")):
+                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_cleanup"):
+                    process.run_contained_verifier_stream(
+                        executable,
+                        (),
+                        b"frame",
+                        workspace=workspace,
+                        timeout_seconds=1.0,
+                        expected_executable_size_bytes=len(payload),
+                        expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    )
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
 
     def test_resource_limit_contract_rejects_five_gib_and_keeps_five_gib_minus_one(self):
         payload = b"resource-limited-verifier"
@@ -959,6 +1486,87 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                         expected_executable_sha256=hashlib.sha256(payload).digest(),
                     )
 
+    @unittest.skipUnless(os.name == "nt", "Windows bounded child-output test")
+    def test_real_child_output_overflow_is_terminated_without_output_files(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            executable = Path(sys._base_executable)
+            payload = executable.read_bytes()
+            with self.assertRaisesRegex(process.VerifierProcessError, "stdout_cap"):
+                process.run_contained_verifier(
+                    executable,
+                    ("-c", "import sys;sys.stdout.write('x'*70000);sys.stdout.flush()"),
+                    workspace=workspace,
+                    timeout_seconds=30.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    @unittest.skipUnless(os.name == "nt", "Windows verifier workspace containment test")
+    def test_real_stream_child_workspace_file_fails_closed_and_is_removed(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            executable = Path(sys._base_executable)
+            payload = executable.read_bytes()
+            spill = str(workspace / "spill")
+            script = f"import os;spill={spill!r};os.mkdir(spill);handle=open(os.path.join(spill,'proof.bin'),'wb');handle.write(b'x');handle.close()"
+            with self.assertRaisesRegex(process.VerifierProcessError, "verifier_workspace_contents"):
+                process.run_contained_verifier_stream(
+                    executable,
+                    ("-c", script),
+                    b"frame",
+                    workspace=workspace,
+                    timeout_seconds=30.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
+    @unittest.skipUnless(os.name == "nt", "Windows relative workspace containment test")
+    def test_real_stream_child_relative_file_is_contained_and_removed(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            root = Path(root_name)
+            helper_parent = root / "helper"
+            helper_parent.mkdir()
+            source_executable = Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe"
+            executable = helper_parent / "helper.exe"
+            shutil.copyfile(source_executable, executable)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            spill_name = f"relative-spill-{root.name}.bin"
+            parent_entries = tuple(sorted(entry.name for entry in helper_parent.iterdir()))
+            payload = executable.read_bytes()
+            result = None
+            caught = None
+            try:
+                result = process.run_contained_verifier_stream(
+                    executable,
+                    ("/d", "/c", f"type nul > {spill_name}"),
+                    b"frame",
+                    workspace=workspace,
+                    timeout_seconds=30.0,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
+            except process.VerifierProcessError as error:
+                caught = error
+            if result is None:
+                self.assertIsNotNone(caught)
+                self.assertRegex(str(caught), "verifier_workspace_contents")
+            else:
+                self.assertEqual(result.exit_code, 0)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(result.stderr, b"")
+                self.assertTrue(result.cleanup_complete)
+            self.assertEqual(tuple(workspace.iterdir()), ())
+            self.assertEqual(
+                tuple(sorted(entry.name for entry in helper_parent.iterdir())),
+                parent_entries,
+            )
+            self.assertFalse((workspace / spill_name).exists())
+            self.assertFalse((helper_parent / spill_name).exists())
+
     @unittest.skipUnless(os.name == "nt", "Windows stream writer completion test")
     def test_stream_requires_writer_completion_after_early_runner_return(self):
         executable = Path(sys.executable)
@@ -1033,23 +1641,6 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             self.assertTrue(result.cleanup_complete)
             self.assertEqual(tuple(workspace.iterdir()), ())
 
-    @unittest.skipUnless(os.name == "nt", "Windows bounded child-output test")
-    def test_real_child_output_overflow_is_terminated_without_output_files(self):
-        with tempfile.TemporaryDirectory() as root_name:
-            workspace = Path(root_name)
-            executable = Path(sys._base_executable)
-            payload = executable.read_bytes()
-            with self.assertRaisesRegex(process.VerifierProcessError, "stdout_cap"):
-                process.run_contained_verifier(
-                    executable,
-                    ("-c", "import sys;sys.stdout.write('x'*70000);sys.stdout.flush()"),
-                    workspace=workspace,
-                    timeout_seconds=30.0,
-                    expected_executable_size_bytes=len(payload),
-                    expected_executable_sha256=hashlib.sha256(payload).digest(),
-                )
-            self.assertEqual(tuple(workspace.iterdir()), ())
-
     @unittest.skipUnless(os.name == "nt", "Windows per-call child-output cap test")
     def test_real_child_per_call_stdout_and_stderr_caps_are_enforced(self):
         cases = (
@@ -1074,6 +1665,28 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                     )
                 self.assertEqual(tuple(workspace.iterdir()), ())
 
+    @unittest.skipUnless(os.name == "nt", "Windows binary stdout test")
+    def test_real_child_binary_stdout_is_allowed_only_when_requested(self):
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            executable = Path(sys._base_executable)
+            payload = executable.read_bytes()
+            result = process.run_contained_verifier(
+                executable,
+                ("-c", "import sys;sys.stdout.buffer.write(b'\\x00\\xff');sys.stdout.flush()"),
+                workspace=workspace,
+                timeout_seconds=30.0,
+                expected_executable_size_bytes=len(payload),
+                expected_executable_sha256=hashlib.sha256(payload).digest(),
+                stdout_cap_bytes=8,
+                stdout_ascii=False,
+            )
+            self.assertEqual(result.exit_code, 0)
+            self.assertEqual(result.stdout, b"\x00\xff")
+            self.assertEqual(result.stderr, b"")
+            self.assertTrue(result.cleanup_complete)
+            self.assertEqual(tuple(workspace.iterdir()), ())
+
     @unittest.skipUnless(os.name == "nt", "Windows contained timeout test")
     def test_real_child_timeout_before_output_is_terminated_and_reaped(self):
         with tempfile.TemporaryDirectory() as root_name:
@@ -1094,70 +1707,6 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             self.assertTrue(result.process_tree_complete)
             self.assertTrue(result.cleanup_complete)
             self.assertEqual(tuple(workspace.iterdir()), ())
-
-    @unittest.skipUnless(os.name == "nt", "Windows verifier workspace containment test")
-    def test_real_stream_child_workspace_file_fails_closed_and_is_removed(self):
-        with tempfile.TemporaryDirectory() as root_name:
-            workspace = Path(root_name)
-            executable = Path(sys._base_executable)
-            payload = executable.read_bytes()
-            spill = str(workspace / "spill")
-            script = f"import os;spill={spill!r};os.mkdir(spill);handle=open(os.path.join(spill,'proof.bin'),'wb');handle.write(b'x');handle.close()"
-            with self.assertRaisesRegex(process.VerifierProcessError, "verifier_workspace_contents"):
-                process.run_contained_verifier_stream(
-                    executable,
-                    ("-c", script),
-                    b"frame",
-                    workspace=workspace,
-                    timeout_seconds=30.0,
-                    expected_executable_size_bytes=len(payload),
-                    expected_executable_sha256=hashlib.sha256(payload).digest(),
-                )
-            self.assertEqual(tuple(workspace.iterdir()), ())
-
-    @unittest.skipUnless(os.name == "nt", "Windows relative workspace containment test")
-    def test_real_stream_child_relative_file_is_contained_and_removed(self):
-        with tempfile.TemporaryDirectory() as root_name:
-            root = Path(root_name)
-            helper_parent = root / "helper"
-            helper_parent.mkdir()
-            source_executable = Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe"
-            executable = helper_parent / "helper.exe"
-            shutil.copyfile(source_executable, executable)
-            workspace = root / "workspace"
-            workspace.mkdir()
-            spill_name = f"relative-spill-{root.name}.bin"
-            parent_entries = tuple(sorted(entry.name for entry in helper_parent.iterdir()))
-            payload = executable.read_bytes()
-            result = None
-            caught = None
-            try:
-                result = process.run_contained_verifier_stream(
-                    executable,
-                    ("/d", "/c", f"type nul > {spill_name}"),
-                    b"frame",
-                    workspace=workspace,
-                    timeout_seconds=30.0,
-                    expected_executable_size_bytes=len(payload),
-                    expected_executable_sha256=hashlib.sha256(payload).digest(),
-                )
-            except process.VerifierProcessError as error:
-                caught = error
-            if result is None:
-                self.assertIsNotNone(caught)
-                self.assertRegex(str(caught), "verifier_workspace_contents")
-            else:
-                self.assertEqual(result.exit_code, 0)
-                self.assertEqual(result.stdout, b"")
-                self.assertEqual(result.stderr, b"")
-                self.assertTrue(result.cleanup_complete)
-            self.assertEqual(tuple(workspace.iterdir()), ())
-            self.assertEqual(
-                tuple(sorted(entry.name for entry in helper_parent.iterdir())),
-                parent_entries,
-            )
-            self.assertFalse((workspace / spill_name).exists())
-            self.assertFalse((helper_parent / spill_name).exists())
 
     def test_failure_boundaries_remain_fixed_and_close_handles(self):
         stages = {"setup", "limits", "attribute_initialize", "attribute_update", "create", "assign", "resume", "wait", "exit", "query", "close"}

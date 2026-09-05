@@ -20,7 +20,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sqlite3
 import stat
 import subprocess
@@ -33,12 +33,11 @@ import uuid
 
 # Execution-only Queue source binding.  Library imports deliberately retain the
 # checkout selected by the test collector; only direct script execution binds
-# the coordinator to the accepted Queue checkout.
-_QUEUE_SOURCE_PATH = Path(r"C:\Users\neers\Documents\Codex\2026-09-04\blind-queue-receiver-binding-v1")
-_QUEUE_SOURCE_HEAD = "1cc7c092a42140d99a3b8e6e52ba419fc770c7fd"
-_QUEUE_SOURCE_TREE = "b058d3d77c483f8b71e50bcba22c28d6cd403c81"
+# the coordinator to the exact clean source set reviewed by the local manifest.
+_QUEUE_SOURCE_PATH: Path | None = None
 _QUEUE_SOURCE_BOUND = False
 _QUEUE_CACHE_PREFIX: Path | None = None
+_QUEUE_EXPECTED_APP_BLOBS: dict[str, str] = {}
 _QUEUE_BINDING_SCHEMA = "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH/v1"
 _QUEUE_MODULE_SOURCES: Final[dict[str, Path]] = {
     "app": Path("app/__init__.py"),
@@ -58,20 +57,211 @@ def _queue_binding_failure() -> None:
     raise SystemExit(2)
 
 
+def _binding_manifest_path() -> Path:
+    return Path(__file__).resolve().with_name("profile11_complete_path_manifest.json")
+
+
+def _regular_source_file(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    reparse = int(getattr(info, "st_file_attributes", 0)) & 0x00000400
+    return stat.S_ISREG(info.st_mode) and not path.is_symlink() and not reparse
+
+
+def _load_manifest_source_binding(*, fail_closed: bool = True) -> tuple[Path, dict[str, str]]:
+    def invalid() -> None:
+        if fail_closed:
+            _queue_binding_failure()
+        raise ValueError("queue_source_binding")
+
+    manifest_path = _binding_manifest_path()
+    if not _regular_source_file(manifest_path):
+        invalid()
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict) or manifest.get("schema") != "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH-MANIFEST/v2":
+            invalid()
+        binding = manifest.get("python_source_binding")
+        if not isinstance(binding, dict):
+            invalid()
+        if (
+            binding.get("canonical_package") != "app"
+            or binding.get("content_hash") != "git-blob-sha1"
+            or binding.get("source_only_cache_handling") is not True
+            or binding.get("fallback") is not False
+            or binding.get("git_clean_required") is not True
+        ):
+            invalid()
+        source_root_record = binding.get("source_root")
+        if not isinstance(source_root_record, dict) or set(source_root_record) != {"relative_to", "relative_path", "max_depth"}:
+            invalid()
+        relative_to = source_root_record.get("relative_to")
+        relative_text = source_root_record.get("relative_path")
+        max_depth = source_root_record.get("max_depth")
+        if relative_to != "manifest_parent" or relative_text != "." or max_depth != 0:
+            invalid()
+        relative = PurePosixPath(relative_text)
+        if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+            invalid()
+        relative_path = Path(*relative.parts) if relative.parts else Path(".")
+        source_root = (manifest_path.parent / relative_path).resolve()
+        required_modules = binding.get("required_modules")
+        if not isinstance(required_modules, dict) or set(required_modules) != set(_QUEUE_MODULE_SOURCES):
+            invalid()
+        expected_blobs: dict[str, str] = {}
+        for name, relative_source in _QUEUE_MODULE_SOURCES.items():
+            record = required_modules.get(name)
+            if not isinstance(record, dict) or set(record) != {"path", "git_blob"}:
+                invalid()
+            if record.get("path") != relative_source.as_posix():
+                invalid()
+            blob = record.get("git_blob")
+            if not isinstance(blob, str) or len(blob) != 40 or blob != blob.lower() or any(character not in "0123456789abcdef" for character in blob):
+                invalid()
+            expected_blobs[name] = blob
+        if "queue" in manifest.get("git_pins", {}):
+            invalid()
+        return source_root, expected_blobs
+    except SystemExit:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        invalid()
+
+
+def _normalize_source_line_endings(data: bytes) -> bytes | None:
+    normalized = data.replace(b"\r\n", b"\n")
+    if b"\r" in normalized:
+        return None
+    return normalized
+
+
+def _git_canonical_sources(root: Path, expected_blobs: dict[str, str]) -> dict[str, bytes] | None:
+    names = tuple(_QUEUE_MODULE_SOURCES)
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "cat-file",
+                "--batch",
+            ],
+            input=b"".join((expected_blobs[name] + "\n").encode("ascii") for name in names),
+            capture_output=True,
+            timeout=10.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    output = result.stdout
+    offset = 0
+    canonical_sources: dict[str, bytes] = {}
+    for name in names:
+        line_end = output.find(b"\n", offset)
+        if line_end < 0:
+            return None
+        fields = output[offset:line_end].split()
+        expected_blob = expected_blobs[name].encode("ascii")
+        if len(fields) != 3 or fields[0] != expected_blob or fields[1] != b"blob":
+            return None
+        try:
+            byte_count = int(fields[2])
+        except ValueError:
+            return None
+        offset = line_end + 1
+        end = offset + byte_count
+        if end >= len(output) or output[end:end + 1] != b"\n":
+            return None
+        canonical = output[offset:end]
+        header = b"blob " + str(len(canonical)).encode("ascii") + b"\0"
+        if hashlib.sha1(header + canonical).hexdigest() != expected_blobs[name]:
+            return None
+        canonical_sources[name] = canonical
+        offset = end + 1
+    return canonical_sources if offset == len(output) else None
+
+
+def _git_filter_attributes_are_unset(root: Path, relative_sources: Iterable[Path]) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "check-attr", "--all", "--", *(path.as_posix() for path in relative_sources)],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        fields = line.split(": ", 2)
+        if len(fields) == 3 and fields[1] == "filter" and fields[2] not in {"unspecified", "unset"}:
+            return False
+    return True
+
+
+def _source_bytes_match(path: Path, canonical: bytes) -> bool:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return False
+    normalized_raw = _normalize_source_line_endings(raw)
+    normalized_canonical = _normalize_source_line_endings(canonical)
+    return normalized_raw is not None and normalized_canonical is not None and normalized_raw == normalized_canonical
+
+
+def _validate_source_checkout(root: Path, expected_blobs: dict[str, str], *, fail_closed: bool = True) -> None:
+    def invalid() -> None:
+        if fail_closed:
+            _queue_binding_failure()
+        raise ValueError("queue_source_binding")
+
+    if not root.is_absolute() or not root.is_dir() or root.is_symlink() or not _regular_source_file(root / "profile11_complete_path.py"):
+        invalid()
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+        status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        invalid()
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root or status.returncode != 0 or status.stdout.strip() != "":
+        invalid()
+    if not _git_filter_attributes_are_unset(root, _QUEUE_MODULE_SOURCES.values()):
+        invalid()
+    canonical_sources = _git_canonical_sources(root, expected_blobs)
+    if canonical_sources is None:
+        invalid()
+    for name, relative_source in _QUEUE_MODULE_SOURCES.items():
+        path = root / relative_source
+        if not _regular_source_file(path) or not _source_bytes_match(path, canonical_sources[name]):
+            invalid()
+
+
 def _run_queue_binding_preflight() -> None:
-    global _QUEUE_CACHE_PREFIX
+    global _QUEUE_CACHE_PREFIX, _QUEUE_SOURCE_PATH, _QUEUE_EXPECTED_APP_BLOBS
     try:
         if any(name == "app" or name.startswith("app.") for name in sys.modules):
             _queue_binding_failure()
-        if not _QUEUE_SOURCE_PATH.is_absolute() or not _QUEUE_SOURCE_PATH.is_dir() or _QUEUE_SOURCE_PATH.is_symlink():
-            _queue_binding_failure()
-        def git(*args: str) -> str:
-            result = subprocess.run(["git", "-C", str(_QUEUE_SOURCE_PATH), *args], capture_output=True, text=True, timeout=10.0, check=False)
-            if result.returncode != 0:
-                _queue_binding_failure()
-            return result.stdout.strip()
-        if git("rev-parse", "HEAD") != _QUEUE_SOURCE_HEAD or git("rev-parse", "HEAD^{tree}") != _QUEUE_SOURCE_TREE or git("status", "--porcelain=v1", "--untracked-files=all") != "":
-            _queue_binding_failure()
+        source_root, expected_blobs = _load_manifest_source_binding()
+        _validate_source_checkout(source_root, expected_blobs)
+        _QUEUE_SOURCE_PATH = source_root
+        _QUEUE_EXPECTED_APP_BLOBS = expected_blobs
         cache_prefix = Path(tempfile.gettempdir()) / ("blind-queue-pycache-" + uuid.uuid4().hex)
         if cache_prefix.exists() or not cache_prefix.is_absolute():
             _queue_binding_failure()
@@ -90,6 +280,8 @@ def _run_queue_binding_preflight() -> None:
 
 def _finalize_queue_binding() -> None:
     global _QUEUE_SOURCE_BOUND
+    if _QUEUE_SOURCE_PATH is None or not _QUEUE_EXPECTED_APP_BLOBS:
+        _queue_binding_failure()
     queue_root = (_QUEUE_SOURCE_PATH / "app").resolve()
     cache_prefix = _QUEUE_CACHE_PREFIX
     app_package = sys.modules.get("app")
@@ -102,6 +294,11 @@ def _finalize_queue_binding() -> None:
     ):
         _queue_binding_failure()
     if tuple(Path(item).resolve() for item in getattr(app_package, "__path__", ())) != (queue_root,):
+        _queue_binding_failure()
+    if not _git_filter_attributes_are_unset(_QUEUE_SOURCE_PATH, _QUEUE_MODULE_SOURCES.values()):
+        _queue_binding_failure()
+    canonical_sources = _git_canonical_sources(_QUEUE_SOURCE_PATH, _QUEUE_EXPECTED_APP_BLOBS)
+    if canonical_sources is None:
         _queue_binding_failure()
     loaded = {name for name in sys.modules if name == "app" or name.startswith("app.")}
     if loaded != set(_QUEUE_MODULE_SOURCES):
@@ -116,7 +313,8 @@ def _finalize_queue_binding() -> None:
         if (
             module is None
             or not expected_source.is_file()
-            or expected_source.is_symlink()
+            or not _regular_source_file(expected_source)
+            or not _source_bytes_match(expected_source, canonical_sources[name])
             or source_file is None
             or Path(source_file).resolve() != expected_source
             or spec is None
@@ -153,7 +351,6 @@ def _import_queue_dependencies() -> tuple[Any, ...]:
     import app.minimal_clearance_composition as imported_composition
     import app.minimal_clearance_composition_independent
     import app.minimal_clearance_source_auth_verifier_adapter as imported_source_auth_adapter
-    from app.minimal_clearance_composition import ClearanceCompositionStoreV2 as imported_composition_store
     from app.minimal_clearance_composition import StateDispositionControl as imported_state_control
     from app.minimal_clearance_composition import build_synthetic_acknowledgment as imported_build_ack
     from app.minimal_clearance_resource_limits import ADMISSION_CAP_BYTES as imported_admission_cap
@@ -170,7 +367,7 @@ def _import_queue_dependencies() -> tuple[Any, ...]:
     from app.minimal_clearance_verification_queue import _compute_batch_root_from_refs as imported_batch_root
     from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime as imported_runtime
     return (
-        imported_composition, imported_source_auth_adapter, imported_composition_store,
+        imported_composition, imported_source_auth_adapter,
         imported_state_control, imported_build_ack, imported_admission_cap, imported_tree_cap,
         imported_key_bytes, imported_verifier_sha256, imported_verifier_size, imported_source_config,
         imported_issued_batch, imported_operation_template, imported_queue_config, imported_handoff,
@@ -181,7 +378,7 @@ def _import_queue_dependencies() -> tuple[Any, ...]:
 if __name__ == "__main__":
     try:
         (
-            composition, source_auth_adapter, ClearanceCompositionStoreV2, StateDispositionControl,
+            composition, source_auth_adapter, StateDispositionControl,
             build_synthetic_acknowledgment, ADMISSION_CAP_BYTES, PROCESS_TREE_PEAK_CAP_BYTES,
             ML_DSA_87_PUBLIC_KEY_BYTES, SOURCE_AUTH_EXECUTABLE_SHA256, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
             SourceAuthVerifierConfig, IssuedVerificationBatch, OperationTemplate, QueueConfig,
@@ -195,7 +392,7 @@ if __name__ == "__main__":
         _queue_binding_failure()
 else:
     (
-        composition, source_auth_adapter, ClearanceCompositionStoreV2, StateDispositionControl,
+        composition, source_auth_adapter, StateDispositionControl,
         build_synthetic_acknowledgment, ADMISSION_CAP_BYTES, PROCESS_TREE_PEAK_CAP_BYTES,
         ML_DSA_87_PUBLIC_KEY_BYTES, SOURCE_AUTH_EXECUTABLE_SHA256, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
         SourceAuthVerifierConfig, IssuedVerificationBatch, OperationTemplate, QueueConfig,
@@ -236,9 +433,7 @@ C_REPO: Final[Path] = Path(
 C_HEAD: Final[str] = "9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2"
 C_TREE: Final[str] = "178a5f20c6738f7272cd38f77315da83650bbac0"
 
-QUEUE_REPO: Final[Path] = _QUEUE_SOURCE_PATH
-QUEUE_HEAD: Final[str] = _QUEUE_SOURCE_HEAD
-QUEUE_TREE: Final[str] = _QUEUE_SOURCE_TREE
+QUEUE_REPO: Final[Path] = Path(__file__).resolve().parent
 
 SOURCE_HOST: Final[Path] = Path(__file__).parent / "experiments" / "profile11_source_host" / "target" / "release" / "profile11_source_host.exe"
 SOURCE_HOST_SIZE_BYTES: Final[int] = 480_768
@@ -288,7 +483,7 @@ AGGREGATE_ERROR_CODES: Final[frozenset[str]] = frozenset({
     "outer_process_limit", "outer_process_limit_configuration", "outer_cleanup",
     "outer_observation_shape", "outer_cap_configuration", "outer_cap_invalid", "outer_cap_readback",
     "outer_memory_cap", "outer_process_limit_readback", "outer_process_lineage", "aggregate_p95_target",
-    "product_target_exceeded",
+    "product_target_exceeded", "runtime_restart", "runtime_restart_database", "timing_ack_reconciliation",
 })
 
 FIXED_QUALIFICATION_FLAGS: Final[tuple[str, ...]] = (
@@ -297,6 +492,41 @@ FIXED_QUALIFICATION_FLAGS: Final[tuple[str, ...]] = (
     "synthetic_source_authority",
     "timing_memory_only",
 )
+OBSERVER_DIAGNOSTIC_SCHEMA: Final[str] = "BL/NATIVE-V3/PROFILE11-OBSERVER-CAPABILITY-DIAGNOSTIC/v1"
+_OBSERVER_DIAGNOSTIC_REASON_ORDER: Final[tuple[str, ...]] = (
+    "observer_non_windows",
+    "observer_pointer_width",
+    "observer_api_unavailable",
+    "observer_api_failure",
+    "observer_provider_query_failure",
+    "observer_provider_missing",
+    "observer_schema_query_failure",
+    "observer_schema_incomplete",
+    "observer_privilege_query_failure",
+    "observer_privilege_api_failure",
+    "observer_privilege_absent",
+    "observer_privilege_present_disabled",
+    "observer_privilege_unavailable",
+    "observer_lineage_api_failure",
+    "observer_lineage_api_unavailable",
+    "observer_loss_api_failure",
+    "observer_loss_api_unavailable",
+)
+_OBSERVER_DIAGNOSTIC_REASON_CODES: Final[frozenset[str]] = frozenset(_OBSERVER_DIAGNOSTIC_REASON_ORDER)
+_OBSERVER_PRIVILEGE_STATES: Final[frozenset[str]] = frozenset({
+    "enabled", "present_disabled", "absent", "api_failure", "unknown",
+})
+_OBSERVER_EXECUTION_CONTEXTS: Final[frozenset[str]] = frozenset({
+    "current_process_token_se_system_profile_enabled",
+    "current_process_token_builtin_alias_544",
+    "current_process_token_builtin_alias_559",
+    "unavailable", "api_failure", "unknown",
+})
+_OBSERVER_SUPPORTED_EXECUTION_CONTEXTS: Final[frozenset[str]] = frozenset({
+    "current_process_token_se_system_profile_enabled",
+    "current_process_token_builtin_alias_544",
+    "current_process_token_builtin_alias_559",
+})
 FORBIDDEN_AGGREGATE_WORDS: Final[tuple[str, ...]] = (
     "statement", "operation_ref", "proof", "frame", "key", "signature",
     "seed", "witness", "nonce", "tape", "phi", "path", "stdout", "stderr",
@@ -372,7 +602,6 @@ class DependencyReport:
 def _file_pins() -> tuple[FilePin, ...]:
     return (
         FilePin("producer_executable", PRODUCER_EXECUTABLE, PRODUCER_EXECUTABLE_SIZE_BYTES, PRODUCER_EXECUTABLE_SHA256),
-        FilePin("source_host", SOURCE_HOST, SOURCE_HOST_SIZE_BYTES, SOURCE_HOST_SHA256.hex().upper()),
         FilePin("c_verifier", C_VERIFIER, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES, SOURCE_AUTH_EXECUTABLE_SHA256.hex().upper()),
         FilePin("c_source_library", C_SOURCE_LIBRARY, C_SOURCE_LIBRARY_SIZE_BYTES, C_SOURCE_LIBRARY_SHA256),
         FilePin("c_range_library", C_RANGE_LIBRARY, C_RANGE_LIBRARY_SIZE_BYTES, C_RANGE_LIBRARY_SHA256),
@@ -384,7 +613,6 @@ def _git_pins() -> tuple[GitPin, ...]:
         GitPin("producer_repo", PRODUCER_REPO, PRODUCER_HEAD, PRODUCER_TREE),
         GitPin("source_repo", SOURCE_REPO, SOURCE_HEAD, SOURCE_TREE),
         GitPin("c_repo", C_REPO, C_HEAD, C_TREE),
-        GitPin("queue_repo", QUEUE_REPO, QUEUE_HEAD, QUEUE_TREE),
     )
 
 
@@ -429,6 +657,14 @@ def _check_git_pin(pin: GitPin, missing: list[str], mismatched: list[str]) -> No
         return
     if head != pin.head or tree != pin.tree or status != "":
         mismatched.append(pin.code)
+
+
+def _check_python_source_binding_pin(missing: list[str], mismatched: list[str]) -> None:
+    try:
+        source_root, expected_blobs = _load_manifest_source_binding(fail_closed=False)
+        _validate_source_checkout(source_root, expected_blobs, fail_closed=False)
+    except (OSError, ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+        mismatched.append("queue_source_binding")
 
 
 def _load_synthetic_public_key() -> bytes:
@@ -519,6 +755,7 @@ def validate_dependencies(
         _check_file_pin(pin, missing, mismatched)
     for pin in _git_pins():
         _check_git_pin(pin, missing, mismatched)
+    _check_python_source_binding_pin(missing, mismatched)
     try:
         _load_synthetic_public_key()
     except CompletePathError as error:
@@ -1302,43 +1539,67 @@ class _EtwWindowsApi:
                 facts.append(self.event_schema(record))
         return tuple(facts)
 
-    def has_builtin_alias(self, rid: int) -> bool:
+    def builtin_alias_state(self, rid: int) -> str:
+        if type(rid) is not int or rid not in {544, 559}:
+            return "api_failure"
         authority = _EtwSidIdentifierAuthority((0, 0, 0, 0, 0, 5))
         sid = ctypes.c_void_p()
         if not self.advapi32.AllocateAndInitializeSid(ctypes.byref(authority), 2, 32, rid, 0, 0, 0, 0, 0, 0, ctypes.byref(sid)):
-            return False
+            return "api_failure"
         try:
             member = wintypes.BOOL(False)
-            return bool(self.advapi32.CheckTokenMembership(None, sid, ctypes.byref(member)) and member.value)
+            if not self.advapi32.CheckTokenMembership(None, sid, ctypes.byref(member)):
+                return "api_failure"
+            return "present" if member.value else "absent"
         finally:
             self.advapi32.FreeSid(sid)
 
-    def has_enabled_profile_privilege(self) -> bool:
+    def has_builtin_alias(self, rid: int) -> bool:
+        return self.builtin_alias_state(rid) == "present"
+
+    def profile_privilege_state(self) -> str:
         token = wintypes.HANDLE()
         if not self.advapi32.OpenProcessToken(self.kernel32.GetCurrentProcess(), _ETW_TOKEN_QUERY, ctypes.byref(token)):
-            return False
+            return "api_failure"
+        result = "api_failure"
         try:
             size = ctypes.c_ulong(0)
-            self.advapi32.GetTokenInformation(token, _ETW_TOKEN_PRIVILEGES, None, 0, ctypes.byref(size))
-            if not size.value or size.value > 1024 * 1024:
-                return False
-            storage = ctypes.create_string_buffer(size.value)
-            if not self.advapi32.GetTokenInformation(token, _ETW_TOKEN_PRIVILEGES, storage, size.value, ctypes.byref(size)):
-                return False
-            target = _EtwLuid()
-            if not self.advapi32.LookupPrivilegeValueW(None, "SeSystemProfilePrivilege", ctypes.byref(target)):
-                return False
-            raw = bytes(storage)
-            count = int.from_bytes(raw[:4], "little")
-            for index in range(count):
-                offset = 4 + index * 12
-                if offset + 12 > len(raw):
-                    return False
-                if raw[offset:offset + 8] == bytes(target) and int.from_bytes(raw[offset + 8:offset + 12], "little") & _ETW_SE_PRIVILEGE_ENABLED:
-                    return True
-            return False
+            if not self.advapi32.GetTokenInformation(token, _ETW_TOKEN_PRIVILEGES, None, 0, ctypes.byref(size)):
+                if ctypes.get_last_error() == _ETW_ERROR_INSUFFICIENT_BUFFER and size.value and size.value <= 1024 * 1024:
+                    storage = ctypes.create_string_buffer(size.value)
+                    if self.advapi32.GetTokenInformation(token, _ETW_TOKEN_PRIVILEGES, storage, size.value, ctypes.byref(size)):
+                        target = _EtwLuid()
+                        if self.advapi32.LookupPrivilegeValueW(None, "SeSystemProfilePrivilege", ctypes.byref(target)):
+                            raw = bytes(storage)[: int(size.value)]
+                            if len(raw) >= 4:
+                                count = int.from_bytes(raw[:4], "little")
+                                if count <= (len(raw) - 4) // 12:
+                                    result = "absent"
+                                    for index in range(count):
+                                        offset = 4 + index * 12
+                                        if raw[offset:offset + 8] == bytes(target):
+                                            attributes = int.from_bytes(raw[offset + 8:offset + 12], "little")
+                                            result = "enabled" if attributes & _ETW_SE_PRIVILEGE_ENABLED else "present_disabled"
+                                            break
         finally:
-            self.kernel32.CloseHandle(token)
+            if not self.kernel32.CloseHandle(token):
+                result = "api_failure"
+        return result
+
+    def has_enabled_profile_privilege(self) -> bool:
+        return self.profile_privilege_state() == "enabled"
+
+    def execution_context(self) -> ObserverExecutionEvidence:
+        privilege_state = self.profile_privilege_state()
+        if privilege_state in {"enabled", "api_failure"}:
+            return _observer_execution_evidence(privilege_state=privilege_state)
+        alias_544 = self.builtin_alias_state(544)
+        alias_559 = self.builtin_alias_state(559)
+        return _observer_execution_evidence(
+            privilege_state=privilege_state,
+            alias_544=alias_544,
+            alias_559=alias_559,
+        )
 
     def root_identity(self, pid: int) -> tuple[int | None, bool]:
         handle = self.kernel32.OpenProcess(_ETW_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
@@ -1773,12 +2034,103 @@ class WindowsEtwWriteTraceBackend:
                 and _ETW_KERNEL_PROCESS_PROVIDER_GUID in providers
                 and schema_complete
             )
-            privilege_available = api.has_enabled_profile_privilege() or api.has_builtin_alias(544) or api.has_builtin_alias(559)
+            execution_method = getattr(api, "execution_context", None)
+            if callable(execution_method):
+                execution = execution_method()
+                privilege_available = execution.execution_context in _OBSERVER_SUPPORTED_EXECUTION_CONTEXTS
+            else:
+                privilege_available = bool(api.has_enabled_profile_privilege() or api.has_builtin_alias(544) or api.has_builtin_alias(559))
             lineage_available = all(hasattr(api.kernel32, name) for name in ("OpenProcess", "GetProcessTimes", "IsProcessInJob"))
             loss_available = all(hasattr(api.advapi32, name) for name in ("ControlTraceW", "CloseTrace"))
             return provider_available, privilege_available, lineage_available, loss_available
         except BaseException:
             return False, False, False, False
+
+    def capability_diagnostic(self) -> ObserverCapabilityDiagnostic:
+        if os.name != "nt":
+            return _observer_diagnostic_fallback("observer_non_windows")
+        if ctypes.sizeof(ctypes.c_void_p) != 8:
+            return _observer_diagnostic_fallback("observer_pointer_width")
+        try:
+            api = self._ensure_api()
+        except BaseException:
+            return _observer_diagnostic_fallback("observer_api_unavailable")
+        reasons: list[str] = []
+        provider_available = False
+        schema_complete = False
+        privilege_available = False
+        privilege_state = "unknown"
+        execution_context = "unknown"
+        lineage_available = False
+        loss_detection_available = False
+        execution_method = None
+        try:
+            providers = api.providers()
+            provider_available = _ETW_KERNEL_FILE_PROVIDER_GUID in providers and _ETW_KERNEL_PROCESS_PROVIDER_GUID in providers
+        except BaseException:
+            reasons.append("observer_provider_query_failure")
+        try:
+            schema_facts = self._schema_facts if self._schema_facts is not None else api.installed_schema_facts()
+            schema_complete = _etw_schema_facts_complete(schema_facts)
+        except BaseException:
+            reasons.append("observer_schema_query_failure")
+        try:
+            execution_method = getattr(api, "execution_context", None)
+            if callable(execution_method):
+                execution = execution_method()
+                if type(execution) is not ObserverExecutionEvidence:
+                    raise RuntimeError("observer_execution_evidence_shape")
+                privilege_state = execution.privilege_state
+                execution_context = execution.execution_context
+                if privilege_state not in _OBSERVER_PRIVILEGE_STATES - {"unknown"} or execution_context not in _OBSERVER_EXECUTION_CONTEXTS:
+                    raise RuntimeError("observer_execution_evidence_values")
+                privilege_available = execution_context in _OBSERVER_SUPPORTED_EXECUTION_CONTEXTS
+            else:
+                privilege_available = bool(api.has_enabled_profile_privilege() or api.has_builtin_alias(544) or api.has_builtin_alias(559))
+        except BaseException:
+            if callable(execution_method):
+                privilege_state = "api_failure"
+                execution_context = "api_failure"
+                reasons.append("observer_privilege_api_failure")
+            else:
+                reasons.append("observer_privilege_query_failure")
+        try:
+            lineage_available = all(hasattr(api.kernel32, name) for name in ("OpenProcess", "GetProcessTimes", "IsProcessInJob"))
+        except BaseException:
+            reasons.append("observer_lineage_api_failure")
+        try:
+            loss_detection_available = all(hasattr(api.advapi32, name) for name in ("ControlTraceW", "CloseTrace"))
+        except BaseException:
+            reasons.append("observer_loss_api_failure")
+        if not provider_available and "observer_provider_query_failure" not in reasons:
+            reasons.append("observer_provider_missing")
+        if not schema_complete and "observer_schema_query_failure" not in reasons:
+            reasons.append("observer_schema_incomplete")
+        if not privilege_available and "observer_privilege_query_failure" not in reasons:
+            if "observer_privilege_api_failure" not in reasons:
+                if execution_context == "api_failure" or privilege_state == "api_failure":
+                    privilege_reason = "observer_privilege_api_failure"
+                else:
+                    privilege_reason = {
+                        "absent": "observer_privilege_absent",
+                        "present_disabled": "observer_privilege_present_disabled",
+                    }.get(privilege_state, "observer_privilege_unavailable")
+                reasons.append(privilege_reason)
+        if not lineage_available and "observer_lineage_api_failure" not in reasons:
+            reasons.append("observer_lineage_api_unavailable")
+        if not loss_detection_available and "observer_loss_api_failure" not in reasons:
+            reasons.append("observer_loss_api_unavailable")
+        return ObserverCapabilityDiagnostic(
+            True,
+            provider_available,
+            schema_complete,
+            privilege_available,
+            lineage_available,
+            loss_detection_available,
+            tuple(reason for reason in _OBSERVER_DIAGNOSTIC_REASON_ORDER if reason in reasons),
+            privilege_state,
+            execution_context,
+        )
 
     def _properties_for_session(self, name: str, session_guid: uuid.UUID) -> tuple[ctypes.Array[ctypes.c_char], ctypes.POINTER(_EtwEventTraceProperties)]:
         property_size = ctypes.sizeof(_EtwEventTraceProperties)
@@ -2116,6 +2468,7 @@ class WindowsEtwWriteTraceBackend:
 
 class WriteTraceBackend(Protocol):
     def capability(self) -> tuple[bool, bool, bool, bool]: ...
+    def capability_diagnostic(self) -> ObserverCapabilityDiagnostic: ...
     def start(self, root_pid: int) -> None: ...
     def stop(self) -> "FileWriteObservation": ...
 
@@ -2141,6 +2494,82 @@ class FileWriteObservation:
     events: tuple[FileWriteEvent, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class ObserverCapabilityDiagnostic:
+    api_available: bool
+    provider_available: bool
+    schema_complete: bool
+    privilege_available: bool
+    lineage_available: bool
+    loss_detection_available: bool
+    reasons: tuple[str, ...] = ()
+    privilege_state: str = "unknown"
+    execution_context: str = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class ObserverExecutionEvidence:
+    """Bounded native evidence for the least-scoped ETW execution context."""
+
+    privilege_state: str
+    execution_context: str
+
+
+def _observer_execution_evidence(
+    *,
+    privilege_state: str,
+    alias_544: str | None = None,
+    alias_559: str | None = None,
+) -> ObserverExecutionEvidence:
+    if privilege_state not in _OBSERVER_PRIVILEGE_STATES - {"unknown"}:
+        return ObserverExecutionEvidence("api_failure", "api_failure")
+    if privilege_state == "enabled":
+        return ObserverExecutionEvidence(privilege_state, "current_process_token_se_system_profile_enabled")
+    if privilege_state == "api_failure":
+        return ObserverExecutionEvidence(privilege_state, "api_failure")
+    if alias_544 == "present":
+        return ObserverExecutionEvidence(privilege_state, "current_process_token_builtin_alias_544")
+    if alias_559 == "present":
+        return ObserverExecutionEvidence(privilege_state, "current_process_token_builtin_alias_559")
+    if alias_544 == "api_failure" or alias_559 == "api_failure":
+        return ObserverExecutionEvidence(privilege_state, "api_failure")
+    return ObserverExecutionEvidence(privilege_state, "unavailable")
+
+
+def _observer_diagnostic_fallback(reason: str) -> ObserverCapabilityDiagnostic:
+    if reason not in _OBSERVER_DIAGNOSTIC_REASON_CODES:
+        reason = "observer_api_failure"
+    privilege_state = "api_failure" if "privilege" in reason or reason == "observer_api_failure" else "unknown"
+    execution_context = "api_failure" if privilege_state == "api_failure" else "unknown"
+    return ObserverCapabilityDiagnostic(False, False, False, False, False, False, (reason,), privilege_state, execution_context)
+
+
+def _observer_diagnostic_from_legacy_flags(flags: object) -> ObserverCapabilityDiagnostic:
+    if type(flags) is not tuple or len(flags) != 4 or any(type(item) is not bool for item in flags):
+        return _observer_diagnostic_fallback("observer_api_failure")
+    provider_available, privilege_available, lineage_available, loss_detection_available = flags
+    reasons = []
+    if not provider_available:
+        reasons.append("observer_provider_missing")
+    if not privilege_available:
+        reasons.append("observer_privilege_unavailable")
+    if not lineage_available:
+        reasons.append("observer_lineage_api_unavailable")
+    if not loss_detection_available:
+        reasons.append("observer_loss_api_unavailable")
+    return ObserverCapabilityDiagnostic(
+        True,
+        provider_available,
+        provider_available,
+        privilege_available,
+        lineage_available,
+        loss_detection_available,
+        tuple(reason for reason in _OBSERVER_DIAGNOSTIC_REASON_ORDER if reason in reasons),
+        "unknown",
+        "unknown",
+    )
+
+
 class WindowsEtwFileWriteObserver:
     """Capability probe; no snapshot is treated as a trace.
 
@@ -2156,15 +2585,48 @@ class WindowsEtwFileWriteObserver:
         self._backend = backend if backend is not None else (WindowsEtwWriteTraceBackend() if os.name == "nt" else None)
         self._started = False
 
+    def capability_diagnostic(self) -> ObserverCapabilityDiagnostic:
+        if os.name != "nt" or self._backend is None:
+            return _observer_diagnostic_fallback("observer_non_windows")
+        diagnostic_method = getattr(self._backend, "capability_diagnostic", None)
+        if callable(diagnostic_method):
+            try:
+                value = diagnostic_method()
+            except BaseException:
+                return _observer_diagnostic_fallback("observer_api_failure")
+            if type(value) is not ObserverCapabilityDiagnostic:
+                return _observer_diagnostic_fallback("observer_api_failure")
+            flags = (
+                value.api_available,
+                value.provider_available,
+                value.schema_complete,
+                value.privilege_available,
+                value.lineage_available,
+                value.loss_detection_available,
+            )
+            if (
+                any(type(item) is not bool for item in flags)
+                or type(value.reasons) is not tuple
+                or len(value.reasons) > len(_OBSERVER_DIAGNOSTIC_REASON_ORDER)
+                or any(reason not in _OBSERVER_DIAGNOSTIC_REASON_CODES for reason in value.reasons)
+                or len(set(value.reasons)) != len(value.reasons)
+                or value.privilege_state not in _OBSERVER_PRIVILEGE_STATES
+                or value.execution_context not in _OBSERVER_EXECUTION_CONTEXTS
+            ):
+                return _observer_diagnostic_fallback("observer_api_failure")
+            return value
+        try:
+            return _observer_diagnostic_from_legacy_flags(self._backend.capability())
+        except BaseException:
+            return _observer_diagnostic_fallback("observer_api_failure")
+
     def probe(self) -> FileWriteObservation:
         if os.name != "nt" or self._backend is None:
             return FileWriteObservation("observer_unavailable", False, False, False, False)
-        try:
-            provider, privilege, lineage, loss_detection = self._backend.capability()
-        except BaseException:
-            return FileWriteObservation("observer_unavailable", False, False, False, False)
-        if not all((provider, privilege, lineage, loss_detection)):
-            return FileWriteObservation("observer_unavailable", provider, privilege, lineage, False)
+        diagnostic = self.capability_diagnostic()
+        provider = diagnostic.provider_available and diagnostic.schema_complete
+        if not all((diagnostic.api_available, provider, diagnostic.privilege_available, diagnostic.lineage_available, diagnostic.loss_detection_available)):
+            return FileWriteObservation("observer_unavailable", provider, diagnostic.privilege_available, diagnostic.lineage_available, False)
         return FileWriteObservation("observer_ready", True, True, True, False)
 
     def start(self, root_pid: int) -> FileWriteObservation:
@@ -2191,6 +2653,50 @@ class WindowsEtwFileWriteObserver:
         if result.status != "observer_ready" or not result.provider_available or not result.privilege_available or not result.lineage_complete or result.loss_detected:
             return FileWriteObservation("observer_incomplete", result.provider_available, result.privilege_available, result.lineage_complete, result.loss_detected, result.events)
         return result
+
+
+def observer_diagnostic_report(*, observer: WindowsEtwFileWriteObserver | None = None) -> dict[str, Any]:
+    observer = observer or WindowsEtwFileWriteObserver()
+    diagnostic = observer.capability_diagnostic()
+    reasons = list(diagnostic.reasons)
+    if not reasons and not all((diagnostic.api_available, diagnostic.provider_available, diagnostic.schema_complete, diagnostic.privilege_available, diagnostic.lineage_available, diagnostic.loss_detection_available)):
+        reasons = ["observer_api_failure"]
+    ready = not reasons and all((diagnostic.api_available, diagnostic.provider_available, diagnostic.schema_complete, diagnostic.privilege_available, diagnostic.lineage_available, diagnostic.loss_detection_available))
+    if ready:
+        next_operation = "none"
+    elif "observer_privilege_absent" in reasons:
+        next_operation = "owner_grant_SeSystemProfilePrivilege_to_current_execution_identity_or_BUILTIN_alias_544_or_559"
+    elif "observer_privilege_present_disabled" in reasons:
+        next_operation = "enable_existing_SeSystemProfilePrivilege_in_current_execution_token_or_use_BUILTIN_alias_544_or_559"
+    elif "observer_privilege_api_failure" in reasons or "observer_privilege_query_failure" in reasons:
+        next_operation = "resolve_native_privilege_query_before_qualification"
+    elif "observer_privilege_unavailable" in reasons:
+        next_operation = "enable_SeSystemProfilePrivilege_or_BUILTIN_alias_544_or_559"
+    else:
+        next_operation = "resolve_fixed_capability_reasons_and_rerun_diagnostic"
+    return {
+        "schema": OBSERVER_DIAGNOSTIC_SCHEMA,
+        "mode": "observer_diagnostic",
+        "status": "ready" if ready else "blocked",
+        "capability": {
+            "api_available": diagnostic.api_available,
+            "provider_available": diagnostic.provider_available,
+            "schema_complete": diagnostic.schema_complete,
+            "privilege_available": diagnostic.privilege_available,
+            "lineage_available": diagnostic.lineage_available,
+            "loss_detection_available": diagnostic.loss_detection_available,
+            "privilege_state": diagnostic.privilege_state,
+            "execution_context": diagnostic.execution_context,
+        },
+        "reasons": reasons,
+        "next_operation": next_operation,
+        "coordinator_launches": 0,
+        "trace_launches": 0,
+        "proof_launches": 0,
+        "proofSuiteId": None,
+        "production_usable": False,
+        "activation": False,
+    }
 
 
 def _state_workspace_root(state_workspace: Path) -> Path:
@@ -2774,6 +3280,9 @@ class _SyntheticReceiver:
     def __init__(self, config: object) -> None:
         self._config = config
         self.calls = 0
+        self.lookup_calls = 0
+        self._acknowledgments: dict[bytes, bytes] = {}
+        self._lost_ack_sent = False
 
     def identity_sha256(self) -> bytes:
         return self._config.receiver_identity  # type: ignore[attr-defined]
@@ -2781,14 +3290,33 @@ class _SyntheticReceiver:
     def epoch(self) -> int:
         return self._config.receiver_epoch  # type: ignore[attr-defined]
 
-    def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes:
+    def acknowledgment_profile(self) -> object:
+        return self._config.acknowledgment_profile  # type: ignore[attr-defined]
+
+    def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes | None:
         self.calls += 1
-        return build_synthetic_acknowledgment(
-            envelope_bytes,
-            config=self._config,  # type: ignore[arg-type]
-            idempotency_key=idempotency_key,
-            accepted_ms=1_700_000_000_000,
-        )
+        acknowledgment = self._acknowledgments.get(idempotency_key)
+        if acknowledgment is None:
+            acknowledgment = build_synthetic_acknowledgment(
+                envelope_bytes,
+                config=self._config,  # type: ignore[arg-type]
+                idempotency_key=idempotency_key,
+                accepted_ms=1_700_000_000_000 + self.calls,
+            )
+            self._acknowledgments[idempotency_key] = acknowledgment
+        if not self._lost_ack_sent:
+            self._lost_ack_sent = True
+            return None
+        return acknowledgment
+
+    def lookup_acknowledgment(self, **query: object) -> bytes | None:
+        self.lookup_calls += 1
+        if query.get("receiver_identity") != self._config.receiver_identity or query.get("receiver_epoch") != self._config.receiver_epoch:  # type: ignore[attr-defined]
+            return None
+        idempotency_key = query.get("idempotency_key")
+        if type(idempotency_key) is not bytes:
+            return None
+        return self._acknowledgments.get(idempotency_key)
 
 
 def _template(queue_config: QueueConfig) -> OperationTemplate:
@@ -2806,15 +3334,30 @@ def _template(queue_config: QueueConfig) -> OperationTemplate:
 
 def _run_one_sample(*, root: Path, source_workspace: Path, verifier_workspace: Path, source_caller: Profile11SourceBoundaryCaller, queue_config: QueueConfig, source_config: SourceAuthVerifierConfig, state_port: _ScreenStatePort, expected_acknowledged_count: int) -> StageSample:
     total_start = time.perf_counter()
-    runtime = MinimalClearanceVerificationRuntime.from_source_auth(
-        root=root,
-        source_auth_config=source_config,
-        state_disposition_port=state_port,
+    composition_config = composition.CompositionConfigV2(
+        queue_config.queue_id,
+        queue_config.digest,
+        verifier_profile_identity=bytes([0x11]) * 32,
+        receiver_identity=bytes([0x22]) * 32,
     )
+    receiver = _SyntheticReceiver(composition_config)
+    def open_runtime() -> MinimalClearanceVerificationRuntime:
+        return MinimalClearanceVerificationRuntime.from_source_auth(
+            root=root,
+            source_auth_config=source_config,
+            state_disposition_port=state_port,
+            composition_config=composition_config,
+            receiver=receiver,
+            lookup=receiver,
+        )
+
+    runtime: MinimalClearanceVerificationRuntime | None = open_runtime()
     frame: bytearray | None = None
     timing = _VerifierTiming()
     verify_start: float | None = None
     try:
+        if runtime is None:
+            _fixed("runtime_startup")
         batch = runtime.issue_batch(template=_template(queue_config))
         source_start = time.perf_counter()
         frame = source_caller.prove_one(batch=batch, source_key_epoch=queue_config.source_key_epoch)
@@ -2838,17 +3381,62 @@ def _run_one_sample(*, root: Path, source_workspace: Path, verifier_workspace: P
         runtime._verify_integrity()
         timing.integrity_ms = (time.perf_counter() - integrity_start) * 1000.0
         database = runtime._database_path
-        composition_config = runtime._composition_config
-    finally:
+        verify_end = time.perf_counter()
+        verify_state_ms = (verify_end - verify_start) * 1000.0
+    except BaseException:
         _wipe(frame)
-        close_start = time.perf_counter()
-        try:
-            runtime.close()
-        finally:
-            timing.close_ms = (time.perf_counter() - close_start) * 1000.0
+        runtime.close()
+        raise
+    else:
+        _wipe(frame)
     if verify_start is None:
         _fixed("timing_verify_scope")
-    verify_state_ms = (time.perf_counter() - verify_start) * 1000.0
+    ack_start = time.perf_counter()
+    restart_ms = 0.0
+    try:
+        if runtime is None:
+            _fixed("runtime_restart")
+        delivery = runtime.dispatch_outbox(max_batches=1)
+        if (
+            delivery.outcome,
+            delivery.batch_count,
+            delivery.attempted_operation_count,
+            delivery.acknowledged_operation_count,
+            delivery.unconfirmed_operation_count,
+            delivery.has_more,
+        ) != ("PROCESSED", 1, SOURCE_AUTH_OPERATION_COUNT, SOURCE_AUTH_OPERATION_COUNT - 1, 1, False):
+            _fixed("ack_batch_shape")
+
+        restart_start = time.perf_counter()
+        database_before_restart = runtime._database_path
+        runtime.close()
+        runtime = None
+        runtime = open_runtime()
+        if runtime._database_path != database_before_restart:
+            _fixed("runtime_restart_database")
+        restart_ms = (time.perf_counter() - restart_start) * 1000.0
+
+        reconciliation = runtime.reconcile_outbox(max_batches=1)
+        if (reconciliation.outcome, reconciliation.batch_count, reconciliation.attempted_operation_count, reconciliation.acknowledged_operation_count, reconciliation.unconfirmed_operation_count) != ("PROCESSED", 1, 1, 1, 0):
+            _fixed("reconciliation_batch_shape")
+        if receiver.calls != SOURCE_AUTH_OPERATION_COUNT or receiver.lookup_calls != 1:
+            _fixed("ack_call_shape")
+        state = runtime.support_summary()
+        if state["outbox_counts"] != {"READY": 0, "LEASED": 0, "ACKNOWLEDGED": expected_acknowledged_count, "DELIVERY_UNCONFIRMED": 0}:
+            _fixed("ack_state_shape")
+        runtime._verify_integrity()
+    finally:
+        ack_end = time.perf_counter()
+        close_start = time.perf_counter()
+        try:
+            if runtime is not None:
+                runtime.close()
+        finally:
+            timing.close_ms = restart_ms + (time.perf_counter() - close_start) * 1000.0
+        ack_ms = (ack_end - ack_start) * 1000.0 - restart_ms
+        if ack_ms < 0.0:
+            _fixed("timing_ack_reconciliation")
+    verify_state_ms += timing.close_ms
     measured_verify_ms = (
         timing.handoff_ms
         + timing.frame_read_ms
@@ -2871,19 +3459,6 @@ def _run_one_sample(*, root: Path, source_workspace: Path, verifier_workspace: P
         timing.close_ms,
         verify_unbucketed_ms,
     )
-    ack_start = time.perf_counter()
-    store = ClearanceCompositionStoreV2(path=database, config=composition_config)
-    try:
-        receiver = _SyntheticReceiver(composition_config)
-        delivery = store.dispatch_outbox_batch("profile11-screen-receiver", receiver=receiver)
-        if delivery is None or len(delivery.results) != SOURCE_AUTH_OPERATION_COUNT or receiver.calls != SOURCE_AUTH_OPERATION_COUNT or any(result.status != "ACKNOWLEDGED" for result in delivery.results):
-            _fixed("ack_batch_shape")
-        state = store.snapshot()
-        if state["outbox_counts"] != {"READY": 0, "LEASED": 0, "ACKNOWLEDGED": expected_acknowledged_count, "DELIVERY_UNCONFIRMED": 0}:
-            _fixed("ack_state_shape")
-    finally:
-        store.close()
-    ack_ms = (time.perf_counter() - ack_start) * 1000.0
     for workspace in (source_workspace, verifier_workspace):
         try:
             if tuple(workspace.iterdir()):
@@ -3052,6 +3627,25 @@ class CoordinatorRun:
     payload: bytes | None
     observation: JobObservation
     error_code: str | None
+
+
+def _failed_coordinator_run() -> CoordinatorRun:
+    """Return a bounded, unmeasured failure when launch orchestration raises unexpectedly."""
+
+    observation = JobObservation(
+        0,
+        PROCESS_TREE_PEAK_CAP_BYTES,
+        PROCESS_TREE_PEAK_CAP_BYTES,
+        PROCESS_TREE_PEAK_CAP_BYTES,
+        OUTER_ACTIVE_PROCESS_LIMIT,
+        OUTER_ACTIVE_PROCESS_LIMIT,
+        0,
+        0,
+        False,
+        False,
+        False,
+    )
+    return CoordinatorRun(None, observation, "coordinator_failure")
 
 
 def _read_pipe(fd: int, cap: int, output: dict[str, bytes], key: str, failed: dict[str, str]) -> None:
@@ -3367,8 +3961,16 @@ def run_falsification_screen(*, observer: WindowsEtwFileWriteObserver | None = N
             if started.status != "observer_ready":
                 _fixed("outer_observer_start")
 
-        run = _launch_coordinator(run_root, on_assigned=start_observation)
-        observed_after = observer.stop()
+        run: CoordinatorRun
+        try:
+            run = _launch_coordinator(run_root, on_assigned=start_observation)
+        except BaseException:
+            run = _failed_coordinator_run()
+        finally:
+            try:
+                observed_after = observer.stop()
+            except BaseException:
+                observed_after = FileWriteObservation("observer_incomplete", True, True, False, True)
         disk_gate = evaluate_disk_gate(observed_after, state_workspace=state_workspace)
         try:
             payload = _parse_payload(run.payload)
@@ -3428,6 +4030,7 @@ def _probe_tree_coordinator(run_root: Path, sleep_seconds: float) -> dict[str, A
 def main(argv: list[str] | None = None) -> int:
     parser = __import__("argparse").ArgumentParser(add_help=False)
     parser.add_argument("--prepare", action="store_true")
+    parser.add_argument("--diagnose-observer", action="store_true")
     parser.add_argument("--screen", action="store_true")
     parser.add_argument("--coordinator", action="store_true")
     parser.add_argument("--probe-coordinator", type=float)
@@ -3435,8 +4038,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-root")
     args = parser.parse_args(argv)
     try:
+        mode_count = sum((
+            bool(args.prepare),
+            bool(args.diagnose_observer),
+            bool(args.screen),
+            bool(args.coordinator or args.probe_coordinator is not None),
+            args.probe_grandchild is not None,
+        ))
+        if mode_count == 0:
+            _fixed("mode_required")
+        if mode_count != 1:
+            _fixed("mode_conflict")
+        if args.run_root and not (args.coordinator or args.probe_coordinator is not None):
+            _fixed("run_root_mode")
         if args.prepare:
             print(json.dumps(prepare_report(), sort_keys=True, separators=(",", ":")))
+            return 0
+        if args.diagnose_observer:
+            print(json.dumps(observer_diagnostic_report(), sort_keys=True, separators=(",", ":")))
             return 0
         if args.probe_grandchild is not None:
             return _probe_tree_child(args.probe_grandchild)
@@ -3470,9 +4089,9 @@ if __name__ == "__main__":
 __all__ = (
     "C_BUILD", "C_HEAD", "C_RANGE_LIBRARY", "C_REPO", "C_SOURCE_LIBRARY", "C_VERIFIER", "C_TREE",
     "CompletePathError", "DependencyReport", "FileWriteEvent", "FileWriteObservation", "GitPin",
-    "JobObservation", "MANIFEST_PATH", "MEASURED_SAMPLE_COUNT", "OUTER_ACTIVE_PROCESS_LIMIT",
+    "JobObservation", "MANIFEST_PATH", "MEASURED_SAMPLE_COUNT", "OBSERVER_DIAGNOSTIC_SCHEMA", "ObserverCapabilityDiagnostic", "ObserverExecutionEvidence", "OUTER_ACTIVE_PROCESS_LIMIT",
     "OUTER_HARD_CAP_BYTES", "PROFILE_ID", "PROFILE_SCHEMA", "PRODUCER_EXECUTABLE", "PRODUCER_EXECUTABLE_SHA256", "PRODUCER_EXECUTABLE_SIZE_BYTES", "PRODUCER_HEAD", "PRODUCER_REPO", "PRODUCER_TREE", "MeasurementSchedule", "StageSample", "VerifyStateBreakdown", "WindowsEtwFileWriteObserver", "WindowsEtwWriteTraceBackend",
-    "build_test_aggregate", "configured_state_allowlist", "effective_outer_cap", "evaluate_disk_gate",
+    "build_test_aggregate", "configured_state_allowlist", "effective_outer_cap", "evaluate_disk_gate", "observer_diagnostic_report",
     "nearest_rank_p95", "prepare_report", "run_falsification_screen", "run_measurement_schedule", "run_measurement_schedule_with_warmup", "validate_dependencies",
     "validate_job_observation", "validate_topology",
 )

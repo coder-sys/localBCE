@@ -1631,6 +1631,42 @@ def run_contained_verifier(
             raise VerifierProcessError("verifier_cleanup") from None
 
 
+class _OwnedStreamDescriptor:
+    """Own one stream descriptor and make release uncertainty fail closed."""
+
+    __slots__ = ("descriptor", "owner", "state")
+
+    def __init__(self, descriptor: int) -> None:
+        self.descriptor = descriptor
+        self.owner = "wrapper"
+        self.state = "open"
+
+    def transfer_to_writer(self) -> None:
+        if self.owner != "wrapper":
+            raise RuntimeError("stream descriptor ownership transfer")
+        self.owner = "writer"
+
+    def close_once(self) -> bool:
+        """Release this descriptor once; an exception makes release unknown.
+
+        A descriptor is known-open only before its first release attempt.  Once
+        ``os.close`` has been called, its outcome is not safe to retry: the
+        descriptor may have been released and its integer may have been reused.
+        """
+
+        if self.state == "closed":
+            return True
+        if self.state == "unknown":
+            return False
+        try:
+            os.close(self.descriptor)
+        except BaseException:
+            self.state = "unknown"
+            return False
+        self.state = "closed"
+        return True
+
+
 def run_contained_verifier_stream(
     executable: Path,
     arguments: tuple[str, ...],
@@ -1673,6 +1709,8 @@ def run_contained_verifier_stream(
         read_descriptor, write_descriptor = os.pipe()
     except OSError:
         raise VerifierProcessError("verifier_stream_pipe") from None
+    read_owner = _OwnedStreamDescriptor(read_descriptor)
+    write_owner = _OwnedStreamDescriptor(write_descriptor)
     writer_failure: dict[str, str] = {}
 
     def _write_frame() -> None:
@@ -1689,47 +1727,81 @@ def run_contained_verifier_stream(
         finally:
             if offset != len(frame):
                 writer_failure["code"] = "verifier_stream_input_incomplete"
-            try:
-                os.close(write_descriptor)
-            except OSError:
-                pass
+            if not write_owner.close_once():
+                writer_failure["close_unknown"] = "1"
 
     writer = threading.Thread(target=_write_frame, daemon=True)
-    writer.start()
     result: ContainedVerifierResult | None = None
+    primary_error: BaseException | None = None
+    writer_started = False
     try:
-        result = run_contained_verifier(
-            executable,
-            arguments,
-            workspace=workspace,
-            timeout_seconds=timeout_seconds,
-            job_memory_cap_bytes=ADMISSION_CAP_BYTES,
-            _stdin_descriptor=read_descriptor,
-            expected_executable_size_bytes=expected_executable_size_bytes,
-            expected_executable_sha256=expected_executable_sha256,
-            stdout_cap_bytes=stdout_cap_bytes,
-            stderr_cap_bytes=stderr_cap_bytes,
-            stdout_ascii=stdout_ascii,
-            stderr_ascii=stderr_ascii,
-        )
-        return result
-    finally:
         try:
-            os.close(read_descriptor)
-        except OSError:
-            pass
-        writer.join(timeout=5)
-        cleanup_error: VerifierProcessError | None = None
-        if writer.is_alive():
-            cleanup_error = VerifierProcessError("verifier_stream_cleanup")
-        elif writer_failure and result is not None and result.timed_out is not True:
-            cleanup_error = VerifierProcessError(writer_failure["code"])
+            writer.start()
+        except BaseException:
+            # If start failed before the OS thread existed, the wrapper still
+            # owns a known-open write descriptor and may close it once.  If a
+            # thread did exist, ownership may already have transferred; never
+            # close that descriptor from the wrapper.
+            if writer.ident is not None or writer.is_alive():
+                writer_started = True
+                write_owner.transfer_to_writer()
+            primary_error = VerifierProcessError("verifier_stream_start")
+        else:
+            writer_started = True
+            write_owner.transfer_to_writer()
+            try:
+                result = run_contained_verifier(
+                    executable,
+                    arguments,
+                    workspace=workspace,
+                    timeout_seconds=timeout_seconds,
+                    job_memory_cap_bytes=ADMISSION_CAP_BYTES,
+                    _stdin_descriptor=read_owner.descriptor,
+                    expected_executable_size_bytes=expected_executable_size_bytes,
+                    expected_executable_sha256=expected_executable_sha256,
+                    stdout_cap_bytes=stdout_cap_bytes,
+                    stderr_cap_bytes=stderr_cap_bytes,
+                    stdout_ascii=stdout_ascii,
+                    stderr_ascii=stderr_ascii,
+                )
+            except BaseException as error:
+                primary_error = error
+    finally:
+        stream_cleanup_error = False
+        if not read_owner.close_once():
+            stream_cleanup_error = True
+        if writer_started:
+            try:
+                writer.join(timeout=5)
+            except BaseException:
+                stream_cleanup_error = True
+            if writer.is_alive():
+                stream_cleanup_error = True
+        elif not write_owner.close_once():
+            stream_cleanup_error = True
+        if write_owner.state == "unknown":
+            stream_cleanup_error = True
+        workspace_cleanup_error: VerifierProcessError | None = None
         try:
             _cleanup_verifier_workspace(workspace)
         except VerifierProcessError as error:
-            cleanup_error = error
-        if cleanup_error is not None:
-            raise cleanup_error
+            workspace_cleanup_error = error
+        except BaseException:
+            workspace_cleanup_error = VerifierProcessError("verifier_stream_cleanup")
+        if stream_cleanup_error:
+            raise VerifierProcessError("verifier_stream_cleanup") from None
+        if workspace_cleanup_error is not None:
+            raise workspace_cleanup_error from None
+
+    if primary_error is not None:
+        raise primary_error.with_traceback(primary_error.__traceback__)
+    if writer_failure and not (result is not None and result.timed_out is True):
+        raise VerifierProcessError(
+            writer_failure.get("code", "verifier_stream_write")
+        ) from None
+    if result is None:
+        raise VerifierProcessError("verifier_stream_cleanup") from None
+    return result
 
 
 __all__ = (

@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import subprocess
 import sys
@@ -10,10 +11,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app.minimal_clearance_composition as composition
-from app.minimal_clearance_composition import CompositionConfigV2, StateDispositionControl
+import app.minimal_clearance_verification_runtime as runtime_module
+from app.minimal_clearance_composition import CompositionConfigV2, StateDispositionControl, build_synthetic_acknowledgment
 from app.minimal_clearance_source_auth_verifier_adapter import MinimalClearanceSourceAuthVerifierAdapter, SOURCE_AUTH_EXECUTABLE_SHA256, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES, SourceAuthVerifierConfig
 from app.minimal_clearance_verification_queue import BatchVerifierResult, OperationTemplate, QueueConfig, VolatileProofHandoff
-from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime, VerificationRuntimeError
+from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime, RuntimeOutboxResult, VerificationRuntimeError
 
 
 def _controls(operation_refs: tuple[bytes, ...]) -> dict[bytes, StateDispositionControl]:
@@ -66,6 +68,115 @@ class _FailingVerifier:
     def verify(self, _stream: VolatileProofHandoff, _batch):
         self.calls += 1
         raise RuntimeError("verifier process failure")
+
+
+class _Clock:
+    def __init__(self, now: int = 1_700_000_000_000) -> None:
+        self.now = now
+
+    def now_ms(self) -> int:
+        return self.now
+
+    def advance(self, milliseconds: int) -> None:
+        self.now += milliseconds
+
+
+class _Receiver:
+    def __init__(self, config: CompositionConfigV2, clock: _Clock, *, modes: tuple[str, ...] = ("valid",), acks: dict[bytes, bytes] | None = None, directives: dict[bytes, str] | None = None, identity_value: object | None = None) -> None:
+        self.config = config
+        self.clock = clock
+        self.modes = modes
+        self.acks = {} if acks is None else acks
+        self.directives = {} if directives is None else directives
+        self.identity_value = config.receiver_identity if identity_value is None else identity_value
+        self.dispatch_calls: list[tuple[bytes, bytes]] = []
+        self.lookup_calls: list[tuple[bytes, bytes]] = []
+        self.side_effects = 0
+
+    def identity_sha256(self):
+        return self.identity_value
+
+    def epoch(self):
+        return self.config.receiver_epoch
+
+    def acknowledgment_profile(self):
+        return self.config.acknowledgment_profile
+
+    def _mode(self, calls: list[tuple[bytes, bytes]]) -> str:
+        return self.modes[len(calls) % len(self.modes)]
+
+    def _valid_ack(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes:
+        acknowledgment = self.acks.get(idempotency_key)
+        if acknowledgment is None:
+            acknowledgment = build_synthetic_acknowledgment(envelope_bytes, config=self.config, idempotency_key=idempotency_key, accepted_ms=self.clock.now_ms())
+            self.acks[idempotency_key] = acknowledgment
+            self.side_effects += 1
+        return acknowledgment
+
+    def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes | None:
+        operation_ref = bytes.fromhex(json.loads(envelope_bytes.decode("ascii"))["operation_ref"])
+        self.dispatch_calls.append((operation_ref, idempotency_key))
+        mode = self._mode(self.dispatch_calls[:-1])
+        if mode == "valid":
+            return self._valid_ack(envelope_bytes, idempotency_key)
+        if mode == "missing":
+            return None
+        if mode == "crash":
+            self._valid_ack(envelope_bytes, idempotency_key)
+            raise KeyboardInterrupt
+        raise AssertionError(mode)
+
+    def lookup_acknowledgment(self, **query):
+        operation_ref = query["operation_id"]
+        idempotency_key = query["idempotency_key"]
+        self.lookup_calls.append((operation_ref, idempotency_key))
+        mode = self._mode(self.lookup_calls[:-1])
+        if mode == "missing":
+            return None
+        if mode != "valid":
+            raise AssertionError(mode)
+        envelope = composition._envelope(operation_ref, self.directives[operation_ref], self.config)
+        return build_synthetic_acknowledgment(envelope, config=self.config, idempotency_key=idempotency_key, accepted_ms=self.clock.now_ms())
+
+
+class _ReentrantReceiver(_Receiver):
+    def __init__(self, config: CompositionConfigV2, clock: _Clock) -> None:
+        super().__init__(config, clock)
+        self.runtime = None
+        self.reentry_errors: dict[str, str] = {}
+
+    def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes | None:
+        if not self.reentry_errors:
+            if self.runtime is None:
+                raise AssertionError("runtime not attached")
+            actions = {
+                "run": self.runtime.run,
+                "dispatch": self.runtime.dispatch_outbox,
+                "reconcile": self.runtime.reconcile_outbox,
+                "close": self.runtime.close,
+            }
+            for name, action in actions.items():
+                try:
+                    action()
+                except VerificationRuntimeError as error:
+                    self.reentry_errors[name] = str(error)
+                else:
+                    self.reentry_errors[name] = "returned"
+        return super().dispatch(envelope_bytes, idempotency_key)
+
+
+class _BlockingReceiver(_Receiver):
+    def __init__(self, config: CompositionConfigV2, clock: _Clock) -> None:
+        super().__init__(config, clock)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes | None:
+        if not self.entered.is_set():
+            self.entered.set()
+            if not self.release.wait(5):
+                raise RuntimeError("test callback release timeout")
+        return super().dispatch(envelope_bytes, idempotency_key)
 
 
 class RuntimeV10Tests(unittest.TestCase):
@@ -121,6 +232,220 @@ class RuntimeV10Tests(unittest.TestCase):
             with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 100)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 100)
+
+    def test_runtime_run_drives_configured_delivery_without_new_state_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clock = _Clock()
+            config = QueueConfig("runtime-delivery", 100)
+            composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32, lease_seconds=1, reconciliation_lease_seconds=1)
+            receiver = _Receiver(composition_config, clock)
+            with MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=receiver, lookup=receiver, clock=clock) as runtime:
+                batch = runtime.issue_batch(template=OperationTemplate("runtime-delivery", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
+                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"runtime-proof")))
+                result = runtime.run(dispatch_batches=1)
+                self.assertEqual((result.outcome, result.processed, result.outbox_processed, result.accepted_operation_count), ("PROCESSED", 1, 1, 100))
+                self.assertIsNotNone(result.delivery)
+                assert result.delivery is not None
+                self.assertEqual((result.delivery.operation, result.delivery.batch_count, result.delivery.attempted_operation_count, result.delivery.acknowledged_operation_count, result.delivery.unconfirmed_operation_count, result.delivery.has_more), ("DIRECT_DELIVERY", 1, 100, 100, 0, False))
+                self.assertEqual(len(receiver.dispatch_calls), 100)
+                self.assertEqual(runtime.support_summary()["outbox_counts"], {"READY": 0, "LEASED": 0, "ACKNOWLEDGED": 100, "DELIVERY_UNCONFIRMED": 0})
+                with self.assertRaisesRegex(VerificationRuntimeError, "runtime_dispatch_max_batches"):
+                    runtime.dispatch_outbox(max_batches=0)
+                with self.assertRaisesRegex(VerificationRuntimeError, "runtime_reconciliation_max_batches"):
+                    runtime.reconcile_outbox(max_batches=257)
+            with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                self.assertEqual(connection.execute("SELECT status,COUNT(*) FROM composition_outbox GROUP BY status").fetchall(), [("ACKNOWLEDGED", 100)])
+                self.assertEqual(connection.execute("SELECT payment_root FROM composition_meta WHERE id=1").fetchone()[0], bytes(64))
+            with self.assertRaisesRegex(VerificationRuntimeError, "runtime_closed"):
+                runtime.dispatch_outbox()
+            runtime.close()
+
+    def test_runtime_serializes_callback_reentry_and_preserves_owner_until_close(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clock = _Clock()
+            config = QueueConfig("runtime-reentry", 100)
+            composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32, lease_seconds=1, reconciliation_lease_seconds=1)
+            receiver = _ReentrantReceiver(composition_config, clock)
+            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=receiver, lookup=receiver, clock=clock)
+            receiver.runtime = runtime
+            try:
+                batch = runtime.issue_batch(template=OperationTemplate("runtime-reentry", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
+                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"runtime-proof")))
+                self.assertEqual(runtime.run().accepted_operation_count, 100)
+                result = runtime.dispatch_outbox()
+                self.assertEqual((result.acknowledged_operation_count, result.unconfirmed_operation_count), (100, 0))
+                self.assertEqual(receiver.reentry_errors, {name: "runtime_busy" for name in ("run", "dispatch", "reconcile", "close")})
+                self.assertFalse(runtime._closed)
+                self.assertTrue((root / "state.sqlite.runtime-lock").exists())
+            finally:
+                runtime.close()
+            self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+
+    def test_runtime_rejects_concurrent_callers_while_callback_owns_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clock = _Clock()
+            config = QueueConfig("runtime-concurrent", 100)
+            composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32, lease_seconds=1, reconciliation_lease_seconds=1)
+            receiver = _BlockingReceiver(composition_config, clock)
+            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=receiver, lookup=receiver, clock=clock)
+            primary_result: list[RuntimeOutboxResult] = []
+            primary_errors: list[BaseException] = []
+            concurrent_results: dict[str, str] = {}
+            try:
+                batch = runtime.issue_batch(template=OperationTemplate("runtime-concurrent", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
+                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"runtime-proof")))
+                self.assertEqual(runtime.run().accepted_operation_count, 100)
+
+                def primary() -> None:
+                    try:
+                        primary_result.append(runtime.dispatch_outbox())
+                    except BaseException as error:
+                        primary_errors.append(error)
+
+                worker = threading.Thread(target=primary)
+                worker.start()
+                self.assertTrue(receiver.entered.wait(5))
+
+                actions = {
+                    "run": runtime.run,
+                    "dispatch": runtime.dispatch_outbox,
+                    "reconcile": runtime.reconcile_outbox,
+                    "close": runtime.close,
+                }
+
+                def competing(name: str, action) -> None:
+                    try:
+                        action()
+                    except VerificationRuntimeError as error:
+                        concurrent_results[name] = str(error)
+                    except BaseException as error:
+                        concurrent_results[name] = f"unexpected:{type(error).__name__}"
+                    else:
+                        concurrent_results[name] = "returned"
+
+                competitors = [threading.Thread(target=competing, args=(name, action)) for name, action in actions.items()]
+                for thread in competitors:
+                    thread.start()
+                for thread in competitors:
+                    thread.join(5)
+                self.assertEqual(concurrent_results, {name: "runtime_busy" for name in actions})
+                self.assertTrue(worker.is_alive())
+                self.assertTrue((root / "state.sqlite.runtime-lock").exists())
+                receiver.release.set()
+                worker.join(5)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(primary_errors, [])
+                self.assertEqual(len(primary_result), 1)
+                self.assertEqual(primary_result[0].acknowledged_operation_count, 100)
+            finally:
+                receiver.release.set()
+                if 'worker' in locals():
+                    worker.join(5)
+                if not runtime._closed:
+                    runtime.close()
+
+    def test_constructor_cleans_queue_store_when_composition_creation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = QueueConfig("runtime-startup-cleanup", 100)
+            original_close = runtime_module._VerificationQueueStore._close
+            with patch.object(runtime_module._VerificationQueueStore, "_close", autospec=True, side_effect=original_close) as store_close, patch.object(runtime_module, "ClearanceCompositionStoreV2", side_effect=composition.CompositionError("composition_schema")):
+                with self.assertRaisesRegex(VerificationRuntimeError, "composition_schema"):
+                    MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
+            self.assertEqual(store_close.call_count, 1)
+            self.assertTrue((root / "state.sqlite").exists())
+            self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+
+    def test_runtime_rejects_unbound_receiver_before_creating_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = QueueConfig("runtime-binding", 100)
+            composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32)
+            receiver = _Receiver(composition_config, _Clock(), identity_value=bytes([8]) * 32)
+            with self.assertRaisesRegex(VerificationRuntimeError, "runtime_receiver_binding"):
+                MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=receiver)
+            self.assertFalse((root / "state.sqlite").exists())
+
+    def test_runtime_public_delivery_recovery_and_reconciliation_survive_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clock = _Clock()
+            config = QueueConfig("runtime-recovery", 100)
+            composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32, lease_seconds=1, reconciliation_lease_seconds=1)
+            external_acks: dict[bytes, bytes] = {}
+            crashing = _Receiver(composition_config, clock, modes=("valid",) * 99 + ("crash",), acks=external_acks)
+            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=crashing, lookup=crashing, clock=clock)
+            batch = runtime.issue_batch(template=OperationTemplate("runtime-recovery", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
+            runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"runtime-proof")))
+            self.assertEqual(runtime.run().accepted_operation_count, 100)
+            with self.assertRaises(KeyboardInterrupt):
+                runtime.dispatch_outbox()
+            original_keys = tuple(key for _operation, key in crashing.dispatch_calls)
+            self.assertEqual((len(original_keys), crashing.side_effects), (100, 100))
+            self.assertFalse(runtime._closed)
+            self.assertTrue((root / "state.sqlite.runtime-lock").exists())
+            self.assertEqual(runtime.support_summary()["outbox_counts"]["LEASED"], 100)
+            runtime.close()
+
+            before_expiry = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=crashing, lookup=crashing, clock=clock)
+            before_direct = before_expiry.dispatch_outbox()
+            before_reconciliation = before_expiry.reconcile_outbox()
+            self.assertEqual((before_direct.outcome, before_direct.batch_count, before_reconciliation.outcome, before_reconciliation.batch_count, len(crashing.dispatch_calls), len(crashing.lookup_calls)), ("EMPTY", 0, "EMPTY", 0, 100, 0))
+            before_expiry.close()
+
+            clock.advance(composition_config.lease_seconds * 1000)
+            retry_receiver = _Receiver(composition_config, clock, modes=("missing",), acks=external_acks)
+            after_expiry = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=retry_receiver, lookup=retry_receiver, clock=clock)
+            retry = after_expiry.dispatch_outbox()
+            self.assertEqual((retry.outcome, retry.batch_count, retry.attempted_operation_count, retry.acknowledged_operation_count, retry.unconfirmed_operation_count, retry_receiver.side_effects, tuple(key for _operation, key in retry_receiver.dispatch_calls)), ("PROCESSED", 1, 100, 0, 100, 0, original_keys))
+            with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                directives = {bytes(row[0]): str(row[1]) for row in connection.execute("SELECT operation_ref,effective_directive FROM composition_outbox")}
+            after_expiry.close()
+
+            lookup = _Receiver(composition_config, clock, modes=("valid",), directives=directives)
+            reconciler = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=retry_receiver, lookup=lookup, clock=clock)
+            reconciliation_run = reconciler.run(reconciliation_batches=1)
+            self.assertEqual((reconciliation_run.outcome, reconciliation_run.outbox_processed), ("PROCESSED", 1))
+            reconciliation = reconciliation_run.reconciliation
+            assert reconciliation is not None
+            self.assertEqual((reconciliation.outcome, reconciliation.batch_count, reconciliation.attempted_operation_count, reconciliation.acknowledged_operation_count, reconciliation.unconfirmed_operation_count, tuple(key for _operation, key in lookup.lookup_calls)), ("PROCESSED", 1, 100, 100, 0, original_keys))
+            self.assertEqual((reconciler.dispatch_outbox().outcome, reconciler.reconcile_outbox().outcome), ("EMPTY", "EMPTY"))
+            self.assertEqual(reconciler.support_summary()["outbox_counts"], {"READY": 0, "LEASED": 0, "ACKNOWLEDGED": 100, "DELIVERY_UNCONFIRMED": 0})
+            reconciler.close()
+            with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                self.assertEqual(connection.execute("SELECT status,MIN(attempt),MAX(attempt),COUNT(*) FROM composition_outbox GROUP BY status").fetchall(), [("ACKNOWLEDGED", 3, 3, 100)])
+                self.assertEqual(connection.execute("SELECT payment_root FROM composition_meta WHERE id=1").fetchone()[0], bytes(64))
+
+    def test_runtime_close_retries_after_real_handoff_buffer_export_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = QueueConfig("runtime-close-retry", 100)
+            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
+            exported = None
+            try:
+                now = int(time.time() * 1000)
+                batch = runtime.issue_batch(template=OperationTemplate("runtime-close-retry", 1, config.profile_version, now - 100, now + 60_000))
+                runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"cleanup-proof")))
+                handoff = next(iter(runtime._store._handoffs.values()))
+                # A live memoryview makes bytearray.clear raise BufferError;
+                # this is a real buffer-lifetime failure, not a mocked close.
+                exported = memoryview(handoff._buffer)
+                with self.assertRaises(BufferError):
+                    runtime.close()
+                self.assertFalse(runtime._closed)
+                self.assertFalse(handoff.closed)
+                self.assertTrue((root / "state.sqlite.runtime-lock").exists())
+            finally:
+                if exported is not None:
+                    exported.release()
+                if not runtime._closed:
+                    runtime.close()
+            self.assertTrue(runtime._closed)
+            self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+            self.assertEqual(len(handoff._buffer), 0)
 
     def test_legacy_split_database_is_rejected_without_touching_it(self) -> None:
         for legacy_name in ("queue.sqlite", "composition.sqlite"):

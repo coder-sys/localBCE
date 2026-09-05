@@ -122,13 +122,15 @@ runpy.run_path(sys.argv[0], run_name="__main__")
 '''
         self._assert_binding_rejection(self._run_bootstrap(bootstrap, str(wrong_source)))
 
-    def test_execution_binding_rejects_wrong_head_before_launch(self) -> None:
-        old = f'_QUEUE_SOURCE_HEAD = "{screen.QUEUE_HEAD}"'
-        self._assert_binding_rejection(self._run_modified(((old, '_QUEUE_SOURCE_HEAD = "' + "0" * 40 + '"'),), "--prepare"))
+    def test_execution_binding_rejects_manifest_policy_drift_before_launch(self) -> None:
+        old = 'binding.get("git_clean_required") is not True'
+        new = 'binding.get("git_clean_required") is True'
+        self._assert_binding_rejection(self._run_modified(((old, new),), "--prepare"))
 
-    def test_execution_binding_rejects_wrong_tree_before_launch(self) -> None:
-        old = f'_QUEUE_SOURCE_TREE = "{screen.QUEUE_TREE}"'
-        self._assert_binding_rejection(self._run_modified(((old, '_QUEUE_SOURCE_TREE = "' + "0" * 40 + '"'),), "--prepare"))
+    def test_execution_binding_rejects_manifest_fallback_drift_before_launch(self) -> None:
+        old = 'binding.get("fallback") is not False'
+        new = 'binding.get("fallback") is False'
+        self._assert_binding_rejection(self._run_modified(((old, new),), "--prepare"))
 
     def test_execution_binding_rejects_dirty_queue_before_launch(self) -> None:
         with tempfile.TemporaryDirectory(prefix="profile11-dirty-queue-") as directory:
@@ -141,9 +143,14 @@ runpy.run_path(sys.argv[0], run_name="__main__")
             )
             self.assertEqual(cloned.returncode, 0, cloned.stderr)
             (clone / "binding-dirty-sentinel").write_text("dirty", encoding="ascii")
-            old = f'_QUEUE_SOURCE_PATH = Path(r"{self._QUEUE_ROOT}")'
-            new = f'_QUEUE_SOURCE_PATH = Path(r"{clone}")'
-            self._assert_binding_rejection(self._run_modified(((old, new),), "--prepare"))
+            result = subprocess.run(
+                [sys.executable, "-B", str(clone / self._SCRIPT.name), "--prepare"],
+                cwd=clone,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self._assert_binding_rejection(result)
 
     def test_execution_binding_rejects_preloaded_app_before_launch(self) -> None:
         bootstrap = r'''import app, runpy, sys
@@ -294,8 +301,8 @@ print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         self._assert_prepare_shape(json.loads(result.stdout))
 
     def test_direct_prepare_loads_e2e_fixture_without_ambient_tests_import(self) -> None:
-        bootstrap = r'''import json, runpy, sys
-sys.path.insert(0, r"C:\Users\neers\Documents\Codex\2026-09-04\blind-queue-receiver-binding-v1")
+        bootstrap = r'''import json, pathlib, runpy, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).resolve().parent / "ambient-does-not-exist"))
 sys.argv = [sys.argv[1], "--prepare"]
 runpy.run_path(sys.argv[0], run_name="__main__")
 '''
@@ -307,8 +314,8 @@ runpy.run_path(sys.argv[0], run_name="__main__")
         self.assertNotIn("public_key_missing", value["mismatched"])
 
     def test_fixture_loader_ignores_preloaded_hostile_tests_module(self) -> None:
-        bootstrap = r'''import json, runpy, sys, types
-sys.path.insert(0, r"C:\Users\neers\Documents\Codex\2026-09-04\blind-queue-receiver-binding-v1")
+        bootstrap = r'''import json, pathlib, runpy, sys, types
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).resolve().parent / "ambient-does-not-exist"))
 package = types.ModuleType("tests")
 package.__path__ = []
 fixture = types.ModuleType("tests.test_profile11_source_boundary")
@@ -412,9 +419,11 @@ runpy.run_path(sys.argv[0], run_name="__main__")
     def test_manifest_and_exact_pins(self) -> None:
         manifest = json.loads(screen.MANIFEST_PATH.read_text(encoding="utf-8"))
         readme = (screen.MANIFEST_PATH.parent / "README.md").read_text(encoding="utf-8")
-        for field, value in manifest["git_pins"]["queue"].items():
-            with self.subTest(readme_queue_pin=field):
-                self.assertIn(value, readme)
+        self.assertEqual(manifest["schema"], "BL/NATIVE-V3/PROFILE11-COMPLETE-PATH-MANIFEST/v2")
+        self.assertNotIn("queue", manifest["git_pins"])
+        self.assertIn("python_source_binding.required_modules", readme)
+        self.assertNotIn("queue-runtime-assembled-20260905", readme)
+        self.assertNotIn("blind-queue-receiver-binding-v1", readme)
         for retired_pin in (
             "412b53e68091561657106345a22a772699761945",
             "72746eb68e667698fdb0a72c8aea7c9bf027076a",
@@ -450,20 +459,33 @@ runpy.run_path(sys.argv[0], run_name="__main__")
                     "head": screen.C_HEAD,
                     "tree": screen.C_TREE,
                 },
-                "queue": {
-                    "path": str(screen.QUEUE_REPO),
-                    "head": screen.QUEUE_HEAD,
-                    "tree": screen.QUEUE_TREE,
-                },
             },
         )
+        required_modules = {
+            "app": {"path": "app/__init__.py", "git_blob": "75bbf4ba2446feb54ba8516abe2a135925215320"},
+            "app.minimal_clearance_composition": {"path": "app/minimal_clearance_composition.py", "git_blob": "131e6e9649483791b6799c0eefa48d54e5293cf5"},
+            "app.minimal_clearance_composition_independent": {"path": "app/minimal_clearance_composition_independent.py", "git_blob": "466a27bbc9a3aee21333d210c824d938876b0072"},
+            "app.minimal_clearance_resource_limits": {"path": "app/minimal_clearance_resource_limits.py", "git_blob": "56e57ebb3618b5ab090165f6a8ab93be70cd9c7c"},
+            "app.minimal_clearance_source_auth_verifier_adapter": {"path": "app/minimal_clearance_source_auth_verifier_adapter.py", "git_blob": "f4ae20452717683c1182631c5b0c5850d9c78c6f"},
+            "app.minimal_clearance_verification_queue": {"path": "app/minimal_clearance_verification_queue.py", "git_blob": "6f941f638873ad505c30aa1bf862e083e7019762"},
+            "app.minimal_clearance_verification_queue_independent": {"path": "app/minimal_clearance_verification_queue_independent.py", "git_blob": "f700e2036f851a98f77382bb08dda7e728403fea"},
+            "app.minimal_clearance_verification_runtime": {"path": "app/minimal_clearance_verification_runtime.py", "git_blob": "4d1858211e7d3bbf814c571ca6b38715ecf0315d"},
+            "app.minimal_clearance_verifier_process": {"path": "app/minimal_clearance_verifier_process.py", "git_blob": "f8b35e452c94f539c3ba002fb1e7510752d6d2a5"},
+        }
         self.assertEqual(
             manifest["python_source_binding"],
             {
-                "references_git_pin": "queue",
                 "canonical_package": "app",
+                "content_hash": "git-blob-sha1",
+                "source_root": {
+                    "relative_to": "manifest_parent",
+                    "relative_path": ".",
+                    "max_depth": 0,
+                },
+                "git_clean_required": True,
                 "source_only_cache_handling": True,
                 "fallback": False,
+                "required_modules": required_modules,
             },
         )
         self.assertEqual(
@@ -473,11 +495,6 @@ runpy.run_path(sys.argv[0], run_name="__main__")
                     "path": str(screen.PRODUCER_EXECUTABLE),
                     "bytes": screen.PRODUCER_EXECUTABLE_SIZE_BYTES,
                     "sha256": screen.PRODUCER_EXECUTABLE_SHA256,
-                },
-                "source_host": {
-                    "path": "experiments/profile11_source_host/target/release/profile11_source_host.exe",
-                    "bytes": screen.SOURCE_HOST_SIZE_BYTES,
-                    "sha256": screen.SOURCE_HOST_SHA256.hex().upper(),
                 },
                 "c_verifier": {
                     "path": str(screen.C_VERIFIER),

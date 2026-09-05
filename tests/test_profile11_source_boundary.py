@@ -13,6 +13,7 @@ import app.minimal_clearance_composition as composition
 import app.minimal_clearance_source_auth_verifier_adapter as source_auth_adapter
 from app.minimal_clearance_composition import (
     ClearanceCompositionStoreV2,
+    CompositionConfigV2,
     StateDispositionControl,
     build_synthetic_acknowledgment,
 )
@@ -146,6 +147,7 @@ class _SyntheticReceiver:
     def __init__(self, config: object) -> None:
         self.config = config
         self.calls: list[tuple[bytes, bytes]] = []
+        self.lookup_calls: list[dict[str, object]] = []
         self.cache: dict[bytes, bytes] = {}
 
     def identity_sha256(self) -> bytes:
@@ -153,6 +155,9 @@ class _SyntheticReceiver:
 
     def epoch(self) -> int:
         return self.config.receiver_epoch  # type: ignore[attr-defined]
+
+    def acknowledgment_profile(self) -> object:
+        return self.config.acknowledgment_profile  # type: ignore[attr-defined]
 
     def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes:
         self.calls.append((bytes(envelope_bytes), bytes(idempotency_key)))
@@ -164,6 +169,15 @@ class _SyntheticReceiver:
                 accepted_ms=1_700_000_000_000 + len(self.calls),
             )
         return self.cache[idempotency_key]
+
+    def lookup_acknowledgment(self, **query: object) -> bytes | None:
+        self.lookup_calls.append(dict(query))
+        if query.get("receiver_identity") != self.config.receiver_identity or query.get("receiver_epoch") != self.config.receiver_epoch:  # type: ignore[attr-defined]
+            return None
+        idempotency_key = query.get("idempotency_key")
+        if type(idempotency_key) is not bytes:
+            return None
+        return self.cache.get(idempotency_key)
 
 
 class Profile11SourceBoundaryTests(unittest.TestCase):
@@ -343,55 +357,64 @@ class Profile11SourceBoundaryTests(unittest.TestCase):
             timeout_seconds=30.0,
         )
         state_port = _StateDispositionPort()
-        runtime = MinimalClearanceVerificationRuntime.from_source_auth(root=self.state_root, source_auth_config=verifier_config, state_disposition_port=state_port)
+        composition_config = CompositionConfigV2(
+            self.queue_config.queue_id,
+            self.queue_config.digest,
+            verifier_profile_identity=bytes([8]) * 32,
+            receiver_identity=bytes([7]) * 32,
+        )
+        receiver = _SyntheticReceiver(composition_config)
+        runtime = MinimalClearanceVerificationRuntime.from_source_auth(
+            root=self.state_root,
+            source_auth_config=verifier_config,
+            state_disposition_port=state_port,
+            composition_config=composition_config,
+            receiver=receiver,
+            lookup=receiver,
+        )
         frame_snapshot = b""
-        composition_store: ClearanceCompositionStoreV2 | None = None
         try:
             batch = runtime.issue_batch(template=self._template())
             frame = self.caller.prove_one(batch=batch, source_key_epoch=self.queue_config.source_key_epoch)
             frame_snapshot = bytes(frame)
             self.assertEqual(len(frame), SOURCE_AUTH_FRAME_BYTES)
             runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(frame))
-            outcome = runtime.run(max_batches=1)
+            outcome = runtime.run(max_batches=1, dispatch_batches=1)
             self.assertEqual((outcome.outcome, outcome.accepted_operation_count, outcome.verified_batch_count, outcome.rejected_batch_count, outcome.held_batch_count), ("PROCESSED", 100, 1, 0, 0))
+            self.assertIsNotNone(outcome.delivery)
+            assert outcome.delivery is not None
+            self.assertEqual((outcome.delivery.operation, outcome.delivery.batch_count, outcome.delivery.attempted_operation_count, outcome.delivery.acknowledged_operation_count, outcome.delivery.unconfirmed_operation_count), ("DIRECT_DELIVERY", 1, SOURCE_AUTH_OPERATION_COUNT, SOURCE_AUTH_OPERATION_COUNT, 0))
+            self.assertEqual(len(receiver.calls), SOURCE_AUTH_OPERATION_COUNT)
+            self.assertEqual((runtime.reconcile_outbox().outcome, len(receiver.lookup_calls)), ("EMPTY", 0))
             self.assertEqual(state_port.calls, 1)
             runtime._verify_integrity()
-            composition_config = runtime._composition_config
             database = runtime._database_path
         finally:
             runtime.close()
 
+        connection = sqlite3.connect(database)
         try:
-            composition_store = ClearanceCompositionStoreV2(path=database, config=composition_config)
-            receiver = _SyntheticReceiver(composition_config)
-            delivery = composition_store.dispatch_outbox_batch("profile11-e2e-receiver", receiver=receiver)
-            self.assertIsNotNone(delivery)
-            assert delivery is not None
-            self.assertEqual(len(delivery.results), SOURCE_AUTH_OPERATION_COUNT)
-            self.assertEqual([result.status for result in delivery.results], ["ACKNOWLEDGED"] * SOURCE_AUTH_OPERATION_COUNT)
-            self.assertEqual(len(receiver.calls), SOURCE_AUTH_OPERATION_COUNT)
-            connection = sqlite3.connect(database)
-            try:
-                outbox_statuses = connection.execute("SELECT status,COUNT(*) FROM composition_outbox GROUP BY status").fetchall()
-                self.assertEqual(outbox_statuses, [("ACKNOWLEDGED", SOURCE_AUTH_OPERATION_COUNT)])
-                self.assertEqual(connection.execute("SELECT active_dispatch_count FROM composition_meta WHERE id=1").fetchone()[0], 0)
-                self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0], SOURCE_AUTH_OPERATION_COUNT)
-                self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], SOURCE_AUTH_OPERATION_COUNT)
-                self.assertEqual(set(connection.execute("SELECT effective_directive FROM composition_transactions").fetchall()), {("HOLD",)})
-                self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events WHERE event_kind='APPLIED'").fetchone()[0], SOURCE_AUTH_OPERATION_COUNT)
-            finally:
-                connection.close()
-            composition_store.verify_integrity()
-            durable = database.read_bytes()
-            self.assertNotIn(frame_snapshot, durable)
-            self.assertNotIn(SOURCE_TEST_PUBLIC_KEY, durable)
-            allowed = {"state.sqlite", "state.sqlite-journal", "state.sqlite-wal", "state.sqlite-shm", "state.sqlite.runtime-lock"}
-            self.assertTrue({path.name for path in self.state_root.iterdir()} <= allowed)
-            self.assertEqual(list(self.source_workspace.iterdir()), [])
-            self.assertEqual(list(self.verifier_workspace.iterdir()), [])
+            outbox_statuses = connection.execute("SELECT status,COUNT(*) FROM composition_outbox GROUP BY status").fetchall()
+            self.assertEqual(outbox_statuses, [("ACKNOWLEDGED", SOURCE_AUTH_OPERATION_COUNT)])
+            self.assertEqual(connection.execute("SELECT active_dispatch_count FROM composition_meta WHERE id=1").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0], SOURCE_AUTH_OPERATION_COUNT)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], SOURCE_AUTH_OPERATION_COUNT)
+            self.assertEqual(set(connection.execute("SELECT effective_directive FROM composition_transactions").fetchall()), {("HOLD",)})
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_events WHERE event_kind='APPLIED'").fetchone()[0], SOURCE_AUTH_OPERATION_COUNT)
         finally:
-            if composition_store is not None:
-                composition_store.close()
+            connection.close()
+        composition_store = ClearanceCompositionStoreV2(path=database, config=composition_config)
+        try:
+            composition_store.verify_integrity()
+        finally:
+            composition_store.close()
+        durable = database.read_bytes()
+        self.assertNotIn(frame_snapshot, durable)
+        self.assertNotIn(SOURCE_TEST_PUBLIC_KEY, durable)
+        allowed = {"state.sqlite", "state.sqlite-journal", "state.sqlite-wal", "state.sqlite-shm", "state.sqlite.runtime-lock"}
+        self.assertTrue({path.name for path in self.state_root.iterdir()} <= allowed)
+        self.assertEqual(list(self.source_workspace.iterdir()), [])
+        self.assertEqual(list(self.verifier_workspace.iterdir()), [])
 
 
 if __name__ == "__main__":
