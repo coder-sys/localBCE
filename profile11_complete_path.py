@@ -10,6 +10,7 @@ zero-PHI observation claim is made here.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from contextlib import contextmanager
 import ctypes
@@ -21,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -272,6 +274,10 @@ STATE_SQLITE_RUNTIME_LOCK_NAME: Final[str] = "state.sqlite.runtime-lock"
 SOURCE_KEY_EPOCH: Final[int] = 0x0102_0304_0506_0708
 PUBLIC_KEY_BYTES: Final[int] = ML_DSA_87_PUBLIC_KEY_BYTES
 PUBLIC_KEY_SHA256: Final[str] = "3D1F0F47DF60B4E2F31F82A99E32B42776837D974CF798CCFDAD98D617026F32"
+_SYNTHETIC_FIXTURE_RELATIVE_PATH: Final[Path] = Path("tests") / "test_profile11_source_boundary.py"
+# The current fixture source is 27,438 bytes; this bounded ceiling permits small test-file
+# growth while preventing an unbounded source read at the trust boundary.
+_SYNTHETIC_FIXTURE_MAX_BYTES: Final[int] = 128 * 1024
 AGGREGATE_ERROR_CODES: Final[frozenset[str]] = frozenset({
     "dependency_unavailable", "coordinator_failure", "coordinator_output",
     "coordinator_stderr", "coordinator_output_cap", "coordinator_output_read",
@@ -426,12 +432,59 @@ def _check_git_pin(pin: GitPin, missing: list[str], mismatched: list[str]) -> No
 
 
 def _load_synthetic_public_key() -> bytes:
-    """Load the already-used test fixture without placing key bytes on disk."""
+    """Parse the E2E-owned fixture source without importing the test module."""
 
+    fixture_path = Path(__file__).resolve().parent / _SYNTHETIC_FIXTURE_RELATIVE_PATH
     try:
-        from tests.test_profile11_source_boundary import SOURCE_TEST_PUBLIC_KEY
-        value = bytes(SOURCE_TEST_PUBLIC_KEY)
-    except BaseException:
+        if (
+            not fixture_path.is_file()
+            or fixture_path.is_symlink()
+            or fixture_path.stat().st_size > _SYNTHETIC_FIXTURE_MAX_BYTES
+        ):
+            _fixed("public_key_missing")
+        with fixture_path.open("rb") as stream:
+            handle_stat = os.fstat(stream.fileno())
+            if not stat.S_ISREG(handle_stat.st_mode):
+                _fixed("public_key_missing")
+            source_bytes = stream.read(_SYNTHETIC_FIXTURE_MAX_BYTES + 1)
+        if len(source_bytes) > _SYNTHETIC_FIXTURE_MAX_BYTES:
+            _fixed("public_key_missing")
+        source = source_bytes.decode("utf-8")
+        tree = ast.parse(source, filename=str(fixture_path), mode="exec")
+        declarations = [
+            node
+            for node in tree.body
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+            and (
+                any(isinstance(target, ast.Name) and target.id == "SOURCE_TEST_PUBLIC_KEY" for target in getattr(node, "targets", ()))
+                or (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "SOURCE_TEST_PUBLIC_KEY")
+                or (isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == "SOURCE_TEST_PUBLIC_KEY")
+            )
+        ]
+        if len(declarations) != 1:
+            _fixed("public_key_missing")
+        declaration = declarations[0]
+        value_node = declaration.value
+        if (
+            not isinstance(declaration, ast.Assign)
+            or len(declaration.targets) != 1
+            or not isinstance(declaration.targets[0], ast.Name)
+            or declaration.targets[0].id != "SOURCE_TEST_PUBLIC_KEY"
+            or not isinstance(value_node, ast.Call)
+            or not isinstance(value_node.func, ast.Attribute)
+            or not isinstance(value_node.func.value, ast.Name)
+            or value_node.func.value.id != "bytes"
+            or value_node.func.attr != "fromhex"
+            or len(value_node.args) != 1
+            or value_node.keywords
+            or not isinstance(value_node.args[0], ast.Constant)
+            or not isinstance(value_node.args[0].value, str)
+        ):
+            _fixed("public_key_missing")
+        value = bytes.fromhex(value_node.args[0].value)
+    except CompletePathError:
+        raise
+    except (OSError, UnicodeError, SyntaxError, ValueError, TypeError):
         _fixed("public_key_missing")
     if len(value) != PUBLIC_KEY_BYTES or hashlib.sha256(value).hexdigest().upper() != PUBLIC_KEY_SHA256:
         _fixed("public_key_identity")

@@ -259,8 +259,8 @@ print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
             "activation": False,
             "full_mode": "fail_closed",
             "launches": 0,
-            "mismatch_count": 1,
-            "mismatched": ["public_key_missing"],
+            "mismatch_count": 0,
+            "mismatched": [],
             "missing": ["source_workspace", "verifier_workspace", "state_workspace"],
             "missing_count": 3,
             "mode": "prepare",
@@ -291,6 +291,87 @@ print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
         self.assertEqual(result.stderr, "")
         self._assert_prepare_shape(json.loads(result.stdout))
+
+    def test_direct_prepare_loads_e2e_fixture_without_ambient_tests_import(self) -> None:
+        bootstrap = r'''import json, runpy, sys
+sys.path.insert(0, r"C:\Users\neers\Documents\Codex\2026-09-04\blind-queue-receiver-binding-v1")
+sys.argv = [sys.argv[1], "--prepare"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+        result = self._run_bootstrap(bootstrap)
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+        self.assertEqual(result.stderr, "")
+        value = json.loads(result.stdout)
+        self._assert_prepare_shape(value)
+        self.assertNotIn("public_key_missing", value["mismatched"])
+
+    def test_fixture_loader_ignores_preloaded_hostile_tests_module(self) -> None:
+        bootstrap = r'''import json, runpy, sys, types
+sys.path.insert(0, r"C:\Users\neers\Documents\Codex\2026-09-04\blind-queue-receiver-binding-v1")
+package = types.ModuleType("tests")
+package.__path__ = []
+fixture = types.ModuleType("tests.test_profile11_source_boundary")
+fixture.SOURCE_TEST_PUBLIC_KEY = b"hostile"
+sys.modules["tests"] = package
+sys.modules["tests.test_profile11_source_boundary"] = fixture
+sys.argv = [sys.argv[1], "--prepare"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+        result = self._run_bootstrap(bootstrap)
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+        self.assertEqual(result.stderr, "")
+        self._assert_prepare_shape(json.loads(result.stdout))
+
+    def test_fixture_loader_rejects_malformed_declarations_without_importing_fixture(self) -> None:
+        fixture_source = (self._SCRIPT.parent / "tests" / "test_profile11_source_boundary.py").read_text(encoding="utf-8")
+        valid_line = "SOURCE_TEST_PUBLIC_KEY = bytes.fromhex(\"00\")\n"
+        cases = {
+            "missing": "fromhex = bytes.fromhex\n",
+            "dynamic": "SOURCE_TEST_PUBLIC_KEY = bytes.fromhex(get_value())\n",
+            "duplicate": valid_line + valid_line,
+            "wrong_shape": "SOURCE_TEST_PUBLIC_KEY = bytes.fromhex(1)\n",
+            "identity": valid_line,
+        }
+        for name, declaration in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory(prefix="profile11-fixture-") as directory:
+                root = Path(directory)
+                (root / "tests").mkdir()
+                script = root / "profile11_complete_path.py"
+                script.write_text("# isolated loader path\n", encoding="utf-8")
+                start = fixture_source.index("SOURCE_TEST_PUBLIC_KEY = bytes.fromhex(")
+                end = fixture_source.index("\n\n\ndef _assert_pinned_file", start)
+                mutated = fixture_source[:start] + declaration + fixture_source[end:]
+                fixture = root / "tests" / "test_profile11_source_boundary.py"
+                fixture.write_text(mutated, encoding="utf-8")
+                with mock.patch.object(screen, "__file__", str(script)):
+                    with self.assertRaisesRegex(screen.CompletePathError, "public_key_(missing|identity)"):
+                        screen._load_synthetic_public_key()
+
+    def test_fixture_loader_rejects_growth_after_metadata_check(self) -> None:
+        fixture_source = (self._SCRIPT.parent / "tests" / "test_profile11_source_boundary.py").read_bytes()
+        with tempfile.TemporaryDirectory(prefix="profile11-fixture-growth-") as directory:
+            root = Path(directory)
+            (root / "tests").mkdir()
+            script = root / "profile11_complete_path.py"
+            script.write_text("# isolated loader path\n", encoding="utf-8")
+            fixture = root / "tests" / "test_profile11_source_boundary.py"
+            fixture.write_bytes(fixture_source)
+            original_stat = Path.stat
+            grew = False
+
+            def stat_then_grow(path: Path, *, follow_symlinks: bool = True):
+                nonlocal grew
+                result = original_stat(path, follow_symlinks=follow_symlinks)
+                if path == fixture and not grew:
+                    grew = True
+                    with fixture.open("ab") as stream:
+                        stream.write(b"# growth" * (screen._SYNTHETIC_FIXTURE_MAX_BYTES // 8))
+                return result
+
+            with mock.patch.object(screen, "__file__", str(script)), mock.patch.object(Path, "stat", stat_then_grow):
+                with self.assertRaisesRegex(screen.CompletePathError, "public_key_missing"):
+                    screen._load_synthetic_public_key()
+            self.assertGreater(fixture.stat().st_size, screen._SYNTHETIC_FIXTURE_MAX_BYTES)
 
     @staticmethod
     def _timed_sample(index: int = 0) -> screen.StageSample:

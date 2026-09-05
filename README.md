@@ -108,7 +108,8 @@ The pinned C repository is `9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2` (tree
 at `C:\Users\neers\Documents\Codex\2026-09-04\blind-queue-receiver-binding-v1`.
 Direct script execution binds the canonical `app` package to that exact clean source checkout,
 with no fallback.
-The manifest also pins both C libraries and the synthetic public-key fixture; no production key is used.
+The manifest also pins both C libraries and the synthetic public-key fixture. Direct execution reads
+that exact E2E fixture source as data; it does not import a `tests` module, and no production key is used.
 
 The host calls the accepted four-argument `SourceAppliance::new` and supplies one synthetic,
 volatile, non-durable, non-qualified `SourceTransactionAuthority`. Its single consume atomically
@@ -171,7 +172,9 @@ py -3.14 -B profile11_complete_path.py --prepare
 py -3.14 -B profile11_complete_path.py --screen
 ```
 
-`--prepare` launches nothing and reports every missing dependency. `--screen` first requires a ready
+`--prepare` launches nothing and reports every missing dependency; its three no-argument workspace
+placeholders are expected because the full-screen host creates fresh workspaces after the observer
+gate. `--screen` first requires a ready
 complete file-write observer; otherwise it returns a zero-sample failed aggregate without launching
 the coordinator. With that gate open, it uses the already pinned source/C binaries and never compiles
 them.
