@@ -326,10 +326,7 @@ class ReleaseManifestGateTests(unittest.TestCase):
                     gate.PathLane.EXCLUDED_GENERATED_PRIVATE,
                     classification.lane,
                 )
-                self.assertEqual(
-                    "source-only privacy fixture or scanner tool",
-                    classification.reason,
-                )
+                self.assertEqual(gate.RELEASE_EXCLUSION_REASONS[path], classification.reason)
                 with self.assertRaisesRegex(gate.ManifestGateError, "forbidden paths"):
                     gate.validate_release_paths([path])
 

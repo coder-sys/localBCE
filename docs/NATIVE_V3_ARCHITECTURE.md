@@ -83,12 +83,13 @@ persists the seed. This carries no reproducibility or custody claim. The proof e
 16,297,640 bytes, the ML-DSA-87 public key is 2,592 bytes, the signature is 4,627 bytes, and
 the signed source-auth frame is 16,302,267 bytes. The exact IPC is 16,308,435 bytes
 (6,168 state/config bytes plus the frame). Proof, signature, frame, statement, and IPC bytes remain
-volatile. The C source-auth owner is the accepted 8-worker row-parallel implementation from source checkout
-`C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-c-profile11-throughput-v1`, at clean commit
+volatile. The C source-auth owner is the accepted 8-worker row-parallel implementation from the external
+source checkout whose operator-specific filesystem path is intentionally omitted from release documentation,
+at clean commit
 `5d1a53238747540029a740ee8e305121efadaedb` with tree
 `4b0dc25fab9417842548bd1c695577e43f21807f`; the canonical state-side executable is
-`C:\Users\neers\Documents\Codex\2026-08-31\build-profile11-throughput-v1\Release\blind_source_auth_verify_process_v1.exe`,
-52,736 bytes with SHA-256
+the accepted operator-supplied build location (the filesystem path is intentionally omitted from release
+documentation), 52,736 bytes with SHA-256
 `4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C`. This is one newer verifier only;
 the Profile 11 wire and acceptance contract are unchanged, with no dual pin or fallback. The candidate remains
 unselected, unqualified, `proofSuiteId=null`, `production_usable=false`, and `activation=false`.

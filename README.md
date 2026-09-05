@@ -105,7 +105,8 @@ The pinned C repository is `9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2` (tree
 `178a5f20c6738f7272cd38f77315da83650bbac0`); its verifier is 52,736 bytes, SHA-256
 `4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C`. The Queue pin is
 `1cc7c092a42140d99a3b8e6e52ba419fc770c7fd` (tree `b058d3d77c483f8b71e50bcba22c28d6cd403c81`)
-at `C:\Users\neers\Documents\Codex\2026-09-04\blind-queue-receiver-binding-v1`.
+at the accepted external Queue checkout; its operator-specific filesystem path is intentionally
+omitted from the release documentation.
 Direct script execution binds the canonical `app` package to that exact clean source checkout,
 with no fallback.
 The manifest also pins both C libraries and the synthetic public-key fixture. Direct execution reads

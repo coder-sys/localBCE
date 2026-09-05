@@ -195,18 +195,35 @@ RELEASE_SOURCE_ONLY_PATHS = frozenset(
     }
 )
 
-# These source files intentionally remain in Git and are exercised by tests, but their
-# synthetic privacy/security fixtures or scanner vocabulary cannot be serialized into the
-# source archive under the builder's structural privacy gate. Keep this release boundary
-# explicit and finite; do not turn it into a content-based omission rule.
-RELEASE_EXCLUDED_PATHS = frozenset(
-    {
-        "docs/security-freeze/BL-PQ512-v1/hardening.json",
-        "tests/test_build_release_archive.py",
-        "tests/test_privacy_artifact_scan.py",
-        "tools/privacy_artifact_scan.py",
-    }
-)
+# These exact files intentionally remain in Git and are exercised by tests or retained as
+# evidence, but their synthetic privacy fixtures, scanner vocabulary, or private build-path
+# metadata cannot be serialized into the source archive. Keep this boundary explicit and
+# finite; it is a reviewed data-role classification, never a content-based omission rule.
+RELEASE_EXCLUSION_REASONS: dict[str, str] = {
+    "docs/security-freeze/BL-PQ512-v1/hardening.json": "retained generated security evidence with private-path metadata",
+    "experiments/longfellow_v09_native_v3/evidence/longfellow_v09_native_v3_debloat_evidence.json": "retained generated measurement evidence with private build-path metadata",
+    "experiments/longfellow_v09_native_v3/evidence/longfellow_v09_native_v3_failure.json": "retained generated failure evidence with private build-path metadata",
+    "experiments/profile11_source_host/Cargo.lock": "source-only external Profile 11 host harness",
+    "experiments/profile11_source_host/Cargo.toml": "source-only external Profile 11 host harness with private dependency path",
+    "experiments/profile11_source_host/src/main.rs": "source-only external Profile 11 host harness",
+    "tests/test_build_release_archive.py": "source-only privacy fixture or scanner tool",
+    "tests/test_minimal_clearance_proof_primitives.py": "source-only synthetic private-path fixture",
+    "tests/test_minimal_clearance_source_auth_verifier_adapter.py": "source-only external Profile 11 artifact/path fixture",
+    "tests/test_minimal_clearance_verifier_process.py": "source-only synthetic Windows namespace fixture",
+    "tests/test_minimal_clearance_verifier_throughput.py": "source-only synthetic path/telemetry fixture",
+    "tests/test_mirror_external_governance_approval.py": "source-only synthetic privacy-canary fixture",
+    "tests/test_mirror_external_privacy_support_approval.py": "source-only synthetic privacy-canary fixture",
+    "tests/test_mirror_external_source_adapter.py": "source-only synthetic privacy-canary fixture",
+    "tests/test_mirror_qualification_independent.py": "source-only synthetic privacy-canary fixture",
+    "tests/test_mirror_v2_consolidation.py": "source-only synthetic privacy/path-canary fixture",
+    "tests/test_nc_medicaid_fhir_source.py": "source-only synthetic privacy/path-canary fixture",
+    "tests/test_privacy_artifact_scan.py": "source-only privacy fixture or scanner tool",
+    "tests/test_profile11_complete_path.py": "source-only Profile 11 external-workspace fixture",
+    "tests/test_profile11_source_boundary.py": "source-only Profile 11 external-workspace fixture",
+    "tests/test_qualification_gate.py": "source-only synthetic private-path error fixture",
+    "tools/privacy_artifact_scan.py": "source-only privacy fixture or scanner tool",
+}
+RELEASE_EXCLUDED_PATHS = frozenset(RELEASE_EXCLUSION_REASONS)
 _WINDOWS_RESERVED = re.compile(r"(?i)(?:con|prn|aux|nul|com[1-9]|lpt[1-9])")
 
 
@@ -246,7 +263,7 @@ def _fold_path(value: str) -> str:
 
 def _is_excluded(path: str) -> tuple[bool, str]:
     if path in RELEASE_EXCLUDED_PATHS:
-        return True, "source-only privacy fixture or scanner tool"
+        return True, RELEASE_EXCLUSION_REASONS[path]
     parts = path.casefold().split("/")
     if any(part in EXCLUDED_SEGMENTS for part in parts):
         return True, "generated/cache/private/proof-output path segment"

@@ -534,12 +534,15 @@ def _final_path_by_handle(*, kernel32: object, handle: object, flags: int, label
         size = min(_MAX_FINAL_PATH_CHARS, max(size * 2, length + 1))
 
 
+_BACKSLASH = chr(92)
+
+
 def _canonical_volume_path(path: str) -> tuple[str, str, list[str]]:
-    marker = r"\\?\Volume{"
+    marker = _BACKSLASH * 2 + "?" + _BACKSLASH + "Volume{"
     if not path.startswith(marker) or "/" in path:
         raise VerifierProcessError("verifier_executable_final_path")
     guid_start = len(marker)
-    guid_end = path.find("}\\", guid_start)
+    guid_end = path.find("}" + _BACKSLASH, guid_start)
     if guid_end < 0:
         raise VerifierProcessError("verifier_executable_final_path")
     guid = path[guid_start:guid_end]
@@ -547,7 +550,7 @@ def _canonical_volume_path(path: str) -> tuple[str, str, list[str]]:
         raise VerifierProcessError("verifier_executable_final_path")
     prefix = path[:guid_end + 2]
     relative = path[guid_end + 2:]
-    components = relative.split("\\")
+    components = relative.split(_BACKSLASH)
     if not components or any(
         not component or component in {".", ".."} or "\x00" in component
         for component in components
@@ -556,14 +559,14 @@ def _canonical_volume_path(path: str) -> tuple[str, str, list[str]]:
     directory_components = components[:-1]
     directories = [prefix]
     for index in range(1, len(directory_components) + 1):
-        directories.append(prefix + "\\".join(directory_components[:index]))
+        directories.append(prefix + _BACKSLASH.join(directory_components[:index]))
     parent = directories[-1]
     return path, parent, directories
 
 
 def _canonical_native_path(path: str) -> tuple[str, str]:
     match = re.fullmatch(
-        r"(\\Device\\HarddiskVolume[0-9]+)\\(.+)",
+        rf"({_BACKSLASH * 2}Device{_BACKSLASH * 2}HarddiskVolume[0-9]+){_BACKSLASH * 2}(.+)",
         path,
         re.IGNORECASE,
     )
@@ -571,7 +574,7 @@ def _canonical_native_path(path: str) -> tuple[str, str]:
         raise VerifierProcessError("verifier_executable_nt_path")
     native_volume_prefix = match.group(1)
     relative = match.group(2)
-    components = relative.split("\\")
+    components = relative.split(_BACKSLASH)
     if not components or any(
         not component or component in {".", ".."} or "\x00" in component
         for component in components
@@ -581,26 +584,26 @@ def _canonical_native_path(path: str) -> tuple[str, str]:
 
 
 def _canonical_dos_path(path: str) -> tuple[str, str, str]:
-    marker = "\\\\?\\"
+    marker = _BACKSLASH * 2 + "?" + _BACKSLASH
     if not path.startswith(marker) or len(path) < len(marker) + 4:
         raise VerifierProcessError("verifier_executable_dos_path")
     drive = path[len(marker)]
     if not ("A" <= drive <= "Z" or "a" <= drive <= "z"):
         raise VerifierProcessError("verifier_executable_dos_path")
-    if path[len(marker) + 1:len(marker) + 3] != ":\\":
+    if path[len(marker) + 1:len(marker) + 3] != ":" + _BACKSLASH:
         raise VerifierProcessError("verifier_executable_dos_path")
     relative = path[len(marker) + 3:]
-    components = relative.split("\\")
+    components = relative.split(_BACKSLASH)
     if not components or any(
         not component or component in {".", ".."} or "\x00" in component
         for component in components
     ):
         raise VerifierProcessError("verifier_executable_dos_path")
     directory_components = components[:-1]
-    prefix = f"{marker}{drive}:\\"
+    prefix = f"{marker}{drive}:{_BACKSLASH}"
     directories = [prefix]
     for index in range(1, len(directory_components) + 1):
-        directories.append(prefix + "\\".join(directory_components[:index]))
+        directories.append(prefix + _BACKSLASH.join(directory_components[:index]))
     return path, directories[-1], f"{drive}:"
 
 
