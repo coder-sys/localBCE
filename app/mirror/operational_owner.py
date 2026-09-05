@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import secrets
+import threading
 from types import MappingProxyType
 import traceback
 from typing import Callable, Mapping, Protocol
@@ -262,6 +263,10 @@ class MirrorOperationalOwnerV1:
         self.clock = clock
         self.operational_config = operational_config
         self._closed = False
+        self._closing = False
+        self._close_in_progress = False
+        self._close_thread: int | None = None
+        self._lifecycle_changed = threading.Condition(threading.RLock())
         self._authority: writer_authority.WriterAuthority | None = None
         self.ingress: ingress.IngressServiceV2 | None = None
         self.core: core.CoreServiceV2 | None = None
@@ -369,18 +374,31 @@ class MirrorOperationalOwnerV1:
             raise OperationalOwnerError("mirror:operational-indeterminate")
 
     def _assert_owner_identity(self) -> None:
-        if self._closed:
-            raise OperationalOwnerError("mirror:operational-closed")
-        try:
-            self._assert_root_lock_identity()
-            current = self._read_store_identities()
-            if current != self._store_identities:
-                raise OperationalOwnerError("mirror:operational-indeterminate")
-            self._assert_port_identity()
-        except OperationalOwnerError:
-            raise
-        except Exception:
-            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+        with self._lifecycle_changed:
+            if self._closed or self._closing or self._authority is None:
+                raise OperationalOwnerError("mirror:operational-closed")
+            try:
+                self._assert_root_lock_identity()
+                current = self._read_store_identities()
+                if current != self._store_identities:
+                    raise OperationalOwnerError("mirror:operational-indeterminate")
+                self._assert_port_identity()
+            except OperationalOwnerError:
+                raise
+            except Exception:
+                raise OperationalOwnerError("mirror:operational-indeterminate") from None
+
+    def _current_authority(self) -> writer_authority.WriterAuthority:
+        with self._lifecycle_changed:
+            if self._closed or self._closing or self._authority is None:
+                raise OperationalOwnerError("mirror:operational-closed")
+            return self._authority
+
+    def _maybe_finish_close(self) -> None:
+        with self._lifecycle_changed:
+            if not self._closing or self._closed:
+                return
+        self.close()
 
     @staticmethod
     def _validate_schedule(values: tuple[int, ...], config: ingress.IngressConfigV2) -> None:
@@ -719,9 +737,7 @@ class MirrorOperationalOwnerV1:
     def export_provider_evidence(self, request_raw: bytes) -> bytes:
         """Export one bounded aggregate from the independently verified current stores."""
 
-        authority = self._authority
-        if authority is None:
-            raise OperationalOwnerError("mirror:operational-closed")
+        authority = self._current_authority()
         self._assert_owner_identity()
         selection: provider_export.ProviderEvidenceObservationSelectionV1 | None = None
         try:
@@ -756,6 +772,8 @@ class MirrorOperationalOwnerV1:
             raise OperationalOwnerError("mirror:operational-indeterminate") from None
         except Exception:
             raise OperationalOwnerError("mirror:operational-indeterminate") from None
+        finally:
+            self._maybe_finish_close()
 
     def run(
         self,
@@ -763,23 +781,25 @@ class MirrorOperationalOwnerV1:
         *,
         recovery_generation: int | None = None,
     ) -> OperationalAggregateV1:
-        assert self._authority is not None
+        authority = self._current_authority()
         self._assert_owner_identity()
         try:
-            with self._authority.run_scope():
-                with self._authority.external_scope():
+            with authority.run_scope():
+                with authority.external_scope():
                     try:
                         run_now = self.clock()
                     except Exception:
                         raise OperationalOwnerError("mirror:operational-clock") from None
                     if type(run_now) is not int or run_now < 0:
                         raise OperationalOwnerError("mirror:operational-clock")
-                    self._authority.set_run_time(run_now)
+                    authority.set_run_time(run_now)
                 return self._run(scheduled_at, recovery_generation=recovery_generation)
         except OperationalOwnerError:
             raise
         except writer_authority.WriterAuthorityError:
             raise OperationalOwnerError("mirror:operational-indeterminate") from None
+        finally:
+            self._maybe_finish_close()
 
     def _run(
         self,
@@ -911,19 +931,58 @@ class MirrorOperationalOwnerV1:
             raise OperationalOwnerError("mirror:operational-indeterminate") from None
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        for service in (self.ingress, self.core, self.recovery):
-            close = getattr(service, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except Exception:
-                    pass
-        if self._authority is not None:
-            self._authority.close()
-            self._authority = None
+        thread = threading.get_ident()
+        while True:
+            with self._lifecycle_changed:
+                if self._closed:
+                    return
+                self._closing = True
+                if self._close_in_progress:
+                    if self._close_thread == thread:
+                        return
+                    while self._close_in_progress and not self._closed:
+                        self._lifecycle_changed.wait()
+                    continue
+                self._close_in_progress = True
+                self._close_thread = thread
+                authority = self._authority
+            try:
+                if authority is not None:
+                    try:
+                        authority.close()
+                    except BaseException:
+                        raise OperationalOwnerError("mirror:operational-indeterminate") from None
+                    if not authority.closed:
+                        raise OperationalOwnerError("mirror:operational-indeterminate")
+
+                service_failed = False
+                for service in (self.ingress, self.core, self.recovery):
+                    close = getattr(service, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except BaseException as error:
+                            service_failed = True
+                            try:
+                                traceback.clear_frames(error.__traceback__)
+                            except Exception:
+                                pass
+                if service_failed:
+                    raise OperationalOwnerError("mirror:operational-indeterminate")
+                with self._lifecycle_changed:
+                    self._authority = None
+                    self._closed = True
+                    self._closing = False
+                return
+            except OperationalOwnerError:
+                raise
+            except BaseException:
+                raise OperationalOwnerError("mirror:operational-indeterminate") from None
+            finally:
+                with self._lifecycle_changed:
+                    self._close_in_progress = False
+                    self._close_thread = None
+                    self._lifecycle_changed.notify_all()
 
     def __enter__(self) -> "MirrorOperationalOwnerV1":
         self._assert_owner_identity()

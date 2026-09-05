@@ -121,6 +121,20 @@ workspace. The bridge must select only the independently verified current Core S
 head, rebind it to the exact current Ingress artifact/receipt/profile, keep the existing exporter as
 the sole response producer, and fail closed without mutation or raw-data leakage.
 
+On 2026-09-05, the owner additionally authorized a bounded shutdown-state correction in exactly
+these protected paths:
+
+- `app/mirror/operational_owner.py`
+- `tests/test_mirror_operational_owner.py`
+
+The correction may make owner close a retryable lifecycle state: a close request blocks new owner
+operations, waits for active WriterAuthority scopes to quiesce, retains the authority and
+non-terminal state when physical or service release fails, and only reports closed after every
+release is resolved. It may not edit `writer_authority.py`, service implementations, the export
+grammar/verifier, or any other protected path. Public failures remain fixed and sanitized, and
+constructor cleanup, concurrent/reentrant close, normal/repeated close, and active run/export
+behavior require direct regression evidence.
+
 ## Operational authority
 
 `ops/` is canonical. `tools/ops_authority.py` freezes its exact regular-file set, lengths, and SHA3-512 identities. Never change policy bytes merely to make a check pass.

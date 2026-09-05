@@ -308,6 +308,256 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
         finally:
             owner.close()
 
+    def test_owner_close_is_idempotent_and_blocks_new_operations(self) -> None:
+        owner, _port = self._owner()
+        owner.close()
+        owner.close()
+        self.assertTrue(owner._closed)
+        self.assertIsNone(owner._authority)
+        with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-closed$"):
+            owner.run(())
+        with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-closed$"):
+            owner.export_provider_evidence(
+                _export_request(
+                    secrets.token_hex(32),
+                    not_before=self.time - 10,
+                    expires_at=self.time + 50,
+                )
+            )
+
+    def test_owner_close_release_failure_retains_state_and_retries(self) -> None:
+        owner, _port = self._owner()
+        authority = owner._authority
+        self.assertIsNotNone(authority)
+        original_close = authority.close
+        close_calls = 0
+
+        def fail_once() -> None:
+            nonlocal close_calls
+            close_calls += 1
+            if close_calls == 1:
+                raise writer_authority.WriterAuthorityError("writer:indeterminate")
+            original_close()
+
+        authority.close = fail_once  # type: ignore[method-assign]
+        with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+            owner.close()
+        self.assertFalse(owner._closed)
+        self.assertIs(owner._authority, authority)
+        self.assertFalse(authority.closed)
+        self.assertEqual(1, close_calls)
+        with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-closed$"):
+            owner.run(())
+        owner.close()
+        authority.close = original_close  # type: ignore[method-assign]
+        self.assertTrue(owner._closed)
+        self.assertIsNone(owner._authority)
+        self.assertTrue(authority.closed)
+        self.assertEqual(2, close_calls)
+
+    def test_owner_close_ambiguous_release_is_not_reported_closed(self) -> None:
+        owner, _port = self._owner()
+        authority = owner._authority
+        self.assertIsNotNone(authority)
+        original_close = authority.close
+        close_calls = 0
+
+        def ambiguous_once() -> None:
+            nonlocal close_calls
+            close_calls += 1
+            if close_calls == 1:
+                return
+            original_close()
+
+        authority.close = ambiguous_once  # type: ignore[method-assign]
+        with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+            owner.close()
+        self.assertFalse(owner._closed)
+        self.assertIs(owner._authority, authority)
+        self.assertFalse(authority.closed)
+        self.assertEqual(1, close_calls)
+        owner.close()
+        authority.close = original_close  # type: ignore[method-assign]
+        self.assertTrue(owner._closed)
+        self.assertTrue(authority.closed)
+        self.assertEqual(2, close_calls)
+
+    def test_owner_close_accounts_for_service_release_failure_and_retries(self) -> None:
+        owner, _port = self._owner()
+        authority = owner._authority
+        self.assertIsNotNone(authority)
+        original_close = owner.ingress.close
+
+        def fail_service_close() -> None:
+            raise RuntimeError("service-close-detail-must-not-leak")
+
+        owner.ingress.close = fail_service_close  # type: ignore[method-assign]
+        with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$") as caught:
+            owner.close()
+        self.assertNotIn("service-close-detail-must-not-leak", str(caught.exception))
+        self.assertFalse(owner._closed)
+        self.assertIs(owner._authority, authority)
+        self.assertTrue(authority.closed)
+        owner.ingress.close = original_close  # type: ignore[method-assign]
+        owner.close()
+        self.assertTrue(owner._closed)
+        self.assertIsNone(owner._authority)
+
+    def test_concurrent_owner_close_calls_serialize_until_release(self) -> None:
+        owner, _port = self._owner()
+        authority = owner._authority
+        self.assertIsNotNone(authority)
+        original_close = authority.close
+        physical_started = threading.Event()
+        permit_physical_close = threading.Event()
+        first_returned = threading.Event()
+        second_returned = threading.Event()
+        errors: list[BaseException] = []
+
+        def gated_close() -> None:
+            physical_started.set()
+            if not permit_physical_close.wait(timeout=5):
+                raise RuntimeError("physical close gate timeout")
+            original_close()
+
+        authority.close = gated_close  # type: ignore[method-assign]
+
+        def closer(returned: threading.Event) -> None:
+            try:
+                owner.close()
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                returned.set()
+
+        first = threading.Thread(target=closer, args=(first_returned,))
+        second = threading.Thread(target=closer, args=(second_returned,))
+        first.start()
+        self.assertTrue(physical_started.wait(timeout=5))
+        second.start()
+        self.assertFalse(second_returned.wait(timeout=0.1))
+        self.assertFalse(owner._closed)
+        permit_physical_close.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+        authority.close = original_close  # type: ignore[method-assign]
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertEqual([], errors)
+        self.assertTrue(owner._closed)
+
+    def test_reentrant_close_from_active_run_quiesces_then_finishes(self) -> None:
+        port = _ReentrantPort(self.ingress_config)
+        owner, _port = self._owner(port=port)
+        port.callback = owner.close
+        try:
+            with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-closed$"):
+                owner.run((self.time,))
+            self.assertTrue(owner._closed)
+            self.assertEqual(
+                ["mirror:operational-indeterminate"],
+                [str(error) for error in port.errors],
+            )
+        finally:
+            if not owner._closed:
+                owner.close()
+
+    def test_reentrant_close_from_active_export_quiesces_then_finishes(self) -> None:
+        owner, _port = self._owner()
+        owner.run((self.time,))
+        request = _export_request(
+            secrets.token_hex(32),
+            not_before=self.time - 10,
+            expires_at=self.time + 50,
+        )
+        original = provider_export.build_observation_export
+
+        def reentrant_export(*args: object, **kwargs: object) -> bytes:
+            owner.close()
+            return original(*args, **kwargs)  # type: ignore[arg-type]
+
+        with mock.patch.object(provider_export, "build_observation_export", side_effect=reentrant_export):
+            with self.assertRaisesRegex(
+                operational.OperationalOwnerError,
+                "^mirror:operational-indeterminate$",
+            ):
+                owner.export_provider_evidence(request)
+        self.assertTrue(owner._closed)
+
+    def test_constructor_cleanup_releases_authority_after_service_failure(self) -> None:
+        selected = _Port(self.ingress_config)
+        config = operational.OperationalConfigV1(
+            selected.acquisition_identity,
+            selected.external_policy_digest,
+            self.ingress_config.source_contract_digest,
+            4,
+        )
+        with mock.patch.object(
+            operational.ingress,
+            "IngressServiceV2",
+            side_effect=RuntimeError("constructor-detail-must-not-leak"),
+        ):
+            with self.assertRaisesRegex(
+                operational.OperationalOwnerError,
+                "^mirror:operational-initialize$",
+            ):
+                operational.MirrorOperationalOwnerV1(
+                    self.root,
+                    self.ingress_config,
+                    self.core_config,
+                    self.recovery_config,
+                    selected,
+                    self.custody,
+                    self.storage,
+                    clock=self.clock,
+                    operational_config=config,
+                )
+        owner, _port = self._owner()
+        owner.close()
+
+    def test_owner_close_quiesces_an_active_run(self) -> None:
+        owner, port = self._owner()
+        entered = threading.Event()
+        release = threading.Event()
+        run_errors: list[BaseException] = []
+        close_errors: list[BaseException] = []
+        original_acquire = port.acquire
+
+        def gated_acquire(slot_id: str, scheduled_at: int, attempt: int) -> operational.SanitizedObservationPayloadV1:
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("run gate timeout")
+            return original_acquire(slot_id, scheduled_at, attempt)
+
+        port.acquire = gated_acquire  # type: ignore[method-assign]
+
+        def run_worker() -> None:
+            try:
+                owner.run((self.time,))
+            except BaseException as error:
+                run_errors.append(error)
+
+        def close_worker() -> None:
+            try:
+                owner.close()
+            except BaseException as error:
+                close_errors.append(error)
+
+        run_thread = threading.Thread(target=run_worker)
+        close_thread = threading.Thread(target=close_worker)
+        run_thread.start()
+        self.assertTrue(entered.wait(timeout=5))
+        close_thread.start()
+        self.assertTrue(owner._closing)
+        self.assertFalse(owner._closed)
+        release.set()
+        run_thread.join(timeout=5)
+        close_thread.join(timeout=5)
+        self.assertFalse(run_thread.is_alive() or close_thread.is_alive())
+        self.assertEqual([], close_errors)
+        self.assertEqual(1, len(run_errors))
+        self.assertEqual("mirror:operational-closed", str(run_errors[0]))
+        self.assertTrue(owner._closed)
+
     @unittest.skipUnless(os.name == "nt", "Windows-only native release regression")
     def test_windows_native_release_failures_keep_exact_ownership(self) -> None:
         lock = _fake_windows_lock(root_handle=None)
