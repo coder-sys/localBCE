@@ -220,7 +220,6 @@ RELEASE_EXCLUSION_REASONS: dict[str, str] = {
     "tests/test_minimal_clearance_proof_primitives.py": "source-only synthetic private-path fixture",
     "tests/test_minimal_clearance_source_auth_verifier_adapter.py": "source-only external Profile 11 artifact/path fixture",
     "tests/test_minimal_clearance_verifier_process.py": "source-only synthetic Windows namespace fixture",
-    "tests/test_minimal_clearance_verifier_throughput.py": "source-only synthetic path/telemetry fixture",
     "tests/test_mirror_external_governance_approval.py": "source-only synthetic privacy-canary fixture",
     "tests/test_mirror_external_privacy_support_approval.py": "source-only synthetic privacy-canary fixture",
     "tests/test_mirror_qualification_independent.py": "source-only synthetic privacy-canary fixture",

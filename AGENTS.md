@@ -83,6 +83,11 @@ delegation from the owner, or a driver-issued packet within an existing owner de
 the exact paths, tests, invariants, and evidence. This child neither extends nor revokes a separate
 owner packet in another task.
 
+The separately approved source-only deletion `d50f0f28134e40fc5a6a04028ef401f801d6596e`, integrated
+here as local commit `c230aa518f95397f2dac0af8592aae93796c2b53`, removes exactly the two obsolete
+Native throughput/runner wrappers and their obsolete test; no replacement Queue/runtime,
+source-auth, Profile 11, or protected-path implementation was changed by that deletion.
+
 The completed Mirror boundary remains governed by these invariants: independent Core/Ingress
 reconstruction is fail-closed; every native and service release result is checked; partial release
 retains exact ownership; an ambiguous POSIX descriptor is never retried; Windows unlock/handle

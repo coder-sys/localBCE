@@ -10,22 +10,22 @@ evidence checkout is outside this phase. The executable release policy in this i
 
 | Lane | Count | Selection |
 | --- | ---: | --- |
-| Current source | 190 | selected |
+| Current source | 188 | selected |
 | Retained compatibility | 3 | selected only by explicit closure |
 | Source-only | 3 | unselected |
-| Excluded generated/private | 25 | unselected |
+| Excluded generated/private | 24 | unselected |
 | Unknown/retired/legacy | 0 | fail-closed if introduced |
-| Tracked total | 221 | — |
-| Default selection | 193 | 190 current + 3 retained |
-| Unselected total | 28 | — |
+| Tracked total | 218 | — |
+| Default selection | 191 | 188 current + 3 retained |
+| Unselected total | 27 | — |
 
 The retained closure is exactly `app/batch/__init__.py`, `app/batch/poseidon.py`, and
 `app/batch/stark_encoding.py`. Prefix membership is only a classification hint. Deleted
 compatibility entries and the obsolete legacy registry are not release inputs. Source-only privacy
 fixtures, generated evidence, private build metadata, and Profile 11 host files remain excluded.
-The executable classifier reports these counts for the current integrated child. The only release
-policy change is removal of the orphan classification for the deleted external-source test; unknown
-and retired path rejection remains unchanged.
+The executable classifier reports these counts for the current integrated child. The release-policy
+changes are removal of the orphan classifications for the deleted external-source test and the
+deleted Native throughput test; unknown and retired path rejection remains unchanged.
 
 ## Verified evidence
 
@@ -48,7 +48,13 @@ and retired path rejection remains unchanged.
   have no remaining file or import references. The separate source-only cleanup is
   `6df4578aa5c98ca23ba38b563b74a075a504c483` (local `47eb2309e08d17913bb2fc99ffb33e02dc9bffaa`).
 - The release-policy orphan entry for the deleted external-source test was removed from
-  `tools/release_manifest_gate.py`; no other classification or unknown-path guard was changed.
+  `tools/release_manifest_gate.py`; the stale orphan entry for the deleted Native throughput test
+  was removed in the same bounded reconciliation. No other classification or unknown-path guard
+  was changed.
+- The approved source-only deletion `d50f0f28134e40fc5a6a04028ef401f801d6596e`, integrated locally
+  as `c230aa518f95397f2dac0af8592aae93796c2b53`, removes exactly the two obsolete Native
+  throughput/runner wrappers and their obsolete test. Replacement Queue/runtime, source-auth,
+  and Profile 11 files remain present.
 - Recorded sealed-baseline gates include release-policy `21 passed, 34 subtests passed`,
   active-core/security/qualification `19 passed`, proof primitives `24 passed`, and operations
   authority `ops_authority=verified`. The qualification inspection reported

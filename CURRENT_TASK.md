@@ -23,7 +23,7 @@ Remove stale candidate/phase/lineage records and duplicate explanations while pr
 trust boundary, fail-closed rule, custody restriction, negative-test requirement, qualification
 consequence, and nonactivation claim. Git history remains the record of completed implementation
 and prior authority decisions. This child includes only the reviewed Mirror/source commits and the
-single resulting orphan release-policy removal described in `STATE.md`; it creates no archive or
+exact resulting orphan release-policy removals described in `STATE.md`; it creates no archive or
 activation change.
 
 ## Blockers and unresolved identity
