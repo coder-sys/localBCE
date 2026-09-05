@@ -72,14 +72,16 @@ Do not edit these unless the owner explicitly authorizes the exact change:
 The protected list above is the active default and remains owner-gated. The four bounded Mirror
 grants issued on 2026-09-05 and consumed by the immutable `0607a275bb5158dd4b4c70dfcd95d0967c80b839`
 base are closed historical permissions; their exact scopes and evidence remain in Git history. The
-owner-reviewed Mirror patch `46a4c965464ea2cd72a3205d82652ddbf8ae51f6`, integrated here as local
-commit `57e5f1f938ff7346880c6fd6a01138cecd575712`, is limited to the exact deleted adapter/test
-files, `app/mirror/source_admission.py`, and `tests/test_mirror_state_source_contract.py`. The
+driver-reviewed Mirror patch `46a4c965464ea2cd72a3205d82652ddbf8ae51f6`, approved under the
+owner-delegated engineering authority and integrated here as local commit
+`57e5f1f938ff7346880c6fd6a01138cecd575712`, is limited to the exact deleted adapter/test files,
+`app/mirror/source_admission.py`, and `tests/test_mirror_state_source_contract.py`. The
 nonprotected source-only cleanup `6df4578aa5c98ca23ba38b563b74a075a504c483`, integrated here as
 `47eb2309e08d17913bb2fc99ffb33e02dc9bffaa`, removes only unused governance aliases. These are
 completed reviewed changes, not open permission; future protected changes need a new owner
-delegation naming the exact paths, tests, invariants, and evidence. This child neither extends nor
-revokes a separate owner packet in another task.
+delegation from the owner, or a driver-issued packet within an existing owner delegation, naming
+the exact paths, tests, invariants, and evidence. This child neither extends nor revokes a separate
+owner packet in another task.
 
 The completed Mirror boundary remains governed by these invariants: independent Core/Ingress
 reconstruction is fail-closed; every native and service release result is checked; partial release

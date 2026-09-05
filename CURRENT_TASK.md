@@ -2,9 +2,9 @@
 
 Updated: 2026-09-05
 
-Current candidate commit: `0607a275bb5158dd4b4c70dfcd95d0967c80b839` (immutable integration base;
-this child is its separate reviewed successor).
-Current candidate tree: `4571c47be35dd782045aa4f9ed35a9fb31413a2c` (sealed baseline tree).
+Immutable input base commit: `c29d39ff796bb7056b42095dec5bc10a4a959342` (reviewed integrated
+candidate preserved as historical evidence).
+Input base tree: `4ad77eef67acb0d5019ac0520d42849330bd6d21` (the immutable input tree).
 PHASE: Reviewed source integration and authority cleanup.
 
 Next bounded action: complete the final clean-candidate readback and handoff for the exact reviewed

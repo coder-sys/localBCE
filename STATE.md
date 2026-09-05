@@ -55,12 +55,14 @@ and retired path rejection remains unchanged.
   `proofSuiteId=null`, `production_usable=false`, `qualification_state=NOT_QUALIFIED`,
   `activation_state=INACTIVE`, and `selection_state=UNSELECTED`.
 - On clean disposable staging of the integrated source/policy commit
-  `cc953b2fbb226fdcbe03a55fcb2367c26fde9ba0`, the release-manifest gate selected 193 paths and
+  `c29d39ff796bb7056b42095dec5bc10a4a959342`, the release-manifest gate selected 193 paths and
   emitted manifest-v2 SHA-256 `2d54c478a4c5eb45736118e6ccfba726a9ad24922f085d141c012d4948979729`
   (28,959 bytes). The create-only builder completed canonical ZIP/CRC readback with 194 entries,
   3,305,354 archive bytes, payload 3,234,361 bytes, and archive SHA-256
   `ba3533641b07907255d238492906739dad1aa8e085b0d6c50a43f75cd77c47cf`; no publication target was
   refreshed.
+  The earlier internal note naming `cc953b2fbb226fdcbe03a55fcb2367c26fde9ba0` for this receipt
+  was a documentation error; the raw receipt is bound to `c29d39ff796bb7056b42095dec5bc10a4a959342`.
 
 ## Unresolved trust-critical blocker
 

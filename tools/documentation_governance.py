@@ -162,8 +162,8 @@ _INCOMPATIBLE_ACTIVE_INSTRUCTIONS = (
     ),
 )
 _REQUIRED_CURRENT_TASK_MARKERS = (
-    "Current candidate commit:",
-    "Current candidate tree:",
+    "Immutable input base commit:",
+    "Input base tree:",
     "Next bounded action:",
 )
 
