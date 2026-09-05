@@ -1,6 +1,6 @@
 # Blind Ledger architecture
 
-Updated: 2026-08-24
+Updated: 2026-09-05
 
 Blind Ledger is RightRail's state-side payment-clearance product. It answers one narrow question:
 may this proposed payment proceed under the deterministic rules the state has approved for
@@ -237,8 +237,8 @@ outside that handoff.
 
 ## Executable formal kernel
 
-Lean 4 is the later mandatory target for the smallest executable semantic and legal state-transition
-kernel; it is not active now. It owns the five-directive evaluator, `policyResult`/`effectiveDirective` separation,
+Lean 4 is the authorized next formal workstream for the smallest executable semantic and legal
+state-transition kernel; it is not implemented or linked in the current candidate. It owns the five-directive evaluator, `policyResult`/`effectiveDirective` separation,
 control-set semantics, authoritative absence, chronology, governed exceptions, observation-only
 separation, bounded canonical semantic decoding, replay, the exact decision/access join, and
 allowed after-state.
@@ -249,7 +249,7 @@ operational state. For the private path, Rust proof acceptance and Lean semantic
 both necessary before the database may commit. For the direct path, the Lean kernel evaluates the
 canonical governed plaintext input. Any disagreement rejects.
 
-The Lean kernel is a deferred production plug-in, not a replacement for the canonical semantics.
+The Lean kernel is a future production plug-in, not a replacement for the canonical semantics.
 Current qualification status is authoritative in `STATE.md` and `CURRENT_TASK.md`;
 `docs/LEAN_FORMAL_KERNEL.md` defines the theorem manifest, executable correspondence, admitted
 assumptions, CI gates, and implementation order.

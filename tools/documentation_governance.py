@@ -59,7 +59,7 @@ MARKDOWN_REGISTRY = {
         "README.md", "roadmap", "Native-v3 and nonpayment dependency order"
     ),
     "docs/LEAN_FORMAL_KERNEL.md": _registration(
-        "README.md", "lean-target", "later mandatory formal semantic/state gate"
+        "README.md", "lean-target", "authorized mandatory formal semantic/state gate"
     ),
     "docs/MIRROR_ARCHITECTURE.md": _registration(
         "README.md", "mirror-architecture", "read-only source trust, custody, reconciliation, and recovery boundary"
@@ -98,6 +98,74 @@ MARKDOWN_REGISTRY = {
         "README.md", "rejected-architectures", "current prohibitions against retired directions"
     ),
 }
+
+# These are the executable paths named by the maintained command instructions.  The check is
+# intentionally explicit: a command may be source-checkout-only, but it must never point at a
+# file that no longer exists.  Git-only checks are validated by the command itself and are not
+# replaced with an extracted-tree approximation.
+DOCUMENTED_COMMAND_FILE_REFERENCES = {
+    "README.md": frozenset(
+        {
+            "experiments/native_v3_phase0/native_v3_fixture.py",
+            "experiments/native_v3_phase0_rust/Cargo.toml",
+            "profile11_complete_path.py",
+            "tests/test_active_core_contract.py",
+            "tests/test_documentation_governance.py",
+            "tests/test_minimal_clearance_verifier_process.py",
+            "tests/test_native_v3_plaintext_continuity.py",
+            "tests/test_native_v3_trust_boundary_profile.py",
+            "tests/test_profile11_complete_path.py",
+            "tests/test_profile11_source_boundary.py",
+            "tests/test_qualification_gate.py",
+            "tests/test_security_freeze_spec.py",
+            "tools/locked_python_dependencies.py",
+            "tools/ops_authority.py",
+            "tools/qualification_gate.py",
+        }
+    ),
+    "docs/IMPLEMENTATION_ROADMAP.md": frozenset({"ops/launch_blockers.json"}),
+    "docs/PYTHON_DEPENDENCY_LOCKING.md": frozenset(
+        {
+            "docs/SBOM.python.spdx.json",
+            "requirements/locks/cp314-linux_x86_64-development.lock",
+            "requirements/locks/cp314-linux_x86_64-production.lock",
+            "requirements/locks/cp314-win_amd64-development.lock",
+            "requirements/locks/cp314-win_amd64-production.lock",
+            "requirements/locks/python-artifacts.lock.json",
+            "tools/locked_python_dependencies.py",
+        }
+    ),
+    "ops/DEPLOYMENT_RUNBOOK.md": frozenset(
+        {"tools/ops_authority.py", "tools/qualification_gate.py"}
+    ),
+    "ops/PRODUCTION_CONFIG_CHECKLIST.md": frozenset(
+        {"tools/ops_authority.py", "tools/qualification_gate.py"}
+    ),
+    "ops/RISK_REGISTER.md": frozenset({"ops/launch_blockers.json"}),
+}
+
+# These exact strings identify the previous combined-integration task, not a historical fact that
+# should survive in an active task document.  The current task must carry one candidate identity,
+# one phase, and one next bounded action instead.
+_INCOMPATIBLE_ACTIVE_INSTRUCTIONS = (
+    (
+        "CURRENT_TASK.md",
+        re.compile(r"(?im)^\s*PHASE:\s*Combined controlled integration candidate\b"),
+    ),
+    (
+        "CURRENT_TASK.md",
+        re.compile(r"(?im)^\s*authoritative main remains read-only; no archive action\.?\s*$"),
+    ),
+    (
+        "docs/IMPLEMENTATION_ROADMAP.md",
+        re.compile(r"(?im)^\s*This is not the current or next implementation stage\.?\s*$"),
+    ),
+)
+_REQUIRED_CURRENT_TASK_MARKERS = (
+    "Current candidate commit:",
+    "Current candidate tree:",
+    "Next bounded action:",
+)
 
 REMOVED_MARKDOWN_PATHS = frozenset(
     {
@@ -220,6 +288,33 @@ def _read_text(repo_root: Path, relative: str) -> str:
     return (repo_root / Path(*relative.split("/"))).read_text(encoding="utf-8")
 
 
+def _validate_documented_command_paths(
+    repo_root: Path, texts: dict[str, str], errors: list[str]
+) -> None:
+    for document, references in DOCUMENTED_COMMAND_FILE_REFERENCES.items():
+        if document not in texts:
+            errors.append(f"documented command owner is missing: {document}")
+            continue
+        for reference in sorted(references):
+            candidate = repo_root / Path(*reference.split("/"))
+            if not candidate.is_file():
+                errors.append(
+                    f"documented command references missing file: {document} -> {reference}"
+                )
+
+
+def _validate_active_instruction_coherence(
+    texts: dict[str, str], errors: list[str]
+) -> None:
+    task = texts.get("CURRENT_TASK.md", "")
+    for marker in _REQUIRED_CURRENT_TASK_MARKERS:
+        if marker not in task:
+            errors.append(f"CURRENT_TASK.md is missing active marker: {marker}")
+    for document, marker in _INCOMPATIBLE_ACTIVE_INSTRUCTIONS:
+        if marker.search(texts.get(document, "")):
+            errors.append(f"incompatible active instruction remains: {document}")
+
+
 def _constructed_reference_patterns(removed: str) -> tuple[re.Pattern[str], ...]:
     components = removed.split("/")
     quoted = [re.escape(component) for component in components]
@@ -331,6 +426,9 @@ def validate_markdown_tree(
                 errors.append(f"reference to removed Markdown: {path} -> {removed}")
             elif _has_constructed_reference(path, text, removed):
                 errors.append(f"constructed reference to removed Markdown: {path} -> {removed}")
+
+    _validate_documented_command_paths(repo_root, texts, errors)
+    _validate_active_instruction_coherence(texts, errors)
 
     if errors:
         raise DocumentationGovernanceError("; ".join(sorted(set(errors))))

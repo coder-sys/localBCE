@@ -1,6 +1,41 @@
 # Blind Ledger current state
 
-Updated: 2026-08-24
+Updated: 2026-09-05
+
+## Current candidate and operator pass
+
+The current candidate source base is commit `be4f1d565033dd57e0101af6f5bfcb0868bb1db6`, tree
+`746fcbbd314e16bed96e50b52a1f586bfa8ec50a`. The isolated operator worktree now contains the
+in-scope privacy/helper, release-policy, documentation-governance, and authority-record delta as
+one clean immutable operator commit `cf616eeee99fe3dcbfc19a7063926f21ae99970b`
+(tree `031aea92f03c0075848b3a3a9599f82314bddb03`). That commit is handed off separately
+for source integration; it does not claim that Cleanup's source changes have been integrated.
+
+The README boundary correction is accepted in the candidate: source-checkout commands are
+separate from extracted-release use, operations authority and qualification smoke are named, and
+Profile 11 remains source-only. The privacy factoring keeps one shared detector, duplicate-key
+rejection, JSON traversal, and text-category implementation for the release builder and artifact
+scanner. Its focused test result is `21 passed, 5 subtests passed`; the combined
+privacy/builder/release/governance suite is `60 passed, 100 subtests passed`; changed
+Python modules also passed `py_compile`. The current committed default selection passed the
+structural privacy check with `STRUCTURAL_PRIVACY_SELECTED=248` and
+`STRUCTURAL_PRIVACY_FAILURES=0`; the shared detector helper is included as a runtime release
+dependency, with its path-regex vocabulary assembled without self-triggering source literals.
+Documentation governance reported 21 live/registered Markdown
+files, five root authorities, and zero protected-compatibility root files; the active-core/
+security/qualification command passed 19 tests and operations authority verified. Qualification
+remains `NOT_QUALIFIED`, `INACTIVE`, and `UNSELECTED`.
+
+The release policy is being narrowed from retained-prefix selection to an explicit rooted
+dependency closure. The final closure is intentionally pending Cleanup's approved governance-
+constant relocation and behavior-preserving source cleanup. Dynamic dependencies, protected
+consumers, and package/build semantics must be counted; neither the whole experiment tree nor an
+individual old module is retained or deleted merely because it shares a prefix.
+
+This pass has not created, published, or refreshed a source archive. The current worktree has no
+production activation or qualification consequence. The direct-state-owned lane remains live and
+non-dispositive; Queue 11 does not replace it. `app/oracle_attestation.py` and every other
+protected application path remain untouched.
 
 ## Product boundary
 
@@ -70,7 +105,7 @@ exactly one decision row and two access rows, with access index 0 as READ bound 
 before value and access index 1 as WRITE bound to its after value. The independent verifier
 recomputes the same relation without calling the producer validator; its focused raw mutation
 matrix rejects 13/13 malformed or semantically altered joins. The valid 676-byte join and its
-existing SHA3-512 ID remain unchanged. The DP24 ledger now binds an immutable parameter-set
+existing SHA3-512 ID remain unchanged. The historical DP24 ledger now binds an immutable parameter-set
 identity to the pinned upstream manifest (SHA-256
 `A677B8A6BEA7DCA87E4370E8FA07FDFD17F345276B581629BE230022B8C0BB5D`), labels all six numeric
 parameters `UNKNOWN` with candidate literals marked `HYPOTHETICAL_CANDIDATE_INPUT`, and suppresses
@@ -102,10 +137,11 @@ conformance or head-binding error. Only a current `APPROVED_OBSERVATION_ONLY` he
 export/restore preserve that head. This remains synthetic, local/current-Windows, observation-only
 evidence with no production persistence, source authentication, payment authority, or activation.
 
-Lean 4 is the later mandatory target for the executable clearance semantic and legal state-transition
-kernel; it is not active now. It will own bounded canonical semantic decoding, control-set evaluation, authoritative
-absence, chronology, exceptions, observation-only separation, replay, exact decision/access joins,
-and allowed after-state. It is not implemented; the current Python/Rust KATs and parsers are not a
+The Lean 4 formal-kernel workstream is an explicitly authorized next dependency for the executable
+clearance semantic and legal state-transition authority. It will own bounded canonical semantic
+decoding, control-set evaluation, authoritative absence, chronology, exceptions, observation-only
+separation, replay, exact decision/access joins, and allowed after-state. No Lean implementation
+or deployed link exists in this candidate; the current Python/Rust KATs and parsers are not a
 deployed-formal-verification claim.
 
 ## Direct-State-Owned Atomic Clearance V1 candidate
@@ -138,6 +174,18 @@ recovery, restart, and backup/restore. The existing continuity telemetry covered
 195,889-byte Python heap peak, 23,859,200-byte peak working set, zero pagefile growth, and
 `complete_proof_resource_gate_measured=false`.
 
+Cleanup-reported source-review evidence for the pending integration input
+`bdba7c3bee27a33147fb06506225995984a45206` (tree
+`c5b2b5a181fedafeebabc5bdd2cb7f9deb23ef96`) identifies an intentional transactional database
+schema clean break from version 3 to version 4. `_upgrade_schema_version` reads the existing
+metadata version and rejects V3 with `database_schema_version_mismatch` before schema creation
+or PRAGMA work; there is no automatic migration, deletion, fallback, or compatibility reader. The
+reported regression preserves V3 source and copied-backup bytes on rejection and leaves no recovered
+file, while current V4 restart, exact retry, backup/restore, and identity-integrity paths remain
+covered. This is a synthetic, nonactivating candidate boundary, not storage-compatible upgrade
+evidence; operational migration, production persistence, qualification, activation, and real-data
+upgrade remain unqualified.
+
 The active-core, security, documentation, release-manifest, and production-readiness gate command
 passed 35 tests plus 17 subtests. The existing offline Rust Phase-0 `kat` and `negatives` commands
 also passed with their original five-directive and negative-rejection statuses. These checks do not
@@ -152,7 +200,7 @@ clearance authority. The authoritative checkout is changed only by the authorize
 non-destructive fast-forward to this corrected candidate after every required integration gate
 passes.
 
-## Controlled integration synthesis
+## Historical controlled integration synthesis (superseded)
 
 The controlled candidate starts from the unchanged authoritative base
 `458a9cc81dbf4bf3f122b74223fb5d5cf68fa970` and cherry-picks exactly the six authorized Mirror
@@ -358,11 +406,12 @@ Current authority is `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `ARCHITECTURE.m
 `docs/LEAN_FORMAL_KERNEL.md`, and the named component authorities linked from `README.md`.
 Retained compatibility references are not design authority.
 
-The next safe dependency is focused verification of the combined controlled integration candidate.
-After acceptance, the next Blind Ledger architecture seam is the versioned Native amount and
-canonical-state binding described in `CURRENT_TASK.md`; Mirror's next seam is the bounded
-operational acquisition owner. The private-proof theorem/composition terms remain open, no backend
-is selected, and both products remain synthetic and nonactivating.
+The current operator-owned privacy/release/documentation consolidation is verified and handed off
+as a clean, nonintegrated delta. The next safe dependency is Cleanup's rooted source integration,
+followed by a fresh release-policy check against its clean final tree. Formal-kernel
+implementation is the next authorized semantic-authority dependency after that integration; it
+does not exist yet in this candidate. The private-proof theorem and composition terms remain
+open, no backend is selected, and both products remain synthetic and nonactivating.
 
 Current archive authority is the external publication receipt plus independent physical readback
 of exactly the three retained roles: one Downloads copy, one Desktop-root copy, and one nested

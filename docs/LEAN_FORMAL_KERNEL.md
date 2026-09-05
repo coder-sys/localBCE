@@ -1,11 +1,10 @@
 # Lean formal security kernel
 
-Updated: 2026-08-14
-Status: approved deferred target architecture and production-shaped semantic plug-in. Current
-qualification status is authoritative in `STATE.md` and `CURRENT_TASK.md`; Lean work remains
-phase-gated, is not a current implementation stage, and the kernel is not yet implemented or
-linked to the deployed path; it is not production credit until those gates pass.
-Owner: later mandatory formal semantic/state-transition gate. This document specifies the target and
+Updated: 2026-09-05
+Status: approved next formal-workstream target and production-shaped semantic plug-in. Current
+qualification status is authoritative in `STATE.md` and `CURRENT_TASK.md`; the kernel is not yet
+implemented or linked to the deployed path and is not production credit until its gates pass.
+Owner: mandatory formal semantic/state-transition gate. This document specifies the target and
 theorem contract; it contains no Lean implementation.
 
 ## Purpose
@@ -160,9 +159,9 @@ Current nonactivation flags, source/payment boundary, and qualification status a
 
 ## Implementation sequence
 
-Do not begin this sequence in the current phase. The nonpayment commercial wedge and operational
-foundations come first. Lean begins only after explicit phase authorization, but it remains a
-mandatory gate before production clearance or payment authority.
+Begin this sequence under the authorized formal-workstream boundary after the current
+documentation/release integrity pass. It remains a mandatory gate before production clearance or
+payment authority; this document does not claim that implementation or qualification has occurred.
 
 1. Freeze the Lean types and theorem statements against the current Phase-0 and continuity V2
    vectors without changing their semantics.

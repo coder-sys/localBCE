@@ -330,6 +330,60 @@ class ReleaseManifestGateTests(unittest.TestCase):
                 with self.assertRaisesRegex(gate.ManifestGateError, "forbidden paths"):
                     gate.validate_release_paths([path])
 
+        for path in sorted(gate.LEGACY_NONCURRENT_PATHS):
+            with self.subTest(legacy_noncurrent=path):
+                classification = gate.classify_path(path)
+                self.assertEqual(gate.PathLane.LEGACY_NONCURRENT, classification.lane)
+                with self.assertRaisesRegex(gate.ManifestGateError, "forbidden paths"):
+                    gate.validate_release_paths([path])
+
+    def test_default_release_selection_is_an_explicit_dependency_closure(self) -> None:
+        tracked = subprocess.run(
+            ["git", "ls-files"],
+            cwd=REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        selected = set(gate.default_release_selection(tracked))
+        classifications = gate.validate_tracked_paths(tracked)
+        retained = {
+            item.path
+            for item in classifications
+            if item.lane is gate.PathLane.RETAINED_COMPATIBILITY
+        }
+        self.assertEqual(set(gate.CURRENT_RELEASE_DEPENDENCY_PATHS), retained)
+        self.assertTrue(retained <= selected)
+        legacy_noncurrent = {
+            item.path
+            for item in classifications
+            if item.lane is gate.PathLane.LEGACY_NONCURRENT
+        }
+        self.assertEqual(set(gate.LEGACY_NONCURRENT_PATHS), legacy_noncurrent)
+        self.assertFalse(legacy_noncurrent & selected)
+        self.assertFalse(
+            set(item.path for item in classifications if item.lane is gate.PathLane.SOURCE_ONLY)
+            & selected
+        )
+        with self.assertRaisesRegex(
+            gate.ManifestGateError, "outside the reviewed dependency closure"
+        ):
+            gate.default_release_selection(["app/batch/future_reference.py"])
+
+    def test_release_selection_includes_builder_runtime_privacy_dependency(self) -> None:
+        tracked = subprocess.run(
+            ["git", "ls-files"],
+            cwd=REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        selected = set(gate.default_release_selection(tracked))
+        helper = "tools/privacy_primitives.py"
+        self.assertEqual(gate.PathLane.CURRENT_SOURCE, gate.classify_path(helper).lane)
+        self.assertNotIn(helper, gate.RELEASE_EXCLUDED_PATHS)
+        self.assertIn(helper, selected)
+
     def test_current_commit_tracked_tree_has_no_unknown_or_retired_paths(self) -> None:
         tracked = subprocess.run(
             ["git", "ls-files"],

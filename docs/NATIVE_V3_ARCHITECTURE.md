@@ -1,6 +1,6 @@
 # Native-v3 proof architecture
 
-Updated: 2026-08-25
+Updated: 2026-09-05
 Status: production-shaped target architecture; current qualification status is authoritative in
 `STATE.md` and `CURRENT_TASK.md`, and no backend is selected.
 Owner: private-proof, security, state, privacy, and resource qualification authority. The commercial
@@ -501,9 +501,9 @@ the complete path.
 
 ## Implementation order
 
-The Lean item below is a deferred formal gate, not the current or next implementation phase. The
-nonpayment commercial wedge and operational foundations come first, and Lean work begins only after
-explicit phase authorization. It still must close before production clearance or payment authority.
+The Lean item below is the authorized next formal-kernel workstream after the current
+documentation/release integrity pass. No Lean implementation or deployed link exists in this
+candidate, and the formal gates remain open before production clearance or payment authority.
 
 1. Freeze the canonical native-v3 statement, typed receipt, five-directive operation table,
    source/exception-registry contract, privacy adversary, and declared laptop-class state-side
@@ -511,8 +511,8 @@ explicit phase authorization. It still must close before production clearance or
 2. The five cross-language KATs cover `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and governed
    `EXCEPTION_APPROVED`, with wrong-directive, exception, chronology, corruption, root, statement,
    and state-mutation negatives. The exception seal is synthetic-KAT-only.
-3. At the later authorized formal gate, implement the Lean kernel, canonical decoder, theorem
-   manifest, independent check, and narrow fail-closed Rust adapter against the frozen KATs.
+3. Implement the Lean kernel, canonical decoder, theorem manifest, independent check, and narrow
+   fail-closed Rust adapter against the frozen KATs under the authorized formal workstream.
 4. Implement the smallest complete narrow private fixture: one hidden assertion relation with its
    operation/batch/source-bound commitment and minimal result, an independent verifier returning the
    typed receipt, and its binding into the separately verified state transaction and later Lean

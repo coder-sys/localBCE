@@ -1,7 +1,7 @@
 # Native-v3 implementation roadmap
 
-Updated: 2026-08-15
-Owner: dependency order for Native-v3, the later Lean gate, and the nonpayment Mirror wedge. It is
+Updated: 2026-09-05
+Owner: dependency order for Native-v3, the authorized Lean formal workstream, and the nonpayment Mirror wedge. It is
 not a proof-backend selection or activation record.
 
 This roadmap follows the smallest dependency chain that can produce a trustworthy state-side
@@ -33,6 +33,21 @@ being misread as a universal private-proof gate:
 | `BL-OFFICIAL-RECEIVER` | Activation of any mode that emits an operative clearance directive |
 | `BL-GOVERNMENT-CONNECTORS` | Activation of any mode using official external authority |
 
+## Current bounded workstream
+
+The current candidate is in an operator-owned integrity pass over the privacy primitives, release
+manifest selection, documentation governance, and root authority records. The release policy must
+select a reviewed dependency closure rather than every file under a retained prefix. Cleanup owns
+the approved source extraction and behavior-preserving legacy cleanup; the final release closure is
+recomputed from that actual source state before a manifest or archive is accepted. This workstream
+does not change application trust boundaries, operations bytes, verifier behavior, activation, or
+the nonpayment/read-only claim.
+
+The immediate evidence gates are the focused privacy, builder, documentation-governance, and
+release-manifest tests plus strict Python compilation and Git cleanliness checks. A source-only
+harness, generated/private artifact, or failed privacy gate remains excluded and cannot be promoted
+by documentation or a manifest default.
+
 ## Completed foundation
 
 1. Freeze the five directives and ten verifier-facing statement fields in the strict public
@@ -46,12 +61,13 @@ being misread as a universal private-proof gate:
    verifier-owned `DIRECT_STATE_OWNED` control set, authoritative absence evidence, all five
    directives, focused tests, independent parsing, and bounded direct-path telemetry.
 
-## Later mandatory formal-kernel gate
+## Authorized formal-kernel workstream
 
-This is not the current or next implementation stage. Complete the nonpayment commercial wedge and
-operational foundations first. Do not start Lean implementation without explicit phase
-authorization. Lean remains mandatory before a production direct evaluator or private proof can
-authorize a clearance transition.
+The formal-kernel workstream is the next authorized semantic-authority dependency after the current
+documentation/release integrity pass. No Lean implementation or deployed link exists in the current
+candidate. Lean remains mandatory before a production direct evaluator or private proof can authorize
+a clearance transition; this roadmap records the dependency and its gates without claiming that they
+have passed.
 
 Before a production direct evaluator or private proof can authorize a clearance transition:
 

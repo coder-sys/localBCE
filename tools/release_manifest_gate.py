@@ -52,6 +52,7 @@ class ManifestGateError(RuntimeError):
 class PathLane(str, Enum):
     CURRENT_SOURCE = "current_source"
     RETAINED_COMPATIBILITY = "retained_compatibility"
+    LEGACY_NONCURRENT = "legacy_noncurrent"
     SOURCE_ONLY = "source_only"
     EXCLUDED_GENERATED_PRIVATE = "excluded_generated_private"
     RETIRED_FORBIDDEN = "retired_forbidden"
@@ -106,12 +107,54 @@ CURRENT_TOP_LEVELS = frozenset(
     }
 )
 
-# These are evidence/migration lanes, not current native-v3 or commercial authority.
-# They remain selectable only when a release review explicitly includes them.
+# These prefixes are classification hints for retained evidence/migration lanes.  They are
+# never, by themselves, a release-selection rule.
 RETAINED_PREFIXES = (
     "app/batch/",
     "experiments/bl_pq512_crypto_foundation/",
     "experiments/fixed_shape_claim_air/",
+)
+
+# The current direct-state candidate still imports these retained paths.  Keep the closure
+# explicit so a default release cannot silently grow by prefix, and so cleanup can remove a path
+# only after its callers and replacement tests have been dealt with in the same reviewed change.
+CURRENT_RELEASE_DEPENDENCY_PATHS = frozenset(
+    {
+        "app/batch/__init__.py",
+        "app/batch/poseidon.py",
+        "app/batch/poseidon_helper/Cargo.lock",
+        "app/batch/poseidon_helper/Cargo.toml",
+        "app/batch/poseidon_helper/src/main.rs",
+        "app/batch/pq_suite_candidate.py",
+        "app/batch/stark_encoding.py",
+        "experiments/bl_pq512_crypto_foundation/field16_reference.py",
+        "experiments/bl_pq512_crypto_foundation/master_commitments_v2.py",
+        "experiments/bl_pq512_crypto_foundation/oods_reference.py",
+        "experiments/bl_pq512_crypto_foundation/pq_signature_adapters.py",
+        "experiments/bl_pq512_crypto_foundation/production_candidate.py",
+        "experiments/bl_pq512_crypto_foundation/public_coin_reference.py",
+        "experiments/bl_pq512_crypto_foundation/selected_proof_parameters.py",
+        "experiments/bl_pq512_crypto_foundation/selected_public_coin.py",
+        "experiments/bl_pq512_crypto_foundation/unique_decoding_parameters.py",
+        "experiments/fixed_shape_claim_air/air_binary_ir.py",
+        "experiments/fixed_shape_claim_air/executable_air.py",
+        "experiments/fixed_shape_claim_air/profile.py",
+        "experiments/fixed_shape_claim_air/semantics.py",
+    }
+)
+
+# These retained files are not reached by the surviving Profile 11, Mirror, native/KAT, release,
+# or direct-state roots.  They remain tracked only until Cleanup removes their exclusive tests and
+# callers; they are never selected for a release.
+LEGACY_NONCURRENT_PATHS = frozenset(
+    {
+        "app/batch/pq_nullifier_derivation.py",
+        "app/batch/pq_sparse_tree_reference.py",
+        "app/batch/pq_state_reference.py",
+        "app/batch/pq_strong_nullifier_reference.py",
+        "app/batch/pq_tree_reference.py",
+        "app/batch/tar_required.py",
+    }
 )
 
 # These paths are abandoned compatibility designs.  A tracked path in one of them is a
@@ -305,6 +348,12 @@ def classify_path(path: str) -> PathClassification:
     if top_level == "docs" and normalised.casefold().endswith(".md"):
         if normalised not in DOC_MARKDOWN_ALLOWLIST:
             return PathClassification(normalised, PathLane.UNKNOWN, "unallowlisted docs Markdown authority")
+    if normalised in LEGACY_NONCURRENT_PATHS:
+        return PathClassification(
+            normalised,
+            PathLane.LEGACY_NONCURRENT,
+            "retained reference path not reached by a current product or release root",
+        )
     if any(normalised.startswith(prefix) for prefix in RETAINED_PREFIXES):
         return PathClassification(normalised, PathLane.RETAINED_COMPATIBILITY, "retained regression/evidence lane")
     return PathClassification(normalised, PathLane.CURRENT_SOURCE, "reviewed current source lane")
@@ -352,6 +401,10 @@ def validate_release_paths(paths: Iterable[str]) -> tuple[str, ...]:
         item
         for item in classifications
         if item.lane not in {PathLane.CURRENT_SOURCE, PathLane.RETAINED_COMPATIBILITY}
+        or (
+            item.lane is PathLane.RETAINED_COMPATIBILITY
+            and item.path not in CURRENT_RELEASE_DEPENDENCY_PATHS
+        )
     ]
     if failures:
         details = "; ".join(f"{item.path}: {item.lane.value} ({item.reason})" for item in failures[:8])
@@ -367,6 +420,35 @@ def validate_release_paths(paths: Iterable[str]) -> tuple[str, ...]:
             ) from None
         ordered.append(item.path)
     return tuple(sorted(ordered))
+
+
+def default_release_selection(paths: Iterable[str]) -> tuple[str, ...]:
+    """Return the dependency-closed current release selection.
+
+    Current source is selected by lane.  Retained paths are selected only when they are in the
+    explicit, reviewed dependency closure above; an unlisted path under a retained prefix is a
+    policy error rather than an implicit release input.
+    """
+
+    classifications = validate_tracked_paths(paths)
+    retained = {
+        item.path
+        for item in classifications
+        if item.lane is PathLane.RETAINED_COMPATIBILITY
+    }
+    unreviewed_retained = sorted(retained - CURRENT_RELEASE_DEPENDENCY_PATHS)
+    if unreviewed_retained:
+        raise ManifestGateError(
+            "retained compatibility paths are outside the reviewed dependency closure: "
+            + ", ".join(unreviewed_retained[:8])
+        )
+    selected = {
+        item.path
+        for item in classifications
+        if item.lane is PathLane.CURRENT_SOURCE
+    }
+    selected.update(retained & CURRENT_RELEASE_DEPENDENCY_PATHS)
+    return validate_release_paths(selected)
 
 
 def _git(repo: Path, args: Sequence[str]) -> bytes:
@@ -540,7 +622,9 @@ def generate_manifest(
 
     source_files, source_directories = _inventory_source(resolved_source)
     expected_selection = (
-        tuple(selected_paths) if selected_paths is not None else tuple(sorted(source_files))
+        tuple(selected_paths)
+        if selected_paths is not None
+        else default_release_selection(tracked_paths)
     )
     release_paths = validate_release_paths(expected_selection)
     release_set = set(release_paths)

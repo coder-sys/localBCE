@@ -1,7 +1,7 @@
 # Clearance database + conditional mandatory-ZK architecture
 
 Status: authoritative transaction boundary; proof boundary is `NATIVE_V3_ARCHITECTURE.md`
-Updated: 2026-08-25
+Updated: 2026-09-05
 Owner: this document defines the verifier-to-database, retry, recovery, migration, and
 anti-rollback boundary. It does not select a backend or claim production persistence.
 
@@ -203,9 +203,9 @@ for the READ/WRITE row roles; the producer compatibility object is not semantic 
 
 ## Formal semantic boundary
 
-Lean 4 is the later mandatory executable authority for clearance meaning and the legal local
-transition. It is not an active dependency of the current synthetic transaction boundary: the kernel
-is not implemented, linked, or production-qualified. Before direct or private clearance authority,
+Lean 4 is the authorized next executable authority for clearance meaning and the legal local
+transition. It is not implemented, linked, or production-qualified in the current synthetic
+transaction boundary. Before direct or private clearance authority,
 the future kernel must cover bounded decoding, the five directives, result separation, control sets,
 authoritative absence, chronology, exceptions, observation-only separation, replay, exact joins, and
 allowed after-state.
@@ -225,7 +225,8 @@ inventory, independent kernel check, and CI gates. Current status and nonactivat
 `app/production_boundary.py` and `app/transactional_database_boundary.py` remain the tested local
 owners of the current compatibility seam. They must preserve one atomic clearance-state mutation,
 exact receipt identities, idempotent retry, concurrency rejection, anti-rollback, backup/restore,
-migration, append-only audit, and zero-PHI support behavior.
+explicit version handling, append-only audit, and zero-PHI support behavior. Historical migration
+exercises remain source/test evidence and do not imply a current cross-version storage upgrade path.
 
 The focused evidence is `tests/test_bl_pq512_production_boundary.py`,
 `tests/test_bl_pq512_transactional_database_boundary.py`,
@@ -240,6 +241,14 @@ commit, return an explicit indeterminate result on post-commit finalization fail
 only by exact idempotent retry. Competing transitions, stale roots, older databases, partial writes,
 and configuration drift fail closed. Backup/restore and restart must retain the same decision,
 receipt, audit, and anti-rollback identities.
+
+The pending Cleanup source input at commit `bdba7c3bee27a33147fb06506225995984a45206` intentionally
+changes the transactional database boundary from schema version 3 to 4. Its version check rejects
+an existing V3 direct-state-owned database or backup with `database_schema_version_mismatch` before
+schema creation or PRAGMA work; it has no automatic migration, deletion, fallback, or compatibility
+reader. This is an intentional nonactivating clean break. V3 source/backup byte preservation on
+rejection and V4 retry/recovery are required integration evidence; no cross-version storage
+compatibility, operational migration, production persistence, or real-data upgrade is claimed.
 
 ## What the selected proof must establish
 

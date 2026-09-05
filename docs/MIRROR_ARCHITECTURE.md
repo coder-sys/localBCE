@@ -1,6 +1,6 @@
 # Mirror architecture
 
-Updated: 2026-08-24
+Updated: 2026-09-05
 Status: synthetic, read-only, nonactivating architecture candidate
 Owner: Mirror source trust, evidence custody, reconciliation, and recovery boundary
 

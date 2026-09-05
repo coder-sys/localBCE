@@ -68,6 +68,46 @@ class DocumentationGovernanceTests(unittest.TestCase):
                 for marker in governance._RETIRED_MARKDOWN_STRUCTURE)
         )
 
+    def test_missing_documented_command_file_fails_closed(self) -> None:
+        original = governance.DOCUMENTED_COMMAND_FILE_REFERENCES
+        governance.DOCUMENTED_COMMAND_FILE_REFERENCES = {
+            "README.md": frozenset({"does/not-exist.py"}),
+        }
+        try:
+            with self.assertRaisesRegex(
+                governance.DocumentationGovernanceError,
+                "documented command references missing file",
+            ):
+                governance.validate_markdown_tree(ROOT)
+        finally:
+            governance.DOCUMENTED_COMMAND_FILE_REFERENCES = original
+
+    def test_incompatible_active_instruction_fails_closed(self) -> None:
+        original = governance._INCOMPATIBLE_ACTIVE_INSTRUCTIONS
+        governance._INCOMPATIBLE_ACTIVE_INSTRUCTIONS = (
+            ("README.md", governance.re.compile(r"(?m)^# Blind Ledger$")),
+        )
+        try:
+            with self.assertRaisesRegex(
+                governance.DocumentationGovernanceError,
+                "incompatible active instruction remains",
+            ):
+                governance.validate_markdown_tree(ROOT)
+        finally:
+            governance._INCOMPATIBLE_ACTIVE_INSTRUCTIONS = original
+
+    def test_current_task_requires_candidate_identity_and_next_action(self) -> None:
+        original = governance._REQUIRED_CURRENT_TASK_MARKERS
+        governance._REQUIRED_CURRENT_TASK_MARKERS = (*original, "missing active marker")
+        try:
+            with self.assertRaisesRegex(
+                governance.DocumentationGovernanceError,
+                "CURRENT_TASK.md is missing active marker",
+            ):
+                governance.validate_markdown_tree(ROOT)
+        finally:
+            governance._REQUIRED_CURRENT_TASK_MARKERS = original
+
 
 if __name__ == "__main__":
     unittest.main()

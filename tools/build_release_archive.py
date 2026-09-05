@@ -24,6 +24,13 @@ import unicodedata
 import zipfile
 import zlib
 
+from tools.privacy_primitives import (
+    _DuplicateJsonKey,
+    _reject_duplicate_keys,
+    _text_categories,
+    _walk_json,
+)
+
 
 MANIFEST_VERSION = 2
 BUILDER_VERSION = "blind-ledger-release-archive-v1"
@@ -101,19 +108,6 @@ _STRUCTURAL_PRIVATE_CATEGORIES = {
 }
 class ReleaseArchiveError(RuntimeError):
     """A fail-closed release validation or readback failure."""
-
-
-class _DuplicateJsonKey(ValueError):
-    pass
-
-
-def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise _DuplicateJsonKey(key)
-        result[key] = value
-    return result
 
 
 def _is_reparse_point(path: Path) -> bool:
@@ -332,8 +326,6 @@ def _decoded_payload_is_forbidden(data: bytes) -> bool:
         decoded_text = data.decode("utf-8")
     except UnicodeDecodeError:
         return False
-    from tools.privacy_artifact_scan import _text_categories
-
     return bool(_STRUCTURAL_PRIVATE_CATEGORIES & set(_text_categories(decoded_text)))
 
 
@@ -411,12 +403,6 @@ def _validate_payload_content(relative: str, data: bytes) -> None:
         for character in text
     ):
         raise ReleaseArchiveError("release payload contains opaque control bytes")
-    from tools.privacy_artifact_scan import (
-        _reject_duplicate_keys,
-        _text_categories,
-        _walk_json,
-    )
-
     categories = set(_text_categories(text))
     if categories & _STRUCTURAL_PRIVATE_CATEGORIES:
         raise ReleaseArchiveError("release payload failed the structural privacy gate")
