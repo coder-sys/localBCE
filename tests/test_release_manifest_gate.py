@@ -267,6 +267,10 @@ class ReleaseManifestGateTests(unittest.TestCase):
             gate.classify_path("docs/DESIGN_IDEOLOGY.md").lane,
         )
         self.assertEqual(
+            gate.PathLane.CURRENT_SOURCE,
+            gate.classify_path(".gitattributes").lane,
+        )
+        self.assertEqual(
             gate.PathLane.EXCLUDED_GENERATED_PRIVATE,
             gate.classify_path("STATE.md").lane,
         )
@@ -301,6 +305,20 @@ class ReleaseManifestGateTests(unittest.TestCase):
                 gate.validate_release_paths([path])
         with self.assertRaisesRegex(gate.ManifestGateError, "duplicate or case"):
             gate.classify_paths(["tools/A.py", "tools/a.py"])
+        for path in sorted(gate.RELEASE_SOURCE_ONLY_PATHS):
+            with self.subTest(source_only=path):
+                classification = gate.classify_path(path)
+                self.assertEqual(gate.PathLane.SOURCE_ONLY, classification.lane)
+                self.assertEqual(
+                    "retained source/test-only nonrelease harness",
+                    classification.reason,
+                )
+                self.assertEqual(
+                    classification,
+                    gate.validate_tracked_paths([path])[0],
+                )
+                with self.assertRaisesRegex(gate.ManifestGateError, "forbidden paths"):
+                    gate.validate_release_paths([path])
         for path in sorted(gate.RELEASE_EXCLUDED_PATHS):
             with self.subTest(release_excluded=path):
                 classification = gate.classify_path(path)

@@ -41,6 +41,7 @@ MAX_FILE_BYTES = archive_builder.MAX_FILE_BYTES
 POLICY_INPUT_SHA256 = {
     ".archiveignore": "a6b8981b81255c914df2fd7fb60cbab3266922b748492aad08f82c6e6e25c6d6",
     ".gitignore": "8e62c95885ead2e9d03a65568ccc425d01b0b92a3f3f7d9bb89b7d85c558cdc9",
+    ".gitattributes": "898abe08ca35ca160d2c17fe86dcc93cf846576444a6902063f2fed3e18bb086",
 }
 
 
@@ -51,6 +52,7 @@ class ManifestGateError(RuntimeError):
 class PathLane(str, Enum):
     CURRENT_SOURCE = "current_source"
     RETAINED_COMPATIBILITY = "retained_compatibility"
+    SOURCE_ONLY = "source_only"
     EXCLUDED_GENERATED_PRIVATE = "excluded_generated_private"
     RETIRED_FORBIDDEN = "retired_forbidden"
     UNKNOWN = "unknown"
@@ -69,6 +71,7 @@ ROOT_PATH_ALLOWLIST = frozenset(
     {
         ".archiveignore",
         ".gitignore",
+        ".gitattributes",
         "AGENTS.md",
         "ARCHITECTURE.md",
         "CURRENT_TASK.md",
@@ -182,9 +185,19 @@ EXCLUDED_SUFFIXES = frozenset(
         ".zst",
     }
 )
+# These source-only harness files intentionally remain in Git and are exercised by tests,
+# but are not publishable release inputs. Keep this boundary explicit and finite.
+RELEASE_SOURCE_ONLY_PATHS = frozenset(
+    {
+        "profile11_complete_path.py",
+        "profile11_complete_path_manifest.json",
+        "profile11_source_boundary.py",
+    }
+)
+
 # These source files intentionally remain in Git and are exercised by tests, but their
 # synthetic privacy/security fixtures or scanner vocabulary cannot be serialized into the
-# source archive under the builder's structural privacy gate.  Keep this release boundary
+# source archive under the builder's structural privacy gate. Keep this release boundary
 # explicit and finite; do not turn it into a content-based omission rule.
 RELEASE_EXCLUDED_PATHS = frozenset(
     {
@@ -254,6 +267,8 @@ def classify_path(path: str) -> PathClassification:
     normalised = _normalise_path(path)
     if normalised in {"CURRENT_TASK.md", "STATE.md"}:
         return PathClassification(normalised, PathLane.EXCLUDED_GENERATED_PRIVATE, "workspace-only authority record")
+    if normalised in RELEASE_SOURCE_ONLY_PATHS:
+        return PathClassification(normalised, PathLane.SOURCE_ONLY, "retained source/test-only nonrelease harness")
     excluded, excluded_reason = _is_excluded(normalised)
     if excluded:
         return PathClassification(normalised, PathLane.EXCLUDED_GENERATED_PRIVATE, excluded_reason)
@@ -577,6 +592,9 @@ def generate_manifest(
         "payload_file_count": len(entries),
         "excluded_tracked_count": sum(
             item.lane is PathLane.EXCLUDED_GENERATED_PRIVATE for item in tracked
+        ),
+        "source_only_tracked_count": sum(
+            item.lane is PathLane.SOURCE_ONLY for item in tracked
         ),
     }
 

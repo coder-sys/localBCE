@@ -1,7 +1,7 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
   "creationInfo": {
-    "comment": "Complete Python logical-package inventory for the reviewed CPython 3.14.4 Windows x86-64 and Linux x86-64 production (1) and development (7) locks.",
+    "comment": "Complete Python logical-package inventory for the reviewed CPython 3.14.4 Windows x86-64 and Linux x86-64 production (3) and development (9) locks.",
     "created": "2026-07-18T17:02:33Z",
     "creators": [
       "Tool: Codex R30 reviewed-wheel inventory"
@@ -24,6 +24,24 @@
       "licenseDeclared": "NOASSERTION",
       "name": "blind-ledger-python-environment",
       "versionInfo": "R30"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-cffi",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact cffi-2.0.0-cp314-cp314-win_amd64.whl; Linux artifact cffi-2.0.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/cffi/2.0.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/cffi@2.0.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "cffi",
+      "versionInfo": "2.0.0"
     },
     {
       "SPDXID": "SPDXRef-Package-Python-colorama",
@@ -116,6 +134,24 @@
       "versionInfo": "0.4.0"
     },
     {
+      "SPDXID": "SPDXRef-Package-Python-pycparser",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pycparser-3.0-py3-none-any.whl; Linux artifact pycparser-3.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pycparser/3.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pycparser@3.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "pycparser",
+      "versionInfo": "3.0"
+    },
+    {
       "SPDXID": "SPDXRef-Package-Python-pygments",
       "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pygments-2.20.0-py3-none-any.whl; Linux artifact pygments-2.20.0-py3-none-any.whl.",
       "copyrightText": "NOASSERTION",
@@ -159,7 +195,17 @@
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
     {
+      "relatedSpdxElement": "SPDXRef-Package-Python-cffi",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
       "relatedSpdxElement": "SPDXRef-Package-Python-colorama",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-pycparser",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
     },

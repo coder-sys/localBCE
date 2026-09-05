@@ -16,8 +16,11 @@ installation are offline and consume only an already provisioned wheelhouse.
   embedded version, and declared wheel-metadata license for each supported platform.
 - The four `requirements/locks/*.lock` files are pip-compatible, fully transitive, exact-version,
   SHA-256-hashed production/development locks for CPython 3.14.4 on Windows x86-64 and Linux x86-64.
-- `docs/SBOM.python.spdx.json` reconciles the 7 logical packages and their declared licenses. The
+- `docs/SBOM.python.spdx.json` reconciles the 9 logical packages and their declared licenses. The
   artifact manifest remains the authority for per-platform wheel identities.
+- The reviewed CPython production closure is `pqcrypto` plus its declared `cffi` dependency and
+  `cffi`'s CPython `pycparser` dependency; unrelated packages from superseded graphs are not
+  reintroduced.
 - `requirements.txt` and `requirements-dev.txt` deliberately install nothing, preventing old
   automation from silently returning to online resolution.
 
