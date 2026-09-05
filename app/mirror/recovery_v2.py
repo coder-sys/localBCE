@@ -1112,6 +1112,62 @@ class RecoveryServiceV2:
         if not isinstance(material, dict) or material.get("ingress_target_binding") != ingress_binding or material.get("core_target_binding") != core_binding:
             raise RecoveryConflictError("recovery:publication-claim")
 
+    def _verify_published_targets(
+        self,
+        claim: Mapping[str, object],
+        ingress_path: Path,
+        core_path: Path,
+        ingress_raw: bytes,
+        core_raw: bytes,
+    ) -> None:
+        if (
+            claim.get("ingress_image_digest") != _raw_digest("ingress-image", ingress_raw)
+            or claim.get("ingress_image_length") != len(ingress_raw)
+            or claim.get("core_image_digest") != _raw_digest("core-image", core_raw)
+            or claim.get("core_image_length") != len(core_raw)
+        ):
+            raise RecoveryConflictError("recovery:publication-claim")
+        try:
+            restore_publication.verify_pair_read_only(
+                ingress_target=ingress_path,
+                core_target=core_path,
+                ingress_image=ingress_raw,
+                core_image=core_raw,
+                pair_operation_id=claim["pair_operation_id"],
+                ingress_file_digest=restore_publication._file_digest(ingress_raw),
+                ingress_file_length=claim["ingress_image_length"],
+                core_file_digest=restore_publication._file_digest(core_raw),
+                core_file_length=claim["core_image_length"],
+                ingress_expected={
+                    "database_id": claim["ingress_database_id"],
+                    "config_digest": claim["ingress_config_digest"],
+                    "head_root": claim["ingress_head_root"],
+                    "sequence": claim["ingress_watermark"],
+                },
+                core_expected={
+                    "database_id": claim["core_database_id"],
+                    "config_digest": claim["core_config_digest"],
+                    "head_root": claim["core_head_root"],
+                    "ingress_database_id": claim["ingress_database_id"],
+                    "ingress_watermark": claim["core_watermark"],
+                },
+                verify_ingress=lambda image: ingress.verify_bytes(
+                    image,
+                    expected_database_id=self.config.ingress_database_id,
+                    expected_config_digest=self.config.ingress_config_digest,
+                ),
+                verify_core=lambda image, exact_ingress: core.verify_bytes(
+                    image,
+                    expected_database_id=self.config.core_database_id,
+                    expected_config_digest=self.config.core_config_digest,
+                    ingress_bytes=exact_ingress,
+                ),
+            )
+        except restore_publication.RestorePublicationConflict:
+            raise_redacted(RecoveryConflictError, "recovery:publication-conflict")
+        except restore_publication.RestorePublicationError:
+            raise_redacted(RecoveryError, "recovery:publication")
+
     @_mutation
     def restore_point(self, point_id: str, ingress_target: str | Path, core_target: str | Path) -> RecoveryReceipt:
         try:
@@ -1131,6 +1187,7 @@ class RecoveryServiceV2:
             selected_material = selected["event"].get("material")
             if not isinstance(selected_material, dict) or any(selected_material.get(key) != claim[key] for key in claim):
                 raise RecoveryConflictError("recovery:publication-claim")
+            self._verify_published_targets(claim, ingress_path, core_path, ing_raw, core_raw)
             return self._receipt(selected_receipt)
         if point["state"] == "PUBLICATION_PENDING":
             pending_material = selected["event"].get("material")
@@ -1152,6 +1209,7 @@ class RecoveryServiceV2:
                 current_material = current_selected["event"].get("material")
                 if not isinstance(current_material, dict) or any(current_material.get(key) != claim[key] for key in claim):
                     raise RecoveryConflictError("recovery:publication-claim")
+                self._verify_published_targets(claim, ingress_path, core_path, ing_raw, core_raw)
                 return self._receipt(bytes(current_selected["receipt"]))
             if current["state"] not in {"VERIFIED", "PUBLICATION_PENDING"}:
                 raise RecoveryConflictError("recovery:point-state")
@@ -1216,6 +1274,7 @@ class RecoveryServiceV2:
         except restore_publication.RestorePublicationError:
             raise_redacted(RecoveryError, "recovery:publication")
         self._require_active_key(point)
+        self._verify_published_targets(claim, ingress_path, core_path, ing_raw, core_raw)
         connection = self._open()
         try:
             self._begin(connection)
@@ -1230,6 +1289,7 @@ class RecoveryServiceV2:
                 current_material = current_selected["event"].get("material")
                 if not isinstance(current_material, dict) or any(current_material.get(key) != claim[key] for key in claim):
                     raise RecoveryConflictError("recovery:publication-claim")
+                self._verify_published_targets(claim, ingress_path, core_path, ing_raw, core_raw)
                 return self._receipt(bytes(current_selected["receipt"]))
             if current["state"] != "PUBLICATION_PENDING":
                 raise RecoveryConflictError("recovery:point-state")

@@ -297,7 +297,7 @@ def _lock_marker(target: Path) -> bytes:
     })
 
 
-def _lock_file_check(stream, target: Path, expected: bytes) -> None:
+def _lock_file_check(stream, target: Path, expected: bytes, *, repair: bool = True) -> None:
     try:
         stream.seek(0)
         raw = stream.read(MAX_MARKER_BYTES + 1)
@@ -307,6 +307,8 @@ def _lock_file_check(stream, target: Path, expected: bytes) -> None:
     except (OSError, ValueError):
         _fail(RestorePublicationVerification, "restore-publication:lock")
     if current[:3] != path_identity[:3] or len(raw) > len(expected) or raw != expected[:len(raw)]:
+        _fail(RestorePublicationVerification, "restore-publication:lock")
+    if raw != expected and not repair:
         _fail(RestorePublicationVerification, "restore-publication:lock")
     if raw != expected:
         try:
@@ -412,10 +414,57 @@ def _target_lock(target: Path) -> Iterator[None]:
 
 
 @contextmanager
+def _target_lock_read_only(target: Path) -> Iterator[None]:
+    """Acquire an existing target lock without creating or repairing it."""
+    lock = _lock_path(target)
+    expected = _lock_marker(target)
+    descriptor = -1
+    stream = None
+    try:
+        if not os.path.lexists(os.fspath(lock)):
+            _fail(RestorePublicationVerification, "restore-publication:lock")
+        _regular(lock, allow_empty=False, nlinks=(1,))
+        flags = os.O_RDWR | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(os.fspath(lock), flags)
+        stream = os.fdopen(descriptor, "r+b", buffering=0)
+        descriptor = -1
+        _lock_os(stream)
+        _lock_file_check(stream, target, expected, repair=False)
+        _safe_parent(target.parent)
+        try:
+            yield
+        finally:
+            _unlock_os(stream)
+    except RestorePublicationError:
+        raise
+    except (OSError, TypeError, ValueError):
+        _fail(RestorePublicationVerification, "restore-publication:lock")
+    finally:
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+        if descriptor != -1:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+@contextmanager
 def _pair_locks(first: Path, second: Path) -> Iterator[None]:
     ordered = sorted((first, second), key=lambda path: (_target_identity(path), os.path.normcase(os.path.abspath(os.fspath(path)))))
     with _target_lock(ordered[0]):
         with _target_lock(ordered[1]):
+            yield
+
+
+@contextmanager
+def _pair_locks_read_only(first: Path, second: Path) -> Iterator[None]:
+    ordered = sorted((first, second), key=lambda path: (_target_identity(path), os.path.normcase(os.path.abspath(os.fspath(path)))))
+    with _target_lock_read_only(ordered[0]):
+        with _target_lock_read_only(ordered[1]):
             yield
 
 
@@ -713,6 +762,116 @@ def _existing_target(target: Path, image: bytes) -> tuple[bytes, tuple[int, int,
     return raw, identity
 
 
+def _check_image_claim(image: bytes, expected_digest: object, expected_length: object) -> None:
+    if (
+        type(expected_digest) is not str
+        or len(expected_digest) != 128
+        or any(char not in "0123456789abcdef" for char in expected_digest)
+        or type(expected_length) is not int
+        or expected_length <= 0
+        or len(image) != expected_length
+        or _file_digest(image) != expected_digest
+    ):
+        _fail(RestorePublicationConflict, "restore-publication:target-conflict")
+
+
+def _reject_current_namespace(target: Path, pair_operation_id: str) -> None:
+    namespace = _namespace(target, pair_operation_id)
+    try:
+        present = os.path.lexists(os.fspath(namespace))
+    except (OSError, TypeError, ValueError):
+        _fail(RestorePublicationVerification, "restore-publication:namespace")
+    if present:
+        _namespace_identity(namespace)
+        _fail(RestorePublicationConflict, "restore-publication:foreign-stage")
+
+
+def _verify_stable_target(
+    target: Path,
+    expected_raw: bytes,
+    expected_identity: tuple[int, int, int, int],
+) -> None:
+    if _sidecars(target):
+        _fail(RestorePublicationConflict, "restore-publication:target-sidecar")
+    raw, identity = _read_file(target, cap=MAX_IMAGE_BYTES, allow_empty=False, nlinks=(1,))
+    if raw != expected_raw or identity != expected_identity:
+        _fail(RestorePublicationConflict, "restore-publication:target-changed")
+
+
+def verify_pair_read_only(
+    *,
+    ingress_target: str | Path,
+    core_target: str | Path,
+    ingress_image: bytes,
+    core_image: bytes,
+    pair_operation_id: str,
+    ingress_file_digest: object,
+    ingress_file_length: object,
+    core_file_digest: object,
+    core_file_length: object,
+    ingress_expected: Mapping[str, object],
+    core_expected: Mapping[str, object],
+    verify_ingress: Callable[[bytes], object],
+    verify_core: Callable[[bytes, bytes], object],
+) -> None:
+    """Verify an already published pair without creating or adopting anything.
+
+    The recorded image claims are checked against the recovered bundle images,
+    then both current targets are independently verified while deterministic
+    pair locks are held.  A final exact reread closes the callback boundary.
+    This does not claim hostile-administrator atomicity or historical inode
+    custody; it fails closed on every detectable drift.
+    """
+    operation = _hex(pair_operation_id, "restore-publication:operation")
+    if type(ingress_image) is not bytes or type(core_image) is not bytes or not ingress_image or not core_image:
+        _fail(RestorePublicationVerification, "restore-publication:image")
+    if len(ingress_image) > MAX_IMAGE_BYTES or len(core_image) > MAX_IMAGE_BYTES:
+        _fail(RestorePublicationVerification, "restore-publication:image-cap")
+    _check_image_claim(ingress_image, ingress_file_digest, ingress_file_length)
+    _check_image_claim(core_image, core_file_digest, core_file_length)
+
+    ingress_path = _target(ingress_target)
+    core_path = _target(core_target)
+    if os.path.normcase(os.path.abspath(os.fspath(ingress_path))) == os.path.normcase(os.path.abspath(os.fspath(core_path))):
+        _fail(RestorePublicationConflict, "restore-publication:target-alias")
+    if _safe_parent(ingress_path.parent) == _safe_parent(core_path.parent) and os.path.normcase(ingress_path.name) == os.path.normcase(core_path.name):
+        _fail(RestorePublicationConflict, "restore-publication:target-alias")
+
+    with _pair_locks_read_only(ingress_path, core_path):
+        parent_ingress = _safe_parent(ingress_path.parent)
+        parent_core = _safe_parent(core_path.parent)
+        if _sidecars(ingress_path) or _sidecars(core_path):
+            _fail(RestorePublicationConflict, "restore-publication:target-sidecar")
+        ingress_raw, ingress_identity = _read_file(ingress_path, cap=MAX_IMAGE_BYTES, allow_empty=False, nlinks=(1,))
+        core_raw, core_identity = _read_file(core_path, cap=MAX_IMAGE_BYTES, allow_empty=False, nlinks=(1,))
+        if ingress_raw != ingress_image or core_raw != core_image:
+            _fail(RestorePublicationConflict, "restore-publication:target-conflict")
+        if ingress_identity[:2] == core_identity[:2]:
+            _fail(RestorePublicationConflict, "restore-publication:target-alias")
+        _scan_namespaces(ingress_path, _namespace(ingress_path, operation))
+        _scan_namespaces(core_path, _namespace(core_path, operation))
+        _reject_current_namespace(ingress_path, operation)
+        _reject_current_namespace(core_path, operation)
+
+        ingress_evidence = _invoke_verifier(verify_ingress, ingress_raw)
+        _check_binding(ingress_evidence, ingress_expected, "restore-publication:ingress-binding")
+        # The bounded semantic projection is tied to the recorded image claim;
+        # the final exact reread below prevents it from becoming stale.
+        _semantic_digest(ingress_evidence)
+        core_evidence = _invoke_verifier(verify_core, core_raw, ingress_raw)
+        _check_binding(core_evidence, core_expected, "restore-publication:core-binding")
+        _semantic_digest(core_evidence)
+
+        if _safe_parent(ingress_path.parent) != parent_ingress or _safe_parent(core_path.parent) != parent_core:
+            _fail(RestorePublicationConflict, "restore-publication:parent")
+        _scan_namespaces(ingress_path, _namespace(ingress_path, operation))
+        _scan_namespaces(core_path, _namespace(core_path, operation))
+        _reject_current_namespace(ingress_path, operation)
+        _reject_current_namespace(core_path, operation)
+        _verify_stable_target(ingress_path, ingress_raw, ingress_identity)
+        _verify_stable_target(core_path, core_raw, core_identity)
+
+
 def _preflight_target_namespace(
     target: Path,
     image: bytes,
@@ -931,5 +1090,5 @@ __all__ = [
     "MAX_IMAGE_BYTES", "PublicationResultV1", "PublicationPairResultV1",
     "RestorePublicationError", "RestorePublicationConflict",
     "RestorePublicationVerification", "RestorePublicationCleanupError",
-    "publish_pair_create_only",
+    "publish_pair_create_only", "verify_pair_read_only",
 ]

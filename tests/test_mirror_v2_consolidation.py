@@ -1630,6 +1630,150 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertNotIn("Bearer", formatted)
         self.assertNotIn("C:\\Users\\private", formatted)
 
+    def test_restore_publication_read_only_pair_rejects_unsafe_targets_and_callback_drift(self) -> None:
+        ingress_image = b"read-only-ingress"
+        core_image = b"read-only-core"
+        expected_i = {"database_id": "ingress", "head_root": "7" * 128}
+        expected_c = {"database_id": "core", "head_root": "8" * 128}
+
+        def verify_pair(
+            ingress_target: Path,
+            core_target: Path,
+            *,
+            operation: str,
+            ingress_bytes: bytes = ingress_image,
+            core_bytes: bytes = core_image,
+            verify_i: object | None = None,
+            verify_c: object | None = None,
+        ) -> None:
+            def default_i(raw: bytes) -> dict[str, object]:
+                self.assertEqual(ingress_bytes, raw)
+                return dict(expected_i)
+
+            def default_c(raw: bytes, exact_ingress: bytes) -> dict[str, object]:
+                self.assertEqual(core_bytes, raw)
+                self.assertEqual(ingress_bytes, exact_ingress)
+                return dict(expected_c)
+
+            with restore_publication._target_lock(ingress_target):
+                pass
+            with restore_publication._target_lock(core_target):
+                pass
+            restore_publication.verify_pair_read_only(
+                ingress_target=ingress_target,
+                core_target=core_target,
+                ingress_image=ingress_bytes,
+                core_image=core_bytes,
+                pair_operation_id=operation,
+                ingress_file_digest=restore_publication._file_digest(ingress_bytes),
+                ingress_file_length=len(ingress_bytes),
+                core_file_digest=restore_publication._file_digest(core_bytes),
+                core_file_length=len(core_bytes),
+                ingress_expected=expected_i,
+                core_expected=expected_c,
+                verify_ingress=verify_i or default_i,
+                verify_core=verify_c or default_c,
+            )
+
+        sidecar_i = self.root / "read-only-sidecar-ingress.db"
+        sidecar_c = self.root / "read-only-sidecar-core.db"
+        sidecar_i.write_bytes(ingress_image)
+        sidecar_c.write_bytes(core_image)
+        sidecar = Path(os.fspath(sidecar_i) + "-wal")
+        sidecar.write_bytes(b"caller-owned-sidecar")
+        try:
+            with self.assertRaises(restore_publication.RestorePublicationConflict) as caught:
+                verify_pair(sidecar_i, sidecar_c, operation=_hex("read-only-sidecar"))
+            self.assertEqual("restore-publication:target-sidecar", str(caught.exception))
+            self.assertEqual(ingress_image, sidecar_i.read_bytes())
+            self.assertEqual(core_image, sidecar_c.read_bytes())
+        finally:
+            sidecar.unlink()
+
+        alias_i = self.root / "read-only-alias-ingress.db"
+        alias_c = self.root / "read-only-alias-core.db"
+        alias_image = b"read-only-hardlink-alias"
+        alias_i.write_bytes(alias_image)
+        os.link(alias_i, alias_c)
+        alias_inode = os.stat(alias_i).st_ino
+        try:
+            with self.assertRaises(restore_publication.RestorePublicationError):
+                verify_pair(
+                    alias_i,
+                    alias_c,
+                    operation=_hex("read-only-hardlink-alias"),
+                    ingress_bytes=alias_image,
+                    core_bytes=alias_image,
+                )
+            self.assertEqual(alias_inode, os.stat(alias_c).st_ino)
+        finally:
+            alias_c.unlink()
+            alias_i.unlink()
+
+        mutation_i = self.root / "read-only-mutation-ingress.db"
+        mutation_c = self.root / "read-only-mutation-core.db"
+        mutation_i.write_bytes(ingress_image)
+        mutation_c.write_bytes(core_image)
+
+        def mutate_ingress(raw: bytes) -> dict[str, object]:
+            self.assertEqual(ingress_image, raw)
+            mutation_i.write_bytes(b"mutated-in-callback")
+            return dict(expected_i)
+
+        with self.assertRaises(restore_publication.RestorePublicationConflict) as caught:
+            verify_pair(
+                mutation_i,
+                mutation_c,
+                operation=_hex("read-only-mutation"),
+                verify_i=mutate_ingress,
+            )
+        self.assertEqual("restore-publication:target-changed", str(caught.exception))
+        self.assertEqual(b"mutated-in-callback", mutation_i.read_bytes())
+        self.assertEqual(core_image, mutation_c.read_bytes())
+
+        replacement_i = self.root / "read-only-replacement-ingress.db"
+        replacement_c = self.root / "read-only-replacement-core.db"
+        replacement_backup = self.root / "read-only-replacement-backup.db"
+        replacement_i.write_bytes(ingress_image)
+        replacement_c.write_bytes(core_image)
+
+        def replace_ingress(raw: bytes) -> dict[str, object]:
+            self.assertEqual(ingress_image, raw)
+            os.replace(replacement_i, replacement_backup)
+            replacement_i.write_bytes(raw)
+            return dict(expected_i)
+
+        with self.assertRaises(restore_publication.RestorePublicationConflict) as caught:
+            verify_pair(
+                replacement_i,
+                replacement_c,
+                operation=_hex("read-only-replacement"),
+                verify_i=replace_ingress,
+            )
+        self.assertEqual("restore-publication:target-changed", str(caught.exception))
+        self.assertTrue(replacement_backup.exists())
+        self.assertEqual(ingress_image, replacement_i.read_bytes())
+        self.assertEqual(core_image, replacement_c.read_bytes())
+
+        bad_i = self.root / "read-only-redacted-ingress.db"
+        bad_c = self.root / "read-only-redacted-core.db"
+        bad_i.write_bytes(ingress_image)
+        bad_c.write_bytes(core_image)
+
+        def bad_verifier(raw: bytes) -> object:
+            raise OSError("RAW_CAPTURE SECRET C:\\Users\\private\\mirror.db")
+
+        with self.assertRaises(restore_publication.RestorePublicationVerification) as caught:
+            verify_pair(
+                bad_i,
+                bad_c,
+                operation=_hex("read-only-redacted"),
+                verify_i=bad_verifier,
+            )
+        self.assertEqual("restore-publication:independent-verify", str(caught.exception))
+        self.assertNotIn("RAW_CAPTURE", repr(caught.exception))
+        self.assertNotIn("C:\\Users\\private", "".join(traceback.format_exception(caught.exception)))
+
     def test_restore_publication_marker_only_requires_and_can_reconcile_receipt(self) -> None:
         image = b"marker-only-image"
         target = self.root / "marker-only-target.db"
@@ -2218,8 +2362,16 @@ class MirrorV2Fixture(unittest.TestCase):
         ingress_target = self.root / "published-ingress-path-canary.db"
         core_target = self.root / "published-core-path-canary.db"
         first = self.recovery_service.restore_point(point.point_id, ingress_target, core_target)
+        target_bytes_before = (ingress_target.read_bytes(), core_target.read_bytes())
+        catalog_bytes_before = self.recovery_path.read_bytes()
+        logical_export_before = self.recovery_service.logical_export()
+        support_before = json.dumps(self.recovery_service.support(), sort_keys=True).encode("ascii")
         retry = self.recovery_service.restore_point(point.point_id, ingress_target, core_target)
         self.assertEqual(first.raw, retry.raw)
+        self.assertEqual(target_bytes_before, (ingress_target.read_bytes(), core_target.read_bytes()))
+        self.assertEqual(catalog_bytes_before, self.recovery_path.read_bytes())
+        self.assertEqual(logical_export_before, self.recovery_service.logical_export())
+        self.assertEqual(support_before, json.dumps(self.recovery_service.support(), sort_keys=True).encode("ascii"))
         other_i = self.root / "published-other-ingress-path-canary.db"
         other_c = self.root / "published-other-core-path-canary.db"
         with self.assertRaises(recovery.RecoveryConflictError) as caught:
@@ -2235,6 +2387,235 @@ class MirrorV2Fixture(unittest.TestCase):
             self.assertNotIn(b"published-core-path-canary", value)
             self.assertNotIn(b"published-other-ingress-path-canary", value)
             self.assertNotIn(b"published-other-core-path-canary", value)
+
+    def test_recovery_published_retry_rejects_missing_or_corrupt_member_without_recreating(self) -> None:
+        for role in ("ingress", "core"):
+            for action in ("missing", "corrupt"):
+                with self.subTest(role=role, action=action):
+                    service = recovery.RecoveryServiceV2(
+                        self.root / f"published-damage-{role}-{action}-recovery.db",
+                        self.recovery_config,
+                        self.custody,
+                        self.storage,
+                        authority=self.authority,
+                    )
+                    point = service.create_point(self.ingress_path, self.core_path, generation=1)
+                    ingress_target = self.root / f"published-damage-{role}-{action}-ingress.db"
+                    core_target = self.root / f"published-damage-{role}-{action}-core.db"
+                    first = service.restore_point(point.point_id, ingress_target, core_target)
+                    target = ingress_target if role == "ingress" else core_target
+                    peer = core_target if role == "ingress" else ingress_target
+                    catalog_before = service.path.read_bytes()
+                    logical_before = service.logical_export()
+                    support_before = json.dumps(service.support(), sort_keys=True).encode("ascii")
+                    if action == "missing":
+                        target.unlink()
+                    else:
+                        target.write_bytes(b"corrupt")
+
+                    with self.assertRaises(recovery.RecoveryError) as caught:
+                        service.restore_point(point.point_id, ingress_target, core_target)
+                    self.assertIn(str(caught.exception), {"recovery:publication", "recovery:publication-conflict"})
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertIsNone(caught.exception.__context__)
+                    self.assertNotIn(str(target), str(caught.exception))
+                    self.assertNotIn("corrupt", str(caught.exception))
+                    self.assertEqual(first.state, "PUBLISHED")
+                    self.assertEqual("PUBLISHED", recovery_independent.select_point(service.path, point_id=point.point_id)["point"]["state"])
+                    self.assertEqual(catalog_before, service.path.read_bytes())
+                    self.assertEqual(logical_before, service.logical_export())
+                    self.assertEqual(support_before, json.dumps(service.support(), sort_keys=True).encode("ascii"))
+                    if action == "corrupt":
+                        self.assertEqual(b"corrupt", target.read_bytes())
+                    else:
+                        self.assertFalse(target.exists())
+                        self.assertTrue(peer.exists())
+
+    def test_recovery_published_retry_rejects_missing_or_bad_read_only_locks(self) -> None:
+        for mode in ("missing", "truncated", "mismatched"):
+            with self.subTest(mode=mode):
+                service = recovery.RecoveryServiceV2(
+                    self.root / f"published-read-only-lock-{mode}-recovery.db",
+                    self.recovery_config,
+                    self.custody,
+                    self.storage,
+                    authority=self.authority,
+                )
+                point = service.create_point(self.ingress_path, self.core_path, generation=1)
+                ingress_target = self.root / f"published-read-only-lock-{mode}-ingress.db"
+                core_target = self.root / f"published-read-only-lock-{mode}-core.db"
+                service.restore_point(point.point_id, ingress_target, core_target)
+                locks = (
+                    restore_publication._lock_path(ingress_target),
+                    restore_publication._lock_path(core_target),
+                )
+                catalog_before = service.path.read_bytes()
+                target_before = (ingress_target.read_bytes(), core_target.read_bytes())
+                marker_before = tuple(path.read_bytes() for path in locks)
+                if mode == "missing":
+                    for path in locks:
+                        path.unlink()
+                else:
+                    locks[0].write_bytes(b"{" if mode == "truncated" else b"foreign-lock-marker")
+                with self.assertRaises(recovery.RecoveryError):
+                    service.restore_point(point.point_id, ingress_target, core_target)
+                self.assertEqual(catalog_before, service.path.read_bytes())
+                self.assertEqual(target_before, (ingress_target.read_bytes(), core_target.read_bytes()))
+                if mode == "missing":
+                    self.assertFalse(any(path.exists() for path in locks))
+                else:
+                    self.assertEqual(b"{" if mode == "truncated" else b"foreign-lock-marker", locks[0].read_bytes())
+                    self.assertEqual(marker_before[1], locks[1].read_bytes())
+
+    def test_recovery_first_publication_verifies_after_final_custody_callback_drift(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        ingress_target = self.root / "published-custody-drift-ingress.db"
+        core_target = self.root / "published-custody-drift-core.db"
+        original_state = self.custody.state
+        injected = b"SYNTHETIC_CORRUPT_IN_POST_PUBLICATION_CUSTODY_CALLBACK"
+        drifted = False
+
+        def state_then_drift(key_id: str, key_epoch: int) -> str:
+            nonlocal drifted
+            if ingress_target.exists() and core_target.exists() and not drifted:
+                core_target.write_bytes(injected)
+                drifted = True
+            return original_state(key_id, key_epoch)
+
+        with mock.patch.object(self.custody, "state", side_effect=state_then_drift):
+            with self.assertRaises(recovery.RecoveryError):
+                self.recovery_service.restore_point(point.point_id, ingress_target, core_target)
+        selected = recovery_independent.select_point(self.recovery_path, point_id=point.point_id)
+        self.assertTrue(drifted)
+        self.assertEqual("PUBLICATION_PENDING", selected["point"]["state"])
+        self.assertEqual(self.ingress_path.read_bytes(), ingress_target.read_bytes())
+        self.assertEqual(injected, core_target.read_bytes())
+
+    def test_recovery_published_interleavings_verify_pair_before_return(self) -> None:
+        def copy_published_tail(source: Path, destination: Path, point_id: str) -> None:
+            source_connection = sqlite3.connect(source)
+            destination_connection = sqlite3.connect(destination)
+            try:
+                source_point = source_connection.execute(
+                    "SELECT point_id,state,updated_sequence FROM recovery_points WHERE point_id=?",
+                    (point_id,),
+                ).fetchone()
+                source_meta = source_connection.execute(
+                    "SELECT sequence,head_root,current_generation FROM recovery_meta WHERE meta_id=1"
+                ).fetchone()
+                destination_meta = destination_connection.execute(
+                    "SELECT sequence FROM recovery_meta WHERE meta_id=1"
+                ).fetchone()
+                if source_point is None or source_meta is None or destination_meta is None or source_point[1] != "PUBLISHED":
+                    raise AssertionError("expected a published source state")
+                events = source_connection.execute(
+                    "SELECT * FROM recovery_events WHERE sequence>? ORDER BY sequence",
+                    (destination_meta[0],),
+                ).fetchall()
+                placeholders = ",".join("?" for _ in range(20))
+                for event in events:
+                    destination_connection.execute(
+                        f"INSERT INTO recovery_events VALUES ({placeholders})", event
+                    )
+                destination_connection.execute(
+                    "UPDATE recovery_points SET state=?,updated_sequence=? WHERE point_id=?",
+                    (source_point[1], source_point[2], point_id),
+                )
+                destination_connection.execute(
+                    "UPDATE recovery_meta SET sequence=?,head_root=?,current_generation=? WHERE meta_id=1",
+                    source_meta,
+                )
+                destination_connection.commit()
+            finally:
+                source_connection.close()
+                destination_connection.close()
+
+        first_service = recovery.RecoveryServiceV2(
+            self.root / "published-race-first-recovery.db",
+            self.recovery_config,
+            self.custody,
+            self.storage,
+            authority=self.authority,
+        )
+        first_auxiliary = recovery.RecoveryServiceV2(
+            self.root / "published-race-first-auxiliary.db",
+            self.recovery_config,
+            self.custody,
+            self.storage,
+            authority=self.authority,
+        )
+        first_point = first_service.create_point(self.ingress_path, self.core_path, generation=1)
+        first_auxiliary_point = first_auxiliary.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual(first_point.point_id, first_auxiliary_point.point_id)
+        first_ingress = self.root / "published-race-first-ingress.db"
+        first_core = self.root / "published-race-first-core.db"
+        auxiliary_receipt = first_auxiliary.restore_point(
+            first_auxiliary_point.point_id, first_ingress, first_core
+        )
+        original_first_open = first_service._open
+        first_open_calls = 0
+
+        def open_after_concurrent_publish() -> sqlite3.Connection:
+            nonlocal first_open_calls
+            connection = original_first_open()
+            first_open_calls += 1
+            if first_open_calls == 1:
+                copy_published_tail(first_auxiliary.path, first_service.path, first_point.point_id)
+            return connection
+
+        with mock.patch.object(first_service, "_open", side_effect=open_after_concurrent_publish):
+            with mock.patch.object(
+                first_service,
+                "_verify_published_targets",
+                wraps=first_service._verify_published_targets,
+            ) as verify_first:
+                first_result = first_service.restore_point(first_point.point_id, first_ingress, first_core)
+        self.assertEqual(1, first_open_calls)
+        self.assertEqual(1, verify_first.call_count)
+        self.assertEqual(auxiliary_receipt.raw, first_result.raw)
+
+        second_service = recovery.RecoveryServiceV2(
+            self.root / "published-race-second-recovery.db",
+            self.recovery_config,
+            self.custody,
+            self.storage,
+            authority=self.authority,
+        )
+        second_auxiliary = recovery.RecoveryServiceV2(
+            self.root / "published-race-second-auxiliary.db",
+            self.recovery_config,
+            self.custody,
+            self.storage,
+            authority=self.authority,
+        )
+        second_point = second_service.create_point(self.ingress_path, self.core_path, generation=1)
+        second_auxiliary_point = second_auxiliary.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual(second_point.point_id, second_auxiliary_point.point_id)
+        second_ingress = self.root / "published-race-second-ingress.db"
+        second_core = self.root / "published-race-second-core.db"
+        second_auxiliary_receipt = second_auxiliary.restore_point(
+            second_auxiliary_point.point_id, second_ingress, second_core
+        )
+        original_publish = restore_publication.publish_pair_create_only
+
+        def publish_after_concurrent_publish(**kwargs: object) -> object:
+            result = original_publish(**kwargs)
+            copy_published_tail(second_auxiliary.path, second_service.path, second_point.point_id)
+            return result
+
+        with mock.patch.object(
+            restore_publication,
+            "publish_pair_create_only",
+            side_effect=publish_after_concurrent_publish,
+        ):
+            with mock.patch.object(
+                second_service,
+                "_verify_published_targets",
+                wraps=second_service._verify_published_targets,
+            ) as verify_second:
+                second_result = second_service.restore_point(second_point.point_id, second_ingress, second_core)
+        self.assertEqual(2, verify_second.call_count)
+        self.assertEqual(second_auxiliary_receipt.raw, second_result.raw)
 
     def test_recovery_publication_different_pair_concurrency_has_one_durable_claim(self) -> None:
         point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
