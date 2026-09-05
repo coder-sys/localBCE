@@ -69,6 +69,17 @@ deleted Native throughput test; unknown and retired path rejection remains uncha
   refreshed.
   The earlier internal note naming `cc953b2fbb226fdcbe03a55fcb2367c26fde9ba0` for this receipt
   was a documentation error; the raw receipt is bound to `c29d39ff796bb7056b42095dec5bc10a4a959342`.
+- On clean disposable staging of the final source/policy/docs commit
+  `5989bb47d72b08a8e6345130e7c3f38b9757a33e` (tree
+  `e3bcb94ca692fcb771a17cd6c71c67afe23bab8f`), the release-manifest gate selected 191 paths and
+  emitted manifest-v2 SHA-256 `86b0c01631156ef088302ea34633f3b6c9b31e5cde1fd5a2426fbda14eba8832`
+  (28,575 bytes). The create-only builder completed canonical ZIP/CRC readback with 192 entries,
+  3,284,299 archive bytes, payload 3,214,292 bytes, and archive SHA-256
+  `40a15ccf73c52397c586a0a34758d6bc4606c05c48534e5ca6a5957f9ea160a4`; no publication target was
+  refreshed. Independent extracted readback matched every manifest hash and size, found all three
+  deleted paths absent, and found the release helper present. The extracted positive helper exited
+  0 with a 530-byte archive receipt; the negative helper exited 0 with
+  `EXTRACTED_NEGATIVE_REJECTION=pass reason=release payload failed the structural privacy gate`.
 
 ## Unresolved trust-critical blocker
 
