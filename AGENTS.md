@@ -102,6 +102,25 @@ This test scope covers native release and constructor failures, active-scope qui
 close retry, independent Core projection reconstruction, and independent Ingress lease/artifact
 bindings. It does not authorize any other test or protected implementation path.
 
+On 2026-09-05, the owner additionally authorized a bounded, read-only operational provider-evidence
+export bridge from the committed candidate baseline. Its exact implementation scope is:
+
+- `app/mirror/operational_owner.py`
+- `app/mirror/core_v2_independent.py` (only the independent current SOURCE_OBSERVATION selector needed by the bridge)
+- `app/mirror/provider_evidence_export_v1.py`
+
+Its exact directly corresponding test scope is:
+
+- `tests/test_mirror_operational_owner.py`
+- `tests/test_mirror_provider_evidence_export_v1.py`
+
+This scope does not authorize changes to the external V1 request/response grammar, the independent
+export verifier, source adapters, raw capture, any new owner/table/daemon/authentication/payment
+authority, PHI, production activation, or promotion of the candidate into the accepted source
+workspace. The bridge must select only the independently verified current Core SOURCE_OBSERVATION
+head, rebind it to the exact current Ingress artifact/receipt/profile, keep the existing exporter as
+the sole response producer, and fail closed without mutation or raw-data leakage.
+
 ## Operational authority
 
 `ops/` is canonical. `tools/ops_authority.py` freezes its exact regular-file set, lengths, and SHA3-512 identities. Never change policy bytes merely to make a check pass.

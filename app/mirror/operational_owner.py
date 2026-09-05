@@ -11,12 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 import secrets
 from types import MappingProxyType
+import traceback
 from typing import Callable, Mapping, Protocol
 
 from app.mirror import core_v2 as core
 from app.mirror import core_v2_independent as core_independent
 from app.mirror import ingress_v2 as ingress
 from app.mirror import ingress_v2_independent as ingress_independent
+from app.mirror import provider_evidence_export_v1 as provider_export
 from app.mirror import recovery_v2 as recovery
 from app.mirror import recovery_v2_independent as recovery_independent
 from app.mirror import writer_authority
@@ -591,6 +593,167 @@ class MirrorOperationalOwnerV1:
             return ingress_result, core_result, recovery_result
         except OperationalOwnerError:
             raise
+        except Exception:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+
+    def _current_provider_observation_selection(
+        self,
+    ) -> provider_export.ProviderEvidenceObservationSelectionV1:
+        """Select one exact current Core source bound to the current Ingress artifact."""
+
+        assert self._authority is not None
+        try:
+            self._assert_owner_identity()
+            ingress_result = ingress_independent.verify_database(
+                self.ingress_path,
+                expected_database_id=self.ingress_config.database_id,
+                expected_config_digest=self.ingress_config.digest,
+                include_observation=True,
+            )
+            self._assert_owner_identity()
+            core_result = core_independent.verify_database(
+                self.core_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+                include_source_observation=True,
+            )
+            self._assert_owner_identity()
+        except OperationalOwnerError:
+            raise
+        except Exception:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+
+        if (
+            ingress_result.get("accepted") is not True
+            or ingress_result.get("schema") != ingress_independent.SCHEMA
+            or ingress_result.get("schema_version") != ingress_independent.SCHEMA_VERSION
+            or core_result.get("structural_valid") is not True
+            or core_result.get("schema") != core_independent.SCHEMA
+            or core_result.get("schema_version") != core_independent.SCHEMA_VERSION
+            or ingress_result.get("flags") != ingress_independent.FIXED_FLAGS
+            or core_result.get("flags") != core_independent.FIXED_FLAGS
+            or core_result.get("ingress_bound") is not True
+        ):
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        ingress_artifact_id = ingress_result.get("current_artifact_id")
+        ingress_artifact = ingress_result.get("current_artifact")
+        core_artifact_id = core_result.get("current_source_artifact_id")
+        core_artifact = core_result.get("current_source_artifact")
+        if (
+            type(ingress_artifact_id) is not str
+            or not isinstance(ingress_artifact, dict)
+            or type(core_artifact_id) is not str
+            or not isinstance(core_artifact, dict)
+            or core_artifact.get("ingress_artifact_id") != ingress_artifact_id
+            or ingress_artifact.get("artifact_id") != ingress_artifact_id
+            or ingress_artifact.get("terminal_state") != "QUARANTINED"
+            or ingress_artifact.get("terminal_event_kind") != "ADMIT"
+        ):
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+
+        observation_raw = ingress_artifact.get("observation")
+        receipt_raw = ingress_artifact.get("verification_receipt")
+        if type(observation_raw) is not bytes or type(receipt_raw) is not bytes:
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        try:
+            checked = ingress_independent.verify_observation_pair(
+                observation_raw,
+                receipt_raw,
+                expected_profile_id=ingress_independent.NC_MEDICAID_PROFILE.source_profile_id,
+                expected_profile_version=3,
+            )
+            observation = checked["observation"]
+            receipt = checked["verification_receipt"]
+            if (
+                not isinstance(observation, dict)
+                or not isinstance(receipt, dict)
+                or core_independent._canonical(observation) != observation_raw
+                or core_independent._canonical(receipt) != receipt_raw
+                or core_artifact.get("observation") != observation
+                or core_artifact.get("verification_receipt") != receipt
+                or core_artifact.get("admission_receipt") != receipt
+                or core_artifact.get("observation_identity") != checked["observation_id"]
+                or ingress_artifact.get("observation_id") != checked["observation_id"]
+            ):
+                raise ValueError("observation-binding")
+        except Exception:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+
+        for source_key, ingress_key in (
+            ("profile_id", "profile_id"),
+            ("profile_version", "profile_version"),
+            ("observation_time", "observation_time"),
+            ("source_status", "source_status"),
+            ("freshness", "freshness"),
+            ("page_complete", "page_complete"),
+            ("page_count", "page_count"),
+            ("resource_count", "resource_count"),
+            ("source_count", "source_count"),
+            ("complete_source_count", "complete_source_count"),
+            ("record_count", "record_count"),
+            ("finding_count", "finding_count"),
+            ("discrepancy_count", "discrepancy_count"),
+            ("outcome", "outcome"),
+        ):
+            if core_artifact.get(source_key) != ingress_artifact.get(ingress_key):
+                raise OperationalOwnerError("mirror:operational-indeterminate")
+        if (
+            core_artifact.get("ingress_database_id") != ingress_result.get("database_id")
+            or core_artifact.get("ingress_chain_id") != ingress_result.get("chain_id")
+            or core_artifact.get("ingress_config_digest") != ingress_result.get("config_digest")
+            or core_artifact.get("runtime_profile_digest") != self.operational_config.profile_digest
+            or self.operational_config.profile_digest != self.ingress_config.source_contract_digest
+            or core_artifact.get("ingress_event_sequence") != ingress_artifact.get("event_sequence")
+            or core_artifact.get("ingress_prefix_root") != ingress_artifact.get("event_prefix_root")
+            or core_artifact.get("ingress_after_root") != ingress_artifact.get("event_after_root")
+            or core_artifact.get("ingress_head_root") != ingress_artifact.get("event_after_root")
+        ):
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        return provider_export.ProviderEvidenceObservationSelectionV1(
+            observation=observation_raw,
+            verification_receipt=receipt_raw,
+            authorization_evidence=provider_export.SYNTHETIC_SELECTION_AUTHORIZATION,
+        )
+
+    def export_provider_evidence(self, request_raw: bytes) -> bytes:
+        """Export one bounded aggregate from the independently verified current stores."""
+
+        authority = self._authority
+        if authority is None:
+            raise OperationalOwnerError("mirror:operational-closed")
+        self._assert_owner_identity()
+        selection: provider_export.ProviderEvidenceObservationSelectionV1 | None = None
+        try:
+            with authority.external_scope():
+                try:
+                    now = self.clock()
+                except Exception:
+                    raise OperationalOwnerError("mirror:operational-clock") from None
+                if type(now) is not int or now < 0:
+                    raise OperationalOwnerError("mirror:operational-clock")
+                selection = self._current_provider_observation_selection()
+                response = provider_export.build_observation_export(
+                    request_raw,
+                    selection,
+                    now=now,
+                )
+                self._assert_owner_identity()
+                if type(response) is not bytes or not response or len(response) > provider_export.MAX_RESPONSE_BYTES:
+                    raise OperationalOwnerError("mirror:operational-indeterminate")
+                return response
+        except provider_export.ProviderEvidenceExportError as error:
+            request_raw = b""
+            selection = None
+            try:
+                traceback.clear_frames(error.__traceback__)
+            except Exception:
+                pass
+            raise
+        except OperationalOwnerError:
+            raise
+        except writer_authority.WriterAuthorityError:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
         except Exception:
             raise OperationalOwnerError("mirror:operational-indeterminate") from None
 

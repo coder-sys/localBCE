@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
+import secrets
 import shutil
 import sqlite3
 import tempfile
@@ -20,12 +21,32 @@ from app.mirror import nc_medicaid_fhir as fhir_runtime
 from app.mirror import nc_medicaid_fhir_independent as fhir_independent
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import operational_owner as operational
+from app.mirror import provider_evidence_export_v1 as provider_export
+from app.mirror import provider_evidence_export_v1_independent as provider_export_independent
 from app.mirror import recovery_v2 as recovery
 from app.mirror import recovery_v2_independent as recovery_independent
 from app.mirror import source_admission
 from app.mirror import writer_authority
 from tests.test_mirror_v2_consolidation import _Custody, _Storage, _hex
 from tests.test_nc_medicaid_fhir_source import _bundle, _envelope, _transport
+
+
+def _export_request(
+    operation_ref: str,
+    *,
+    not_before: int,
+    expires_at: int,
+) -> bytes:
+    return ingress_independent._canonical({
+        "domain": provider_export.REQUEST_DOMAIN,
+        "version": 1,
+        "operation_ref": operation_ref,
+        "consumer_domain": provider_export.CONSUMER_DOMAIN,
+        "evidence_profile": provider_export.EVIDENCE_PROFILE,
+        "evidence_profile_version": provider_export.EVIDENCE_PROFILE_VERSION,
+        "not_before": not_before,
+        "expires_at": expires_at,
+    })
 
 
 class _Clock:
@@ -228,7 +249,21 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
             self.storage,
             clock=self.clock,
             operational_config=config,
-        ), selected
+            ), selected
+
+    @staticmethod
+    def _store_snapshot(owner: operational.MirrorOperationalOwnerV1) -> tuple[object, ...]:
+        return (
+            owner.ingress_path.read_bytes(),
+            owner.core_path.read_bytes(),
+            owner.recovery_path.read_bytes(),
+            owner.ingress.logical_export(),
+            owner.core.logical_export(),
+            owner.recovery.logical_export(),
+            json.dumps(owner.ingress.support(), sort_keys=True),
+            json.dumps(owner.core.support(), sort_keys=True),
+            json.dumps(owner.recovery.support(), sort_keys=True),
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -336,6 +371,221 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
             with self.assertRaises(OSError) as caught:
                 writer_authority._win_unlock(ctypes.c_void_p(506), writer_authority._WinOverlapped())
         self.assertEqual("[Errno 322] UnlockFileEx", str(caught.exception))
+
+    def test_provider_evidence_export_reads_current_verified_source_and_is_nonmutating(self) -> None:
+        owner, _port = self._owner()
+        try:
+            owner.run((self.time,))
+            operation_ref = secrets.token_hex(32)
+            request = _export_request(
+                operation_ref,
+                not_before=self.time - 10,
+                expires_at=self.time + 50,
+            )
+            before = self._store_snapshot(owner)
+            raw = owner.export_provider_evidence(request)
+            verified = provider_export_independent.verify_export(
+                raw,
+                expected_operation_ref=operation_ref,
+                now=self.time,
+            )
+            self.assertEqual("EVIDENCE_INCOMPLETE", verified.outcome)
+            self.assertEqual((2, 0, 2, 1, 0), (
+                verified.source_count,
+                verified.complete_source_count,
+                verified.record_count,
+                verified.finding_count,
+                verified.discrepancy_count,
+            ))
+            after = self._store_snapshot(owner)
+            self.assertEqual(before, after)
+        finally:
+            owner.close()
+
+    def test_provider_evidence_export_restart_parity_and_request_rejection_are_nonmutating(self) -> None:
+        owner, _port = self._owner()
+        operation_ref = secrets.token_hex(32)
+        request = _export_request(
+            operation_ref,
+            not_before=self.time - 10,
+            expires_at=self.time + 50,
+        )
+        try:
+            owner.run((self.time,), recovery_generation=1)
+            first = owner.export_provider_evidence(request)
+            before_rejection = self._store_snapshot(owner)
+            with self.assertRaisesRegex(provider_export.ProviderEvidenceExportError, "^export:operation-ref$"):
+                owner.export_provider_evidence(
+                    _export_request(
+                        "0" * 64,
+                        not_before=self.time - 10,
+                        expires_at=self.time + 50,
+                    )
+                )
+            self.assertEqual(before_rejection, self._store_snapshot(owner))
+        finally:
+            owner.close()
+        owner, _port = self._owner()
+        try:
+            second = owner.export_provider_evidence(request)
+            self.assertEqual(first, second)
+            before_rejection = self._store_snapshot(owner)
+            with self.assertRaisesRegex(provider_export.ProviderEvidenceExportError, "^export:time-window$"):
+                owner.export_provider_evidence(
+                    _export_request(
+                        secrets.token_hex(32),
+                        not_before=self.time + 1,
+                        expires_at=self.time + 50,
+                    )
+                )
+            self.assertEqual(before_rejection, self._store_snapshot(owner))
+        finally:
+            owner.close()
+
+    def test_provider_evidence_export_after_close_returns_fixed_code(self) -> None:
+        owner, _port = self._owner()
+        owner.close()
+        with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-closed$"):
+            owner.export_provider_evidence(
+                _export_request(
+                    secrets.token_hex(32),
+                    not_before=self.time - 10,
+                    expires_at=self.time + 50,
+                )
+            )
+
+    def test_provider_evidence_export_requires_current_core_head_and_quiesces_close(self) -> None:
+        owner, _port = self._owner()
+        try:
+            with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                owner.export_provider_evidence(
+                    _export_request(
+                        secrets.token_hex(32),
+                        not_before=self.time - 10,
+                        expires_at=self.time + 50,
+                    )
+                )
+            owner.run((self.time,))
+            connection = sqlite3.connect(owner.core_path)
+            try:
+                connection.execute(
+                    "UPDATE core_heads SET head_ref=? WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'",
+                    ("0" * 128,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                owner.export_provider_evidence(
+                    _export_request(
+                        secrets.token_hex(32),
+                        not_before=self.time - 10,
+                        expires_at=self.time + 50,
+                    )
+                )
+        finally:
+            owner.close()
+
+    def test_provider_evidence_export_rejects_core_projection_tamper(self) -> None:
+        owner, _port = self._owner()
+        try:
+            owner.run((self.time,))
+            connection = sqlite3.connect(owner.core_path)
+            try:
+                connection.execute(
+                    "UPDATE core_artifacts SET current_state=? WHERE kind='SOURCE_OBSERVATION'",
+                    ("SYNTHETIC_PROJECTION_TAMPER",),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                owner.export_provider_evidence(
+                    _export_request(
+                        secrets.token_hex(32),
+                        not_before=self.time - 10,
+                        expires_at=self.time + 50,
+                    )
+                )
+        finally:
+            owner.close()
+
+    def test_provider_evidence_export_rejects_ingress_receipt_mismatch(self) -> None:
+        owner, _port = self._owner()
+        try:
+            owner.run((self.time,))
+            connection = sqlite3.connect(owner.ingress_path)
+            try:
+                connection.execute("UPDATE ingress_artifacts SET verification_receipt=?", (b"{}",))
+                connection.commit()
+            finally:
+                connection.close()
+            with self.assertRaisesRegex(operational.OperationalOwnerError, "^mirror:operational-indeterminate$"):
+                owner.export_provider_evidence(
+                    _export_request(
+                        secrets.token_hex(32),
+                        not_before=self.time - 10,
+                        expires_at=self.time + 50,
+                    )
+                )
+        finally:
+            owner.close()
+
+    def test_provider_evidence_export_holds_writer_until_response_validation_finishes(self) -> None:
+        owner, _port = self._owner()
+        owner.run((self.time,))
+        request = _export_request(
+            secrets.token_hex(32),
+            not_before=self.time - 10,
+            expires_at=self.time + 50,
+        )
+        original = provider_export.build_observation_export
+        entered = threading.Event()
+        release = threading.Event()
+        close_returned = threading.Event()
+        export_errors: list[BaseException] = []
+        close_errors: list[BaseException] = []
+
+        def gated_export(*args: object, **kwargs: object) -> bytes:
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("export gate timeout")
+            return original(*args, **kwargs)  # type: ignore[arg-type]
+
+        def export_worker() -> None:
+            try:
+                owner.export_provider_evidence(request)
+            except BaseException as error:
+                export_errors.append(error)
+
+        def close_worker() -> None:
+            try:
+                owner.close()
+            except BaseException as error:
+                close_errors.append(error)
+            finally:
+                close_returned.set()
+
+        try:
+            with mock.patch.object(provider_export, "build_observation_export", side_effect=gated_export):
+                export_thread = threading.Thread(target=export_worker)
+                close_thread = threading.Thread(target=close_worker)
+                export_thread.start()
+                self.assertTrue(entered.wait(timeout=5))
+                close_thread.start()
+                self.assertFalse(close_returned.wait(timeout=0.1))
+                release.set()
+                export_thread.join(timeout=5)
+                close_thread.join(timeout=5)
+            self.assertFalse(export_thread.is_alive() or close_thread.is_alive())
+            self.assertEqual([], close_errors)
+            self.assertEqual(1, len(export_errors))
+            self.assertIsInstance(export_errors[0], operational.OperationalOwnerError)
+            self.assertEqual("mirror:operational-closed", str(export_errors[0]))
+            self.assertTrue(owner._closed)
+        finally:
+            if not owner._closed:
+                owner.close()
 
     @unittest.skipUnless(os.name == "nt", "Windows-only constructor release regression")
     def test_windows_constructor_probe_invalid_handle_is_not_retried(self) -> None:

@@ -743,6 +743,7 @@ def _verify_connection(
     expected_config_digest: str | None = None,
     ingress_path: str | Path | None = None,
     ingress_bytes: bytes | None = None,
+    include_source_observation: bool = False,
 ) -> dict[str, object]:
     if _table_names(connection) != tuple(sorted(TABLES)):
         raise CoreVerificationError("core:tables")
@@ -1238,7 +1239,23 @@ def _verify_connection(
             ):
                 raise CoreVerificationError("core:ingress-binding")
         ingress_bound = True
-    return {
+    current_source_artifact = None
+    if include_source_observation:
+        current_source_id = stream_refs.get(("ARTIFACT", "SOURCE_OBSERVATION"))
+        if current_source_id is not None:
+            current_source_row = actual_artifacts.get(current_source_id)
+            if (
+                current_source_row is None
+                or current_source_row["kind"] != "SOURCE_OBSERVATION"
+                or type(current_source_row["raw"]) is not bytes
+            ):
+                raise CoreVerificationError("core:source-head")
+            current_source_artifact = _verify_source(
+                _parse(current_source_row["raw"], "core:source-observation"),
+                config,
+            )
+
+    result = {
         "structural_valid": True,
         "ingress_bound": ingress_bound,
         "schema": SCHEMA,
@@ -1260,6 +1277,9 @@ def _verify_connection(
         "flags": dict(FIXED_FLAGS),
         "current_source_artifact_id": stream_refs.get(("ARTIFACT", "SOURCE_OBSERVATION")),
     }
+    if include_source_observation:
+        result["current_source_artifact"] = current_source_artifact
+    return result
 
 
 def verify_database(
@@ -1268,6 +1288,7 @@ def verify_database(
     expected_database_id: str | None = None,
     expected_config_digest: str | None = None,
     ingress_path: str | Path | None = None,
+    include_source_observation: bool = False,
 ) -> dict[str, object]:
     connection = _open(path)
     try:
@@ -1276,6 +1297,7 @@ def verify_database(
             expected_database_id=expected_database_id,
             expected_config_digest=expected_config_digest,
             ingress_path=ingress_path,
+            include_source_observation=include_source_observation,
         )
     finally:
         _close(connection)

@@ -17,6 +17,7 @@ import re
 import traceback
 from typing import NoReturn
 
+from app.mirror import ingress_v2_independent as ingress_independent
 from app.mirror import nc_medicaid_fhir_profile as nc_profile
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror.error_boundary import raise_redacted
@@ -95,6 +96,15 @@ class ProviderEvidenceSelectionV1:
 
     graph_artifact: bytes
     profile_registry: Mapping[str, object]
+    authorization_evidence: str
+
+
+@dataclass(frozen=True)
+class ProviderEvidenceObservationSelectionV1:
+    """Verified sanitized observation selected from the operational stores."""
+
+    observation: bytes
+    verification_receipt: bytes
     authorization_evidence: str
 
 
@@ -248,6 +258,48 @@ def _validate_selection(selection: ProviderEvidenceSelectionV1) -> object:
         _fail("export:selection")
 
 
+def _validate_observation_selection_inner(
+    selection: ProviderEvidenceObservationSelectionV1,
+) -> dict[str, object]:
+    if not isinstance(selection, ProviderEvidenceObservationSelectionV1):
+        _fail("export:selection")
+    if (
+        type(selection.observation) is not bytes
+        or not selection.observation
+        or len(selection.observation) > ingress_independent.MAX_OBSERVATION_BYTES
+        or type(selection.verification_receipt) is not bytes
+        or not selection.verification_receipt
+        or len(selection.verification_receipt) > ingress_independent.MAX_VERIFICATION_RECEIPT_BYTES
+    ):
+        _fail("export:observation-bytes")
+    if selection.authorization_evidence != SYNTHETIC_SELECTION_AUTHORIZATION:
+        _fail("export:authorization")
+    try:
+        checked = ingress_independent.verify_observation_pair(
+            selection.observation,
+            selection.verification_receipt,
+            expected_profile_id=nc_profile.SOURCE_PROFILE_ID,
+            expected_profile_version=3,
+        )
+    except Exception:
+        _fail("export:observation-reject")
+    observation = checked.get("observation")
+    if not isinstance(observation, dict):
+        _fail("export:observation-result")
+    return observation
+
+
+def _validate_observation_selection(
+    selection: ProviderEvidenceObservationSelectionV1,
+) -> dict[str, object]:
+    try:
+        return _validate_observation_selection_inner(selection)
+    except ProviderEvidenceExportError:
+        raise
+    except Exception:
+        _fail("export:selection")
+
+
 def _derive_aggregate(value: Mapping[str, object]) -> dict[str, object]:
     sources = value.get("source_coverage")
     findings = value.get("findings")
@@ -290,12 +342,42 @@ def _derive_aggregate(value: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _build_export_inner(request_raw: bytes, selection: ProviderEvidenceSelectionV1, *, now: int) -> bytes:
-    """Validate one request and return one bounded, nonpersistent export."""
+def _derive_observation_aggregate(value: Mapping[str, object]) -> dict[str, object]:
+    required = (
+        "outcome",
+        "source_count",
+        "complete_source_count",
+        "record_count",
+        "finding_count",
+        "discrepancy_count",
+    )
+    if any(key not in value for key in required):
+        _fail("export:observation-shape")
+    aggregate = {key: value[key] for key in required}
+    if (
+        type(aggregate["outcome"]) is not str
+        or aggregate["outcome"] not in OUTCOME_KINDS
+        or type(aggregate["source_count"]) is not int
+        or aggregate["source_count"] != MAX_SOURCE_COUNT
+        or type(aggregate["complete_source_count"]) is not int
+        or not 0 <= aggregate["complete_source_count"] <= MAX_SOURCE_COUNT
+        or type(aggregate["record_count"]) is not int
+        or not 0 <= aggregate["record_count"] <= MAX_RECORD_COUNT
+        or type(aggregate["finding_count"]) is not int
+        or aggregate["finding_count"] != 1
+        or type(aggregate["discrepancy_count"]) is not int
+        or not 0 <= aggregate["discrepancy_count"] <= 1
+    ):
+        _fail("export:observation-shape")
+    return aggregate
 
-    request = _validate_request(request_raw, now=now)
-    graph_value = _validate_selection(selection)
-    aggregate = _derive_aggregate(graph_value)
+
+def _build_response(
+    request: Mapping[str, object],
+    aggregate: Mapping[str, object],
+    *,
+    now: int,
+) -> bytes:
     response: dict[str, object] = {
         "domain": RESPONSE_DOMAIN,
         "version": 1,
@@ -320,11 +402,54 @@ def _build_export_inner(request_raw: bytes, selection: ProviderEvidenceSelection
     return _canonical(response)
 
 
+def _build_export_inner(request_raw: bytes, selection: ProviderEvidenceSelectionV1, *, now: int) -> bytes:
+    """Validate one request and return one bounded, nonpersistent export."""
+
+    request = _validate_request(request_raw, now=now)
+    graph_value = _validate_selection(selection)
+    aggregate = _derive_aggregate(graph_value)
+    return _build_response(request, aggregate, now=now)
+
+
+def _build_observation_export_inner(
+    request_raw: bytes,
+    selection: ProviderEvidenceObservationSelectionV1,
+    *,
+    now: int,
+) -> bytes:
+    """Validate one selected sanitized observation and return one bounded export."""
+
+    request = _validate_request(request_raw, now=now)
+    observation = _validate_observation_selection(selection)
+    aggregate = _derive_observation_aggregate(observation)
+    return _build_response(request, aggregate, now=now)
+
+
 def build_export(request_raw: bytes, selection: ProviderEvidenceSelectionV1, *, now: int) -> bytes:
     """Validate one request and return one bounded, nonpersistent export."""
 
     try:
         return _build_export_inner(request_raw, selection, now=now)
+    except ProviderEvidenceExportError as error:
+        request_raw = b""
+        selection = None  # type: ignore[assignment]
+        try:
+            traceback.clear_frames(error.__traceback__)
+        except Exception:
+            pass
+        raise
+
+
+def build_observation_export(
+    request_raw: bytes,
+    selection: ProviderEvidenceObservationSelectionV1,
+    *,
+    now: int,
+) -> bytes:
+    """Validate a selected sanitized observation and return one bounded export."""
+
+    try:
+        return _build_observation_export_inner(request_raw, selection, now=now)
     except ProviderEvidenceExportError as error:
         request_raw = b""
         selection = None  # type: ignore[assignment]

@@ -58,6 +58,15 @@ def _selection() -> producer.ProviderEvidenceSelectionV1:
     )
 
 
+def _observation_selection() -> producer.ProviderEvidenceObservationSelectionV1:
+    admission = _admission()
+    return producer.ProviderEvidenceObservationSelectionV1(
+        observation=admission.observation,
+        verification_receipt=admission.verification_receipt,
+        authorization_evidence=producer.SYNTHETIC_SELECTION_AUTHORIZATION,
+    )
+
+
 def _selection_for_graph_profile(admission, graph_profile) -> producer.ProviderEvidenceSelectionV1:
     value = json.loads(admission.graph_input.decode("ascii"))
     value["profile_id"] = graph_profile.profile_id
@@ -138,6 +147,60 @@ def _conflict_selection() -> producer.ProviderEvidenceSelectionV1:
 
 
 class ProviderEvidenceExportV1Tests(unittest.TestCase):
+    def test_valid_request_observation_export_and_independent_verification(self) -> None:
+        operation_ref = secrets.token_hex(32)
+        raw = producer.build_observation_export(
+            _request(operation_ref), _observation_selection(), now=7_000
+        )
+        verified = independent.verify_export(raw, expected_operation_ref=operation_ref, now=7_000)
+        self.assertEqual("EVIDENCE_INCOMPLETE", verified.outcome)
+        self.assertEqual((2, 0, 2, 1, 0), (
+            verified.source_count,
+            verified.complete_source_count,
+            verified.record_count,
+            verified.finding_count,
+            verified.discrepancy_count,
+        ))
+        self.assertEqual(len(raw), len(producer._canonical(json.loads(raw.decode("ascii")))))
+
+    def test_observation_selection_is_canonical_authorized_and_fail_closed(self) -> None:
+        selection = _observation_selection()
+        operation_ref = secrets.token_hex(32)
+        observation = json.loads(selection.observation.decode("ascii"))
+        observation["UNAUTHORIZED_SYNTHETIC_KEY"] = "Z" * 128
+        altered = replace(selection, observation=_canonical(observation))
+        with self.assertRaisesRegex(producer.ProviderEvidenceExportError, "export:observation-reject"):
+            producer.build_observation_export(_request(operation_ref), altered, now=7_000)
+        with self.assertRaisesRegex(producer.ProviderEvidenceExportError, "export:authorization"):
+            producer.build_observation_export(
+                _request(secrets.token_hex(32)),
+                replace(selection, authorization_evidence=""),
+                now=7_000,
+            )
+        with self.assertRaisesRegex(producer.ProviderEvidenceExportError, "export:observation-reject"):
+            producer.build_observation_export(
+                _request(secrets.token_hex(32)),
+                replace(selection, verification_receipt=b"{}"),
+                now=7_000,
+            )
+
+    def test_observation_aggregate_fields_are_not_guessed(self) -> None:
+        selection = _observation_selection()
+        observation = json.loads(selection.observation.decode("ascii"))
+        for key, value in (("record_count", None), ("source_count", 1), ("finding_count", 2)):
+            with self.subTest(key=key):
+                altered = dict(observation)
+                if value is None:
+                    del altered[key]
+                else:
+                    altered[key] = value
+                with self.assertRaisesRegex(producer.ProviderEvidenceExportError, "export:observation-reject"):
+                    producer.build_observation_export(
+                        _request(secrets.token_hex(32)),
+                        replace(selection, observation=_canonical(altered)),
+                        now=7_000,
+                    )
+
     def test_valid_request_graph_export_and_independent_verification(self) -> None:
         operation_ref = secrets.token_hex(32)
         raw = producer.build_export(_request(operation_ref), _selection(), now=7_000)
