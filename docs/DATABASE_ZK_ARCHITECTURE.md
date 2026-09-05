@@ -155,10 +155,19 @@ evaluation or authoritative source-signature/assertion result is the correspondi
 evidence input in the other two modes. The state-owned `policyResult` and exception control still
 determine the directive in every mode.
 
+As a required contract, every admitted attempt uses the same fixed observable replay/audit shape
+across all five directives, including `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and `EXCEPTION_APPROVED`;
+non-`CLEAR` outcomes do not skip or reshape replay/audit state. This requirement is not a claim
+that the current experimental implementation is deployed or qualified.
+
 The no-exception case uses a canonical domain-separated nonzero sentinel so every row has the same
-shape. An emergency continuity action is a separate signed and expiring human override transaction,
-not a parser fallback or a failed proof converted to `CLEAR`. Mirror records the underlying result,
-override, final payment outcome, and any Blind Ledger failure.
+shape. Operative `EXCEPTION_APPROVED` additionally requires a separately governed, signed, immutable
+exception-authorization record bound to the exact rule, reason, approver authority, scope, amount,
+and expiry, while preserving the underlying `policyResult`. Native proof acceptance remains
+non-dispositive and cannot substitute for that authorization. An emergency continuity action is a
+separate signed and expiring human override transaction, not a parser fallback or a failed proof
+converted to `CLEAR`. Mirror records the underlying result, override, final payment outcome, and
+any Blind Ledger failure.
 
 The exact automatic control set is verifier-owned and binds rule order, priority/conflict handling,
 directive mapping, scope, and effective interval. A prover cannot choose a favorable subset. Event,
