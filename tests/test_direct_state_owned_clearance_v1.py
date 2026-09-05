@@ -349,10 +349,14 @@ def _tamper_direct_state(path: Path, field: str) -> None:
 def _tamper_transition_kind(path: Path) -> None:
     with sqlite3.connect(path) as connection:
         connection.execute("DROP TRIGGER transition_records_no_update")
-        connection.execute(
-            "UPDATE transition_records SET transition_kind='SETTLEMENT' "
-            "WHERE sequence_after=1"
-        )
+        connection.execute("PRAGMA ignore_check_constraints=ON")
+        try:
+            connection.execute(
+                "UPDATE transition_records SET transition_kind='SETTLEMENT' "
+                "WHERE sequence_after=1"
+            )
+        finally:
+            connection.execute("PRAGMA ignore_check_constraints=OFF")
 
 
 class _FinalizeFailureAnchor:
@@ -758,6 +762,24 @@ def test_direct_transition_kind_substitution_fails_closed(tmp_path: Path) -> Non
     service = DirectStateOwnedAtomicClearanceV1(path=path)
     service.submit(raw)
     service.close()
+    with sqlite3.connect(path) as connection, pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO transition_records ("
+            "sequence_after, transition_kind, record_commitment, "
+            "state_binding_before, state_binding_after, nullifier_root_before, "
+            "nullifier_root_after, payment_root_before, payment_root_after, "
+            "governance_before, governance_after, profile_before, profile_after, "
+            "suite_before, suite_after, schema_before, schema_after, verifier_before, "
+            "verifier_after, epoch_before, epoch_after, checkpoint_commitment_after"
+            ") SELECT sequence_after + 1, 'SETTLEMENT', ?, state_binding_before, "
+            "state_binding_after, nullifier_root_before, nullifier_root_after, "
+            "payment_root_before, payment_root_after, governance_before, "
+            "governance_after, profile_before, profile_after, suite_before, "
+            "suite_after, schema_before, schema_after, verifier_before, verifier_after, "
+            "epoch_before, epoch_after, ? FROM transition_records "
+            "WHERE sequence_after=1",
+            (sqlite3.Binary(b"\xC3" * 64), sqlite3.Binary(b"\xC4" * 64)),
+        )
     _tamper_transition_kind(path)
     with pytest.raises(ProductionBoundaryError, match="database_direct_transition_kind_invalid"):
         DirectStateOwnedAtomicClearanceV1(path=path)

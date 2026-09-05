@@ -1305,7 +1305,51 @@ class SQLiteSettlementStoreV2:
         self._direct_rule_id: bytes | None = None
         self._direct_phase0_receipt_binding: bytes | None = None
         self._closed = False
+        self._preflight_existing_schema_version(self._path)
         self._initialize()
+
+    @staticmethod
+    def _preflight_existing_schema_version(path: Path) -> None:
+        """Reject an unsupported existing schema before opening it read-write.
+
+        Opening a WAL-mode SQLite database through the normal connection path can create
+        ``-wal``/``-shm`` sidecars even when initialization subsequently rejects its
+        schema.  The immutable read-only preflight observes only an explicit metadata
+        version and leaves all other initialization and corruption handling to the
+        normal path.
+        """
+
+        try:
+            if not path.exists() or path.stat().st_size == 0:
+                return
+        except OSError:
+            return
+
+        source_uri = path.resolve().as_uri() + "?mode=ro&immutable=1"
+        try:
+            with closing(
+                sqlite3.connect(source_uri, uri=True, isolation_level=None)
+            ) as connection:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    ).fetchall()
+                }
+                if "metadata" not in tables:
+                    return
+                row = connection.execute(
+                    "SELECT schema_version FROM metadata WHERE id=1"
+                ).fetchone()
+        except sqlite3.DatabaseError:
+            return
+
+        if row is None or row == (_SCHEMA_VERSION,):
+            return
+        if row in {(1,), (2,)}:
+            raise ProductionBoundaryError("database_legacy_governance_schema_rejected")
+        raise ProductionBoundaryError("database_schema_version_mismatch")
 
     def _connect(self) -> sqlite3.Connection:
         if self._closed:
@@ -2071,7 +2115,7 @@ class SQLiteSettlementStoreV2:
             );
             CREATE TABLE IF NOT EXISTS transition_records (
                 sequence_after INTEGER PRIMARY KEY CHECK (sequence_after > 0),
-                transition_kind TEXT NOT NULL CHECK (transition_kind IN ('SETTLEMENT', 'DIRECT_CLEARANCE')),
+                transition_kind TEXT NOT NULL CHECK (transition_kind = 'DIRECT_CLEARANCE'),
                 record_commitment BLOB NOT NULL UNIQUE CHECK (length(record_commitment) = 64),
                 state_binding_before BLOB NOT NULL CHECK (length(state_binding_before) = 64),
                 state_binding_after BLOB NOT NULL CHECK (length(state_binding_after) = 64),
