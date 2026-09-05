@@ -12,9 +12,7 @@ from hashlib import sha3_512
 from typing import Final
 
 from app.batch.poseidon import FIELD_MODULUS
-from experiments.bl_pq512_crypto_foundation.master_commitments_v2 import (
-    GOVERNANCE_DOMAIN,
-)
+GOVERNANCE_DOMAIN: Final[bytes] = b"BL/PQ512/GOVERNANCE/v2"
 
 
 PROFILE_CODES: Final[frozenset[int]] = frozenset({1, 2, 3})

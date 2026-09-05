@@ -15,10 +15,10 @@ from app.direct_state_owned_clearance_v1 import (
     DirectStateOwnedAtomicClearanceV1,
     DirectStateOwnedClearanceError,
 )
-from app.production_boundary import ProductionBoundaryError
 from app.transactional_database_boundary import (
     AntiRollbackAnchorSnapshot,
     InMemoryAntiRollbackReference,
+    ProductionBoundaryError,
 )
 from experiments.native_v3_phase0.native_v3_fixture import (
     DIRECTIVE_BLOCK,
