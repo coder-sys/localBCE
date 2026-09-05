@@ -1,8 +1,8 @@
 """Canonical application form of the authoritative master governance v2 tuple.
 
-This module mirrors only the governance preimage frozen by
-``master_commitments_v2.py``.  It deliberately retains every full-width input;
-the four Privacy V2 public fields are compatibility aliases without authority.
+This module owns the governance preimage and commitment used by the database
+boundary.  It retains every full-width input so the stored authority tuple and
+its commitment remain the single canonical representation.
 """
 
 from __future__ import annotations
@@ -11,12 +11,10 @@ from dataclasses import dataclass
 from hashlib import sha3_512
 from typing import Final
 
-from app.batch.poseidon import FIELD_MODULUS
 GOVERNANCE_DOMAIN: Final[bytes] = b"BL/PQ512/GOVERNANCE/v2"
 
 
 PROFILE_CODES: Final[frozenset[int]] = frozenset({1, 2, 3})
-PUBLIC_ALIAS_ROOT_INDICES: Final[tuple[int, int, int, int]] = (0, 1, 3, 5)
 
 
 def _wide(label: str, value: object) -> bytes:
@@ -86,20 +84,7 @@ class GovernanceAuthorityV2:
     def commitment_512(self) -> bytes:
         return sha3_512(self.canonical_bytes).digest()
 
-    @property
-    def public_aliases(self) -> tuple[bytes, bytes, bytes, bytes]:
-        return tuple(
-            (
-                int.from_bytes(self.claim_truth_roots_512[index], "big")
-                % (FIELD_MODULUS - 1)
-                + 1
-            ).to_bytes(32, "big")
-            for index in PUBLIC_ALIAS_ROOT_INDICES
-        )  # type: ignore[return-value]
-
-
 __all__ = (
     "GovernanceAuthorityV2",
     "PROFILE_CODES",
-    "PUBLIC_ALIAS_ROOT_INDICES",
 )
