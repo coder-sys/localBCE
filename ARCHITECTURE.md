@@ -309,9 +309,10 @@ The following local documents have one component owner and one narrow purpose:
 | Rejected architectures | [`docs/REJECTED_ARCHITECTURES.md`](docs/REJECTED_ARCHITECTURES.md) | Concise current prohibitions against restarting retired directions |
 | Pending domain decision | [`docs/RARC_PENDING_DECISION.md`](docs/RARC_PENDING_DECISION.md) and `rarc_mapping.tsv` | Open mapping rows, source material, G8 split rationale, and required sign-off |
 
-The release and documentation gates register every retained Markdown path. Markdown under retired
-experiment or protected-proof lanes is forbidden; current prohibitions live only in
-`docs/REJECTED_ARCHITECTURES.md`.
+The release and documentation gates register every retained Markdown path. Release selection uses
+current-source lanes plus an explicit three-file compatibility closure; no retained prefix is a
+keep map. Markdown under retired experiment or protected-proof lanes is forbidden; current
+prohibitions live only in `docs/REJECTED_ARCHITECTURES.md`.
 
 ## Active target
 
@@ -320,8 +321,8 @@ experiment or protected-proof lanes is forbidden; current prohibitions live only
 - `docs/DATABASE_ZK_ARCHITECTURE.md` owns the verifier-to-clearance-database transaction boundary.
 - `docs/LEAN_FORMAL_KERNEL.md` owns the approved formal semantic/state-transition target and
   theorem gates; it is not implemented evidence yet.
-- `app/production_boundary.py` and `app/transactional_database_boundary.py` are retained local,
-  synthetic transaction references; they are not production selections.
+- `app/transactional_database_boundary.py` is the retained local, synthetic transaction reference;
+  it is not a production selection.
 - Full-width SHA3-512 identifiers remain externally authoritative.
 - `docs/NATIVE_V3_ARCHITECTURE.md` is the sole authority for the exact source-auth profile, private
   representation and link relation, cryptographic theorem/accounting, PQ/privacy/setup, zero-PHI

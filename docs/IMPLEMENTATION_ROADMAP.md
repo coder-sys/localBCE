@@ -33,20 +33,20 @@ being misread as a universal private-proof gate:
 | `BL-OFFICIAL-RECEIVER` | Activation of any mode that emits an operative clearance directive |
 | `BL-GOVERNMENT-CONNECTORS` | Activation of any mode using official external authority |
 
-## Current bounded workstream
+## Current integrated workstream
 
-The current candidate is in an operator-owned integrity pass over the privacy primitives, release
-manifest selection, documentation governance, and root authority records. The release policy must
-select a reviewed dependency closure rather than every file under a retained prefix. Cleanup owns
-the approved source extraction and behavior-preserving legacy cleanup; the final release closure is
-recomputed from that actual source state before a manifest or archive is accepted. This workstream
-does not change application trust boundaries, operations bytes, verifier behavior, activation, or
-the nonpayment/read-only claim.
+The integrated candidate now contains Cleanup's reviewed source closure and the operator's shared
+privacy, release-policy, and documentation-governance delta. The executable map is 225 tracked paths:
+193 current source, 3 explicitly retained compatibility modules, 3 source-only, and 26 excluded
+generated/private paths. The default selection is 196 (193 + 3); 29 remain unselected. Prefix
+membership is a classification hint only, and deleted compatibility entries are not retained in a
+blanket keep map.
 
-The immediate evidence gates are the focused privacy, builder, documentation-governance, and
-release-manifest tests plus strict Python compilation and Git cleanliness checks. A source-only
-harness, generated/private artifact, or failed privacy gate remains excluded and cannot be promoted
-by documentation or a manifest default.
+The final bounded gates are the privacy, builder, manifest, documentation, active-core/security,
+direct-state, native boundary, operations-authority, qualification, strict-compilation, structural
+privacy, and extracted-builder/readback checks. This workstream does not change application trust
+boundaries, operations bytes, verifier semantics, activation, or the read-only/nonpayment claim.
+Source-only harnesses, generated/private artifacts, and failed privacy gates remain excluded.
 
 ## Completed foundation
 

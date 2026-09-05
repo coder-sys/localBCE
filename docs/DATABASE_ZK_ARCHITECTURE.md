@@ -222,19 +222,12 @@ inventory, independent kernel check, and CI gates. Current status and nonactivat
 
 ## Current recovery and compatibility evidence
 
-`app/production_boundary.py` and `app/transactional_database_boundary.py` remain the tested local
-owners of the current compatibility seam. They must preserve one atomic clearance-state mutation,
-exact receipt identities, idempotent retry, concurrency rejection, anti-rollback, backup/restore,
-explicit version handling, append-only audit, and zero-PHI support behavior. Historical migration
-exercises remain source/test evidence and do not imply a current cross-version storage upgrade path.
-
-The focused evidence is `tests/test_bl_pq512_production_boundary.py`,
-`tests/test_bl_pq512_transactional_database_boundary.py`,
-`tests/test_bl_pq512_transactional_privacy_v2_migration.py`,
-`tests/attacks/test_bl_pq512_transactional_privacy_v2_migration_attacks.py`,
-the public-input, commitment, nullifier,
-and custody tests named by the active-core map. These are synthetic compatibility regressions; they
-do not select a proof backend or make historical package claims current.
+`app/transactional_database_boundary.py` is the current local owner of the compatibility seam. It
+must preserve one atomic clearance-state mutation, exact receipt identities, idempotent retry,
+concurrency rejection, anti-rollback, backup/restore, explicit version handling, append-only audit,
+and zero-PHI support behavior. The focused direct-state evidence is
+`tests/test_direct_state_owned_clearance_v1.py`; it is synthetic compatibility evidence and does not
+select a proof backend or imply production persistence.
 
 The recovery contract is: reserve the exact expected and next anchors before commit, finalize after
 commit, return an explicit indeterminate result on post-commit finalization failure, and resolve it
@@ -242,7 +235,7 @@ only by exact idempotent retry. Competing transitions, stale roots, older databa
 and configuration drift fail closed. Backup/restore and restart must retain the same decision,
 receipt, audit, and anti-rollback identities.
 
-The pending Cleanup source input at commit `bdba7c3bee27a33147fb06506225995984a45206` intentionally
+The integrated Cleanup source at commit `f53b4230bfa61a5fc87c17964d49e4c70cb92c12` intentionally
 changes the transactional database boundary from schema version 3 to 4. Its version check rejects
 an existing V3 direct-state-owned database or backup with `database_schema_version_mismatch` before
 schema creation or PRAGMA work; it has no automatic migration, deletion, fallback, or compatibility
