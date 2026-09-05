@@ -4,27 +4,28 @@ Updated: 2026-09-05
 
 ## Candidate and release closure
 
-This documentation-only candidate starts from sealed commit `0607a275bb5158dd4b4c70dfcd95d0967c80b839`
-(tree `4571c47be35dd782045aa4f9ed35a9fb31413a2c`). The sealed checkout is not modified. The
-executable release policy at that baseline is:
+This candidate starts from immutable commit `0607a275bb5158dd4b4c70dfcd95d0967c80b839` (tree
+`4571c47be35dd782045aa4f9ed35a9fb31413a2c`) in this separate child. The state of the separate v2
+evidence checkout is outside this phase. The executable release policy in this integrated child is:
 
 | Lane | Count | Selection |
 | --- | ---: | --- |
-| Current source | 192 | selected |
+| Current source | 190 | selected |
 | Retained compatibility | 3 | selected only by explicit closure |
 | Source-only | 3 | unselected |
-| Excluded generated/private | 26 | unselected |
+| Excluded generated/private | 25 | unselected |
 | Unknown/retired/legacy | 0 | fail-closed if introduced |
-| Tracked total | 224 | — |
-| Default selection | 195 | 192 current + 3 retained |
-| Unselected total | 29 | — |
+| Tracked total | 221 | — |
+| Default selection | 193 | 190 current + 3 retained |
+| Unselected total | 28 | — |
 
 The retained closure is exactly `app/batch/__init__.py`, `app/batch/poseidon.py`, and
 `app/batch/stark_encoding.py`. Prefix membership is only a classification hint. Deleted
 compatibility entries and the obsolete legacy registry are not release inputs. Source-only privacy
 fixtures, generated evidence, private build metadata, and Profile 11 host files remain excluded.
-The executable classifier reports these counts for the current candidate; no release-policy bytes
-were changed by this documentation cleanup.
+The executable classifier reports these counts for the current integrated child. The only release
+policy change is removal of the orphan classification for the deleted external-source test; unknown
+and retired path rejection remains unchanged.
 
 ## Verified evidence
 
@@ -40,17 +41,25 @@ were changed by this documentation cleanup.
   evidence. They have no authenticated real source, production persistence, PHI, payment, or
   activation claim. The operational export bridge selects independently reconstructed Core
   `SOURCE_OBSERVATION`, not the Provider Trust Graph path.
+- The reviewed Mirror cleanup is the exact source commit `46a4c965464ea2cd72a3205d82652ddbf8ae51f6`
+  (local integration `57e5f1f938ff7346880c6fd6a01138cecd575712`): the unused external adapters and
+  their fixture test are deleted, source admission retains the active NC source path, and the
+  state-source contract tests cover the remaining boundary. The exact deleted module/test paths
+  have no remaining file or import references. The separate source-only cleanup is
+  `6df4578aa5c98ca23ba38b563b74a075a504c483` (local `47eb2309e08d17913bb2fc99ffb33e02dc9bffaa`).
+- The release-policy orphan entry for the deleted external-source test was removed from
+  `tools/release_manifest_gate.py`; no other classification or unknown-path guard was changed.
 - Recorded sealed-baseline gates include release-policy `21 passed, 34 subtests passed`,
   active-core/security/qualification `19 passed`, proof primitives `24 passed`, and operations
   authority `ops_authority=verified`. The qualification inspection reported
   `proofSuiteId=null`, `production_usable=false`, `qualification_state=NOT_QUALIFIED`,
   `activation_state=INACTIVE`, and `selection_state=UNSELECTED`.
-- On clean disposable staging of commit `e2e9ae428e82841f1a18a6fcdecd0b7d2679e26e`, the
-  release-manifest gate selected 195 paths and emitted manifest-v2 SHA-256
-  `c09bdd34c67522c47063f69bb9290038b0cd52c0d8d3900209c59395769cb715` (29,247 bytes). The
-  create-only builder completed canonical ZIP/CRC readback with 196 entries, 3,346,819 archive
-  bytes, and archive SHA-256
-  `322e9493fbcd1923d26123d42661b45d1a9827aeeecea2aa592e7ca99a2d52cf`; no publication target was
+- On clean disposable staging of the integrated source/policy commit
+  `cc953b2fbb226fdcbe03a55fcb2367c26fde9ba0`, the release-manifest gate selected 193 paths and
+  emitted manifest-v2 SHA-256 `2d54c478a4c5eb45736118e6ccfba726a9ad24922f085d141c012d4948979729`
+  (28,959 bytes). The create-only builder completed canonical ZIP/CRC readback with 194 entries,
+  3,305,354 archive bytes, payload 3,234,361 bytes, and archive SHA-256
+  `ba3533641b07907255d238492906739dad1aa8e085b0d6c50a43f75cd77c47cf`; no publication target was
   refreshed.
 
 ## Unresolved trust-critical blocker

@@ -2,14 +2,14 @@
 
 Updated: 2026-09-05
 
-Current candidate commit: `0607a275bb5158dd4b4c70dfcd95d0967c80b839` (sealed review baseline;
-this child is its documentation-only successor).
+Current candidate commit: `0607a275bb5158dd4b4c70dfcd95d0967c80b839` (immutable integration base;
+this child is its separate reviewed successor).
 Current candidate tree: `4571c47be35dd782045aa4f9ed35a9fb31413a2c` (sealed baseline tree).
-PHASE: Authority and documentation cleanup.
+PHASE: Reviewed source integration and authority cleanup.
 
-Next bounded action: finish the Markdown authority consolidation in this isolated child, run only
-the gates affected by the changed Markdown, and report the resulting clean candidate. Do not edit
-application source, tests, dependencies, operations bytes, protected paths, or archive targets.
+Next bounded action: complete the final clean-candidate readback and handoff for the exact reviewed
+source integration and authority cleanup. No further source/docs edits are planned; do not publish
+an archive or mutate the separate v2 evidence checkout.
 
 ## Objective
 
@@ -22,7 +22,9 @@ and unresolved blockers.
 Remove stale candidate/phase/lineage records and duplicate explanations while preserving every
 trust boundary, fail-closed rule, custody restriction, negative-test requirement, qualification
 consequence, and nonactivation claim. Git history remains the record of completed implementation
-and prior authority decisions; this phase creates no archive or activation change.
+and prior authority decisions. This child includes only the reviewed Mirror/source commits and the
+single resulting orphan release-policy removal described in `STATE.md`; it creates no archive or
+activation change.
 
 ## Blockers and unresolved identity
 
@@ -44,4 +46,5 @@ and prior authority decisions; this phase creates no archive or activation chang
 `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED` remain authoritative. No Lean kernel is implemented or
 linked, no private-proof backend is selected, and no real PHI, credentials, payment movement,
 production persistence, or official receiver is in scope. Mirror remains read-only and
-nonpayment. The sealed 0607 checkout is not modified; all edits are confined to this child.
+nonpayment. The immutable 0607 commit is the integration base; the separate v2 checkout and any
+other working-tree state are outside this child’s scope, and current edits are confined here.

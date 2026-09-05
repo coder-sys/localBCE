@@ -223,7 +223,6 @@ RELEASE_EXCLUSION_REASONS: dict[str, str] = {
     "tests/test_minimal_clearance_verifier_throughput.py": "source-only synthetic path/telemetry fixture",
     "tests/test_mirror_external_governance_approval.py": "source-only synthetic privacy-canary fixture",
     "tests/test_mirror_external_privacy_support_approval.py": "source-only synthetic privacy-canary fixture",
-    "tests/test_mirror_external_source_adapter.py": "source-only synthetic privacy-canary fixture",
     "tests/test_mirror_qualification_independent.py": "source-only synthetic privacy-canary fixture",
     "tests/test_mirror_v2_consolidation.py": "source-only synthetic privacy/path-canary fixture",
     "tests/test_nc_medicaid_fhir_source.py": "source-only synthetic privacy/path-canary fixture",
