@@ -228,6 +228,53 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
                 with self.assertRaisesRegex(SourceAdmissionError, "verifier:reject"):
                     _service().admit(_adapter(**extra))
 
+    def test_removed_external_keyword_api_rejects_before_mutation(self) -> None:
+        class CountingVerifier(SyntheticTestSourceVerifier):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
+                self.calls += 1
+                return super().verify(adapter_bytes)
+
+        verifier = CountingVerifier()
+        service = _service(verifier)
+        raw = _adapter()
+        before = service.admit(raw)
+        before_bytes = (
+            before.graph_input,
+            before.graph_artifact,
+            before.receipt,
+            before.observation,
+            before.verification_receipt,
+        )
+        calls_before = verifier.calls
+        for removed_kwargs in (
+            {"external_evidence_raw": b"removed"},
+            {"external_policy": {}},
+        ):
+            with self.subTest(removed_kwargs=tuple(removed_kwargs)):
+                with self.assertRaises(TypeError):
+                    service.admit(raw, **removed_kwargs)  # type: ignore[call-arg]
+                self.assertEqual(calls_before, verifier.calls)
+        after = service.admit(raw)
+        after_bytes = (
+            after.graph_input,
+            after.graph_artifact,
+            after.receipt,
+            after.observation,
+            after.verification_receipt,
+        )
+        self.assertEqual(before_bytes, after_bytes)
+        self.assertEqual(calls_before + 1, verifier.calls)
+        for field in (
+            "external_artifact_id",
+            "external_artifact_digest",
+            "capture_id",
+            "capture_context_digest",
+        ):
+            self.assertFalse(hasattr(before, field))
+
     def test_synthetic_verifier_failure_and_malformed_output_fail_closed(self) -> None:
         with self.assertRaisesRegex(SourceAdmissionError, "verifier:reject"):
             _service().admit(_adapter("fail"))

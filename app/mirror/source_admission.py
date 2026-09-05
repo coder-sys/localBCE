@@ -18,7 +18,6 @@ from typing import Mapping, Protocol
 
 from app.mirror import provider_trust_graph as graph
 from app.mirror import provider_trust_graph_independent as graph_independent
-from app.mirror import external_source_adapter_independent as external_independent
 from app.mirror.error_boundary import raise_redacted
 
 
@@ -268,10 +267,6 @@ class SourceAdmission:
     telemetry: tuple[tuple[str, int | bool | str | None], ...]
     profile_version: int = 1
     source_contract_digest: str | None = None
-    external_artifact_id: str | None = None
-    external_artifact_digest: str | None = None
-    capture_id: str | None = None
-    capture_context_digest: str | None = None
     envelope_digest: str | None = None
     page_digests: tuple[str, ...] = ()
     observation: bytes = b""
@@ -544,7 +539,7 @@ class SourceAdmissionService:
             if (start, end) != (profile.effective_start, profile.effective_end):
                 raise SourceAdmissionError("graph:interval-mismatch")
 
-    def admit(self, adapter_bytes: bytes, *, external_evidence_raw: bytes | None = None, external_policy: Mapping[str, object] | None = None, expected_receipt: bytes | None = None) -> SourceAdmission:
+    def admit(self, adapter_bytes: bytes, *, expected_receipt: bytes | None = None) -> SourceAdmission:
         """Verify one exact envelope/evidence pair and bind one graph receipt."""
 
         if type(adapter_bytes) is not bytes or not adapter_bytes:
@@ -553,26 +548,6 @@ class SourceAdmissionService:
             raise SourceAdmissionError("adapter:byte-cap")
         result = self._verify(adapter_bytes)
         self._validate_result(result)
-        if external_evidence_raw is not None or external_policy is not None:
-            if type(external_evidence_raw) is not bytes or not external_evidence_raw or not isinstance(external_policy, Mapping):
-                raise SourceAdmissionError("external:evidence")
-            try:
-                external = external_independent.verify_bytes(external_evidence_raw, policy=external_policy, capture_raw=adapter_bytes)
-            except Exception:
-                raise_redacted(SourceAdmissionError, "external:evidence-reject")
-            if external.get("derived_status") != "OBSERVATION_ADMITTED":
-                raise SourceAdmissionError("external:not-admitted")
-            if external.get("source_contract_digest") != result.source_contract_digest:
-                raise SourceAdmissionError("external:contract-binding")
-            context = result
-            for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest"):
-                actual = context.subject if key == "subject_id" else getattr(context, key, None)
-                if actual != external.get(key):
-                    raise SourceAdmissionError("external:context-binding")
-            if result.observation_time != external.get("observed_at") or result.fetched_at != external.get("fetched_at") or tuple(result.page_digests) != tuple(digest for _, digest in external.get("page_bindings", ())):
-                raise SourceAdmissionError("external:capture-binding")
-        else:
-            external = None
         effective_profile = result.graph_profile or self.profile
         try:
             if _v2_profile(effective_profile):
@@ -636,14 +611,6 @@ class SourceAdmissionService:
             "graph_report_id": report_id,
             "production_source_authentication": False,
         }
-        if external is not None:
-            body.update({
-                "external_artifact_id": external["artifact_id"],
-                "external_artifact_digest": _raw_digest("external-artifact", external_evidence_raw),
-                "capture_id": external["capture_id"],
-                "capture_context_digest": _digest("capture-context", {key: external[key] for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest", "observed_at", "fetched_at")} ),
-                "external_policy_digest": external["policy_digest"],
-            })
         source_receipt_value = {"receipt_id": _digest("receipt-id", body), **body}
         source_receipt = _canonical(source_receipt_value)
         observation_value, verification_receipt_value = _sanitized_values(artifact, result, effective_profile)
@@ -674,10 +641,6 @@ class SourceAdmissionService:
             telemetry=telemetry,
             profile_version=effective_profile.version,
             source_contract_digest=result.source_contract_digest,
-            external_artifact_id=external.get("artifact_id") if external is not None else None,
-            external_artifact_digest=_raw_digest("external-artifact", external_evidence_raw) if external is not None and isinstance(external_evidence_raw, bytes) else None,
-            capture_id=external.get("capture_id") if external is not None else None,
-            capture_context_digest=body.get("capture_context_digest"),
             envelope_digest=_raw_digest("envelope", adapter_bytes),
             page_digests=tuple(result.page_digests),
             observation=observation,
