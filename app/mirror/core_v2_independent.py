@@ -799,6 +799,8 @@ def _verify_connection(
         actual_artifacts[identifier] = row
 
     expected_artifacts: dict[str, sqlite3.Row] = {}
+    expected_sessions: dict[str, dict[str, object]] = {}
+    expected_slots: dict[tuple[str, int], dict[str, object]] = {}
     stream_roots: dict[tuple[str, str], str] = {}
     stream_refs: dict[tuple[str, str], str] = {}
     stream_sequences: dict[tuple[str, str], int] = {}
@@ -1002,12 +1004,36 @@ def _verify_connection(
                 or session["state"] != "OPEN" or session["last_slot"] != -1
             ):
                 raise CoreVerificationError("core:session-open")
+            session_id = str(value["subject_id"])
+            if (
+                value["stream_kind"] != "SESSION"
+                or value["stream_id"] != session_id
+                or session_id in expected_sessions
+            ):
+                raise CoreVerificationError("core:session-open")
             for key in ("source_artifact_id", "governance_artifact_id", "privacy_artifact_id"):
                 _hex(session[key], "core:session-open")
+            for key, artifact_kind in (
+                ("source_artifact_id", "SOURCE_OBSERVATION"),
+                ("governance_artifact_id", "GOVERNANCE"),
+                ("privacy_artifact_id", "PRIVACY"),
+            ):
+                artifact = expected_artifacts.get(str(session[key]))
+                if artifact is None or artifact["kind"] != artifact_kind:
+                    raise CoreVerificationError("core:session-open")
             if value["operation_id"] != _digest("session-operation", {"session_id": value["subject_id"], "action": "OPEN"}):
                 raise CoreVerificationError("core:session-open")
             if value["request_digest"] != _digest("session-request", {"session_id": value["subject_id"]}):
                 raise CoreVerificationError("core:session-open")
+            expected_sessions[session_id] = {
+                "session_id": session_id,
+                "state": "OPEN",
+                "source_artifact_id": str(session["source_artifact_id"]),
+                "governance_artifact_id": str(session["governance_artifact_id"]),
+                "privacy_artifact_id": str(session["privacy_artifact_id"]),
+                "head_root": str(value["stream_after_root"]),
+                "last_slot": -1,
+            }
         elif kind == "SESSION_START":
             if (
                 value["prior_state"] != "OPEN" or value["next_state"] != "RUNNING"
@@ -1016,21 +1042,97 @@ def _verify_connection(
                 or value["request_digest"] != _digest("session-request", {"session_id": value["subject_id"], "action": "START"})
             ):
                 raise CoreVerificationError("core:session-start")
+            session_id = str(value["subject_id"])
+            session_state = expected_sessions.get(session_id)
+            if (
+                value["stream_kind"] != "SESSION"
+                or value["stream_id"] != session_id
+                or session_state is None
+                or session_state["state"] != "OPEN"
+                or value["prior_state"] != session_state["state"]
+            ):
+                raise CoreVerificationError("core:session-start")
+            session_state["state"] = "RUNNING"
+            session_state["head_root"] = str(value["stream_after_root"])
         elif kind == "OBSERVATION":
             observation = material["observation"]
             if not isinstance(observation, dict):
                 raise CoreVerificationError("core:session-observation")
             required = {"schema", "schema_version", "session_id", "slot_number", "result", "counts", "flags", "result_digest"}
-            if set(observation) != required or observation["flags"] != FIXED_FLAGS or observation["session_id"] != value["subject_id"] or observation["result"] not in OBSERVATION_RESULTS:
+            if set(observation) != required or observation["schema"] != "mirror-core-observation-v3" or type(observation["schema_version"]) is not int or observation["schema_version"] != 3 or observation["flags"] != FIXED_FLAGS or observation["session_id"] != value["subject_id"] or observation["result"] not in OBSERVATION_RESULTS:
                 raise CoreVerificationError("core:session-observation")
             if observation["result_digest"] != _digest("observation", {key: observation[key] for key in observation if key != "result_digest"}):
                 raise CoreVerificationError("core:session-observation")
             result_raw = _canonical(observation)
             if value["payload_digest"] != observation["result_digest"] or value["payload_length"] != len(result_raw):
                 raise CoreVerificationError("core:session-observation")
+            session_id = str(value["subject_id"])
+            session_state = expected_sessions.get(session_id)
+            slot_number = observation["slot_number"]
+            counts = observation["counts"]
+            if (
+                value["stream_kind"] != "SESSION"
+                or value["stream_id"] != session_id
+                or value["prior_state"] != "RUNNING"
+                or value["next_state"] != "RUNNING"
+                or session_state is None
+                or session_state["state"] != "RUNNING"
+                or type(slot_number) is not int
+                or slot_number < 0
+                or slot_number >= int(config["max_slots_per_session"])
+                or slot_number != int(session_state["last_slot"]) + 1
+                or not isinstance(counts, dict)
+                or set(counts) != {"changed", "observed"}
+                or any(type(item) is not int or item < 0 or item > 64 for item in counts.values())
+                or (session_id, slot_number) in expected_slots
+            ):
+                raise CoreVerificationError("core:session-observation")
+            expected_slots[(session_id, slot_number)] = {
+                "session_id": session_id,
+                "slot_number": slot_number,
+                "result_digest": str(observation["result_digest"]),
+                "result_raw": result_raw,
+            }
+            session_state["last_slot"] = slot_number
+            session_state["head_root"] = str(value["stream_after_root"])
         elif kind == "SESSION_PAUSE":
             if value["next_state"] != "PAUSED" or material["state"] != "PAUSED":
                 raise CoreVerificationError("core:session-pause")
+            session_id = str(value["subject_id"])
+            session_state = expected_sessions.get(session_id)
+            trigger = material["trigger"]
+            slot_number = material["slot_number"]
+            observation_digest = material["observation_digest"]
+            if (
+                value["stream_kind"] != "SESSION"
+                or value["stream_id"] != session_id
+                or session_state is None
+                or session_state["state"] not in {"OPEN", "RUNNING"}
+                or value["prior_state"] != session_state["state"]
+                or material["reason"] not in ("SOURCE_SUPERSEDED", "AUTHORITY_INDETERMINATE", "AUTHORITY_EXPIRED")
+                or trigger not in ("START", "OBSERVATION", "RECONCILE")
+                or (trigger == "OBSERVATION" and (
+                    type(slot_number) is not int
+                    or slot_number < 0
+                    or slot_number >= int(config["max_slots_per_session"])
+                    or slot_number != int(session_state["last_slot"]) + 1
+                    or type(observation_digest) is not str
+                ))
+                or (trigger != "OBSERVATION" and (slot_number is not None or observation_digest is not None))
+            ):
+                raise CoreVerificationError("core:session-pause")
+            if trigger == "OBSERVATION":
+                _hex(observation_digest, "core:session-pause")
+            for key, artifact_kind in (
+                ("current_source_artifact_id", "SOURCE_OBSERVATION"),
+                ("current_governance_artifact_id", "GOVERNANCE"),
+                ("current_privacy_artifact_id", "PRIVACY"),
+            ):
+                _hex(material[key], "core:session-pause")
+                if material[key] != stream_refs.get(("ARTIFACT", artifact_kind)):
+                    raise CoreVerificationError("core:session-pause")
+            session_state["state"] = "PAUSED"
+            session_state["head_root"] = str(value["stream_after_root"])
         if kind.startswith("SESSION_") or kind == "OBSERVATION":
             stream_refs[stream_key] = str(value["subject_id"])
 
@@ -1047,6 +1149,26 @@ def _verify_connection(
             raise CoreVerificationError("core:artifact-reconstruction")
         if any(row[key] != expected_artifacts[identifier][key] for key in TABLE_COLUMNS["core_artifacts"]):
             raise CoreVerificationError("core:artifact-reconstruction")
+    actual_sessions = connection.execute("SELECT * FROM core_sessions ORDER BY session_id").fetchall()
+    if len(actual_sessions) != len(expected_sessions):
+        raise CoreVerificationError("core:session-reconstruction")
+    for row in actual_sessions:
+        identifier = row["session_id"]
+        if type(identifier) is not str or identifier not in expected_sessions:
+            raise CoreVerificationError("core:session-reconstruction")
+        expected = expected_sessions[identifier]
+        if any(row[key] != expected[key] for key in TABLE_COLUMNS["core_sessions"]):
+            raise CoreVerificationError("core:session-reconstruction")
+    actual_slots = connection.execute("SELECT * FROM core_slots ORDER BY session_id,slot_number").fetchall()
+    if len(actual_slots) != len(expected_slots):
+        raise CoreVerificationError("core:slot-reconstruction")
+    for row in actual_slots:
+        key = (row["session_id"], row["slot_number"])
+        if key not in expected_slots:
+            raise CoreVerificationError("core:slot-reconstruction")
+        expected = expected_slots[key]
+        if any(row[column] != expected[column] for column in TABLE_COLUMNS["core_slots"]):
+            raise CoreVerificationError("core:slot-reconstruction")
     actual_heads = connection.execute("SELECT * FROM core_heads ORDER BY stream_kind,stream_id").fetchall()
     if len(actual_heads) != len(stream_roots):
         raise CoreVerificationError("core:heads")
@@ -1131,8 +1253,8 @@ def _verify_connection(
         "ingress_watermark": int(meta["ingress_watermark"]),
         "artifact_count": len(actual_artifacts),
         "head_count": len(stream_roots),
-        "session_count": int(connection.execute("SELECT COUNT(*) FROM core_sessions").fetchone()[0]),
-        "slot_count": int(connection.execute("SELECT COUNT(*) FROM core_slots").fetchone()[0]),
+        "session_count": len(expected_sessions),
+        "slot_count": len(expected_slots),
         "event_count": len(events),
         "latest_observed_at": previous_observed if events else 0,
         "flags": dict(FIXED_FLAGS),

@@ -518,6 +518,7 @@ def _verify_event(
     slot_operations: dict[str, str],
     slot_attempts: dict[str, int],
     slot_leases: dict[str, tuple[str | None, int | None]],
+    slot_artifacts: dict[str, str | None],
     artifacts: dict[str, dict[str, object]],
     capture_operations: dict[str, str],
     stream_roots: dict[tuple[str, str], str],
@@ -602,6 +603,7 @@ def _verify_event(
         slot_attempts[slot_id] = 0
         slot_states[slot_id] = "DUE"
         slot_leases[slot_id] = (None, None)
+        slot_artifacts[slot_id] = None
     else:
         scheduled = slot_schedules.get(slot_id)
         operation = slot_operations.get(slot_id)
@@ -629,11 +631,20 @@ def _verify_event(
         elif kind == "CAPTURE":
             if set(material) != {"slot_id", "artifact_id", "observation_id", "outcome", "operation_id", "lease_token_digest"} or row["next_state"] != "CAPTURED" or material["slot_id"] != slot_id:
                 raise IngressVerificationError("ingress:capture")
-            if prior != "LEASED" or row["lease_token"] is None or row["lease_until"] is None or row["observed_at"] > row["lease_until"]:
+            if (
+                prior != "LEASED"
+                or row["attempt"] != slot_attempts[slot_id]
+                or (row["lease_token"], row["lease_until"]) != slot_leases[slot_id]
+                or row["lease_token"] is None
+                or row["lease_until"] is None
+                or row["observed_at"] > row["lease_until"]
+            ):
                 raise IngressVerificationError("ingress:capture")
             artifact_id = str(material["artifact_id"])
             artifact = artifacts.get(artifact_id)
             if artifact is None or material["outcome"] != artifact["outcome"] or material["observation_id"] != _raw_digest("sanitized-observation", artifact["observation"]):
+                raise IngressVerificationError("ingress:capture")
+            if artifact_id in capture_operations:
                 raise IngressVerificationError("ingress:capture")
             if artifact["observation_time"] != scheduled:
                 raise IngressVerificationError("ingress:capture")
@@ -653,6 +664,11 @@ def _verify_event(
                 raise IngressVerificationError("ingress:quarantine")
             if (kind == "BEGIN_QUARANTINE" and prior != "CAPTURED") or (kind == "ADMIT" and prior != "QUARANTINE_PENDING"):
                 raise IngressVerificationError("ingress:quarantine")
+            if (
+                row["attempt"] != slot_attempts[slot_id]
+                or (row["lease_token"], row["lease_until"]) != slot_leases[slot_id]
+            ):
+                raise IngressVerificationError("ingress:quarantine")
             artifact_id = str(material["artifact_id"])
             if artifact_id not in artifacts or capture_operations.get(artifact_id) is None:
                 raise IngressVerificationError("ingress:quarantine")
@@ -668,6 +684,7 @@ def _verify_event(
             slot_states[slot_id] = expected_next
             if kind == "ADMIT":
                 slot_leases[slot_id] = (None, None)
+                slot_artifacts[slot_id] = artifact_id
                 artifacts[artifact_id]["_terminal_event_sequence"] = row["sequence"]
                 artifacts[artifact_id]["_terminal_event_kind"] = kind
                 artifacts[artifact_id]["_terminal_slot_id"] = slot_id
@@ -678,6 +695,11 @@ def _verify_event(
             if set(material) != {"slot_id", "action", "attempt", "operation_id"} or material["slot_id"] != slot_id or material["operation_id"] != operation or material["action"] != kind:
                 raise IngressVerificationError("ingress:lease-recovery")
             if prior != "LEASED" or material["attempt"] != slot_attempts[slot_id]:
+                raise IngressVerificationError("ingress:lease-recovery")
+            if (
+                row["attempt"] != slot_attempts[slot_id]
+                or (row["lease_token"], row["lease_until"]) != slot_leases[slot_id]
+            ):
                 raise IngressVerificationError("ingress:lease-recovery")
             expected_operation = operation
             expected_request = _digest("request", {"slot_id": slot_id, "action": kind})
@@ -744,6 +766,7 @@ def _verify_connection(
     slot_operations: dict[str, str] = {}
     slot_attempts: dict[str, int] = {}
     slot_leases: dict[str, tuple[str | None, int | None]] = {}
+    slot_artifacts: dict[str, str | None] = {}
     capture_operations: dict[str, str] = {}
     stream_roots: dict[tuple[str, str], str] = {}
     heads: dict[tuple[str, str], tuple[str | None, str, int]] = {}
@@ -757,7 +780,8 @@ def _verify_connection(
             row, meta=meta, config=config, previous_root=previous,
             slot_states=slot_states, slot_schedules=slot_schedules,
             slot_operations=slot_operations, slot_attempts=slot_attempts,
-            slot_leases=slot_leases, artifacts=artifacts,
+            slot_leases=slot_leases, slot_artifacts=slot_artifacts,
+            artifacts=artifacts,
             capture_operations=capture_operations, stream_roots=stream_roots,
             heads=heads, previous_observed_at=previous_observed_at,
         )
@@ -774,6 +798,12 @@ def _verify_connection(
         artifact.pop("_stored_event_sequence", None)
         if artifact["terminal_event_kind"] != "ADMIT":
             raise IngressVerificationError("ingress:artifact-state")
+        terminal_slot_id = artifact["terminal_slot_id"]
+        if (
+            type(terminal_slot_id) is not str
+            or slot_artifacts.get(terminal_slot_id) != artifact["artifact_id"]
+        ):
+            raise IngressVerificationError("ingress:artifact-slot")
     for row in slot_rows:
         slot_id = str(row["slot_id"])
         if (
@@ -782,6 +812,7 @@ def _verify_connection(
             or row["scheduled_at"] != slot_schedules.get(slot_id)
             or row["operation_id"] != slot_operations.get(slot_id)
             or row["attempt"] != slot_attempts.get(slot_id, 0)
+            or row["artifact_id"] != slot_artifacts.get(slot_id)
         ):
             raise IngressVerificationError("ingress:slot-state")
         if (row["lease_token"], row["lease_until"]) != slot_leases.get(slot_id, (None, None)):

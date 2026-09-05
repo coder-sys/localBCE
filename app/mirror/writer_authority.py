@@ -134,6 +134,7 @@ if os.name == "nt":
     _WIN_FILE_TYPE_DISK = 0x00000001
     _WIN_LOCKFILE_EXCLUSIVE_LOCK = 0x00000002
     _WIN_LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
+    _WIN_ERROR_INVALID_HANDLE = 6
     _WIN_INVALID_HANDLE = ctypes.c_void_p(-1).value
     _WIN_ULONG_PTR = getattr(wintypes, "ULONG_PTR", ctypes.c_size_t)
 
@@ -196,7 +197,9 @@ if os.name == "nt":
 
     def _win_close(handle: object | None) -> None:
         if handle is not None and _win_handle_value(handle) not in {None, _WIN_INVALID_HANDLE}:
-            _WIN_CloseHandle(handle)
+            if not _WIN_CloseHandle(handle):
+                error = ctypes.get_last_error()
+                raise OSError(error, "CloseHandle")
 
     def _win_open(path: Path, *, access: int, disposition: int, directory: bool = False) -> object:
         flags = _WIN_FILE_FLAG_OPEN_REPARSE_POINT
@@ -237,7 +240,13 @@ if os.name == "nt":
 
     def _win_unlock(handle: object, overlapped: _WinOverlapped | None) -> None:
         if overlapped is not None:
-            _WIN_UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped))
+            if not _WIN_UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped)):
+                error = ctypes.get_last_error()
+                raise OSError(error, "UnlockFileEx")
+
+
+def _win_error_code(error: BaseException) -> int:
+    return int(getattr(error, "winerror", None) or getattr(error, "errno", 0) or 0)
 
 
 class _ExclusiveLock:
@@ -246,11 +255,19 @@ class _ExclusiveLock:
         self.path = path
         self._descriptor: int | None = None
         self._root_descriptor: int | None = None
+        self._descriptor_locked = False
         self._handle: object | None = None
         self._root_handle: object | None = None
         self._overlapped = None
         self._root_locked = False
         self._locked = False
+        self._pending_handles: dict[int, object] = {}
+        self._pending_handle_unknown: set[int] = set()
+        self._handle_release_unknown = False
+        self._root_handle_release_unknown = False
+        self._descriptor_release_unknown = False
+        self._root_descriptor_release_unknown = False
+        self._release_unknown = False
         try:
             if os.name == "nt":
                 self._init_windows()
@@ -258,14 +275,20 @@ class _ExclusiveLock:
                 self._init_posix()
             self._locked = True
         except WriterAuthorityError:
-            self.close()
+            self._constructor_cleanup()
             raise
         except OSError:
-            self.close()
+            self._constructor_cleanup()
             raise WriterAuthorityError("writer:lock") from None
-        except Exception:
-            self.close()
+        except BaseException:
+            self._constructor_cleanup()
             raise WriterAuthorityError("writer:lock") from None
+
+    def _constructor_cleanup(self) -> None:
+        try:
+            self.close()
+        except BaseException:
+            raise WriterAuthorityError("writer:indeterminate") from None
 
     def _init_posix(self) -> None:
         nofollow = getattr(os, "O_NOFOLLOW", None)
@@ -317,6 +340,7 @@ class _ExclusiveLock:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             raise WriterAuthorityError("writer:lock") from None
+        self._descriptor_locked = True
         self.identity = final
 
     def _init_windows(self) -> None:
@@ -349,10 +373,21 @@ class _ExclusiveLock:
         ):
             raise WriterAuthorityError("writer:indeterminate")
         probe = _win_open(self.path, access=_WIN_GENERIC_READ, disposition=_WIN_OPEN_EXISTING)
+        probe_key = id(probe)
+        self._pending_handles[probe_key] = probe
         try:
             probed = _win_info(probe)
         finally:
-            _win_close(probe)
+            try:
+                _win_close(probe)
+            except BaseException as error:
+                if _win_error_code(error) == _WIN_ERROR_INVALID_HANDLE:
+                    self._pending_handle_unknown.add(probe_key)
+                    self._release_unknown = True
+                raise
+            else:
+                self._pending_handles.pop(probe_key, None)
+                self._pending_handle_unknown.discard(probe_key)
         if opened[:3] != probed[:3]:
             raise WriterAuthorityError("writer:indeterminate")
         final = child_identity(self.path, allow_missing=False)
@@ -403,42 +438,108 @@ class _ExclusiveLock:
         if _identity(root_info) != self.root_identity or _identity(opened) != self.identity:
             raise WriterAuthorityError("writer:indeterminate")
 
-    def close(self) -> None:
-        descriptor = self._descriptor
-        root_descriptor = self._root_descriptor
-        handle = self._handle
-        root_handle = self._root_handle
-        self._descriptor = None
-        self._root_descriptor = None
-        self._handle = None
-        self._root_handle = None
-        was_locked = self._locked
-        self._locked = False
-        if os.name == "nt":
-            if was_locked and handle is not None:
-                _win_unlock(handle, self._overlapped)
-            _win_close(handle)
-            _win_close(root_handle)
-            self._overlapped = None
+    def _close_posix_descriptor(self, field: str, unknown_field: str, errors: list[BaseException]) -> None:
+        descriptor = getattr(self, field)
+        if descriptor is None or getattr(self, unknown_field):
             return
         try:
-            if descriptor is not None:
-                os.close(descriptor)
-        except OSError:
-            pass
-        try:
-            if was_locked and root_descriptor is not None and self._root_locked:
+            os.close(descriptor)
+        except BaseException as error:
+            setattr(self, unknown_field, True)
+            self._release_unknown = True
+            errors.append(error)
+        else:
+            setattr(self, field, None)
+            if field == "_descriptor":
+                self._descriptor_locked = False
+            else:
+                self._root_locked = False
+
+    def _close_posix(self, errors: list[BaseException]) -> None:
+        if self._root_descriptor is not None and self._root_locked and not self._root_descriptor_release_unknown:
+            try:
                 import fcntl
 
-                fcntl.flock(root_descriptor, fcntl.LOCK_UN)
-        except OSError:
-            pass
-        try:
-            if root_descriptor is not None:
-                os.close(root_descriptor)
-        except OSError:
-            pass
-        self._root_locked = False
+                fcntl.flock(self._root_descriptor, fcntl.LOCK_UN)
+            except BaseException as error:
+                errors.append(error)
+            else:
+                self._root_locked = False
+        self._close_posix_descriptor("_root_descriptor", "_root_descriptor_release_unknown", errors)
+        self._close_posix_descriptor("_descriptor", "_descriptor_release_unknown", errors)
+
+    def _mark_windows_failure(self, error: BaseException, *, unknown_field: str, errors: list[BaseException]) -> None:
+        errors.append(error)
+        if _win_error_code(error) == _WIN_ERROR_INVALID_HANDLE:
+            setattr(self, unknown_field, True)
+            self._release_unknown = True
+
+    def _close_windows(self, errors: list[BaseException]) -> None:
+        for key, handle in tuple(self._pending_handles.items()):
+            if key in self._pending_handle_unknown:
+                continue
+            try:
+                _win_close(handle)
+            except BaseException as error:
+                errors.append(error)
+                if _win_error_code(error) == _WIN_ERROR_INVALID_HANDLE:
+                    self._pending_handle_unknown.add(key)
+                    self._release_unknown = True
+            else:
+                self._pending_handles.pop(key, None)
+
+        if self._handle is not None and not self._handle_release_unknown:
+            unlock_failed = False
+            if self._overlapped is not None:
+                try:
+                    _win_unlock(self._handle, self._overlapped)
+                except BaseException as error:
+                    unlock_failed = True
+                    self._mark_windows_failure(
+                        error, unknown_field="_handle_release_unknown", errors=errors,
+                    )
+                else:
+                    self._overlapped = None
+            if self._handle is not None and not self._handle_release_unknown and not unlock_failed:
+                try:
+                    _win_close(self._handle)
+                except BaseException as error:
+                    self._mark_windows_failure(
+                        error, unknown_field="_handle_release_unknown", errors=errors,
+                    )
+                else:
+                    self._handle = None
+                    self._overlapped = None
+
+        if self._root_handle is not None and not self._root_handle_release_unknown:
+            try:
+                _win_close(self._root_handle)
+            except BaseException as error:
+                self._mark_windows_failure(
+                    error, unknown_field="_root_handle_release_unknown", errors=errors,
+                )
+            else:
+                self._root_handle = None
+
+    def close(self) -> None:
+        errors: list[BaseException] = []
+        if os.name == "nt":
+            self._close_windows(errors)
+        else:
+            self._close_posix(errors)
+        self._locked = bool(
+            self._release_unknown
+            or self._descriptor is not None
+            or self._root_descriptor is not None
+            or self._handle is not None
+            or self._root_handle is not None
+            or self._overlapped is not None
+            or self._pending_handles
+        )
+        if self._release_unknown:
+            raise WriterAuthorityError("writer:indeterminate")
+        if errors:
+            raise WriterAuthorityError("writer:release")
 
 
 class WriterAuthority:
@@ -448,25 +549,65 @@ class WriterAuthority:
         self.root = safe_root(root)
         self.lock_path = self.root / "operational.lock"
         self._state_lock = threading.Lock()
+        self._state_changed = threading.Condition(self._state_lock)
         self._run_thread: int | None = None
         self._run_value: int | None = None
         self._mutation_thread: int | None = None
         self._external_thread: int | None = None
         self._external_depth = 0
         self._closed = False
+        self._closing = False
+        self._active_scopes = 0
         self._lock = _ExclusiveLock(self.root, self.lock_path)
         self.root_identity = self._lock.root_identity
         self.lock_identity = self._lock.identity
-        self.assert_identity()
+        try:
+            self.assert_identity()
+        except BaseException:
+            try:
+                self._lock.close()
+            except BaseException:
+                raise WriterAuthorityError("writer:indeterminate") from None
+            raise
 
     @property
     def closed(self) -> bool:
         with self._state_lock:
             return self._closed
 
+    def _thread_owns_scope(self, thread: int) -> bool:
+        return (
+            self._run_thread == thread
+            or self._mutation_thread == thread
+            or self._external_thread == thread
+        )
+
+    def _leave_scope(self) -> None:
+        with self._state_changed:
+            self._active_scopes -= 1
+            if self._closing and self._active_scopes == 0 and not self._closed:
+                self._finish_close_locked()
+            else:
+                self._state_changed.notify_all()
+
+    def _finish_close_locked(self) -> None:
+        try:
+            self._lock.close()
+        except BaseException:
+            self._state_changed.notify_all()
+            raise
+        self._closed = True
+        self._run_thread = None
+        self._run_value = None
+        self._mutation_thread = None
+        self._external_thread = None
+        self._external_depth = 0
+        self._state_changed.notify_all()
+
     def assert_live(self) -> None:
+        thread = threading.get_ident()
         with self._state_lock:
-            if self._closed:
+            if self._closed or (self._closing and not self._thread_owns_scope(thread)):
                 raise WriterAuthorityError("writer:closed")
         try:
             if _identity(os.lstat(self.root)) != self.root_identity:
@@ -524,10 +665,11 @@ class WriterAuthority:
         thread = threading.get_ident()
         self.assert_live()
         with self._state_lock:
-            if self._closed or self._run_thread is not None or self._mutation_thread is not None or self._external_depth:
+            if self._closed or self._closing or self._run_thread is not None or self._mutation_thread is not None or self._external_depth:
                 raise WriterAuthorityError("writer:run")
             self._run_thread = thread
             self._run_value = None
+            self._active_scopes += 1
         try:
             self.assert_live()
             yield self
@@ -536,6 +678,7 @@ class WriterAuthority:
                 if self._run_thread == thread:
                     self._run_thread = None
                     self._run_value = None
+            self._leave_scope()
 
     @contextmanager
     def mutation_scope(self, database_parent: str | Path | None = None) -> Iterator["WriterAuthority"]:
@@ -547,6 +690,8 @@ class WriterAuthority:
         with self._state_lock:
             if self._closed:
                 raise WriterAuthorityError("writer:closed")
+            if self._closing:
+                raise WriterAuthorityError("writer:closed")
             if self._external_depth:
                 raise WriterAuthorityError("writer:external-reentry")
             if self._mutation_thread is not None:
@@ -554,6 +699,7 @@ class WriterAuthority:
             if self._run_thread is not None and self._run_thread != thread:
                 raise WriterAuthorityError("writer:run")
             self._mutation_thread = thread
+            self._active_scopes += 1
         try:
             self.assert_live()
             yield self
@@ -561,13 +707,14 @@ class WriterAuthority:
             with self._state_lock:
                 if self._mutation_thread == thread:
                     self._mutation_thread = None
+            self._leave_scope()
 
     @contextmanager
     def external_scope(self) -> Iterator["WriterAuthority"]:
         thread = threading.get_ident()
         self.assert_live()
         with self._state_lock:
-            if self._closed:
+            if self._closed or self._closing:
                 raise WriterAuthorityError("writer:closed")
             if self._external_depth and self._external_thread != thread:
                 raise WriterAuthorityError("writer:external")
@@ -577,6 +724,7 @@ class WriterAuthority:
                 raise WriterAuthorityError("writer:mutation")
             self._external_thread = thread
             self._external_depth += 1
+            self._active_scopes += 1
         try:
             self.assert_live()
             yield self
@@ -586,22 +734,25 @@ class WriterAuthority:
                     self._external_depth -= 1
                     if self._external_depth == 0:
                         self._external_thread = None
+            self._leave_scope()
 
     def layout(self, *, allow_missing_stores: bool) -> dict[str, tuple[int, int, int] | None]:
         self.assert_live()
         return layout(self.root, allow_missing_stores=allow_missing_stores)
 
     def close(self) -> None:
-        with self._state_lock:
+        thread = threading.get_ident()
+        with self._state_changed:
             if self._closed:
                 return
-            self._closed = True
-            self._run_thread = None
-            self._run_value = None
-            self._mutation_thread = None
-            self._external_thread = None
-            self._external_depth = 0
-        self._lock.close()
+            self._closing = True
+            if self._active_scopes and self._thread_owns_scope(thread):
+                return
+            while self._active_scopes:
+                self._state_changed.wait()
+            if self._closed:
+                return
+            self._finish_close_locked()
 
     def __enter__(self) -> "WriterAuthority":
         self.assert_live()

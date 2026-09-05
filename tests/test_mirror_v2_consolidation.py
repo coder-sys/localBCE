@@ -428,6 +428,70 @@ def _rechain_ingress_observed_at(path: Path, replacements: dict[int, int]) -> No
         connection.close()
 
 
+def _tamper_ingress_terminal_lease(path: Path) -> None:
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    try:
+        row = connection.execute(
+            "SELECT * FROM ingress_events ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        value = json.loads(bytes(row["event_raw"]).decode("ascii"))
+        value["lease_token"] = "f" * 128
+        value["lease_until"] = 0
+        value["event_id"] = ingress_independent._digest(
+            "event-id",
+            {
+                key: value[key]
+                for key in ingress_independent.EVENT_KEYS
+                if key not in {"event_id", "after_root", "stream_after_root"}
+            },
+        )
+        value["after_root"] = ingress_independent._event_root(
+            sequence=value["sequence"],
+            previous=value["before_root"],
+            event_id=value["event_id"],
+            event_kind=value["event_kind"],
+            stream_kind=value["stream_kind"],
+            stream_id=value["stream_id"],
+            slot_id=value["slot_id"],
+            next_state=value["next_state"],
+            observed_at=value["observed_at"],
+            material_digest=value["material_digest"],
+        )
+        value["stream_after_root"] = ingress_independent._stream_root(
+            sequence=value["sequence"],
+            previous=value["stream_before_root"],
+            event_id=value["event_id"],
+            stream_kind=value["stream_kind"],
+            stream_id=value["stream_id"],
+            next_state=value["next_state"],
+            observed_at=value["observed_at"],
+            material_digest=value["material_digest"],
+        )
+        raw = ingress_independent._canonical(value)
+        connection.execute(
+            """
+            UPDATE ingress_events
+            SET event_id=?,lease_token=?,lease_until=?,after_root=?,
+                stream_after_root=?,event_raw=?,receipt_digest=?
+            WHERE sequence=?
+            """,
+            (
+                value["event_id"], value["lease_token"], value["lease_until"],
+                value["after_root"], value["stream_after_root"], raw,
+                ingress_independent._raw_digest("receipt", raw), value["sequence"],
+            ),
+        )
+        connection.execute(
+            "UPDATE ingress_heads SET head_root=? WHERE stream_kind=? AND stream_id=?",
+            (value["stream_after_root"], value["stream_kind"], value["stream_id"]),
+        )
+        connection.execute("UPDATE ingress_meta SET head_root=? WHERE meta_id=1", (value["after_root"],))
+        connection.commit()
+    finally:
+        connection.close()
+
+
 class MirrorV2Fixture(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="mirror-v2-test-")
@@ -692,6 +756,68 @@ class MirrorV2Fixture(unittest.TestCase):
             thread.join(timeout=2)
         self.assertEqual(1, len(errors))
         self.assertIsInstance(errors[0], writer_authority.WriterAuthorityError)
+
+    def test_independent_ingress_reconstructs_terminal_slot_bindings(self) -> None:
+        pointer_path = self.root / "ingress-terminal-pointer-tamper.db"
+        shutil.copy2(self.ingress_path, pointer_path)
+        connection = sqlite3.connect(pointer_path)
+        try:
+            connection.execute("UPDATE ingress_slots SET artifact_id=NULL WHERE state='QUARANTINED'")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "^ingress:slot-state$"):
+            ingress_independent.verify_database(
+                pointer_path,
+                expected_database_id=self.ingress_config.database_id,
+                expected_config_digest=self.ingress_config.digest,
+            )
+
+        lease_path = self.root / "ingress-terminal-lease-tamper.db"
+        shutil.copy2(self.ingress_path, lease_path)
+        _tamper_ingress_terminal_lease(lease_path)
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "^ingress:quarantine$"):
+            ingress_independent.verify_database(
+                lease_path,
+                expected_database_id=self.ingress_config.database_id,
+                expected_config_digest=self.ingress_config.digest,
+            )
+
+    def test_independent_core_reconstructs_session_and_slot_projections(self) -> None:
+        session_path = self.root / "core-session-projection-tamper.db"
+        shutil.copy2(self.core_path, session_path)
+        connection = sqlite3.connect(session_path)
+        try:
+            connection.execute("UPDATE core_sessions SET last_slot=-1")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "^core:session-reconstruction$"):
+            core_independent.verify_database(
+                session_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+            )
+
+        slot_path = self.root / "core-slot-projection-tamper.db"
+        shutil.copy2(self.core_path, slot_path)
+        connection = sqlite3.connect(slot_path)
+        try:
+            connection.execute(
+                "UPDATE core_slots SET result_digest=?,result_raw=?",
+                ("0" * 128, b"tampered-synthetic-result"),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "^core:slot-reconstruction$"):
+            core_independent.verify_database(
+                slot_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+            )
 
     def test_ingress_public_rewind_and_core_public_rewind_preserve_state(self) -> None:
         high_clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME + 120)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 from dataclasses import replace
@@ -7,6 +8,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -140,6 +142,32 @@ class _ReentrantPort(_Port):
         return self.payload
 
 
+def _fake_windows_lock(
+    *,
+    handle: int | None = 101,
+    root_handle: int | None = 202,
+) -> writer_authority._ExclusiveLock:
+    lock = object.__new__(writer_authority._ExclusiveLock)
+    lock.root = Path("C:/native-release-root")
+    lock.path = lock.root / "operational.lock"
+    lock._descriptor = None
+    lock._root_descriptor = None
+    lock._descriptor_locked = False
+    lock._handle = None if handle is None else ctypes.c_void_p(handle)
+    lock._root_handle = None if root_handle is None else ctypes.c_void_p(root_handle)
+    lock._overlapped = writer_authority._WinOverlapped() if handle is not None else None
+    lock._root_locked = False
+    lock._locked = True
+    lock._pending_handles = {}
+    lock._pending_handle_unknown = set()
+    lock._handle_release_unknown = False
+    lock._root_handle_release_unknown = False
+    lock._descriptor_release_unknown = False
+    lock._root_descriptor_release_unknown = False
+    lock._release_unknown = False
+    return lock
+
+
 class MirrorOperationalOwnerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="mirror-operational-owner-")
@@ -244,6 +272,238 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
                 result.counts["admitted"] = 0  # type: ignore[index]
         finally:
             owner.close()
+
+    @unittest.skipUnless(os.name == "nt", "Windows-only native release regression")
+    def test_windows_native_release_failures_keep_exact_ownership(self) -> None:
+        lock = _fake_windows_lock(root_handle=None)
+        unlock_calls: list[int] = []
+        close_calls: list[int] = []
+
+        def retryable_unlock(handle: object, _overlapped: object) -> None:
+            unlock_calls.append(int(writer_authority._win_handle_value(handle)))
+            if len(unlock_calls) == 1:
+                raise OSError(123, "UnlockFileEx")
+
+        def close(handle: object | None) -> None:
+            close_calls.append(int(writer_authority._win_handle_value(handle)))
+
+        with mock.patch.object(writer_authority, "_win_unlock", side_effect=retryable_unlock), mock.patch.object(
+            writer_authority, "_win_close", side_effect=close
+        ):
+            with self.assertRaisesRegex(writer_authority.WriterAuthorityError, "^writer:release$"):
+                lock.close()
+            self.assertIsNotNone(lock._handle)
+            self.assertIsNotNone(lock._overlapped)
+            self.assertTrue(lock._locked)
+            lock.close()
+        self.assertEqual([101, 101], unlock_calls)
+        self.assertEqual([101], close_calls)
+        self.assertFalse(lock._locked)
+
+        lock = _fake_windows_lock(root_handle=None)
+        unlock_calls = []
+        close_calls = []
+
+        def invalid_unlock(handle: object, _overlapped: object) -> None:
+            unlock_calls.append(int(writer_authority._win_handle_value(handle)))
+            raise OSError(writer_authority._WIN_ERROR_INVALID_HANDLE, "UnlockFileEx")
+
+        with mock.patch.object(writer_authority, "_win_unlock", side_effect=invalid_unlock), mock.patch.object(
+            writer_authority, "_win_close", side_effect=close
+        ):
+            with self.assertRaisesRegex(writer_authority.WriterAuthorityError, "^writer:indeterminate$"):
+                lock.close()
+            with self.assertRaisesRegex(writer_authority.WriterAuthorityError, "^writer:indeterminate$"):
+                lock.close()
+        self.assertEqual([101], unlock_calls)
+        self.assertEqual([], close_calls)
+        self.assertTrue(lock._handle is not None and lock._overlapped is not None)
+        self.assertTrue(lock._release_unknown and lock._locked)
+
+        def false_close(_handle: object) -> bool:
+            ctypes.set_last_error(321)
+            return False
+
+        def false_unlock(_handle: object, *_args: object) -> bool:
+            ctypes.set_last_error(322)
+            return False
+
+        with mock.patch.object(writer_authority, "_WIN_CloseHandle", side_effect=false_close):
+            with self.assertRaises(OSError) as caught:
+                writer_authority._win_close(ctypes.c_void_p(505))
+        self.assertEqual("[Errno 321] CloseHandle", str(caught.exception))
+        with mock.patch.object(writer_authority, "_WIN_UnlockFileEx", side_effect=false_unlock):
+            with self.assertRaises(OSError) as caught:
+                writer_authority._win_unlock(ctypes.c_void_p(506), writer_authority._WinOverlapped())
+        self.assertEqual("[Errno 322] UnlockFileEx", str(caught.exception))
+
+    @unittest.skipUnless(os.name == "nt", "Windows-only constructor release regression")
+    def test_windows_constructor_probe_invalid_handle_is_not_retried(self) -> None:
+        root = self.root / "constructor-probe"
+        root.mkdir()
+        lock_path = root / "operational.lock"
+        lock_path.write_bytes(b"")
+        root_identity = writer_authority._identity(os.lstat(root))
+        lock_identity = writer_authority._identity(os.lstat(lock_path))
+        handles = iter((101, 202, 303))
+        close_calls: list[int] = []
+
+        def fake_open(*_args: object, **_kwargs: object) -> object:
+            return ctypes.c_void_p(next(handles))
+
+        def fake_info(handle: object) -> tuple[int, int, int, int, int]:
+            if writer_authority._win_handle_value(handle) == 101:
+                return (1, root_identity[1], 1, 0, writer_authority._WIN_FILE_ATTRIBUTE_DIRECTORY)
+            return (1, lock_identity[1], 1, 0, 0)
+
+        def fake_close(handle: object | None) -> None:
+            value = int(writer_authority._win_handle_value(handle))
+            close_calls.append(value)
+            if value == 303 and close_calls.count(303) == 1:
+                ctypes.set_last_error(writer_authority._WIN_ERROR_INVALID_HANDLE)
+                raise OSError(writer_authority._WIN_ERROR_INVALID_HANDLE, "CloseHandle")
+
+        with mock.patch.object(writer_authority, "_win_open", side_effect=fake_open), mock.patch.object(
+            writer_authority, "_win_info", side_effect=fake_info
+        ), mock.patch.object(
+            writer_authority, "_WIN_GetFileType", return_value=writer_authority._WIN_FILE_TYPE_DISK
+        ), mock.patch.object(
+            writer_authority, "_win_lock", return_value=writer_authority._WinOverlapped()
+        ), mock.patch.object(writer_authority, "_win_close", side_effect=fake_close):
+            with self.assertRaisesRegex(writer_authority.WriterAuthorityError, "^writer:indeterminate$"):
+                writer_authority.WriterAuthority(root)
+        self.assertEqual([303, 202, 101], close_calls)
+
+    def test_close_quiesces_run_mutation_external_and_exception_scopes(self) -> None:
+        scope_names = ("run", "mutation", "external")
+        for scope_name in scope_names:
+            with self.subTest(scope=scope_name):
+                root = self.root / f"scope-{scope_name}"
+                root.mkdir()
+                authority = writer_authority.WriterAuthority(root)
+                try:
+                    scope = {
+                        "run": authority.run_scope,
+                        "mutation": lambda: authority.mutation_scope(root / "store.sqlite"),
+                        "external": authority.external_scope,
+                    }[scope_name]()
+                    with scope:
+                        if scope_name == "run":
+                            authority.set_run_time(0)
+                        authority.close()
+                        self.assertFalse(authority.closed)
+                        with self.assertRaisesRegex(writer_authority.WriterAuthorityError, "^writer:lock$"):
+                            writer_authority.WriterAuthority(root)
+                    self.assertTrue(authority.closed)
+                    replacement = writer_authority.WriterAuthority(root)
+                    replacement.close()
+                finally:
+                    if not authority.closed:
+                        authority.close()
+
+        for scope_name in scope_names:
+            with self.subTest(exception_scope=scope_name):
+                root = self.root / f"exception-scope-{scope_name}"
+                root.mkdir()
+                authority = writer_authority.WriterAuthority(root)
+                try:
+                    scope = {
+                        "run": authority.run_scope,
+                        "mutation": lambda: authority.mutation_scope(root / "store.sqlite"),
+                        "external": authority.external_scope,
+                    }[scope_name]()
+                    with self.assertRaisesRegex(RuntimeError, "^scope-failure$"):
+                        with scope:
+                            if scope_name == "run":
+                                authority.set_run_time(0)
+                            authority.close()
+                            raise RuntimeError("scope-failure")
+                    self.assertTrue(authority.closed)
+                finally:
+                    if not authority.closed:
+                        authority.close()
+
+    def test_simultaneous_close_waits_for_physical_release_and_reopens(self) -> None:
+        authority = writer_authority.WriterAuthority(self.root)
+        original_close = authority._lock.close
+        worker_entered = threading.Event()
+        release_worker = threading.Event()
+        physical_started = threading.Event()
+        permit_physical_close = threading.Event()
+        close_returned = threading.Event()
+        errors: list[BaseException] = []
+
+        def gated_close() -> None:
+            physical_started.set()
+            if not permit_physical_close.wait(timeout=5):
+                raise RuntimeError("physical close gate timeout")
+            original_close()
+
+        authority._lock.close = gated_close  # type: ignore[method-assign]
+
+        def worker() -> None:
+            try:
+                with authority.external_scope():
+                    worker_entered.set()
+                    if not release_worker.wait(timeout=5):
+                        raise RuntimeError("worker release timeout")
+            except BaseException as error:
+                errors.append(error)
+
+        def closer() -> None:
+            try:
+                authority.close()
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                close_returned.set()
+
+        worker_thread = threading.Thread(target=worker)
+        close_thread = threading.Thread(target=closer)
+        worker_thread.start()
+        self.assertTrue(worker_entered.wait(timeout=5))
+        close_thread.start()
+        release_worker.set()
+        self.assertTrue(physical_started.wait(timeout=5))
+        try:
+            self.assertFalse(close_returned.wait(timeout=0.1))
+            with self.assertRaisesRegex(writer_authority.WriterAuthorityError, "^writer:lock$"):
+                writer_authority.WriterAuthority(self.root)
+        finally:
+            permit_physical_close.set()
+            worker_thread.join(timeout=5)
+            close_thread.join(timeout=5)
+        self.assertFalse(worker_thread.is_alive() or close_thread.is_alive())
+        self.assertEqual([], errors)
+        self.assertTrue(authority.closed)
+        replacement = writer_authority.WriterAuthority(self.root)
+        replacement.close()
+
+    def test_physical_close_failure_is_retryable_without_forced_cleanup(self) -> None:
+        authority = writer_authority.WriterAuthority(self.root)
+        original_close = authority._lock.close
+        close_calls = 0
+
+        def fail_once() -> None:
+            nonlocal close_calls
+            close_calls += 1
+            if close_calls == 1:
+                raise RuntimeError("synthetic-close-failure")
+            original_close()
+
+        authority._lock.close = fail_once  # type: ignore[method-assign]
+        try:
+            with self.assertRaisesRegex(RuntimeError, "^synthetic-close-failure$"):
+                authority.close()
+            self.assertFalse(authority.closed)
+            self.assertTrue(authority._closing)
+            authority.close()
+            self.assertTrue(authority.closed)
+            replacement = writer_authority.WriterAuthority(self.root)
+            replacement.close()
+        finally:
+            if not authority.closed:
+                authority.close()
 
     def test_second_owner_and_replacements_fail_closed_with_fixed_codes(self) -> None:
         owner, port = self._owner()

@@ -67,6 +67,41 @@ Do not edit these unless the owner explicitly authorizes the exact change:
 - `app/public_inputs.py`
 - `app/canonical_encoding.py`
 
+## Scoped owner authorization — Mirror boundary proposal
+
+On 2026-09-05, the owner explicitly authorized an isolated candidate implementation from baseline
+`bf71b9cba3c55f35398d7aacde4d29e9ed35ac4d` for exactly these protected paths:
+
+- `app/mirror/core_v2_independent.py`
+- `app/mirror/ingress_v2_independent.py`
+- `app/mirror/writer_authority.py`
+
+This scoped exception covers the previously evidenced Core session/slot reconstruction and Ingress
+lease/artifact bindings, plus the complete writer shutdown/native-resource-release correction now
+required by the audit. It supersedes approval of the earlier proposal artifact only; it does not
+approve any other protected path, source promotion, archive publication, production deployment,
+payment, PHI, or activation change.
+
+Required invariants are: independent Core/Ingress reconstruction remains fail-closed; every native
+release result is checked; partial release retains exact ownership state; retry never reuses an
+ambiguous POSIX descriptor after `EINTR`/unspecified close state; Windows unlock/handle failures
+remain observable and retryable only while the handle identity is safe; constructor failures clean
+up all acquired resources; and WriterAuthority is not reported closed until physical release is
+resolved. Required evidence is exact patch application, syntax, native release fault injection,
+normal close/reopen, the existing scope/concurrency lifecycle matrix, Ingress/Core diagnostics, and
+the connected regression/direct-dependent suites on disposable candidates. The accepted source
+workspace remains untouched.
+
+On 2026-09-05, the owner also authorized directly corresponding tracked regressions in exactly
+these test modules:
+
+- `tests/test_mirror_operational_owner.py`
+- `tests/test_mirror_v2_consolidation.py`
+
+This test scope covers native release and constructor failures, active-scope quiescence and
+close retry, independent Core projection reconstruction, and independent Ingress lease/artifact
+bindings. It does not authorize any other test or protected implementation path.
+
 ## Operational authority
 
 `ops/` is canonical. `tools/ops_authority.py` freezes its exact regular-file set, lengths, and SHA3-512 identities. Never change policy bytes merely to make a check pass.
