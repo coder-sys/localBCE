@@ -70,11 +70,6 @@ class RuntimeRunResult:
         return int(self.accepted_operation_count or 0)
 
     @property
-    def accepted_count(self) -> int:
-        """Compatibility-free explicit alias for accepted_operation_count."""
-        return int(self.accepted_operation_count or 0)
-
-    @property
     def rejected(self) -> int:
         return int(self.rejected_batch_count or 0)
 

@@ -195,10 +195,6 @@ class MinimalClearanceSourceAuthVerifierAdapter:
             raise ValueError("source_auth_config") from None
         self._config = config
 
-    @property
-    def config(self) -> SourceAuthVerifierConfig:
-        return self._config
-
     def verify(self, stream: VolatileProofHandoff, issued_batch: IssuedVerificationBatch) -> BatchVerifierResult:
         if type(stream) is not VolatileProofHandoff:
             _hold("proof_handoff_stream")

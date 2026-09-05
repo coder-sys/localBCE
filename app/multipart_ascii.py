@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Mapping
 
 
 FIELD_MODULUS = 2**251 + 17 * 2**192 + 1
@@ -11,7 +10,6 @@ MULTIPART_ASCII_PARTS = 3
 MULTIPART_ASCII_PART_PAYLOAD_BYTES = 30
 MULTIPART_ASCII_CAPACITIES = (30, 30, 4)
 _CANONICAL_TOKEN = re.compile(r"^[A-Z0-9][A-Z0-9-]{0,63}$")
-_HEX_FELT = re.compile(r"^0x[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -116,55 +114,3 @@ def decode_multipart_ascii64(
     if canonical != encoded:
         raise ValueError(f"{label}_multipart_noncanonical")
     return value
-
-
-def parse_multipart_ascii64_json(
-    value: object,
-    *,
-    label: str,
-    allow_empty: bool = False,
-) -> MultipartAscii64:
-    if not isinstance(value, Mapping) or set(value) != {"byte_length", "parts"}:
-        raise ValueError(f"{label}_multipart_shape")
-    byte_length = value["byte_length"]
-    raw_parts = value["parts"]
-    if isinstance(byte_length, bool) or not isinstance(byte_length, int):
-        raise TypeError(f"{label}_byte_length_not_integer")
-    if not isinstance(raw_parts, list) or len(raw_parts) != MULTIPART_ASCII_PARTS:
-        raise ValueError(f"{label}_part_count")
-    parts: list[int] = []
-    for index, raw_part in enumerate(raw_parts):
-        if not isinstance(raw_part, str) or _HEX_FELT.fullmatch(raw_part) is None:
-            raise ValueError(f"{label}_part_{index}_hex_noncanonical")
-        parts.append(int(raw_part[2:], 16))
-    encoded = MultipartAscii64(byte_length, (parts[0], parts[1], parts[2]))
-    decode_multipart_ascii64(encoded, label=label, allow_empty=allow_empty)
-    return encoded
-
-
-def multipart_ascii64_order_key(
-    encoded: MultipartAscii64,
-    *,
-    label: str,
-    allow_empty: bool = False,
-) -> tuple[int, bytes]:
-    value = decode_multipart_ascii64(encoded, label=label, allow_empty=allow_empty)
-    raw = value.encode("ascii")
-    return len(raw), raw
-
-
-def require_unique_multipart_ascii64(
-    values: list[MultipartAscii64] | tuple[MultipartAscii64, ...],
-    *,
-    label: str,
-) -> None:
-    seen: set[tuple[int, bytes]] = set()
-    for index, value in enumerate(values):
-        key = multipart_ascii64_order_key(
-            value,
-            label=f"{label}_{index}",
-            allow_empty=False,
-        )
-        if key in seen:
-            raise ValueError(f"{label}_duplicate")
-        seen.add(key)

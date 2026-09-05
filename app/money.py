@@ -45,15 +45,3 @@ def canonical_money_cents(value: float | int | str | Decimal) -> int:
     if isinstance(value, bool) or type(value) not in {float, int, str, Decimal}:
         raise ValueError("money_model_type_invalid")
     return _canonical_text_to_cents(str(value))
-
-
-def canonical_money_float(value: str) -> float:
-    cents = canonical_source_money_cents(value)
-    return float(Decimal(cents) / Decimal(100))
-
-
-def canonical_money_text(value: float | int | str | Decimal) -> str:
-    """Return the canonical two-decimal wire form after exact validation."""
-
-    cents = canonical_money_cents(value)
-    return f"{cents // 100}.{cents % 100:02d}"
