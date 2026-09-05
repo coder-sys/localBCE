@@ -84,14 +84,16 @@ This boundary enforces only the exact nonzero 32-byte representation and never t
 caller-provided digest as authorization. The receiving owner must issue and retain one-time
 references and own replay consumption.
 
-Provider selection remains an in-memory Mirror access-control decision. The selected current
-primary V2 Provider Trust Graph is independently verified before this producer derives a fresh
-allowlist-only aggregate: outcome enum, bounded source/coverage/record/finding/discrepancy counts,
-and fixed synthetic/nonactivating authority flags. No graph object, source map, identifier, digest,
-raw capture, error, credential, URL, path, PHI-shaped value, proof/signature bytes, stable export
-identity, or lifecycle fragment is serialized. The export is returned only as bounded canonical
-bytes; this module has no persistence, recovery, support, monitoring, logging, delivery, or replay
-state.
+Provider selection remains an in-memory Mirror access-control decision. For the current operational
+bridge, the owner selects Core's current `SOURCE_OBSERVATION` head; an independent Core
+reconstruction rebinds it to the current Ingress artifact, verification receipt, profile, and roots
+before this producer derives a fresh allowlist-only aggregate: outcome enum, bounded source/coverage/
+record/finding/discrepancy counts, and fixed synthetic/nonactivating authority flags. The Provider
+Trust Graph remains a separate, independently verified product path; it is not the current
+operational bridge's input. No graph object, source map, identifier, digest, raw capture, error,
+credential, URL, path, PHI-shaped value, proof/signature bytes, stable export identity, or lifecycle
+fragment is serialized. The export is returned only as bounded canonical bytes; this module has no
+persistence, recovery, support, monitoring, logging, delivery, or replay state.
 
 app/mirror/provider_evidence_export_v1_independent.py is an independently implemented response
 verifier. It does not import the producer, graph producer, or their schema constants. It reparses
