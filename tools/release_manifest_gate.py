@@ -52,7 +52,6 @@ class ManifestGateError(RuntimeError):
 class PathLane(str, Enum):
     CURRENT_SOURCE = "current_source"
     RETAINED_COMPATIBILITY = "retained_compatibility"
-    LEGACY_NONCURRENT = "legacy_noncurrent"
     SOURCE_ONLY = "source_only"
     EXCLUDED_GENERATED_PRIVATE = "excluded_generated_private"
     RETIRED_FORBIDDEN = "retired_forbidden"
@@ -115,45 +114,13 @@ RETAINED_PREFIXES = (
     "experiments/fixed_shape_claim_air/",
 )
 
-# The current direct-state candidate still imports these retained paths.  Keep the closure
-# explicit so a default release cannot silently grow by prefix, and so cleanup can remove a path
-# only after its callers and replacement tests have been dealt with in the same reviewed change.
+# The current candidate retains these compatibility modules. Keep the closure explicit so a
+# default release cannot silently grow by prefix.
 CURRENT_RELEASE_DEPENDENCY_PATHS = frozenset(
     {
         "app/batch/__init__.py",
         "app/batch/poseidon.py",
-        "app/batch/poseidon_helper/Cargo.lock",
-        "app/batch/poseidon_helper/Cargo.toml",
-        "app/batch/poseidon_helper/src/main.rs",
-        "app/batch/pq_suite_candidate.py",
         "app/batch/stark_encoding.py",
-        "experiments/bl_pq512_crypto_foundation/field16_reference.py",
-        "experiments/bl_pq512_crypto_foundation/master_commitments_v2.py",
-        "experiments/bl_pq512_crypto_foundation/oods_reference.py",
-        "experiments/bl_pq512_crypto_foundation/pq_signature_adapters.py",
-        "experiments/bl_pq512_crypto_foundation/production_candidate.py",
-        "experiments/bl_pq512_crypto_foundation/public_coin_reference.py",
-        "experiments/bl_pq512_crypto_foundation/selected_proof_parameters.py",
-        "experiments/bl_pq512_crypto_foundation/selected_public_coin.py",
-        "experiments/bl_pq512_crypto_foundation/unique_decoding_parameters.py",
-        "experiments/fixed_shape_claim_air/air_binary_ir.py",
-        "experiments/fixed_shape_claim_air/executable_air.py",
-        "experiments/fixed_shape_claim_air/profile.py",
-        "experiments/fixed_shape_claim_air/semantics.py",
-    }
-)
-
-# These retained files are not reached by the surviving Profile 11, Mirror, native/KAT, release,
-# or direct-state roots.  They remain tracked only until Cleanup removes their exclusive tests and
-# callers; they are never selected for a release.
-LEGACY_NONCURRENT_PATHS = frozenset(
-    {
-        "app/batch/pq_nullifier_derivation.py",
-        "app/batch/pq_sparse_tree_reference.py",
-        "app/batch/pq_state_reference.py",
-        "app/batch/pq_strong_nullifier_reference.py",
-        "app/batch/pq_tree_reference.py",
-        "app/batch/tar_required.py",
     }
 )
 
@@ -348,12 +315,6 @@ def classify_path(path: str) -> PathClassification:
     if top_level == "docs" and normalised.casefold().endswith(".md"):
         if normalised not in DOC_MARKDOWN_ALLOWLIST:
             return PathClassification(normalised, PathLane.UNKNOWN, "unallowlisted docs Markdown authority")
-    if normalised in LEGACY_NONCURRENT_PATHS:
-        return PathClassification(
-            normalised,
-            PathLane.LEGACY_NONCURRENT,
-            "retained reference path not reached by a current product or release root",
-        )
     if any(normalised.startswith(prefix) for prefix in RETAINED_PREFIXES):
         return PathClassification(normalised, PathLane.RETAINED_COMPATIBILITY, "retained regression/evidence lane")
     return PathClassification(normalised, PathLane.CURRENT_SOURCE, "reviewed current source lane")

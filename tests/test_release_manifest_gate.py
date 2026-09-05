@@ -330,13 +330,6 @@ class ReleaseManifestGateTests(unittest.TestCase):
                 with self.assertRaisesRegex(gate.ManifestGateError, "forbidden paths"):
                     gate.validate_release_paths([path])
 
-        for path in sorted(gate.LEGACY_NONCURRENT_PATHS):
-            with self.subTest(legacy_noncurrent=path):
-                classification = gate.classify_path(path)
-                self.assertEqual(gate.PathLane.LEGACY_NONCURRENT, classification.lane)
-                with self.assertRaisesRegex(gate.ManifestGateError, "forbidden paths"):
-                    gate.validate_release_paths([path])
-
     def test_default_release_selection_is_an_explicit_dependency_closure(self) -> None:
         tracked = subprocess.run(
             ["git", "ls-files"],
@@ -352,15 +345,16 @@ class ReleaseManifestGateTests(unittest.TestCase):
             for item in classifications
             if item.lane is gate.PathLane.RETAINED_COMPATIBILITY
         }
+        self.assertEqual(
+            {
+                "app/batch/__init__.py",
+                "app/batch/poseidon.py",
+                "app/batch/stark_encoding.py",
+            },
+            set(gate.CURRENT_RELEASE_DEPENDENCY_PATHS),
+        )
         self.assertEqual(set(gate.CURRENT_RELEASE_DEPENDENCY_PATHS), retained)
         self.assertTrue(retained <= selected)
-        legacy_noncurrent = {
-            item.path
-            for item in classifications
-            if item.lane is gate.PathLane.LEGACY_NONCURRENT
-        }
-        self.assertEqual(set(gate.LEGACY_NONCURRENT_PATHS), legacy_noncurrent)
-        self.assertFalse(legacy_noncurrent & selected)
         self.assertFalse(
             set(item.path for item in classifications if item.lane is gate.PathLane.SOURCE_ONLY)
             & selected
