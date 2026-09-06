@@ -42,14 +42,6 @@ roadmap does not create a second readiness record or change application trust bo
 bytes, verifier semantics, activation, or the read-only/nonpayment claim. Source-only harnesses and
 generated/private artifacts remain outside release selection.
 
-## Completed foundation
-
-The foundation freezes the five directives, separates `policyResult` from `effectiveDirective`,
-binds governed exceptions/times/roots/retry/access joins, and retains cross-language KATs plus
-negative mutation coverage. It also contains the synthetic Native-v3 boundary and the read-only
-Mirror/Provider Trust Graph continuity candidate. Their exact contracts and evidence belong to
-their owner documents and `STATE.md`.
-
 ## Next formal dependency
 
 The authorized next semantic dependency is the Lean formal kernel. No implementation or deployed
@@ -59,16 +51,6 @@ bounded decoder, prove the required semantic/state properties, compile one pinne
 narrow Rust adapter, and pass theorem-manifest, axiom, independent-kernel, KAT, mutation, and
 resource gates. `docs/LEAN_FORMAL_KERNEL.md` is the exact authority; a separate model, differential
 test, or generated vector is not formal-verification credit.
-
-## Current private-proof position
-
-The Queue/Proof Handoff candidate is Profile 11. It is mechanically interoperable but
-cryptographically unqualified, unselected, nonactivating, and non-production; proof acceptance is
-opaque evidence and never `CLEAR`. Profile 10 and earlier paths are rejected without fallback,
-compatibility readers, relabeling, or dual acceptance. State owns disposition and transition
-semantics; the database document owns transaction behavior; `docs/NATIVE_V3_ARCHITECTURE.md` owns
-the exact Profile 11 identity, source binding, privacy/PQ, resource, and complete-profile gates.
-`proofSuiteId=null`, `production_usable=false`, and `activation=false` remain fixed.
 
 ## Next implementation after theorem closure
 

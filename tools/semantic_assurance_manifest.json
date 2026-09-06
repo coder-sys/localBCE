@@ -1,0 +1,251 @@
+{
+  "schema": "blind_ledger_semantic_assurance_manifest_v1",
+  "manifest_version": 1,
+  "candidate": {
+    "required_head": "0f594f6333fab720127f94b1259688331befd004",
+    "required_tree": "b6eb1164f944625231cffae9ee282daadb41c389",
+    "module": "BlindLedger.Theorems",
+    "theorem_source": "BlindLedger/Theorems.lean",
+    "declaration_sources": {
+      "evaluation_deterministic": "BlindLedger/Theorems.lean",
+      "proof_acceptance_ne_clear": "BlindLedger/Theorems.lean",
+      "observe_only_no_operative_clearance": "BlindLedger/Theorems.lean",
+      "absence_requires_authoritative_completeness": "BlindLedger/Theorems.lean",
+      "policy_effective_separation": "BlindLedger/Theorems.lean",
+      "exception_requires_exact_authorization": "BlindLedger/Theorems.lean",
+      "nonclear_no_economic_mutation": "BlindLedger/Theorems.lean",
+      "wrong_control_set_rejects": "BlindLedger/Theorems.lean",
+      "chronology_strict": "BlindLedger/Theorems.lean",
+      "replay_preserves_state": "BlindLedger/Theorems.lean",
+      "decision_access_join_unique": "BlindLedger/Theorems.lean",
+      "decode_encode_roundtrip": "BlindLedger/Theorems.lean",
+      "canonical_encoding_injective": "BlindLedger/Theorems.lean",
+      "checkpoint_chain_append_only": "BlindLedger/Checkpoint.lean"
+    },
+    "source_files": [
+      "BlindLedger.lean",
+      "BlindLedger/Checkpoint.lean",
+      "BlindLedger/Codec.lean",
+      "BlindLedger/ControlSet.lean",
+      "BlindLedger/Evaluation.lean",
+      "BlindLedger/Executable.lean",
+      "BlindLedger/StateTransition.lean",
+      "BlindLedger/Theorems.lean",
+      "BlindLedger/Types.lean",
+      "lake-manifest.json",
+      "lakefile.toml",
+      "lean-toolchain"
+    ]
+  },
+  "toolchain": {
+    "descriptor": "leanprover/lean4:v4.33.1",
+    "platform": "windows-x86_64",
+    "lean_version": "Lean (version 4.33.1, x86_64-w64-windows-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)",
+    "lake_version": "Lake version 5.0.0-src+819816b (Lean version 4.33.1)",
+    "executables": {
+      "lake": {
+        "bytes": 87552,
+        "sha256": "565c3976275d79e104421014b6229f4fcf4a8c8edfe164a43b344c91af6f496c"
+      },
+      "lean": {
+        "bytes": 83456,
+        "sha256": "af49bacfabaa1fea71332ca0feae0fa1a60912219d5902291adc79f905bffb8d"
+      },
+      "leanchecker": {
+        "bytes": 115200,
+        "sha256": "31b506f83737b7d629fd11699df5aaf88c3b50be23c28219e6b283f0de98f85c"
+      }
+    }
+  },
+  "build": {
+    "target": "blind_clearance_kernel",
+    "root_module": "BlindLedger.Executable",
+    "artifact": {
+      "relative_path": ".lake/build/bin/blind_clearance_kernel.exe",
+      "minimum_bytes": 1,
+      "identity": "sha256-and-byte-length-of-fresh-build-output"
+    }
+  },
+  "properties": [
+    {
+      "id": "evaluation_deterministic",
+      "statement": "{input : ClearanceInput} {left right : SemanticResult} (hleft : evaluate input = some left) (hright : evaluate input = some right) : left = right",
+      "declarations": [
+        {
+          "name": "evaluation_deterministic",
+          "source_statement": "{input : ClearanceInput} {left right : SemanticResult} (hleft : evaluate input = some left) (hright : evaluate input = some right) : left = right"
+        }
+      ]
+    },
+    {
+      "id": "proof_acceptance_ne_clear",
+      "statement": "proofSessionOnly true = none",
+      "declarations": [
+        {
+          "name": "proof_acceptance_ne_clear",
+          "source_statement": "proofSessionOnly true = none"
+        }
+      ]
+    },
+    {
+      "id": "observe_only_no_operative_clearance",
+      "statement": "(input : ClearanceInput) (hobserve : input.authority = .observeOnly) : makeDecision input = none",
+      "declarations": [
+        {
+          "name": "observe_only_no_operative_clearance",
+          "source_statement": "(input : ClearanceInput) (hobserve : input.authority = .observeOnly) : makeDecision input = none"
+        }
+      ]
+    },
+    {
+      "id": "absence_requires_authoritative_completeness",
+      "statement": "(input : ClearanceInput) (habsence : authoritativeAbsence input = true) : input.completeness.complete = true",
+      "declarations": [
+        {
+          "name": "absence_requires_authoritative_completeness",
+          "source_statement": "(input : ClearanceInput) (habsence : authoritativeAbsence input = true) : input.completeness.complete = true"
+        }
+      ]
+    },
+    {
+      "id": "policy_effective_separation",
+      "statement": "(result : SemanticResult) (hconsistent : policyDirectiveConsistent result.policyResult result.effectiveDirective = true) (hexception : result.effectiveDirective = .EXCEPTION_APPROVED) : result.policyResult = .fail",
+      "declarations": [
+        {
+          "name": "policy_effective_separation",
+          "source_statement": "(result : SemanticResult) (hconsistent : policyDirectiveConsistent result.policyResult result.effectiveDirective = true) (hexception : result.effectiveDirective = .EXCEPTION_APPROVED) : result.policyResult = .fail"
+        }
+      ]
+    },
+    {
+      "id": "exception_requires_exact_authorization",
+      "statement": "(input : ClearanceInput) (base : SemanticResult) (authorization : ExceptionAuthorization) (hexact : exactException input base authorization = true) : authorization.signerId = trustedAuthorizerId ∧ authorization.subjectId = input.request.subjectId ∧ authorization.ruleId = expectedRuleId ∧ authorization.reasonId = expectedReasonId ∧ authorization.amountScope = expectedAmountScope ∧ authorization.policyResult = .fail ∧ authorization.effectiveAt ≤ input.request.ruleEffectiveTime ∧ input.request.decisionTime < authorization.expiresAt",
+      "declarations": [
+        {
+          "name": "exception_requires_exact_authorization",
+          "source_statement": "(input : ClearanceInput) (base : SemanticResult) (authorization : ExceptionAuthorization) (hexact : exactException input base authorization = true) : authorization.signerId = trustedAuthorizerId ∧ authorization.subjectId = input.request.subjectId ∧ authorization.ruleId = expectedRuleId ∧ authorization.reasonId = expectedReasonId ∧ authorization.amountScope = expectedAmountScope ∧ authorization.policyResult = .fail ∧ authorization.effectiveAt ≤ input.request.ruleEffectiveTime ∧ input.request.decisionTime < authorization.expiresAt"
+        }
+      ]
+    },
+    {
+      "id": "nonclear_no_economic_mutation",
+      "statement": "{before after : LedgerState} {attemptId decisionId : Id} {directive : EffectiveDirective} (hadvance : advanceState before attemptId decisionId directive = some after) (hnotClear : directive ≠ .CLEAR) (hnotException : directive ≠ .EXCEPTION_APPROVED) : economicView after = economicView before",
+      "declarations": [
+        {
+          "name": "nonclear_no_economic_mutation",
+          "source_statement": "{before after : LedgerState} {attemptId decisionId : Id} {directive : EffectiveDirective} (hadvance : advanceState before attemptId decisionId directive = some after) (hnotClear : directive ≠ .CLEAR) (hnotException : directive ≠ .EXCEPTION_APPROVED) : economicView after = economicView before"
+        }
+      ]
+    },
+    {
+      "id": "wrong_control_set_rejects",
+      "statement": "(input : ClearanceInput) (hmismatch : input.controlSet ≠ fixedControlSet) : evaluate input = none",
+      "declarations": [
+        {
+          "name": "wrong_control_set_rejects",
+          "source_statement": "(input : ClearanceInput) (hmismatch : input.controlSet ≠ fixedControlSet) : evaluate input = none"
+        }
+      ]
+    },
+    {
+      "id": "chronology_strict",
+      "statement": "(request : Request) (hwell : requestWellFormed request = true) : request.chronology.Strict",
+      "declarations": [
+        {
+          "name": "chronology_strict",
+          "source_statement": "(request : Request) (hwell : requestWellFormed request = true) : request.chronology.Strict"
+        }
+      ]
+    },
+    {
+      "id": "replay_preserves_state",
+      "statement": "(state : LedgerState) (decision : Decision) (hreplay : state.lastAttempt = some decision.attemptId) : applyTransition state decision = none",
+      "declarations": [
+        {
+          "name": "replay_preserves_state",
+          "source_statement": "(state : LedgerState) (decision : Decision) (hreplay : state.lastAttempt = some decision.attemptId) : applyTransition state decision = none"
+        }
+      ]
+    },
+    {
+      "id": "decision_access_join_unique",
+      "statement": "{left right : DecisionAccessJoin} (hleft : joinValid left = true) (hright : joinValid right = true) (hdecision : left.decision = right.decision) : left = right",
+      "declarations": [
+        {
+          "name": "decision_access_join_unique",
+          "source_statement": "{left right : DecisionAccessJoin} (hleft : joinValid left = true) (hright : joinValid right = true) (hdecision : left.decision = right.decision) : left = right"
+        }
+      ]
+    },
+    {
+      "id": "decode_encode_roundtrip_and_canonical_encoding_injective",
+      "statement": "decode_encode_roundtrip ∧ canonical_encoding_injective",
+      "declarations": [
+        {
+          "name": "decode_encode_roundtrip",
+          "source_statement": "∀ case : KnownCase, decode (rawEncode (KnownCase.input case)) = some (KnownCase.input case)"
+        },
+        {
+          "name": "canonical_encoding_injective",
+          "source_statement": "∀ left right : KnownCase, rawEncode (KnownCase.input left) = rawEncode (KnownCase.input right) → KnownCase.input left = KnownCase.input right"
+        }
+      ]
+    },
+    {
+      "id": "checkpoint_chain_append_only",
+      "statement": "{chain result : List Checkpoint} {checkpoint : Checkpoint} (h : appendCheckpoint chain checkpoint = some result) : result = chain ++ [checkpoint] ∧ checkpoint.operative = false",
+      "declarations": [
+        {
+          "name": "checkpoint_chain_append_only",
+          "source_statement": "{chain result : List Checkpoint} {checkpoint : Checkpoint} (h : appendCheckpoint chain checkpoint = some result) : result = chain ++ [checkpoint] ∧ checkpoint.operative = false"
+        }
+      ]
+    }
+  ],
+  "allowed_axioms": [
+    "propext"
+  ],
+  "forbidden_source_tokens": [
+    "axiom",
+    "sorry",
+    "admit",
+    "custom_axiom",
+    "unsafe"
+  ],
+  "native_protocol": {
+    "header": [
+      "BL-CLEARANCE-KERNEL/1",
+      "schema=bounded-u16/id-byte/fact-slots-2/absence-slots-2",
+      "mode=DIRECT_STATE_OWNED authority=verifier-owned proof_suite_id=NONE",
+      "claim=PURE_SYNTHETIC_NONACTIVATING",
+      "KAT_COUNT=8"
+    ],
+    "kat_count": 8,
+    "negative_names": [
+      "observe-only",
+      "wrong-control-set",
+      "bad-chronology",
+      "bad-exception",
+      "proof-acceptance-only",
+      "replay-same-attempt",
+      "trailing-wire"
+    ],
+    "theorem_declaration_count": 14,
+    "gate_ids": [
+      "evaluation_deterministic",
+      "proof_acceptance_ne_clear",
+      "observe_only_no_operative_clearance",
+      "absence_requires_authoritative_completeness",
+      "policy_effective_separation",
+      "exception_requires_exact_authorization",
+      "nonclear_no_economic_mutation",
+      "wrong_control_set_rejects",
+      "chronology_strict",
+      "replay_preserves_state",
+      "decision_access_join_unique",
+      "decode_encode_roundtrip_and_canonical_encoding_injective",
+      "checkpoint_chain_append_only"
+    ],
+    "final_line": "KERNEL_RESULT=PASS"
+  }
+}

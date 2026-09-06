@@ -38,107 +38,55 @@ gates recorded by their owners.
 
 The current Queue integration candidate is Profile 11 and remains unqualified, unselected,
 nonactivating, and non-production. Profile 10 and earlier databases, artifact readers, filesystem
-snapshot/refetch paths, and proof-bound disposition receipts are unsupported and fail closed; no
-migration, compatibility reader, fallback, wrapper, relabeling, or dual path exists. Blind state creates
-exactly 100 fresh state-generated random 32-byte operation references for each batch. Durable queue
-data contains only those opaque references, their immutable positions, the shared state-issued
-allowlisted assertion/profile/version, bounded validity window, ordered batch root, optional
-approved-source registry root, chronology/status/retry data, and qualification flags. Caller job IDs,
-artifact/source paths, patient/provider/case identity,
-raw-data digests, acceptance bytes, and process-output hashes are not queue fields.
+snapshot/refetch paths, proof-bound disposition receipts, migration, fallback, relabeling, and dual
+acceptance are unsupported and fail closed. Native-v3 owns the exact Profile 11 identity, statement,
+fingerprints, artifact pins, envelope/frame/IPC sizes, and complete-profile gates.
 
-The Profile 11 candidate ownership chain is source-local prover -> optional aggregator -> independent verifier ->
-state owner -> opaque-reference/directive outbox and ACK -> audit/recovery. Admission is two phase:
-the state first issues an immutable allowlisted shared template, exactly 100 ordered opaque
-references, and one complete batch statement in `AWAITING_HANDOFF`; it computes one domain-separated
-ordered root from the exact references and shared template. Only after issuance may a caller submit
-one exact mutable bytearray for that exact ordered batch; Queue copies it into a bounded,
-memory-owned single-use handoff, clears the caller buffer, and transitions the batch to `QUEUED`.
-The verifier receives that sealed handoff and the complete issued statement, never an unrelated
-caller/reference argument. Native-v3 owns each selected
-profile's envelope and process-tree safety constraints; there is no universal input-admission
-allowance, and a not-yet-selected private profile remains inactive. No proof, source, signature,
-commitment, verifier output, proof/signature/frame/statement bytes, exact proof/source digest, PHI,
-temp/spill, or log bytes are written to a proof workspace, DB, WAL, receipt, event, export, backup,
-or error. Authorized Queue/State DB, WAL, and commit writes remain limited to the state-owned fields
-listed above. The owned handoff buffer is wiped in full on close. The exact deployed zero-PHI
-recoverability gate is
-owned by Native-v3; current experimental handling does not establish destruction. A timeout, crash,
-lease expiry, restart, transport failure, or ambiguity consumes the handoff and fails closed to
-`HELD` with bounded `fresh_handoff_required`; retry requires a new state operation and fresh
-bytearray handoff.
+State creates exactly 100 fresh state-generated random 32-byte operation references per batch. Queue
+data contains only those opaque references and positions, the state-issued allowlisted
+assertion/profile/version, validity window, ordered batch root, optional source-registry root,
+chronology/status/retry data, and qualification flags. Caller job IDs, paths, claimant/provider
+identity, raw-data digests, acceptance bytes, and process-output hashes never enter the proof
+workspace, Queue/State DB, WAL, receipts, events, exports, backups, logs, or errors.
 
-Before cryptographic acceptance work, the state owner atomically reserves each theorem-relevant
-acceptance unit against the selected security profile's single deployment/authorization-lifetime
-budget. The reservation may record the operative key epoch for nested operational signature, message,
-and query caps and audit, but key rotation never creates, resets, or refunds the statistical budget.
-In Queue V11, one claimed batch reserves exactly 101 units. Retries, post-challenge aborts, malformed candidate verifications, and crashes after reservation
-consume that reservation and never refund it. Loss of trustworthy coordination, overflow, budget or
-cap exhaustion, or ambiguous batch cardinality fails closed. Only a genuinely new, separately
-requalified security profile can establish a separately scoped budget; any cross-profile or
-system-lifetime claim must explicitly bound and union all profiles. Native-v3 owns the exact
-acceptance-unit counting and theorem ledger; this document owns the reservation and state-transaction
-semantics.
+The ownership chain is source-local prover -> optional aggregator -> independent verifier -> state
+owner -> opaque-reference/directive outbox and ACK -> audit/recovery. State first issues the immutable
+template, exact ordered references, and complete batch statement in `AWAITING_HANDOFF`, then computes
+the ordered root. Queue accepts one exact mutable `bytearray`, copies it into a bounded single-use
+handoff, clears the caller buffer, and moves to `QUEUED`; the verifier receives only that sealed
+handoff. Timeout, crash, lease expiry, restart, transport failure, or ambiguity consumes it and
+fails closed to `HELD` with `fresh_handoff_required`; retry needs a new state operation and handoff.
+The handoff is volatile, and the deployed zero-PHI recoverability gate remains Native-v3-owned; the
+current experimental handling does not establish destruction.
 
-For the current unqualified Profile 11 handoff, Native-v3 owns the exact verifier receipt allowlist. The
-database accepts only a mode-specific, non-dispositive evidence result; it never receives a
-`policyResult` or `effectiveDirective` from the verifier or source. `DIRECT_STATE_OWNED` and
-`AUTHORITATIVE_ASSERTION` use their separate mode-specific state-evaluation or qualified
-source-signature/assertion result; none is a disposition. The state owner separately controls
-`PASS`, `MISSING`, `AMBIGUOUS`, or `FAIL` and resolves exactly `CLEAR`, `HOLD`, `HUMAN_REVIEW`,
-`BLOCK`, or `EXCEPTION_APPROVED`; proof or signature acceptance alone can never create `CLEAR`. A
-complete promotion batch is preflighted against one state snapshot and commits all composition
-rows, events, state roots, and outbox rows in one transaction. A mixed APPLIED/HELD persisted image
-is independently rejected.
+Before cryptographic acceptance, the state owner atomically reserves each theorem-relevant acceptance
+unit against the selected profile's single lifetime budget. Queue V11 reserves exactly 101 units per
+claimed batch. The reservation may record the operative key epoch for nested operational caps and
+audit, but retries, post-challenge aborts, malformed candidate verification, crashes after
+reservation, coordination loss, overflow, exhaustion, and ambiguous cardinality fail closed; no
+reservation is refunded or reset by key rotation. Only a genuinely new, separately requalified
+profile gets a separate budget, and any cross-profile or system-lifetime claim must union all
+profiles explicitly. Native-v3 owns unit counting and the theorem ledger; this document owns
+reservation and transaction semantics.
 
-The current Profile 11 Queue/Native proof boundary is mechanically interoperable at the handoff but
-cryptographically unqualified: `proofSuiteId=null`, `production_usable=false`,
-`activation=false`, no backend is selected or qualified, and the co-equal Native-v3 profile gates
-remain open. Native-v3 is the sole authority for the exact current Profile 11 identity, statement
-and fingerprints, artifact pins, and envelope/frame/IPC sizes. Proof acceptance yields only an opaque
-scoped verification outcome and never `CLEAR`; State alone owns chronology, `policyResult`,
-`effectiveDirective`, exceptions, disposition, retries, and economic state.
+The database accepts only a mode-specific, non-dispositive evidence result. It never receives
+`policyResult` or `effectiveDirective` from a verifier or source. The state owner resolves
+`PASS`/`MISSING`/`AMBIGUOUS`/`FAIL` to exactly `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, or
+`EXCEPTION_APPROVED`; proof or signature acceptance alone never creates `CLEAR`. A complete batch is
+preflighted against one snapshot and atomically commits its composition rows, events, state roots,
+and outbox rows; mixed `APPLIED`/`HELD` images, stale roots, duplicates, conflicting retries, partial
+batches, and any Rust/Lean disagreement reject.
 
-For a future qualified private batch, the service will:
-
-1. receive a canonical native-v3 statement and fixed-profile proof envelope for the private-proof
-   path;
-2. select governed source-registry, automatic-control-set, governance, schema, program, and
-   candidate-suite context;
-3. verify the mandatory zero-knowledge proof with the native verifier, returning only the minimal
-   allowlisted receipt;
-4. let the state owner resolve its separate disposition control and preflight the complete ordered
-   state chain against one snapshot;
-5. open one serializable transaction only after preflight, rechecking state-before roots,
-   governance roots, and anti-rollback epoch;
-6. reject consumed nullifiers, stale roots, duplicates, conflicting retries, and partial batches;
-7. pass only proof acceptance to the state owner; policy result, exception approval, effective
-   directive, exact amount, and decision-path state remain state-owned rather than proof-supplied;
-8. reserve the exact canonical state receipt and proposed transition for the later mandatory Lean
-   gate; the current nonactivating boundary has no Lean result, and any future missing result,
-   decoding error, theorem-version mismatch, or Rust/Lean disagreement rejects;
-9. write state-after roots, the state-owned clearance commitment, and the audit event; economic
-   clearance may advance only for `CLEAR` or a valid `EXCEPTION_APPROVED`;
-10. commit the database transition exactly once, or roll it back; an uncertain response is resolved
-    only by exact idempotent retry without proof reuse.
-
-Verifier acceptance alone is never interpreted as `CLEAR` and never proves that funds moved. A
-private-path database write without verifier acceptance is forbidden. The official state payment
-system consumes an accepted clearance directive and later returns the actual outcome to Mirror.
-
-## Current experimental application chain
-
-The current nonactivating Profile 11 candidate implementation separates the source/prover, optional aggregation,
-independent verifier, state-owned disposition, durable composition/outbox, and audit/recovery
-owners. Queue promotion uses a one-use volatile handoff; it never refetches proof bytes. The
-state owner, not the verifier, preserves `policyResult` separately from `effectiveDirective`, and
-the opaque outbox cannot mutate payment, settlement, or official-system state.
-
-This chain is not yet the production transaction described above. Its current native statement
-does not carry the complete proposed/authorized amount contract, Lean is not linked, and the
-official receiver is synthetic. The next breaking native revision must fail closed at the current
-composition boundary; a separately reviewed composition version must then bind the new authorized
-amount and canonical state identifiers rather than silently accepting the old grammar.
+The current Profile 11 statement does not carry the complete proposed/authorized amount contract,
+Lean is not linked, and the official receiver is synthetic. A breaking revision must fail closed
+until a reviewed version binds the new amount and canonical state identifiers. For a future qualified
+private batch, the service must select the governed source/control/schema/program context, native
+verification must return only its allowlisted receipt, and consumed nullifiers, stale roots,
+duplicates, and partial batches must reject. The state owner must resolve disposition and recheck
+roots/epochs in one serializable transaction; the later Lean gate must accept the exact receipt and
+transition; commit/rollback must be resolved only by exact idempotent retry without proof reuse.
+Acceptance never proves that funds moved; the official payment system consumes the accepted state
+directive and reports the outcome to Mirror.
 
 ## Directive transition rules
 

@@ -1,0 +1,1322 @@
+"""Build and check the separately pinned Blind Ledger semantic kernel.
+
+The candidate is an external, read-only Git checkout.  This gate binds that
+checkout to the reviewed commit/tree, extracts that commit into fresh build
+roots, checks the actual theorem declarations and proof bodies with the pinned
+Lean toolchain, checks the axiom closure, checks the independent Lean checker,
+and fingerprints the freshly built native diagnostic artifact before and after
+execution.  The native diagnostic output is conformance evidence only; it is
+never used as proof evidence.
+
+This gate does not establish refinement to Rust, database durability,
+cryptographic soundness, source truth, deployment, payment movement, or
+activation.
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from io import BytesIO
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import platform
+import re
+import signal
+import subprocess
+import sys
+import tarfile
+import tempfile
+from typing import Any, Mapping, Sequence
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MANIFEST_PATH = ROOT / "tools" / "semantic_assurance_manifest.json"
+MAX_MANIFEST_BYTES = 256 * 1024
+COMMAND_TIMEOUT_SECONDS = 180.0
+CHECK_TIMEOUT_SECONDS = 90.0
+NATIVE_TIMEOUT_SECONDS = 15.0
+
+REQUIRED_MANIFEST_SHA256 = "3a76e9a9e5279d904a98d9e92f7eb507fc91c3ec17fc0b6720843369df4fff61"
+REQUIRED_CANDIDATE_MODULE = "BlindLedger.Theorems"
+REQUIRED_CANDIDATE_THEOREM_SOURCE = "BlindLedger/Theorems.lean"
+REQUIRED_CANDIDATE_SOURCE_FILES = (
+    "BlindLedger.lean",
+    "BlindLedger/Checkpoint.lean",
+    "BlindLedger/Codec.lean",
+    "BlindLedger/ControlSet.lean",
+    "BlindLedger/Evaluation.lean",
+    "BlindLedger/Executable.lean",
+    "BlindLedger/StateTransition.lean",
+    "BlindLedger/Theorems.lean",
+    "BlindLedger/Types.lean",
+    "lake-manifest.json",
+    "lakefile.toml",
+    "lean-toolchain",
+)
+REQUIRED_LEAN_VERSION = (
+    "Lean (version 4.33.1, x86_64-w64-windows-gnu, commit "
+    "819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)"
+)
+REQUIRED_LAKE_VERSION = "Lake version 5.0.0-src+819816b (Lean version 4.33.1)"
+REQUIRED_BUILD_TARGET = "blind_clearance_kernel"
+REQUIRED_BUILD_ROOT_MODULE = "BlindLedger.Executable"
+REQUIRED_ARTIFACT_RELATIVE_PATH = ".lake/build/bin/blind_clearance_kernel.exe"
+
+AUTHORITY_PROPERTY_IDS = (
+    "evaluation_deterministic",
+    "proof_acceptance_ne_clear",
+    "observe_only_no_operative_clearance",
+    "absence_requires_authoritative_completeness",
+    "policy_effective_separation",
+    "exception_requires_exact_authorization",
+    "nonclear_no_economic_mutation",
+    "wrong_control_set_rejects",
+    "chronology_strict",
+    "replay_preserves_state",
+    "decision_access_join_unique",
+    "decode_encode_roundtrip_and_canonical_encoding_injective",
+    "checkpoint_chain_append_only",
+)
+
+AUTHORITY_DECLARATION_NAMES = (
+    "evaluation_deterministic",
+    "proof_acceptance_ne_clear",
+    "observe_only_no_operative_clearance",
+    "absence_requires_authoritative_completeness",
+    "policy_effective_separation",
+    "exception_requires_exact_authorization",
+    "nonclear_no_economic_mutation",
+    "wrong_control_set_rejects",
+    "chronology_strict",
+    "replay_preserves_state",
+    "decision_access_join_unique",
+    "decode_encode_roundtrip",
+    "canonical_encoding_injective",
+    "checkpoint_chain_append_only",
+)
+
+FORBIDDEN_TOKEN_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(axiom|sorry|admit|custom_axiom|unsafe)(?![A-Za-z0-9_])"
+)
+THEOREM_DECLARATION_RE = re.compile(
+    r"(?ms)^theorem\s+(?P<name>[A-Za-z0-9_']+)\s+(?P<header>.*?)\s*:=\s*by\b"
+)
+AXIOM_LINE_RE = re.compile(
+    r"^'(?P<name>[^']+)' (?:(?:does not depend on any axioms)|(?:depends on axioms: \[(?P<axioms>.*)\]))$"
+)
+HEX_256_RE = re.compile(r"[0-9a-f]{64}\Z")
+HEX_160_RE = re.compile(r"[0-9a-f]{40}\Z")
+
+KAT_EXPECTED: Mapping[str, Mapping[str, str]] = {
+    "valid-continuity": {
+        "policy": "PASS",
+        "directive": "CLEAR",
+        "reason": "VALID_CONTINUITY",
+        "exception": "NONE",
+        "economic_advance": "true",
+        "economic_mutation": "true",
+        "wire_bytes": "71",
+    },
+    "expired-credential": {
+        "policy": "FAIL",
+        "directive": "BLOCK",
+        "reason": "EXPIRED_OR_TERMINATED",
+        "exception": "NONE",
+        "economic_advance": "false",
+        "economic_mutation": "false",
+        "wire_bytes": "71",
+    },
+    "terminated-credential": {
+        "policy": "FAIL",
+        "directive": "BLOCK",
+        "reason": "EXPIRED_OR_TERMINATED",
+        "exception": "NONE",
+        "economic_advance": "false",
+        "economic_mutation": "false",
+        "wire_bytes": "71",
+    },
+    "missing-incomplete-feed": {
+        "policy": "AMBIGUOUS",
+        "directive": "HUMAN_REVIEW",
+        "reason": "INCOMPLETE_OR_AMBIGUOUS",
+        "exception": "NONE",
+        "economic_advance": "false",
+        "economic_mutation": "false",
+        "wire_bytes": "59",
+    },
+    "authoritative-absence": {
+        "policy": "MISSING_EVIDENCE",
+        "directive": "HOLD",
+        "reason": "AUTHORITATIVE_ABSENCE",
+        "exception": "NONE",
+        "economic_advance": "false",
+        "economic_mutation": "false",
+        "wire_bytes": "60",
+    },
+    "conflicting-facts": {
+        "policy": "AMBIGUOUS",
+        "directive": "HUMAN_REVIEW",
+        "reason": "INCOMPLETE_OR_AMBIGUOUS",
+        "exception": "NONE",
+        "economic_advance": "false",
+        "economic_mutation": "false",
+        "wire_bytes": "83",
+    },
+    "stale-rule-interval": {
+        "policy": "AMBIGUOUS",
+        "directive": "HUMAN_REVIEW",
+        "reason": "STALE_RULE_INTERVAL",
+        "exception": "NONE",
+        "economic_advance": "false",
+        "economic_mutation": "false",
+        "wire_bytes": "59",
+    },
+    "governed-exception": {
+        "policy": "FAIL",
+        "directive": "EXCEPTION_APPROVED",
+        "reason": "EXPIRED_OR_TERMINATED",
+        "exception": "40",
+        "economic_advance": "true",
+        "economic_mutation": "true",
+        "wire_bytes": "82",
+    },
+}
+
+EXPECTED_KAT_NAMES = tuple(KAT_EXPECTED)
+
+
+class AssuranceError(RuntimeError):
+    """A fail-closed semantic assurance setup or verification error."""
+
+
+@dataclass(frozen=True)
+class DeclarationExpectation:
+    property_id: str
+    name: str
+    source_statement: str
+
+
+@dataclass(frozen=True)
+class Manifest:
+    raw: Mapping[str, Any]
+    candidate: Mapping[str, Any]
+    toolchain: Mapping[str, Any]
+    build: Mapping[str, Any]
+    properties: tuple[Mapping[str, Any], ...]
+    declarations: tuple[DeclarationExpectation, ...]
+    allowed_axioms: frozenset[str]
+    forbidden_tokens: tuple[str, ...]
+    native: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class FileIdentity:
+    path: str
+    bytes: int
+    sha256: str
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise AssuranceError(f"duplicate manifest key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite(value: str) -> None:
+    raise AssuranceError(f"non-finite manifest number: {value}")
+
+
+def _exact_keys(value: Mapping[str, Any], expected: set[str], label: str) -> None:
+    if set(value) != expected:
+        raise AssuranceError(
+            f"{label} keys differ: expected={sorted(expected)!r} got={sorted(value)!r}"
+        )
+
+
+def _string(value: Any, label: str) -> str:
+    if type(value) is not str or not value:
+        raise AssuranceError(f"{label} must be a non-empty string")
+    return value
+
+
+def _positive_int(value: Any, label: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise AssuranceError(f"{label} must be a positive integer")
+    return value
+
+
+def _relative_path(value: Any, label: str) -> str:
+    value = _string(value, label)
+    parsed = PurePosixPath(value)
+    if parsed.is_absolute() or ".." in parsed.parts or "" in parsed.parts:
+        raise AssuranceError(f"{label} is not a safe relative POSIX path: {value!r}")
+    if "\\" in value:
+        raise AssuranceError(f"{label} must use POSIX separators: {value!r}")
+    return value
+
+
+def _sha256_hex(value: Any, label: str) -> str:
+    value = _string(value, label).lower()
+    if HEX_256_RE.fullmatch(value) is None:
+        raise AssuranceError(f"{label} is not a SHA-256 digest")
+    return value
+
+
+def _git_hex(value: Any, label: str) -> str:
+    value = _string(value, label).lower()
+    if HEX_160_RE.fullmatch(value) is None:
+        raise AssuranceError(f"{label} is not a Git object id")
+    return value
+
+
+def _load_manifest() -> Manifest:
+    if MANIFEST_PATH.is_symlink() or not MANIFEST_PATH.is_file():
+        raise AssuranceError(f"manifest is not a regular file: {MANIFEST_PATH}")
+    raw = MANIFEST_PATH.read_bytes()
+    if len(raw) > MAX_MANIFEST_BYTES:
+        raise AssuranceError(f"manifest exceeds {MAX_MANIFEST_BYTES} bytes")
+    manifest_sha256 = hashlib.sha256(raw).hexdigest()
+    if manifest_sha256 != REQUIRED_MANIFEST_SHA256:
+        raise AssuranceError(
+            "manifest identity changed: "
+            f"expected={REQUIRED_MANIFEST_SHA256} got={manifest_sha256}"
+        )
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_nonfinite,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AssuranceError(f"manifest is not strict UTF-8 JSON: {exc}") from exc
+    if type(value) is not dict:
+        raise AssuranceError("manifest root must be an object")
+    _exact_keys(
+        value,
+        {
+            "schema",
+            "manifest_version",
+            "candidate",
+            "toolchain",
+            "build",
+            "properties",
+            "allowed_axioms",
+            "forbidden_source_tokens",
+            "native_protocol",
+        },
+        "manifest",
+    )
+    if value["schema"] != "blind_ledger_semantic_assurance_manifest_v1":
+        raise AssuranceError(f"unsupported manifest schema: {value['schema']!r}")
+    if value["manifest_version"] != 1:
+        raise AssuranceError(f"unsupported manifest version: {value['manifest_version']!r}")
+
+    candidate = value["candidate"]
+    if type(candidate) is not dict:
+        raise AssuranceError("candidate record must be an object")
+    _exact_keys(
+        candidate,
+        {
+            "required_head",
+            "required_tree",
+            "module",
+            "theorem_source",
+            "declaration_sources",
+            "source_files",
+        },
+        "candidate",
+    )
+    _git_hex(candidate["required_head"], "candidate.required_head")
+    _git_hex(candidate["required_tree"], "candidate.required_tree")
+    module = _string(candidate["module"], "candidate.module")
+    if module != REQUIRED_CANDIDATE_MODULE:
+        raise AssuranceError(f"unexpected candidate module: {module!r}")
+    theorem_source = _relative_path(candidate["theorem_source"], "candidate.theorem_source")
+    if theorem_source != REQUIRED_CANDIDATE_THEOREM_SOURCE:
+        raise AssuranceError(f"unexpected candidate theorem source: {theorem_source!r}")
+    source_files_value = candidate["source_files"]
+    if type(source_files_value) is not list or not source_files_value:
+        raise AssuranceError("candidate.source_files must be a non-empty list")
+    source_files = tuple(_relative_path(item, "candidate.source_files[]") for item in source_files_value)
+    if source_files != tuple(sorted(source_files)) or len(set(source_files)) != len(source_files):
+        raise AssuranceError("candidate.source_files must be sorted and unique")
+    if source_files != REQUIRED_CANDIDATE_SOURCE_FILES:
+        raise AssuranceError(
+            "candidate.source_files differ from the reviewed source closure: "
+            f"expected={REQUIRED_CANDIDATE_SOURCE_FILES!r} got={source_files!r}"
+        )
+    if theorem_source not in source_files:
+        raise AssuranceError("candidate.theorem_source is not in candidate.source_files")
+    declaration_sources_value = candidate["declaration_sources"]
+    if type(declaration_sources_value) is not dict:
+        raise AssuranceError("candidate.declaration_sources must be an object")
+    if set(declaration_sources_value) != set(AUTHORITY_DECLARATION_NAMES):
+        raise AssuranceError(
+            "candidate.declaration_sources keys differ: "
+            f"expected={list(AUTHORITY_DECLARATION_NAMES)!r} "
+            f"got={sorted(declaration_sources_value)!r}"
+        )
+    for declaration_name in AUTHORITY_DECLARATION_NAMES:
+        declaration_source = _relative_path(
+            declaration_sources_value[declaration_name],
+            f"candidate.declaration_sources.{declaration_name}",
+        )
+        if declaration_source not in source_files:
+            raise AssuranceError(
+                f"candidate.declaration_sources.{declaration_name} is not in "
+                "candidate.source_files"
+            )
+
+    toolchain = value["toolchain"]
+    if type(toolchain) is not dict:
+        raise AssuranceError("toolchain record must be an object")
+    _exact_keys(
+        toolchain,
+        {"descriptor", "platform", "lean_version", "lake_version", "executables"},
+        "toolchain",
+    )
+    descriptor = _string(toolchain["descriptor"], "toolchain.descriptor")
+    if descriptor != "leanprover/lean4:v4.33.1":
+        raise AssuranceError(f"unexpected pinned Lean descriptor: {descriptor!r}")
+    if _string(toolchain["platform"], "toolchain.platform") != "windows-x86_64":
+        raise AssuranceError("this reviewed toolchain manifest is not for windows-x86_64")
+    lean_version = _string(toolchain["lean_version"], "toolchain.lean_version")
+    if lean_version != REQUIRED_LEAN_VERSION:
+        raise AssuranceError(f"unexpected pinned Lean version: {lean_version!r}")
+    lake_version = _string(toolchain["lake_version"], "toolchain.lake_version")
+    if lake_version != REQUIRED_LAKE_VERSION:
+        raise AssuranceError(f"unexpected pinned Lake version: {lake_version!r}")
+    executables = toolchain["executables"]
+    if type(executables) is not dict or set(executables) != {"lake", "lean", "leanchecker"}:
+        raise AssuranceError("toolchain.executable set is not exactly lake/lean/leanchecker")
+    for name, record in executables.items():
+        if type(record) is not dict:
+            raise AssuranceError(f"toolchain executable record is not an object: {name}")
+        _exact_keys(record, {"bytes", "sha256"}, f"toolchain.executables.{name}")
+        _positive_int(record["bytes"], f"toolchain.executables.{name}.bytes")
+        _sha256_hex(record["sha256"], f"toolchain.executables.{name}.sha256")
+
+    build = value["build"]
+    if type(build) is not dict:
+        raise AssuranceError("build record must be an object")
+    _exact_keys(build, {"target", "root_module", "artifact"}, "build")
+    target = _string(build["target"], "build.target")
+    if target != REQUIRED_BUILD_TARGET:
+        raise AssuranceError(f"unexpected build target: {target!r}")
+    root_module = _string(build["root_module"], "build.root_module")
+    if root_module != REQUIRED_BUILD_ROOT_MODULE:
+        raise AssuranceError(f"unexpected build root module: {root_module!r}")
+    artifact = build["artifact"]
+    if type(artifact) is not dict:
+        raise AssuranceError("build.artifact must be an object")
+    _exact_keys(artifact, {"relative_path", "minimum_bytes", "identity"}, "build.artifact")
+    artifact_relative_path = _relative_path(
+        artifact["relative_path"], "build.artifact.relative_path"
+    )
+    if artifact_relative_path != REQUIRED_ARTIFACT_RELATIVE_PATH:
+        raise AssuranceError(f"unexpected build artifact path: {artifact_relative_path!r}")
+    _positive_int(artifact["minimum_bytes"], "build.artifact.minimum_bytes")
+    if artifact["identity"] != "sha256-and-byte-length-of-fresh-build-output":
+        raise AssuranceError("build.artifact.identity is not the reviewed identity rule")
+
+    properties_value = value["properties"]
+    if type(properties_value) is not list or len(properties_value) != len(AUTHORITY_PROPERTY_IDS):
+        raise AssuranceError(
+            f"manifest property count must be {len(AUTHORITY_PROPERTY_IDS)}"
+        )
+    declarations: list[DeclarationExpectation] = []
+    property_ids: list[str] = []
+    for property_index, item in enumerate(properties_value):
+        if type(item) is not dict:
+            raise AssuranceError(f"properties[{property_index}] must be an object")
+        _exact_keys(item, {"id", "statement", "declarations"}, f"properties[{property_index}]")
+        property_id = _string(item["id"], f"properties[{property_index}].id")
+        property_ids.append(property_id)
+        statement = _string(item["statement"], f"properties[{property_index}].statement")
+        declaration_value = item["declarations"]
+        if type(declaration_value) is not list or not declaration_value:
+            raise AssuranceError(f"properties[{property_index}].declarations must be non-empty")
+        for declaration_index, declaration in enumerate(declaration_value):
+            if type(declaration) is not dict:
+                raise AssuranceError(
+                    f"properties[{property_index}].declarations[{declaration_index}] must be an object"
+                )
+            _exact_keys(
+                declaration,
+                {"name", "source_statement"},
+                f"properties[{property_index}].declarations[{declaration_index}]",
+            )
+            declarations.append(
+                DeclarationExpectation(
+                    property_id=property_id,
+                    name=_string(
+                        declaration["name"],
+                        f"properties[{property_index}].declarations[{declaration_index}].name",
+                    ),
+                    source_statement=_string(
+                        declaration["source_statement"],
+                        f"properties[{property_index}].declarations[{declaration_index}].source_statement",
+                    ),
+                )
+            )
+        if property_id == "decode_encode_roundtrip_and_canonical_encoding_injective":
+            if statement != "decode_encode_roundtrip ∧ canonical_encoding_injective":
+                raise AssuranceError("codec composite property statement changed")
+        elif len(declaration_value) != 1 or statement != declaration_value[0]["source_statement"]:
+            raise AssuranceError(f"property statement/declaration mismatch: {property_id}")
+    if tuple(property_ids) != AUTHORITY_PROPERTY_IDS:
+        raise AssuranceError(
+            f"property identity/order differs: expected={AUTHORITY_PROPERTY_IDS!r} got={tuple(property_ids)!r}"
+        )
+    if tuple(item.name for item in declarations) != AUTHORITY_DECLARATION_NAMES:
+        raise AssuranceError(
+            "declaration identity/order differs: "
+            f"expected={AUTHORITY_DECLARATION_NAMES!r} "
+            f"got={tuple(item.name for item in declarations)!r}"
+        )
+
+    allowed_axioms_value = value["allowed_axioms"]
+    if type(allowed_axioms_value) is not list or any(type(item) is not str for item in allowed_axioms_value):
+        raise AssuranceError("allowed_axioms must be a list of strings")
+    allowed_axioms = frozenset(allowed_axioms_value)
+    if allowed_axioms != frozenset({"propext"}) or len(allowed_axioms_value) != 1:
+        raise AssuranceError("only the reviewed propext axiom allowance is supported")
+
+    forbidden_value = value["forbidden_source_tokens"]
+    if type(forbidden_value) is not list or tuple(forbidden_value) != (
+        "axiom",
+        "sorry",
+        "admit",
+        "custom_axiom",
+        "unsafe",
+    ):
+        raise AssuranceError("forbidden_source_tokens changed")
+
+    native = value["native_protocol"]
+    if type(native) is not dict:
+        raise AssuranceError("native_protocol must be an object")
+    _exact_keys(
+        native,
+        {
+            "header",
+            "kat_count",
+            "negative_names",
+            "theorem_declaration_count",
+            "gate_ids",
+            "final_line",
+        },
+        "native_protocol",
+    )
+    header = native["header"]
+    if type(header) is not list or tuple(_string(item, "native_protocol.header[]") for item in header) != (
+        "BL-CLEARANCE-KERNEL/1",
+        "schema=bounded-u16/id-byte/fact-slots-2/absence-slots-2",
+        "mode=DIRECT_STATE_OWNED authority=verifier-owned proof_suite_id=NONE",
+        "claim=PURE_SYNTHETIC_NONACTIVATING",
+        "KAT_COUNT=8",
+    ):
+        raise AssuranceError("native protocol header changed")
+    if native["kat_count"] != 8 or native["theorem_declaration_count"] != len(AUTHORITY_DECLARATION_NAMES):
+        raise AssuranceError("native protocol counts changed")
+    negative_names = native["negative_names"]
+    if type(negative_names) is not list or tuple(negative_names) != (
+        "observe-only",
+        "wrong-control-set",
+        "bad-chronology",
+        "bad-exception",
+        "proof-acceptance-only",
+        "replay-same-attempt",
+        "trailing-wire",
+    ):
+        raise AssuranceError("native negative names changed")
+    if native["gate_ids"] != list(AUTHORITY_PROPERTY_IDS):
+        raise AssuranceError("native gate ids do not match the 13-property authority")
+    if native["final_line"] != "KERNEL_RESULT=PASS":
+        raise AssuranceError("native final line changed")
+
+    return Manifest(
+        raw=value,
+        candidate=candidate,
+        toolchain=toolchain,
+        build=build,
+        properties=tuple(properties_value),
+        declarations=tuple(declarations),
+        allowed_axioms=allowed_axioms,
+        forbidden_tokens=tuple(forbidden_value),
+        native=native,
+    )
+
+
+def _run(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    timeout: float,
+    env: Mapping[str, str] | None = None,
+    input_bytes: bytes = b"",
+) -> subprocess.CompletedProcess[bytes]:
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    try:
+        process = subprocess.Popen(
+            list(command),
+            cwd=str(cwd),
+            env=dict(env) if env is not None else None,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=creationflags if os.name == "nt" else 0,
+            start_new_session=os.name != "nt",
+        )
+    except OSError as exc:
+        raise AssuranceError(f"could not execute {' '.join(command)}: {exc}") from exc
+    try:
+        stdout, stderr = process.communicate(input=input_bytes, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        cleanup = b""
+        if os.name == "nt":
+            try:
+                killed = subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10.0,
+                    check=False,
+                )
+                cleanup = killed.stdout + killed.stderr
+            except (OSError, subprocess.TimeoutExpired) as cleanup_error:
+                cleanup = repr(cleanup_error).encode("utf-8", "replace")
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError as cleanup_error:
+                cleanup = repr(cleanup_error).encode("utf-8", "replace")
+        stdout, stderr = process.communicate()
+        raise AssuranceError(
+            f"command timed out after {timeout:.1f}s: {' '.join(command)}; "
+            f"stdout={stdout!r} stderr={stderr!r} cleanup={cleanup!r}"
+        ) from exc
+    return subprocess.CompletedProcess(list(command), process.returncode, stdout, stderr)
+
+
+def _decode(data: bytes, label: str, *, encoding: str = "utf-8") -> str:
+    try:
+        return data.decode(encoding)
+    except UnicodeDecodeError as exc:
+        raise AssuranceError(f"{label} output is not {encoding}: {data!r}") from exc
+
+
+def _git(root: Path, *args: str) -> str:
+    result = _run(["git", *args], cwd=root, timeout=CHECK_TIMEOUT_SECONDS)
+    if result.returncode != 0:
+        raise AssuranceError(
+            f"git {' '.join(args)} failed exit={result.returncode}; "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+    if result.stderr:
+        raise AssuranceError(f"git {' '.join(args)} wrote stderr: {result.stderr!r}")
+    return _decode(result.stdout, "git").strip()
+
+
+def _git_bytes(root: Path, *args: str) -> bytes:
+    result = _run(["git", *args], cwd=root, timeout=CHECK_TIMEOUT_SECONDS)
+    if result.returncode != 0:
+        raise AssuranceError(
+            f"git {' '.join(args)} failed exit={result.returncode}; "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+    if result.stderr:
+        raise AssuranceError(f"git {' '.join(args)} wrote stderr: {result.stderr!r}")
+    return result.stdout
+
+
+def _require_success(label: str, result: subprocess.CompletedProcess[bytes]) -> None:
+    if result.returncode != 0:
+        raise AssuranceError(
+            f"{label} failed exit={result.returncode}\n"
+            f"stdout={result.stdout!r}\n"
+            f"stderr={result.stderr!r}"
+        )
+    if b"warning" in result.stderr.lower():
+        print(f"{label.upper()}_WARNINGS_BEGIN")
+        print(_decode(result.stderr, f"{label} stderr"), end="" if result.stderr.endswith(b"\n") else "\n")
+        print(f"{label.upper()}_WARNINGS_END")
+
+
+def _regular_file(path: Path, label: str) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise AssuranceError(f"{label} is not a regular file: {path}")
+
+
+def _worktree_identity(root: Path) -> tuple[str, int, str]:
+    status = _git(root, "status", "--porcelain", "--untracked-files=all")
+    normalized = status.replace("\r\n", "\n").encode("utf-8")
+    count = len(status.splitlines()) if status else 0
+    return status, count, hashlib.sha256(normalized).hexdigest()
+
+
+def _source_identity(root: Path, source_files: Sequence[str]) -> tuple[str, tuple[FileIdentity, ...]]:
+    digest = hashlib.sha256()
+    identities: list[FileIdentity] = []
+    for relative in source_files:
+        path = root / Path(*relative.split("/"))
+        _regular_file(path, f"source file {relative}")
+        expected_blob = _git(root, "rev-parse", f"HEAD:{relative}").lower()
+        # Git's canonical blob is the input to the fresh archive/build.  The
+        # working tree may have a reviewed CRLF conversion on Windows, so the
+        # identity is taken from `git show`, while the required clean status
+        # still rejects any tracked edit or untracked source replacement.
+        content = _git_bytes(root, "show", f"HEAD:{relative}")
+        blob = hashlib.sha1(b"blob " + str(len(content)).encode("ascii") + b"\0" + content).hexdigest()
+        if blob != expected_blob:
+            raise AssuranceError(
+                f"source file differs from pinned Git blob: {relative} expected={expected_blob} got={blob}"
+            )
+        file_hash = hashlib.sha256(content).hexdigest()
+        identities.append(FileIdentity(relative, len(content), file_hash))
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest(), tuple(identities)
+
+
+def _parse_source_declarations(
+    source: str, expectations: Sequence[DeclarationExpectation]
+) -> tuple[dict[str, str], ...]:
+    found: dict[str, str] = {}
+    order: list[str] = []
+    for match in THEOREM_DECLARATION_RE.finditer(source):
+        name = match.group("name")
+        header = match.group("header").strip()
+        if header.startswith(":"):
+            header = header[1:].strip()
+        header = re.sub(r"\s+", " ", header)
+        if name in found:
+            raise AssuranceError(f"duplicate theorem declaration in source: {name}")
+        found[name] = header
+        order.append(name)
+    expected_names = tuple(item.name for item in expectations)
+    missing = [name for name in expected_names if name not in found]
+    if missing:
+        raise AssuranceError(f"required theorem declaration missing: {missing!r}")
+    observed = tuple(found[name] for name in expected_names)
+    for expectation, observed_header in zip(expectations, observed, strict=True):
+        if observed_header != expectation.source_statement:
+            raise AssuranceError(
+                f"theorem statement changed: {expectation.name}; "
+                f"expected={expectation.source_statement!r} got={observed_header!r}"
+            )
+    statement_records = tuple(
+        {"name": name, "source_statement": found[name]} for name in expected_names
+    )
+    # Extra declarations are allowed for implementation lemmas, but they can
+    # never replace a required declaration.  The exact candidate tree/source
+    # identity still binds the complete reviewed source closure.
+    _ = order
+    return statement_records
+
+
+def _check_forbidden_sources(
+    root: Path, source_files: Sequence[str], forbidden_tokens: Sequence[str]
+) -> tuple[int, ...]:
+    expected = {token.lower() for token in forbidden_tokens}
+    hits: list[int] = []
+    for relative in source_files:
+        path = root / Path(*relative.split("/"))
+        source = path.read_text(encoding="utf-8")
+        for match in FORBIDDEN_TOKEN_RE.finditer(source):
+            if match.group(1).lower() in expected:
+                line = source.count("\n", 0, match.start()) + 1
+                raise AssuranceError(
+                    f"forbidden source token {match.group(0)!r} in {relative}:{line}"
+                )
+        hits.append(0)
+    return tuple(hits)
+
+
+def _extract_git_tree(root: Path, revision: str, destination: Path) -> None:
+    result = _run(
+        ["git", "archive", "--format=tar", revision],
+        cwd=root,
+        timeout=CHECK_TIMEOUT_SECONDS,
+    )
+    _require_success("git archive", result)
+    destination.mkdir(parents=True, exist_ok=False)
+    try:
+        with tarfile.open(fileobj=BytesIO(result.stdout), mode="r:") as archive:
+            members = archive.getmembers()
+            for member in members:
+                relative = PurePosixPath(member.name)
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise AssuranceError(f"Git archive contains unsafe path: {member.name!r}")
+                if member.issym() or member.islnk():
+                    raise AssuranceError(f"Git archive contains a link: {member.name!r}")
+                if not (member.isdir() or member.isfile()):
+                    raise AssuranceError(f"Git archive contains unsupported entry: {member.name!r}")
+                target = (destination / Path(*relative.parts)).resolve()
+                if destination.resolve() not in target.parents and target != destination.resolve():
+                    raise AssuranceError(f"Git archive path escapes destination: {member.name!r}")
+            archive.extractall(destination)
+    except (OSError, tarfile.TarError) as exc:
+        raise AssuranceError(f"could not extract pinned Git archive: {exc}") from exc
+
+
+def _toolchain_paths(manifest: Manifest) -> tuple[dict[str, Path], dict[str, Any]]:
+    if platform.system() != "Windows" or platform.machine().lower() not in {"amd64", "x86_64"}:
+        raise AssuranceError(
+            f"reviewed toolchain requires Windows x86_64; observed={platform.system()} {platform.machine()}"
+        )
+    descriptor = str(manifest.toolchain["descriptor"])
+    version = descriptor.split(":", 1)[1]
+    base = Path.home() / ".elan" / "toolchains" / f"leanprover--lean4---{version}" / "bin"
+    paths: dict[str, Path] = {}
+    identities: dict[str, Any] = {}
+    for name, expected in manifest.toolchain["executables"].items():
+        path = base / f"{name}.exe"
+        _regular_file(path, f"pinned {name} executable")
+        content = path.read_bytes()
+        observed = {"path": str(path.resolve()), "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+        if observed["bytes"] != expected["bytes"] or observed["sha256"] != expected["sha256"]:
+            raise AssuranceError(
+                f"pinned {name} executable identity changed: expected={expected!r} got={observed!r}"
+            )
+        paths[name] = path.resolve()
+        identities[name] = observed
+
+    lake_version = _run([str(paths["lake"]), "--version"], cwd=ROOT, timeout=CHECK_TIMEOUT_SECONDS)
+    _require_success("lake version", lake_version)
+    observed_lake_version = _decode(lake_version.stdout, "lake version").strip()
+    if lake_version.stderr or observed_lake_version != manifest.toolchain["lake_version"]:
+        raise AssuranceError(
+            f"lake version changed: expected={manifest.toolchain['lake_version']!r} "
+            f"got={observed_lake_version!r} stderr={lake_version.stderr!r}"
+        )
+    lean_version = _run([str(paths["lean"]), "--version"], cwd=ROOT, timeout=CHECK_TIMEOUT_SECONDS)
+    _require_success("lean version", lean_version)
+    observed_lean_version = _decode(lean_version.stdout, "lean version").strip()
+    if lean_version.stderr or observed_lean_version != manifest.toolchain["lean_version"]:
+        raise AssuranceError(
+            f"Lean version changed: expected={manifest.toolchain['lean_version']!r} "
+            f"got={observed_lean_version!r} stderr={lean_version.stderr!r}"
+        )
+    identities["descriptor"] = descriptor
+    identities["lean_version"] = observed_lean_version
+    identities["lake_version"] = observed_lake_version
+    identities["bin_dir"] = str(base.resolve())
+    return paths, identities
+
+
+def _clean_environment(tool_paths: Mapping[str, Path]) -> dict[str, str]:
+    environment = dict(os.environ)
+    for key in tuple(environment):
+        if key.upper() in {
+            "LEAN_PATH",
+            "LAKE_PATH",
+            "LAKE_HOME",
+            "ELAN_HOME",
+            "LEAN_SRC_PATH",
+            "LEAN_LIB",
+        }:
+            environment.pop(key, None)
+    bin_dir = str(next(iter(tool_paths.values())).parent)
+    environment["PATH"] = bin_dir + os.pathsep + environment.get("PATH", "")
+    return environment
+
+
+def _parse_fields(line: str, prefix: str) -> dict[str, str]:
+    parts = line.split(" ")
+    if not parts or parts[0] != prefix:
+        raise AssuranceError(f"expected {prefix} line, got {line!r}")
+    fields: dict[str, str] = {}
+    for part in parts[1:]:
+        if "=" not in part:
+            raise AssuranceError(f"malformed {prefix} field in {line!r}")
+        key, value = part.split("=", 1)
+        if not key or key in fields:
+            raise AssuranceError(f"duplicate or empty {prefix} field in {line!r}")
+        fields[key] = value
+    return fields
+
+
+def _check_wire(fields: Mapping[str, str], line: str) -> None:
+    try:
+        declared = int(fields["wire_bytes"])
+        wire = [int(item) for item in fields["wire"].split(",")]
+    except (KeyError, ValueError) as exc:
+        raise AssuranceError(f"malformed wire evidence in {line!r}") from exc
+    if declared != len(wire) or declared <= 0:
+        raise AssuranceError(f"wire length mismatch in {line!r}")
+    if any(byte < 0 or byte > 255 for byte in wire) or wire[:4] != [66, 76, 75, 49]:
+        raise AssuranceError(f"wire bytes are not the reviewed bounded format in {line!r}")
+
+
+def _check_native_output(raw: bytes, native: Mapping[str, Any], declarations: Sequence[str]) -> dict[str, int]:
+    text = _decode(raw, "native kernel", encoding="ascii")
+    if not raw.endswith(b"\n"):
+        raise AssuranceError("native kernel output has no final line ending")
+    lines = text.splitlines()
+    negative_names = tuple(native["negative_names"])
+    expected_line_count = (
+        len(native["header"])
+        + len(KAT_EXPECTED)
+        + len(negative_names)
+        + 1
+        + len(declarations)
+        + len(native["gate_ids"])
+        + 3
+    )
+    if len(lines) != expected_line_count:
+        raise AssuranceError(
+            f"native output line count mismatch: expected={expected_line_count} got={len(lines)}"
+        )
+    if tuple(lines[: len(native["header"])]) != tuple(native["header"]):
+        raise AssuranceError(f"native protocol header mismatch: {lines[:len(native['header'])]!r}")
+    index = len(native["header"])
+    seen_kats: list[str] = []
+    for _ in KAT_EXPECTED:
+        fields = _parse_fields(lines[index], "KAT")
+        line = lines[index]
+        index += 1
+        name = fields.get("name")
+        if name not in KAT_EXPECTED or name in seen_kats:
+            raise AssuranceError(f"unexpected or duplicate KAT {name!r}")
+        seen_kats.append(name)
+        expected = KAT_EXPECTED[name]
+        expected_fields = {
+            "name",
+            "decoded",
+            "evaluate",
+            "policy",
+            "directive",
+            "reason",
+            "exception",
+            "operative",
+            "economic_advance",
+            "transition",
+            "join",
+            "proof_session_accepted",
+            "economic_mutation",
+            "wire_bytes",
+            "wire",
+        }
+        if set(fields) != expected_fields:
+            raise AssuranceError(f"KAT {name!r} fields changed: {sorted(fields)!r}")
+        for key, expected_value in expected.items():
+            if fields.get(key) != expected_value:
+                raise AssuranceError(
+                    f"KAT {name!r} field {key!r} changed: expected={expected_value!r} got={fields.get(key)!r}"
+                )
+        for key, expected_value in {
+            "decoded": "PASS",
+            "evaluate": "PASS",
+            "operative": "true",
+            "transition": "PASS",
+            "join": "PASS",
+            "proof_session_accepted": "false",
+        }.items():
+            if fields.get(key) != expected_value:
+                raise AssuranceError(f"KAT {name!r} field {key!r} is not {expected_value!r}")
+        _check_wire(fields, line)
+    if tuple(seen_kats) != EXPECTED_KAT_NAMES:
+        raise AssuranceError(f"KAT order changed: {seen_kats!r}")
+
+    seen_negatives: list[str] = []
+    for _ in negative_names:
+        fields = _parse_fields(lines[index], "NEGATIVE")
+        index += 1
+        if set(fields) != {"name", "result"}:
+            raise AssuranceError(f"negative fields changed: {lines[index - 1]!r}")
+        name = fields.get("name")
+        if name not in negative_names or name in seen_negatives:
+            raise AssuranceError(f"unexpected or duplicate negative {name!r}")
+        if fields.get("result") != "REJECTED":
+            raise AssuranceError(f"negative {name!r} was accepted: {lines[index - 1]!r}")
+        seen_negatives.append(name)
+    if tuple(seen_negatives) != negative_names:
+        raise AssuranceError(f"negative order changed: {seen_negatives!r}")
+
+    expected_manifest_line = f"THEOREM_MANIFEST_COUNT={len(declarations)}"
+    if lines[index] != expected_manifest_line:
+        raise AssuranceError(f"theorem manifest count changed: {lines[index]!r}")
+    index += 1
+    seen_theorems: list[str] = []
+    for _ in declarations:
+        fields = _parse_fields(lines[index], "THEOREM")
+        index += 1
+        if set(fields) != {"name", "result"} or fields.get("result") != "PROVED":
+            raise AssuranceError(f"native theorem diagnostic changed: {lines[index - 1]!r}")
+        name = fields.get("name")
+        if name not in declarations or name in seen_theorems:
+            raise AssuranceError(f"unexpected or duplicate native theorem: {name!r}")
+        seen_theorems.append(name)
+    if tuple(seen_theorems) != tuple(declarations):
+        raise AssuranceError(f"native theorem diagnostic order changed: {seen_theorems!r}")
+
+    seen_gates: list[str] = []
+    for _ in native["gate_ids"]:
+        fields = _parse_fields(lines[index], "GATE")
+        index += 1
+        if set(fields) != {"name", "result"} or fields.get("result") != "PASS":
+            raise AssuranceError(f"native gate diagnostic failed: {lines[index - 1]!r}")
+        name = fields.get("name")
+        if name not in native["gate_ids"] or name in seen_gates:
+            raise AssuranceError(f"unexpected or duplicate native gate: {name!r}")
+        seen_gates.append(name)
+    if tuple(seen_gates) != tuple(native["gate_ids"]):
+        raise AssuranceError(f"native gate diagnostic order changed: {seen_gates!r}")
+    if lines[index] != f"GATE_COUNT={len(native['gate_ids'])}":
+        raise AssuranceError(f"native gate count changed: {lines[index]!r}")
+    index += 1
+    if lines[index] != "CLOSURE_CHECK=LOCAL_KERNEL_SOURCE_SCAN_REQUIRED":
+        raise AssuranceError(f"native closure marker changed: {lines[index]!r}")
+    index += 1
+    if lines[index] != native["final_line"]:
+        raise AssuranceError(f"native final result changed: {lines[index]!r}")
+    return {
+        "kat_count": len(seen_kats),
+        "negative_count": len(seen_negatives),
+        "theorem_diagnostic_count": len(seen_theorems),
+        "gate_diagnostic_count": len(seen_gates),
+    }
+
+
+def _file_identity(path: Path, label: str) -> FileIdentity:
+    _regular_file(path, label)
+    content = path.read_bytes()
+    return FileIdentity(str(path), len(content), hashlib.sha256(content).hexdigest())
+
+
+def _parse_axiom_output(raw: bytes, declarations: Sequence[str], allowed: frozenset[str]) -> tuple[dict[str, Any], ...]:
+    text = _decode(raw, "axiom closure")
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) != len(declarations):
+        raise AssuranceError(
+            f"axiom closure line count mismatch: expected={len(declarations)} got={len(lines)} raw={text!r}"
+        )
+    records: list[dict[str, Any]] = []
+    for expected_name, line in zip(declarations, lines, strict=True):
+        match = AXIOM_LINE_RE.fullmatch(line)
+        if match is None or match.group("name") != f"BlindLedger.Kernel.{expected_name}":
+            raise AssuranceError(f"axiom closure declaration order changed: {line!r}")
+        axioms = tuple(
+            sorted(item.strip() for item in (match.group("axioms") or "").split(",") if item.strip())
+        )
+        if set(axioms) - allowed:
+            raise AssuranceError(
+                f"unapproved axiom dependency for {expected_name}: {axioms!r}; allowed={sorted(allowed)!r}"
+            )
+        records.append({"name": expected_name, "axioms": list(axioms), "raw": line})
+    return tuple(records)
+
+
+def _check_declaration_output(raw: bytes, declarations: Sequence[str]) -> str:
+    text = _decode(raw, "declaration check")
+    cursor = 0
+    for name in declarations:
+        marker = f"BlindLedger.Kernel.{name}"
+        position = text.find(marker, cursor)
+        if position < 0:
+            raise AssuranceError(f"declaration check did not expose {marker}")
+        cursor = position + len(marker)
+    return text
+
+
+def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any]:
+    candidate_root = candidate_root.resolve()
+    if not candidate_root.is_dir() or not (candidate_root / ".git").exists():
+        raise AssuranceError(f"candidate root is not a Git checkout: {candidate_root}")
+    before_status, before_status_count, before_status_sha256 = _worktree_identity(candidate_root)
+    if before_status:
+        raise AssuranceError(f"candidate checkout is dirty:\n{before_status}")
+    expected_head = str(manifest.candidate["required_head"]).lower()
+    expected_tree = str(manifest.candidate["required_tree"]).lower()
+    head = _git(candidate_root, "rev-parse", "HEAD").lower()
+    tree = _git(candidate_root, "rev-parse", "HEAD^{tree}").lower()
+    if head != expected_head or tree != expected_tree:
+        raise AssuranceError(
+            f"candidate Git identity mismatch: expected head/tree={expected_head}/{expected_tree} "
+            f"got={head}/{tree}"
+        )
+    source_files = tuple(manifest.candidate["source_files"])
+    source_hash_before, file_identities = _source_identity(candidate_root, source_files)
+    theorem_source = str(manifest.candidate["theorem_source"])
+    declaration_sources = manifest.candidate["declaration_sources"]
+    grouped_expectations: dict[str, list[DeclarationExpectation]] = {}
+    for expectation in manifest.declarations:
+        source_path = str(declaration_sources[expectation.name])
+        grouped_expectations.setdefault(source_path, []).append(expectation)
+    parsed_by_name: dict[str, dict[str, str]] = {}
+    statement_records: list[dict[str, str]] = []
+    for source_path, expectations in grouped_expectations.items():
+        source_file = candidate_root / Path(*source_path.split("/"))
+        source_text = source_file.read_text(encoding="utf-8")
+        parsed_records = _parse_source_declarations(source_text, expectations)
+        for record in parsed_records:
+            name = record["name"]
+            if name in parsed_by_name:
+                raise AssuranceError(f"duplicate source mapping for theorem declaration: {name}")
+            parsed_by_name[name] = record
+    for expectation in manifest.declarations:
+        try:
+            record = parsed_by_name[expectation.name]
+        except KeyError as exc:
+            raise AssuranceError(
+                f"required theorem declaration was not parsed: {expectation.name}"
+            ) from exc
+        statement_records.append(
+            {
+                "name": record["name"],
+                "source_path": str(declaration_sources[expectation.name]),
+                "source_statement": record["source_statement"],
+            }
+        )
+    _check_forbidden_sources(candidate_root, source_files, manifest.forbidden_tokens)
+    tool_paths, tool_identities = _toolchain_paths(manifest)
+    build_command = [str(tool_paths["lake"]), "build", str(manifest.build["target"])]
+    declarations = tuple(item.name for item in manifest.declarations)
+
+    with tempfile.TemporaryDirectory(prefix="blind-ledger-semantic-assurance-") as temporary:
+        temporary_root = Path(temporary)
+        build_root = temporary_root / "build"
+        _extract_git_tree(candidate_root, expected_head, build_root)
+        environment = _clean_environment(tool_paths)
+        build = _run(
+            build_command,
+            cwd=build_root,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            env=environment,
+        )
+        _require_success("candidate build", build)
+        lib_path = (build_root / ".lake" / "build" / "lib" / "lean").resolve()
+        if not lib_path.is_dir():
+            raise AssuranceError(f"fresh Lean build library path is missing: {lib_path}")
+        artifact_relative = str(manifest.build["artifact"]["relative_path"])
+        artifact = build_root / Path(*artifact_relative.split("/"))
+        artifact_identity_before = _file_identity(artifact, "fresh native artifact")
+        if artifact_identity_before.bytes < manifest.build["artifact"]["minimum_bytes"]:
+            raise AssuranceError(f"fresh native artifact is below its minimum size: {artifact}")
+
+        check_environment = dict(environment)
+        check_environment["LEAN_PATH"] = str(lib_path)
+        proof_body_checks: dict[str, dict[str, Any]] = {}
+        for source_path in grouped_expectations:
+            proof_olean = temporary_root / (
+                source_path.replace("/", "_").replace("\\", "_") + ".bodycheck.olean"
+            )
+            body_check_command = [
+                str(tool_paths["lean"]),
+                "--trust=0",
+                source_path,
+                "-o",
+                str(proof_olean),
+            ]
+            body_check = _run(
+                body_check_command,
+                cwd=build_root,
+                timeout=CHECK_TIMEOUT_SECONDS,
+                env=check_environment,
+            )
+            _require_success(f"proof body check {source_path}", body_check)
+            proof_identity = _file_identity(
+                proof_olean, f"fresh theorem body-check artifact for {source_path}"
+            )
+            proof_body_checks[source_path] = {
+                "command": body_check_command,
+                "exit": body_check.returncode,
+                "stdout": _decode(body_check.stdout, f"proof body check {source_path}"),
+                "stderr": _decode(body_check.stderr, f"proof body check {source_path} stderr"),
+                "bodycheck_artifact": {
+                    "path": proof_identity.path,
+                    "bytes": proof_identity.bytes,
+                    "sha256": proof_identity.sha256,
+                },
+            }
+
+        declaration_query = "import " + str(manifest.candidate["module"]) + "\n" + "\n".join(
+            f"#check BlindLedger.Kernel.{name}" for name in declarations
+        ) + "\n"
+        declaration_check = _run(
+            [str(tool_paths["lean"]), "--trust=0", "--stdin"],
+            cwd=build_root,
+            timeout=CHECK_TIMEOUT_SECONDS,
+            env=check_environment,
+            input_bytes=declaration_query.encode("ascii"),
+        )
+        _require_success("declaration check", declaration_check)
+        declaration_output = _check_declaration_output(declaration_check.stdout, declarations)
+
+        axiom_query = "import " + str(manifest.candidate["module"]) + "\n" + "\n".join(
+            f"#print axioms BlindLedger.Kernel.{name}" for name in declarations
+        ) + "\n"
+        axiom_check = _run(
+            [str(tool_paths["lean"]), "--trust=0", "--stdin"],
+            cwd=build_root,
+            timeout=CHECK_TIMEOUT_SECONDS,
+            env=check_environment,
+            input_bytes=axiom_query.encode("ascii"),
+        )
+        _require_success("axiom closure check", axiom_check)
+        axiom_records = _parse_axiom_output(axiom_check.stdout, declarations, manifest.allowed_axioms)
+
+        independent_check = _run(
+            [str(tool_paths["leanchecker"]), str(manifest.candidate["module"])],
+            cwd=build_root,
+            timeout=CHECK_TIMEOUT_SECONDS,
+            env=check_environment,
+        )
+        _require_success("independent Lean checker", independent_check)
+
+        native = _run(
+            [str(artifact.resolve())],
+            cwd=build_root,
+            timeout=NATIVE_TIMEOUT_SECONDS,
+            env=check_environment,
+        )
+        _require_success("native semantic diagnostic", native)
+        if native.stderr:
+            raise AssuranceError(f"native semantic diagnostic wrote stderr: {native.stderr!r}")
+        native_counts = _check_native_output(native.stdout, manifest.native, declarations)
+        artifact_identity_after = _file_identity(artifact, "native artifact after execution")
+        if artifact_identity_after != artifact_identity_before:
+            raise AssuranceError(
+                "native artifact changed during execution: "
+                f"before={artifact_identity_before} after={artifact_identity_after}"
+            )
+
+        source_hash_after, file_identities_after = _source_identity(candidate_root, source_files)
+        if source_hash_after != source_hash_before or file_identities_after != file_identities:
+            raise AssuranceError("candidate source identity changed during verification")
+        after_status, after_status_count, after_status_sha256 = _worktree_identity(candidate_root)
+        if before_status != after_status:
+            raise AssuranceError(
+                f"candidate Git status changed during verification: before={before_status!r} after={after_status!r}"
+            )
+
+        print("DECLARATION_CHECK_OUTPUT_BEGIN")
+        print(declaration_output, end="" if declaration_output.endswith("\n") else "\n")
+        print("DECLARATION_CHECK_OUTPUT_END")
+        axiom_output = _decode(axiom_check.stdout, "axiom closure")
+        print("AXIOM_CLOSURE_OUTPUT_BEGIN")
+        print(axiom_output, end="" if axiom_output.endswith("\n") else "\n")
+        print("AXIOM_CLOSURE_OUTPUT_END")
+        print("NATIVE_OUTPUT_BEGIN")
+        print(_decode(native.stdout, "native semantic diagnostic", encoding="ascii"), end="")
+        print("NATIVE_OUTPUT_END")
+
+        return {
+            "schema": "blind_ledger_semantic_assurance_receipt_v1",
+            "status": "PASS",
+            "claim": "PURE_SEMANTIC_KERNEL_ARTIFACT_NONACTIVATING",
+            "manifest": {
+                "path": str(MANIFEST_PATH),
+                "sha256": hashlib.sha256(MANIFEST_PATH.read_bytes()).hexdigest(),
+                "property_count": len(manifest.properties),
+                "declaration_count": len(manifest.declarations),
+                "allowed_axioms": sorted(manifest.allowed_axioms),
+            },
+            "candidate": {
+                "root": str(candidate_root),
+                "head": head,
+                "tree": tree,
+                "source_sha256": source_hash_after,
+                "source_files": [identity.__dict__ for identity in file_identities_after],
+                "worktree_status_count": after_status_count,
+                "worktree_status_sha256": after_status_sha256,
+                "status_unchanged": before_status == after_status,
+            },
+            "toolchain": tool_identities,
+            "build": {
+                "target": manifest.build["target"],
+                "root_module": manifest.build["root_module"],
+                "command": build_command,
+                "exit": build.returncode,
+                "artifact": {
+                    "path": str(artifact.resolve()),
+                    "bytes": artifact_identity_before.bytes,
+                    "sha256": artifact_identity_before.sha256,
+                    "identity_unchanged": artifact_identity_before == artifact_identity_after,
+                },
+                "proof_body_checks": proof_body_checks,
+                "declaration_check": {
+                    "exit": declaration_check.returncode,
+                    "declaration_count": len(declarations),
+                    "output": declaration_output,
+                },
+                "axiom_closure": {
+                    "exit": axiom_check.returncode,
+                    "records": list(axiom_records),
+                    "output": axiom_output,
+                },
+                "independent_checker": {
+                    "command": [str(tool_paths["leanchecker"]), str(manifest.candidate["module"])],
+                    "exit": independent_check.returncode,
+                    "stdout": _decode(independent_check.stdout, "independent Lean checker"),
+                    "stderr": _decode(independent_check.stderr, "independent Lean checker stderr"),
+                },
+            },
+            "source_declarations": list(statement_records),
+            "native": {
+                "counts": native_counts,
+                "stdout": _decode(native.stdout, "native semantic diagnostic", encoding="ascii"),
+            },
+            "qualification": {
+                "modeled": "PASS",
+                "proved": "PASS",
+                "compiled": "PASS",
+                "runtime_linked": "NOT_ESTABLISHED",
+                "deployment_qualified": "NOT_ESTABLISHED",
+                "production_usable": False,
+                "activation": False,
+                "proofSuiteId": None,
+            },
+        }
+
+
+def verify(candidate_root: Path) -> dict[str, Any]:
+    manifest = _load_manifest()
+    return _verify_candidate(candidate_root, manifest)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--candidate-root",
+        type=Path,
+        required=True,
+        help="the separately pinned formal-production-candidate Git checkout",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="strict")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="strict")
+    args = _parser().parse_args(argv)
+    try:
+        receipt = verify(args.candidate_root)
+    except AssuranceError as exc:
+        print(f"SEMANTIC_ASSURANCE_GATE=FAIL {exc}", file=sys.stderr)
+        return 1
+    print("PROOF_BODY_CHECK=PASS actual_lean_trust=0 fresh_source_process=true")
+    print("INDEPENDENT_LEAN_CHECKER=PASS fresh_pinned_process=true")
+    print(
+        "SEMANTIC_ASSURANCE_GATE=PASS "
+        f"property_count={receipt['manifest']['property_count']} "
+        f"declaration_count={receipt['manifest']['declaration_count']} "
+        f"artifact_bytes={receipt['build']['artifact']['bytes']} "
+        f"artifact_sha256={receipt['build']['artifact']['sha256']}"
+    )
+    print("SEMANTIC_ASSURANCE_RECEIPT=" + json.dumps(receipt, sort_keys=True, ensure_ascii=True, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
