@@ -215,8 +215,9 @@ class _GovernanceVerifier:
     verifier_id = "SYNTH_GOVERNANCE_VERIFIER"
     verifier_epoch = 1
 
-    def __init__(self, policy: governance.ExternalGovernanceApprovalPolicyV1) -> None:
+    def __init__(self, policy: governance.ExternalGovernanceApprovalPolicyV1, *, decision: str = "GRANTED") -> None:
         self.policy = policy
+        self.decision = decision
         self.authority_evidence_digest = policy.authority_evidence_digest
         self.revocation_head_digest = policy.revocation_head_digest
         self.terms_digest = policy.terms_digest
@@ -237,7 +238,7 @@ class _GovernanceVerifier:
             revocation_head_digest=self.policy.revocation_head_digest,
             terms_digest=self.policy.terms_digest,
             retention_policy_digest=self.policy.retention_policy_digest,
-            decision="GRANTED",
+            decision=self.decision,
             issued_at=self.policy.effective_start,
             valid_from=self.policy.effective_start,
             valid_until=self.policy.effective_end - 1,
@@ -253,8 +254,16 @@ class _PrivacyVerifier:
     verifier_id = "SYNTH_PRIVACY_VERIFIER"
     verifier_epoch = 1
 
-    def __init__(self, policy: privacy.ExternalPrivacySupportPolicyV1) -> None:
+    def __init__(
+        self,
+        policy: privacy.ExternalPrivacySupportPolicyV1,
+        *,
+        privacy_decision: str = "GRANTED",
+        support_decision: str = "GRANTED",
+    ) -> None:
         self.policy = policy
+        self.privacy_decision = privacy_decision
+        self.support_decision = support_decision
         self.privacy_authority_evidence_digest = policy.privacy_authority_evidence_digest
         self.support_authority_evidence_digest = policy.support_authority_evidence_digest
         self.revocation_head_digest = policy.revocation_head_digest
@@ -275,8 +284,8 @@ class _PrivacyVerifier:
             governance_decision=self.policy.governance_decision,
             terms_digest=self.policy.terms_digest,
             retention_policy_digest=self.policy.retention_policy_digest,
-            privacy_decision="GRANTED",
-            support_decision="GRANTED",
+            privacy_decision=self.privacy_decision,
+            support_decision=self.support_decision,
             issued_at=self.policy.effective_start,
             valid_from=self.policy.effective_start,
             valid_until=self.policy.effective_end - 1,
@@ -611,11 +620,7 @@ class MirrorV2Fixture(unittest.TestCase):
             policy=self.privacy_policy,
             evidence_raw=privacy_evidence,
         )
-        self.session_open = self.core.open_session(
-            source_artifact_id=self.source_result["source_artifact_id"],
-            governance_artifact_id=self.gov_core_id,
-            privacy_artifact_id=self.privacy_core_id,
-        )
+        self.session_open = self.core.open_session()
         self.session_id = json.loads(self.session_open.raw.decode("ascii"))["subject_id"]
         self.core.start_session(self.session_id)
         self.core.observe(self.session_id, 0, "PARITY", counts={"observed": 1, "changed": 0})
@@ -818,6 +823,129 @@ class MirrorV2Fixture(unittest.TestCase):
                 expected_config_digest=self.core_config.digest,
                 ingress_path=self.ingress_path,
             )
+
+    def test_open_session_composes_current_heads_and_retries_without_caller_ids(self) -> None:
+        replacement_evidence = b"synthetic replacement governance assertion"
+        replacement_raw = governance.ExternalGovernanceApprovalService(
+            self.governance_policy,
+            _GovernanceVerifier(self.governance_policy),
+        ).observe(replacement_evidence).raw
+        replacement_id = self.core.admit_governance(
+            replacement_raw,
+            policy=self.governance_policy,
+            evidence_raw=replacement_evidence,
+        )
+
+        before = self._core_fingerprint(self.core)
+        first = self.core.open_session()
+        second = self.core.open_session()
+        self.assertEqual(first.raw, second.raw)
+        self.assertNotEqual(first.raw, self.session_open.raw)
+        after = self._core_fingerprint(self.core)
+        self.assertEqual(before[0] + 1, after[0])
+
+        event = json.loads(first.raw.decode("ascii"))
+        session = event["material"]["session"]
+        self.assertEqual(replacement_id, session["governance_artifact_id"])
+        self.assertEqual(self.source_result["source_artifact_id"], session["source_artifact_id"])
+        self.assertEqual(self.privacy_core_id, session["privacy_artifact_id"])
+        connection = sqlite3.connect(self.core_path)
+        try:
+            heads = {
+                str(row[0]): str(row[1])
+                for row in connection.execute(
+                    "SELECT stream_id,head_ref FROM core_heads "
+                    "WHERE stream_kind='ARTIFACT' AND stream_id IN "
+                    "('SOURCE_OBSERVATION','GOVERNANCE','PRIVACY')"
+                ).fetchall()
+            }
+        finally:
+            connection.close()
+        self.assertEqual(
+            {
+                "SOURCE_OBSERVATION": session["source_artifact_id"],
+                "GOVERNANCE": session["governance_artifact_id"],
+                "PRIVACY": session["privacy_artifact_id"],
+            },
+            heads,
+        )
+        self.assertEqual(
+            core_independent.verify_database(
+                self.core_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+            )["structural_valid"],
+            True,
+        )
+
+    def test_withdrawn_authority_rejects_new_composition_and_pauses_existing_session(self) -> None:
+        withdrawn_evidence = b"synthetic withdrawn governance assertion"
+        withdrawn_raw = governance.ExternalGovernanceApprovalService(
+            self.governance_policy,
+            _GovernanceVerifier(self.governance_policy, decision="WITHDRAWN"),
+        ).observe(withdrawn_evidence).raw
+        withdrawn_id = self.core.admit_governance(
+            withdrawn_raw,
+            policy=self.governance_policy,
+            evidence_raw=withdrawn_evidence,
+        )
+
+        before_fingerprint = self._core_fingerprint(self.core)
+        before_export = self.core.logical_export()
+        before_support = self.core.support()
+        with self.assertRaisesRegex(core.CoreConflictError, "^core:authority-negative$"):
+            self.core.open_session()
+        self.assertEqual(before_fingerprint, self._core_fingerprint(self.core))
+        self.assertEqual(before_export, self.core.logical_export())
+        self.assertEqual(before_support, self.core.support())
+
+        paused = self.core.observe(
+            self.session_id,
+            1,
+            "DISCREPANCY",
+            counts={"observed": 1, "changed": 1},
+        )
+        pause_event = json.loads(paused.raw.decode("ascii"))
+        self.assertEqual("SESSION_PAUSE", pause_event["event_kind"])
+        self.assertEqual("AUTHORITY_INDETERMINATE", pause_event["material"]["reason"])
+        self.assertEqual(withdrawn_id, pause_event["material"]["current_governance_artifact_id"])
+        self.assertEqual("PAUSED", pause_event["next_state"])
+
+        after_pause = self._core_fingerprint(self.core)
+        with self.assertRaisesRegex(core.CoreConflictError, "^core:authority-negative$"):
+            self.core.open_session()
+        self.assertEqual(after_pause, self._core_fingerprint(self.core))
+        self.assertEqual(
+            core_independent.verify_database(
+                self.core_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+            )["structural_valid"],
+            True,
+        )
+
+    def test_expired_authority_rejects_new_composition_without_mutation(self) -> None:
+        replacement_evidence = b"synthetic expiring governance assertion"
+        replacement_raw = governance.ExternalGovernanceApprovalService(
+            self.governance_policy,
+            _GovernanceVerifier(self.governance_policy),
+        ).observe(replacement_evidence).raw
+        self.core.admit_governance(
+            replacement_raw,
+            policy=self.governance_policy,
+            evidence_raw=replacement_evidence,
+        )
+        before_fingerprint = self._core_fingerprint(self.core)
+        before_export = self.core.logical_export()
+        before_support = self.core.support()
+        self.core_clock.value = self.governance_policy.effective_end
+        with self.assertRaisesRegex(core.CoreConflictError, "^core:authority-window$"):
+            self.core.open_session()
+        self.assertEqual(before_fingerprint, self._core_fingerprint(self.core))
+        self.assertEqual(before_export, self.core.logical_export())
+        self.assertEqual(before_support, self.core.support())
 
     def test_ingress_public_rewind_and_core_public_rewind_preserve_state(self) -> None:
         high_clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME + 120)

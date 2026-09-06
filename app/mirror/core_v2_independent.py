@@ -704,6 +704,63 @@ def _material_keys(kind: str) -> set[str]:
     raise CoreVerificationError("core:event-kind")
 
 
+def _session_authority(
+    artifacts: Mapping[str, sqlite3.Row],
+    heads: Mapping[tuple[str, str], str],
+    session: Mapping[str, object],
+    config: Mapping[str, object],
+    observed_at: int,
+) -> tuple[str | None, dict[str, str | None]]:
+    current_heads = {
+        kind: heads.get(("ARTIFACT", kind))
+        for kind in ("SOURCE_OBSERVATION", "GOVERNANCE", "PRIVACY")
+    }
+    if current_heads["SOURCE_OBSERVATION"] != session.get("source_artifact_id"):
+        return "SOURCE_SUPERSEDED", current_heads
+    if (
+        current_heads["GOVERNANCE"] != session.get("governance_artifact_id")
+        or current_heads["PRIVACY"] != session.get("privacy_artifact_id")
+    ):
+        return "AUTHORITY_INDETERMINATE", current_heads
+
+    source_id = session.get("source_artifact_id")
+    governance_id = session.get("governance_artifact_id")
+    privacy_id = session.get("privacy_artifact_id")
+    source_row = artifacts.get(str(source_id))
+    governance_row = artifacts.get(str(governance_id))
+    privacy_row = artifacts.get(str(privacy_id))
+    if (
+        source_row is None
+        or source_row["kind"] != "SOURCE_OBSERVATION"
+        or governance_row is None
+        or governance_row["kind"] != "GOVERNANCE"
+        or privacy_row is None
+        or privacy_row["kind"] != "PRIVACY"
+    ):
+        return "AUTHORITY_INDETERMINATE", current_heads
+    try:
+        source = _parse(source_row["raw"], "core:authority-source")
+        governance = _parse(governance_row["raw"], "core:authority-governance")
+        privacy = _parse(privacy_row["raw"], "core:authority-privacy")
+    except CoreVerificationError:
+        return "AUTHORITY_INDETERMINATE", current_heads
+    if (
+        source.get("runtime_profile_digest") != config["runtime_profile_digest"]
+        or governance.get("policy_digest") != config["governance_policy_digest"]
+        or privacy.get("policy_digest") != config["privacy_policy_digest"]
+        or governance.get("decision") != "GRANTED"
+        or privacy.get("privacy_decision") != "GRANTED"
+        or privacy.get("support_decision") != "GRANTED"
+    ):
+        return "AUTHORITY_INDETERMINATE", current_heads
+    for authority in (governance, privacy):
+        if type(authority.get("valid_from")) is not int or type(authority.get("valid_until")) is not int:
+            return "AUTHORITY_INDETERMINATE", current_heads
+        if observed_at < int(authority["valid_from"]) or observed_at > int(authority["valid_until"]):
+            return "AUTHORITY_EXPIRED", current_heads
+    return None, current_heads
+
+
 def _check_event(value: Mapping[str, object], meta: Mapping[str, object], previous_root: str, previous_observed: int) -> None:
     if set(value) != EVENT_RAW_KEYS or value["schema"] != SCHEMA or value["schema_version"] != SCHEMA_VERSION:
         raise CoreVerificationError("core:event-schema")
@@ -1022,10 +1079,31 @@ def _verify_connection(
                 artifact = expected_artifacts.get(str(session[key]))
                 if artifact is None or artifact["kind"] != artifact_kind:
                     raise CoreVerificationError("core:session-open")
+            if session_id != _digest(
+                "session-id",
+                {
+                    "source": session["source_artifact_id"],
+                    "governance": session["governance_artifact_id"],
+                    "privacy": session["privacy_artifact_id"],
+                    "config": _digest("config", config),
+                },
+            ):
+                raise CoreVerificationError("core:session-open")
+            if len(expected_sessions) >= int(config["max_sessions"]):
+                raise CoreVerificationError("core:session-capacity")
             if value["operation_id"] != _digest("session-operation", {"session_id": value["subject_id"], "action": "OPEN"}):
                 raise CoreVerificationError("core:session-open")
             if value["request_digest"] != _digest("session-request", {"session_id": value["subject_id"]}):
                 raise CoreVerificationError("core:session-open")
+            authority_reason, _heads = _session_authority(
+                expected_artifacts,
+                stream_refs,
+                session,
+                config,
+                int(value["observed_at"]),
+            )
+            if authority_reason is not None:
+                raise CoreVerificationError("core:session-open-authority")
             expected_sessions[session_id] = {
                 "session_id": session_id,
                 "state": "OPEN",
@@ -1053,6 +1131,15 @@ def _verify_connection(
                 or value["prior_state"] != session_state["state"]
             ):
                 raise CoreVerificationError("core:session-start")
+            authority_reason, _heads = _session_authority(
+                expected_artifacts,
+                stream_refs,
+                session_state,
+                config,
+                int(value["observed_at"]),
+            )
+            if authority_reason is not None:
+                raise CoreVerificationError("core:session-start-authority")
             session_state["state"] = "RUNNING"
             session_state["head_root"] = str(value["stream_after_root"])
         elif kind == "OBSERVATION":
@@ -1088,6 +1175,15 @@ def _verify_connection(
                 or (session_id, slot_number) in expected_slots
             ):
                 raise CoreVerificationError("core:session-observation")
+            authority_reason, _heads = _session_authority(
+                expected_artifacts,
+                stream_refs,
+                session_state,
+                config,
+                int(value["observed_at"]),
+            ) if session_state is not None else ("AUTHORITY_INDETERMINATE", {})
+            if authority_reason is not None:
+                raise CoreVerificationError("core:session-observation-authority")
             expected_slots[(session_id, slot_number)] = {
                 "session_id": session_id,
                 "slot_number": slot_number,
@@ -1132,6 +1228,15 @@ def _verify_connection(
                 _hex(material[key], "core:session-pause")
                 if material[key] != stream_refs.get(("ARTIFACT", artifact_kind)):
                     raise CoreVerificationError("core:session-pause")
+            authority_reason, _heads = _session_authority(
+                expected_artifacts,
+                stream_refs,
+                session_state,
+                config,
+                int(value["observed_at"]),
+            )
+            if authority_reason is None or material["reason"] != authority_reason:
+                raise CoreVerificationError("core:session-pause-authority")
             session_state["state"] = "PAUSED"
             session_state["head_root"] = str(value["stream_after_root"])
         if kind.startswith("SESSION_") or kind == "OBSERVATION":

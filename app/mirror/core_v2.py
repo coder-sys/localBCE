@@ -766,22 +766,28 @@ class CoreServiceV2:
                 return False
         return source.get("ingress_head_root") == ing.get("event_after_root") and source.get("observation_identity") == ing.get("observation_id")
 
-    @staticmethod
     def _authority_staleness(
+        self,
         connection: sqlite3.Connection,
         row: sqlite3.Row,
         now: int,
     ) -> tuple[str | None, dict[str, str | None]]:
-        heads: dict[str, str | None] = {}
-        for kind in ("SOURCE_OBSERVATION", "GOVERNANCE", "PRIVACY"):
-            head = connection.execute(
-                "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?",
-                (kind,),
-            ).fetchone()
-            heads[kind] = str(head[0]) if head is not None else None
+        heads = CoreServiceV2._current_authority_heads(connection)
         if heads["SOURCE_OBSERVATION"] != row["source_artifact_id"]:
             return "SOURCE_SUPERSEDED", heads
         if heads["GOVERNANCE"] != row["governance_artifact_id"] or heads["PRIVACY"] != row["privacy_artifact_id"]:
+            return "AUTHORITY_INDETERMINATE", heads
+        source_authority = connection.execute(
+            "SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='SOURCE_OBSERVATION'",
+            (row["source_artifact_id"],),
+        ).fetchone()
+        if source_authority is None or type(source_authority[0]) is not bytes:
+            return "AUTHORITY_INDETERMINATE", heads
+        try:
+            source_value = independent._parse(source_authority[0], "core:artifact")
+        except independent.CoreVerificationError:
+            return "AUTHORITY_INDETERMINATE", heads
+        if source_value.get("runtime_profile_digest") != self.config.runtime_profile_digest:
             return "AUTHORITY_INDETERMINATE", heads
         authority_rows: list[sqlite3.Row] = []
         for kind in ("GOVERNANCE", "PRIVACY"):
@@ -798,7 +804,9 @@ class CoreServiceV2:
             authority_rows.append(value)  # type: ignore[arg-type]
         governance_value, privacy_value = authority_rows
         if (
-            governance_value.get("decision") != "GRANTED"
+            governance_value.get("policy_digest") != self.config.governance_policy_digest
+            or privacy_value.get("policy_digest") != self.config.privacy_policy_digest
+            or governance_value.get("decision") != "GRANTED"
             or privacy_value.get("privacy_decision") != "GRANTED"
             or privacy_value.get("support_decision") != "GRANTED"
         ):
@@ -809,6 +817,17 @@ class CoreServiceV2:
             if now < int(value["valid_from"]) or now > int(value["valid_until"]):
                 return "AUTHORITY_EXPIRED", heads
         return None, heads
+
+    @staticmethod
+    def _current_authority_heads(connection: sqlite3.Connection) -> dict[str, str | None]:
+        heads: dict[str, str | None] = {}
+        for kind in ("SOURCE_OBSERVATION", "GOVERNANCE", "PRIVACY"):
+            head = connection.execute(
+                "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?",
+                (kind,),
+            ).fetchone()
+            heads[kind] = str(head[0]) if head is not None else None
+        return heads
 
     @staticmethod
     def _latest_pause_receipt(connection: sqlite3.Connection, session_id: str) -> CoreReceipt:
@@ -1518,17 +1537,22 @@ class CoreServiceV2:
         return row
 
     @_mutation
-    def open_session(self, *, source_artifact_id: str, governance_artifact_id: str, privacy_artifact_id: str) -> CoreReceipt:
-        _require_digest(source_artifact_id, "core:authority-head")
-        _require_digest(governance_artifact_id, "core:authority-head")
-        _require_digest(privacy_artifact_id, "core:authority-head")
-        session_id = _digest("session-id", {"source": source_artifact_id, "governance": governance_artifact_id, "privacy": privacy_artifact_id, "config": self.config.digest})
-        operation_id = _digest("session-operation", {"session_id": session_id, "action": "OPEN"})
+    def open_session(self) -> CoreReceipt:
         connection = self._open()
         commit_attempted = False
         commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
+            heads = self._current_authority_heads(connection)
+            for kind in ("SOURCE_OBSERVATION", "GOVERNANCE", "PRIVACY"):
+                if heads[kind] is None:
+                    raise CoreConflictError("core:authority-head")
+                _require_digest(heads[kind], "core:authority-head")
+            source_artifact_id = str(heads["SOURCE_OBSERVATION"])
+            governance_artifact_id = str(heads["GOVERNANCE"])
+            privacy_artifact_id = str(heads["PRIVACY"])
+            session_id = _digest("session-id", {"source": source_artifact_id, "governance": governance_artifact_id, "privacy": privacy_artifact_id, "config": self.config.digest})
+            operation_id = _digest("session-operation", {"session_id": session_id, "action": "OPEN"})
             existing = self._event(connection, operation_id)
             if existing is not None:
                 commit_attempted = True
