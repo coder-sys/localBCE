@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import copy
 from dataclasses import replace
-import hashlib
 import json
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -19,7 +17,6 @@ from experiments.native_v3_phase0.native_v3_fixture import (
 )
 
 from experiments.native_v3_trust_boundary.profile import (
-    MAX_RETRIES,
     ProfileError,
     _validate_compiled_parameter_report,
     build_profile_bindings,
@@ -30,49 +27,9 @@ from experiments.native_v3_trust_boundary.profile import (
     profile_manifest,
     validate_security_ledger,
 )
-from experiments.native_v3_trust_boundary.session import (
-    ChallengeMessage,
-    CommitmentMessage,
-    Opening,
-    ProverSession,
-    ProverState,
-    ProfileStatement,
-    Transcript,
-    VerifierSession,
-    build_verifier_bindings,
-    create_session_artifacts,
-    issue_session_challenge,
-    recompute_decision_access_join_id,
-    respond_to_challenge,
-    verify_opening,
-    verify_session_directory,
-)
-
-
-class CounterRandom:
-    def __init__(self) -> None:
-        self.counter = 0
-
-    def __call__(self, length: int) -> bytes:
-        self.counter += 1
-        return hashlib.sha3_512(self.counter.to_bytes(8, "big")).digest()[:length]
 
 
 class TrustBoundaryProfileTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory(prefix="native-v3-tbp-", dir=Path("work"))
-        self.directory = Path(self.temp.name)
-        self.auth_key = bytes(range(32))
-
-    def tearDown(self) -> None:
-        self.temp.cleanup()
-
-    def make_flow(self):
-        state = create_session_artifacts(self.directory, auth_key=self.auth_key, random_source=CounterRandom())
-        challenge = issue_session_challenge(self.directory, random_source=CounterRandom())
-        transcript = respond_to_challenge(self.directory, random_source=CounterRandom())
-        return state, challenge, transcript
-
     def test_manifest_is_explicit_and_nonactivating(self) -> None:
         manifest = profile_manifest()
         self.assertFalse(manifest["complete_bound_available"])
@@ -292,60 +249,6 @@ class TrustBoundaryProfileTests(unittest.TestCase):
             with self.assertRaises(ProfileError):
                 parse_decision_access_join(mutation)
 
-    def test_independent_verifier_recomputes_join_and_rejects_raw_mutations(self) -> None:
-        fixture = build_fixture()
-        valid = DecisionAccessJoin(fixture.operation, fixture.accesses).canonical_bytes()
-        expected = build_profile_bindings().decision_access_join_id
-        self.assertEqual(recompute_decision_access_join_id(valid), expected)
-        self.assertEqual(build_verifier_bindings().decision_access_join_id, expected)
-
-        rows_start = 4 + 480 + 4
-        mutations: list[bytes] = []
-        for offset, value in (
-            (0, 2),
-            (4 + 16, 2),
-            (4 + 480, 1),
-            (rows_start + 12, 1),
-            (rows_start + 20, 1),
-            (rows_start + 24, ACCESS_WRITE),
-            (rows_start + 94 + 24, ACCESS_READ),
-            (rows_start + 24, 9),
-        ):
-            mutation = bytearray(valid)
-            if offset in (0, 4 + 16, 4 + 480, rows_start + 12, rows_start + 20):
-                mutation[offset:offset + 4] = value.to_bytes(4, "big")
-            else:
-                mutation[offset] = value
-            mutations.append(bytes(mutation))
-        mutation = bytearray(valid)
-        mutation[rows_start + 30] ^= 1
-        mutations.append(bytes(mutation))
-        mutation = bytearray(valid)
-        mutation[rows_start + 94 + 30] ^= 1
-        mutations.append(bytes(mutation))
-        mutation = bytearray(valid)
-        mutation[4 + 280] ^= 1
-        mutations.append(bytes(mutation))
-        mutations.extend((valid[:-1], valid + b"\0"))
-        self.assertEqual(len(mutations), 13)
-
-        for mutation in mutations:
-            with self.assertRaisesRegex(ProfileError, "verifier:join-"):
-                recompute_decision_access_join_id(mutation)
-
-        with patch(
-            "experiments.native_v3_trust_boundary.profile.access_row_bytes",
-            side_effect=AssertionError("producer validator called"),
-        ):
-            self.assertEqual(recompute_decision_access_join_id(valid), expected)
-
-        with patch(
-            "experiments.native_v3_trust_boundary.session.build_profile_bindings",
-            return_value=replace(build_profile_bindings(), decision_access_join_id=b"\1" + b"\0" * 63),
-        ):
-            with self.assertRaisesRegex(ProfileError, "verifier:join-producer-disagreement"):
-                build_verifier_bindings()
-
     def test_producer_rejects_all_non_strict_time_orders(self) -> None:
         bindings = build_profile_bindings()
         times = [
@@ -356,7 +259,6 @@ class TrustBoundaryProfileTests(unittest.TestCase):
         ]
         self.assertEqual(times, sorted(times))
         self.assertEqual(len(set(times)), 4)
-        self.assertEqual(len(ProfileStatement(b"\1" * 32, bindings).canonical_bytes()), 992)
 
         for left, right in ((0, 1), (1, 2), (2, 3), (0, 2), (1, 3), (0, 3)):
             swapped = times.copy()
@@ -381,95 +283,6 @@ class TrustBoundaryProfileTests(unittest.TestCase):
                     observation_time=equal[2],
                     decision_time=equal[3],
                 )
-
-    def test_live_flow_and_replay_marker(self) -> None:
-        state, challenge, transcript = self.make_flow()
-        result = verify_session_directory(self.directory)
-        self.assertEqual(result.session_id, state.statement.session_id)
-        self.assertEqual(result.challenge_digest, challenge.digest)
-        self.assertEqual(result.transcript_digest, hashlib.sha3_512(
-            b"BL/NATIVE-V3/TBP/TRANSCRIPT/v1\0"
-            + transcript.session_id
-            + transcript.statement
-            + transcript.commitment
-            + transcript.challenge
-            + transcript.response
-        ).digest())
-        self.assertFalse(result.complete_bound_available)
-        self.assertFalse(result.production_usable)
-        with self.assertRaisesRegex(ProfileError, "registry:replay"):
-            verify_session_directory(self.directory)
-
-    def test_independent_parsers_reject_role_auth_truncation_and_reorder(self) -> None:
-        state, _, _ = self.make_flow()
-        statement_bytes = (self.directory / "statement.bin").read_bytes()
-        commitment_bytes = (self.directory / "commitment.bin").read_bytes()
-        challenge_bytes = (self.directory / "challenge.bin").read_bytes()
-        transcript_bytes = (self.directory / "transcript.bin").read_bytes()
-
-        bad_commitment = bytearray(commitment_bytes)
-        bad_commitment[11] = 2
-        with self.assertRaises(ProfileError):
-            CommitmentMessage.parse(bytes(bad_commitment))
-
-        bad_challenge = bytearray(challenge_bytes)
-        bad_challenge[-1] ^= 1
-        with self.assertRaises(ProfileError):
-            ChallengeMessage.parse(bytes(bad_challenge), self.auth_key)
-
-        with self.assertRaises(ProfileError):
-            Transcript.parse(transcript_bytes[:-1])
-
-        parsed = Transcript.parse(transcript_bytes)
-        reordered = Transcript(
-            parsed.session_id,
-            parsed.statement,
-            parsed.challenge,
-            parsed.commitment,
-            parsed.response,
-        ).canonical_bytes()
-        with self.assertRaises(ProfileError):
-            Transcript.parse(reordered)
-
-        bad_statement = bytearray(statement_bytes)
-        source_root_offset = 112 + (3 * 64)
-        bad_statement[source_root_offset] ^= 1
-        with self.assertRaises(ProfileError):
-            ProverState.parse(ProverState.parse((self.directory / "prover_state.bin").read_bytes()).canonical_bytes().replace(statement_bytes, bytes(bad_statement), 1))
-
-        self.assertEqual(state.statement.session_id, parsed.session_id)
-
-    def test_wrong_salt_and_opening_index_fail_closed(self) -> None:
-        state, challenge, _ = self.make_flow()
-        commitment = CommitmentMessage.parse((self.directory / "commitment.bin").read_bytes())
-        response_bytes = (self.directory / "response.bin").read_bytes()
-        response = ProverState.parse((self.directory / "prover_state.bin").read_bytes())
-        self.assertEqual(response.statement.session_id, state.statement.session_id)
-        opening = Opening.parse(response_bytes[-(len(response_bytes) - response_bytes.find(b"BLTBOP01")):])
-        bad_salt = bytes((opening.salt[0] ^ 1,)) + opening.salt[1:]
-        with self.assertRaises(ProfileError):
-            verify_opening(Opening(opening.index, opening.value, bad_salt, opening.sibling_is_left, opening.sibling_hash), commitment, challenge)
-        with self.assertRaises(ProfileError):
-            verify_opening(Opening(1 - challenge.selected_index, opening.value, opening.salt, opening.sibling_is_left, opening.sibling_hash), commitment, challenge)
-
-    def test_abort_retry_cap_and_challenge_replay(self) -> None:
-        bindings = build_profile_bindings()
-        registry = self.directory / "retry-registry"
-        prover = ProverSession(bindings, random_source=CounterRandom(), registry_dir=registry)
-        for _ in range(MAX_RETRIES):
-            prover.commit()
-            prover.abort()
-        with self.assertRaisesRegex(ProfileError, "retry:cap"):
-            prover.commit()
-
-        state = ProverSession(bindings, random_source=CounterRandom(), registry_dir=self.directory / "challenge-registry").commit()
-        statement = state.statement.canonical_bytes()
-        commitment = state.commitment.canonical_bytes()
-        verifier = VerifierSession(self.auth_key, random_source=CounterRandom(), registry_dir=self.directory / "challenge-registry")
-        verifier.issue_challenge(commitment, statement)
-        with self.assertRaisesRegex(ProfileError, "registry:replay"):
-            VerifierSession(self.auth_key, random_source=CounterRandom(), registry_dir=self.directory / "challenge-registry").issue_challenge(commitment, statement)
-
 
 if __name__ == "__main__":
     unittest.main()

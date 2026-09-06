@@ -19,7 +19,6 @@ TRANSITIVE_SOURCE_ROOTS = (
     ROOT / "experiments" / "native_v3_phase0_rust",
     ROOT / "experiments" / "native_v3_plaintext_continuity",
     ROOT / "experiments" / "native_v3_trust_boundary",
-    ROOT / "experiments" / "native_v3_trust_boundary_rust",
 )
 RETIRED_IMPORT_PREFIXES = (
     "app.privacy_v2",

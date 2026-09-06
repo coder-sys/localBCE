@@ -1,8 +1,0 @@
-[package]
-name = "native_v3_trust_boundary_rust"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-[dependencies]
-sha3 = { version = "=0.10.9", default-features = false }
