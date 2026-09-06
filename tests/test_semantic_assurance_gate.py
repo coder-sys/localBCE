@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
+import os
 from pathlib import Path
+import platform
+import re
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,8 +17,155 @@ from tools import semantic_assurance_gate as gate
 
 
 class SemanticAssuranceGateNegativeTests(unittest.TestCase):
+    ACTUAL_CANDIDATE_DEFAULT = Path(
+        r"C:\Users\neers\Documents\Codex\2026-08-31\pq-v3\work\formal-production-candidate"
+    )
+
     def setUp(self) -> None:
         self.manifest = gate._load_manifest()
+
+    def _actual_candidate(self) -> Path:
+        candidate = Path(
+            os.environ.get(
+                "BLIND_LEDGER_SEMANTIC_CANDIDATE",
+                str(self.ACTUAL_CANDIDATE_DEFAULT),
+            )
+        ).resolve()
+        self.assertTrue(candidate.is_dir(), f"actual candidate is absent: {candidate}")
+        self.assertTrue((candidate / ".git").exists(), f"actual candidate is not Git: {candidate}")
+        self.assertEqual(
+            "",
+            self._git_command(candidate, "status", "--porcelain", "--untracked-files=all"),
+            f"actual candidate is dirty: {candidate}",
+        )
+        self.assertEqual(
+            self.manifest.candidate["required_head"],
+            self._git_command(candidate, "rev-parse", "HEAD"),
+        )
+        self.assertEqual(
+            self.manifest.candidate["required_tree"],
+            self._git_command(candidate, "rev-parse", "HEAD^{tree}"),
+        )
+        return candidate
+
+    @staticmethod
+    def _git_command(root: Path, *arguments: str) -> str:
+        command = ["git", *arguments]
+        result = subprocess.run(
+            command,
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"command failed exit={result.returncode}: {command!r}\n"
+                f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+            )
+        return result.stdout.strip()
+
+    @classmethod
+    def _git_mutation(cls, root: Path, *arguments: str) -> None:
+        command = ["git", *arguments]
+        result = subprocess.run(
+            command,
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"command failed exit={result.returncode}: {command!r}\n"
+                f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+            )
+
+    @classmethod
+    def _commit_fixture(cls, root: Path, message: str) -> tuple[str, str]:
+        cls._git_mutation(root, "add", "--all")
+        cls._git_mutation(
+            root,
+            "-c",
+            "user.name=semantic-assurance-test",
+            "-c",
+            "user.email=semantic-assurance-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            message,
+        )
+        return (
+            cls._git_command(root, "rev-parse", "HEAD"),
+            cls._git_command(root, "rev-parse", "HEAD^{tree}"),
+        )
+
+    @contextmanager
+    def _fresh_candidate(self, mutation):
+        actual = self._actual_candidate()
+        with tempfile.TemporaryDirectory(prefix="semantic-gate-candidate-") as temporary:
+            root = Path(temporary) / "candidate"
+            self._git_mutation(
+                Path(temporary),
+                "clone",
+                "--no-local",
+                "--quiet",
+                str(actual),
+                str(root),
+            )
+            mutation(root)
+            head = self._git_command(root, "rev-parse", "HEAD")
+            tree = self._git_command(root, "rev-parse", "HEAD^{tree}")
+            self.assertEqual(
+                "",
+                self._git_command(root, "status", "--porcelain", "--untracked-files=all"),
+            )
+            yield root, head, tree
+        self.assertFalse(Path(temporary).exists())
+        self.assertEqual(
+            "",
+            self._git_command(actual, "status", "--porcelain", "--untracked-files=all"),
+        )
+        print(f"INTEGRATION_FIXTURE_CLEANUP=PASS candidate_temp={temporary}")
+
+    def _test_manifest_for(
+        self,
+        head: str,
+        tree: str,
+        *,
+        source_files: tuple[str, ...] | None = None,
+        forbidden_tokens: tuple[str, ...] | None = None,
+    ) -> gate.Manifest:
+        candidate_record = dict(self.manifest.candidate)
+        candidate_record["required_head"] = head
+        candidate_record["required_tree"] = tree
+        if source_files is not None:
+            candidate_record["source_files"] = list(source_files)
+        return replace(
+            self.manifest,
+            candidate=candidate_record,
+            forbidden_tokens=(
+                self.manifest.forbidden_tokens
+                if forbidden_tokens is None
+                else forbidden_tokens
+            ),
+        )
+
+    def _assert_production_identity_rejection(self, candidate: Path) -> str:
+        with self.assertRaisesRegex(gate.AssuranceError, "candidate Git identity mismatch") as raised:
+            gate.verify(candidate)
+        reason = str(raised.exception)
+        print(f"PRODUCTION_MANIFEST_REJECTION={reason}")
+        return reason
+
+    @staticmethod
+    def _native_invocation(command) -> bool:
+        return (
+            len(command) == 1
+            and Path(str(command[0])).name.lower() == "blind_clearance_kernel.exe"
+        )
 
     def _theorem_expectations(self) -> tuple[gate.DeclarationExpectation, ...]:
         theorem_source = self.manifest.candidate["theorem_source"]
@@ -157,6 +310,303 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             ):
                 gate._check_forbidden_sources(
                     root, ("source.lean",), ("forbidden_marker",)
+                )
+
+    def test_real_removed_theorem_reaches_containing_declaration_gate(self) -> None:
+        expectation = self._theorem_expectations()[0]
+
+        def mutate(root: Path) -> None:
+            source_path = root / self.manifest.candidate["theorem_source"]
+            source = source_path.read_text(encoding="utf-8")
+            pattern = re.compile(
+                rf"(?ms)^theorem {re.escape(expectation.name)}\b.*?(?=^theorem |\Z)"
+            )
+            matches = list(pattern.finditer(source))
+            self.assertEqual(1, len(matches), expectation.name)
+            source_path.write_text(
+                source[: matches[0].start()] + source[matches[0].end() :],
+                encoding="utf-8",
+            )
+            self._commit_fixture(root, "remove required theorem for verifier test")
+
+        with self._fresh_candidate(mutate) as (candidate, head, tree):
+            production_reason = self._assert_production_identity_rejection(candidate)
+            test_manifest = self._test_manifest_for(head, tree)
+            with self.assertRaisesRegex(
+                gate.AssuranceError,
+                rf"required theorem declaration missing: \['{expectation.name}'\]",
+            ) as raised:
+                gate._verify_candidate(candidate, test_manifest)
+            print(
+                "INTEGRATION_NEGATIVE "
+                f"stage=declaration_presence mutation=removed_theorem name={expectation.name} "
+                f"head={head} tree={tree} production={production_reason!r} "
+                f"containing={str(raised.exception)!r}"
+            )
+
+    def test_real_changed_theorem_reaches_containing_statement_gate(self) -> None:
+        expectation = self._theorem_expectations()[1]
+
+        def mutate(root: Path) -> None:
+            source_path = root / self.manifest.candidate["theorem_source"]
+            source = source_path.read_text(encoding="utf-8")
+            old = "theorem proof_acceptance_ne_clear :\n    proofSessionOnly true = none"
+            new = "theorem proof_acceptance_ne_clear :\n    proofSessionOnly false = none"
+            self.assertEqual(1, source.count(old))
+            source_path.write_text(source.replace(old, new, 1), encoding="utf-8")
+            self._commit_fixture(root, "change required theorem statement for verifier test")
+
+        with self._fresh_candidate(mutate) as (candidate, head, tree):
+            production_reason = self._assert_production_identity_rejection(candidate)
+            test_manifest = self._test_manifest_for(head, tree)
+            with self.assertRaisesRegex(gate.AssuranceError, "theorem statement changed") as raised:
+                gate._verify_candidate(candidate, test_manifest)
+            print(
+                "INTEGRATION_NEGATIVE "
+                f"stage=declaration_statement mutation=changed_theorem name={expectation.name} "
+                f"head={head} tree={tree} production={production_reason!r} "
+                f"containing={str(raised.exception)!r}"
+            )
+
+    def test_real_transitive_custom_axiom_reaches_containing_axiom_gate(self) -> None:
+        def mutate(root: Path) -> None:
+            injected = root / "BlindLedger" / "Injected.lean"
+            injected.write_text(
+                "namespace BlindLedger.Kernel\n\n"
+                "axiom injected_custom_axiom : True\n\n"
+                "end BlindLedger.Kernel\n",
+                encoding="utf-8",
+            )
+            source_path = root / self.manifest.candidate["theorem_source"]
+            source = source_path.read_text(encoding="utf-8")
+            self.assertEqual(1, source.count("import BlindLedger.Codec\n"))
+            self.assertEqual(1, source.count("exact Option.some.inj"))
+            source = source.replace(
+                "import BlindLedger.Codec\n",
+                "import BlindLedger.Codec\nimport BlindLedger.Injected\n",
+                1,
+            )
+            source = source.replace(
+                "  exact Option.some.inj (hleft.symm.trans hright)",
+                "  have _h : True := injected_custom_axiom\n"
+                "  exact Option.some.inj (hleft.symm.trans hright)",
+                1,
+            )
+            source_path.write_text(source, encoding="utf-8")
+            self._commit_fixture(root, "introduce transitive custom axiom for verifier test")
+
+        with self._fresh_candidate(mutate) as (candidate, head, tree):
+            source_files = tuple(
+                sorted(
+                    (*self.manifest.candidate["source_files"], "BlindLedger/Injected.lean")
+                )
+            )
+            forbidden_tokens = tuple(
+                token for token in self.manifest.forbidden_tokens if token != "axiom"
+            )
+            test_manifest = self._test_manifest_for(
+                head,
+                tree,
+                source_files=source_files,
+                forbidden_tokens=forbidden_tokens,
+            )
+            with patch.object(
+                gate, "_parse_axiom_output", wraps=gate._parse_axiom_output
+            ) as parser_spy:
+                with self.assertRaisesRegex(
+                    gate.AssuranceError,
+                    "unapproved axiom dependency for evaluation_deterministic",
+                ) as raised:
+                    gate._verify_candidate(candidate, test_manifest)
+            self.assertIsNotNone(parser_spy.call_args)
+            axiom_output = parser_spy.call_args.args[0].decode("utf-8")
+            self.assertIn("BlindLedger.Kernel.injected_custom_axiom", axiom_output)
+            print(
+                "INTEGRATION_NEGATIVE "
+                f"stage=axiom_closure mutation=transitive_custom_axiom head={head} tree={tree} "
+                f"containing={str(raised.exception)!r}"
+            )
+            print("REAL_LEAN_AXIOM_OUTPUT_BEGIN")
+            print(axiom_output, end="" if axiom_output.endswith("\n") else "\n")
+            print("REAL_LEAN_AXIOM_OUTPUT_END")
+
+    def test_real_source_change_during_verification_reaches_containing_identity_gate(self) -> None:
+        def mutate(root: Path) -> None:
+            del root
+
+        with self._fresh_candidate(mutate) as (candidate, head, tree):
+            source_path = candidate / "BlindLedger" / "Types.lean"
+            original_run = gate._run
+            evidence: dict[str, str] = {}
+
+            def run_and_mutate(command, *, cwd, timeout, env=None, input_bytes=b""):
+                result = original_run(
+                    command,
+                    cwd=cwd,
+                    timeout=timeout,
+                    env=env,
+                    input_bytes=input_bytes,
+                )
+                if not evidence and result.returncode == 0 and self._native_invocation(command):
+                    before_head = self._git_command(candidate, "rev-parse", "HEAD")
+                    before_tree = self._git_command(candidate, "rev-parse", "HEAD^{tree}")
+                    with source_path.open("a", encoding="utf-8", newline="") as handle:
+                        handle.write("\n-- real source identity mutation during verification\n")
+                    after_head, after_tree = self._commit_fixture(
+                        candidate, "mutate source identity during verifier test"
+                    )
+                    evidence.update(
+                        before_head=before_head,
+                        before_tree=before_tree,
+                        after_head=after_head,
+                        after_tree=after_tree,
+                    )
+                return result
+
+            with patch.object(gate, "_run", side_effect=run_and_mutate):
+                with self.assertRaisesRegex(
+                    gate.AssuranceError,
+                    "candidate source identity changed during verification",
+                ) as raised:
+                    gate._verify_candidate(candidate, self.manifest)
+            self.assertEqual(head, evidence["before_head"])
+            self.assertEqual(tree, evidence["before_tree"])
+            self.assertNotEqual(head, evidence["after_head"])
+            self.assertNotEqual(tree, evidence["after_tree"])
+            print(
+                "INTEGRATION_NEGATIVE "
+                f"stage=source_identity mutation=real_committed_source_change "
+                f"before={evidence['before_head']}/{evidence['before_tree']} "
+                f"after={evidence['after_head']}/{evidence['after_tree']} "
+                f"containing={str(raised.exception)!r}"
+            )
+
+    def test_real_artifact_change_during_verification_reaches_containing_identity_gate(self) -> None:
+        with self._fresh_candidate(lambda root: None) as (candidate, head, tree):
+            original_run = gate._run
+            evidence: dict[str, gate.FileIdentity] = {}
+
+            def run_and_mutate(command, *, cwd, timeout, env=None, input_bytes=b""):
+                result = original_run(
+                    command,
+                    cwd=cwd,
+                    timeout=timeout,
+                    env=env,
+                    input_bytes=input_bytes,
+                )
+                if not evidence and result.returncode == 0 and self._native_invocation(command):
+                    artifact = Path(str(command[0]))
+                    evidence["before"] = gate._file_identity(artifact, "real artifact before mutation")
+                    with artifact.open("ab") as handle:
+                        handle.write(b"\x00")
+                    evidence["after"] = gate._file_identity(artifact, "real artifact after mutation")
+                return result
+
+            with patch.object(gate, "_run", side_effect=run_and_mutate):
+                with self.assertRaisesRegex(
+                    gate.AssuranceError,
+                    "native artifact changed during execution",
+                ) as raised:
+                    gate._verify_candidate(candidate, self.manifest)
+            self.assertEqual(evidence["before"].bytes + 1, evidence["after"].bytes)
+            self.assertNotEqual(evidence["before"].sha256, evidence["after"].sha256)
+            print(
+                "INTEGRATION_NEGATIVE "
+                f"stage=artifact_identity mutation=real_artifact_byte_append head={head} tree={tree} "
+                f"before={evidence['before']!r} after={evidence['after']!r} "
+                f"containing={str(raised.exception)!r}"
+            )
+
+    @contextmanager
+    def _copied_toolchain(self):
+        installed_root = (
+            Path.home()
+            / ".elan"
+            / "toolchains"
+            / "leanprover--lean4---v4.33.1"
+        )
+        installed_bin = installed_root / "bin"
+        self.assertTrue(installed_bin.is_dir(), f"installed toolchain is absent: {installed_bin}")
+        with tempfile.TemporaryDirectory(prefix="semantic-gate-toolchain-") as temporary:
+            home = Path(temporary)
+            copied_root = home / ".elan" / "toolchains" / installed_root.name
+            copied_bin = copied_root / "bin"
+            copied_bin.mkdir(parents=True)
+            for executable in installed_bin.iterdir():
+                if executable.is_file():
+                    shutil.copy2(executable, copied_bin / executable.name)
+            junctions = []
+            try:
+                for directory_name in ("lib", "include", "share", "src"):
+                    link = copied_root / directory_name
+                    result = subprocess.run(
+                        [
+                            "cmd.exe",
+                            "/d",
+                            "/c",
+                            "mklink",
+                            "/J",
+                            str(link),
+                            str(installed_root / directory_name),
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        check=False,
+                    )
+                    if result.returncode != 0:
+                        raise AssertionError(
+                            f"junction creation failed exit={result.returncode}: "
+                            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+                        )
+                    junctions.append(link)
+                yield home, copied_bin
+            finally:
+                for link in reversed(junctions):
+                    if os.path.lexists(link):
+                        link.rmdir()
+        self.assertFalse(Path(temporary).exists())
+        print(f"TOOLCHAIN_FIXTURE_CLEANUP=PASS temp={temporary}")
+
+    def test_real_tool_change_during_verification_reaches_containing_identity_gate(self) -> None:
+        if os.name != "nt" or platform.machine().lower() not in {"amd64", "x86_64"}:
+            self.skipTest("copied Lean toolchain integration requires Windows x86_64")
+        with self._fresh_candidate(lambda root: None) as (candidate, head, tree):
+            with self._copied_toolchain() as (home, copied_bin):
+                original_run = gate._run
+                evidence: dict[str, gate.FileIdentity] = {}
+
+                def run_and_mutate(command, *, cwd, timeout, env=None, input_bytes=b""):
+                    result = original_run(
+                        command,
+                        cwd=cwd,
+                        timeout=timeout,
+                        env=env,
+                        input_bytes=input_bytes,
+                    )
+                    if not evidence and result.returncode == 0 and self._native_invocation(command):
+                        tool = copied_bin / "lean.exe"
+                        evidence["before"] = gate._file_identity(tool, "real copied tool before mutation")
+                        with tool.open("ab") as handle:
+                            handle.write(b"\x00")
+                        evidence["after"] = gate._file_identity(tool, "real copied tool after mutation")
+                    return result
+
+                with patch.object(gate.Path, "home", return_value=home), patch.object(
+                    gate, "_run", side_effect=run_and_mutate
+                ):
+                    with self.assertRaisesRegex(
+                        gate.AssuranceError,
+                        "pinned lean executable changed during execution",
+                    ) as raised:
+                        gate._verify_candidate(candidate, self.manifest)
+                self.assertEqual(evidence["before"].bytes + 1, evidence["after"].bytes)
+                self.assertNotEqual(evidence["before"].sha256, evidence["after"].sha256)
+                print(
+                    "INTEGRATION_NEGATIVE "
+                    f"stage=toolchain_identity mutation=real_copied_lean_byte_append "
+                    f"head={head} tree={tree} before={evidence['before']!r} "
+                    f"after={evidence['after']!r} containing={str(raised.exception)!r}"
                 )
 
 
