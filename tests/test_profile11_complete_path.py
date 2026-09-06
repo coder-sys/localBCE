@@ -513,6 +513,21 @@ runpy.run_path(sys.argv[0], run_name="__main__")
                 },
             },
         )
+        self.assertEqual(
+            manifest["resource_observation"],
+            {
+                "authority": "Windows Job Object",
+                "api": "QueryInformationJobObject",
+                "memory_metric": "JOBOBJECT_EXTENDED_LIMIT_INFORMATION.PeakJobMemoryUsed",
+                "cap_metric": "JOBOBJECT_EXTENDED_LIMIT_INFORMATION.JobMemoryLimit",
+                "process_metric": "JOBOBJECT_BASIC_ACCOUNTING_INFORMATION.ActiveProcesses_and_TotalProcesses",
+                "enforcement": ["JobMemoryLimit", "ActiveProcessLimit"],
+                "cap_strictly_less_than_bytes": 5_000_000_000,
+                "missing_metric": "fail_closed",
+                "process_tree_completion": "final ActiveProcesses equals zero after process-handle signal",
+                "resource_only_report_is_nonactivating": True,
+            },
+        )
         self.assertIsNone(manifest["qualification"]["proofSuiteId"])
         self.assertFalse(manifest["qualification"]["production_usable"])
         self.assertFalse(manifest["qualification"]["activation"])
@@ -555,6 +570,12 @@ runpy.run_path(sys.argv[0], run_name="__main__")
             screen.effective_outer_cap(screen.OUTER_HARD_CAP_BYTES, 4096)
         good = screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 8, 8, True, True, True)
         screen.validate_job_observation(good)
+        with self.assertRaisesRegex(screen.CompletePathError, "outer_measurement_missing"):
+            screen.validate_job_observation(screen.JobObservation(0, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 1, 1, True, True, True))
+        with self.assertRaisesRegex(screen.CompletePathError, "outer_measurement_incomplete"):
+            screen.validate_job_observation(screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 1, 1, True, False, True))
+        with self.assertRaisesRegex(screen.CompletePathError, "outer_memory_cap"):
+            screen.validate_job_observation(screen.JobObservation(effective + 1, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 1, 1, True, True, True))
         for bad, code in (
             (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective + 4096, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 3, True, True, True), "outer_cap_readback"),
             (screen.JobObservation(screen.OUTER_HARD_CAP_BYTES, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, screen.OUTER_ACTIVE_PROCESS_LIMIT, screen.OUTER_ACTIVE_PROCESS_LIMIT, 2, 3, True, True, True), "outer_memory_cap"),
@@ -577,13 +598,64 @@ runpy.run_path(sys.argv[0], run_name="__main__")
     def test_outer_job_probe_contains_child_and_grandchild(self) -> None:
         if os.name != "nt":
             self.skipTest("Windows Job Object ABI is unavailable")
-        with tempfile.TemporaryDirectory(prefix="profile11-job-") as directory:
-            run = screen._launch_coordinator(Path(directory), timeout_seconds=5.0, arguments=("--probe-coordinator", "0.15"))
-        self.assertIsNone(run.error_code, run.error_code)
-        self.assertIsNotNone(run.payload)
-        self.assertGreaterEqual(run.observation.total_processes, 2)
-        self.assertGreaterEqual(run.observation.peak_active_processes, 1)
-        screen.validate_job_observation(run.observation)
+        for delay in ("0.15", "0.01"):
+            with self.subTest(delay=delay), tempfile.TemporaryDirectory(prefix="profile11-job-") as directory:
+                run = screen._launch_coordinator(Path(directory), timeout_seconds=5.0, arguments=("--probe-coordinator", delay))
+            self.assertIsNone(run.error_code, run.error_code)
+            self.assertIsNotNone(run.payload)
+            self.assertGreater(run.observation.peak_job_commit_bytes, 0)
+            self.assertEqual(run.observation.cap_readback_bytes, run.observation.effective_cap_bytes)
+            self.assertTrue(run.observation.measurement_complete)
+            self.assertGreaterEqual(run.observation.total_processes, 2)
+            self.assertGreaterEqual(run.observation.peak_active_processes, 1)
+            self.assertTrue(run.observation.process_tree_complete)
+            self.assertTrue(run.observation.cleanup_complete)
+            screen.validate_job_observation(run.observation)
+
+    def test_resource_report_is_measured_but_not_qualified(self) -> None:
+        effective = screen.effective_outer_cap(screen.PROCESS_TREE_PEAK_CAP_BYTES, 4096)
+        payload = screen.build_test_aggregate(
+            completed_samples=5,
+            timings=tuple(self._timed_sample(index + 1) for index in range(5)),
+            warmup=self._timed_sample(),
+        )
+        run = screen.CoordinatorRun(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii"),
+            screen.JobObservation(103956480, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, 8, 8, 5, 27, True, True, True),
+            None,
+        )
+        report = screen._resource_report_from_run(run=run, payload=payload)
+        self.assertEqual(report["schema"], screen.RESOURCE_OBSERVATION_SCHEMA)
+        self.assertEqual(report["status"], "measured")
+        self.assertIsNone(report["error_code"])
+        self.assertEqual(report["resource_observation"]["peak_job_commit_bytes"], 103956480)
+        self.assertEqual(report["resource_observation"]["total_processes"], 27)
+        self.assertFalse(report["complete_profile_qualification"])
+        self.assertEqual(report["observer_status"], "observer_unavailable")
+        self.assertEqual(report["disk_gate"], "observer_unavailable")
+        self.assertFalse(report["activation"])
+        self.assertIsNone(report["proofSuiteId"])
+
+    def test_resource_report_rejects_missing_metric_and_incomplete_cleanup(self) -> None:
+        effective = screen.effective_outer_cap(screen.PROCESS_TREE_PEAK_CAP_BYTES, 4096)
+        payload = screen.build_test_aggregate(
+            completed_samples=5,
+            timings=tuple(self._timed_sample(index + 1) for index in range(5)),
+            warmup=self._timed_sample(),
+        )
+        for observation, error_code in (
+            (screen.JobObservation(0, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, 8, 8, 1, 1, True, True, True), "outer_measurement_missing"),
+            (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, 8, 8, 1, 1, True, False, True), "outer_measurement_incomplete"),
+            (screen.JobObservation(1024, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, 8, 8, 1, 1, False, True, False), "outer_cleanup"),
+            (screen.JobObservation(effective + 1, screen.PROCESS_TREE_PEAK_CAP_BYTES, effective, effective, 8, 8, 1, 1, True, True, True), "outer_memory_cap"),
+        ):
+            with self.subTest(error_code=error_code):
+                report = screen._resource_report_from_run(
+                    run=screen.CoordinatorRun(None, observation, None),
+                    payload=payload,
+                )
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(report["error_code"], error_code)
 
     def test_outer_job_timeout_terminates_and_reaps(self) -> None:
         if os.name != "nt":

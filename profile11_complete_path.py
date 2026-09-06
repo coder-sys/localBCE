@@ -482,7 +482,9 @@ AGGREGATE_ERROR_CODES: Final[frozenset[str]] = frozenset({
     "state_durability_configuration", "state_durability_readback",
     "outer_process_limit", "outer_process_limit_configuration", "outer_cleanup",
     "outer_observation_shape", "outer_cap_configuration", "outer_cap_invalid", "outer_cap_readback",
-    "outer_memory_cap", "outer_process_limit_readback", "outer_process_lineage", "aggregate_p95_target",
+    "outer_memory_cap", "outer_process_limit_readback", "outer_process_lineage",
+    "outer_measurement_incomplete", "outer_measurement_missing", "resource_payload_missing",
+    "aggregate_p95_target",
     "product_target_exceeded", "runtime_restart", "runtime_restart_database", "timing_ack_reconciliation",
 })
 
@@ -493,6 +495,7 @@ FIXED_QUALIFICATION_FLAGS: Final[tuple[str, ...]] = (
     "timing_memory_only",
 )
 OBSERVER_DIAGNOSTIC_SCHEMA: Final[str] = "BL/NATIVE-V3/PROFILE11-OBSERVER-CAPABILITY-DIAGNOSTIC/v1"
+RESOURCE_OBSERVATION_SCHEMA: Final[str] = "BL/NATIVE-V3/PROFILE11-RESOURCE-OBSERVATION/v1"
 _OBSERVER_DIAGNOSTIC_REASON_ORDER: Final[tuple[str, ...]] = (
     "observer_non_windows",
     "observer_pointer_width",
@@ -799,7 +802,9 @@ def validate_job_observation(observation: JobObservation) -> None:
         _fixed("outer_process_lineage")
     if observation.timed_out:
         _fixed("outer_timeout")
-    if observation.process_tree_complete is not True or observation.measurement_complete is not True or observation.cleanup_complete is not True:
+    if observation.measurement_complete is not True:
+        _fixed("outer_measurement_incomplete")
+    if observation.process_tree_complete is not True or observation.cleanup_complete is not True:
         _fixed("outer_cleanup")
 
 
@@ -830,6 +835,8 @@ def _validate_job_observation_safety(observation: JobObservation) -> None:
         _fixed("outer_process_limit_readback")
     if observation.active_process_limit != OUTER_ACTIVE_PROCESS_LIMIT or observation.active_process_limit_readback != OUTER_ACTIVE_PROCESS_LIMIT:
         _fixed("outer_process_limit_configuration")
+    if observation.measurement_complete is True and observation.peak_job_commit_bytes <= 0:
+        _fixed("outer_measurement_missing")
     if observation.peak_job_commit_bytes >= OUTER_HARD_CAP_BYTES or observation.peak_job_commit_bytes > observation.effective_cap_bytes:
         _fixed("outer_memory_cap")
     if observation.peak_active_processes > OUTER_ACTIVE_PROCESS_LIMIT:
@@ -3939,6 +3946,127 @@ def _parse_payload(payload: bytes | None) -> dict[str, Any] | None:
     return _validate_aggregate_mapping(value)
 
 
+def _resource_observation_mapping(observation: JobObservation) -> dict[str, Any]:
+    return {
+        "source": "windows_job_object",
+        "enforcement": "job_memory_limit_and_active_process_limit",
+        "measurement": "PeakJobMemoryUsed_and_basic_accounting",
+        "requested_cap_bytes": observation.requested_cap_bytes,
+        "effective_cap_bytes": observation.effective_cap_bytes,
+        "cap_readback_bytes": observation.cap_readback_bytes,
+        "active_process_limit": observation.active_process_limit,
+        "active_process_limit_readback": observation.active_process_limit_readback,
+        "peak_job_commit_bytes": observation.peak_job_commit_bytes,
+        "peak_active_processes": observation.peak_active_processes,
+        "total_processes": observation.total_processes,
+        "process_tree_complete": observation.process_tree_complete,
+        "measurement_complete": observation.measurement_complete,
+        "cleanup_complete": observation.cleanup_complete,
+        "timed_out": observation.timed_out,
+    }
+
+
+def _validate_resource_observation_mapping(value: object) -> dict[str, Any]:
+    allowed = {
+        "source", "enforcement", "measurement", "requested_cap_bytes",
+        "effective_cap_bytes", "cap_readback_bytes", "active_process_limit",
+        "active_process_limit_readback", "peak_job_commit_bytes",
+        "peak_active_processes", "total_processes", "process_tree_complete",
+        "measurement_complete", "cleanup_complete", "timed_out",
+    }
+    if type(value) is not dict or set(value) != allowed:
+        _fixed("resource_observation_shape")
+    if (
+        value["source"] != "windows_job_object"
+        or value["enforcement"] != "job_memory_limit_and_active_process_limit"
+        or value["measurement"] != "PeakJobMemoryUsed_and_basic_accounting"
+    ):
+        _fixed("resource_observation_authority")
+    observation = JobObservation(
+        value["peak_job_commit_bytes"],
+        value["requested_cap_bytes"],
+        value["effective_cap_bytes"],
+        value["cap_readback_bytes"],
+        value["active_process_limit"],
+        value["active_process_limit_readback"],
+        value["peak_active_processes"],
+        value["total_processes"],
+        value["process_tree_complete"],
+        value["measurement_complete"],
+        value["cleanup_complete"],
+        value["timed_out"],
+    )
+    validate_job_observation(observation)
+    return value
+
+
+def _resource_report_from_run(*, run: CoordinatorRun, payload: dict[str, Any] | None) -> dict[str, Any]:
+    resource = _resource_observation_mapping(run.observation)
+    error_code = run.error_code
+    try:
+        _validate_resource_observation_mapping(resource)
+    except CompletePathError as error:
+        if error_code is None:
+            error_code = str(error)
+    aggregate = None if payload is None else dict(payload)
+    if aggregate is None:
+        if error_code is None:
+            error_code = "resource_payload_missing"
+    else:
+        aggregate["peak_job_commit_bytes"] = run.observation.peak_job_commit_bytes
+        aggregate["effective_cap_bytes"] = run.observation.effective_cap_bytes
+        aggregate["peak_active_processes"] = run.observation.peak_active_processes
+        aggregate["total_processes"] = run.observation.total_processes
+        aggregate["observer_status"] = "observer_unavailable"
+        aggregate["disk_gate"] = "observer_unavailable"
+        try:
+            _validate_aggregate_mapping(aggregate)
+        except CompletePathError as error:
+            if error_code is None:
+                error_code = str(error)
+        if aggregate["status"] != "complete" or aggregate["error_code"] is not None:
+            if error_code is None:
+                error_code = aggregate["error_code"] or "coordinator_failure"
+    return {
+        "schema": RESOURCE_OBSERVATION_SCHEMA,
+        "mode": "resource_observation",
+        "status": "measured" if error_code is None else "failed",
+        "error_code": error_code,
+        "resource_observation": resource,
+        "aggregate": aggregate,
+        "observer_status": "observer_unavailable",
+        "disk_gate": "observer_unavailable",
+        "complete_profile_qualification": False,
+        "proofSuiteId": None,
+        "production_usable": False,
+        "activation": False,
+    }
+
+
+def _validate_resource_run_root(run_root: Path) -> None:
+    if not isinstance(run_root, Path) or not run_root.is_absolute() or run_root.is_symlink() or not run_root.is_dir():
+        _fixed("resource_run_root")
+    for name in ("source-workspace", "verifier-workspace", "state"):
+        workspace = run_root / name
+        try:
+            if not workspace.is_dir() or workspace.is_symlink() or tuple(workspace.iterdir()):
+                _fixed("resource_run_root")
+        except OSError:
+            _fixed("resource_run_root")
+
+
+def run_resource_measurement(*, run_root: Path) -> dict[str, Any]:
+    _validate_resource_run_root(run_root)
+    run = _launch_coordinator(run_root)
+    try:
+        payload = _parse_payload(run.payload)
+    except CompletePathError as error:
+        payload = None
+        if run.error_code is None:
+            run = CoordinatorRun(run.payload, run.observation, str(error))
+    return _resource_report_from_run(run=run, payload=payload)
+
+
 def run_falsification_screen(*, observer: WindowsEtwFileWriteObserver | None = None) -> dict[str, Any]:
     observer = observer or WindowsEtwFileWriteObserver()
     capability = observer.probe()
@@ -4032,6 +4160,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--diagnose-observer", action="store_true")
     parser.add_argument("--screen", action="store_true")
+    parser.add_argument("--resource", action="store_true")
     parser.add_argument("--coordinator", action="store_true")
     parser.add_argument("--probe-coordinator", type=float)
     parser.add_argument("--probe-grandchild", type=float)
@@ -4042,6 +4171,7 @@ def main(argv: list[str] | None = None) -> int:
             bool(args.prepare),
             bool(args.diagnose_observer),
             bool(args.screen),
+            bool(args.resource),
             bool(args.coordinator or args.probe_coordinator is not None),
             args.probe_grandchild is not None,
         ))
@@ -4049,7 +4179,7 @@ def main(argv: list[str] | None = None) -> int:
             _fixed("mode_required")
         if mode_count != 1:
             _fixed("mode_conflict")
-        if args.run_root and not (args.coordinator or args.probe_coordinator is not None):
+        if args.run_root and not (args.coordinator or args.probe_coordinator is not None or args.resource):
             _fixed("run_root_mode")
         if args.prepare:
             print(json.dumps(prepare_report(), sort_keys=True, separators=(",", ":")))
@@ -4064,6 +4194,12 @@ def main(argv: list[str] | None = None) -> int:
                 _fixed("outer_run_root")
             print(_aggregate_json(_probe_tree_coordinator(Path(args.run_root), args.probe_coordinator)), end="")
             return 0
+        if args.resource:
+            if not args.run_root:
+                _fixed("resource_run_root")
+            value = run_resource_measurement(run_root=Path(args.run_root))
+            print(json.dumps(value, sort_keys=True, separators=(",", ":")), end="")
+            return 0 if value["status"] == "measured" else 1
         if args.coordinator:
             if not args.run_root:
                 _fixed("outer_run_root")
@@ -4090,8 +4226,8 @@ __all__ = (
     "C_BUILD", "C_HEAD", "C_RANGE_LIBRARY", "C_REPO", "C_SOURCE_LIBRARY", "C_VERIFIER", "C_TREE",
     "CompletePathError", "DependencyReport", "FileWriteEvent", "FileWriteObservation", "GitPin",
     "JobObservation", "MANIFEST_PATH", "MEASURED_SAMPLE_COUNT", "OBSERVER_DIAGNOSTIC_SCHEMA", "ObserverCapabilityDiagnostic", "ObserverExecutionEvidence", "OUTER_ACTIVE_PROCESS_LIMIT",
-    "OUTER_HARD_CAP_BYTES", "PROFILE_ID", "PROFILE_SCHEMA", "PRODUCER_EXECUTABLE", "PRODUCER_EXECUTABLE_SHA256", "PRODUCER_EXECUTABLE_SIZE_BYTES", "PRODUCER_HEAD", "PRODUCER_REPO", "PRODUCER_TREE", "MeasurementSchedule", "StageSample", "VerifyStateBreakdown", "WindowsEtwFileWriteObserver", "WindowsEtwWriteTraceBackend",
+    "OUTER_HARD_CAP_BYTES", "PROFILE_ID", "PROFILE_SCHEMA", "PRODUCER_EXECUTABLE", "PRODUCER_EXECUTABLE_SHA256", "PRODUCER_EXECUTABLE_SIZE_BYTES", "PRODUCER_HEAD", "PRODUCER_REPO", "PRODUCER_TREE", "RESOURCE_OBSERVATION_SCHEMA", "MeasurementSchedule", "StageSample", "VerifyStateBreakdown", "WindowsEtwFileWriteObserver", "WindowsEtwWriteTraceBackend",
     "build_test_aggregate", "configured_state_allowlist", "effective_outer_cap", "evaluate_disk_gate", "observer_diagnostic_report",
     "nearest_rank_p95", "prepare_report", "run_falsification_screen", "run_measurement_schedule", "run_measurement_schedule_with_warmup", "validate_dependencies",
-    "validate_job_observation", "validate_topology",
+    "run_resource_measurement", "validate_job_observation", "validate_topology",
 )
