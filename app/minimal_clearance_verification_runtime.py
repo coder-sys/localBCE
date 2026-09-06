@@ -192,19 +192,22 @@ class MinimalClearanceVerificationRuntime:
         composition_store: ClearanceCompositionStoreV2 | None = None
 
         def fail_startup(code: str) -> None:
-            try:
+            cleanup_failed = False
+            for cleanup in (
+                (composition_store.close if composition_store is not None else None),
+                (store._close if store is not None else None),
+                (owner._startup_cleanup if owner is not None else None),
+            ):
+                if cleanup is None:
+                    continue
                 try:
-                    if composition_store is not None:
-                        composition_store.close()
-                finally:
-                    try:
-                        if store is not None:
-                            store._close()
-                    finally:
-                        if owner is not None:
-                            owner.close()
-            finally:
-                _fixed(code)
+                    cleanup()
+                except BaseException:
+                    # Preserve fail-closed startup semantics when cleanup
+                    # itself is indeterminate; the original startup code is
+                    # not a proof that the resource boundary was released.
+                    cleanup_failed = True
+            _fixed("runtime_startup" if cleanup_failed else code)
 
         try:
             database = root / "state.sqlite"
@@ -427,7 +430,12 @@ class MinimalClearanceVerificationRuntime:
                 return
             self._composition_store.close()
             self._close_queue_store()
-            self._database_owner.close()
+            try:
+                self._database_owner.close()
+            except VerificationQueueError as error:
+                _fixed(str(error))
+            except BaseException:
+                _fixed("runtime_close")
             self._closed = True
         finally:
             self._operation_lock.release()

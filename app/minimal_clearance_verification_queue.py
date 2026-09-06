@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from dataclasses import dataclass
+import errno
 import hashlib
 import hmac
 import json
@@ -19,6 +20,7 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+import stat
 from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
 
 from app.minimal_clearance_resource_limits import (
@@ -676,36 +678,272 @@ class _QueueWorkItem:
     lease_expires_ms: int
 
 
-def _owner_process_is_live(pid: int) -> bool:
-    """Return live for a confirmed live or ambiguously probeable owner PID."""
+_RUNTIME_LOCK_MARKER_BYTES: Final[int] = 32
+_RUNTIME_LOCK_MARKER_PREFIX: Final[bytes] = b"BL/RUNTIME-LOCK/v1/"
+_RUNTIME_LOCK_PID_BYTES: Final[int] = 10
+_RUNTIME_REPARSE_POINT: Final[int] = 0x400
+
+
+def _runtime_file_identity(info: os.stat_result) -> tuple[int, int, int]:
+    return int(info.st_dev), int(info.st_ino), int(info.st_nlink)
+
+
+def _runtime_path_identity(path: Path) -> tuple[int, int, int]:
+    try:
+        info = os.lstat(path)
+    except (OSError, RuntimeError):
+        _raise_fixed(VerificationQueueError("runtime_scope"))
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or bool(getattr(info, "st_file_attributes", 0) & _RUNTIME_REPARSE_POINT)
+        or info.st_nlink != 1
+    ):
+        _raise_fixed(VerificationQueueError("runtime_scope"))
+    return _runtime_file_identity(info)
+
+
+def _runtime_marker_pid(raw: bytes) -> int:
+    if type(raw) is not bytes or len(raw) != len(_RUNTIME_LOCK_MARKER_PREFIX) + _RUNTIME_LOCK_PID_BYTES or not raw.startswith(_RUNTIME_LOCK_MARKER_PREFIX):
+        _raise_fixed(VerificationQueueError("runtime_scope"))
+    try:
+        pid_bytes = raw[len(_RUNTIME_LOCK_MARKER_PREFIX):]
+        if not pid_bytes.isascii() or not pid_bytes.isdigit():
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        pid = int(pid_bytes.decode("ascii"))
+    except (ValueError, UnicodeError):
+        _raise_fixed(VerificationQueueError("runtime_scope"))
+    if pid <= 0:
+        _raise_fixed(VerificationQueueError("runtime_scope"))
+    return pid
+
+
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+
+    _RUNTIME_WIN_GENERIC_READ = 0x80000000
+    _RUNTIME_WIN_GENERIC_WRITE = 0x40000000
+    _RUNTIME_WIN_DELETE = 0x00010000
+    _RUNTIME_WIN_FILE_SHARE_READ = 0x00000001
+    _RUNTIME_WIN_FILE_SHARE_WRITE = 0x00000002
+    _RUNTIME_WIN_FILE_SHARE_DELETE = 0x00000004
+    _RUNTIME_WIN_OPEN_EXISTING = 3
+    _RUNTIME_WIN_CREATE_NEW = 1
+    _RUNTIME_WIN_FILE_ATTRIBUTE_NORMAL = 0x00000080
+    _RUNTIME_WIN_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    _RUNTIME_WIN_FILE_TYPE_DISK = 0x00000001
+    _RUNTIME_WIN_LOCKFILE_EXCLUSIVE_LOCK = 0x00000002
+    _RUNTIME_WIN_LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
+    _RUNTIME_WIN_FILE_DISPOSITION_INFO = 4
+    _RUNTIME_WIN_ERROR_FILE_NOT_FOUND = 2
+    _RUNTIME_WIN_ERROR_INVALID_HANDLE = 6
+    _RUNTIME_WIN_ERROR_SHARING_VIOLATION = 32
+    _RUNTIME_WIN_ERROR_LOCK_VIOLATION = 33
+    _RUNTIME_WIN_ERROR_FILE_EXISTS = 80
+    _RUNTIME_WIN_ERROR_ALREADY_EXISTS = 183
+    _RUNTIME_WIN_INVALID_HANDLE = ctypes.c_void_p(-1).value
+    _RUNTIME_WIN_ULONG_PTR = getattr(wintypes, "ULONG_PTR", ctypes.c_size_t)
+
+    class _RuntimeWinOverlapped(ctypes.Structure):
+        _fields_ = [
+            ("Internal", _RUNTIME_WIN_ULONG_PTR),
+            ("InternalHigh", _RUNTIME_WIN_ULONG_PTR),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        ]
+
+    class _RuntimeWinFileInfo(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    class _RuntimeWinFileDisposition(ctypes.Structure):
+        _fields_ = [("DeleteFile", wintypes.BOOL)]
+
+    _RUNTIME_WIN_KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _RUNTIME_WIN_CreateFileW = _RUNTIME_WIN_KERNEL32.CreateFileW
+    _RUNTIME_WIN_CreateFileW.argtypes = (
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    )
+    _RUNTIME_WIN_CreateFileW.restype = wintypes.HANDLE
+    _RUNTIME_WIN_GetFileInformationByHandle = _RUNTIME_WIN_KERNEL32.GetFileInformationByHandle
+    _RUNTIME_WIN_GetFileInformationByHandle.argtypes = (wintypes.HANDLE, ctypes.POINTER(_RuntimeWinFileInfo))
+    _RUNTIME_WIN_GetFileInformationByHandle.restype = wintypes.BOOL
+    _RUNTIME_WIN_GetFileType = _RUNTIME_WIN_KERNEL32.GetFileType
+    _RUNTIME_WIN_GetFileType.argtypes = (wintypes.HANDLE,)
+    _RUNTIME_WIN_GetFileType.restype = wintypes.DWORD
+    _RUNTIME_WIN_CloseHandle = _RUNTIME_WIN_KERNEL32.CloseHandle
+    _RUNTIME_WIN_CloseHandle.argtypes = (wintypes.HANDLE,)
+    _RUNTIME_WIN_CloseHandle.restype = wintypes.BOOL
+    _RUNTIME_WIN_LockFileEx = _RUNTIME_WIN_KERNEL32.LockFileEx
+    _RUNTIME_WIN_LockFileEx.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+        wintypes.DWORD, ctypes.POINTER(_RuntimeWinOverlapped),
+    )
+    _RUNTIME_WIN_LockFileEx.restype = wintypes.BOOL
+    _RUNTIME_WIN_UnlockFileEx = _RUNTIME_WIN_KERNEL32.UnlockFileEx
+    _RUNTIME_WIN_UnlockFileEx.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+        ctypes.POINTER(_RuntimeWinOverlapped),
+    )
+    _RUNTIME_WIN_UnlockFileEx.restype = wintypes.BOOL
+    _RUNTIME_WIN_SetFileInformationByHandle = _RUNTIME_WIN_KERNEL32.SetFileInformationByHandle
+    _RUNTIME_WIN_SetFileInformationByHandle.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+    )
+    _RUNTIME_WIN_SetFileInformationByHandle.restype = wintypes.BOOL
+    _RUNTIME_WIN_SetFilePointerEx = _RUNTIME_WIN_KERNEL32.SetFilePointerEx
+    _RUNTIME_WIN_SetFilePointerEx.argtypes = (
+        wintypes.HANDLE, ctypes.c_longlong, ctypes.POINTER(ctypes.c_longlong), wintypes.DWORD,
+    )
+    _RUNTIME_WIN_SetFilePointerEx.restype = wintypes.BOOL
+    _RUNTIME_WIN_ReadFile = _RUNTIME_WIN_KERNEL32.ReadFile
+    _RUNTIME_WIN_ReadFile.argtypes = (
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+    )
+    _RUNTIME_WIN_ReadFile.restype = wintypes.BOOL
+    _RUNTIME_WIN_WriteFile = _RUNTIME_WIN_KERNEL32.WriteFile
+    _RUNTIME_WIN_WriteFile.argtypes = (
+        wintypes.HANDLE, wintypes.LPCVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+    )
+    _RUNTIME_WIN_WriteFile.restype = wintypes.BOOL
+    _RUNTIME_WIN_SetEndOfFile = _RUNTIME_WIN_KERNEL32.SetEndOfFile
+    _RUNTIME_WIN_SetEndOfFile.argtypes = (wintypes.HANDLE,)
+    _RUNTIME_WIN_SetEndOfFile.restype = wintypes.BOOL
+    _RUNTIME_WIN_FlushFileBuffers = _RUNTIME_WIN_KERNEL32.FlushFileBuffers
+    _RUNTIME_WIN_FlushFileBuffers.argtypes = (wintypes.HANDLE,)
+    _RUNTIME_WIN_FlushFileBuffers.restype = wintypes.BOOL
+
+    def _runtime_win_error(error: BaseException) -> int:
+        return int(getattr(error, "winerror", None) or getattr(error, "errno", 0) or 0)
+
+    def _runtime_win_handle_value(handle: object) -> int | None:
+        return ctypes.cast(handle, ctypes.c_void_p).value
+
+    def _runtime_win_close(handle: object | None) -> None:
+        if handle is not None and _runtime_win_handle_value(handle) not in {None, _RUNTIME_WIN_INVALID_HANDLE}:
+            if not _RUNTIME_WIN_CloseHandle(handle):
+                raise OSError(ctypes.get_last_error(), "CloseHandle")
+
+    def _runtime_win_open(path: Path, *, disposition: int) -> object:
+        handle = _RUNTIME_WIN_CreateFileW(
+            str(path),
+            _RUNTIME_WIN_GENERIC_READ | _RUNTIME_WIN_GENERIC_WRITE | _RUNTIME_WIN_DELETE,
+            _RUNTIME_WIN_FILE_SHARE_READ | _RUNTIME_WIN_FILE_SHARE_WRITE | _RUNTIME_WIN_FILE_SHARE_DELETE,
+            None,
+            disposition,
+            _RUNTIME_WIN_FILE_FLAG_OPEN_REPARSE_POINT | _RUNTIME_WIN_FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+        if _runtime_win_handle_value(handle) in {None, _RUNTIME_WIN_INVALID_HANDLE}:
+            raise OSError(ctypes.get_last_error(), "CreateFileW")
+        return handle
+
+    def _runtime_win_info(handle: object) -> tuple[int, int, int, int, int]:
+        info = _RuntimeWinFileInfo()
+        if not _RUNTIME_WIN_GetFileInformationByHandle(handle, ctypes.byref(info)):
+            raise OSError(ctypes.get_last_error(), "GetFileInformationByHandle")
+        size = (int(info.nFileSizeHigh) << 32) | int(info.nFileSizeLow)
+        index = (int(info.nFileIndexHigh) << 32) | int(info.nFileIndexLow)
+        return int(info.dwVolumeSerialNumber), index, int(info.nNumberOfLinks), size, int(info.dwFileAttributes)
+
+    def _runtime_win_seek(handle: object) -> None:
+        result = ctypes.c_longlong()
+        if not _RUNTIME_WIN_SetFilePointerEx(handle, 0, ctypes.byref(result), 0):
+            raise OSError(ctypes.get_last_error(), "SetFilePointerEx")
+
+    def _runtime_win_read_marker(handle: object) -> bytes:
+        _runtime_win_seek(handle)
+        buffer = ctypes.create_string_buffer(_RUNTIME_LOCK_MARKER_BYTES + 1)
+        count = wintypes.DWORD()
+        if not _RUNTIME_WIN_ReadFile(handle, buffer, _RUNTIME_LOCK_MARKER_BYTES + 1, ctypes.byref(count), None):
+            raise OSError(ctypes.get_last_error(), "ReadFile")
+        return bytes(buffer.raw[:count.value])
+
+    def _runtime_win_write_marker(handle: object, marker: bytes) -> None:
+        _runtime_win_seek(handle)
+        offset = 0
+        while offset < len(marker):
+            payload = ctypes.create_string_buffer(marker[offset:])
+            count = wintypes.DWORD()
+            if not _RUNTIME_WIN_WriteFile(handle, payload, len(marker) - offset, ctypes.byref(count), None):
+                raise OSError(ctypes.get_last_error(), "WriteFile")
+            if count.value <= 0:
+                raise OSError(0, "WriteFile")
+            offset += count.value
+        if not _RUNTIME_WIN_SetEndOfFile(handle):
+            raise OSError(ctypes.get_last_error(), "SetEndOfFile")
+        if not _RUNTIME_WIN_FlushFileBuffers(handle):
+            raise OSError(ctypes.get_last_error(), "FlushFileBuffers")
+
+    def _runtime_win_lock(handle: object) -> _RuntimeWinOverlapped:
+        overlapped = _RuntimeWinOverlapped()
+        if not _RUNTIME_WIN_LockFileEx(
+            handle,
+            _RUNTIME_WIN_LOCKFILE_EXCLUSIVE_LOCK | _RUNTIME_WIN_LOCKFILE_FAIL_IMMEDIATELY,
+            0,
+            1,
+            0,
+            ctypes.byref(overlapped),
+        ):
+            raise OSError(ctypes.get_last_error(), "LockFileEx")
+        return overlapped
+
+    def _runtime_win_unlock(handle: object, overlapped: _RuntimeWinOverlapped | None) -> None:
+        if overlapped is not None and not _RUNTIME_WIN_UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped)):
+            raise OSError(ctypes.get_last_error(), "UnlockFileEx")
+
+    def _runtime_win_mark_delete(handle: object) -> None:
+        disposition = _RuntimeWinFileDisposition(True)
+        if not _RUNTIME_WIN_SetFileInformationByHandle(
+            handle,
+            _RUNTIME_WIN_FILE_DISPOSITION_INFO,
+            ctypes.byref(disposition),
+            ctypes.sizeof(disposition),
+        ):
+            raise OSError(ctypes.get_last_error(), "SetFileInformationByHandle")
+
+
+def _runtime_owner_process_is_live(pid: int) -> bool:
+    """Only reject a live legacy marker after the OS lock is acquired."""
     if type(pid) is not int or pid <= 0:
         return False
     if os.name == "nt":
         try:
-            import ctypes
-            from ctypes import wintypes
-
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            ERROR_INVALID_PARAMETER = 87
-            STILL_ACTIVE = 259
+            access = 0x1000
+            invalid_parameter = 87
+            still_active = 259
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-            kernel32.OpenProcess.restype = wintypes.HANDLE
-            kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
-            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
-            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-            kernel32.CloseHandle.restype = wintypes.BOOL
-
-            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            open_process = kernel32.OpenProcess
+            open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            open_process.restype = wintypes.HANDLE
+            get_exit_code = kernel32.GetExitCodeProcess
+            get_exit_code.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+            get_exit_code.restype = wintypes.BOOL
+            handle = open_process(access, False, pid)
             if not handle:
-                return ctypes.get_last_error() != ERROR_INVALID_PARAMETER
+                return ctypes.get_last_error() != invalid_parameter
             result = True
             try:
                 exit_code = wintypes.DWORD()
-                if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-                    result = exit_code.value == STILL_ACTIVE
+                if get_exit_code(handle, ctypes.byref(exit_code)):
+                    result = exit_code.value == still_active
             finally:
-                if not kernel32.CloseHandle(handle):
+                try:
+                    _runtime_win_close(handle)
+                except BaseException:
                     result = True
             return result
         except BaseException:
@@ -722,9 +960,13 @@ def _owner_process_is_live(pid: int) -> bool:
 
 
 class _QueueRuntimeOwnership:
-    """Exclusive process ownership with exact stale-lock recovery."""
+    """One OS-held lock with identity-bound marker and release cleanup."""
 
-    __slots__ = ("_lock_path", "_parent", "_closed", "_pid")
+    __slots__ = (
+        "_lock_path", "_parent", "_closed", "_pid", "_created", "_identity",
+        "_path_removed", "_release_unknown", "_fd", "_flock_held",
+        "_fd_release_unknown", "_handle", "_overlapped", "_handle_release_unknown",
+    )
 
     def __init__(self, *, lock_path: Path, parent: Path) -> None:
         if not isinstance(lock_path, Path) or not isinstance(parent, Path) or not lock_path.is_absolute() or not parent.is_absolute() or not parent.is_dir():
@@ -733,58 +975,282 @@ class _QueueRuntimeOwnership:
         self._parent = parent
         self._closed = False
         self._pid = os.getpid()
-        self._acquire()
+        self._created = False
+        self._identity: tuple[int, int, int] | None = None
+        self._path_removed = False
+        self._release_unknown = False
+        self._fd: int | None = None
+        self._flock_held = False
+        self._fd_release_unknown = False
+        self._handle: object | None = None
+        self._overlapped = None
+        self._handle_release_unknown = False
+        try:
+            self._acquire()
+        except BaseException:
+            try:
+                self._constructor_cleanup()
+            except BaseException:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            raise
+
+    @staticmethod
+    def _marker_bytes(pid: int) -> bytes:
+        marker = _RUNTIME_LOCK_MARKER_PREFIX + f"{pid:0{_RUNTIME_LOCK_PID_BYTES}d}".encode("ascii")
+        if not 1 <= len(marker) <= _RUNTIME_LOCK_MARKER_BYTES:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        return marker
+
+    def _read_marker(self) -> bytes:
+        if os.name == "nt":
+            return _runtime_win_read_marker(self._handle)
+        if self._fd is None:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        os.lseek(self._fd, 0, os.SEEK_SET)
+        return os.read(self._fd, _RUNTIME_LOCK_MARKER_BYTES + 1)
+
+    def _write_marker(self, marker: bytes) -> None:
+        if os.name == "nt":
+            _runtime_win_write_marker(self._handle, marker)
+            return
+        if self._fd is None:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        os.lseek(self._fd, 0, os.SEEK_SET)
+        offset = 0
+        while offset < len(marker):
+            written = os.write(self._fd, marker[offset:])
+            if type(written) is not int or written <= 0:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            offset += written
+        os.ftruncate(self._fd, len(marker))
+        os.fsync(self._fd)
+
+    def _check_marker_and_rebind(self, *, created: bool) -> None:
+        raw = self._read_marker()
+        if created:
+            if raw:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+        else:
+            pid = _runtime_marker_pid(raw)
+            # The OS lock is the current ownership authority.  A live PID in
+            # an unlocked legacy marker is still treated as an unknown owner;
+            # PID probing is never used to reclaim a lock path.
+            if pid == self._pid or _runtime_owner_process_is_live(pid):
+                _raise_fixed(VerificationQueueError("runtime_already_owned"))
+        self._write_marker(self._marker_bytes(self._pid))
+
+    def _acquire_posix(self) -> None:
+        import fcntl
+
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDWR | os.O_CREAT | nofollow
+        try:
+            self._fd = os.open(self._lock_path, flags | os.O_EXCL, 0o600)
+            self._created = True
+        except FileExistsError:
+            self._fd = os.open(self._lock_path, flags)
+        try:
+            opened = os.fstat(self._fd)
+            if not stat.S_ISREG(opened.st_mode) or stat.S_ISLNK(opened.st_mode) or opened.st_nlink != 1 or opened.st_size > _RUNTIME_LOCK_MARKER_BYTES:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            current = _runtime_path_identity(self._lock_path)
+            opened_identity = _runtime_file_identity(opened)
+            if current != opened_identity:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            self._identity = current
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                if getattr(error, "errno", None) in {errno.EACCES, errno.EAGAIN}:
+                    _raise_fixed(VerificationQueueError("runtime_already_owned"))
+                raise
+            self._flock_held = True
+            self._check_marker_and_rebind(created=self._created)
+        except VerificationQueueError:
+            raise
+
+    def _acquire_windows(self) -> None:
+        try:
+            self._handle = _runtime_win_open(self._lock_path, disposition=_RUNTIME_WIN_CREATE_NEW)
+            self._created = True
+        except OSError as error:
+            code = _runtime_win_error(error)
+            if code in {_RUNTIME_WIN_ERROR_FILE_EXISTS, _RUNTIME_WIN_ERROR_ALREADY_EXISTS}:
+                self._handle = _runtime_win_open(self._lock_path, disposition=_RUNTIME_WIN_OPEN_EXISTING)
+            elif code == _RUNTIME_WIN_ERROR_SHARING_VIOLATION:
+                _raise_fixed(VerificationQueueError("runtime_already_owned"))
+            else:
+                raise
+        info = _runtime_win_info(self._handle)
+        if (
+            _runtime_win_handle_value(self._handle) in {None, _RUNTIME_WIN_INVALID_HANDLE}
+            or _RUNTIME_WIN_GetFileType(self._handle) != _RUNTIME_WIN_FILE_TYPE_DISK
+            or info[4] & _RUNTIME_REPARSE_POINT
+            or info[2] != 1
+            or info[3] > _RUNTIME_LOCK_MARKER_BYTES
+        ):
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        current_info = _runtime_path_identity(self._lock_path)
+        if current_info[1] != info[1] or current_info[2] != info[2]:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        self._identity = current_info
+        try:
+            self._overlapped = _runtime_win_lock(self._handle)
+        except OSError as error:
+            if _runtime_win_error(error) in {_RUNTIME_WIN_ERROR_LOCK_VIOLATION, _RUNTIME_WIN_ERROR_SHARING_VIOLATION}:
+                _raise_fixed(VerificationQueueError("runtime_already_owned"))
+            raise
+        self._check_marker_and_rebind(created=self._created)
 
     def _acquire(self) -> None:
-        created = False
-        fd: int | None = None
         try:
-            try:
-                fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                created = True
-            except FileExistsError:
-                stale = False
-                try:
-                    raw = self._lock_path.read_text(encoding="ascii").strip()
-                    pid = int(raw)
-                    if pid <= 0:
-                        stale = True
-                    else:
-                        stale = not _owner_process_is_live(pid)
-                except (OSError, ValueError):
-                    stale = True
-                if not stale:
-                    _raise_fixed(VerificationQueueError("runtime_already_owned"))
-                self._lock_path.unlink()
-                fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                created = True
-            if fd is None:
-                _raise_fixed(VerificationQueueError("runtime_already_owned"))
-            os.write(fd, str(self._pid).encode("ascii"))
+            if os.name == "nt":
+                self._acquire_windows()
+            else:
+                self._acquire_posix()
         except VerificationQueueError:
-            if fd is not None:
-                os.close(fd)
-            if created:
-                try:
-                    self._lock_path.unlink()
-                except OSError:
-                    pass
             raise
         except BaseException:
-            if fd is not None:
-                os.close(fd)
-            if created:
-                try:
-                    self._lock_path.unlink()
-                except OSError:
-                    pass
             _raise_fixed(VerificationQueueError("runtime_scope"))
-        finally:
-            if fd is not None:
+
+    def _remove_path(self) -> None:
+        if self._path_removed:
+            return
+        if os.name == "nt":
+            if self._handle is None:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            try:
+                current = _runtime_path_identity(self._lock_path)
+            except VerificationQueueError:
                 try:
-                    os.close(fd)
+                    if not self._lock_path.exists():
+                        self._path_removed = True
+                        return
                 except OSError:
                     pass
+                raise
+            if current != self._identity:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            try:
+                _runtime_win_mark_delete(self._handle)
+            except OSError as error:
+                if _runtime_win_error(error) == _RUNTIME_WIN_ERROR_FILE_NOT_FOUND:
+                    self._path_removed = True
+                    return
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            self._path_removed = True
+            return
+        try:
+            current = _runtime_path_identity(self._lock_path)
+        except VerificationQueueError:
+            if not self._lock_path.exists():
+                self._path_removed = True
+                return
+            raise
+        if current != self._identity:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        try:
+            self._lock_path.unlink()
+        except FileNotFoundError:
+            self._path_removed = True
+        except OSError:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        else:
+            self._path_removed = True
+
+    def _release_os(self, errors: list[BaseException]) -> None:
+        if os.name == "nt":
+            if self._handle is None or self._handle_release_unknown:
+                return
+            if self._overlapped is not None:
+                try:
+                    _runtime_win_unlock(self._handle, self._overlapped)
+                except BaseException as error:
+                    errors.append(error)
+                    if _runtime_win_error(error) == _RUNTIME_WIN_ERROR_INVALID_HANDLE:
+                        self._handle_release_unknown = True
+                        self._release_unknown = True
+                    else:
+                        return
+                else:
+                    self._overlapped = None
+            if self._overlapped is None and not self._handle_release_unknown:
+                try:
+                    _runtime_win_close(self._handle)
+                except BaseException as error:
+                    errors.append(error)
+                    if _runtime_win_error(error) == _RUNTIME_WIN_ERROR_INVALID_HANDLE:
+                        self._handle_release_unknown = True
+                        self._release_unknown = True
+                else:
+                    self._handle = None
+            return
+        if self._fd is None or self._fd_release_unknown:
+            return
+        if self._flock_held:
+            try:
+                import fcntl
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+            except BaseException as error:
+                errors.append(error)
+            else:
+                self._flock_held = False
+        try:
+            os.close(self._fd)
+        except BaseException as error:
+            # A POSIX descriptor whose close result is unknown is never
+            # retried: retrying could close a reused descriptor.
+            self._fd_release_unknown = True
+            self._release_unknown = True
+            errors.append(error)
+        else:
+            self._fd = None
+
+    def _constructor_cleanup(self) -> None:
+        errors: list[BaseException] = []
+        if self._created and (self._fd is not None or self._handle is not None):
+            try:
+                self._remove_path()
+            except BaseException as error:
+                errors.append(error)
+        self._release_os(errors)
+        if self._release_unknown or errors:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+
+    def _startup_cleanup(self) -> None:
+        """Release startup-owned OS resources even when marker cleanup fails."""
+        if self._closed:
+            return
+        errors: list[BaseException] = []
+        try:
+            self._remove_path()
+        except BaseException as error:
+            errors.append(error)
+        self._release_os(errors)
+        if self._release_unknown or errors or self._fd is not None or self._handle is not None:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        self._closed = True
+
+    def _assert_identity(self) -> None:
+        if self._release_unknown:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        if os.name == "nt":
+            if self._handle is None or self._overlapped is None:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            info = _runtime_win_info(self._handle)
+            if self._identity is None or info[1] != self._identity[1] or info[2] != self._identity[2]:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+        else:
+            if self._fd is None or not self._flock_held:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            try:
+                opened = os.fstat(self._fd)
+            except OSError:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+            if _runtime_file_identity(opened) != self._identity:
+                _raise_fixed(VerificationQueueError("runtime_scope"))
+        if _runtime_path_identity(self._lock_path) != self._identity:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
 
     def assert_scope(self, *, lock_path: Path, parent: Path) -> None:
         if self._closed or lock_path != self._lock_path or parent != self._parent:
@@ -793,16 +1259,19 @@ class _QueueRuntimeOwnership:
     def assert_live(self) -> None:
         if self._closed:
             _raise_fixed(VerificationQueueError("runtime_closed"))
+        self._assert_identity()
 
     def close(self) -> None:
         if self._closed:
             return
+        if self._release_unknown:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
+        self._remove_path()
+        errors: list[BaseException] = []
+        self._release_os(errors)
+        if self._release_unknown or errors or self._fd is not None or self._handle is not None:
+            _raise_fixed(VerificationQueueError("runtime_scope"))
         self._closed = True
-        try:
-            if self._lock_path.read_text(encoding="ascii").strip() == str(self._pid):
-                self._lock_path.unlink()
-        except (FileNotFoundError, OSError, UnicodeError):
-            pass
 
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
@@ -981,7 +1450,7 @@ class _VerificationQueueStore:
         except BaseException:
             # Ownership is acquired before store/schema construction.  Any
             # scope failure must release that exact lock before propagating.
-            owner.close()
+            owner._startup_cleanup()
             raise
         self.path = path
         self.config = config
@@ -993,7 +1462,7 @@ class _VerificationQueueStore:
         if composition_config is None:
             composition_config = CompositionConfigV2(config.queue_id, config.digest, capacity=max(RANGE100_COUNT, config.capacity))
         if type(composition_config) is not CompositionConfigV2 or composition_config.queue_id != config.queue_id or composition_config.queue_config_digest != config.digest:
-            owner.close()
+            owner._startup_cleanup()
             _raise_fixed(VerificationQueueError("composition_schema"))
         self.composition_config = composition_config
         self._handoffs: dict[bytes, VolatileProofHandoff] = {}
@@ -1012,7 +1481,7 @@ class _VerificationQueueStore:
                 self._create_database()
             self._startup_recovered_count = self._recover_startup()
         except BaseException:
-            owner.close()
+            owner._startup_cleanup()
             raise
 
     def _assert_owner(self) -> None:
@@ -1568,10 +2037,12 @@ class _VerificationQueueStore:
     def _close(self) -> None:
         if self._closed:
             return
-        self._closed = True
+        for handoff in tuple(self._handoffs.values()):
+            handoff.wipe()
         for handoff in tuple(self._handoffs.values()):
             handoff.close()
         self._handoffs.clear()
+        self._closed = True
 
 
 class QueueClock(Protocol):

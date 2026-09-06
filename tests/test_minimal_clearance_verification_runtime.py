@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app.minimal_clearance_composition as composition
+import app.minimal_clearance_verification_queue as queue_module
 import app.minimal_clearance_verification_runtime as runtime_module
 from app.minimal_clearance_composition import CompositionConfigV2, StateDispositionControl, build_synthetic_acknowledgment
 from app.minimal_clearance_source_auth_verifier_adapter import MinimalClearanceSourceAuthVerifierAdapter, SOURCE_AUTH_EXECUTABLE_SHA256, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES, SourceAuthVerifierConfig
@@ -358,6 +360,74 @@ class RuntimeV10Tests(unittest.TestCase):
             self.assertEqual(store_close.call_count, 1)
             self.assertTrue((root / "state.sqlite").exists())
             self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+
+    def test_constructor_reports_runtime_startup_when_owner_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = QueueConfig("runtime-startup-owner-cleanup", 100)
+            lock = root / "state.sqlite.runtime-lock"
+            failures = 0
+
+            if os.name == "nt":
+                cleanup_patch = patch.object(queue_module, "_runtime_win_mark_delete", side_effect=OSError(5, "delete"))
+            else:
+                original_unlink = Path.unlink
+
+                def fail_unlink(path: Path, *args: object, **kwargs: object) -> None:
+                    nonlocal failures
+                    if path == lock and failures == 0:
+                        failures += 1
+                        raise OSError("delete")
+                    original_unlink(path, *args, **kwargs)
+
+                cleanup_patch = patch.object(Path, "unlink", fail_unlink)
+            with cleanup_patch, patch.object(runtime_module, "ClearanceCompositionStoreV2", side_effect=composition.CompositionError("composition_schema")):
+                with self.assertRaisesRegex(VerificationRuntimeError, "runtime_startup"):
+                    MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
+            self.assertTrue(lock.exists())
+
+    def test_runtime_close_propagates_owner_cleanup_failure_and_retries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = QueueConfig("runtime-owner-close-retry", 100)
+            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
+            lock = root / "state.sqlite.runtime-lock"
+            failures = 0
+            try:
+                if os.name == "nt":
+                    original_mark_delete = queue_module._runtime_win_mark_delete
+
+                    def fail_once(handle: object) -> None:
+                        nonlocal failures
+                        if failures == 0:
+                            failures += 1
+                            raise OSError(5, "delete")
+                        original_mark_delete(handle)
+
+                    with patch.object(queue_module, "_runtime_win_mark_delete", side_effect=fail_once):
+                        with self.assertRaisesRegex(VerificationRuntimeError, "runtime_scope"):
+                            runtime.close()
+                else:
+                    original_unlink = Path.unlink
+
+                    def fail_once(path: Path, *args: object, **kwargs: object) -> None:
+                        nonlocal failures
+                        if path == lock and failures == 0:
+                            failures += 1
+                            raise OSError("delete")
+                        original_unlink(path, *args, **kwargs)
+
+                    with patch.object(Path, "unlink", fail_once):
+                        with self.assertRaisesRegex(VerificationRuntimeError, "runtime_scope"):
+                            runtime.close()
+                self.assertFalse(runtime._closed)
+                self.assertTrue(lock.exists())
+                runtime.close()
+                self.assertTrue(runtime._closed)
+                self.assertFalse(lock.exists())
+            finally:
+                if not runtime._closed:
+                    runtime.close()
 
     def test_runtime_rejects_unbound_receiver_before_creating_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

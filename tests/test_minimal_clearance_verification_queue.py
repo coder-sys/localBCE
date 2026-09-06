@@ -1,7 +1,9 @@
 import hashlib
 import json
+import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from dataclasses import replace
@@ -9,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app.minimal_clearance_composition as composition
+import app.minimal_clearance_verification_queue as queue_module
 from app.minimal_clearance_verification_queue import _build_statement, _compute_batch_root_from_refs
 from app.minimal_clearance_composition import (
     CompositionConfigV2,
@@ -227,6 +230,102 @@ class QueueV11Tests(unittest.TestCase):
         self.store._close()
         self.owner.close()
         self.temp.cleanup()
+
+    def test_runtime_owner_rejects_empty_and_partial_markers_without_reclaim(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        for marker in (b"", b"1"):
+            lock.write_bytes(marker)
+            with self.subTest(marker=marker), self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
+                _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+            self.assertEqual(lock.read_bytes(), marker)
+            lock.unlink()
+
+    def test_runtime_owner_serializes_stale_reclaimers_with_os_lock(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        lock.write_bytes(queue_module._QueueRuntimeOwnership._marker_bytes(9_999_999_999))
+        barrier = threading.Barrier(2)
+        release = threading.Event()
+        owners: list[_QueueRuntimeOwnership] = []
+        results: list[str] = []
+
+        def create_owner() -> None:
+            barrier.wait()
+            try:
+                owner = _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+            except VerificationQueueError as error:
+                results.append(str(error))
+            else:
+                owners.append(owner)
+                results.append("acquired")
+                release.wait(5)
+
+        threads = [threading.Thread(target=create_owner) for _ in range(2)]
+        try:
+            with patch.object(queue_module, "_runtime_owner_process_is_live", return_value=False):
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(1)
+                release.set()
+                for thread in threads:
+                    thread.join(5)
+            self.assertEqual(sorted(results), ["acquired", "runtime_already_owned"])
+            self.assertEqual(len(owners), 1)
+            self.assertTrue(lock.exists())
+        finally:
+            release.set()
+            for thread in threads:
+                thread.join(5)
+            for owner in owners:
+                if not owner._closed:
+                    owner.close()
+        self.assertFalse(lock.exists())
+
+    def test_runtime_owner_close_failure_is_retryable_without_releasing_identity(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        owner = _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        failures = 0
+        try:
+            if os.name == "nt":
+                original_mark_delete = queue_module._runtime_win_mark_delete
+
+                def fail_once(handle: object) -> None:
+                    nonlocal failures
+                    if failures == 0:
+                        failures += 1
+                        raise OSError(5, "delete")
+                    original_mark_delete(handle)
+
+                with patch.object(queue_module, "_runtime_win_mark_delete", side_effect=fail_once):
+                    with self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
+                        owner.close()
+            else:
+                original_unlink = Path.unlink
+
+                def fail_once(path: Path, *args: object, **kwargs: object) -> None:
+                    nonlocal failures
+                    if path == lock and failures == 0:
+                        failures += 1
+                        raise OSError("delete")
+                    original_unlink(path, *args, **kwargs)
+
+                with patch.object(Path, "unlink", fail_once):
+                    with self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
+                        owner.close()
+            self.assertFalse(owner._closed)
+            self.assertTrue(lock.exists())
+            owner.close()
+            self.assertTrue(owner._closed)
+            self.assertFalse(lock.exists())
+        finally:
+            if not owner._closed:
+                owner.close()
 
     def test_handoff_is_memory_owned_bounded_and_fully_wiped(self) -> None:
         caller = bytearray(b"secret-proof")
