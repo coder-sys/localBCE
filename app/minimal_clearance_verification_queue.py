@@ -681,6 +681,7 @@ class _QueueWorkItem:
 _RUNTIME_LOCK_MARKER_BYTES: Final[int] = 32
 _RUNTIME_LOCK_MARKER_PREFIX: Final[bytes] = b"BL/RUNTIME-LOCK/v1/"
 _RUNTIME_LOCK_PID_BYTES: Final[int] = 10
+_RUNTIME_LOCK_RELEASED_MARKER: Final[bytes] = _RUNTIME_LOCK_MARKER_PREFIX + b"FREE"
 _RUNTIME_REPARSE_POINT: Final[int] = 0x400
 
 
@@ -964,7 +965,7 @@ class _QueueRuntimeOwnership:
 
     __slots__ = (
         "_lock_path", "_parent", "_closed", "_pid", "_created", "_identity",
-        "_path_removed", "_release_unknown", "_fd", "_flock_held",
+        "_path_removed", "_marker_rebound", "_release_unknown", "_fd", "_flock_held",
         "_fd_release_unknown", "_handle", "_overlapped", "_handle_release_unknown",
     )
 
@@ -978,6 +979,7 @@ class _QueueRuntimeOwnership:
         self._created = False
         self._identity: tuple[int, int, int] | None = None
         self._path_removed = False
+        self._marker_rebound = False
         self._release_unknown = False
         self._fd: int | None = None
         self._flock_held = False
@@ -1027,8 +1029,10 @@ class _QueueRuntimeOwnership:
 
     def _check_marker_and_rebind(self, *, created: bool) -> None:
         raw = self._read_marker()
-        if created:
-            if raw:
+        if raw == _RUNTIME_LOCK_RELEASED_MARKER:
+            pass
+        elif created:
+            if raw != _RUNTIME_LOCK_RELEASED_MARKER:
                 _raise_fixed(VerificationQueueError("runtime_scope"))
         else:
             pid = _runtime_marker_pid(raw)
@@ -1038,6 +1042,7 @@ class _QueueRuntimeOwnership:
             if pid == self._pid or _runtime_owner_process_is_live(pid):
                 _raise_fixed(VerificationQueueError("runtime_already_owned"))
         self._write_marker(self._marker_bytes(self._pid))
+        self._marker_rebound = True
 
     def _acquire_posix(self) -> None:
         import fcntl
@@ -1058,6 +1063,8 @@ class _QueueRuntimeOwnership:
             if current != opened_identity:
                 _raise_fixed(VerificationQueueError("runtime_scope"))
             self._identity = current
+            if self._created:
+                self._write_marker(_RUNTIME_LOCK_RELEASED_MARKER)
             try:
                 fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as error:
@@ -1065,6 +1072,7 @@ class _QueueRuntimeOwnership:
                     _raise_fixed(VerificationQueueError("runtime_already_owned"))
                 raise
             self._flock_held = True
+            self._assert_locked_identity()
             self._check_marker_and_rebind(created=self._created)
         except VerificationQueueError:
             raise
@@ -1094,12 +1102,15 @@ class _QueueRuntimeOwnership:
         if current_info[1] != info[1] or current_info[2] != info[2]:
             _raise_fixed(VerificationQueueError("runtime_scope"))
         self._identity = current_info
+        if self._created:
+            self._write_marker(_RUNTIME_LOCK_RELEASED_MARKER)
         try:
             self._overlapped = _runtime_win_lock(self._handle)
         except OSError as error:
             if _runtime_win_error(error) in {_RUNTIME_WIN_ERROR_LOCK_VIOLATION, _RUNTIME_WIN_ERROR_SHARING_VIOLATION}:
                 _raise_fixed(VerificationQueueError("runtime_already_owned"))
             raise
+        self._assert_locked_identity()
         self._check_marker_and_rebind(created=self._created)
 
     def _acquire(self) -> None:
@@ -1208,9 +1219,14 @@ class _QueueRuntimeOwnership:
 
     def _constructor_cleanup(self) -> None:
         errors: list[BaseException] = []
-        if self._created and (self._fd is not None or self._handle is not None):
+        if self._created and self._lock_is_held() and os.name == "nt":
             try:
                 self._remove_path()
+            except BaseException as error:
+                errors.append(error)
+        elif self._lock_is_held() and os.name != "nt" and self._marker_rebound:
+            try:
+                self._write_marker(_RUNTIME_LOCK_RELEASED_MARKER)
             except BaseException as error:
                 errors.append(error)
         self._release_os(errors)
@@ -1222,16 +1238,27 @@ class _QueueRuntimeOwnership:
         if self._closed:
             return
         errors: list[BaseException] = []
-        try:
-            self._remove_path()
-        except BaseException as error:
-            errors.append(error)
+        if os.name == "nt":
+            try:
+                self._remove_path()
+            except BaseException as error:
+                errors.append(error)
+        elif self._lock_is_held():
+            try:
+                self._write_marker(_RUNTIME_LOCK_RELEASED_MARKER)
+            except BaseException as error:
+                errors.append(error)
         self._release_os(errors)
         if self._release_unknown or errors or self._fd is not None or self._handle is not None:
             _raise_fixed(VerificationQueueError("runtime_scope"))
         self._closed = True
 
-    def _assert_identity(self) -> None:
+    def _lock_is_held(self) -> bool:
+        if os.name == "nt":
+            return self._overlapped is not None
+        return self._flock_held
+
+    def _assert_locked_identity(self) -> None:
         if self._release_unknown:
             _raise_fixed(VerificationQueueError("runtime_scope"))
         if os.name == "nt":
@@ -1252,6 +1279,9 @@ class _QueueRuntimeOwnership:
         if _runtime_path_identity(self._lock_path) != self._identity:
             _raise_fixed(VerificationQueueError("runtime_scope"))
 
+    def _assert_identity(self) -> None:
+        self._assert_locked_identity()
+
     def assert_scope(self, *, lock_path: Path, parent: Path) -> None:
         if self._closed or lock_path != self._lock_path or parent != self._parent:
             _raise_fixed(VerificationQueueError("runtime_scope"))
@@ -1266,7 +1296,11 @@ class _QueueRuntimeOwnership:
             return
         if self._release_unknown:
             _raise_fixed(VerificationQueueError("runtime_scope"))
-        self._remove_path()
+        if os.name == "nt":
+            self._remove_path()
+        else:
+            self._assert_locked_identity()
+            self._write_marker(_RUNTIME_LOCK_RELEASED_MARKER)
         errors: list[BaseException] = []
         self._release_os(errors)
         if self._release_unknown or errors or self._fd is not None or self._handle is not None:

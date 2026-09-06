@@ -65,7 +65,7 @@
       },
       "app.minimal_clearance_verification_queue": {
         "path": "app/minimal_clearance_verification_queue.py",
-        "git_blob": "89338774e44c21e7579c7f68541cfbddb803e4dc"
+        "git_blob": "cb8e68a13e188a192c0e2cababc6e97af033291b"
       },
       "app.minimal_clearance_verification_queue_independent": {
         "path": "app/minimal_clearance_verification_queue_independent.py",
@@ -73,7 +73,7 @@
       },
       "app.minimal_clearance_verification_runtime": {
         "path": "app/minimal_clearance_verification_runtime.py",
-        "git_blob": "74756b1c2b2aca7ff6cf54d61fa6a9fca4fb5c87"
+        "git_blob": "80a79c138b96296b585f4748d652d82ebdcf319f"
       },
       "app.minimal_clearance_verifier_process": {
         "path": "app/minimal_clearance_verifier_process.py",

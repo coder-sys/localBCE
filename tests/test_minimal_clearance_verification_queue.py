@@ -1,9 +1,13 @@
 import hashlib
+import ctypes
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import closing
 from dataclasses import replace
@@ -27,12 +31,60 @@ from app.minimal_clearance_verification_queue import (
     QueueHeldError,
     QueueIntegrityError,
     QueueLeaseError,
+    _RUNTIME_LOCK_RELEASED_MARKER,
     _TRIGGER_DEFS,
     VerificationQueueError,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
     _VerificationQueueStore,
 )
+
+
+_OWNER_CHILD_SOURCE = r'''
+import json
+import sys
+import time
+from pathlib import Path
+from app.minimal_clearance_verification_queue import _QueueRuntimeOwnership
+
+lock = Path(sys.argv[1])
+mode = sys.argv[2]
+ready = Path(sys.argv[3])
+gate = Path(sys.argv[4])
+if mode == "gate":
+    original = _QueueRuntimeOwnership._check_marker_and_rebind
+
+    def gated(self, *, created):
+        ready.write_text("locked", encoding="ascii")
+        deadline = time.monotonic() + 10
+        while not gate.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return original(self, created=created)
+
+    _QueueRuntimeOwnership._check_marker_and_rebind = gated
+
+try:
+    owner = _QueueRuntimeOwnership(lock_path=lock, parent=lock.parent)
+except BaseException as error:
+    print(json.dumps({"status": "error", "type": type(error).__name__, "message": str(error)}), flush=True)
+else:
+    result = {"status": "acquired"}
+    try:
+        owner.close()
+        result["close"] = "ok"
+    except BaseException as error:
+        result["close"] = f"{type(error).__name__}:{error}"
+    print(json.dumps(result), flush=True)
+'''
+
+
+def _child_result(completed: subprocess.CompletedProcess[str]) -> dict[str, str]:
+    if completed.stderr:
+        raise AssertionError(completed.stderr)
+    lines = [line for line in completed.stdout.splitlines() if line]
+    if not lines:
+        raise AssertionError((completed.returncode, completed.stdout, completed.stderr))
+    return json.loads(lines[-1])
 from app.minimal_clearance_verification_queue_independent import _build_statement as independent_build_statement, read_verified_batch, verify_database
 
 
@@ -242,6 +294,17 @@ class QueueV11Tests(unittest.TestCase):
             self.assertEqual(lock.read_bytes(), marker)
             lock.unlink()
 
+    def test_runtime_owner_rejected_live_legacy_marker_is_not_rebound_or_erased(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        marker = queue_module._QueueRuntimeOwnership._marker_bytes(os.getpid())
+        lock.write_bytes(marker)
+        with self.assertRaisesRegex(VerificationQueueError, "runtime_already_owned"):
+            _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        self.assertEqual(lock.read_bytes(), marker)
+        lock.unlink()
+
     def test_runtime_owner_serializes_stale_reclaimers_with_os_lock(self) -> None:
         self.store._close()
         self.owner.close()
@@ -283,7 +346,10 @@ class QueueV11Tests(unittest.TestCase):
             for owner in owners:
                 if not owner._closed:
                     owner.close()
-        self.assertFalse(lock.exists())
+        if os.name == "nt":
+            self.assertFalse(lock.exists())
+        else:
+            self.assertEqual(lock.read_bytes(), _RUNTIME_LOCK_RELEASED_MARKER)
 
     def test_runtime_owner_close_failure_is_retryable_without_releasing_identity(self) -> None:
         self.store._close()
@@ -306,26 +372,279 @@ class QueueV11Tests(unittest.TestCase):
                     with self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
                         owner.close()
             else:
-                original_unlink = Path.unlink
+                original_write_marker = queue_module._QueueRuntimeOwnership._write_marker
 
-                def fail_once(path: Path, *args: object, **kwargs: object) -> None:
+                def fail_once(current_owner, marker: bytes) -> None:
                     nonlocal failures
-                    if path == lock and failures == 0:
+                    if marker == _RUNTIME_LOCK_RELEASED_MARKER and failures == 0:
                         failures += 1
-                        raise OSError("delete")
-                    original_unlink(path, *args, **kwargs)
+                        raise OSError("marker")
+                    original_write_marker(current_owner, marker)
 
-                with patch.object(Path, "unlink", fail_once):
+                with patch.object(queue_module._QueueRuntimeOwnership, "_write_marker", new=fail_once):
                     with self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
                         owner.close()
             self.assertFalse(owner._closed)
             self.assertTrue(lock.exists())
             owner.close()
             self.assertTrue(owner._closed)
-            self.assertFalse(lock.exists())
+            if os.name == "nt":
+                self.assertFalse(lock.exists())
+            else:
+                self.assertEqual(lock.read_bytes(), _RUNTIME_LOCK_RELEASED_MARKER)
         finally:
             if not owner._closed:
                 owner.close()
+
+    def test_runtime_owner_revalidates_path_after_native_lock(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+
+        def replace_path() -> None:
+            lock.unlink()
+            lock.write_bytes(b"replacement")
+
+        if os.name == "nt":
+            original_lock = queue_module._runtime_win_lock
+
+            def swap_before_lock(handle: object):
+                replace_path()
+                return original_lock(handle)
+
+            patcher = patch.object(queue_module, "_runtime_win_lock", side_effect=swap_before_lock)
+        else:
+            import fcntl
+
+            original_flock = fcntl.flock
+
+            def swap_before_lock(fd: int, operation: int):
+                if operation & fcntl.LOCK_EX:
+                    replace_path()
+                return original_flock(fd, operation)
+
+            patcher = patch.object(fcntl, "flock", side_effect=swap_before_lock)
+        with patcher, self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
+            _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        self.assertEqual(lock.read_bytes(), b"replacement")
+        lock.unlink()
+
+    def test_runtime_owner_constructor_failure_before_lock_preserves_recoverable_path(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        if os.name == "nt":
+            patcher = patch.object(queue_module, "_runtime_win_lock", side_effect=OSError(5, "forced-pre-lock"))
+        else:
+            import fcntl
+            patcher = patch.object(fcntl, "flock", side_effect=OSError(11, "forced-pre-lock"))
+        with patcher, self.assertRaisesRegex(VerificationQueueError, "runtime_(?:scope|already_owned)"):
+            _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        self.assertTrue(lock.exists())
+        self.assertEqual(lock.read_bytes(), _RUNTIME_LOCK_RELEASED_MARKER)
+        recovered = _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        recovered.close()
+        if os.name == "nt":
+            self.assertFalse(lock.exists())
+        else:
+            self.assertEqual(lock.read_bytes(), _RUNTIME_LOCK_RELEASED_MARKER)
+
+    def test_runtime_owner_actual_subprocess_stale_reclaimers_have_one_acquirer(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        dead_pid = int(subprocess.run(
+            [sys.executable, "-B", "-c", "import os; print(os.getpid())"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip())
+        lock.write_bytes(queue_module._QueueRuntimeOwnership._marker_bytes(dead_pid))
+        ready = self.root / "stale-owner-ready"
+        gate = self.root / "stale-owner-gate"
+        cwd = str(Path(__file__).resolve().parents[1])
+        first = second = None
+        try:
+            first = subprocess.Popen(
+                [sys.executable, "-B", "-c", _OWNER_CHILD_SOURCE, str(lock), "gate", str(ready), str(gate)],
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = time.monotonic() + 5
+            while not ready.exists() and first.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            if not ready.exists():
+                first_output, first_error = first.communicate(timeout=5)
+                self.fail((first.returncode, first_output, first_error))
+            second = subprocess.Popen(
+                [sys.executable, "-B", "-c", _OWNER_CHILD_SOURCE, str(lock), "plain", str(ready), str(gate)],
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            second_output, second_error = second.communicate(timeout=5)
+            self.assertEqual(second_error, "")
+            second_result = _child_result(subprocess.CompletedProcess(second.args, second.returncode, second_output, second_error))
+            self.assertEqual(second_result["status"], "error")
+            self.assertEqual(second_result["message"], "runtime_already_owned")
+            gate.write_text("go", encoding="ascii")
+            first_output, first_error = first.communicate(timeout=5)
+            first_result = _child_result(subprocess.CompletedProcess(first.args, first.returncode, first_output, first_error))
+            self.assertEqual(first_result["status"], "acquired")
+            self.assertEqual(first_result["close"], "ok")
+        finally:
+            gate.write_text("go", encoding="ascii")
+            for process in (first, second):
+                if process is not None and process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=5)
+            if lock.exists():
+                lock.unlink()
+
+    def test_runtime_owner_close_does_not_expose_replacement_before_native_release(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        owner = _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        ready = self.root / "release-ready"
+        gate = self.root / "release-gate"
+        original_release = queue_module._QueueRuntimeOwnership._release_os
+        close_result: dict[str, str] = {}
+
+        def gated_release(current_owner, errors):
+            ready.write_text("release", encoding="ascii")
+            deadline = time.monotonic() + 10
+            while not gate.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            return original_release(current_owner, errors)
+
+        def close_owner() -> None:
+            try:
+                owner.close()
+                close_result["status"] = "ok"
+            except BaseException as error:
+                close_result["status"] = f"{type(error).__name__}:{error}"
+
+        thread = threading.Thread(target=close_owner)
+        try:
+            with patch.object(queue_module._QueueRuntimeOwnership, "_release_os", new=gated_release):
+                thread.start()
+                deadline = time.monotonic() + 5
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(ready.exists())
+                child = subprocess.run(
+                    [sys.executable, "-B", "-c", _OWNER_CHILD_SOURCE, str(lock), "plain", str(ready), str(gate)],
+                    cwd=str(Path(__file__).resolve().parents[1]),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                result = _child_result(child)
+                self.assertEqual(result["status"], "error")
+                gate.write_text("go", encoding="ascii")
+                thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(close_result, {"status": "ok"})
+            self.assertTrue(owner._closed)
+        finally:
+            gate.write_text("go", encoding="ascii")
+            thread.join(5)
+            if not owner._closed:
+                errors: list[BaseException] = []
+                owner._release_os(errors)
+            if lock.exists():
+                lock.unlink()
+
+    def test_runtime_owner_identity_reuse_is_never_released_by_path(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        owner = _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        lock.unlink()
+        lock.write_bytes(b"replacement")
+        with self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
+            owner.close()
+        self.assertEqual(lock.read_bytes(), b"replacement")
+        errors: list[BaseException] = []
+        owner._release_os(errors)
+        self.assertEqual(errors, [])
+        lock.unlink()
+
+    @unittest.skipUnless(os.name == "nt", "Windows native fault branch is not executed on POSIX")
+    def test_windows_native_release_and_marker_faults_fail_closed_or_retry(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        owner = _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        original_unlock = queue_module._runtime_win_unlock
+        unlock_failures = 0
+
+        def fail_unlock_once(handle: object, overlapped: object) -> None:
+            nonlocal unlock_failures
+            if unlock_failures == 0:
+                unlock_failures += 1
+                raise OSError(5, "forced-unlock-failure")
+            original_unlock(handle, overlapped)
+
+        with patch.object(queue_module, "_runtime_win_unlock", side_effect=fail_unlock_once):
+            with self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
+                owner.close()
+        self.assertFalse(owner._closed)
+        self.assertIsNotNone(owner._handle)
+        self.assertIsNotNone(owner._overlapped)
+        owner.close()
+        self.assertTrue(owner._closed)
+        self.assertFalse(lock.exists())
+
+        owner = _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        original_close = queue_module._runtime_win_close
+        close_failures = 0
+
+        def fail_close_once(handle: object) -> None:
+            nonlocal close_failures
+            if close_failures == 0:
+                close_failures += 1
+                raise OSError(5, "forced-close-failure")
+            original_close(handle)
+
+        with patch.object(queue_module, "_runtime_win_close", side_effect=fail_close_once):
+            with self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
+                owner.close()
+        self.assertFalse(owner._closed)
+        self.assertIsNotNone(owner._handle)
+        self.assertIsNone(owner._overlapped)
+        owner.close()
+        self.assertTrue(owner._closed)
+        self.assertFalse(lock.exists())
+
+        lock.write_bytes(b"BL/RUNTIME-LOCK/v1/0000000001")
+        with patch.object(queue_module, "_runtime_win_read_marker", side_effect=OSError(5, "forced-read-failure")):
+            with self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
+                _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        self.assertEqual(lock.read_bytes(), b"BL/RUNTIME-LOCK/v1/0000000001")
+        lock.unlink()
+
+        calls = 0
+        native_write = queue_module._RUNTIME_WIN_WriteFile
+
+        def fail_after_short_write(handle, payload, length, count, overlapped):
+            nonlocal calls
+            if calls == 0:
+                calls += 1
+                return native_write(handle, payload, 1, count, overlapped)
+            ctypes.set_last_error(5)
+            return False
+
+        with patch.object(queue_module, "_RUNTIME_WIN_WriteFile", side_effect=fail_after_short_write):
+            with self.assertRaisesRegex(VerificationQueueError, "runtime_scope"):
+                _QueueRuntimeOwnership(lock_path=lock, parent=self.root)
+        self.assertTrue(lock.exists())
+        self.assertEqual(len(lock.read_bytes()), 1)
+        lock.unlink()
 
     def test_handoff_is_memory_owned_bounded_and_fully_wiped(self) -> None:
         caller = bytearray(b"secret-proof")

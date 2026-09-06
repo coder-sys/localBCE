@@ -238,6 +238,7 @@ class MinimalClearanceVerificationRuntime:
         if store is None or composition_store is None or owner is None:
             _fixed("runtime_startup")
         self._closed = False
+        self._closing = False
         self._operation_lock = threading.Lock()
         self._root = root
         self._database_path = database
@@ -252,7 +253,7 @@ class MinimalClearanceVerificationRuntime:
         self._recovered_leases = self._store._startup_recovered_count
 
     def _assert_open(self) -> None:
-        if self._closed:
+        if self._closed or self._closing:
             _fixed("runtime_closed")
         try:
             self._database_owner.assert_live()
@@ -428,6 +429,7 @@ class MinimalClearanceVerificationRuntime:
         try:
             if self._closed:
                 return
+            self._closing = True
             self._composition_store.close()
             self._close_queue_store()
             try:
@@ -437,6 +439,7 @@ class MinimalClearanceVerificationRuntime:
             except BaseException:
                 _fixed("runtime_close")
             self._closed = True
+            self._closing = False
         finally:
             self._operation_lock.release()
 

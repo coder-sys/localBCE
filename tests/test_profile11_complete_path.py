@@ -467,9 +467,9 @@ runpy.run_path(sys.argv[0], run_name="__main__")
             "app.minimal_clearance_composition_independent": {"path": "app/minimal_clearance_composition_independent.py", "git_blob": "466a27bbc9a3aee21333d210c824d938876b0072"},
             "app.minimal_clearance_resource_limits": {"path": "app/minimal_clearance_resource_limits.py", "git_blob": "56e57ebb3618b5ab090165f6a8ab93be70cd9c7c"},
             "app.minimal_clearance_source_auth_verifier_adapter": {"path": "app/minimal_clearance_source_auth_verifier_adapter.py", "git_blob": "f4ae20452717683c1182631c5b0c5850d9c78c6f"},
-            "app.minimal_clearance_verification_queue": {"path": "app/minimal_clearance_verification_queue.py", "git_blob": "6f941f638873ad505c30aa1bf862e083e7019762"},
+            "app.minimal_clearance_verification_queue": {"path": "app/minimal_clearance_verification_queue.py", "git_blob": "cb8e68a13e188a192c0e2cababc6e97af033291b"},
             "app.minimal_clearance_verification_queue_independent": {"path": "app/minimal_clearance_verification_queue_independent.py", "git_blob": "f700e2036f851a98f77382bb08dda7e728403fea"},
-            "app.minimal_clearance_verification_runtime": {"path": "app/minimal_clearance_verification_runtime.py", "git_blob": "4d1858211e7d3bbf814c571ca6b38715ecf0315d"},
+            "app.minimal_clearance_verification_runtime": {"path": "app/minimal_clearance_verification_runtime.py", "git_blob": "80a79c138b96296b585f4748d652d82ebdcf319f"},
             "app.minimal_clearance_verifier_process": {"path": "app/minimal_clearance_verifier_process.py", "git_blob": "f8b35e452c94f539c3ba002fb1e7510752d6d2a5"},
         }
         self.assertEqual(

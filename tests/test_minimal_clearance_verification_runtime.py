@@ -16,8 +16,46 @@ import app.minimal_clearance_verification_queue as queue_module
 import app.minimal_clearance_verification_runtime as runtime_module
 from app.minimal_clearance_composition import CompositionConfigV2, StateDispositionControl, build_synthetic_acknowledgment
 from app.minimal_clearance_source_auth_verifier_adapter import MinimalClearanceSourceAuthVerifierAdapter, SOURCE_AUTH_EXECUTABLE_SHA256, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES, SourceAuthVerifierConfig
-from app.minimal_clearance_verification_queue import BatchVerifierResult, OperationTemplate, QueueConfig, VolatileProofHandoff
+from app.minimal_clearance_verification_queue import BatchVerifierResult, OperationTemplate, QueueConfig, VolatileProofHandoff, _RUNTIME_LOCK_RELEASED_MARKER
 from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime, RuntimeOutboxResult, VerificationRuntimeError
+
+
+_STARTUP_CLEANUP_CHILD_SOURCE = r'''
+import json
+import os
+import sys
+from pathlib import Path
+from unittest.mock import patch
+import app.minimal_clearance_composition as composition
+import app.minimal_clearance_verification_queue as queue_module
+import app.minimal_clearance_verification_runtime as runtime_module
+from app.minimal_clearance_verification_queue import QueueConfig, _RUNTIME_LOCK_RELEASED_MARKER
+from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime
+
+root = Path(sys.argv[1])
+config = QueueConfig("startup-native-cleanup", 100)
+if os.name == "nt":
+    cleanup_patch = patch.object(queue_module, "_runtime_win_mark_delete", side_effect=OSError(5, "delete"))
+else:
+    original_write_marker = queue_module._QueueRuntimeOwnership._write_marker
+    calls = 0
+
+    def fail_cleanup_marker(current_owner, marker: bytes) -> None:
+        global calls
+        if marker == _RUNTIME_LOCK_RELEASED_MARKER and calls >= 1:
+            raise OSError("marker")
+        calls += 1
+        original_write_marker(current_owner, marker)
+
+    cleanup_patch = patch.object(queue_module._QueueRuntimeOwnership, "_write_marker", new=fail_cleanup_marker)
+with cleanup_patch, patch.object(runtime_module, "ClearanceCompositionStoreV2", side_effect=composition.CompositionError("composition_schema")):
+    try:
+        MinimalClearanceVerificationRuntime(root=root, verifier=object(), config=config)
+    except BaseException as error:
+        print(json.dumps({"type": type(error).__name__, "message": str(error)}), flush=True)
+    else:
+        print(json.dumps({"type": "returned", "message": ""}), flush=True)
+'''
 
 
 def _controls(operation_refs: tuple[bytes, ...]) -> dict[bytes, StateDispositionControl]:
@@ -359,7 +397,10 @@ class RuntimeV10Tests(unittest.TestCase):
                     MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
             self.assertEqual(store_close.call_count, 1)
             self.assertTrue((root / "state.sqlite").exists())
-            self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+            if os.name == "nt":
+                self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+            else:
+                self.assertEqual((root / "state.sqlite.runtime-lock").read_bytes(), _RUNTIME_LOCK_RELEASED_MARKER)
 
     def test_constructor_reports_runtime_startup_when_owner_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -371,20 +412,45 @@ class RuntimeV10Tests(unittest.TestCase):
             if os.name == "nt":
                 cleanup_patch = patch.object(queue_module, "_runtime_win_mark_delete", side_effect=OSError(5, "delete"))
             else:
-                original_unlink = Path.unlink
+                original_write_marker = queue_module._QueueRuntimeOwnership._write_marker
 
-                def fail_unlink(path: Path, *args: object, **kwargs: object) -> None:
+                def fail_write_marker(current_owner, marker: bytes) -> None:
                     nonlocal failures
-                    if path == lock and failures == 0:
+                    if marker == _RUNTIME_LOCK_RELEASED_MARKER and failures == 0:
                         failures += 1
-                        raise OSError("delete")
-                    original_unlink(path, *args, **kwargs)
+                        raise OSError("marker")
+                    original_write_marker(current_owner, marker)
 
-                cleanup_patch = patch.object(Path, "unlink", fail_unlink)
+                cleanup_patch = patch.object(queue_module._QueueRuntimeOwnership, "_write_marker", new=fail_write_marker)
             with cleanup_patch, patch.object(runtime_module, "ClearanceCompositionStoreV2", side_effect=composition.CompositionError("composition_schema")):
                 with self.assertRaisesRegex(VerificationRuntimeError, "runtime_startup"):
                     MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
             self.assertTrue(lock.exists())
+
+    def test_startup_cleanup_releases_native_lock_for_next_process_after_marker_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = subprocess.run(
+                [sys.executable, "-B", "-c", _STARTUP_CLEANUP_CHILD_SOURCE, str(root)],
+                cwd=str(Path(__file__).resolve().parents[1]),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+            self.assertEqual(result.stderr, "")
+            lines = [line for line in result.stdout.splitlines() if line]
+            self.assertEqual(len(lines), 1, result.stdout)
+            child_result = json.loads(lines[0])
+            self.assertEqual(child_result, {"type": "VerificationRuntimeError", "message": "runtime_startup"})
+            lock = root / "state.sqlite.runtime-lock"
+            self.assertTrue(lock.exists())
+            owner = queue_module._QueueRuntimeOwnership(lock_path=lock, parent=root)
+            owner.close()
+            if os.name == "nt":
+                self.assertFalse(lock.exists())
+            else:
+                self.assertEqual(lock.read_bytes(), _RUNTIME_LOCK_RELEASED_MARKER)
 
     def test_runtime_close_propagates_owner_cleanup_failure_and_retries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -408,23 +474,88 @@ class RuntimeV10Tests(unittest.TestCase):
                         with self.assertRaisesRegex(VerificationRuntimeError, "runtime_scope"):
                             runtime.close()
                 else:
-                    original_unlink = Path.unlink
+                    original_write_marker = queue_module._QueueRuntimeOwnership._write_marker
 
-                    def fail_once(path: Path, *args: object, **kwargs: object) -> None:
+                    def fail_once(current_owner, marker: bytes) -> None:
                         nonlocal failures
-                        if path == lock and failures == 0:
+                        if marker == _RUNTIME_LOCK_RELEASED_MARKER and failures == 0:
                             failures += 1
-                            raise OSError("delete")
-                        original_unlink(path, *args, **kwargs)
+                            raise OSError("marker")
+                        original_write_marker(current_owner, marker)
 
-                    with patch.object(Path, "unlink", fail_once):
+                    with patch.object(queue_module._QueueRuntimeOwnership, "_write_marker", new=fail_once):
                         with self.assertRaisesRegex(VerificationRuntimeError, "runtime_scope"):
                             runtime.close()
                 self.assertFalse(runtime._closed)
                 self.assertTrue(lock.exists())
                 runtime.close()
                 self.assertTrue(runtime._closed)
-                self.assertFalse(lock.exists())
+                if os.name == "nt":
+                    self.assertFalse(lock.exists())
+                else:
+                    self.assertEqual(lock.read_bytes(), _RUNTIME_LOCK_RELEASED_MARKER)
+            finally:
+                if not runtime._closed:
+                    runtime.close()
+
+    def test_runtime_rejects_dispatch_and_reconcile_after_partial_shutdown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clock = _Clock()
+            config = QueueConfig("runtime-partial-shutdown", 100)
+            composition_config = CompositionConfigV2(
+                config.queue_id,
+                config.digest,
+                receiver_identity=bytes([7]) * 32,
+                lease_seconds=1,
+                reconciliation_lease_seconds=1,
+            )
+            receiver = _Receiver(composition_config, clock)
+            runtime = MinimalClearanceVerificationRuntime(
+                root=root,
+                verifier=_Verifier(config),
+                config=config,
+                composition_config=composition_config,
+                receiver=receiver,
+                lookup=receiver,
+                clock=clock,
+            )
+            lock = root / "state.sqlite.runtime-lock"
+            failures = 0
+            try:
+                if os.name == "nt":
+                    original_mark_delete = queue_module._runtime_win_mark_delete
+
+                    def fail_once(handle: object) -> None:
+                        nonlocal failures
+                        if failures == 0:
+                            failures += 1
+                            raise OSError(5, "delete")
+                        original_mark_delete(handle)
+
+                    cleanup_patch = patch.object(queue_module, "_runtime_win_mark_delete", side_effect=fail_once)
+                else:
+                    original_write_marker = queue_module._QueueRuntimeOwnership._write_marker
+
+                    def fail_once(current_owner, marker: bytes) -> None:
+                        nonlocal failures
+                        if marker == _RUNTIME_LOCK_RELEASED_MARKER and failures == 0:
+                            failures += 1
+                            raise OSError("marker")
+                        original_write_marker(current_owner, marker)
+
+                    cleanup_patch = patch.object(queue_module._QueueRuntimeOwnership, "_write_marker", new=fail_once)
+                with cleanup_patch:
+                    with self.assertRaisesRegex(VerificationRuntimeError, "runtime_scope"):
+                        runtime.close()
+                self.assertFalse(runtime._closed)
+                self.assertTrue(runtime._closing)
+                self.assertTrue(runtime._store._closed)
+                for name, action in (("dispatch", runtime.dispatch_outbox), ("reconcile", runtime.reconcile_outbox)):
+                    with self.subTest(operation=name), self.assertRaisesRegex(VerificationRuntimeError, "runtime_closed"):
+                        action()
+                runtime.close()
+                self.assertTrue(runtime._closed)
             finally:
                 if not runtime._closed:
                     runtime.close()
@@ -514,7 +645,10 @@ class RuntimeV10Tests(unittest.TestCase):
                 if not runtime._closed:
                     runtime.close()
             self.assertTrue(runtime._closed)
-            self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+            if os.name == "nt":
+                self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+            else:
+                self.assertEqual((root / "state.sqlite.runtime-lock").read_bytes(), _RUNTIME_LOCK_RELEASED_MARKER)
             self.assertEqual(len(handoff._buffer), 0)
 
     def test_legacy_split_database_is_rejected_without_touching_it(self) -> None:
@@ -542,7 +676,10 @@ class RuntimeV10Tests(unittest.TestCase):
                 self.assertTrue((root / "state.sqlite.runtime-lock").exists())
             finally:
                 first.close()
-            self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+            if os.name == "nt":
+                self.assertFalse((root / "state.sqlite.runtime-lock").exists())
+            else:
+                self.assertEqual((root / "state.sqlite.runtime-lock").read_bytes(), _RUNTIME_LOCK_RELEASED_MARKER)
 
     def test_concurrent_runtime_creation_has_one_owner_and_one_terminal_commit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
