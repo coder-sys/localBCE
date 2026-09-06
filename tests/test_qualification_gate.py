@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr
 import io
 import json
 from pathlib import Path

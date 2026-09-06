@@ -12,13 +12,12 @@ from dataclasses import dataclass, field
 import ctypes
 from ctypes import wintypes
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
 import stat
 import tempfile
-from typing import Callable, Final
+from typing import Final
 
 from app.minimal_clearance_resource_limits import (
     ACTIVE_PROCESS_LIMIT,

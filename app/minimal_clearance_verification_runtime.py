@@ -22,7 +22,6 @@ from app.minimal_clearance_verification_queue import (
     OperationTemplate,
     QueueClock,
     QueueConfig,
-    QueueResult,
     VerificationQueueError,
     VerificationOutcome,
     VolatileProofHandoff,

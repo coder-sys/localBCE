@@ -17,11 +17,6 @@ from app.minimal_clearance_composition import (
     StateDispositionControl,
     build_synthetic_acknowledgment,
 )
-from app.minimal_clearance_source_auth_verifier_adapter import (
-    MinimalClearanceSourceAuthVerifierAdapter,
-    SOURCE_AUTH_EXECUTABLE_SHA256,
-    SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
-)
 from app.minimal_clearance_verification_queue import (
     ACTIVE_PROCESS_LIMIT,
     ADMISSION_CAP_BYTES,
@@ -37,8 +32,6 @@ from profile11_source_boundary import (
     Profile11SourceBoundaryCaller,
     SourceApplianceConfig,
     SourceBoundaryError,
-    SOURCE_APPLIANCE_EXECUTABLE_SHA256,
-    SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
     SOURCE_APPLIANCE_PROTOCOL_VERSION,
     SOURCE_APPLIANCE_REQUEST_MAGIC,
     SOURCE_AUTH_FRAME_BYTES,

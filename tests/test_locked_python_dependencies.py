@@ -3,7 +3,6 @@ from __future__ import annotations
 from hashlib import sha256, sha3_512
 import json
 from pathlib import Path
-import tempfile
 from unittest import mock
 from zipfile import ZIP_DEFLATED, ZipFile
 

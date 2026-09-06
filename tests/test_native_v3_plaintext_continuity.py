@@ -6,7 +6,6 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
-import struct
 import subprocess
 import sys
 import unittest
@@ -27,7 +26,6 @@ from experiments.native_v3_plaintext_continuity.continuity import (
     ACCESS_READ,
     ACCESS_WRITE,
     DEMO_CASES,
-    CONTROL_EFFECTIVE_START,
     DECISION_TIME,
     EXCEPTION_NONE_SENTINEL,
     FACT_ACTIVE,
@@ -44,15 +42,12 @@ from experiments.native_v3_plaintext_continuity.continuity import (
     DecisionAccessJoin,
     FeedCompleteness,
     RULE_ID,
-    StateAccessRow,
     TrustBoundaryAdapter,
     automatic_control_set_id,
     build_demo_case,
-    build_known_answer_vectors,
     build_manifest,
     bundle_bytes,
     make_completeness,
-    make_governed_exception,
     source_state_address,
     audit_state_address,
 )
