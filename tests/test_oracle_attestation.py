@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from pqcrypto.sign import sphincs_sha2_128f_simple as oracle_signature
 
+from app.canonical_encoding import stable_private_hash
 from app.oracle_attestation import (
     LOCAL_TEST_ORACLE_KEYS_ENV,
     ORACLE_PUBLIC_KEY_ENV,
@@ -17,6 +18,12 @@ from app.oracle_attestation import (
 
 
 class OracleAttestationTests(unittest.TestCase):
+    def test_stable_private_hash_rejects_top_level_and_nested_float(self):
+        with self.assertRaisesRegex(ValueError, "^float_not_canonical$"):
+            stable_private_hash(1.005)
+        with self.assertRaisesRegex(ValueError, "^float_not_canonical$"):
+            stable_private_hash({"amount": 1.005})
+
     def test_checked_in_dev_key_refused_in_staging_even_when_bl_dev_is_set(self):
         with patch.dict(os.environ, {"BL_ENV": "staging", "BL_DEV": "1"}, clear=False):
             os.environ.pop(LOCAL_TEST_ORACLE_KEYS_ENV, None)

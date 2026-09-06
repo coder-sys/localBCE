@@ -217,7 +217,6 @@ RELEASE_EXCLUSION_REASONS: dict[str, str] = {
     "experiments/profile11_source_host/Cargo.toml": "source-only external Profile 11 host harness with private dependency path",
     "experiments/profile11_source_host/src/main.rs": "source-only external Profile 11 host harness",
     "tests/test_build_release_archive.py": "source-only privacy fixture or scanner tool",
-    "tests/test_minimal_clearance_proof_primitives.py": "source-only synthetic private-path fixture",
     "tests/test_minimal_clearance_source_auth_verifier_adapter.py": "source-only external Profile 11 artifact/path fixture",
     "tests/test_minimal_clearance_verifier_process.py": "source-only synthetic Windows namespace fixture",
     "tests/test_mirror_external_governance_approval.py": "source-only synthetic privacy-canary fixture",
