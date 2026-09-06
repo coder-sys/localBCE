@@ -778,10 +778,12 @@ class CoreServiceV2:
         if heads["GOVERNANCE"] != row["governance_artifact_id"] or heads["PRIVACY"] != row["privacy_artifact_id"]:
             return "AUTHORITY_INDETERMINATE", heads
         source_authority = connection.execute(
-            "SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='SOURCE_OBSERVATION'",
+            "SELECT raw,profile_digest FROM core_artifacts WHERE artifact_id=? AND kind='SOURCE_OBSERVATION'",
             (row["source_artifact_id"],),
         ).fetchone()
         if source_authority is None or type(source_authority[0]) is not bytes:
+            return "AUTHORITY_INDETERMINATE", heads
+        if source_authority[1] != self.config.runtime_profile_digest:
             return "AUTHORITY_INDETERMINATE", heads
         try:
             source_value = independent._parse(source_authority[0], "core:artifact")
@@ -792,10 +794,13 @@ class CoreServiceV2:
         authority_rows: list[sqlite3.Row] = []
         for kind in ("GOVERNANCE", "PRIVACY"):
             authority = connection.execute(
-                "SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind=?",
+                "SELECT raw,profile_digest FROM core_artifacts WHERE artifact_id=? AND kind=?",
                 (row["governance_artifact_id"] if kind == "GOVERNANCE" else row["privacy_artifact_id"], kind),
             ).fetchone()
             if authority is None or type(authority[0]) is not bytes:
+                return "AUTHORITY_INDETERMINATE", heads
+            expected_profile = self.config.governance_policy_digest if kind == "GOVERNANCE" else self.config.privacy_policy_digest
+            if authority[1] != expected_profile:
                 return "AUTHORITY_INDETERMINATE", heads
             try:
                 value = independent._parse(authority[0], "core:artifact")
@@ -1568,9 +1573,12 @@ class CoreServiceV2:
                     raise CoreConflictError("core:authority-head")
             rows = {}
             for kind, identifier in (("SOURCE_OBSERVATION", source_artifact_id), ("GOVERNANCE", governance_artifact_id), ("PRIVACY", privacy_artifact_id)):
-                row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind=?", (identifier, kind)).fetchone()
+                row = connection.execute("SELECT raw,profile_digest FROM core_artifacts WHERE artifact_id=? AND kind=?", (identifier, kind)).fetchone()
                 if row is None or type(row[0]) is not bytes:
                     raise CoreConflictError("core:authority-missing")
+                expected_profile = self.config.runtime_profile_digest if kind == "SOURCE_OBSERVATION" else self.config.governance_policy_digest if kind == "GOVERNANCE" else self.config.privacy_policy_digest
+                if row[1] != expected_profile:
+                    raise CoreConflictError("core:authority-config")
                 rows[kind] = independent._parse(row[0], "core:artifact")
             gov = rows["GOVERNANCE"]; pval = rows["PRIVACY"]; source = rows["SOURCE_OBSERVATION"]
             if source.get("runtime_profile_digest") != self.config.runtime_profile_digest or gov.get("policy_digest") != self.config.governance_policy_digest or pval.get("policy_digest") != self.config.privacy_policy_digest:
@@ -1580,8 +1588,10 @@ class CoreServiceV2:
             for authority in (gov, pval):
                 if type(authority.get("valid_from")) is not int or type(authority.get("valid_until")) is not int or int(authority["valid_from"]) > now or now > int(authority["valid_until"]):
                     raise CoreConflictError("core:authority-window")
-            capacity_row = connection.execute("SELECT session_id FROM core_sessions ORDER BY session_id LIMIT 1 OFFSET ?", (self.config.max_sessions,)).fetchone()
-            if capacity_row is not None:
+            capacity_row = connection.execute("SELECT COUNT(*) FROM core_sessions").fetchone()
+            if capacity_row is None or type(capacity_row[0]) is not int:
+                raise CoreError("core:capacity")
+            if capacity_row[0] >= self.config.max_sessions:
                 raise CoreConflictError("core:capacity")
             material = {"session_id": session_id, "state": "OPEN", "source_artifact_id": source_artifact_id, "governance_artifact_id": governance_artifact_id, "privacy_artifact_id": privacy_artifact_id, "last_slot": -1}
             connection.execute("INSERT INTO core_sessions(session_id,state,source_artifact_id,governance_artifact_id,privacy_artifact_id,head_root,last_slot) VALUES(?,?,?,?,?,?,?)", (session_id, "OPEN", source_artifact_id, governance_artifact_id, privacy_artifact_id, independent.GENESIS_ROOT, -1))

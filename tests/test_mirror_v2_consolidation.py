@@ -215,9 +215,18 @@ class _GovernanceVerifier:
     verifier_id = "SYNTH_GOVERNANCE_VERIFIER"
     verifier_epoch = 1
 
-    def __init__(self, policy: governance.ExternalGovernanceApprovalPolicyV1, *, decision: str = "GRANTED") -> None:
+    def __init__(
+        self,
+        policy: governance.ExternalGovernanceApprovalPolicyV1,
+        *,
+        decision: str = "GRANTED",
+        valid_from: int | None = None,
+        valid_until: int | None = None,
+    ) -> None:
         self.policy = policy
         self.decision = decision
+        self.valid_from = policy.effective_start if valid_from is None else valid_from
+        self.valid_until = policy.effective_end - 1 if valid_until is None else valid_until
         self.authority_evidence_digest = policy.authority_evidence_digest
         self.revocation_head_digest = policy.revocation_head_digest
         self.terms_digest = policy.terms_digest
@@ -240,9 +249,9 @@ class _GovernanceVerifier:
             retention_policy_digest=self.policy.retention_policy_digest,
             decision=self.decision,
             issued_at=self.policy.effective_start,
-            valid_from=self.policy.effective_start,
-            valid_until=self.policy.effective_end - 1,
-            observed_at=self.policy.effective_start + 1,
+            valid_from=self.valid_from,
+            valid_until=self.valid_until,
+            observed_at=self.valid_from + 1,
             verifier_id=self.verifier_id,
             verifier_epoch=self.verifier_epoch,
             zero_phi=True,
@@ -674,6 +683,276 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             connection.close()
 
+    def _new_core_with_authority(self, name: str) -> tuple[core.CoreServiceV2, Path, str, str, str]:
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        service = core.CoreServiceV2(
+            path,
+            self.core_config,
+            clock=self.core_clock,
+            authority=self.authority,
+        )
+        source = service.ingest_source(self.ingress_path, self.ingress_receipt.artifact_id or "")
+        governance_id = service.admit_governance(
+            self.governance_raw,
+            policy=self.governance_policy,
+            evidence_raw=b"synthetic governance assertion",
+        )
+        privacy_id = service.admit_privacy(
+            self.privacy_raw,
+            policy=self.privacy_policy,
+            evidence_raw=b"synthetic privacy assertion",
+        )
+        return service, path, str(source["source_artifact_id"]), governance_id, privacy_id
+
+    def _new_governance(
+        self,
+        service: core.CoreServiceV2,
+        label: str,
+        *,
+        decision: str = "GRANTED",
+        valid_from: int | None = None,
+        valid_until: int | None = None,
+    ) -> str:
+        evidence = f"synthetic governance {label}".encode("ascii")
+        raw = governance.ExternalGovernanceApprovalService(
+            self.governance_policy,
+            _GovernanceVerifier(
+                self.governance_policy,
+                decision=decision,
+                valid_from=valid_from,
+                valid_until=valid_until,
+            ),
+        ).observe(evidence).raw
+        return service.admit_governance(
+            raw,
+            policy=self.governance_policy,
+            evidence_raw=evidence,
+        )
+
+    def _new_privacy(
+        self,
+        service: core.CoreServiceV2,
+        label: str,
+        *,
+        privacy_decision: str = "GRANTED",
+        support_decision: str = "GRANTED",
+    ) -> str:
+        evidence = f"synthetic privacy {label}".encode("ascii")
+        raw = privacy.ExternalPrivacySupportApprovalService(
+            self.privacy_policy,
+            _PrivacyVerifier(
+                self.privacy_policy,
+                privacy_decision=privacy_decision,
+                support_decision=support_decision,
+            ),
+        ).observe(evidence).raw
+        return service.admit_privacy(
+            raw,
+            policy=self.privacy_policy,
+            evidence_raw=evidence,
+        )
+
+    @staticmethod
+    def _append_forged_start(service: core.CoreServiceV2, session_id: str) -> None:
+        connection = service._open()
+        committed = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            observed_at = service._owner_now(connection)
+            raw = service._append(
+                connection,
+                kind="SESSION_START",
+                operation_id=core._digest("session-operation", {"session_id": session_id, "action": "START"}),
+                subject_id=session_id,
+                request_digest=core._digest("session-request", {"session_id": session_id, "action": "START"}),
+                prior_state="OPEN",
+                next_state="RUNNING",
+                attempt=0,
+                observed_at=observed_at,
+                material={"delta": {"state": "RUNNING"}},
+                payload_digest=session_id,
+                payload_length=0,
+                stream_kind="SESSION",
+                stream_id=session_id,
+                head_ref=session_id,
+            )
+            event = core_independent._parse(raw, "core:event-raw")
+            connection.execute(
+                "UPDATE core_sessions SET state=?,head_root=? WHERE session_id=?",
+                ("RUNNING", event["stream_after_root"], session_id),
+            )
+            connection.commit()
+            committed = True
+        finally:
+            if not committed:
+                connection.rollback()
+            connection.close()
+
+    @staticmethod
+    def _append_forged_observation(service: core.CoreServiceV2, session_id: str) -> None:
+        observation = {
+            "schema": "mirror-core-observation-v3",
+            "schema_version": 3,
+            "session_id": session_id,
+            "slot_number": 0,
+            "result": "PARITY",
+            "counts": {"changed": 0, "observed": 1},
+            "flags": dict(core.FIXED_FLAGS),
+        }
+        observation["result_digest"] = core._digest(
+            "observation",
+            {key: observation[key] for key in observation if key != "result_digest"},
+        )
+        result_raw = core._canonical(observation)
+        connection = service._open()
+        committed = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            observed_at = service._owner_now(connection)
+            connection.execute(
+                "INSERT INTO core_slots(session_id,slot_number,result_digest,result_raw) VALUES(?,?,?,?)",
+                (session_id, 0, observation["result_digest"], result_raw),
+            )
+            raw = service._append(
+                connection,
+                kind="OBSERVATION",
+                operation_id=core._digest("observation-operation", {"session_id": session_id, "slot_number": 0}),
+                subject_id=session_id,
+                request_digest=core._digest("observation-request", {"session_id": session_id, "slot_number": 0}),
+                prior_state="RUNNING",
+                next_state="RUNNING",
+                attempt=0,
+                observed_at=observed_at,
+                material={"observation": observation},
+                payload_digest=observation["result_digest"],
+                payload_length=len(result_raw),
+                stream_kind="SESSION",
+                stream_id=session_id,
+                head_ref=session_id,
+            )
+            event = core_independent._parse(raw, "core:event-raw")
+            connection.execute(
+                "UPDATE core_sessions SET last_slot=?,head_root=? WHERE session_id=?",
+                (0, event["stream_after_root"], session_id),
+            )
+            connection.commit()
+            committed = True
+        finally:
+            if not committed:
+                connection.rollback()
+            connection.close()
+
+    @staticmethod
+    def _append_forged_open(
+        service: core.CoreServiceV2,
+        source_id: str,
+        governance_id: str,
+        privacy_id: str,
+    ) -> str:
+        session_id = core._digest(
+            "session-id",
+            {
+                "source": source_id,
+                "governance": governance_id,
+                "privacy": privacy_id,
+                "config": service.config.digest,
+            },
+        )
+        connection = service._open()
+        committed = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            observed_at = service._owner_now(connection)
+            material = {
+                "session_id": session_id,
+                "state": "OPEN",
+                "source_artifact_id": source_id,
+                "governance_artifact_id": governance_id,
+                "privacy_artifact_id": privacy_id,
+                "last_slot": -1,
+            }
+            connection.execute(
+                "INSERT INTO core_sessions(session_id,state,source_artifact_id,governance_artifact_id,privacy_artifact_id,head_root,last_slot) VALUES(?,?,?,?,?,?,?)",
+                (session_id, "OPEN", source_id, governance_id, privacy_id, core_independent.GENESIS_ROOT, -1),
+            )
+            raw = service._append(
+                connection,
+                kind="SESSION_OPEN",
+                operation_id=core._digest("session-operation", {"session_id": session_id, "action": "OPEN"}),
+                subject_id=session_id,
+                request_digest=core._digest("session-request", {"session_id": session_id}),
+                prior_state="NONE",
+                next_state="OPEN",
+                attempt=0,
+                observed_at=observed_at,
+                material={"session": material},
+                payload_digest=source_id,
+                payload_length=0,
+                stream_kind="SESSION",
+                stream_id=session_id,
+                head_ref=session_id,
+            )
+            event = core_independent._parse(raw, "core:event-raw")
+            connection.execute(
+                "UPDATE core_sessions SET head_root=? WHERE session_id=?",
+                (event["stream_after_root"], session_id),
+            )
+            connection.commit()
+            committed = True
+            return session_id
+        finally:
+            if not committed:
+                connection.rollback()
+            connection.close()
+
+    @staticmethod
+    def _rewrite_last_pause_reason(path: Path, reason: str) -> None:
+        connection = sqlite3.connect(path)
+        connection.row_factory = sqlite3.Row
+        committed = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM core_events ORDER BY sequence DESC LIMIT 1").fetchone()
+            if row is None:
+                raise AssertionError("missing pause event")
+            value = core_independent._parse(bytes(row["event_raw"]), "core:event-raw")
+            material = dict(value["material"])
+            material["reason"] = reason
+            value["material"] = material
+            value["material_digest"] = core._digest("material", material)
+            value["payload_digest"] = core._digest("pause-reason", {"reason": reason})
+            value["event_id"] = core._digest(
+                "event-id",
+                {
+                    key: value[key]
+                    for key in core_independent.EVENT_RAW_KEYS
+                    if key not in {"event_id", "after_root", "stream_after_root"}
+                },
+            )
+            value["after_root"] = core_independent._event_root(value)
+            value["stream_after_root"] = core_independent._stream_root(value)
+            raw = core._canonical(value)
+            connection.execute(
+                "UPDATE core_events SET event_id=?,event_raw=?,receipt_digest=? WHERE sequence=?",
+                (value["event_id"], raw, core._raw_digest("receipt", raw), value["sequence"]),
+            )
+            connection.execute("UPDATE core_meta SET head_root=? WHERE meta_id=1", (value["after_root"],))
+            connection.execute(
+                "UPDATE core_heads SET head_root=? WHERE stream_kind=? AND stream_id=?",
+                (value["stream_after_root"], value["stream_kind"], value["stream_id"]),
+            )
+            connection.execute(
+                "UPDATE core_sessions SET head_root=? WHERE session_id=?",
+                (value["stream_after_root"], value["subject_id"]),
+            )
+            connection.commit()
+            committed = True
+        finally:
+            if not committed:
+                connection.rollback()
+            connection.close()
+
     def test_v6_ingress_contract_and_three_admission_events_are_frozen(self) -> None:
         result = self.ingress.verify()
         self.assertEqual("mirror-ingress-v6", result["schema"])
@@ -946,6 +1225,330 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertEqual(before_fingerprint, self._core_fingerprint(self.core))
         self.assertEqual(before_export, self.core.logical_export())
         self.assertEqual(before_support, self.core.support())
+
+    def test_session_capacity_rejects_before_mutation_and_retries_exactly(self) -> None:
+        for index in range(1, self.core_config.max_sessions):
+            evidence = f"synthetic capacity governance assertion {index}".encode("ascii")
+            raw = governance.ExternalGovernanceApprovalService(
+                self.governance_policy,
+                _GovernanceVerifier(self.governance_policy),
+            ).observe(evidence).raw
+            self.core.admit_governance(
+                raw,
+                policy=self.governance_policy,
+                evidence_raw=evidence,
+            )
+            self.core.open_session()
+
+        self.assertEqual(self.core_config.max_sessions, self.core.support()["session_count"])
+        final_evidence = b"synthetic capacity boundary governance assertion"
+        final_raw = governance.ExternalGovernanceApprovalService(
+            self.governance_policy,
+            _GovernanceVerifier(self.governance_policy),
+        ).observe(final_evidence).raw
+        self.core.admit_governance(
+            final_raw,
+            policy=self.governance_policy,
+            evidence_raw=final_evidence,
+        )
+        before_fingerprint = self._core_fingerprint(self.core)
+        before_export = self.core.logical_export()
+        before_support = self.core.support()
+        with self.assertRaisesRegex(core.CoreConflictError, "^core:capacity$"):
+            self.core.open_session()
+        with self.assertRaisesRegex(core.CoreConflictError, "^core:capacity$"):
+            self.core.open_session()
+        self.assertEqual(before_fingerprint, self._core_fingerprint(self.core))
+        self.assertEqual(before_export, self.core.logical_export())
+        self.assertEqual(before_support, self.core.support())
+
+    def test_independent_replay_rejects_rehashed_open_authority_mismatch(self) -> None:
+        service, path, source_id, initial_governance_id, privacy_id = self._new_core_with_authority(
+            "forged-open-authority.db"
+        )
+        self._new_governance(service, "forged-open-current")
+        self._append_forged_open(service, source_id, initial_governance_id, privacy_id)
+        with self.assertRaisesRegex(
+            core_independent.CoreVerificationError,
+            "^core:session-open-authority$",
+        ):
+            core_independent.verify_database(
+                path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+            )
+
+    def test_independent_replay_rejects_rehashed_start_authority_mismatch(self) -> None:
+        service, path, _source_id, _governance_id, _privacy_id = self._new_core_with_authority(
+            "forged-start-authority.db"
+        )
+        opened = service.open_session()
+        session_id = json.loads(opened.raw.decode("ascii"))["subject_id"]
+        self._new_governance(service, "forged-start-current")
+        self._append_forged_start(service, session_id)
+        with self.assertRaisesRegex(
+            core_independent.CoreVerificationError,
+            "^core:session-start-authority$",
+        ):
+            core_independent.verify_database(
+                path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+            )
+
+    def test_independent_replay_rejects_rehashed_observation_authority_mismatch(self) -> None:
+        service, path, _source_id, _governance_id, _privacy_id = self._new_core_with_authority(
+            "forged-observation-authority.db"
+        )
+        opened = service.open_session()
+        session_id = json.loads(opened.raw.decode("ascii"))["subject_id"]
+        service.start_session(session_id)
+        self._new_governance(service, "forged-observation-current")
+        self._append_forged_observation(service, session_id)
+        with self.assertRaisesRegex(
+            core_independent.CoreVerificationError,
+            "^core:session-observation-authority$",
+        ):
+            core_independent.verify_database(
+                path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+            )
+
+    def test_independent_replay_rejects_rehashed_pause_reason_mismatch(self) -> None:
+        service, path, _source_id, _governance_id, _privacy_id = self._new_core_with_authority(
+            "forged-pause-authority.db"
+        )
+        opened = service.open_session()
+        session_id = json.loads(opened.raw.decode("ascii"))["subject_id"]
+        service.start_session(session_id)
+        self._new_governance(service, "forged-pause-current")
+        service.observe(session_id, 0, "DISCREPANCY", counts={"observed": 1, "changed": 1})
+        self._rewrite_last_pause_reason(path, "AUTHORITY_EXPIRED")
+        with self.assertRaisesRegex(
+            core_independent.CoreVerificationError,
+            "^core:session-pause-authority$",
+        ):
+            core_independent.verify_database(
+                path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=self.ingress_path,
+            )
+
+    def test_privacy_withdrawal_and_support_denial_block_new_composition(self) -> None:
+        for label, privacy_decision, support_decision in (
+            ("withdrawn", "WITHDRAWN", "GRANTED"),
+            ("support-denied", "GRANTED", "DENIED"),
+        ):
+            with self.subTest(label=label):
+                service, _path, _source_id, _governance_id, _privacy_id = self._new_core_with_authority(
+                    f"privacy-{label}.db"
+                )
+                self._new_privacy(
+                    service,
+                    label,
+                    privacy_decision=privacy_decision,
+                    support_decision=support_decision,
+                )
+                before_fingerprint = self._core_fingerprint(service)
+                before_export = service.logical_export()
+                before_support = service.support()
+                with self.assertRaisesRegex(core.CoreConflictError, "^core:authority-negative$"):
+                    service.open_session()
+                self.assertEqual(before_fingerprint, self._core_fingerprint(service))
+                self.assertEqual(before_export, service.logical_export())
+                self.assertEqual(before_support, service.support())
+
+    def test_missing_and_cross_profile_authority_reject_new_composition_unchanged(self) -> None:
+        service, path, _source_id, _governance_id, privacy_id = self._new_core_with_authority(
+            "missing-authority.db"
+        )
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute(
+                "UPDATE core_heads SET head_ref=? WHERE stream_kind='ARTIFACT' AND stream_id='PRIVACY'",
+                ("0" * 128,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        before_bytes = path.read_bytes()
+        with self.assertRaisesRegex(core.CoreConflictError, "^core:authority-missing$"):
+            service.open_session()
+        self.assertEqual(before_bytes, path.read_bytes())
+
+        service, path, _source_id, _governance_id, privacy_id = self._new_core_with_authority(
+            "cross-profile-authority.db"
+        )
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute(
+                "UPDATE core_artifacts SET profile_digest=? WHERE artifact_id=?",
+                (_hex("wrong-privacy-profile"), privacy_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        before_bytes = path.read_bytes()
+        with self.assertRaisesRegex(core.CoreConflictError, "^core:authority-config$"):
+            service.open_session()
+        self.assertEqual(before_bytes, path.read_bytes())
+
+    def test_not_yet_effective_authority_rejects_new_composition_without_mutation(self) -> None:
+        service, _path, _source_id, _governance_id, _privacy_id = self._new_core_with_authority(
+            "not-yet-effective-authority.db"
+        )
+        self._new_governance(
+            service,
+            "not-yet-effective",
+            valid_from=self.governance_policy.effective_start + 100,
+        )
+        before_fingerprint = self._core_fingerprint(service)
+        before_export = service.logical_export()
+        before_support = service.support()
+        with self.assertRaisesRegex(core.CoreConflictError, "^core:authority-window$"):
+            service.open_session()
+        self.assertEqual(before_fingerprint, self._core_fingerprint(service))
+        self.assertEqual(before_export, service.logical_export())
+        self.assertEqual(before_support, service.support())
+
+    def test_concurrent_head_change_cannot_split_session_composition_snapshot(self) -> None:
+        service, path, _source_id, _governance_id, _privacy_id = self._new_core_with_authority(
+            "concurrent-head.db"
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        writer_started = threading.Event()
+        heads_before: dict[str, str | None] = {}
+        opened: list[core.CoreReceipt] = []
+        writer_ids: list[str] = []
+        errors: list[BaseException] = []
+        original_heads = service._current_authority_heads
+
+        def delayed_heads(connection: sqlite3.Connection) -> dict[str, str | None]:
+            heads = original_heads(connection)
+            heads_before.update(heads)
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("composition snapshot release timed out")
+            return heads
+
+        service._current_authority_heads = delayed_heads  # type: ignore[method-assign]
+
+        def compose() -> None:
+            try:
+                opened.append(service.open_session())
+            except BaseException as error:
+                errors.append(error)
+
+        def replace_governance() -> None:
+            writer_started.set()
+            try:
+                evidence = b"synthetic governance concurrent-head"
+                raw = governance.ExternalGovernanceApprovalService(
+                    self.governance_policy,
+                    _GovernanceVerifier(self.governance_policy),
+                ).observe(evidence).raw
+                value = core_independent._parse(raw, "core:artifact")
+                assertion = value["assertion"]
+                projection = {
+                    "schema": "mirror-core-governance-v3",
+                    "schema_version": 3,
+                    "kind": "GOVERNANCE",
+                    "artifact_id": value["artifact_id"],
+                    "decision": assertion["decision"],
+                    "policy_digest": value["policy_digest"],
+                    "evidence_digest": assertion["evidence_sha3_512"],
+                    "verifier_id": assertion["verifier_id"],
+                    "verifier_epoch": assertion["verifier_epoch"],
+                    "valid_from": assertion["valid_from"],
+                    "valid_until": assertion["valid_until"],
+                    "flags": dict(core.FIXED_FLAGS),
+                }
+                connection = sqlite3.connect(path, isolation_level=None, timeout=5)
+                committed = False
+                try:
+                    connection.row_factory = sqlite3.Row
+                    connection.execute("BEGIN IMMEDIATE")
+                    predecessor_row = connection.execute(
+                        "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='GOVERNANCE'"
+                    ).fetchone()
+                    predecessor = str(predecessor_row[0]) if predecessor_row is not None else None
+                    artifact_id, _event = service._admit_artifact(
+                        connection,
+                        kind="GOVERNANCE",
+                        raw=core._canonical(projection),
+                        profile_digest=service.config.governance_policy_digest,
+                        predecessor_id=predecessor,
+                        source_artifact_id=None,
+                        operation_id=core._digest(
+                            "approval-operation",
+                            {"kind": "GOVERNANCE", "raw": core._raw_digest("approval", core._canonical(projection))},
+                        ),
+                        request_digest=core._digest(
+                            "approval-request",
+                            {"kind": "GOVERNANCE", "raw": core._raw_digest("approval", core._canonical(projection))},
+                        ),
+                        state=str(assertion["decision"]),
+                        observed_at=service._owner_now(connection),
+                    )
+                    connection.commit()
+                    committed = True
+                    writer_ids.append(artifact_id)
+                finally:
+                    if not committed:
+                        connection.rollback()
+                    connection.close()
+            except BaseException as error:
+                errors.append(error)
+
+        compose_thread = threading.Thread(target=compose)
+        writer_thread = threading.Thread(target=replace_governance)
+        try:
+            compose_thread.start()
+            self.assertTrue(entered.wait(5))
+            writer_thread.start()
+            self.assertTrue(writer_started.wait(5))
+            release.set()
+            compose_thread.join(timeout=5)
+            writer_thread.join(timeout=5)
+            self.assertFalse(compose_thread.is_alive())
+            self.assertFalse(writer_thread.is_alive())
+            if errors:
+                raise errors[0]
+            self.assertEqual(1, len(opened))
+            self.assertEqual(1, len(writer_ids))
+            session = json.loads(opened[0].raw.decode("ascii"))["material"]["session"]
+            self.assertEqual(
+                {
+                    "SOURCE_OBSERVATION": session["source_artifact_id"],
+                    "GOVERNANCE": session["governance_artifact_id"],
+                    "PRIVACY": session["privacy_artifact_id"],
+                },
+                heads_before,
+            )
+            connection = sqlite3.connect(path)
+            try:
+                current_governance = connection.execute(
+                    "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='GOVERNANCE'"
+                ).fetchone()
+            finally:
+                connection.close()
+            self.assertIsNotNone(current_governance)
+            self.assertEqual(writer_ids[0], current_governance[0])
+            self.assertTrue(
+                service.verify(
+                    ingress_path=self.ingress_path,
+                )["structural_valid"]
+            )
+        finally:
+            release.set()
+            compose_thread.join(timeout=5)
+            writer_thread.join(timeout=5)
 
     def test_ingress_public_rewind_and_core_public_rewind_preserve_state(self) -> None:
         high_clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME + 120)
