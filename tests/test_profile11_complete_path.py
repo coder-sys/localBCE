@@ -774,6 +774,185 @@ runpy.run_path(sys.argv[0], run_name="__main__")
         self.assertEqual(failed, {"code": "coordinator_output_close"})
         self.assertEqual(cleanup_failures, ["outer_stdout_close"])
 
+    def test_launcher_reader_start_before_thread_releases_from_launcher_once(self) -> None:
+        owners: list[screen._CoordinatorOwnedDescriptor] = []
+        close_calls: list[int] = []
+
+        class StartBeforeThread:
+            ident = None
+
+            def start(self) -> None:
+                raise RuntimeError("start-before-thread")
+
+            def join(self, *, timeout: float) -> None:
+                del timeout
+                raise RuntimeError("cannot join thread before it is started")
+
+            def is_alive(self) -> bool:
+                return False
+
+        def factory(owner, cap, output, key, failed, cleanup_failures):
+            del cap, output, key, failed, cleanup_failures
+            owners.append(owner)
+            return StartBeforeThread()
+
+        real_close = screen.os.close
+
+        def track_close(fd: int) -> None:
+            close_calls.append(fd)
+            real_close(fd)
+
+        with tempfile.TemporaryDirectory(prefix="profile11-reader-start-before-") as directory:
+            with mock.patch.object(screen, "_new_coordinator_reader_thread", side_effect=factory), mock.patch.object(screen.os, "close", side_effect=track_close):
+                run = screen._launch_coordinator(Path(directory), timeout_seconds=5.0, arguments=("--probe-coordinator", "0.01"))
+        self.assertEqual(run.error_code, "outer_reader_start")
+        self.assertIsNone(run.payload)
+        self.assertFalse(run.observation.cleanup_complete)
+        self.assertEqual(len(owners), 2)
+        self.assertTrue(all(owner.owner == "launcher" for owner in owners))
+        self.assertTrue(all(owner.state == "closed" for owner in owners))
+        self.assertEqual(len(close_calls), 4)
+        self.assertEqual(len(set(close_calls)), 4)
+
+    def test_launcher_reader_start_after_thread_transfers_once_without_double_close(self) -> None:
+        owners: list[screen._CoordinatorOwnedDescriptor] = []
+        close_calls: list[int] = []
+
+        class StartAfterThread:
+            def __init__(self, owner, cap, output, key, failed, cleanup_failures) -> None:
+                self._owner = owner
+                self._args = (owner.descriptor, cap, output, key, failed, cleanup_failures, owner)
+                self.ident = None
+
+            def start(self) -> None:
+                self.ident = 1
+                screen._read_pipe(*self._args)
+                raise RuntimeError("start-after-thread")
+
+            def join(self, *, timeout: float) -> None:
+                del timeout
+
+            def is_alive(self) -> bool:
+                return False
+
+        def factory(owner, cap, output, key, failed, cleanup_failures):
+            owners.append(owner)
+            return StartAfterThread(owner, cap, output, key, failed, cleanup_failures)
+
+        real_close = screen.os.close
+
+        def track_close(fd: int) -> None:
+            close_calls.append(fd)
+            real_close(fd)
+
+        with tempfile.TemporaryDirectory(prefix="profile11-reader-start-after-") as directory:
+            with mock.patch.object(screen, "_new_coordinator_reader_thread", side_effect=factory), mock.patch.object(screen.os, "close", side_effect=track_close):
+                run = screen._launch_coordinator(Path(directory), timeout_seconds=5.0, arguments=("--probe-coordinator", "0.01"))
+        self.assertEqual(run.error_code, "outer_reader_start")
+        self.assertIsNone(run.payload)
+        self.assertFalse(run.observation.cleanup_complete)
+        self.assertEqual(len(owners), 2)
+        self.assertEqual((owners[0].owner, owners[0].state), ("reader", "closed"))
+        self.assertEqual((owners[1].owner, owners[1].state), ("launcher", "closed"))
+        self.assertEqual(len(close_calls), 4)
+        self.assertEqual(len(set(close_calls)), 4)
+
+    def test_launcher_reader_join_exception_releases_everything_without_retry(self) -> None:
+        owners: list[screen._CoordinatorOwnedDescriptor] = []
+        join_calls = 0
+        close_calls: list[int] = []
+
+        class JoinFaultThread:
+            def __init__(self, owner, cap, output, key, failed, cleanup_failures) -> None:
+                self._args = (owner.descriptor, cap, output, key, failed, cleanup_failures, owner)
+                self.ident = None
+
+            def start(self) -> None:
+                self.ident = 1
+                screen._read_pipe(*self._args)
+
+            def join(self, *, timeout: float) -> None:
+                nonlocal join_calls
+                del timeout
+                join_calls += 1
+                raise RuntimeError("join-fault")
+
+            def is_alive(self) -> bool:
+                return False
+
+        def factory(owner, cap, output, key, failed, cleanup_failures):
+            owners.append(owner)
+            return JoinFaultThread(owner, cap, output, key, failed, cleanup_failures)
+
+        real_close = screen.os.close
+
+        def track_close(fd: int) -> None:
+            close_calls.append(fd)
+            real_close(fd)
+
+        with tempfile.TemporaryDirectory(prefix="profile11-reader-join-fault-") as directory:
+            with mock.patch.object(screen, "_new_coordinator_reader_thread", side_effect=factory), mock.patch.object(screen.os, "close", side_effect=track_close):
+                run = screen._launch_coordinator(Path(directory), timeout_seconds=5.0, arguments=("--probe-coordinator", "0.01"))
+        self.assertEqual(run.error_code, "outer_cleanup")
+        self.assertIsNone(run.payload)
+        self.assertFalse(run.observation.cleanup_complete)
+        self.assertEqual(join_calls, 2)
+        self.assertTrue(all(owner.state == "closed" for owner in owners))
+        self.assertEqual(len(close_calls), 4)
+        self.assertEqual(len(set(close_calls)), 4)
+
+    def test_launcher_final_reader_close_failure_releases_handles_and_rejects_payload(self) -> None:
+        owners: list[screen._CoordinatorOwnedDescriptor] = []
+        close_calls: list[int] = []
+        injected = False
+        handle_labels: list[str] = []
+
+        class FinalCloseFaultThread:
+            def __init__(self, owner, cap, output, key, failed, cleanup_failures) -> None:
+                self._args = (owner.descriptor, cap, output, key, failed, cleanup_failures, owner)
+                self.ident = None
+
+            def start(self) -> None:
+                self.ident = 1
+                screen._read_pipe(*self._args)
+
+            def join(self, *, timeout: float) -> None:
+                del timeout
+
+            def is_alive(self) -> bool:
+                return False
+
+        def factory(owner, cap, output, key, failed, cleanup_failures):
+            owners.append(owner)
+            return FinalCloseFaultThread(owner, cap, output, key, failed, cleanup_failures)
+
+        real_os_close = screen.os.close
+        real_handle_close = screen._close_owned_handle_once
+
+        def track_close(fd: int) -> None:
+            nonlocal injected
+            close_calls.append(fd)
+            if owners and fd == owners[0].descriptor and not injected:
+                injected = True
+                real_os_close(fd)
+                raise OSError("final-reader-close-fault")
+            real_os_close(fd)
+
+        def track_handle_close(kernel32, handle, *, label, cleanup_failures) -> None:
+            handle_labels.append(label)
+            real_handle_close(kernel32, handle, label=label, cleanup_failures=cleanup_failures)
+
+        with tempfile.TemporaryDirectory(prefix="profile11-reader-final-close-") as directory:
+            with mock.patch.object(screen, "_new_coordinator_reader_thread", side_effect=factory), mock.patch.object(screen.os, "close", side_effect=track_close), mock.patch.object(screen, "_close_owned_handle_once", side_effect=track_handle_close):
+                run = screen._launch_coordinator(Path(directory), timeout_seconds=5.0, arguments=("--probe-coordinator", "0.01"))
+        self.assertEqual(run.error_code, "coordinator_output_close")
+        self.assertIsNone(run.payload)
+        self.assertFalse(run.observation.cleanup_complete)
+        self.assertTrue(injected)
+        self.assertEqual(len(close_calls), 4)
+        self.assertEqual(len(set(close_calls)), 4)
+        self.assertEqual(set(handle_labels), {"outer_thread_handle_close", "outer_process_handle_close", "outer_job_handle_close"})
+
     def test_resource_report_is_measured_but_not_qualified(self) -> None:
         effective = screen.effective_outer_cap(screen.PROCESS_TREE_PEAK_CAP_BYTES, 4096)
         payload = screen.build_test_aggregate(

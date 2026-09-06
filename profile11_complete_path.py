@@ -3658,6 +3658,42 @@ def _failed_coordinator_run() -> CoordinatorRun:
     return CoordinatorRun(None, observation, "coordinator_failure")
 
 
+class _CoordinatorOwnedDescriptor:
+    """Own one launcher pipe descriptor across a possible thread-start race."""
+
+    __slots__ = ("descriptor", "owner", "state")
+
+    def __init__(self, descriptor: int) -> None:
+        self.descriptor = descriptor
+        self.owner = "launcher"
+        self.state = "open"
+
+    def transfer_to_reader(self) -> None:
+        if self.owner != "launcher":
+            raise RuntimeError("coordinator_descriptor_ownership")
+        self.owner = "reader"
+
+    def close_once(self) -> bool:
+        if self.state == "closed":
+            return True
+        if self.state == "unknown":
+            return False
+        try:
+            os.close(self.descriptor)
+        except BaseException:
+            self.state = "unknown"
+            return False
+        self.state = "closed"
+        return True
+
+    def release_from_launcher(self) -> bool:
+        if self.state == "closed":
+            return True
+        if self.owner != "launcher":
+            return False
+        return self.close_once()
+
+
 def _read_pipe(
     fd: int,
     cap: int,
@@ -3665,7 +3701,10 @@ def _read_pipe(
     key: str,
     failed: dict[str, str],
     cleanup_failures: list[str] | None = None,
+    descriptor_owner: _CoordinatorOwnedDescriptor | None = None,
 ) -> None:
+    if descriptor_owner is not None:
+        fd = descriptor_owner.descriptor
     data = bytearray()
     try:
         while len(data) <= cap:
@@ -3679,9 +3718,15 @@ def _read_pipe(
     except BaseException:
         failed.setdefault("code", "coordinator_output_read")
     finally:
-        try:
-            os.close(fd)
-        except BaseException:
+        if descriptor_owner is None:
+            try:
+                os.close(fd)
+                released = True
+            except BaseException:
+                released = False
+        else:
+            released = descriptor_owner.close_once()
+        if not released:
             failed.setdefault("code", "coordinator_output_close")
             if cleanup_failures is not None:
                 cleanup_failures.append(f"outer_{key}_close")
@@ -3723,6 +3768,7 @@ def _release_coordinator_resources(
     process_handle: Any,
     job: Any,
     cleanup_failures: list[str],
+    reader_owners: tuple[_CoordinatorOwnedDescriptor, ...] = (),
 ) -> None:
     """Release every resource still owned by the launcher, without unsafe retries."""
 
@@ -3733,6 +3779,9 @@ def _release_coordinator_resources(
         ("outer_stderr_write_close", stderr_write),
     ):
         _close_owned_fd_once(fd, label=label, cleanup_failures=cleanup_failures)
+    for owner in reader_owners:
+        if not owner.release_from_launcher():
+            cleanup_failures.append("outer_reader_descriptor")
     if attribute_list_initialized:
         try:
             if kernel32 is None:
@@ -3781,6 +3830,59 @@ def _terminate_coordinator_tree_once(
         cleanup_failures.append("outer_process_wait")
         return False
     return True
+
+
+def _new_coordinator_reader_thread(
+    owner: _CoordinatorOwnedDescriptor,
+    cap: int,
+    output: dict[str, bytes],
+    key: str,
+    failed: dict[str, str],
+    cleanup_failures: list[str],
+) -> threading.Thread:
+    return threading.Thread(
+        target=_read_pipe,
+        args=(owner.descriptor, cap, output, key, failed, cleanup_failures, owner),
+        daemon=True,
+    )
+
+
+def _reader_start_may_have_started(reader: Any, cleanup_failures: list[str]) -> bool:
+    try:
+        if reader.ident is not None:
+            return True
+    except BaseException:
+        cleanup_failures.append("outer_reader_start_state")
+        return True
+    try:
+        return bool(reader.is_alive())
+    except BaseException:
+        cleanup_failures.append("outer_reader_start_state")
+        return True
+
+
+def _join_coordinator_reader_once(
+    reader: Any,
+    attempted: set[int],
+    started_or_maybe: set[int],
+    cleanup_failures: list[str],
+) -> None:
+    identity = id(reader)
+    if identity in attempted or identity not in started_or_maybe:
+        return
+    attempted.add(identity)
+    try:
+        reader.join(timeout=5.0)
+    except BaseException:
+        cleanup_failures.append("outer_reader_join")
+        return
+    try:
+        alive = bool(reader.is_alive())
+    except BaseException:
+        cleanup_failures.append("outer_reader_join")
+        return
+    if alive:
+        cleanup_failures.append("outer_reader_thread")
 
 
 def _configure_kernel32(kernel32: Any) -> None:
@@ -3843,6 +3945,9 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
     job = process_handle = thread_handle = None
     job_assigned = False
     reader_threads: list[threading.Thread] = []
+    reader_owners: list[_CoordinatorOwnedDescriptor] = []
+    reader_join_attempted: set[int] = set()
+    reader_started_or_maybe: set[int] = set()
     output: dict[str, bytes] = {}
     failed: dict[str, str] = {}
     cleanup_failures: list[str] = []
@@ -3870,7 +3975,11 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
             _fixed("outer_page_size")
         effective_cap = effective_outer_cap(requested_cap, page_size)
         stdout_read, stdout_write = os.pipe()
+        reader_owners.append(_CoordinatorOwnedDescriptor(stdout_read))
+        stdout_read = None
         stderr_read, stderr_write = os.pipe()
+        reader_owners.append(_CoordinatorOwnedDescriptor(stderr_read))
+        stderr_read = None
         import msvcrt
         child_stdout = int(msvcrt.get_osfhandle(stdout_write))
         child_stderr = int(msvcrt.get_osfhandle(stderr_write))
@@ -3931,15 +4040,20 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
         _close_owned_fd_once(stderr_write, label="outer_stderr_write_close", cleanup_failures=cleanup_failures)
         stderr_write = None
         reader_threads = [
-            threading.Thread(target=_read_pipe, args=(stdout_read, COORDINATOR_STDOUT_CAP_BYTES, output, "stdout", failed, cleanup_failures), daemon=True),
-            threading.Thread(target=_read_pipe, args=(stderr_read, COORDINATOR_STDERR_CAP_BYTES, output, "stderr", failed, cleanup_failures), daemon=True),
+            _new_coordinator_reader_thread(reader_owners[0], COORDINATOR_STDOUT_CAP_BYTES, output, "stdout", failed, cleanup_failures),
+            _new_coordinator_reader_thread(reader_owners[1], COORDINATOR_STDERR_CAP_BYTES, output, "stderr", failed, cleanup_failures),
         ]
         for index, reader in enumerate(reader_threads):
-            reader.start()
-            if index == 0:
-                stdout_read = None
+            try:
+                reader.start()
+            except BaseException:
+                if _reader_start_may_have_started(reader, cleanup_failures):
+                    reader_started_or_maybe.add(id(reader))
+                    reader_owners[index].transfer_to_reader()
+                _fixed("outer_reader_start")
             else:
-                stderr_read = None
+                reader_started_or_maybe.add(id(reader))
+                reader_owners[index].transfer_to_reader()
         deadline = time.monotonic() + timeout_seconds
         while True:
             current = _JobExtendedLimitInformation()
@@ -3999,9 +4113,7 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
             _fixed("outer_memory_cap")
         measurement_complete = True
         for reader in reader_threads:
-            reader.join(timeout=5.0)
-            if reader.is_alive():
-                cleanup_failures.append("outer_reader_thread")
+            _join_coordinator_reader_once(reader, reader_join_attempted, reader_started_or_maybe, cleanup_failures)
         exit_code = wintypes.DWORD()
         if not kernel32.GetExitCodeProcess(process_handle, ctypes.byref(exit_code)):
             _fixed("outer_exit_code")
@@ -4039,10 +4151,7 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
             )
     finally:
         for reader in reader_threads:
-            if reader.is_alive():
-                reader.join(timeout=5.0)
-                if reader.is_alive():
-                    cleanup_failures.append("outer_reader_thread")
+            _join_coordinator_reader_once(reader, reader_join_attempted, reader_started_or_maybe, cleanup_failures)
         _release_coordinator_resources(
             kernel32=kernel32,
             stdout_read=stdout_read,
@@ -4055,6 +4164,7 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
             process_handle=process_handle,
             job=job,
             cleanup_failures=cleanup_failures,
+            reader_owners=tuple(reader_owners),
         )
     cleanup_complete = process_tree_complete and not cleanup_failures
     if not cleanup_complete and primary_error is None:
