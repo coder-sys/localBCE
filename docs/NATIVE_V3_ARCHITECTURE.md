@@ -101,13 +101,19 @@ acceptance yields only an opaque scoped verification outcome and never `CLEAR`; 
 chronology, `policyResult`, `effectiveDirective`, exceptions, disposition, retries, and economic
 state.
 
-## Source-only semantic and session fixtures
+## Source-only semantic and plaintext continuity fixture
 
-The source-only continuity and session fixtures are differential evidence under this Native-v3
-authority; they are not separate proof backends or production interfaces. The plaintext continuity
-fixture owns the synthetic V2 bundle contract: V2 magic/domain values reject V1 bytes except for the
-frozen V1 exception record; one synthetic provider/credential/enrollment/feed; one ordered
-`EXPECTED_RULE_ID` rule at priority 100 with `priority-then-human-review`, scope
+The source-only plaintext continuity fixture is differential evidence under this Native-v3
+authority; it is not a separate proof backend or production interface. The former two-leaf
+session-boundary island was retired by the separately reviewed Cleanup commit
+`16cdf48e8523bf59cd3bd11078c0987b99dcedb2`; its session module and standalone Rust crate remain
+historical Git evidence only, not an active owner, runtime, proof backend, or qualification path.
+Any future replacement session/protocol contract requires separate authorization and independent
+checking. This authority does not claim the retired session files or framing as current runtime
+assurance. The plaintext continuity fixture owns the synthetic V2 bundle contract: V2 magic/domain
+values reject V1 bytes except for the frozen V1 exception record; one synthetic
+provider/credential/enrollment/feed; one ordered `EXPECTED_RULE_ID` rule at priority 100 with
+`priority-then-human-review`, scope
 `provider-credential-enrollment-continuity-v1`, and interval `[6000, 9000)`; and the bounded bundle
 order `receipt, request, facts, completeness, exception-or-sentinel, before-state, after-state`.
 Each request attempt binds the exact expected initial before-state identity. Every admitted fact
@@ -117,25 +123,11 @@ time. `HOLD` requires complete authoritative absence and exact subject/feed/prov
 nonmembership; incomplete feeds yield `HUMAN_REVIEW`. The independent parser reconstructs the
 canonical request, chronology, replay, decision, state, access, receipt, and bundle identities
 without importing producer/evaluator classes. Its receipts remain audit-only with
-`proofSuiteId=null`, `proof_session_accepted=false`, and `economic_mutation=false`.
-
-The session-boundary fixture owns the bounded two-leaf framing contract: all integers use unsigned
-big-endian encoding; the 992-byte fixed statement and `BLTBFRM1` frames carry
-version/kind/role/round, a nonzero 32-byte session ID, 64-byte domain, u32 payload length, and
-exact payload; each ordered vector leaf carries its u32 index, length-delimited value, and 32-byte
-hidden salt; and the height-0 internal node binds ordered child hashes, left index 0, and the
-domain-separated handle. The commitment binds the statement digest, vector root, and handle,
-and the verifier-selected one-sibling opening binds the selected index. Challenge and response
-frames enforce role, order, freshness, and the fixed retry cap. The verifier samples fresh public
-challenge material after the commitment; the current HMAC-SHA3-512 tag is fixture-only and does
-not claim Fiat-Shamir/QROM, hiding, ZK, PQ authorization, or binding. Create-once state rejects
-duplicate/replayed sessions, challenges, transcripts, randomness, and retry grinding. The
-independent Rust parser reads only public session files and the verifier key, never
-`prover_state.bin`, and all corruption, role/round/domain, root/index/salt/opening, and
-statement/transcript mutations fail closed. Numeric ideal-vector terms remain only in the explicit
-machine-readable [`security_ledger.json`](../experiments/native_v3_trust_boundary/security_ledger.json),
-where unresolved values are `UNKNOWN`; neither fixture supplies production qualification, payment
-authority, or activation.
+`proofSuiteId=null`, `proof_session_accepted=false`, and `economic_mutation=false`. Numeric
+ideal-vector terms remain only in the explicit machine-readable
+[`security_ledger.json`](../experiments/native_v3_trust_boundary/security_ledger.json), where
+unresolved values are `UNKNOWN`; this live continuity fixture supplies no production
+qualification, payment authority, or activation.
 
 ## Source-auth and private representation contract
 
