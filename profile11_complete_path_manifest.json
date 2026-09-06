@@ -20,6 +20,9 @@
     "memory_metric": "JOBOBJECT_EXTENDED_LIMIT_INFORMATION.PeakJobMemoryUsed",
     "cap_metric": "JOBOBJECT_EXTENDED_LIMIT_INFORMATION.JobMemoryLimit",
     "process_metric": "JOBOBJECT_BASIC_ACCOUNTING_INFORMATION.ActiveProcesses_and_TotalProcesses",
+    "active_process_metric_semantics": "sampled_maximum_lower_bound_not_exact_high_water_mark",
+    "active_process_limit_semantics": "os_enforced_job_object_limit",
+    "total_process_metric_semantics": "os_cumulative_total_processes",
     "enforcement": [
       "JobMemoryLimit",
       "ActiveProcessLimit"

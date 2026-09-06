@@ -521,6 +521,9 @@ runpy.run_path(sys.argv[0], run_name="__main__")
                 "memory_metric": "JOBOBJECT_EXTENDED_LIMIT_INFORMATION.PeakJobMemoryUsed",
                 "cap_metric": "JOBOBJECT_EXTENDED_LIMIT_INFORMATION.JobMemoryLimit",
                 "process_metric": "JOBOBJECT_BASIC_ACCOUNTING_INFORMATION.ActiveProcesses_and_TotalProcesses",
+                "active_process_metric_semantics": "sampled_maximum_lower_bound_not_exact_high_water_mark",
+                "active_process_limit_semantics": "os_enforced_job_object_limit",
+                "total_process_metric_semantics": "os_cumulative_total_processes",
                 "enforcement": ["JobMemoryLimit", "ActiveProcessLimit"],
                 "cap_strictly_less_than_bytes": 5_000_000_000,
                 "missing_metric": "fail_closed",
@@ -612,6 +615,165 @@ runpy.run_path(sys.argv[0], run_name="__main__")
             self.assertTrue(run.observation.cleanup_complete)
             screen.validate_job_observation(run.observation)
 
+    def test_outer_job_probe_reads_descendant_tail_allocation_after_coordinator_signal(self) -> None:
+        if os.name != "nt":
+            self.skipTest("Windows Job Object ABI is unavailable")
+        tail_bytes = 96 * 1024 * 1024
+        with tempfile.TemporaryDirectory(prefix="profile11-job-tail-") as directory:
+            run = screen._launch_coordinator(
+                Path(directory),
+                timeout_seconds=10.0,
+                arguments=(
+                    "--probe-coordinator", "0.01",
+                    "--probe-tail-bytes", str(tail_bytes),
+                    "--probe-tail-delay", "0.25",
+                ),
+            )
+        self.assertIsNone(run.error_code, run.error_code)
+        self.assertIsNotNone(run.payload)
+        self.assertGreaterEqual(run.observation.peak_job_commit_bytes, tail_bytes)
+        self.assertTrue(run.observation.process_tree_complete)
+        self.assertTrue(run.observation.measurement_complete)
+        self.assertTrue(run.observation.cleanup_complete)
+        screen.validate_job_observation(run.observation)
+
+    def test_native_resource_release_closes_each_owned_path_once(self) -> None:
+        class Kernel:
+            def __init__(self) -> None:
+                self.attribute_deletes = []
+                self.handle_closes = []
+
+            def DeleteProcThreadAttributeList(self, value) -> None:
+                self.attribute_deletes.append(value)
+
+            def CloseHandle(self, value) -> bool:
+                self.handle_closes.append(value)
+                return True
+
+        kernel = Kernel()
+        failures: list[str] = []
+        attribute_list = object()
+        with mock.patch.object(screen.os, "close") as close:
+            screen._release_coordinator_resources(
+                kernel32=kernel,
+                stdout_read=11,
+                stdout_write=12,
+                stderr_read=13,
+                stderr_write=14,
+                attribute_list_initialized=True,
+                attribute_list=attribute_list,
+                thread_handle="thread",
+                process_handle="process",
+                job="job",
+                cleanup_failures=failures,
+            )
+        self.assertEqual([call.args[0] for call in close.call_args_list], [11, 12, 13, 14])
+        self.assertEqual(kernel.attribute_deletes, [attribute_list])
+        self.assertEqual(kernel.handle_closes, ["thread", "process", "job"])
+        self.assertEqual(failures, [])
+
+    def test_native_resource_release_faults_and_partial_ownership_fail_closed_without_retry(self) -> None:
+        class FaultingKernel:
+            def __init__(self) -> None:
+                self.attribute_deletes = 0
+                self.handle_closes = []
+
+            def DeleteProcThreadAttributeList(self, value) -> None:
+                del value
+                self.attribute_deletes += 1
+                raise RuntimeError("attribute close fault")
+
+            def CloseHandle(self, value) -> bool:
+                self.handle_closes.append(value)
+                return value != "process"
+
+        kernel = FaultingKernel()
+        failures: list[str] = []
+
+        def close(fd: int) -> None:
+            if fd == 12:
+                raise OSError("descriptor close fault")
+
+        with mock.patch.object(screen.os, "close", side_effect=close) as close_mock:
+            screen._release_coordinator_resources(
+                kernel32=kernel,
+                stdout_read=11,
+                stdout_write=12,
+                stderr_read=None,
+                stderr_write=None,
+                attribute_list_initialized=True,
+                attribute_list=object(),
+                thread_handle="thread",
+                process_handle="process",
+                job="job",
+                cleanup_failures=failures,
+            )
+        self.assertEqual([call.args[0] for call in close_mock.call_args_list], [11, 12])
+        self.assertEqual(kernel.attribute_deletes, 1)
+        self.assertEqual(kernel.handle_closes, ["thread", "process", "job"])
+        self.assertEqual(
+            set(failures),
+            {"outer_stdout_write_close", "outer_attribute_list_close", "outer_process_handle_close"},
+        )
+
+        partial_failures: list[str] = []
+        with mock.patch.object(screen.os, "close") as partial_close:
+            screen._release_coordinator_resources(
+                kernel32=None,
+                stdout_read=21,
+                stdout_write=22,
+                stderr_read=None,
+                stderr_write=None,
+                attribute_list_initialized=False,
+                attribute_list=None,
+                thread_handle=None,
+                process_handle=None,
+                job=None,
+                cleanup_failures=partial_failures,
+            )
+        self.assertEqual([call.args[0] for call in partial_close.call_args_list], [21, 22])
+        self.assertEqual(partial_failures, [])
+
+        class TerminationKernel:
+            def __init__(self, result: bool) -> None:
+                self.result = result
+                self.termination_calls = 0
+                self.wait_calls = 0
+
+            def TerminateJobObject(self, job, code) -> bool:
+                del job, code
+                self.termination_calls += 1
+                return self.result
+
+            def WaitForSingleObject(self, handle, timeout) -> int:
+                del handle, timeout
+                self.wait_calls += 1
+                return screen._WAIT_OBJECT_0
+
+        termination_failures: list[str] = []
+        failed_kernel = TerminationKernel(False)
+        self.assertFalse(
+            screen._terminate_coordinator_tree_once(
+                kernel32=failed_kernel,
+                job="job",
+                process_handle="process",
+                job_assigned=True,
+                cleanup_failures=termination_failures,
+            )
+        )
+        self.assertEqual((failed_kernel.termination_calls, failed_kernel.wait_calls), (1, 0))
+        self.assertEqual(termination_failures, ["outer_process_terminate"])
+
+    def test_native_reader_thread_close_failure_is_fail_closed(self) -> None:
+        output: dict[str, bytes] = {}
+        failed: dict[str, str] = {}
+        cleanup_failures: list[str] = []
+        with mock.patch.object(screen.os, "read", return_value=b""), mock.patch.object(screen.os, "close", side_effect=OSError("reader close fault")):
+            screen._read_pipe(31, 64, output, "stdout", failed, cleanup_failures)
+        self.assertEqual(output, {"stdout": b""})
+        self.assertEqual(failed, {"code": "coordinator_output_close"})
+        self.assertEqual(cleanup_failures, ["outer_stdout_close"])
+
     def test_resource_report_is_measured_but_not_qualified(self) -> None:
         effective = screen.effective_outer_cap(screen.PROCESS_TREE_PEAK_CAP_BYTES, 4096)
         payload = screen.build_test_aggregate(
@@ -630,6 +792,18 @@ runpy.run_path(sys.argv[0], run_name="__main__")
         self.assertIsNone(report["error_code"])
         self.assertEqual(report["resource_observation"]["peak_job_commit_bytes"], 103956480)
         self.assertEqual(report["resource_observation"]["total_processes"], 27)
+        self.assertEqual(
+            report["resource_observation"]["active_process_metric_semantics"],
+            "sampled_maximum_lower_bound_not_exact_high_water_mark",
+        )
+        self.assertEqual(
+            report["resource_observation"]["active_process_limit_semantics"],
+            "os_enforced_job_object_limit",
+        )
+        self.assertEqual(
+            report["resource_observation"]["total_process_metric_semantics"],
+            "os_cumulative_total_processes",
+        )
         self.assertFalse(report["complete_profile_qualification"])
         self.assertEqual(report["observer_status"], "observer_unavailable")
         self.assertEqual(report["disk_gate"], "observer_unavailable")

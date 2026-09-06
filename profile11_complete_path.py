@@ -496,6 +496,9 @@ FIXED_QUALIFICATION_FLAGS: Final[tuple[str, ...]] = (
 )
 OBSERVER_DIAGNOSTIC_SCHEMA: Final[str] = "BL/NATIVE-V3/PROFILE11-OBSERVER-CAPABILITY-DIAGNOSTIC/v1"
 RESOURCE_OBSERVATION_SCHEMA: Final[str] = "BL/NATIVE-V3/PROFILE11-RESOURCE-OBSERVATION/v1"
+ACTIVE_PROCESS_METRIC_SEMANTICS: Final[str] = "sampled_maximum_lower_bound_not_exact_high_water_mark"
+ACTIVE_PROCESS_LIMIT_SEMANTICS: Final[str] = "os_enforced_job_object_limit"
+TOTAL_PROCESS_METRIC_SEMANTICS: Final[str] = "os_cumulative_total_processes"
 _OBSERVER_DIAGNOSTIC_REASON_ORDER: Final[tuple[str, ...]] = (
     "observer_non_windows",
     "observer_pointer_width",
@@ -3655,7 +3658,14 @@ def _failed_coordinator_run() -> CoordinatorRun:
     return CoordinatorRun(None, observation, "coordinator_failure")
 
 
-def _read_pipe(fd: int, cap: int, output: dict[str, bytes], key: str, failed: dict[str, str]) -> None:
+def _read_pipe(
+    fd: int,
+    cap: int,
+    output: dict[str, bytes],
+    key: str,
+    failed: dict[str, str],
+    cleanup_failures: list[str] | None = None,
+) -> None:
     data = bytearray()
     try:
         while len(data) <= cap:
@@ -3671,8 +3681,106 @@ def _read_pipe(fd: int, cap: int, output: dict[str, bytes], key: str, failed: di
     finally:
         try:
             os.close(fd)
-        except OSError:
+        except BaseException:
             failed.setdefault("code", "coordinator_output_close")
+            if cleanup_failures is not None:
+                cleanup_failures.append(f"outer_{key}_close")
+
+
+def _close_owned_fd_once(fd: int | None, *, label: str, cleanup_failures: list[str]) -> None:
+    """Release one owned descriptor exactly once; a failed close is ambiguous."""
+
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except BaseException:
+        cleanup_failures.append(label)
+
+
+def _close_owned_handle_once(kernel32: Any | None, handle: Any, *, label: str, cleanup_failures: list[str]) -> None:
+    """Release one owned Windows handle exactly once; never retry an ambiguous identity."""
+
+    if not handle:
+        return
+    try:
+        if kernel32 is None or not kernel32.CloseHandle(handle):
+            cleanup_failures.append(label)
+    except BaseException:
+        cleanup_failures.append(label)
+
+
+def _release_coordinator_resources(
+    *,
+    kernel32: Any | None,
+    stdout_read: int | None,
+    stdout_write: int | None,
+    stderr_read: int | None,
+    stderr_write: int | None,
+    attribute_list_initialized: bool,
+    attribute_list: Any,
+    thread_handle: Any,
+    process_handle: Any,
+    job: Any,
+    cleanup_failures: list[str],
+) -> None:
+    """Release every resource still owned by the launcher, without unsafe retries."""
+
+    for label, fd in (
+        ("outer_stdout_read_close", stdout_read),
+        ("outer_stdout_write_close", stdout_write),
+        ("outer_stderr_read_close", stderr_read),
+        ("outer_stderr_write_close", stderr_write),
+    ):
+        _close_owned_fd_once(fd, label=label, cleanup_failures=cleanup_failures)
+    if attribute_list_initialized:
+        try:
+            if kernel32 is None:
+                cleanup_failures.append("outer_attribute_list_close")
+            else:
+                kernel32.DeleteProcThreadAttributeList(attribute_list)
+        except BaseException:
+            cleanup_failures.append("outer_attribute_list_close")
+    for label, handle in (
+        ("outer_thread_handle_close", thread_handle),
+        ("outer_process_handle_close", process_handle),
+        ("outer_job_handle_close", job),
+    ):
+        _close_owned_handle_once(kernel32, handle, label=label, cleanup_failures=cleanup_failures)
+
+
+def _terminate_coordinator_tree_once(
+    *,
+    kernel32: Any,
+    job: Any,
+    process_handle: Any,
+    job_assigned: bool,
+    cleanup_failures: list[str],
+) -> bool:
+    """Attempt process-tree termination once and never retry an ambiguous identity."""
+
+    if not process_handle:
+        return True
+    try:
+        if job_assigned and job:
+            terminated = bool(kernel32.TerminateJobObject(job, 1))
+        else:
+            terminated = bool(kernel32.TerminateProcess(process_handle, 1))
+    except BaseException:
+        cleanup_failures.append("outer_process_terminate")
+        return False
+    if not terminated:
+        cleanup_failures.append("outer_process_terminate")
+        return False
+    try:
+        waited = kernel32.WaitForSingleObject(process_handle, _INFINITE)
+    except BaseException:
+        cleanup_failures.append("outer_process_wait")
+        return False
+    if waited != _WAIT_OBJECT_0:
+        cleanup_failures.append("outer_process_wait")
+        return False
+    return True
 
 
 def _configure_kernel32(kernel32: Any) -> None:
@@ -3728,30 +3836,39 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
     executable = executable or Path(sys.executable).resolve()
     if not executable.is_file():
         _fixed("outer_python")
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _configure_kernel32(kernel32)
-    system_info = _SystemInfo()
-    kernel32.GetSystemInfo(ctypes.byref(system_info))
-    page_size = int(system_info.dwPageSize)
     requested_cap = PROCESS_TREE_PEAK_CAP_BYTES
-    effective_cap = effective_outer_cap(requested_cap, page_size)
+    effective_cap = requested_cap
+    kernel32: Any | None = None
     stdout_read = stdout_write = stderr_read = stderr_write = None
     job = process_handle = thread_handle = None
     job_assigned = False
     reader_threads: list[threading.Thread] = []
     output: dict[str, bytes] = {}
     failed: dict[str, str] = {}
+    cleanup_failures: list[str] = []
     timed_out = False
     peak_commit = 0
     peak_active = 0
     total_processes = 0
     measurement_complete = False
     process_tree_complete = False
-    cleanup_complete = True
+    observed_limit = effective_cap
+    observed_basic = OUTER_ACTIVE_PROCESS_LIMIT
     process_info = _ProcessInformation()
     attribute_list_initialized = False
     attribute_list = wintypes.LPVOID()
+    termination_attempted = False
+    primary_error: str | None = None
+    payload: bytes | None = None
     try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        _configure_kernel32(kernel32)
+        system_info = _SystemInfo()
+        kernel32.GetSystemInfo(ctypes.byref(system_info))
+        page_size = int(system_info.dwPageSize)
+        if page_size <= 0:
+            _fixed("outer_page_size")
+        effective_cap = effective_outer_cap(requested_cap, page_size)
         stdout_read, stdout_write = os.pipe()
         stderr_read, stderr_write = os.pipe()
         import msvcrt
@@ -3809,15 +3926,20 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
         resume_count = int(kernel32.ResumeThread(thread_handle))
         if resume_count in {0, 0xFFFFFFFF}:
             _fixed("outer_process_resume")
-        os.close(stdout_write); stdout_write = None
-        os.close(stderr_write); stderr_write = None
+        _close_owned_fd_once(stdout_write, label="outer_stdout_write_close", cleanup_failures=cleanup_failures)
+        stdout_write = None
+        _close_owned_fd_once(stderr_write, label="outer_stderr_write_close", cleanup_failures=cleanup_failures)
+        stderr_write = None
         reader_threads = [
-            threading.Thread(target=_read_pipe, args=(stdout_read, COORDINATOR_STDOUT_CAP_BYTES, output, "stdout", failed), daemon=True),
-            threading.Thread(target=_read_pipe, args=(stderr_read, COORDINATOR_STDERR_CAP_BYTES, output, "stderr", failed), daemon=True),
+            threading.Thread(target=_read_pipe, args=(stdout_read, COORDINATOR_STDOUT_CAP_BYTES, output, "stdout", failed, cleanup_failures), daemon=True),
+            threading.Thread(target=_read_pipe, args=(stderr_read, COORDINATOR_STDERR_CAP_BYTES, output, "stderr", failed, cleanup_failures), daemon=True),
         ]
-        stdout_read = stderr_read = None
-        for reader in reader_threads:
+        for index, reader in enumerate(reader_threads):
             reader.start()
+            if index == 0:
+                stdout_read = None
+            else:
+                stderr_read = None
         deadline = time.monotonic() + timeout_seconds
         while True:
             current = _JobExtendedLimitInformation()
@@ -3838,102 +3960,134 @@ def _launch_coordinator(run_root: Path, timeout_seconds: float = COORDINATOR_TIM
                 _fixed("outer_wait")
             if time.monotonic() >= deadline:
                 timed_out = True
-                if not kernel32.TerminateJobObject(job, 1):
+                termination_attempted = True
+                if not _terminate_coordinator_tree_once(
+                    kernel32=kernel32,
+                    job=job,
+                    process_handle=process_handle,
+                    job_assigned=job_assigned,
+                    cleanup_failures=cleanup_failures,
+                ):
                     _fixed("outer_timeout_terminate")
-                if kernel32.WaitForSingleObject(process_handle, _INFINITE) != _WAIT_OBJECT_0:
-                    _fixed("outer_timeout_wait")
                 break
-        for reader in reader_threads:
-            reader.join(timeout=5.0)
-        if any(reader.is_alive() for reader in reader_threads):
-            _fixed("outer_output_read")
-        final_info = _JobExtendedLimitInformation()
+        # The process handle can signal before a descendant exits.  The final
+        # memory read must occur only after the complete Job accounting view is
+        # at zero, otherwise a descendant tail allocation can be missed.
         final_accounting = _JobBasicAccountingInformation()
-        if not kernel32.QueryInformationJobObject(job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(final_info), ctypes.sizeof(final_info), None):
-            _fixed("outer_job_query")
         if not kernel32.QueryInformationJobObject(job, _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION, ctypes.byref(final_accounting), ctypes.sizeof(final_accounting), None):
             _fixed("outer_accounting_query")
-        peak_commit = max(peak_commit, int(final_info.PeakJobMemoryUsed))
-        peak_active = max(peak_active, int(final_accounting.ActiveProcesses))
-        total_processes = max(total_processes, int(final_accounting.TotalProcesses))
-        observed_limit = int(final_info.JobMemoryLimit)
-        observed_basic = int(final_info.BasicLimitInformation.ActiveProcessLimit)
-        if int(final_info.BasicLimitInformation.LimitFlags) != _JOB_LIMIT_FLAGS or observed_limit != effective_cap or observed_basic != OUTER_ACTIVE_PROCESS_LIMIT:
-            _fixed("outer_job_limits_readback")
-        # A process handle can signal before Job accounting publishes the
-        # final nested-job exit.  Wait for the accounting view to reach zero;
-        # returning earlier would falsely claim complete-tree reaping.
-        for _ in range(100):
-            if int(final_accounting.ActiveProcesses) == 0:
-                break
+        while int(final_accounting.ActiveProcesses) != 0 and time.monotonic() < deadline:
             time.sleep(0.01)
             if not kernel32.QueryInformationJobObject(job, _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION, ctypes.byref(final_accounting), ctypes.sizeof(final_accounting), None):
                 _fixed("outer_accounting_query")
             peak_active = max(peak_active, int(final_accounting.ActiveProcesses))
             total_processes = max(total_processes, int(final_accounting.TotalProcesses))
         process_tree_complete = total_processes >= 1 and int(final_accounting.ActiveProcesses) == 0
+        if not process_tree_complete:
+            _fixed("outer_cleanup")
+        final_info = _JobExtendedLimitInformation()
+        if not kernel32.QueryInformationJobObject(job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(final_info), ctypes.sizeof(final_info), None):
+            _fixed("outer_job_query")
+        # PeakJobMemoryUsed is read after the final zero-active-process
+        # observation, so it covers the entire completed process tree.
+        peak_commit = max(peak_commit, int(final_info.PeakJobMemoryUsed))
+        observed_limit = int(final_info.JobMemoryLimit)
+        observed_basic = int(final_info.BasicLimitInformation.ActiveProcessLimit)
+        if int(final_info.BasicLimitInformation.LimitFlags) != _JOB_LIMIT_FLAGS or observed_limit != effective_cap or observed_basic != OUTER_ACTIVE_PROCESS_LIMIT:
+            _fixed("outer_job_limits_readback")
+        if peak_commit >= OUTER_HARD_CAP_BYTES or peak_commit > effective_cap:
+            _fixed("outer_memory_cap")
         measurement_complete = True
-        cleanup_complete = process_tree_complete
+        for reader in reader_threads:
+            reader.join(timeout=5.0)
+            if reader.is_alive():
+                cleanup_failures.append("outer_reader_thread")
         exit_code = wintypes.DWORD()
         if not kernel32.GetExitCodeProcess(process_handle, ctypes.byref(exit_code)):
             _fixed("outer_exit_code")
         if output.get("stderr", b""):
-            error_code = "coordinator_stderr"
+            primary_error = "coordinator_stderr"
         elif timed_out:
-            error_code = "outer_timeout"
+            primary_error = "outer_timeout"
         elif failed:
-            error_code = failed.get("code", "outer_output")
+            primary_error = failed.get("code", "outer_output")
         elif int(exit_code.value) != 0:
-            error_code = "coordinator_failure"
-        else:
-            error_code = None
-        observation = JobObservation(peak_commit, requested_cap, effective_cap, observed_limit, OUTER_ACTIVE_PROCESS_LIMIT, observed_basic, peak_active, total_processes, process_tree_complete, measurement_complete, cleanup_complete, timed_out)
-        try:
-            _validate_job_observation_safety(observation)
-        except CompletePathError as error:
-            error_code = str(error)
-        try:
-            validate_job_observation(observation)
-        except CompletePathError as error:
-            if error_code is None:
-                error_code = str(error)
-        payload = output.get("stdout", b"") if error_code is None else None
-        return CoordinatorRun(payload, observation, error_code)
+            primary_error = "coordinator_failure"
     except CompletePathError as error:
-        error_code = str(error)
-        if process_handle:
-            try:
-                if job_assigned and job:
-                    if not kernel32.TerminateJobObject(job, 1):
-                        cleanup_complete = False
-                elif not kernel32.TerminateProcess(process_handle, 1):
-                    cleanup_complete = False
-                kernel32.WaitForSingleObject(process_handle, _INFINITE)
-            except BaseException:
-                cleanup_complete = False
-        observation = JobObservation(peak_commit, requested_cap, effective_cap, effective_cap, OUTER_ACTIVE_PROCESS_LIMIT, OUTER_ACTIVE_PROCESS_LIMIT, peak_active, total_processes, False, measurement_complete, cleanup_complete, timed_out)
-        return CoordinatorRun(None, observation, error_code)
+        if primary_error is None:
+            primary_error = str(error)
+        if process_handle and kernel32 is not None and not process_tree_complete and not termination_attempted:
+            termination_attempted = True
+            _terminate_coordinator_tree_once(
+                kernel32=kernel32,
+                job=job,
+                process_handle=process_handle,
+                job_assigned=job_assigned,
+                cleanup_failures=cleanup_failures,
+            )
+    except BaseException:
+        if primary_error is None:
+            primary_error = "coordinator_failure"
+        if process_handle and kernel32 is not None and not process_tree_complete and not termination_attempted:
+            termination_attempted = True
+            _terminate_coordinator_tree_once(
+                kernel32=kernel32,
+                job=job,
+                process_handle=process_handle,
+                job_assigned=job_assigned,
+                cleanup_failures=cleanup_failures,
+            )
     finally:
         for reader in reader_threads:
             if reader.is_alive():
                 reader.join(timeout=5.0)
-        for fd in (stdout_read, stdout_write, stderr_read, stderr_write):
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-        if attribute_list_initialized:
-            try:
-                kernel32.DeleteProcThreadAttributeList(attribute_list)
-            except BaseException:
-                pass
-        for handle in (thread_handle, process_handle, job):
-            if handle:
-                try:
-                    kernel32.CloseHandle(handle)
-                except BaseException:
-                    pass
+                if reader.is_alive():
+                    cleanup_failures.append("outer_reader_thread")
+        _release_coordinator_resources(
+            kernel32=kernel32,
+            stdout_read=stdout_read,
+            stdout_write=stdout_write,
+            stderr_read=stderr_read,
+            stderr_write=stderr_write,
+            attribute_list_initialized=attribute_list_initialized,
+            attribute_list=attribute_list,
+            thread_handle=thread_handle,
+            process_handle=process_handle,
+            job=job,
+            cleanup_failures=cleanup_failures,
+        )
+    cleanup_complete = process_tree_complete and not cleanup_failures
+    if not cleanup_complete and primary_error is None:
+        primary_error = "outer_cleanup"
+    observation = JobObservation(
+        peak_commit,
+        requested_cap,
+        effective_cap,
+        observed_limit,
+        OUTER_ACTIVE_PROCESS_LIMIT,
+        observed_basic,
+        peak_active,
+        total_processes,
+        process_tree_complete,
+        measurement_complete,
+        cleanup_complete,
+        timed_out,
+    )
+    try:
+        _validate_job_observation_safety(observation)
+    except CompletePathError as error:
+        if primary_error is None:
+            primary_error = str(error)
+    try:
+        validate_job_observation(observation)
+    except CompletePathError as error:
+        if primary_error is None:
+            primary_error = str(error)
+    if primary_error is None:
+        payload = output.get("stdout", b"")
+    else:
+        payload = None
+    return CoordinatorRun(payload, observation, primary_error)
 
 
 def _parse_payload(payload: bytes | None) -> dict[str, Any] | None:
@@ -3951,6 +4105,9 @@ def _resource_observation_mapping(observation: JobObservation) -> dict[str, Any]
         "source": "windows_job_object",
         "enforcement": "job_memory_limit_and_active_process_limit",
         "measurement": "PeakJobMemoryUsed_and_basic_accounting",
+        "active_process_metric_semantics": ACTIVE_PROCESS_METRIC_SEMANTICS,
+        "active_process_limit_semantics": ACTIVE_PROCESS_LIMIT_SEMANTICS,
+        "total_process_metric_semantics": TOTAL_PROCESS_METRIC_SEMANTICS,
         "requested_cap_bytes": observation.requested_cap_bytes,
         "effective_cap_bytes": observation.effective_cap_bytes,
         "cap_readback_bytes": observation.cap_readback_bytes,
@@ -3969,6 +4126,8 @@ def _resource_observation_mapping(observation: JobObservation) -> dict[str, Any]
 def _validate_resource_observation_mapping(value: object) -> dict[str, Any]:
     allowed = {
         "source", "enforcement", "measurement", "requested_cap_bytes",
+        "active_process_metric_semantics", "active_process_limit_semantics",
+        "total_process_metric_semantics",
         "effective_cap_bytes", "cap_readback_bytes", "active_process_limit",
         "active_process_limit_readback", "peak_job_commit_bytes",
         "peak_active_processes", "total_processes", "process_tree_complete",
@@ -3980,6 +4139,9 @@ def _validate_resource_observation_mapping(value: object) -> dict[str, Any]:
         value["source"] != "windows_job_object"
         or value["enforcement"] != "job_memory_limit_and_active_process_limit"
         or value["measurement"] != "PeakJobMemoryUsed_and_basic_accounting"
+        or value["active_process_metric_semantics"] != ACTIVE_PROCESS_METRIC_SEMANTICS
+        or value["active_process_limit_semantics"] != ACTIVE_PROCESS_LIMIT_SEMANTICS
+        or value["total_process_metric_semantics"] != TOTAL_PROCESS_METRIC_SEMANTICS
     ):
         _fixed("resource_observation_authority")
     observation = JobObservation(
@@ -4141,16 +4303,35 @@ def prepare_report() -> dict[str, Any]:
     }
 
 
-def _probe_tree_child(sleep_seconds: float = 0.15) -> int:
+def _probe_tree_child(sleep_seconds: float = 0.15, tail_bytes: int = 0, tail_delay: float = 0.0) -> int:
     if os.name != "nt":
         return 0
     time.sleep(sleep_seconds)
+    if type(tail_bytes) is not int or tail_bytes < 0 or type(tail_delay) is not float or tail_delay < 0.0:
+        _fixed("probe_tail_arguments")
+    if tail_delay:
+        time.sleep(tail_delay)
+    allocation = bytearray(tail_bytes)
+    for offset in range(0, len(allocation), 4096):
+        allocation[offset] = offset // 4096 & 0xFF
+    if allocation:
+        time.sleep(0.05)
+    del allocation
     return 0
 
 
-def _probe_tree_coordinator(run_root: Path, sleep_seconds: float) -> dict[str, Any]:
+def _probe_tree_coordinator(run_root: Path, sleep_seconds: float, *, tail_bytes: int = 0, tail_delay: float = 0.0) -> dict[str, Any]:
     del run_root
-    child = subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve()), "--probe-grandchild", str(sleep_seconds)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    child = subprocess.Popen(
+        [
+            sys.executable, "-B", str(Path(__file__).resolve()), "--probe-grandchild", str(sleep_seconds),
+            "--probe-tail-bytes", str(tail_bytes), "--probe-tail-delay", str(tail_delay),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if tail_bytes:
+        return build_test_aggregate(completed_samples=0, error_code="probe_only", observer_status="observer_unavailable", disk_gate="observer_unavailable")
     child.wait(timeout=max(5.0, sleep_seconds + 2.0))
     return build_test_aggregate(completed_samples=0, error_code="probe_only", observer_status="observer_unavailable", disk_gate="observer_unavailable")
 
@@ -4164,6 +4345,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--coordinator", action="store_true")
     parser.add_argument("--probe-coordinator", type=float)
     parser.add_argument("--probe-grandchild", type=float)
+    parser.add_argument("--probe-tail-bytes", type=int, default=0)
+    parser.add_argument("--probe-tail-delay", type=float, default=0.0)
     parser.add_argument("--run-root")
     args = parser.parse_args(argv)
     try:
@@ -4188,11 +4371,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(observer_diagnostic_report(), sort_keys=True, separators=(",", ":")))
             return 0
         if args.probe_grandchild is not None:
-            return _probe_tree_child(args.probe_grandchild)
+            return _probe_tree_child(args.probe_grandchild, args.probe_tail_bytes, args.probe_tail_delay)
         if args.probe_coordinator is not None:
             if not args.run_root:
                 _fixed("outer_run_root")
-            print(_aggregate_json(_probe_tree_coordinator(Path(args.run_root), args.probe_coordinator)), end="")
+            print(_aggregate_json(_probe_tree_coordinator(Path(args.run_root), args.probe_coordinator, tail_bytes=args.probe_tail_bytes, tail_delay=args.probe_tail_delay)), end="")
             return 0
         if args.resource:
             if not args.run_root:
