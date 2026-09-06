@@ -46,7 +46,6 @@ _ARTIFACT_HEADER_BYTES: Final[int] = 68
 _MAX_PROOF_BYTES: Final[int] = 512 * 1024 * 1024
 _MAX_ARTIFACT_BYTES: Final[int] = _MAX_PROOF_BYTES + _ARTIFACT_HEADER_BYTES + _PUBLIC_BYTES
 _MAX_EXECUTABLE_BYTES: Final[int] = _MAX_ARTIFACT_BYTES
-_MAX_ACCEPTANCE: Final[int] = 65_536
 _WORKSPACE_PREFIX: Final[str] = "BLV3-WORKSPACE-"
 _WORKSPACE_MARKER_NAME: Final[str] = ".BLV3-WORKSPACE"
 _WORKSPACE_MARKER: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE-WORKSPACE/v3\x00"
@@ -56,23 +55,6 @@ _STATE_HEADER_BYTES: Final[int] = 150
 _STATE_DIGEST_COUNT: Final[int] = 23
 _STATE_PROPOSED_COMMITMENT_OFFSET: Final[int] = _STATE_HEADER_BYTES + _STATE_DIGEST_COUNT * _DIGEST_BYTES
 _ZERO_SUITE = bytes(_DIGEST_BYTES)
-_PRIVATE_ZK_ID_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/IDENTITY/v1\x00"
-
-
-def _private_zk_wide(label: str) -> bytes:
-    digest = hashlib.sha3_512(_PRIVATE_ZK_ID_DOMAIN)
-    digest.update(label.encode("ascii"))
-    return digest.digest()
-
-
-PRIVATE_ZK_MODE_ID = _private_zk_wide("mode.PRIVATE_ZK.v1")
-PRIVATE_ZK_DATABASE_CONTEXT_ID = _private_zk_wide("database-context.v1")
-PRIVATE_ZK_DATABASE_SCHEMA_ID = _private_zk_wide("database-schema.v1")
-PRIVATE_ZK_DATABASE_PROGRAM_ID = _private_zk_wide("database-program.v1")
-PRIVATE_ZK_INITIAL_PAYMENT_ROOT = _private_zk_wide("payment-genesis.v1")
-PRIVATE_ZK_INITIAL_CLEARANCE_ROOT = _private_zk_wide("clearance-genesis.v1")
-PRIVATE_ZK_EPOCH = 7
-_PRIVATE_ZK_PROFILE_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/PROFILE/v1\x00"
 
 _GENERIC_READ: Final[int] = 0x80000000
 _GENERIC_EXECUTE: Final[int] = 0x20000000
@@ -110,34 +92,8 @@ def _is_reparse(metadata: os.stat_result) -> bool:
     )
 
 
-def _private_zk_profile_digest(statement: MinimalProofStatementV3, verifier_sha256: bytes) -> bytes:
-    parts = [
-        PRIVATE_ZK_MODE_ID,
-        PRIVATE_ZK_DATABASE_CONTEXT_ID,
-        PRIVATE_ZK_DATABASE_SCHEMA_ID,
-        PRIVATE_ZK_DATABASE_PROGRAM_ID,
-        bytes(statement.get("execution_context")),
-        bytes(statement.get("evaluator_id")),
-        bytes(statement.get("schema_id")),
-        bytes(statement.get("program_id")),
-        bytes(statement.get("automatic_control_set")),
-        _CIRCUIT_ID,
-        verifier_sha256,
-        _ZERO_SUITE,
-        _u64(PRIVATE_ZK_EPOCH),
-    ]
-    return _sha(_PRIVATE_ZK_PROFILE_DOMAIN, *parts)
-_PROOF_OPERATION_DOMAIN = b"BL/MINIMAL-CLEARANCE/PROOF-OPERATION/v1\x00"
-_PROOF_REPLAY_DOMAIN = b"BL/MINIMAL-CLEARANCE/PROOF-REPLAY/v1\x00"
-_PROOF_CLEARANCE_ROOT_DOMAIN = b"BL/MINIMAL-CLEARANCE/CLEARANCE-ROOT/v1\x00"
-_PROOF_STATE_BINDING_DOMAIN = b"BL/MINIMAL-CLEARANCE/STATE-BINDING/v1\x00"
-_PROOF_GENESIS_DOMAIN = b"BL/MINIMAL-CLEARANCE/GENESIS/v1\x00"
-_PROOF_AUDIT_EVENT_DOMAIN = b"BL/MINIMAL-CLEARANCE/AUDIT-EVENT/v1\x00"
-_PROOF_AUDIT_HEAD_DOMAIN = b"BL/MINIMAL-CLEARANCE/AUDIT-HEAD/v1\x00"
-_PROOF_RECEIPT_DOMAIN = b"BL/MINIMAL-CLEARANCE/RECEIPT/v1\x00"
 _ACCEPTANCE_MAGIC = b"BLPACV3\x00"
 _ACCEPTANCE_VERSION: Final[int] = 3
-_KIND = "PRIVATE_ZK_CLEARANCE"
 _NATIVE_INPUTS: Final[int] = 52_057
 _NATIVE_PUBLIC_INPUTS: Final[int] = 40_721
 _NATIVE_LAYERS: Final[int] = 337
@@ -221,7 +177,6 @@ _STATE_LAYOUT_LITERAL: Final[bytes] = (
 )
 _STATE_LAYOUT_ID_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/STATE-LAYOUT/v2\x00"
 _STATE_ID_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/STATE-ID/v1\x00"
-_PROPOSED_PAYMENT_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/PROPOSED-PAYMENT-COMMITMENT/v1\x00"
 _NO_AUTHORIZED_AMOUNT_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/NO-AUTHORIZED-AMOUNT/v1\x00"
 
 
