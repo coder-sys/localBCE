@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class DocumentationGovernanceTests(unittest.TestCase):
     def test_live_markdown_tree_is_registered_and_linked(self) -> None:
         result = governance.validate_markdown_tree(ROOT)
-        self.assertEqual(21, len(governance.MARKDOWN_REGISTRY))
+        self.assertEqual(19, len(governance.MARKDOWN_REGISTRY))
         self.assertEqual(len(governance.MARKDOWN_REGISTRY), result["markdown_count"])
         self.assertEqual(5, result["root_authority_count"])
         self.assertEqual(0, result["root_protected_compatibility_count"])

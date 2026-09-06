@@ -101,6 +101,34 @@ acceptance yields only an opaque scoped verification outcome and never `CLEAR`; 
 chronology, `policyResult`, `effectiveDirective`, exceptions, disposition, retries, and economic
 state.
 
+## Source-only semantic and session fixtures
+
+The source-only continuity and session fixtures are differential evidence under this Native-v3
+authority; they are not separate proof backends or production interfaces. The plaintext continuity
+fixture owns the synthetic V2 bundle contract: V2 magic/domain values reject V1 bytes except for the
+frozen V1 exception record; one synthetic provider/credential/enrollment/feed; one ordered
+`EXPECTED_RULE_ID` rule at priority 100 with `priority-then-human-review`, scope
+`provider-credential-enrollment-continuity-v1`, and interval `[6000, 9000)`; and the bounded bundle
+order `receipt, request, facts, completeness, exception-or-sentinel, before-state, after-state`.
+`HOLD` requires complete authoritative absence and exact subject/feed/provider/scope/time
+nonmembership; incomplete feeds yield `HUMAN_REVIEW`. The independent parser reconstructs the
+canonical request, chronology, replay, decision, state, access, receipt, and bundle identities
+without importing producer/evaluator classes. Its receipts remain audit-only with
+`proofSuiteId=null`, `proof_session_accepted=false`, and `economic_mutation=false`.
+
+The session-boundary fixture owns the bounded two-leaf framing contract: a 992-byte fixed statement,
+`BLTBFRM1` frames with version/kind/role/round, nonzero 32-byte session ID, 64-byte domain, u32
+payload length, and exact payload; ordered vector leaves with 32-byte hidden salts; a commitment
+binding statement digest, vector root, and handle; and a verifier-selected one-sibling opening.
+The verifier samples fresh public challenge material after the commitment; the current HMAC-SHA3-512
+tag is fixture-only and does not claim Fiat-Shamir/QROM, hiding, ZK, PQ authorization, or binding.
+Create-once state rejects duplicate/replayed sessions, challenges, transcripts, randomness, and
+retry grinding. The independent Rust parser reads only public session files and the verifier key,
+never `prover_state.bin`, and all corruption, role/round/domain, root/index/salt/opening, and
+statement/transcript mutations fail closed. The machine-readable ledger remains the authority for
+its unresolved ideal-vector terms; neither fixture supplies production qualification, payment
+authority, or activation.
+
 ## Source-auth and private representation contract
 
 `AUTHORITATIVE_ASSERTION` signs the narrow operation-scoped assertion directly when the genuine source

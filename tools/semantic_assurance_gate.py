@@ -40,67 +40,7 @@ CHECK_TIMEOUT_SECONDS = 90.0
 NATIVE_TIMEOUT_SECONDS = 15.0
 
 REQUIRED_MANIFEST_SHA256 = "3a76e9a9e5279d904a98d9e92f7eb507fc91c3ec17fc0b6720843369df4fff61"
-REQUIRED_CANDIDATE_MODULE = "BlindLedger.Theorems"
-REQUIRED_CANDIDATE_THEOREM_SOURCE = "BlindLedger/Theorems.lean"
-REQUIRED_CANDIDATE_SOURCE_FILES = (
-    "BlindLedger.lean",
-    "BlindLedger/Checkpoint.lean",
-    "BlindLedger/Codec.lean",
-    "BlindLedger/ControlSet.lean",
-    "BlindLedger/Evaluation.lean",
-    "BlindLedger/Executable.lean",
-    "BlindLedger/StateTransition.lean",
-    "BlindLedger/Theorems.lean",
-    "BlindLedger/Types.lean",
-    "lake-manifest.json",
-    "lakefile.toml",
-    "lean-toolchain",
-)
-REQUIRED_LEAN_VERSION = (
-    "Lean (version 4.33.1, x86_64-w64-windows-gnu, commit "
-    "819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)"
-)
-REQUIRED_LAKE_VERSION = "Lake version 5.0.0-src+819816b (Lean version 4.33.1)"
-REQUIRED_BUILD_TARGET = "blind_clearance_kernel"
-REQUIRED_BUILD_ROOT_MODULE = "BlindLedger.Executable"
-REQUIRED_ARTIFACT_RELATIVE_PATH = ".lake/build/bin/blind_clearance_kernel.exe"
 
-AUTHORITY_PROPERTY_IDS = (
-    "evaluation_deterministic",
-    "proof_acceptance_ne_clear",
-    "observe_only_no_operative_clearance",
-    "absence_requires_authoritative_completeness",
-    "policy_effective_separation",
-    "exception_requires_exact_authorization",
-    "nonclear_no_economic_mutation",
-    "wrong_control_set_rejects",
-    "chronology_strict",
-    "replay_preserves_state",
-    "decision_access_join_unique",
-    "decode_encode_roundtrip_and_canonical_encoding_injective",
-    "checkpoint_chain_append_only",
-)
-
-AUTHORITY_DECLARATION_NAMES = (
-    "evaluation_deterministic",
-    "proof_acceptance_ne_clear",
-    "observe_only_no_operative_clearance",
-    "absence_requires_authoritative_completeness",
-    "policy_effective_separation",
-    "exception_requires_exact_authorization",
-    "nonclear_no_economic_mutation",
-    "wrong_control_set_rejects",
-    "chronology_strict",
-    "replay_preserves_state",
-    "decision_access_join_unique",
-    "decode_encode_roundtrip",
-    "canonical_encoding_injective",
-    "checkpoint_chain_append_only",
-)
-
-FORBIDDEN_TOKEN_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_])(axiom|sorry|admit|custom_axiom|unsafe)(?![A-Za-z0-9_])"
-)
 THEOREM_DECLARATION_RE = re.compile(
     r"(?ms)^theorem\s+(?P<name>[A-Za-z0-9_']+)\s+(?P<header>.*?)\s*:=\s*by\b"
 )
@@ -201,7 +141,6 @@ class DeclarationExpectation:
 
 @dataclass(frozen=True)
 class Manifest:
-    raw: Mapping[str, Any]
     candidate: Mapping[str, Any]
     toolchain: Mapping[str, Any]
     build: Mapping[str, Any]
@@ -334,44 +273,19 @@ def _load_manifest() -> Manifest:
     )
     _git_hex(candidate["required_head"], "candidate.required_head")
     _git_hex(candidate["required_tree"], "candidate.required_tree")
-    module = _string(candidate["module"], "candidate.module")
-    if module != REQUIRED_CANDIDATE_MODULE:
-        raise AssuranceError(f"unexpected candidate module: {module!r}")
+    _string(candidate["module"], "candidate.module")
     theorem_source = _relative_path(candidate["theorem_source"], "candidate.theorem_source")
-    if theorem_source != REQUIRED_CANDIDATE_THEOREM_SOURCE:
-        raise AssuranceError(f"unexpected candidate theorem source: {theorem_source!r}")
     source_files_value = candidate["source_files"]
     if type(source_files_value) is not list or not source_files_value:
         raise AssuranceError("candidate.source_files must be a non-empty list")
     source_files = tuple(_relative_path(item, "candidate.source_files[]") for item in source_files_value)
     if source_files != tuple(sorted(source_files)) or len(set(source_files)) != len(source_files):
         raise AssuranceError("candidate.source_files must be sorted and unique")
-    if source_files != REQUIRED_CANDIDATE_SOURCE_FILES:
-        raise AssuranceError(
-            "candidate.source_files differ from the reviewed source closure: "
-            f"expected={REQUIRED_CANDIDATE_SOURCE_FILES!r} got={source_files!r}"
-        )
     if theorem_source not in source_files:
         raise AssuranceError("candidate.theorem_source is not in candidate.source_files")
     declaration_sources_value = candidate["declaration_sources"]
     if type(declaration_sources_value) is not dict:
         raise AssuranceError("candidate.declaration_sources must be an object")
-    if set(declaration_sources_value) != set(AUTHORITY_DECLARATION_NAMES):
-        raise AssuranceError(
-            "candidate.declaration_sources keys differ: "
-            f"expected={list(AUTHORITY_DECLARATION_NAMES)!r} "
-            f"got={sorted(declaration_sources_value)!r}"
-        )
-    for declaration_name in AUTHORITY_DECLARATION_NAMES:
-        declaration_source = _relative_path(
-            declaration_sources_value[declaration_name],
-            f"candidate.declaration_sources.{declaration_name}",
-        )
-        if declaration_source not in source_files:
-            raise AssuranceError(
-                f"candidate.declaration_sources.{declaration_name} is not in "
-                "candidate.source_files"
-            )
 
     toolchain = value["toolchain"]
     if type(toolchain) is not dict:
@@ -381,17 +295,10 @@ def _load_manifest() -> Manifest:
         {"descriptor", "platform", "lean_version", "lake_version", "executables"},
         "toolchain",
     )
-    descriptor = _string(toolchain["descriptor"], "toolchain.descriptor")
-    if descriptor != "leanprover/lean4:v4.33.1":
-        raise AssuranceError(f"unexpected pinned Lean descriptor: {descriptor!r}")
-    if _string(toolchain["platform"], "toolchain.platform") != "windows-x86_64":
-        raise AssuranceError("this reviewed toolchain manifest is not for windows-x86_64")
-    lean_version = _string(toolchain["lean_version"], "toolchain.lean_version")
-    if lean_version != REQUIRED_LEAN_VERSION:
-        raise AssuranceError(f"unexpected pinned Lean version: {lean_version!r}")
-    lake_version = _string(toolchain["lake_version"], "toolchain.lake_version")
-    if lake_version != REQUIRED_LAKE_VERSION:
-        raise AssuranceError(f"unexpected pinned Lake version: {lake_version!r}")
+    _string(toolchain["descriptor"], "toolchain.descriptor")
+    _string(toolchain["platform"], "toolchain.platform")
+    _string(toolchain["lean_version"], "toolchain.lean_version")
+    _string(toolchain["lake_version"], "toolchain.lake_version")
     executables = toolchain["executables"]
     if type(executables) is not dict or set(executables) != {"lake", "lean", "leanchecker"}:
         raise AssuranceError("toolchain.executable set is not exactly lake/lean/leanchecker")
@@ -406,32 +313,23 @@ def _load_manifest() -> Manifest:
     if type(build) is not dict:
         raise AssuranceError("build record must be an object")
     _exact_keys(build, {"target", "root_module", "artifact"}, "build")
-    target = _string(build["target"], "build.target")
-    if target != REQUIRED_BUILD_TARGET:
-        raise AssuranceError(f"unexpected build target: {target!r}")
-    root_module = _string(build["root_module"], "build.root_module")
-    if root_module != REQUIRED_BUILD_ROOT_MODULE:
-        raise AssuranceError(f"unexpected build root module: {root_module!r}")
+    _string(build["target"], "build.target")
+    _string(build["root_module"], "build.root_module")
     artifact = build["artifact"]
     if type(artifact) is not dict:
         raise AssuranceError("build.artifact must be an object")
     _exact_keys(artifact, {"relative_path", "minimum_bytes", "identity"}, "build.artifact")
-    artifact_relative_path = _relative_path(
-        artifact["relative_path"], "build.artifact.relative_path"
-    )
-    if artifact_relative_path != REQUIRED_ARTIFACT_RELATIVE_PATH:
-        raise AssuranceError(f"unexpected build artifact path: {artifact_relative_path!r}")
+    _relative_path(artifact["relative_path"], "build.artifact.relative_path")
     _positive_int(artifact["minimum_bytes"], "build.artifact.minimum_bytes")
     if artifact["identity"] != "sha256-and-byte-length-of-fresh-build-output":
         raise AssuranceError("build.artifact.identity is not the reviewed identity rule")
 
     properties_value = value["properties"]
-    if type(properties_value) is not list or len(properties_value) != len(AUTHORITY_PROPERTY_IDS):
-        raise AssuranceError(
-            f"manifest property count must be {len(AUTHORITY_PROPERTY_IDS)}"
-        )
+    if type(properties_value) is not list or not properties_value:
+        raise AssuranceError("manifest properties must be a non-empty list")
     declarations: list[DeclarationExpectation] = []
     property_ids: list[str] = []
+    declaration_names: set[str] = set()
     for property_index, item in enumerate(properties_value):
         if type(item) is not dict:
             raise AssuranceError(f"properties[{property_index}] must be an object")
@@ -465,38 +363,52 @@ def _load_manifest() -> Manifest:
                     ),
                 )
             )
-        if property_id == "decode_encode_roundtrip_and_canonical_encoding_injective":
-            if statement != "decode_encode_roundtrip ∧ canonical_encoding_injective":
-                raise AssuranceError("codec composite property statement changed")
-        elif len(declaration_value) != 1 or statement != declaration_value[0]["source_statement"]:
+        if len(declaration_value) == 1 and statement != declaration_value[0]["source_statement"]:
             raise AssuranceError(f"property statement/declaration mismatch: {property_id}")
-    if tuple(property_ids) != AUTHORITY_PROPERTY_IDS:
+
+        for declaration in declaration_value:
+            name = str(declaration["name"])
+            if name in declaration_names:
+                raise AssuranceError(f"duplicate theorem declaration in manifest: {name}")
+            declaration_names.add(name)
+    if len(set(property_ids)) != len(property_ids):
+        raise AssuranceError("manifest property ids must be unique")
+    if set(declaration_sources_value) != declaration_names:
         raise AssuranceError(
-            f"property identity/order differs: expected={AUTHORITY_PROPERTY_IDS!r} got={tuple(property_ids)!r}"
+            "candidate.declaration_sources keys differ from manifest declarations: "
+            f"expected={sorted(declaration_names)!r} got={sorted(declaration_sources_value)!r}"
         )
-    if tuple(item.name for item in declarations) != AUTHORITY_DECLARATION_NAMES:
-        raise AssuranceError(
-            "declaration identity/order differs: "
-            f"expected={AUTHORITY_DECLARATION_NAMES!r} "
-            f"got={tuple(item.name for item in declarations)!r}"
+    for declaration_name in declaration_names:
+        declaration_source = _relative_path(
+            declaration_sources_value[declaration_name],
+            f"candidate.declaration_sources.{declaration_name}",
         )
+        if declaration_source not in source_files:
+            raise AssuranceError(
+                f"candidate.declaration_sources.{declaration_name} is not in "
+                "candidate.source_files"
+            )
 
     allowed_axioms_value = value["allowed_axioms"]
-    if type(allowed_axioms_value) is not list or any(type(item) is not str for item in allowed_axioms_value):
-        raise AssuranceError("allowed_axioms must be a list of strings")
+    if (
+        type(allowed_axioms_value) is not list
+        or not allowed_axioms_value
+        or any(type(item) is not str or not item for item in allowed_axioms_value)
+        or len(set(allowed_axioms_value)) != len(allowed_axioms_value)
+    ):
+        raise AssuranceError("allowed_axioms must be a non-empty list of unique strings")
     allowed_axioms = frozenset(allowed_axioms_value)
-    if allowed_axioms != frozenset({"propext"}) or len(allowed_axioms_value) != 1:
-        raise AssuranceError("only the reviewed propext axiom allowance is supported")
 
     forbidden_value = value["forbidden_source_tokens"]
-    if type(forbidden_value) is not list or tuple(forbidden_value) != (
-        "axiom",
-        "sorry",
-        "admit",
-        "custom_axiom",
-        "unsafe",
+    if (
+        type(forbidden_value) is not list
+        or not forbidden_value
+        or any(type(item) is not str or not item for item in forbidden_value)
+        or len(set(forbidden_value)) != len(forbidden_value)
     ):
-        raise AssuranceError("forbidden_source_tokens changed")
+        raise AssuranceError(
+            "forbidden_source_tokens must be a non-empty list of unique strings"
+        )
 
     native = value["native_protocol"]
     if type(native) is not dict:
@@ -514,34 +426,35 @@ def _load_manifest() -> Manifest:
         "native_protocol",
     )
     header = native["header"]
-    if type(header) is not list or tuple(_string(item, "native_protocol.header[]") for item in header) != (
-        "BL-CLEARANCE-KERNEL/1",
-        "schema=bounded-u16/id-byte/fact-slots-2/absence-slots-2",
-        "mode=DIRECT_STATE_OWNED authority=verifier-owned proof_suite_id=NONE",
-        "claim=PURE_SYNTHETIC_NONACTIVATING",
-        "KAT_COUNT=8",
+    if type(header) is not list or not header or any(
+        type(item) is not str or not item for item in header
     ):
-        raise AssuranceError("native protocol header changed")
-    if native["kat_count"] != 8 or native["theorem_declaration_count"] != len(AUTHORITY_DECLARATION_NAMES):
-        raise AssuranceError("native protocol counts changed")
+        raise AssuranceError("native protocol header must be a non-empty list of strings")
+    kat_count = _positive_int(native["kat_count"], "native_protocol.kat_count")
+    if kat_count != len(KAT_EXPECTED):
+        raise AssuranceError(
+            f"native protocol KAT count must be {len(KAT_EXPECTED)}: got={kat_count}"
+        )
+    if _positive_int(
+        native["theorem_declaration_count"], "native_protocol.theorem_declaration_count"
+    ) != len(declarations):
+        raise AssuranceError("native protocol theorem declaration count changed")
     negative_names = native["negative_names"]
-    if type(negative_names) is not list or tuple(negative_names) != (
-        "observe-only",
-        "wrong-control-set",
-        "bad-chronology",
-        "bad-exception",
-        "proof-acceptance-only",
-        "replay-same-attempt",
-        "trailing-wire",
+    if (
+        type(negative_names) is not list
+        or not negative_names
+        or any(type(item) is not str or not item for item in negative_names)
+        or len(set(negative_names)) != len(negative_names)
     ):
-        raise AssuranceError("native negative names changed")
-    if native["gate_ids"] != list(AUTHORITY_PROPERTY_IDS):
-        raise AssuranceError("native gate ids do not match the 13-property authority")
-    if native["final_line"] != "KERNEL_RESULT=PASS":
-        raise AssuranceError("native final line changed")
+        raise AssuranceError(
+            "native negative names must be a non-empty list of unique strings"
+        )
+    gate_ids = native["gate_ids"]
+    if type(gate_ids) is not list or tuple(gate_ids) != tuple(property_ids):
+        raise AssuranceError("native gate ids must match manifest property order")
+    _string(native["final_line"], "native_protocol.final_line")
 
     return Manifest(
-        raw=value,
         candidate=candidate,
         toolchain=toolchain,
         build=build,
@@ -690,7 +603,6 @@ def _parse_source_declarations(
     source: str, expectations: Sequence[DeclarationExpectation]
 ) -> tuple[dict[str, str], ...]:
     found: dict[str, str] = {}
-    order: list[str] = []
     for match in THEOREM_DECLARATION_RE.finditer(source):
         name = match.group("name")
         header = match.group("header").strip()
@@ -700,7 +612,6 @@ def _parse_source_declarations(
         if name in found:
             raise AssuranceError(f"duplicate theorem declaration in source: {name}")
         found[name] = header
-        order.append(name)
     expected_names = tuple(item.name for item in expectations)
     missing = [name for name in expected_names if name not in found]
     if missing:
@@ -718,26 +629,36 @@ def _parse_source_declarations(
     # Extra declarations are allowed for implementation lemmas, but they can
     # never replace a required declaration.  The exact candidate tree/source
     # identity still binds the complete reviewed source closure.
-    _ = order
     return statement_records
+
+
+def _forbidden_token_pattern(tokens: Sequence[str]) -> re.Pattern[str] | None:
+    if not tokens:
+        return None
+    alternatives = "|".join(
+        re.escape(token) for token in sorted(tokens, key=lambda token: (-len(token), token))
+    )
+    return re.compile(
+        rf"(?i)(?<![A-Za-z0-9_])(?:{alternatives})(?![A-Za-z0-9_])"
+    )
 
 
 def _check_forbidden_sources(
     root: Path, source_files: Sequence[str], forbidden_tokens: Sequence[str]
-) -> tuple[int, ...]:
-    expected = {token.lower() for token in forbidden_tokens}
-    hits: list[int] = []
+) -> dict[str, int]:
+    pattern = _forbidden_token_pattern(forbidden_tokens)
+    files_scanned = 0
     for relative in source_files:
         path = root / Path(*relative.split("/"))
         source = path.read_text(encoding="utf-8")
-        for match in FORBIDDEN_TOKEN_RE.finditer(source):
-            if match.group(1).lower() in expected:
+        files_scanned += 1
+        if pattern is not None:
+            for match in pattern.finditer(source):
                 line = source.count("\n", 0, match.start()) + 1
                 raise AssuranceError(
                     f"forbidden source token {match.group(0)!r} in {relative}:{line}"
                 )
-        hits.append(0)
-    return tuple(hits)
+    return {"files_scanned": files_scanned, "forbidden_token_matches": 0}
 
 
 def _extract_git_tree(root: Path, revision: str, destination: Path) -> None:
@@ -992,6 +913,41 @@ def _file_identity(path: Path, label: str) -> FileIdentity:
     return FileIdentity(str(path), len(content), hashlib.sha256(content).hexdigest())
 
 
+def _require_identity_unchanged(
+    label: str, before: FileIdentity, after: FileIdentity
+) -> None:
+    if before != after:
+        raise AssuranceError(f"{label} changed during execution: before={before} after={after}")
+
+
+def _require_source_identity_unchanged(
+    before: tuple[str, tuple[FileIdentity, ...]],
+    after: tuple[str, tuple[FileIdentity, ...]],
+) -> None:
+    if before != after:
+        raise AssuranceError(
+            "candidate source identity changed during verification: "
+            f"before={before} after={after}"
+        )
+
+
+def _require_toolchain_identity_unchanged(
+    tool_paths: Mapping[str, Path], before: Mapping[str, Mapping[str, Any]]
+) -> None:
+    for name, path in tool_paths.items():
+        identity = _file_identity(path, f"pinned {name} executable after execution")
+        after = {
+            "path": str(path.resolve()),
+            "bytes": identity.bytes,
+            "sha256": identity.sha256,
+        }
+        if before.get(name) != after:
+            raise AssuranceError(
+                f"pinned {name} executable changed during execution: "
+                f"before={before.get(name)!r} after={after!r}"
+            )
+
+
 def _parse_axiom_output(raw: bytes, declarations: Sequence[str], allowed: frozenset[str]) -> tuple[dict[str, Any], ...]:
     text = _decode(raw, "axiom closure")
     lines = [line for line in text.splitlines() if line.strip()]
@@ -1076,7 +1032,9 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
                 "source_statement": record["source_statement"],
             }
         )
-    _check_forbidden_sources(candidate_root, source_files, manifest.forbidden_tokens)
+    source_scan = _check_forbidden_sources(
+        candidate_root, source_files, manifest.forbidden_tokens
+    )
     tool_paths, tool_identities = _toolchain_paths(manifest)
     build_command = [str(tool_paths["lake"]), "build", str(manifest.build["target"])]
     declarations = tuple(item.name for item in manifest.declarations)
@@ -1183,15 +1141,23 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             raise AssuranceError(f"native semantic diagnostic wrote stderr: {native.stderr!r}")
         native_counts = _check_native_output(native.stdout, manifest.native, declarations)
         artifact_identity_after = _file_identity(artifact, "native artifact after execution")
-        if artifact_identity_after != artifact_identity_before:
-            raise AssuranceError(
-                "native artifact changed during execution: "
-                f"before={artifact_identity_before} after={artifact_identity_after}"
-            )
+        _require_identity_unchanged(
+            "native artifact", artifact_identity_before, artifact_identity_after
+        )
+        _require_toolchain_identity_unchanged(tool_paths, tool_identities)
 
         source_hash_after, file_identities_after = _source_identity(candidate_root, source_files)
-        if source_hash_after != source_hash_before or file_identities_after != file_identities:
-            raise AssuranceError("candidate source identity changed during verification")
+        _require_source_identity_unchanged(
+            (source_hash_before, file_identities),
+            (source_hash_after, file_identities_after),
+        )
+        head_after = _git(candidate_root, "rev-parse", "HEAD").lower()
+        tree_after = _git(candidate_root, "rev-parse", "HEAD^{tree}").lower()
+        if head_after != head or tree_after != tree:
+            raise AssuranceError(
+                "candidate Git identity changed during verification: "
+                f"before={head}/{tree} after={head_after}/{tree_after}"
+            )
         after_status, after_status_count, after_status_sha256 = _worktree_identity(candidate_root)
         if before_status != after_status:
             raise AssuranceError(
@@ -1230,7 +1196,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
                 "worktree_status_sha256": after_status_sha256,
                 "status_unchanged": before_status == after_status,
             },
-            "toolchain": tool_identities,
+            "toolchain": {**tool_identities, "identity_unchanged": True},
             "build": {
                 "target": manifest.build["target"],
                 "root_module": manifest.build["root_module"],
@@ -1263,6 +1229,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             "source_declarations": list(statement_records),
             "native": {
                 "counts": native_counts,
+                "source_scan": source_scan,
                 "stdout": _decode(native.stdout, "native semantic diagnostic", encoding="ascii"),
             },
             "qualification": {
@@ -1307,6 +1274,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     print("PROOF_BODY_CHECK=PASS actual_lean_trust=0 fresh_source_process=true")
     print("INDEPENDENT_LEAN_CHECKER=PASS fresh_pinned_process=true")
+    source_scan = receipt["native"]["source_scan"]
+    print(
+        "SOURCE_CLOSURE_SCAN=PASS "
+        f"files_scanned={source_scan['files_scanned']} "
+        f"forbidden_token_matches={source_scan['forbidden_token_matches']}"
+    )
     print(
         "SEMANTIC_ASSURANCE_GATE=PASS "
         f"property_count={receipt['manifest']['property_count']} "

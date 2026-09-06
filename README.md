@@ -34,13 +34,13 @@ not a semantic rewrite.
 8. [`docs/LEAN_FORMAL_KERNEL.md`](docs/LEAN_FORMAL_KERNEL.md) — later formal semantic gate.
 9. [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — dependency order.
 
-Supporting authorities are [`docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md`](docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md),
-[`docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md`](docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md),
-[`docs/PYTHON_DEPENDENCY_LOCKING.md`](docs/PYTHON_DEPENDENCY_LOCKING.md),
+Supporting authorities are [`docs/PYTHON_DEPENDENCY_LOCKING.md`](docs/PYTHON_DEPENDENCY_LOCKING.md),
 [`docs/RARC_PENDING_DECISION.md`](docs/RARC_PENDING_DECISION.md),
 [`docs/REJECTED_ARCHITECTURES.md`](docs/REJECTED_ARCHITECTURES.md), and the independent
-[`docs/DESIGN_IDEOLOGY.md`](docs/DESIGN_IDEOLOGY.md). Git preserves superseded source and narrative;
-the rejected-architectures record is the only live place for concise prohibitions against revival.
+[`docs/DESIGN_IDEOLOGY.md`](docs/DESIGN_IDEOLOGY.md). The source-only continuity and session
+fixtures are owned by [`docs/NATIVE_V3_ARCHITECTURE.md`](docs/NATIVE_V3_ARCHITECTURE.md) and their
+executable sources/tests. Git preserves superseded source and narrative; the rejected-architectures
+record is the only live place for concise prohibitions against revival.
 
 ## Local verification
 

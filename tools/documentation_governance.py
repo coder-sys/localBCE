@@ -67,12 +67,6 @@ MARKDOWN_REGISTRY = {
     "docs/NATIVE_V3_ARCHITECTURE.md": _registration(
         "README.md", "native-v3", "private-proof, security, state, and CPU target"
     ),
-    "docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md": _registration(
-        "README.md", "plaintext-continuity", "internal deterministic continuity harness"
-    ),
-    "docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md": _registration(
-        "README.md", "trust-boundary", "session framing and independent parser profile"
-    ),
     "docs/PYTHON_DEPENDENCY_LOCKING.md": _registration(
         "README.md", "python-dependencies", "offline Python lock and wheelhouse contract"
     ),
@@ -189,6 +183,8 @@ REMOVED_MARKDOWN_PATHS = frozenset(
         "experiments/bl_pq512_crypto_foundation/README.md",
         "experiments/fixed_shape_claim_air/README.md",
         "experiments/README.md",
+        "docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md",
+        "docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md",
     }
 )
 
