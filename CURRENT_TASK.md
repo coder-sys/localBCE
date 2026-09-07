@@ -10,10 +10,12 @@ clean candidate before this bounded portability and authority-reconciliation cor
 Reviewed integration baseline tree: `ecd85c04af106cfdde19c07c495f570cce6db399`.
 PHASE: Portable semantic candidate input and release-authority reconciliation.
 
-Next bounded action: finish the explicit external semantic-candidate tests, reconcile the current
-release classification, investigate unchanged Profile 11/process failures without crossing
-protected ownership, and complete a clean disposable release readback. Do not publish an archive,
-activate a profile, or mutate the separate v2 evidence checkout.
+Final source correction commit: `365536cc344889e4d111e7dc996cdd17c8f76d8f` (tree
+`ba2b86b9a3447bfdf81f3e9300c423fed20a65e9`), clean after the bounded correction and disposable
+release readback.
+
+Next bounded action: preserve the verified handoff and do not publish an archive, activate a
+profile, or mutate the separate v2 evidence checkout.
 
 ## Objective
 
@@ -50,6 +52,11 @@ portable-input/authority-count correction; it creates no archive or activation c
   files: 183 current source, 3 retained compatibility, 3 source-only, and 23 excluded
   generated/private, with 186 selected by default. The older 218-tracked/191-selected numbers
   are historical evidence and must not be presented as current.
+- The Windows verifier workspace snapshot now compares only stable directory/reparse attribute
+  bits; volatile `st_file_attributes` provider bits no longer turn an unchanged workspace into a
+  false `verifier_workspace_changed` failure. The Profile 11 source-binding manifest pins the
+  reviewed runtime blob `6c48f2428ef5fe391eeb24ab566b4c2ecc680445` and final verifier-process blob
+  `2002036f2e0be3266ff4827bb01a24b13657b2cd`.
 
 ## Nonclaims and scope
 

@@ -4,9 +4,11 @@ Updated: 2026-09-07
 
 ## Candidate and release closure
 
-The reviewed integration baseline for this correction is commit
-`9c0586f4303a504dee48730c4525c93277511e94` (tree
-`ecd85c04af106cfdde19c07c495f570cce6db399`) in this separate child. The earlier immutable
+The final bounded source correction is commit
+`365536cc344889e4d111e7dc996cdd17c8f76d8f` (tree
+`ba2b86b9a3447bfdf81f3e9300c423fed20a65e9`) in this separate child. Its reviewed integration
+baseline was commit `9c0586f4303a504dee48730c4525c93277511e94` (tree
+`ecd85c04af106cfdde19c07c495f570cce6db399`). The earlier immutable
 `0607a275bb5158dd4b4c70dfcd95d0967c80b839` input (tree
 `4571c47be35dd782045aa4f9ed35a9fb31413a2c`) and the separate v2 evidence checkout are historical
 inputs outside this correction. The executable release policy at the reviewed integration
@@ -58,6 +60,25 @@ unknown and retired path rejection remains unchanged. The previously recorded 21
   `tools/release_manifest_gate.py`; the stale orphan entry for the deleted Native throughput test
   was removed in the same bounded reconciliation. No other classification or unknown-path guard
   was changed.
+- The verifier workspace identity fix masks only volatile Windows `st_file_attributes` bits while
+  retaining device/inode/link-count, directory type, reparse rejection, and entry-name checks.
+  The full verifier-process suite passed `41 passed, 1 skipped, 65 subtests`; the exact skip is
+  unavailable Windows symlink creation. Profile 11 source binding was reconciled to the reviewed
+  runtime and verifier-process Git blobs; its focused closure passed `78 passed, 1 skipped, 129
+  subtests`, with the skip the locked-dependency symlink capability check.
+- Final executable verification after the correction: core/semantic suite `63 passed`; release,
+  privacy, documentation, plaintext-continuity, and source-boundary suite `92 passed, 108
+  subtests`; Mirror suite `170 passed, 2 skipped, 189 subtests`. The semantic CLI emitted
+  `SEMANTIC_ASSURANCE_GATE=PASS property_count=13 declaration_count=14 artifact_bytes=5719040
+  artifact_sha256=5e0505f83680a93fcbfe4a0e31e2fafbe0bc0a95e43854ba0e7b2e783b79e540`, with
+  `PROOF_BODY_CHECK=PASS`, `INDEPENDENT_LEAN_CHECKER=PASS`, and
+  `SOURCE_CLOSURE_SCAN=PASS files_scanned=12 forbidden_token_matches=0`, against external
+  candidate HEAD `0f594f6333fab720127f94b1259688331befd004` and tree
+  `b6eb1164f944625231cffae9ee282daadb41c389`.
+- The clean disposable release readback selected 186 payload files and produced a 27,814-byte
+  manifest (`ddb0ec42252f18421a51cdcb51c2136e58f7150556647fe56f1714e016f9ec61`) and a 187-entry,
+  3,297,499-byte archive (`9328ddb5fdb2b8279e05d2d51f4812651ede52d2ea0b0014cd79053c345ae298`).
+  Independent extracted size/hash readback passed; no publication target was touched.
 - The approved source-only deletion `d50f0f28134e40fc5a6a04028ef401f801d6596e`, integrated locally
   as `c230aa518f95397f2dac0af8592aae93796c2b53`, removes exactly the two obsolete Native
   throughput/runner wrappers and their obsolete test. Replacement Queue/runtime, source-auth,
