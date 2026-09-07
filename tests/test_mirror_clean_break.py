@@ -11,14 +11,12 @@ import unittest
 from unittest import mock
 
 from app.mirror import core_v2 as core
-from app.mirror import core_v2_independent as core_independent
 from app.mirror import ingress_v2 as ingress
 from app.mirror import ingress_v2_independent as ingress_independent
 from app.mirror import nc_medicaid_fhir_independent as fhir_independent
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import operational_owner as operational
 from app.mirror import recovery_v2 as recovery
-from app.mirror import recovery_v2_independent as recovery_independent
 from app.mirror import source_admission
 from app.mirror import writer_authority
 from tests.test_mirror_v2_consolidation import _Custody, _Storage, _hex

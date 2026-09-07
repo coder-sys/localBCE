@@ -91,7 +91,7 @@
       },
       "app.minimal_clearance_verification_runtime": {
         "path": "app/minimal_clearance_verification_runtime.py",
-        "git_blob": "6c48f2428ef5fe391eeb24ab566b4c2ecc680445"
+        "git_blob": "d1a07221cdcfc79e24d2596a6012ee80a1532ae8"
       },
       "app.minimal_clearance_verifier_process": {
         "path": "app/minimal_clearance_verifier_process.py",

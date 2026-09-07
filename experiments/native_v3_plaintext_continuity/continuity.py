@@ -64,16 +64,13 @@ JOIN_MAGIC = b"BLCJON02"
 RECEIPT_MAGIC = b"BLCREC02"
 BUNDLE_MAGIC = b"BLCBND02"
 
-FACT_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/FACT/v2\0"
 FACT_ID_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/FACT-ID/v2\0"
-FACT_SET_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/FACT-SET/v2\0"
 SOURCE_ROOT_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/SOURCE-ROOT/v2\0"
 SUBJECT_KEY_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/SUBJECT-KEY/v2\0"
 COMPLETENESS_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/COMPLETENESS/v2\0"
 REQUEST_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/REQUEST/v2\0"
 REQUEST_ID_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/REQUEST-ID/v2\0"
 CHRONOLOGY_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/CHRONOLOGY/v2\0"
-RULE_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/RULE/v2\0"
 MODE_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/EVIDENCE-MODE/v2\0"
 EVALUATOR_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/EVALUATOR/v2\0"
 CONTROL_SET_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/CONTROL-SET/v2\0"
@@ -163,11 +160,6 @@ def _read(data: bytes, offset: int, length: int, label: str) -> tuple[bytes, int
     return data[offset:end], end
 
 
-def _read_u16(data: bytes, offset: int, label: str) -> tuple[int, int]:
-    raw, offset = _read(data, offset, 2, label)
-    return int.from_bytes(raw, "big"), offset
-
-
 def _read_u32(data: bytes, offset: int, label: str) -> tuple[int, int]:
     raw, offset = _read(data, offset, 4, label)
     return int.from_bytes(raw, "big"), offset
@@ -214,7 +206,6 @@ SYNTHETIC_FEED_ID = _sha(
 RULE_ID = EXPECTED_RULE_ID
 DIRECT_STATE_OWNED_MODE_ID = _sha(MODE_DOMAIN, b"DIRECT_STATE_OWNED")
 EVALUATOR_ID = _sha(EVALUATOR_DOMAIN, b"verifier-owned-plaintext-continuity-v1")
-SUBJECT_SCOPE_ID = _sha(SUBJECT_KEY_DOMAIN, SYNTHETIC_CREDENTIAL_ID, SYNTHETIC_ENROLLMENT_ID)
 REASON_VALID = _sha(REASON_DOMAIN, b"valid-continuity")
 REASON_EXPIRED_OR_TERMINATED = _sha(REASON_DOMAIN, b"expired-or-terminated")
 REASON_MISSING_AUTHORITATIVE = _sha(REASON_DOMAIN, b"authoritative-absence")

@@ -68,19 +68,6 @@ class GovernanceAuthorityV2:
         )
 
     @property
-    def authority_material(self) -> bytes:
-        """Full roots and authority IDs, excluding rotatable profile/epoch context."""
-
-        return b"".join(
-            (
-                *self.claim_truth_roots_512,
-                self.claim_truth_authority_digest_512,
-                self.nullifier_authority_id_512,
-                self.pepper_commitment_512,
-            )
-        )
-
-    @property
     def commitment_512(self) -> bytes:
         return sha3_512(self.canonical_bytes).digest()
 

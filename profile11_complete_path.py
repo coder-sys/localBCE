@@ -402,8 +402,6 @@ else:
 from profile11_source_boundary import (
     Profile11SourceBoundaryCaller,
     SourceApplianceConfig,
-    SOURCE_APPLIANCE_EXECUTABLE_SHA256,
-    SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
     SOURCE_AUTH_FRAME_BYTES,
     SOURCE_AUTH_OPERATION_COUNT,
 )
@@ -533,11 +531,6 @@ _OBSERVER_SUPPORTED_EXECUTION_CONTEXTS: Final[frozenset[str]] = frozenset({
     "current_process_token_builtin_alias_544",
     "current_process_token_builtin_alias_559",
 })
-FORBIDDEN_AGGREGATE_WORDS: Final[tuple[str, ...]] = (
-    "statement", "operation_ref", "proof", "frame", "key", "signature",
-    "seed", "witness", "nonce", "tape", "phi", "path", "stdout", "stderr",
-    "digest", "raw", "source_identity",
-)
 
 
 class CompletePathError(RuntimeError):
@@ -1828,9 +1821,6 @@ class _EtwTraceState:
             return
         self._file_keys.pop(file_key, None)
 
-    def remember_file_name(self, key: int, path: Path) -> None:
-        self.update_file_correlation(file_object=None, file_key=key, path=path)
-
     def record_file(self, *, pid: int, key: int, path: Path, operation: str, source_path: Path | None = None, target_path: Path | None = None) -> None:
         if not self.actor_is_traced(pid, key):
             return
@@ -1896,12 +1886,6 @@ class _EtwTraceState:
         self.root_stop_seen = False
         self.root_creation_match = False
         self.root_observed.clear()
-
-
-def _etw_event_task(record: _EtwEventRecord, known: frozenset[int]) -> int | None:
-    descriptor = record.EventHeader.EventDescriptor
-    event_id = int(descriptor.Id)
-    return event_id if event_id in known else None
 
 
 def _etw_process_start_key(record: _EtwEventRecord) -> int | None:

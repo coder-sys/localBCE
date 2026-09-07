@@ -9,8 +9,6 @@ transition correctness.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, localcontext
-from fractions import Fraction
 import hashlib
 import json
 from pathlib import Path
@@ -22,8 +20,6 @@ from experiments.native_v3_phase0.native_v3_fixture import (
     DIRECTIVE_CLEAR,
     DIRECTIVE_NAMES,
     DIRECTIVE_POLICY_RESULT,
-    EXPECTED_AMOUNT_SCOPE,
-    EXPECTED_REASON_ID,
     EXPECTED_RULE_ID,
     NO_EXCEPTION_SENTINEL,
     OP_ROW_BYTES,
@@ -40,7 +36,6 @@ class ProfileError(ValueError):
 PROFILE_VERSION = 1
 PROFILE_NAME = "BL-NATIVE-V3-TRUST-BOUNDARY-PROFILE-v1"
 PROFILE_ID_DOMAIN = b"BL/NATIVE-V3/TBP/PROFILE-ID/v1\0"
-FRAME_DOMAIN = b"BL/NATIVE-V3/TBP/FRAME/v1\0"
 STATEMENT_DOMAIN = b"BL/NATIVE-V3/TBP/STATEMENT/v1\0"
 CONTROL_SET_DOMAIN = b"BL/NATIVE-V3/TBP/AUTOMATIC-CONTROL-SET/v1\0"
 JOIN_DOMAIN = b"BL/NATIVE-V3/TBP/DECISION-ACCESS-JOIN/v1\0"
@@ -49,13 +44,8 @@ COMPLETENESS_DOMAIN = b"BL/NATIVE-V3/TBP/COMPLETENESS/v1\0"
 CHRONOLOGY_DOMAIN = b"BL/NATIVE-V3/TBP/CHRONOLOGY/v1\0"
 REPLAY_DOMAIN = b"BL/NATIVE-V3/TBP/REPLAY/v1\0"
 ATTEMPT_DOMAIN = b"BL/NATIVE-V3/TBP/ATTEMPT/v1\0"
-PROFILE_BINDINGS_DOMAIN = b"BL/NATIVE-V3/TBP/BINDINGS/v1\0"
-ACCESS_DOMAIN = b"BL/NATIVE-V3/TBP/ACCESS-ROW/v1\0"
 
 PROFILE_ID = hashlib.sha3_512(PROFILE_ID_DOMAIN + PROFILE_NAME.encode()).digest()
-FIXED_SALT_BYTES = 32
-FIXED_SESSION_ID_BYTES = 32
-FIXED_CHALLENGE_BYTES = 32
 MAX_RETRIES = 4
 
 EVENT_TIME = 7_000
@@ -352,13 +342,6 @@ def fixed_field(value: bytes, label: str) -> bytes:
     return nonzero64(value, label)
 
 
-def read_exact(data: bytes, offset: int, length: int, label: str) -> tuple[bytes, int]:
-    end = offset + length
-    if end > len(data):
-        raise ProfileError(f"{label}:truncated")
-    return data[offset:end], end
-
-
 def _ascii_field(value: bytes, label: str) -> bytes:
     if len(value) > 0xFFFF:
         raise ProfileError(f"{label}:too-long")
@@ -637,21 +620,6 @@ def build_profile_bindings() -> ProfileBindings:
         rule_effective_time=RULE_EFFECTIVE_TIME,
         decision_time=DECISION_TIME,
     )
-
-
-def _decimal_fraction(value: Fraction, digits: int = 80) -> str:
-    with localcontext() as ctx:
-        ctx.prec = digits
-        return format(Decimal(value.numerator) / Decimal(value.denominator), "f")
-
-
-def _decimal_log2(value: Fraction, digits: int = 50) -> str:
-    if value <= 0:
-        raise ProfileError("ledger:log2-nonpositive")
-    with localcontext() as ctx:
-        ctx.prec = digits + 12
-        result = (Decimal(value.numerator).ln() - Decimal(value.denominator).ln()) / Decimal(2).ln()
-        return format(+result, "f")
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -1084,10 +1052,6 @@ def profile_manifest() -> dict[str, Any]:
             "no state transition authorization",
         ],
     }
-
-
-def json_bytes(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, indent=2).encode("utf-8") + b"\n"
 
 
 if __name__ == "__main__":

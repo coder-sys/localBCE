@@ -60,7 +60,6 @@ def _expect(value: bytes, expected: bytes, label: str) -> None:
 STATEMENT_MAGIC = b"BLNV3ST1"
 STATEMENT_PROTOCOL_VERSION = 3
 STATEMENT_FLAGS = 0
-STATEMENT_HEADER_BYTES = 20
 STATEMENT_BYTES = 556
 NULL_PROOF_SUITE = b"\0" * 64
 

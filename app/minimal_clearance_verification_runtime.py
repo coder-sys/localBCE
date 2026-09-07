@@ -397,10 +397,6 @@ class MinimalClearanceVerificationRuntime:
         with self._operation():
             return self._store._export_bytes()
 
-    def _expected_config(self) -> dict[str, object]:
-        with self._operation():
-            return self._store.config.as_json
-
     def support_summary(self) -> dict[str, Any]:
         with self._operation():
             summary = self._store._support_summary()
