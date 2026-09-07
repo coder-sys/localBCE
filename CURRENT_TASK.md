@@ -8,13 +8,12 @@ Input base tree: `4ad77eef67acb0d5019ac0520d42849330bd6d21` (historical input tr
 Reviewed integration baseline commit: `9c0586f4303a504dee48730c4525c93277511e94` (the exact
 clean candidate before this bounded portability and authority-reconciliation correction).
 Reviewed integration baseline tree: `ecd85c04af106cfdde19c07c495f570cce6db399`.
-PHASE: Portable semantic candidate input and release-authority reconciliation.
+PHASE: Project-wide obsolete-material reachability and authority cleanup.
 
-Final source correction commit: `365536cc344889e4d111e7dc996cdd17c8f76d8f` (tree
-`ba2b86b9a3447bfdf81f3e9300c423fed20a65e9`), clean after the bounded correction and disposable
-release readback.
+Cleanup input commit: `5fe29fad1f44df961ea20f8e3397c8d2e02783d0` (tree
+`c963c8d489b5295ab0a4679953161a84a624567b`), clean before this bounded cleanup.
 
-Next bounded action: preserve the verified handoff and do not publish an archive, activate a
+Next bounded action: commit this cleanup record only; do not publish an archive, activate a
 profile, or mutate the separate v2 evidence checkout.
 
 ## Objective
@@ -25,12 +24,12 @@ superseded task pointers or repeated ownership prose. `AGENTS.md` owns execution
 the named `docs/` owners own their technical contracts; and this file owns only this bounded work
 and unresolved blockers.
 
-Remove stale candidate/phase/lineage records and duplicate explanations while preserving every
-trust boundary, fail-closed rule, custody restriction, negative-test requirement, qualification
-consequence, and nonactivation claim. Git history remains the record of completed implementation
-and prior authority decisions. This child includes the reviewed Mirror/source commits, the exact
-resulting orphan release-policy removals described in `STATE.md`, and this separately authorized
-portable-input/authority-count correction; it creates no archive or activation change.
+Remove only demonstrably obsolete tracked material and stale authority references while preserving
+every trust boundary, fail-closed rule, custody restriction, negative-test requirement,
+qualification consequence, and nonactivation claim. Git history remains the record of completed
+implementation and prior authority decisions. This cleanup reviews the full current tree after
+the reviewed Mirror/source, release-policy, and portability corrections; it creates no archive or
+activation change.
 
 ## Blockers and unresolved identity
 
@@ -40,11 +39,18 @@ portable-input/authority-count correction; it creates no archive or activation c
   `experiments/longfellow_v09_native_v3/upstream_manifest.json` is 2633 bytes with SHA-256
   `466A704DD9CE3F812FB19A73EABC44EB922113922C805B7AD17DEEB29D52A1DD`. The three known failures
   return `ledger:provenance-source-mismatch`; no native-v3 source fix or repin is authorized here.
-- A source-owned version discrepancy remains visible for separate cleanup: the current-lane
-  `app/minimal_clearance_verification_profile.py` names a V6 queue/profile domain, while the active
-  `app/minimal_clearance_verification_queue.py` and its tests freeze Profile 11. This child does
-  not normalize either implementation or its tests; documentation must not describe the mismatch
-  as resolved.
+- Cleanup disposition: the current tree has 212 tracked files (183 current source, 3 retained
+  compatibility, 3 source-only, and 23 excluded generated/private; 186 selected by default).
+  Static Python reachability found 94 modules from 50 roots, with 91 reachable and no parse errors.
+  The only zero-inbound application source candidate is protected `app/public_inputs.py`; package
+  markers and the three retained compatibility files remain intentionally retained. CMake and
+  repository evidence retain the Longfellow, Profile 11, Mirror, operations, test, and evidence
+  paths. No nonprotected source deletion is justified by this scan.
+- The pre-cleanup deleted-path history scan found 1,335 historical deletions and 26 current-tree
+  references. After removing the stale deleted V6 verification-profile reference, 25 intentional
+  governance negative-list/test references remain. The protected
+  Queue V6 metadata comment remains unchanged and requires a separately scoped driver decision;
+  it is not evidence for deleting active Queue or Native-v3 code.
 - The semantic assurance tests require the explicit external `BLIND_LEDGER_SEMANTIC_CANDIDATE`
   environment seam. Missing configuration, dirty state, wrong HEAD/tree, source drift, artifact
   drift, theorem drift, or checker failure remains fail-closed; there is no personal-path fallback.

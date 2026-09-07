@@ -2,7 +2,28 @@
 
 Updated: 2026-09-07
 
-## Candidate and release closure
+## Current cleanup disposition
+
+This bounded cleanup starts from the exact clean input commit
+`5fe29fad1f44df961ea20f8e3397c8d2e02783d0` (tree
+`c963c8d489b5295ab0a4679953161a84a624567b`). The executable release classifier reports 212
+tracked files: 183 current source, 3 retained compatibility, 3 source-only, and 23 excluded
+generated/private, with 186 selected by default. Static Python reachability from 50 test/tool/
+experiment/root harnesses found 94 modules, 91 reachable, and zero parse errors. The only
+zero-inbound application source candidate is protected `app/public_inputs.py`; package markers and
+the three retained compatibility files are intentional. CMake and repository evidence retain the
+Longfellow, Profile 11, Mirror, operations, test, and evidence paths. No nonprotected source
+deletion is justified.
+
+The pre-cleanup deleted-path history scan found 1,335 historical deletions and 26 current-tree
+references. After removing the stale deleted V6 verification-profile reference, 25 intentional
+governance negative-list/test references remain. The protected Queue V6 metadata comment remains
+unchanged and requires a separately scoped driver decision; it does not authorize deleting active
+Queue or Native-v3 code. This batch
+changes only `CURRENT_TASK.md` and `STATE.md`; no protected implementation, operations bytes,
+archive, activation state, or external checkout is changed.
+
+## Prior candidate and release closure
 
 The final bounded source correction is commit
 `365536cc344889e4d111e7dc996cdd17c8f76d8f` (tree
@@ -145,5 +166,5 @@ builder/readback verification and is not a retained publication artifact. `STATE
 `CURRENT_TASK.md` remain workspace-only and excluded from source archives. A future refresh must
 start from a clean reviewed manifest and independently verify builder receipt, canonical ZIP/CRC
 readback, three retained targets, equal hashes, and zero publication artifacts. After this
-documentation/release-integrity work, the next authorized semantic dependency is the Lean workstream;
+cleanup, the next authorized semantic dependency is the Lean workstream;
 a model, differential test, or generated vector cannot replace it.
