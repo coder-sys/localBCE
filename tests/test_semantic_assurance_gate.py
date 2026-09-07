@@ -17,20 +17,18 @@ from tools import semantic_assurance_gate as gate
 
 
 class SemanticAssuranceGateNegativeTests(unittest.TestCase):
-    ACTUAL_CANDIDATE_DEFAULT = Path(
-        r"C:\Users\neers\Documents\Codex\2026-08-31\pq-v3\work\formal-production-candidate"
-    )
+    CANDIDATE_ENVIRONMENT_VARIABLE = "BLIND_LEDGER_SEMANTIC_CANDIDATE"
 
     def setUp(self) -> None:
         self.manifest = gate._load_manifest()
 
     def _actual_candidate(self) -> Path:
-        candidate = Path(
-            os.environ.get(
-                "BLIND_LEDGER_SEMANTIC_CANDIDATE",
-                str(self.ACTUAL_CANDIDATE_DEFAULT),
-            )
-        ).resolve()
+        configured = os.environ.get(self.CANDIDATE_ENVIRONMENT_VARIABLE)
+        self.assertTrue(
+            configured,
+            f"{self.CANDIDATE_ENVIRONMENT_VARIABLE} must name the verified external candidate",
+        )
+        candidate = Path(configured).resolve()
         self.assertTrue(candidate.is_dir(), f"actual candidate is absent: {candidate}")
         self.assertTrue((candidate / ".git").exists(), f"actual candidate is not Git: {candidate}")
         self.assertEqual(
@@ -47,6 +45,15 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             self._git_command(candidate, "rev-parse", "HEAD^{tree}"),
         )
         return candidate
+
+    def test_missing_candidate_configuration_fails_closed(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(self.CANDIDATE_ENVIRONMENT_VARIABLE, None)
+            with self.assertRaisesRegex(
+                AssertionError,
+                rf"{self.CANDIDATE_ENVIRONMENT_VARIABLE} must name the verified external candidate",
+            ):
+                self._actual_candidate()
 
     @staticmethod
     def _git_command(root: Path, *arguments: str) -> str:

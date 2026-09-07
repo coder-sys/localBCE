@@ -38,6 +38,12 @@ class DocumentationGovernanceTests(unittest.TestCase):
         self.assertTrue(registration.independent_authority)
         self.assertEqual("design-ideology", registration.role)
 
+    def test_semantic_assurance_command_is_registered(self) -> None:
+        references = governance.DOCUMENTED_COMMAND_FILE_REFERENCES["README.md"]
+        self.assertIn("tests/test_semantic_assurance_gate.py", references)
+        self.assertIn("tools/semantic_assurance_gate.py", references)
+        self.assertIn("tools/semantic_assurance_manifest.json", references)
+
     def test_constructed_removed_paths_and_duplicate_ownership_fail_closed(self) -> None:
         self.assertTrue(
             governance._has_constructed_reference(

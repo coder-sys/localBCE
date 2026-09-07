@@ -64,6 +64,21 @@ These checks exercise bounded candidate seams. They do not close the private-pro
 authorize deployment, move money, authorize PHI, select a backend, or publish an archive. Dependency
 installation is explicit and offline through `tools.locked_python_dependencies`.
 
+The semantic assurance gate requires an explicitly configured, external, clean Git checkout. It has
+no personal-path fallback: a missing, dirty, or identity-mismatched candidate fails closed. Set the
+existing environment seam to the separately verified candidate before running the negative-fixture
+tests or the executable gate; the checked-in manifest binds the required HEAD and tree.
+
+```powershell
+$env:BLIND_LEDGER_SEMANTIC_CANDIDATE = '<absolute path to the verified external candidate checkout>'
+py -3.14 -B -m pytest -q tests/test_semantic_assurance_gate.py
+py -3.14 -B -m tools.semantic_assurance_gate --candidate-root $env:BLIND_LEDGER_SEMANTIC_CANDIDATE
+```
+
+The semantic gate reads `tools/semantic_assurance_manifest.json` and remains synthetic,
+nonactivating evidence; it does not establish refinement to Rust, database durability,
+cryptographic soundness, deployment, payment movement, or activation.
+
 ## Profile 11 complete-path screen
 
 Profile 11 is a source-only, nonactivating preparation harness. It exercises one state-generated

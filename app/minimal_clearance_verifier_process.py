@@ -873,6 +873,27 @@ def _is_reparse_point(path: Path) -> bool:
     return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
 
 
+def _verifier_workspace_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int]:
+    """Return stable containment identity bits, excluding volatile Windows flags."""
+
+    attributes = int(getattr(metadata, "st_file_attributes", 0))
+    # CPython can expose transient/provider-specific bits in this field.  The
+    # containment boundary only relies on directory and reparse state; device,
+    # inode, link count, and the entry-name snapshot provide the other identity
+    # checks.  Reparse state is still rejected by the caller on every snapshot.
+    stable_attributes = attributes & (
+        _FILE_ATTRIBUTE_DIRECTORY | _FILE_ATTRIBUTE_REPARSE_POINT
+    )
+    return (
+        int(metadata.st_dev),
+        int(metadata.st_ino),
+        int(metadata.st_nlink),
+        stable_attributes,
+    )
+
+
 def _verifier_workspace_snapshot(
     workspace: Path,
 ) -> tuple[tuple[int, int, int, int], tuple[str, ...]]:
@@ -895,12 +916,7 @@ def _verifier_workspace_snapshot(
         raise
     except OSError:
         raise VerifierProcessError("verifier_workspace") from None
-    identity = (
-        int(metadata.st_dev),
-        int(metadata.st_ino),
-        int(metadata.st_nlink),
-        attributes,
-    )
+    identity = _verifier_workspace_identity(metadata)
     return identity, entries
 
 

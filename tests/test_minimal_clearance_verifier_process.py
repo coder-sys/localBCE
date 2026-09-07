@@ -1486,6 +1486,24 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                         expected_executable_sha256=hashlib.sha256(payload).digest(),
                     )
 
+    def test_workspace_identity_ignores_volatile_windows_attribute_bits(self):
+        class _Metadata:
+            st_dev = 11
+            st_ino = 22
+            st_nlink = 1
+
+            def __init__(self, attributes):
+                self.st_file_attributes = attributes
+
+        first = process._verifier_workspace_identity(
+            _Metadata(process._FILE_ATTRIBUTE_DIRECTORY | 0x10000000)
+        )
+        second = process._verifier_workspace_identity(
+            _Metadata(process._FILE_ATTRIBUTE_DIRECTORY)
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(first[-1], process._FILE_ATTRIBUTE_DIRECTORY)
+
     @unittest.skipUnless(os.name == "nt", "Windows bounded child-output test")
     def test_real_child_output_overflow_is_terminated_without_output_files(self):
         with tempfile.TemporaryDirectory() as root_name:

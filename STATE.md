@@ -1,31 +1,38 @@
 # Blind Ledger current state
 
-Updated: 2026-09-05
+Updated: 2026-09-07
 
 ## Candidate and release closure
 
-This candidate starts from immutable commit `0607a275bb5158dd4b4c70dfcd95d0967c80b839` (tree
-`4571c47be35dd782045aa4f9ed35a9fb31413a2c`) in this separate child. The state of the separate v2
-evidence checkout is outside this phase. The executable release policy in this integrated child is:
+The reviewed integration baseline for this correction is commit
+`9c0586f4303a504dee48730c4525c93277511e94` (tree
+`ecd85c04af106cfdde19c07c495f570cce6db399`) in this separate child. The earlier immutable
+`0607a275bb5158dd4b4c70dfcd95d0967c80b839` input (tree
+`4571c47be35dd782045aa4f9ed35a9fb31413a2c`) and the separate v2 evidence checkout are historical
+inputs outside this correction. The executable release policy at the reviewed integration
+baseline is:
 
 | Lane | Count | Selection |
 | --- | ---: | --- |
-| Current source | 188 | selected |
+| Current source | 183 | selected |
 | Retained compatibility | 3 | selected only by explicit closure |
 | Source-only | 3 | unselected |
-| Excluded generated/private | 24 | unselected |
+| Excluded generated/private | 23 | unselected |
 | Unknown/retired/legacy | 0 | fail-closed if introduced |
-| Tracked total | 218 | — |
-| Default selection | 191 | 188 current + 3 retained |
-| Unselected total | 27 | — |
+| Tracked total | 212 | — |
+| Default selection | 186 | 183 current + 3 retained |
+| Unselected total | 26 | — |
 
 The retained closure is exactly `app/batch/__init__.py`, `app/batch/poseidon.py`, and
 `app/batch/stark_encoding.py`. Prefix membership is only a classification hint. Deleted
 compatibility entries and the obsolete legacy registry are not release inputs. Source-only privacy
 fixtures, generated evidence, private build metadata, and Profile 11 host files remain excluded.
-The executable classifier reports these counts for the current integrated child. The release-policy
-changes are removal of the orphan classifications for the deleted external-source test and the
-deleted Native throughput test; unknown and retired path rejection remains unchanged.
+The executable classifier reports these counts for the reviewed integration baseline. The exact
+source-only paths are `profile11_complete_path.py`, `profile11_complete_path_manifest.json`, and
+`profile11_source_boundary.py`. The release-policy changes are removal of the orphan
+classifications for the deleted external-source test and the deleted Native throughput test;
+unknown and retired path rejection remains unchanged. The previously recorded 218-tracked/
+191-selected table belongs to historical source/policy/docs evidence and is not current.
 
 ## Verified evidence
 

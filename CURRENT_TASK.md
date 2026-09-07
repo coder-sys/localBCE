@@ -1,15 +1,19 @@
 # Blind Ledger current task
 
-Updated: 2026-09-05
+Updated: 2026-09-07
 
-Immutable input base commit: `c29d39ff796bb7056b42095dec5bc10a4a959342` (reviewed integrated
-candidate preserved as historical evidence).
-Input base tree: `4ad77eef67acb0d5019ac0520d42849330bd6d21` (the immutable input tree).
-PHASE: Reviewed source integration and authority cleanup.
+Immutable input base commit: `c29d39ff796bb7056b42095dec5bc10a4a959342` (historical reviewed
+integrated evidence, not the current child identity).
+Input base tree: `4ad77eef67acb0d5019ac0520d42849330bd6d21` (historical input tree).
+Reviewed integration baseline commit: `9c0586f4303a504dee48730c4525c93277511e94` (the exact
+clean candidate before this bounded portability and authority-reconciliation correction).
+Reviewed integration baseline tree: `ecd85c04af106cfdde19c07c495f570cce6db399`.
+PHASE: Portable semantic candidate input and release-authority reconciliation.
 
-Next bounded action: complete the final clean-candidate readback and handoff for the exact reviewed
-source integration and authority cleanup. No further source/docs edits are planned; do not publish
-an archive or mutate the separate v2 evidence checkout.
+Next bounded action: finish the explicit external semantic-candidate tests, reconcile the current
+release classification, investigate unchanged Profile 11/process failures without crossing
+protected ownership, and complete a clean disposable release readback. Do not publish an archive,
+activate a profile, or mutate the separate v2 evidence checkout.
 
 ## Objective
 
@@ -22,9 +26,9 @@ and unresolved blockers.
 Remove stale candidate/phase/lineage records and duplicate explanations while preserving every
 trust boundary, fail-closed rule, custody restriction, negative-test requirement, qualification
 consequence, and nonactivation claim. Git history remains the record of completed implementation
-and prior authority decisions. This child includes only the reviewed Mirror/source commits and the
-exact resulting orphan release-policy removals described in `STATE.md`; it creates no archive or
-activation change.
+and prior authority decisions. This child includes the reviewed Mirror/source commits, the exact
+resulting orphan release-policy removals described in `STATE.md`, and this separately authorized
+portable-input/authority-count correction; it creates no archive or activation change.
 
 ## Blockers and unresolved identity
 
@@ -39,6 +43,13 @@ activation change.
   `app/minimal_clearance_verification_queue.py` and its tests freeze Profile 11. This child does
   not normalize either implementation or its tests; documentation must not describe the mismatch
   as resolved.
+- The semantic assurance tests require the explicit external `BLIND_LEDGER_SEMANTIC_CANDIDATE`
+  environment seam. Missing configuration, dirty state, wrong HEAD/tree, source drift, artifact
+  drift, theorem drift, or checker failure remains fail-closed; there is no personal-path fallback.
+- At the reviewed integration baseline, the executable release classifier reports 212 tracked
+  files: 183 current source, 3 retained compatibility, 3 source-only, and 23 excluded
+  generated/private, with 186 selected by default. The older 218-tracked/191-selected numbers
+  are historical evidence and must not be presented as current.
 
 ## Nonclaims and scope
 
@@ -46,5 +57,6 @@ activation change.
 `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED` remain authoritative. No Lean kernel is implemented or
 linked, no private-proof backend is selected, and no real PHI, credentials, payment movement,
 production persistence, or official receiver is in scope. Mirror remains read-only and
-nonpayment. The immutable 0607 commit is the integration base; the separate v2 checkout and any
-other working-tree state are outside this child’s scope, and current edits are confined here.
+nonpayment. The reviewed integration baseline above is the current child input; the separate v2
+checkout and any other working-tree state are outside this child’s scope, and current edits are
+confined here.
