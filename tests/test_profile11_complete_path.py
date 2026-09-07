@@ -28,6 +28,27 @@ class _Backend:
     def capability(self):
         return self._capability
 
+    def capability_diagnostic(self):
+        provider, privilege, lineage, loss = self._capability
+        reasons = []
+        if not provider:
+            reasons.append("observer_provider_missing")
+        if not privilege:
+            reasons.append("observer_privilege_unavailable")
+        if not lineage:
+            reasons.append("observer_lineage_api_unavailable")
+        if not loss:
+            reasons.append("observer_loss_api_unavailable")
+        return screen.ObserverCapabilityDiagnostic(
+            True,
+            provider,
+            provider,
+            privilege,
+            lineage,
+            loss,
+            tuple(reasons),
+        )
+
     def start(self, root_pid: int) -> None:
         self.started_with = root_pid
 

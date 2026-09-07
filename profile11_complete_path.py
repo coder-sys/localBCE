@@ -863,8 +863,6 @@ _ETW_SE_PRIVILEGE_ENABLED: Final[int] = 0x00000002
 _ETW_PROCESS_QUERY_LIMITED_INFORMATION: Final[int] = 0x00001000
 _ETW_KERNEL_FILE_PROVIDER_GUID: Final[bytes] = uuid.UUID("edd08927-9cc4-4e65-b970-c2560fb5c289").bytes_le
 _ETW_KERNEL_PROCESS_PROVIDER_GUID: Final[bytes] = uuid.UUID("22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716").bytes_le
-_ETW_LEGACY_FILE_CLASS_GUID: Final[bytes] = uuid.UUID("90cbdc39-4a3e-11d1-84f4-0000f80464e3").bytes_le
-_ETW_LEGACY_PROCESS_CLASS_GUID: Final[bytes] = uuid.UUID("3d6fa8d0-fe05-11d0-9dda-00c04fd7ba7c").bytes_le
 
 _ETW_TDH_INTYPE_UNICODESTRING: Final[int] = 1
 _ETW_TDH_INTYPE_UINT32: Final[int] = 8
@@ -894,7 +892,6 @@ _ETW_FILE_TASK_OPERATIONS: Final[dict[int, str]] = {
     31: "metadata",
     33: "metadata",
 }
-_ETW_FILE_TASKS_IGNORED: Final[frozenset[int]] = _ETW_FILE_NONMUTATION_IDS
 _ETW_PROCESS_START_TASKS: Final[frozenset[int]] = frozenset({1, 15})
 _ETW_PROCESS_STOP_TASKS: Final[frozenset[int]] = frozenset({2})
 
@@ -2538,32 +2535,6 @@ def _observer_diagnostic_fallback(reason: str) -> ObserverCapabilityDiagnostic:
     return ObserverCapabilityDiagnostic(False, False, False, False, False, False, (reason,), privilege_state, execution_context)
 
 
-def _observer_diagnostic_from_legacy_flags(flags: object) -> ObserverCapabilityDiagnostic:
-    if type(flags) is not tuple or len(flags) != 4 or any(type(item) is not bool for item in flags):
-        return _observer_diagnostic_fallback("observer_api_failure")
-    provider_available, privilege_available, lineage_available, loss_detection_available = flags
-    reasons = []
-    if not provider_available:
-        reasons.append("observer_provider_missing")
-    if not privilege_available:
-        reasons.append("observer_privilege_unavailable")
-    if not lineage_available:
-        reasons.append("observer_lineage_api_unavailable")
-    if not loss_detection_available:
-        reasons.append("observer_loss_api_unavailable")
-    return ObserverCapabilityDiagnostic(
-        True,
-        provider_available,
-        provider_available,
-        privilege_available,
-        lineage_available,
-        loss_detection_available,
-        tuple(reason for reason in _OBSERVER_DIAGNOSTIC_REASON_ORDER if reason in reasons),
-        "unknown",
-        "unknown",
-    )
-
-
 class WindowsEtwFileWriteObserver:
     """Capability probe; no snapshot is treated as a trace.
 
@@ -2609,10 +2580,7 @@ class WindowsEtwFileWriteObserver:
             ):
                 return _observer_diagnostic_fallback("observer_api_failure")
             return value
-        try:
-            return _observer_diagnostic_from_legacy_flags(self._backend.capability())
-        except BaseException:
-            return _observer_diagnostic_fallback("observer_api_failure")
+        return _observer_diagnostic_fallback("observer_api_failure")
 
     def probe(self) -> FileWriteObservation:
         if os.name != "nt" or self._backend is None:
