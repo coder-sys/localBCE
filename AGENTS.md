@@ -241,3 +241,58 @@ If a successful archive refresh is attempted but the staging, manifest-generatio
 publication seam is missing, do not claim the archive was refreshed. Continue implementing or
 repairing that seam as the next safe dependency; the run may remain nonactivating and lower-claim
 while this is resolved.
+
+## Active Profile12 protected-path delegation — 2026-09-08
+
+The owner-delegated driver packet authorizes this existing child to implement one cohesive,
+nonactivating Profile12 Queue/State integration stage. This exact grant supersedes the stale cleanup
+objective in the child `CURRENT_TASK.md` and does not authorize work in the separate direct-mask
+calculator checkout. Starting identity is detached HEAD
+`98a3d9ea7f156653633996170c17236db804eed7` / tree
+`3d8d555397b86384d57fe7db8f530134026eb037`. Before authority-record mutation, the child contained
+only the preserved partial dirty patch in
+`app/minimal_clearance_verification_queue.py` (67 additions, 9 deletions, source SHA-256
+`0953422A72FB34974FC3BF4F0CA1A0403B8FEB02E265665573576A3A30BC4D79`).
+
+### Exact writable grant
+
+The implementation grant covers only:
+
+- `app/minimal_clearance_verification_queue.py`
+- `app/minimal_clearance_verification_queue_independent.py`
+- `app/minimal_clearance_verification_runtime.py`, only necessary Profile12 typed plumbing
+- `tests/test_minimal_clearance_verification_queue.py`
+- `tests/test_minimal_clearance_verification_runtime.py`
+- `tests/test_minimal_clearance_source_auth_verifier_adapter.py`
+- one focused `tests/test_direct_mask_state_profile12.py` if required
+- focused release/documentation expectation updates only in
+  `tests/test_release_manifest_gate.py` and `tests/test_documentation_governance.py`
+- this child's `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `README.md`, `ARCHITECTURE.md`, and
+  the named authority docs only for Profile12 reconciliation and finite retired-path records.
+
+The native adapter `app/minimal_clearance_source_auth_verifier_adapter.py` is deferred until the
+driver supplies an accepted exact C binary and source-appliance identity. Until then it is
+read-only, as are `app/minimal_clearance_verifier_process.py` and
+`app/minimal_clearance_resource_limits.py`. `app/minimal_clearance_composition.py`, its
+independent implementation, every Lean/formal/semantic candidate, `app/mirror/`,
+`experiments/longfellow_v09_native_v3/`, `ops/`, dependency locks, all C/crypto checkouts, source
+archives, deployment/profile-selection/payment/custody paths, and all other source paths are
+protected and unchanged.
+
+### Frozen invariants and evidence boundary
+
+Profile12 is a clean schema break at exactly version 12; no Profile11 migration, fallback, dual
+reader, aliasing, legacy proof acceptance, or compatibility relabeling is authorized. The state
+owner independently issues and persists one nonzero 96-byte public coin with the exact four-draw
+OS-CSPRNG rule, derives the 405-byte context from the frozen state bindings, persists only the
+allowlisted public fields, and reserves exactly one 101-unit lifetime opportunity atomically at
+issue before returning the request. Reservation is never refunded/reset; postcommit ambiguity
+burns it. The independent checker owns independent reconstruction and exact event/row/counter/
+timestamp/epoch/U/context validation. State policy, directives, source truth, native proof
+acceptance, Lean semantics, and payment remain separate authorities.
+
+This stage remains unverified/in progress until its focused tests and whole-boundary review pass.
+Native adapter/process acceptance is explicitly pending the driver's exact identity packet and
+must be reported as a dependency, never as a passed or silently skipped test. Keep
+`proofSuiteId=null`, `production_usable=false`, `activation=false`, and
+`NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.

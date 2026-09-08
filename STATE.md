@@ -1,6 +1,32 @@
 # Blind Ledger current state
 
-Updated: 2026-09-07
+Updated: 2026-09-08
+
+## Active Profile12 Queue/State stage — unverified/in progress
+
+This exclusive child implements the owner-delegated Profile12 Queue/schema/independent/runtime
+stage from starting HEAD `98a3d9ea7f156653633996170c17236db804eed7` / tree
+`3d8d555397b86384d57fe7db8f530134026eb037`. The implementation is a clean schema break at v12:
+it persists one nonzero 96-byte state-issued public coin, derives the 64-byte proof context from
+the exact 405-byte state binding in both producer and independent checker, and atomically inserts
+the batch, 100 members, one 101-unit lifetime reservation, attempt row, counter update, and
+`BATCH_ISSUED` event before returning. Claim emits `VERIFICATION_STARTED` without a second charge;
+source epoch, coin/context, reservation, identity, and lifecycle bindings are checked before lease
+mutation and by the independent checker. Reservations are never refunded; expiry, restart,
+ambiguous commit, malformed handoff, and consumed/partial handoff paths burn them.
+
+Measured bounded evidence in this child: Profile12 focused tests `9 passed`; queue tests `29
+passed`; runtime tests `17 passed, 2 skipped`. The two skips are the native Profile12
+source-auth adapter/source-appliance identity tests, explicitly deferred by the active grant; the
+native adapter, verifier process, resource limits, C/crypto checkouts, and protected production
+paths were not modified. `py -3.14 -B -m py_compile` passed for the changed implementation and
+tests. `verify_database` passed in focused KAT, reservation, and hold tests. No broad suite,
+adapter test, old Profile11 probe, or large solver was run.
+
+The implementation remains nonactivating and unqualified: `proofSuiteId=null`,
+`production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. No native
+adapter acceptance, production proof backend, Lean deployment, real PHI, payment movement,
+custody, or formal-verification claim follows from these synthetic local tests.
 
 ## Current cleanup disposition
 

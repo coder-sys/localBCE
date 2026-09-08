@@ -1,92 +1,135 @@
 # Blind Ledger current task
 
-Updated: 2026-09-07
+Updated: 2026-09-08
 
-Immutable input base commit: `c29d39ff796bb7056b42095dec5bc10a4a959342` (historical reviewed
-integrated evidence, not the current child identity).
-Input base tree: `4ad77eef67acb0d5019ac0520d42849330bd6d21` (historical input tree).
-Reviewed integration baseline commit: `9c0586f4303a504dee48730c4525c93277511e94` (the exact
-clean candidate before this bounded portability and authority-reconciliation correction).
-Reviewed integration baseline tree: `ecd85c04af106cfdde19c07c495f570cce6db399`.
-PHASE: Project-wide obsolete-material reachability and authority cleanup.
+## Profile12 Queue/State implementation — unverified/in progress
 
-Cleanup input commit: `5fe29fad1f44df961ea20f8e3397c8d2e02783d0` (tree
-`c963c8d489b5295ab0a4679953161a84a624567b`), clean before this bounded cleanup.
+This child is the exclusive writable checkout for the Profile12 Queue/schema/independent/runtime/
+accounting stage. The earlier project-wide cleanup objective is historical evidence only and is no
+longer the current authority. The direct-mask contract calculator checkout is read-only and out of
+scope.
 
-Cleanup implementation commit: `960352a8829d426b98053306fba6a2f323c7c896` (tree
-`0dfdaf7eaeef48d9673750f9eafc3827c287aeb8`).
+### Exact starting identity and dirty evidence
 
-Deep reachability implementation commit: `92cb4943afa8665f99c780b6edb04e0b0cac436c` (tree
-`6c0a812a1e6ff17d64527baf1a2e58c206568d94`).
+- Authoritative product/input: `C:\Users\neers\Documents\Codex\2026-08-30\cleanup-v2\work\aggressive-obsolete-removal-20260907`
+- Input HEAD/tree: `98a3d9ea7f156653633996170c17236db804eed7` /
+  `3d8d555397b86384d57fe7db8f530134026eb037`; input was clean before this child.
+- Exclusive writable child: this checkout, detached at the same HEAD/tree.
+- Before this task's first mutation, the child had exactly one authorized dirty file:
+  `app/minimal_clearance_verification_queue.py`, 67 additions and 9 deletions (76 diff lines),
+  SHA-256 `0953422A72FB34974FC3BF4F0CA1A0403B8FEB02E265665573576A3A30BC4D79`.
+- That partial patch is preserved as starting work/evidence. It is not accepted: it used invented
+  length-only preimages, a fixed public coin, a non-independent context KAT, and retained the old
+  Profile11 statement/result schema.
 
-Next bounded action: cleanup is complete; the next authorized semantic dependency is the Lean
-workstream. Do not publish an archive, activate a profile, mutate the separate v2 evidence checkout,
-or resurrect shelved SHAKE/control-export work without a new bounded task.
+### Objective and exact scope
 
-## Objective
+Implement the complete nonactivating Profile12 Queue/State integration stage while preserving all
+existing ownership, fail-closed, retry, OS-lock, single-use handoff, wipe, and database boundaries.
+The exact writable grant is limited to:
 
-Keep one current, nonactivating authority set that future agents can follow without reconstructing
-superseded task pointers or repeated ownership prose. `AGENTS.md` owns execution and safety;
-`STATE.md` owns verified evidence and nonclaims; `ARCHITECTURE.md` owns cross-product boundaries;
-the named `docs/` owners own their technical contracts; and this file owns only this bounded work
-and unresolved blockers.
+- `app/minimal_clearance_verification_queue.py`
+- `app/minimal_clearance_verification_queue_independent.py`
+- `app/minimal_clearance_verification_runtime.py`, only for necessary typed Profile12 plumbing
+- `tests/test_minimal_clearance_verification_queue.py`
+- `tests/test_minimal_clearance_verification_runtime.py`
+- `tests/test_minimal_clearance_source_auth_verifier_adapter.py`
+- one focused `tests/test_direct_mask_state_profile12.py` if needed
+- focused expectation updates only in `tests/test_release_manifest_gate.py` and
+  `tests/test_documentation_governance.py` when required by the finite retired-path cleanup
+- this child's `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `README.md`, `ARCHITECTURE.md`,
+  `docs/DATABASE_ZK_ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`, and
+  `docs/IMPLEMENTATION_ROADMAP.md`, plus exact finite retired-path records required by the grant.
 
-Remove only demonstrably obsolete tracked material and stale authority references while preserving
-every trust boundary, fail-closed rule, custody restriction, negative-test requirement,
-qualification consequence, and nonactivation claim. Git history remains the record of completed
-implementation and prior authority decisions. This cleanup reviews the full current tree after
-the reviewed Mirror/source, release-policy, and portability corrections; it creates no archive or
-activation change.
+The native adapter is not authorized yet. After the driver supplies an accepted exact C binary and
+source-appliance identity, and only then, `app/minimal_clearance_source_auth_verifier_adapter.py`
+may receive the exact new frame/IPC grammar. `app/minimal_clearance_verifier_process.py` and
+`app/minimal_clearance_resource_limits.py` remain read-only. Composition, Lean/formal/semantic
+candidate, Mirror, longfellow, ops, dependency-lock, C/crypto, source, deployment, archive,
+profile-selection, real-PHI, payment, and custody paths remain unchanged.
 
-## Blockers and unresolved identity
+### Frozen Profile12 contract
 
-- The Native-v3 trust-boundary profile remains blocked by an unresolved source-provenance mismatch,
-  not by a relaxed predicate. `experiments/native_v3_trust_boundary/profile.py` pins
-  `A677B8A6BEA7DCA87E4370E8FA07FDFD17F345276B581629BE230022B8C0BB5D`, while the committed
-  `experiments/longfellow_v09_native_v3/upstream_manifest.json` is 2633 bytes with SHA-256
-  `466A704DD9CE3F812FB19A73EABC44EB922113922C805B7AD17DEEB29D52A1DD`. The three known failures
-  return `ledger:provenance-source-mismatch`; no native-v3 source fix or repin is authorized here.
-- Cleanup disposition: the current tree has 195 tracked files (167 current source, 2 retained
-  compatibility, 3 source-only, and 23 excluded generated/private; 169 selected by default).
-  Consumer and build-graph review found the five-file SPHINCS/public-input island and nine generic
-  18-endpoint Native source files unused. Commit `960352a8829d426b98053306fba6a2f323c7c896`
-  removes their 2,214 source lines, seven CMake targets, and sole three-package production
-  dependency closure. A deeper exact-name, schema-identity, vector-hash, Git-history, test,
-  import/build-graph, branch-coverage, duplicate-content, and non-code-consumer review then proved
-  that the BL-PQ512 foundation schema and its two retained vectors had lost every consumer when
-  their reference lanes were retired. Commit `92cb4943afa8665f99c780b6edb04e0b0cac436c`
-  removes those three orphan data files (27,251 bytes and 646 lines). The operation-scoped
-  source-assertion and minimal-clearance Native families remain because current code validates and
-  consumes their implementation attestation.
-- The pre-cleanup deleted-path history scan found 1,335 historical deletions. The corrected current
-  scan found 29 reference occurrences covering 24 distinct deleted paths; these are intentional
-  governance negative-list/test references. The protected
-  Queue V6 metadata comment remains unchanged and requires a separately scoped driver decision;
-  it is not evidence for deleting active Queue or Native-v3 code.
-- The semantic assurance tests require the explicit external `BLIND_LEDGER_SEMANTIC_CANDIDATE`
-  environment seam. Missing configuration, dirty state, wrong HEAD/tree, source drift, artifact
-  drift, theorem drift, or checker failure remains fail-closed; there is no personal-path fallback.
-- At deep reachability commit `92cb4943afa8665f99c780b6edb04e0b0cac436c`, the executable release
-  classifier reports 195 tracked files: 167 current source, 2 retained compatibility, 3
-  source-only, and 23 excluded generated/private, with 169 selected by default. The older
-  218/191, 212/186, and 198/172 numbers are historical evidence and must not be presented as
-  current.
-- Whole-suite verification from clean deep-cleanup authority commit
-  `8e82072854c2b194d2ad834325bc6cee059c5b05` completed with `3 failed, 552 passed,
-  4 skipped, 557 subtests passed in 586.47s`. The only failures are the same three
-  `ledger:provenance-source-mismatch` tests named above; no new cleanup regression was observed.
-- The Windows verifier workspace snapshot now compares only stable directory/reparse attribute
-  bits; volatile `st_file_attributes` provider bits no longer turn an unchanged workspace into a
-  false `verifier_workspace_changed` failure. The Profile 11 source-binding manifest pins the
-  reviewed runtime blob `6c48f2428ef5fe391eeb24ab566b4c2ecc680445` and final verifier-process blob
-  `2002036f2e0be3266ff4827bb01a24b13657b2cd`.
+- `SCHEMA_VERSION` and `PROFILE_VERSION` are exactly `12`. Queue-owned serialized v10/v11
+  domains and worker-format labels become v12 in both main and independent implementations. Old
+  Queue databases/exports/backups reject before mutation, PRAGMA, or schema creation, with original
+  bytes preserved. No migration, fallback, dual reader, legacy proof acceptance, or Profile11 alias.
+- Profile token is `BLIND-DIRECT-MASK-FAEST256F-DEG3-V1`; source-auth token is
+  `BLIND-MLDSA87-SOURCE-AUTH-DIRECT-MASK-V1-UNQUALIFIED`. Exactly 100 ordered state-issued
+  opaque 32-byte operation references remain state-owned and unique.
+- Every batch samples one independent state-issued `public_coin` U of exactly 96 bytes from the
+  existing OS-CSPRNG seam, conditioned only on not-all-zero, with at most four complete samples.
+  Wrong type/length, OS failure, or four zero vectors fails immediately; only an all-zero 96-byte
+  sample may trigger another draw. Repeated nonzero U across batches is allowed; no uniqueness or
+  seed persistence.
+- Persist immutable `public_coin` in the state-owned batch identity/allowlist and immutable-row
+  guards. Do not persist proof context, x, proof/frame/capsule/signature/C/T, source/witness/key
+  bytes, raw-data hashes, or stable cross-batch fingerprints.
+- Replace `proof_statement304` in `IssuedVerificationBatch` and `BatchVerifierResult` with
+  `proof_context64` and `public_coin96`. Both producer and independent checker derive context
+  independently from the exact 405-byte preimage:
+  `ASCII BL/DIRECT-MASK/STATE-CONTEXT/v12 + NUL || u32LE12 || session_ref64 || ordered_root64 ||
+  U96 || u64LE(valid_from_ms) || u64LE(valid_until_ms) || circuit_fingerprint64 ||
+  profile_fingerprint64`, then SHA3-512.
+- Circuit preimage is exactly 120 bytes:
+  `BL/DIRECT-MASK/CIRCUIT-ID/v1\0 || fixed16 SBA1-SRC-CMT-v1+NUL || u32LE23 ||
+  direct-mask-relation-v1 (23 ASCII bytes, no NUL) ||
+  u32LE[256,3,33,8,248,229,125048,172232,0,6,512,1]`;
+  fingerprint is
+  `01ee8be0a1b1bbb9957a9dcbfdc1f15f510226505a735d95f9b15e73de16161bf462522589824a3f0d0193d67aaf43c97736d24e4a00b9da655403cefd38f4a8`.
+- Profile preimage is exactly 248 bytes:
+  `BL/DIRECT-MASK/QUEUE-PROFILE/v12\0 || u32LE12 || u16LElen(profile_token) || profile_token ||
+  u16LElen(source_auth_token) || source_auth_token || circuit_fp64 || DMSP0001 || DMVI0001 ||
+  u32LE[534370,539013,541781,2592,4627,64,96,101] || u64LE4294967296`;
+  fingerprint is
+  `306885c3f4dba50a14bd7aa9e51ce90d4b29d750d813980ed801ba2aff0159e5b256385357219c1e848f55bff8c020d08c5c59f3b63bc5a3b32b388ff794023a`.
+- Context KAT uses `session_ref=bytes(range(64))`, `ordered_root=bytes(range(64,128))`,
+  `U=bytes(range(96))`, validity `[6000,9000)`, and the two fingerprints; expected context is
+  `931fee1e981d0c844438d08662f6853cc62db7b6ac33a789b82032b33a764997677a505644a5e86085b871ac929c4c36667460883cf3d50b658dc50223c1417d`.
+  These KAT bytes are never production RNG defaults.
+- Issue-time accounting is atomic: validate metadata/config epoch, capacity, current lifetime
+  count and overflow/exhaustion before sampling/returning U; insert batch + 100 members + exactly
+  one 101-unit reservation/attempt + counter increment + `BATCH_ISSUED` together. Every durable
+  batch has the reservation, including AWAITING_HANDOFF/QUEUED/pre-lease HELD. Attempt remains 0
+  before lease and 1 after its one lease; reservation is not a started verification.
+- `BATCH_ISSUED` represents AWAITING_HANDOFF/attempt0 and carries reservation before/after and
+  exact identity/member count. `HANDOFF_SUBMITTED` represents QUEUED/attempt0. The old claim
+  charge becomes `VERIFICATION_STARTED` for LEASED/attempt1 and validates, but does not increment,
+  the existing reservation. Expiry, abandonment, restart, consumed/ambiguous/malformed/transport
+  failure burns the reservation and requires a fresh operation and handoff. No refund/reset.
+- The independent verifier accepts only the exact lifecycle and rejects extra/missing/reordered/
+  duplicate events, reservation/counter changes, changed U/context, timestamps, epochs, or attempt
+  identities. HELD after issue has 2 events, after handoff 3, after lease 4. Existing completion
+  semantics remain. Precommit failure rolls back; postcommit indeterminate retains the reservation.
+- Runtime ownership, OS locks, descriptor lifetime, marker/reopen, partial shutdown, one-use
+  handoff, and full wipe behavior remain unchanged. No source private material is received by
+  Python/State. Native acceptance remains pending the driver's exact pin/appliance packet.
 
-## Nonclaims and scope
+### Required verification and blockers
 
-`proofSuiteId=null`, `production_usable=false`, `activation=false`, and
-`NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED` remain authoritative. No Lean kernel is implemented or
-linked, no private-proof backend is selected, and no real PHI, credentials, payment movement,
-production persistence, or official receiver is in scope. Mirror remains read-only and
-nonpayment. The reviewed integration baseline above is the current child input; the separate v2
-checkout and any other working-tree state are outside this child’s scope, and current edits are
-confined here.
+Implement and test independent context/fingerprint KATs; mutation tests for every public/config
+binding and both serializers; RNG zero/shape/failure/repeated-U cases; issue pre/postcommit faults;
+retry/expiry/restart/HELD at each stage; no second charge; counter exhaustion/overflow; event,
+row, timestamp, epoch, U/context and attempt mutations; and existing ownership/concurrency/wipe
+regressions. Keep native adapter tests pending and explicitly blocked until accepted identity input.
+Use `build-state12/` only for untracked diagnostics. Do not run old Profile11/source-proof probes,
+large solvers, or broad suites without a changed-input reason. Preserve all known provenance-
+mismatch failures and unavailable Windows symlink skips with exact counts and reasons.
+
+At completion, reconcile this file and `STATE.md` with actual measured evidence, inspect the whole
+producer -> adapter -> Queue -> independent -> State/outbox boundary, verify protected paths and
+semantic identities are unchanged, report exact commit/tree/diff/tests/warnings/skips/nonclaims,
+and HOLD for driver review. Flags remain `proofSuiteId=null`, `production_usable=false`,
+`activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
+
+### Measured stage evidence — 2026-09-08
+
+The current bounded implementation has passed `py -3.14 -B -m py_compile` for the changed
+implementation/tests, Profile12 focused tests `9 passed`, Queue tests `29 passed`, and Runtime
+tests `17 passed, 2 skipped`. The two runtime skips are the native Profile12 adapter/source
+identity tests, explicitly deferred by the active grant pending the driver's accepted exact C
+binary/source-appliance packet. Focused `verify_database` checks passed for context, reservation,
+and held-state evidence. The independent checker now binds both reservation-bearing events to the
+durable attempt row, and claim validates coin/context, reservation shape, and source epoch before
+lease mutation. No adapter/source-auth test, Profile11 probe, large solver, or broad suite was run.
+The stage remains synthetic, nonactivating, unqualified, and held for driver review.

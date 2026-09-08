@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import app.minimal_clearance_composition as composition
 import app.minimal_clearance_verification_queue as queue_module
-from app.minimal_clearance_verification_queue import _build_statement, _compute_batch_root_from_refs
+from app.minimal_clearance_verification_queue import _compute_batch_root_from_refs, _profile12_context
 from app.minimal_clearance_composition import (
     CompositionConfigV2,
     CompositionConflictError,
@@ -85,7 +85,7 @@ def _child_result(completed: subprocess.CompletedProcess[str]) -> dict[str, str]
     if not lines:
         raise AssertionError((completed.returncode, completed.stdout, completed.stderr))
     return json.loads(lines[-1])
-from app.minimal_clearance_verification_queue_independent import _build_statement as independent_build_statement, read_verified_batch, verify_database
+from app.minimal_clearance_verification_queue_independent import _profile12_context as independent_profile12_context, read_verified_batch, verify_database
 
 
 OLD_PROFILE9_TOKEN = "BLIND-ZKBPP-CUNRUH-RANGE100-V9"
@@ -226,13 +226,18 @@ class _Verifier:
         return BatchVerifierResult(
             self.accepted,
             self.source_authenticated,
-            batch.proof_statement,
+            batch.proof_context,
+            batch.public_coin,
             batch.batch_root,
             self.config.source_auth_profile,
             self.config.source_key_epoch,
             self.result_code,
             self.config.qualification_flags,
         )
+
+
+def _verifier_result(config: QueueConfig, batch, *, accepted: bool = True, result_code: str | None = None) -> BatchVerifierResult:
+    return BatchVerifierResult(accepted, accepted, batch.proof_context, batch.public_coin, batch.batch_root, config.source_auth_profile, config.source_key_epoch, result_code or ("accepted" if accepted else "rejected"), config.qualification_flags)
 
 
 class _MalformedVerifier:
@@ -271,7 +276,7 @@ def _counts(path: Path) -> dict[str, int]:
         }
 
 
-class QueueV11Tests(unittest.TestCase):
+class QueueV12Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -711,9 +716,9 @@ class QueueV11Tests(unittest.TestCase):
 
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "AWAITING_HANDOFF")
-            self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (0, 0))
+            self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (101, 0))
         counts = _counts(self.root / "state.sqlite")
-        self.assertEqual((counts["queue_attempts"], counts["queue_leases"], counts["queue_results"]), (0, 0, 0))
+        self.assertEqual((counts["queue_attempts"], counts["queue_leases"], counts["queue_results"]), (1, 0, 0))
         self.assertEqual(self.store._handoffs, {})
 
     def test_binding_and_expiry_rejections_close_and_wipe_handoffs(self) -> None:
@@ -742,9 +747,9 @@ class QueueV11Tests(unittest.TestCase):
                 self.assertEqual(store._handoffs, {})
                 with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
                     self.assertEqual(connection.execute("SELECT status FROM queue_batches").fetchone()[0], "HELD")
-                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_attempts").fetchone()[0], 0)
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_attempts").fetchone()[0], 1)
                     self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0], 0)
-                    self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (0, 0))
+                    self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (101, 0))
             finally:
                 store._close()
                 owner.close()
@@ -761,55 +766,31 @@ class QueueV11Tests(unittest.TestCase):
         self.assertEqual(self.store._handoffs, {})
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "AWAITING_HANDOFF")
-            self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (0, 0))
+            self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (101, 0))
         counts = _counts(self.root / "state.sqlite")
-        self.assertEqual((counts["queue_attempts"], counts["queue_leases"], counts["queue_results"]), (0, 0, 0))
+        self.assertEqual((counts["queue_attempts"], counts["queue_leases"], counts["queue_results"]), (1, 0, 0))
 
         self.store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"retry-proof")))
 
-    def test_state_database_derives_profile11_statement_without_durable_copy(self) -> None:
+    def test_state_database_derives_profile12_context_without_durable_copy(self) -> None:
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
             self.assertEqual(tables, {"queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions", "composition_meta", "composition_transactions", "composition_events", "composition_outbox"})
-            self.assertEqual(connection.execute("SELECT schema_version FROM queue_metadata").fetchone()[0], 11)
+            self.assertEqual(connection.execute("SELECT schema_version FROM queue_metadata").fetchone()[0], 12)
             self.assertEqual(connection.execute("SELECT schema_version FROM composition_meta").fetchone()[0], 4)
             self.assertEqual(connection.execute("PRAGMA foreign_key_list(composition_transactions)").fetchone()[2], "queue_members")
-            self.assertEqual(tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_batches)")), ("batch_id", "batch_root", "session_ref", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "identity_digest", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"))
-            self.assertNotIn("proof_statement", tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_results)")))
+            self.assertEqual(tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_batches)"))[-1], "public_coin")
+            self.assertNotIn("proof_context", tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_batches)")))
         batch = _prepare(self.store, self.config, self.clock)
-        expected = (
-            b"BL-R100-STMT-V2\x00"
-            + (2).to_bytes(2, "little")
-            + (304).to_bytes(2, "little")
-            + batch.session_ref
-            + batch.batch_root
-            + (11).to_bytes(4, "little")
-            + b"\x01"
-            + b"\x00\x00\x00"
-            + (1).to_bytes(4, "little")
-            + batch.template.valid_from_ms.to_bytes(8, "little")
-            + batch.template.valid_until_ms.to_bytes(8, "little")
-            + bytes.fromhex("A85A1A5F4AD3E9B777E5F9043F8B43F5C0018F8A6AAB51359AEDFE1264091C0C0F973C9D4E3BF9064383F0DB9BEB2606BAD62B92677DB0588006475236BD83CF")
-            + bytes.fromhex("327289A1B8B3F00D7B41745617EC7D64F27122E3451636B2BFEBFC9802213B48F821D95FD3C0C5F1B5E8C7E7AB3DD8A638A34B4B7053FC39E0E4DF734201F724")
-        )
-        self.assertEqual(len(batch.session_ref), 64)
-        self.assertNotEqual(batch.session_ref, bytes(64))
-        self.assertEqual(len(batch.proof_statement), 304)
-        self.assertEqual(batch.proof_statement, expected)
-        self.assertEqual(batch.proof_statement[20:84], batch.session_ref)
-        self.assertEqual(batch.proof_statement[84:148], batch.batch_root)
-        self.assertEqual(batch.proof_statement[148:152], b"\x0b\x00\x00\x00")
-        self.assertEqual(batch.proof_statement[152], 1)
-        self.assertEqual(batch.proof_statement[153:156], b"\x00\x00\x00")
-        self.assertEqual(batch.proof_statement[156:160], b"\x01\x00\x00\x00")
-        self.assertEqual(batch.proof_statement[176:240], bytes.fromhex("A85A1A5F4AD3E9B777E5F9043F8B43F5C0018F8A6AAB51359AEDFE1264091C0C0F973C9D4E3BF9064383F0DB9BEB2606BAD62B92677DB0588006475236BD83CF"))
-        self.assertEqual(batch.proof_statement[240:304], bytes.fromhex("327289A1B8B3F00D7B41745617EC7D64F27122E3451636B2BFEBFC9802213B48F821D95FD3C0C5F1B5E8C7E7AB3DD8A638A34B4B7053FC39E0E4DF734201F724"))
-        self.assertEqual(independent_build_statement(batch_root=batch.batch_root, session_ref=batch.session_ref, valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms), batch.proof_statement)
-        self.assertEqual(self.config.profile_version, "BLIND-ZKBPP-RANGE100-CDG-DIRECT-SEEDED-V1")
-        self.assertEqual(self.config.profile_epoch, 11)
-        self.assertNotIn(batch.proof_statement, (self.root / "state.sqlite").read_bytes())
+        expected = _profile12_context(session_ref=batch.session_ref, ordered_batch_root=batch.batch_root, public_coin=batch.public_coin, valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
+        self.assertEqual(len(batch.proof_context), 64)
+        self.assertEqual(batch.proof_context, expected)
+        self.assertEqual(independent_profile12_context(session_ref=batch.session_ref, batch_root=batch.batch_root, public_coin=batch.public_coin, valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms), batch.proof_context)
+        self.assertEqual(self.config.profile_version, "BLIND-DIRECT-MASK-FAEST256F-DEG3-V1")
+        self.assertEqual(self.config.profile_epoch, 12)
+        self.assertNotIn(batch.proof_context, (self.root / "state.sqlite").read_bytes())
 
-    def test_profile11_statement_rejects_profile10_profile9_zero_identity_and_invalid_window(self) -> None:
+    def test_profile12_context_rejects_old_bindings_zero_identity_and_invalid_window(self) -> None:
         with self.assertRaisesRegex(VerificationQueueError, "queue_profile_epoch"):
             QueueConfig("old-profile10-epoch", 100, profile_epoch=10)
         with self.assertRaisesRegex(VerificationQueueError, "queue_profile_version"):
@@ -825,33 +806,27 @@ class QueueV11Tests(unittest.TestCase):
         with self.assertRaisesRegex(VerificationQueueError, "queue_profile_invalid"):
             QueueConfig("legacycfg", 100, profile_digest=OLD_PROFILE9_FINGERPRINT)
         batch = _prepare(self.store, self.config, self.clock)
-        old_statement = bytearray(batch.proof_statement)
-        old_statement[148:152] = (9).to_bytes(4, "little")
-        old_statement[240:304] = OLD_PROFILE9_FINGERPRINT
-        with self.assertRaisesRegex(VerificationQueueError, "statement_binding"):
-            replace(batch, proof_statement=bytes(old_statement))
-        old_profile10_statement = bytearray(batch.proof_statement)
-        old_profile10_statement[148:152] = (10).to_bytes(4, "little")
-        old_profile10_statement[240:304] = OLD_PROFILE10_FINGERPRINT
-        with self.assertRaisesRegex(VerificationQueueError, "statement_binding"):
-            replace(batch, proof_statement=bytes(old_profile10_statement))
-        with self.assertRaisesRegex(QueueIntegrityError, "session_ref"):
-            _build_statement(batch_root=batch.batch_root, session_ref=bytes(64), valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
-        with self.assertRaisesRegex(QueueIntegrityError, "batch_root"):
-            _build_statement(batch_root=bytes(64), session_ref=batch.session_ref, valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
-        with self.assertRaisesRegex(QueueIntegrityError, "session_ref"):
-            _build_statement(batch_root=batch.batch_root, session_ref=batch.session_ref[:-1], valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
-        with self.assertRaisesRegex(QueueIntegrityError, "proof_statement"):
-            replace(batch, proof_statement=batch.proof_statement[:-1])
+        with self.assertRaisesRegex(QueueIntegrityError, "profile12_public_coin"):
+            replace(batch, public_coin=bytes(96))
+        forged_context = bytearray(batch.proof_context)
+        forged_context[0] ^= 1
+        with self.assertRaisesRegex(QueueIntegrityError, "profile12_context"):
+            replace(batch, proof_context=bytes(forged_context))
+        with self.assertRaisesRegex(QueueIntegrityError, "profile12_context"):
+            replace(batch, session_ref=bytes([batch.session_ref[0] ^ 1]) + batch.session_ref[1:])
+        with self.assertRaisesRegex(QueueIntegrityError, "profile12_context"):
+            replace(batch, public_coin=bytes([batch.public_coin[0] ^ 1]) + batch.public_coin[1:])
+        with self.assertRaisesRegex(QueueIntegrityError, "profile12_context"):
+            replace(batch, proof_context=batch.proof_context[:-1])
         for start, end in ((batch.template.valid_from_ms, batch.template.valid_from_ms), (batch.template.valid_until_ms, batch.template.valid_until_ms), (batch.template.valid_from_ms, batch.template.valid_from_ms + 3_600_001)):
             with self.subTest(start=start, end=end), self.assertRaisesRegex(QueueIntegrityError, "statement_window"):
-                _build_statement(batch_root=batch.batch_root, session_ref=batch.session_ref, valid_from_ms=start, valid_until_ms=end)
+                _profile12_context(session_ref=batch.session_ref, ordered_batch_root=batch.batch_root, public_coin=batch.public_coin, valid_from_ms=start, valid_until_ms=end)
 
-        for offset in (0, 16, 18, 153, 176, 240):
-            forged = bytearray(batch.proof_statement)
+        for offset in (0, 16, 32, 48, 63):
+            forged = bytearray(batch.proof_context)
             forged[offset] ^= 1
-            with self.subTest(offset=offset), self.assertRaisesRegex(VerificationQueueError, "statement_binding"):
-                replace(batch, proof_statement=bytes(forged))
+            with self.subTest(offset=offset), self.assertRaisesRegex(VerificationQueueError, "profile12_context"):
+                replace(batch, proof_context=bytes(forged))
 
     def test_profile9_database_is_rejected_without_rewrite(self) -> None:
         database = self.root / "state.sqlite"
@@ -946,7 +921,7 @@ class QueueV11Tests(unittest.TestCase):
             raw += wal.read_bytes()
         for marker in (b"raw_proof", b"raw_signature", b"frame_payload", b"challenge_bytes", b"opening_bytes", b"response_bytes"):
             self.assertNotIn(marker, raw)
-        self.assertNotIn(batch.proof_statement, raw)
+        self.assertNotIn(batch.proof_context, raw)
         self.assertEqual(verify_database(self.root / "state.sqlite")["accepted_operation_count"], 100)
         reconstructed = read_verified_batch(self.root / "state.sqlite", batch.batch_id)
         self.assertEqual(len(reconstructed.jobs), 100)
@@ -986,7 +961,7 @@ class QueueV11Tests(unittest.TestCase):
                     batch = _prepare(store, config, clock)
                     work = store._claim_next_batch()
                     controls = _controls(batch.operation_refs)
-                    verifier_result = BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, config.source_auth_profile, config.source_key_epoch, "accepted", ())
+                    verifier_result = _verifier_result(config, batch)
                     store._before_fault = lambda actual, expected=label: (_ for _ in ()).throw(RuntimeError("injected")) if actual == expected else None
                     with self.assertRaisesRegex(RuntimeError, "injected"):
                         store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
@@ -1006,7 +981,7 @@ class QueueV11Tests(unittest.TestCase):
         batch = _prepare(self.store, self.config, self.clock)
         work = self.store._claim_next_batch()
         controls = _controls(batch.operation_refs)
-        verifier_result = BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
+        verifier_result = _verifier_result(self.config, batch)
         stale = replace(work, lease_token=bytes(32))
         with self.assertRaises(QueueLeaseError):
             self.store._complete_batch(stale, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
@@ -1017,7 +992,7 @@ class QueueV11Tests(unittest.TestCase):
         batch = _prepare(self.store, self.config, self.clock)
         work = self.store._claim_next_batch()
         controls = _controls(batch.operation_refs)
-        verifier_result = BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
+        verifier_result = _verifier_result(self.config, batch)
         self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             saved_outbox = tuple(connection.execute("SELECT * FROM composition_outbox WHERE operation_ref=?", (batch.operation_refs[0],)).fetchone())
@@ -1040,7 +1015,7 @@ class QueueV11Tests(unittest.TestCase):
         batch = _prepare(self.store, self.config, self.clock)
         work = self.store._claim_next_batch()
         controls = _controls(batch.operation_refs)
-        verifier_result = BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
+        verifier_result = _verifier_result(self.config, batch)
         first = self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
         duplicate = self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
         self.assertEqual((first.status, duplicate.status, duplicate.accepted_count), ("VERIFIED", "VERIFIED", 100))
@@ -1064,9 +1039,10 @@ class QueueV11Tests(unittest.TestCase):
 
         forged_template = replace(batch.template, assertion_identifier="forged-assertion")
         forged_root = _compute_batch_root_from_refs(forged_template, batch.operation_refs)
-        forged_batch = replace(work.batch, template=forged_template, batch_root=forged_root, proof_statement=_build_statement(batch_root=forged_root, session_ref=work.batch.session_ref, valid_from_ms=forged_template.valid_from_ms, valid_until_ms=forged_template.valid_until_ms))
+        forged_context = _profile12_context(session_ref=work.batch.session_ref, ordered_batch_root=forged_root, public_coin=work.batch.public_coin, valid_from_ms=forged_template.valid_from_ms, valid_until_ms=forged_template.valid_until_ms)
+        forged_batch = replace(work.batch, template=forged_template, batch_root=forged_root, proof_context=forged_context)
         forged_work = replace(work, batch=forged_batch)
-        forged_result = BatchVerifierResult(True, True, forged_batch.proof_statement, forged_batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
+        forged_result = _verifier_result(self.config, forged_batch)
         with self.assertRaises(QueueLeaseError) as error:
             self.store._complete_batch(forged_work, status="VERIFIED", verifier_result=forged_result, state_controls=controls)
         self.assertEqual(str(error.exception), "completion_not_live")

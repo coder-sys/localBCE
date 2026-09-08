@@ -1,4 +1,4 @@
-"""Single-owner Queue V10 runtime.
+"""Single-owner Profile12 Queue runtime.
 
 The runtime exposes one state-issued 100-member batch and one volatile
 handoff.  Counters are explicit: batch outcomes are counted in batches while
@@ -12,11 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 import threading
 from typing import Any, Mapping, Protocol
-
-from app.minimal_clearance_source_auth_verifier_adapter import (
-    MinimalClearanceSourceAuthVerifierAdapter,
-    SourceAuthVerifierConfig,
-)
 from app.minimal_clearance_verification_queue import (
     IssuedVerificationBatch,
     OperationTemplate,
@@ -162,7 +157,8 @@ class MinimalClearanceVerificationRuntime:
     """One owner, one synchronous worker, one batch handoff."""
 
     @classmethod
-    def from_source_auth(cls, *, root: Path, source_auth_config: SourceAuthVerifierConfig, state_disposition_port: StateDispositionPort | None = None, composition_config: CompositionConfigV2 | None = None, receiver: OfficialStateReceiverPort | None = None, lookup: OfficialStateReceiverLookupPort | None = None, clock: QueueClock | None = None) -> "MinimalClearanceVerificationRuntime":
+    def from_source_auth(cls, *, root: Path, source_auth_config: "SourceAuthVerifierConfig", state_disposition_port: StateDispositionPort | None = None, composition_config: CompositionConfigV2 | None = None, receiver: OfficialStateReceiverPort | None = None, lookup: OfficialStateReceiverLookupPort | None = None, clock: QueueClock | None = None) -> "MinimalClearanceVerificationRuntime":
+        from app.minimal_clearance_source_auth_verifier_adapter import MinimalClearanceSourceAuthVerifierAdapter, SourceAuthVerifierConfig
         if type(source_auth_config) is not SourceAuthVerifierConfig:
             _fixed("runtime_configuration")
         verifier = MinimalClearanceSourceAuthVerifierAdapter(source_auth_config)
@@ -214,7 +210,7 @@ class MinimalClearanceVerificationRuntime:
                 if legacy.exists():
                     _fixed("legacy_database_unsupported")
             if config is None:
-                config = QueueConfig("minimal-clearance-state-v10", 100)
+                config = QueueConfig("minimal-clearance-state-v12", 100)
             if composition_config is None:
                 composition_config = CompositionConfigV2(config.queue_id, config.digest, capacity=max(100, config.capacity))
             if type(composition_config) is not CompositionConfigV2 or composition_config.queue_id != config.queue_id or composition_config.queue_config_digest != config.digest:
