@@ -4,24 +4,29 @@ Updated: 2026-09-07
 
 ## Current cleanup disposition
 
-This bounded cleanup starts from the exact clean input commit
+This bounded cleanup started from exact clean commit
 `5fe29fad1f44df961ea20f8e3397c8d2e02783d0` (tree
-`c963c8d489b5295ab0a4679953161a84a624567b`). The executable release classifier reports 212
-tracked files: 183 current source, 3 retained compatibility, 3 source-only, and 23 excluded
-generated/private, with 186 selected by default. Static Python reachability from 50 test/tool/
-experiment/root harnesses found 94 modules, 91 reachable, and zero parse errors. The only
-zero-inbound application source candidate is protected `app/public_inputs.py`; package markers and
-the three retained compatibility files are intentional. CMake and repository evidence retain the
-Longfellow, Profile 11, Mirror, operations, test, and evidence paths. No nonprotected source
-deletion is justified.
+`c963c8d489b5295ab0a4679953161a84a624567b`). Cleanup implementation commit
+`960352a8829d426b98053306fba6a2f323c7c896` (tree
+`0dfdaf7eaeef48d9673750f9eafc3827c287aeb8`) removes 14 unused implementation/test files:
+the five-file, 780-line SPHINCS/public-input island and nine generic, 1,434-line Native-v3 files.
+It also removes seven dead CMake targets and the island's sole `pqcrypto -> cffi -> pycparser`
+dependency closure. The exact wheel identities removed from the two platform artifact graphs total
+53,269,389 bytes. Production now has zero Python packages and development has six.
 
-The pre-cleanup deleted-path history scan found 1,335 historical deletions and 26 current-tree
-references. After removing the stale deleted V6 verification-profile reference, 25 intentional
-governance negative-list/test references remain. The protected Queue V6 metadata comment remains
-unchanged and requires a separately scoped driver decision; it does not authorize deleting active
-Queue or Native-v3 code. This batch
-changes only `CURRENT_TASK.md` and `STATE.md`; no protected implementation, operations bytes,
-archive, activation state, or external checkout is changed.
+The executable release classifier now reports 198 tracked files: 170 current source, 2 retained
+compatibility, 3 source-only, and 23 excluded generated/private, with 172 selected by default.
+The retained compatibility closure is only `app/batch/__init__.py` and
+`app/batch/poseidon.py`. The operation-scoped source-assertion family, minimal-clearance Native
+family, their shared fixture, Queue/Profile 11 runtime, historical raw evidence, and reproduction
+records remain. Current trust-boundary code validates the minimal-clearance implementation
+attestation, so deleting that family would require a broader authority change and was not done.
+
+The pre-cleanup deleted-path history scan found 1,335 historical deletions. The corrected current
+scan found 29 reference occurrences covering 24 distinct deleted paths; these remain intentional
+governance negative-list/test references. The protected Queue V6 metadata comment remains unchanged
+and does not authorize deleting active Queue or Native-v3 code. No operations bytes, archive,
+activation state, or external checkout is changed.
 
 ## Prior candidate and release closure
 
@@ -37,17 +42,17 @@ baseline is:
 
 | Lane | Count | Selection |
 | --- | ---: | --- |
-| Current source | 183 | selected |
-| Retained compatibility | 3 | selected only by explicit closure |
+| Current source | 170 | selected |
+| Retained compatibility | 2 | selected only by explicit closure |
 | Source-only | 3 | unselected |
 | Excluded generated/private | 23 | unselected |
 | Unknown/retired/legacy | 0 | fail-closed if introduced |
-| Tracked total | 212 | — |
-| Default selection | 186 | 183 current + 3 retained |
+| Tracked total | 198 | — |
+| Default selection | 172 | 170 current + 2 retained |
 | Unselected total | 26 | — |
 
-The retained closure is exactly `app/batch/__init__.py`, `app/batch/poseidon.py`, and
-`app/batch/stark_encoding.py`. Prefix membership is only a classification hint. Deleted
+The retained closure is exactly `app/batch/__init__.py` and `app/batch/poseidon.py`. Prefix
+membership is only a classification hint. Deleted
 compatibility entries and the obsolete legacy registry are not release inputs. Source-only privacy
 fixtures, generated evidence, private build metadata, and Profile 11 host files remain excluded.
 The executable classifier reports these counts for the reviewed integration baseline. The exact
@@ -59,6 +64,12 @@ unknown and retired path rejection remains unchanged. The previously recorded 21
 
 ## Verified evidence
 
+- Cleanup commit `960352a8829d426b98053306fba6a2f323c7c896` deletes 2,214 source/test
+  lines in 14 files and reconciles CMake, dependency declarations, four platform/profile locks,
+  the canonical dual-hash artifact manifest, Python SBOM, release closure, and focused tests. The
+  dependency/release suite passed `27 passed, 1 skipped, 31 subtests`; the skip is the existing
+  unavailable symlink capability. Static scans found no surviving runtime reference or deleted
+  generic CMake target, while all required minimal-clearance sources remain registered.
 - Cleanup commit `d9220535a68d652dd491fdcaa184b04068014016` is the rebased eight-file reduction from
   immutable input `52b441c138b9577122303aaf1d1769fca2d82e4b`. It removes five unreachable legacy
   money-chain modules and two obsolete money tests; the surviving proof-primitives test retains

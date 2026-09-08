@@ -13,8 +13,11 @@ PHASE: Project-wide obsolete-material reachability and authority cleanup.
 Cleanup input commit: `5fe29fad1f44df961ea20f8e3397c8d2e02783d0` (tree
 `c963c8d489b5295ab0a4679953161a84a624567b`), clean before this bounded cleanup.
 
-Next bounded action: commit this cleanup record only; do not publish an archive, activate a
-profile, or mutate the separate v2 evidence checkout.
+Cleanup implementation commit: `960352a8829d426b98053306fba6a2f323c7c896` (tree
+`0dfdaf7eaeef48d9673750f9eafc3827c287aeb8`).
+
+Next bounded action: finish whole-suite verification and commit this cleanup record only; do not
+publish an archive, activate a profile, or mutate the separate v2 evidence checkout.
 
 ## Objective
 
@@ -39,25 +42,25 @@ activation change.
   `experiments/longfellow_v09_native_v3/upstream_manifest.json` is 2633 bytes with SHA-256
   `466A704DD9CE3F812FB19A73EABC44EB922113922C805B7AD17DEEB29D52A1DD`. The three known failures
   return `ledger:provenance-source-mismatch`; no native-v3 source fix or repin is authorized here.
-- Cleanup disposition: the current tree has 212 tracked files (183 current source, 3 retained
-  compatibility, 3 source-only, and 23 excluded generated/private; 186 selected by default).
-  Static Python reachability found 94 modules from 50 roots, with 91 reachable and no parse errors.
-  The only zero-inbound application source candidate is protected `app/public_inputs.py`; package
-  markers and the three retained compatibility files remain intentionally retained. CMake and
-  repository evidence retain the Longfellow, Profile 11, Mirror, operations, test, and evidence
-  paths. No nonprotected source deletion is justified by this scan.
-- The pre-cleanup deleted-path history scan found 1,335 historical deletions and 26 current-tree
-  references. After removing the stale deleted V6 verification-profile reference, 25 intentional
-  governance negative-list/test references remain. The protected
+- Cleanup disposition: the current tree has 198 tracked files (170 current source, 2 retained
+  compatibility, 3 source-only, and 23 excluded generated/private; 172 selected by default).
+  Consumer and build-graph review found the five-file SPHINCS/public-input island and nine generic
+  18-endpoint Native source files unused. Commit `960352a8829d426b98053306fba6a2f323c7c896`
+  removes their 2,214 source lines, seven CMake targets, and sole three-package production
+  dependency closure. The operation-scoped source-assertion and minimal-clearance Native families
+  remain because current code validates and consumes their implementation attestation.
+- The pre-cleanup deleted-path history scan found 1,335 historical deletions. The corrected current
+  scan found 29 reference occurrences covering 24 distinct deleted paths; these are intentional
+  governance negative-list/test references. The protected
   Queue V6 metadata comment remains unchanged and requires a separately scoped driver decision;
   it is not evidence for deleting active Queue or Native-v3 code.
 - The semantic assurance tests require the explicit external `BLIND_LEDGER_SEMANTIC_CANDIDATE`
   environment seam. Missing configuration, dirty state, wrong HEAD/tree, source drift, artifact
   drift, theorem drift, or checker failure remains fail-closed; there is no personal-path fallback.
-- At the reviewed integration baseline, the executable release classifier reports 212 tracked
-  files: 183 current source, 3 retained compatibility, 3 source-only, and 23 excluded
-  generated/private, with 186 selected by default. The older 218-tracked/191-selected numbers
-  are historical evidence and must not be presented as current.
+- At cleanup commit `960352a8829d426b98053306fba6a2f323c7c896`, the executable release
+  classifier reports 198 tracked files: 170 current source, 2 retained compatibility, 3
+  source-only, and 23 excluded generated/private, with 172 selected by default. The older
+  218/191 and 212/186 numbers are historical evidence and must not be presented as current.
 - The Windows verifier workspace snapshot now compares only stable directory/reparse attribute
   bits; volatile `st_file_attributes` provider bits no longer turn an unchanged workspace into a
   false `verifier_workspace_changed` failure. The Profile 11 source-binding manifest pins the
