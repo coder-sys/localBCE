@@ -71,9 +71,9 @@ activation change.
   source-only, and 23 excluded generated/private, with 169 selected by default. The older
   218/191, 212/186, and 198/172 numbers are historical evidence and must not be presented as
   current.
-- Whole-suite verification from clean record commit
-  `8ffe6ff02e7608665085e8cb481f42c03b215ecb` completed with `3 failed, 552 passed,
-  4 skipped, 557 subtests passed`. The only failures are the same three
+- Whole-suite verification from clean deep-cleanup authority commit
+  `8e82072854c2b194d2ad834325bc6cee059c5b05` completed with `3 failed, 552 passed,
+  4 skipped, 557 subtests passed in 586.47s`. The only failures are the same three
   `ledger:provenance-source-mismatch` tests named above; no new cleanup regression was observed.
 - The Windows verifier workspace snapshot now compares only stable directory/reparse attribute
   bits; volatile `st_file_attributes` provider bits no longer turn an unchanged workspace into a

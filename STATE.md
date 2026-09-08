@@ -73,6 +73,13 @@ unknown and retired path rejection remains unchanged. The previously recorded 21
 
 ## Verified evidence
 
+- From clean deep-cleanup authority commit `8e82072854c2b194d2ad834325bc6cee059c5b05`
+  (tree `93d82b9d0e193628da18d5a12d84444650911caf`), the final whole suite completed
+  `3 failed, 552 passed, 4 skipped, 557 subtests passed in 586.47s`. The failures are exactly the
+  three documented Native profile tests and each stops at
+  `ledger:provenance-source-mismatch`. The four skips are unavailable symlink creation for the
+  locked wheel, verifier executable, Mirror recovery image, and Mirror operational directory;
+  focused replay reported `2 passed, 4 skipped` and no additional skip.
 - The deep repository pass parsed the full Python tree, mapped static imports and file/data
   references, ran Vulture and Pyflakes, measured full branch coverage, checked every Native/CMake
   source registration, searched deleted-path history, and compared tracked blob/content hashes.
