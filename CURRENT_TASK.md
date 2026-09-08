@@ -16,8 +16,9 @@ Cleanup input commit: `5fe29fad1f44df961ea20f8e3397c8d2e02783d0` (tree
 Cleanup implementation commit: `960352a8829d426b98053306fba6a2f323c7c896` (tree
 `0dfdaf7eaeef48d9673750f9eafc3827c287aeb8`).
 
-Next bounded action: finish whole-suite verification and commit this cleanup record only; do not
-publish an archive, activate a profile, or mutate the separate v2 evidence checkout.
+Next bounded action: cleanup is complete; the next authorized semantic dependency is the Lean
+workstream. Do not publish an archive, activate a profile, mutate the separate v2 evidence checkout,
+or resurrect shelved SHAKE/control-export work without a new bounded task.
 
 ## Objective
 
@@ -61,6 +62,10 @@ activation change.
   classifier reports 198 tracked files: 170 current source, 2 retained compatibility, 3
   source-only, and 23 excluded generated/private, with 172 selected by default. The older
   218/191 and 212/186 numbers are historical evidence and must not be presented as current.
+- Whole-suite verification from clean record commit
+  `8ffe6ff02e7608665085e8cb481f42c03b215ecb` completed with `3 failed, 552 passed,
+  4 skipped, 557 subtests passed`. The only failures are the same three
+  `ledger:provenance-source-mismatch` tests named above; no new cleanup regression was observed.
 - The Windows verifier workspace snapshot now compares only stable directory/reparse attribute
   bits; volatile `st_file_attributes` provider bits no longer turn an unchanged workspace into a
   false `verifier_workspace_changed` failure. The Profile 11 source-binding manifest pins the

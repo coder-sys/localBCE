@@ -70,6 +70,16 @@ unknown and retired path rejection remains unchanged. The previously recorded 21
   dependency/release suite passed `27 passed, 1 skipped, 31 subtests`; the skip is the existing
   unavailable symlink capability. Static scans found no surviving runtime reference or deleted
   generic CMake target, while all required minimal-clearance sources remain registered.
+- From clean record commit `8ffe6ff02e7608665085e8cb481f42c03b215ecb`, the full suite completed
+  `3 failed, 552 passed, 4 skipped, 557 subtests passed in 569.60s`. The three failures are exactly
+  `test_compiled_parameter_report_rejects_exactly_seven_categories`,
+  `test_manifest_is_explicit_and_nonactivating`, and
+  `test_symbolic_ledger_rejects_zero_or_complete_placeholders`; each failed at the unchanged
+  `ledger:provenance-source-mismatch` gate. No additional failure occurred.
+- Disposable release-manifest verification selected 172 payload files and emitted a 25,699-byte
+  manifest with SHA-256
+  `21c58b3951db69dde91a2fa0a5e4691588db4aef014fb9cc616d1b648a66e356`.
+  The disposable stage and archive were removed; no publication target was touched.
 - Cleanup commit `d9220535a68d652dd491fdcaa184b04068014016` is the rebased eight-file reduction from
   immutable input `52b441c138b9577122303aaf1d1769fca2d82e4b`. It removes five unreachable legacy
   money-chain modules and two obsolete money tests; the surviving proof-primitives test retains
