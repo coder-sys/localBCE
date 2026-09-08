@@ -16,6 +16,9 @@ Cleanup input commit: `5fe29fad1f44df961ea20f8e3397c8d2e02783d0` (tree
 Cleanup implementation commit: `960352a8829d426b98053306fba6a2f323c7c896` (tree
 `0dfdaf7eaeef48d9673750f9eafc3827c287aeb8`).
 
+Deep reachability implementation commit: `92cb4943afa8665f99c780b6edb04e0b0cac436c` (tree
+`6c0a812a1e6ff17d64527baf1a2e58c206568d94`).
+
 Next bounded action: cleanup is complete; the next authorized semantic dependency is the Lean
 workstream. Do not publish an archive, activate a profile, mutate the separate v2 evidence checkout,
 or resurrect shelved SHAKE/control-export work without a new bounded task.
@@ -43,13 +46,18 @@ activation change.
   `experiments/longfellow_v09_native_v3/upstream_manifest.json` is 2633 bytes with SHA-256
   `466A704DD9CE3F812FB19A73EABC44EB922113922C805B7AD17DEEB29D52A1DD`. The three known failures
   return `ledger:provenance-source-mismatch`; no native-v3 source fix or repin is authorized here.
-- Cleanup disposition: the current tree has 198 tracked files (170 current source, 2 retained
-  compatibility, 3 source-only, and 23 excluded generated/private; 172 selected by default).
+- Cleanup disposition: the current tree has 195 tracked files (167 current source, 2 retained
+  compatibility, 3 source-only, and 23 excluded generated/private; 169 selected by default).
   Consumer and build-graph review found the five-file SPHINCS/public-input island and nine generic
   18-endpoint Native source files unused. Commit `960352a8829d426b98053306fba6a2f323c7c896`
   removes their 2,214 source lines, seven CMake targets, and sole three-package production
-  dependency closure. The operation-scoped source-assertion and minimal-clearance Native families
-  remain because current code validates and consumes their implementation attestation.
+  dependency closure. A deeper exact-name, schema-identity, vector-hash, Git-history, test,
+  import/build-graph, branch-coverage, duplicate-content, and non-code-consumer review then proved
+  that the BL-PQ512 foundation schema and its two retained vectors had lost every consumer when
+  their reference lanes were retired. Commit `92cb4943afa8665f99c780b6edb04e0b0cac436c`
+  removes those three orphan data files (27,251 bytes and 646 lines). The operation-scoped
+  source-assertion and minimal-clearance Native families remain because current code validates and
+  consumes their implementation attestation.
 - The pre-cleanup deleted-path history scan found 1,335 historical deletions. The corrected current
   scan found 29 reference occurrences covering 24 distinct deleted paths; these are intentional
   governance negative-list/test references. The protected
@@ -58,10 +66,11 @@ activation change.
 - The semantic assurance tests require the explicit external `BLIND_LEDGER_SEMANTIC_CANDIDATE`
   environment seam. Missing configuration, dirty state, wrong HEAD/tree, source drift, artifact
   drift, theorem drift, or checker failure remains fail-closed; there is no personal-path fallback.
-- At cleanup commit `960352a8829d426b98053306fba6a2f323c7c896`, the executable release
-  classifier reports 198 tracked files: 170 current source, 2 retained compatibility, 3
-  source-only, and 23 excluded generated/private, with 172 selected by default. The older
-  218/191 and 212/186 numbers are historical evidence and must not be presented as current.
+- At deep reachability commit `92cb4943afa8665f99c780b6edb04e0b0cac436c`, the executable release
+  classifier reports 195 tracked files: 167 current source, 2 retained compatibility, 3
+  source-only, and 23 excluded generated/private, with 169 selected by default. The older
+  218/191, 212/186, and 198/172 numbers are historical evidence and must not be presented as
+  current.
 - Whole-suite verification from clean record commit
   `8ffe6ff02e7608665085e8cb481f42c03b215ecb` completed with `3 failed, 552 passed,
   4 skipped, 557 subtests passed`. The only failures are the same three

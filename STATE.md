@@ -14,8 +14,17 @@ It also removes seven dead CMake targets and the island's sole `pqcrypto -> cffi
 dependency closure. The exact wheel identities removed from the two platform artifact graphs total
 53,269,389 bytes. Production now has zero Python packages and development has six.
 
-The executable release classifier now reports 198 tracked files: 170 current source, 2 retained
-compatibility, 3 source-only, and 23 excluded generated/private, with 172 selected by default.
+Deep reachability implementation commit `92cb4943afa8665f99c780b6edb04e0b0cac436c` (tree
+`6c0a812a1e6ff17d64527baf1a2e58c206568d94`) removes the orphan
+`schemas/bl_pq512_vector_v1.schema.json`, `test_data/bl_pq512_foundation_vectors.json`, and
+`test_data/bl_pq512_s09_foundation_vectors.json`: 27,251 bytes and 646 lines. Their exact
+filenames, schema identity, and SHA-256/SHA3 vector identities have zero current consumers. Git
+history shows that their foundation and S09 reference tests were deleted when those retired
+BL-PQ512 lanes were consolidated; the current rejection authority still forbids restarting that
+architecture.
+
+The executable release classifier now reports 195 tracked files: 167 current source, 2 retained
+compatibility, 3 source-only, and 23 excluded generated/private, with 169 selected by default.
 The retained compatibility closure is only `app/batch/__init__.py` and
 `app/batch/poseidon.py`. The operation-scoped source-assertion family, minimal-clearance Native
 family, their shared fixture, Queue/Profile 11 runtime, historical raw evidence, and reproduction
@@ -64,6 +73,21 @@ unknown and retired path rejection remains unchanged. The previously recorded 21
 
 ## Verified evidence
 
+- The deep repository pass parsed the full Python tree, mapped static imports and file/data
+  references, ran Vulture and Pyflakes, measured full branch coverage, checked every Native/CMake
+  source registration, searched deleted-path history, and compared tracked blob/content hashes.
+  It found no additional unprotected dead implementation cluster and no duplicate tracked file.
+  Full branch coverage completed with `3 failed, 552 passed, 4 skipped, 557 subtests` and 70%
+  aggregate source coverage (25,126 statements, 6,428 missed, 9,446 branches, 2,716 partial); the
+  only failures were the same three `ledger:provenance-source-mismatch` tests. Native Phase 0
+  `cargo check --locked --offline --all-targets`, the five-directive KAT, and all 14 negative cases
+  passed; `cargo clippy` was unavailable because the installed stable toolchain has no
+  `cargo-clippy.exe`. The five focused release/security/privacy/documentation tests passed
+  `50 passed, 36 subtests` after the data removal.
+- At clean deep-reachability commit `92cb4943afa8665f99c780b6edb04e0b0cac436c`, the disposable
+  release-manifest gate selected 169 payload files and emitted a 25,272-byte manifest with SHA-256
+  `5f1aacfac6efb5a7c64649a34de95417eb0ba676f88a1fb4440e26d170bfc7e5`. The disposable
+  source stage was removed and no archive publication target was touched.
 - Cleanup commit `960352a8829d426b98053306fba6a2f323c7c896` deletes 2,214 source/test
   lines in 14 files and reconciles CMake, dependency declarations, four platform/profile locks,
   the canonical dual-hash artifact manifest, Python SBOM, release closure, and focused tests. The
