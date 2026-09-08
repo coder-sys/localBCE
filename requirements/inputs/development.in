@@ -1,4 +1,3 @@
 # Declaration input only. Do not install this file.
-# Development is the complete production graph plus these direct test clients.
-pqcrypto==0.4.0
+# Development is the complete production graph plus this direct test client.
 pytest==9.0.3

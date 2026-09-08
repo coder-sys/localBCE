@@ -120,7 +120,6 @@ CURRENT_RELEASE_DEPENDENCY_PATHS = frozenset(
     {
         "app/batch/__init__.py",
         "app/batch/poseidon.py",
-        "app/batch/stark_encoding.py",
     }
 )
 

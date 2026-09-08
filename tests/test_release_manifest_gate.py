@@ -349,7 +349,6 @@ class ReleaseManifestGateTests(unittest.TestCase):
             {
                 "app/batch/__init__.py",
                 "app/batch/poseidon.py",
-                "app/batch/stark_encoding.py",
             },
             set(gate.CURRENT_RELEASE_DEPENDENCY_PATHS),
         )

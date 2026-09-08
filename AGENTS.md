@@ -63,9 +63,6 @@ Do not edit these unless the owner explicitly authorizes the exact change:
 - `app/minimal_clearance_composition_independent.py`
 - `experiments/longfellow_v09_native_v3/`
 - `app/mirror/`
-- `app/oracle_attestation.py`
-- `app/public_inputs.py`
-- `app/canonical_encoding.py`
 
 ## Protected-path delegation status
 
