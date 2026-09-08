@@ -180,20 +180,31 @@ def _strict_int(value: object, code: str, *, minimum: int | None = None, maximum
     return value
 
 
+def _schema_version_gate(connection: sqlite3.Connection) -> None:
+    """Reject a non-Profile12 connection before any setting PRAGMA."""
+
+    try:
+        table = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='queue_metadata'"
+        ).fetchone()
+        if table is None or type(table[0]) is not str:
+            _fail("queue_schema_unsupported")
+        row = connection.execute("SELECT schema_version FROM queue_metadata WHERE id=1").fetchone()
+        if row is None or type(row[0]) is not int or row[0] != SCHEMA_VERSION:
+            _fail("queue_schema_unsupported")
+    except IndependentQueueError:
+        raise
+    except sqlite3.Error:
+        _fail("queue_schema_unsupported")
+
+
 def _read_only_schema_gate(path: Path) -> None:
     """Reject a non-Profile12 file before any writable/PRAGMA connection work."""
 
     try:
         uri = path.resolve().as_uri() + "?mode=ro"
         with closing(sqlite3.connect(uri, uri=True, timeout=5.0)) as connection:
-            table = connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='queue_metadata'"
-            ).fetchone()
-            if table is None or type(table[0]) is not str:
-                _fail("queue_schema_unsupported")
-            row = connection.execute("SELECT schema_version FROM queue_metadata WHERE id=1").fetchone()
-            if row is None or type(row[0]) is not int or row[0] != SCHEMA_VERSION:
-                _fail("queue_schema_unsupported")
+            _schema_version_gate(connection)
     except IndependentQueueError:
         raise
     except (OSError, sqlite3.Error, ValueError):
@@ -530,7 +541,7 @@ def _verify_lifecycle(events: list[dict[str, Any]], status: str, attempt: int, *
         if terminal["kind"] != "BATCH_COMPLETED" or terminal["status"] != status or terminal["attempt"] != 1:
             _fail("lifecycle_completion")
     elif status == "HELD":
-        if terminal["kind"] not in {"BATCH_HELD", "BATCH_COMPLETED"} or terminal["status"] != "HELD" or terminal["attempt"] != 1:
+        if terminal["kind"] != "BATCH_HELD" or terminal["status"] != "HELD" or terminal["attempt"] != 1:
             _fail("lifecycle_held")
     else:
         _fail("lifecycle_status")
@@ -546,12 +557,15 @@ def _verify_temporal_bindings(
 ) -> None:
     if not events:
         _fail("timestamp_binding")
-    event_times = [_strict_int(event.get("at_ms"), "timestamp_binding", minimum=0) for event in events]
+    event_times = [_strict_int(event.get("at_ms"), "timestamp_binding", minimum=0, maximum=_MAX_EPOCH) for event in events]
     if any(later < earlier for earlier, later in zip(event_times, event_times[1:])):
         _fail("timestamp_binding")
-    created = _strict_int(batch[15], "timestamp_binding", minimum=0)
-    updated = _strict_int(batch[16], "timestamp_binding", minimum=0)
-    reserved = _strict_int(attempt_row[7], "timestamp_binding", minimum=0)
+    valid_from = _strict_int(batch[6], "validity_deadline", minimum=0, maximum=_MAX_EPOCH)
+    valid_until = _strict_int(batch[7], "validity_deadline", minimum=0, maximum=_MAX_EPOCH)
+    created = _strict_int(batch[15], "timestamp_binding", minimum=0, maximum=_MAX_EPOCH)
+    updated = _strict_int(batch[16], "timestamp_binding", minimum=0, maximum=_MAX_EPOCH)
+    next_eligible = _strict_int(batch[14], "timestamp_binding", minimum=0, maximum=_MAX_EPOCH)
+    reserved = _strict_int(attempt_row[7], "timestamp_binding", minimum=0, maximum=_MAX_EPOCH)
     if event_times[0] != created or reserved != created:
         _fail("timestamp_binding")
 
@@ -559,20 +573,24 @@ def _verify_temporal_bindings(
     if len(events) >= 2 and events[1]["kind"] == "HANDOFF_SUBMITTED":
         handoff_time = event_times[1]
     expected_next_eligible = created if handoff_time is None else handoff_time
-    if _strict_int(batch[14], "timestamp_binding", minimum=0) != expected_next_eligible:
+    if next_eligible != expected_next_eligible:
         _fail("next_eligible_binding")
 
     status = str(batch[11])
     started_time: int | None = None
+    lease_deadline: int | None = None
     if len(events) >= 3 and events[2]["kind"] == "VERIFICATION_STARTED":
         started_time = event_times[2]
+        if started_time > _MAX_EPOCH - _LEASE_MS or not valid_from <= started_time < valid_until:
+            _fail("validity_deadline")
+        lease_deadline = started_time + _LEASE_MS
         if status == "LEASED" and lease is None:
             _fail("lease_binding")
         if lease is not None and (
-            _strict_int(lease[3], "lease_binding") != 1
-            or _strict_int(lease[4], "lease_binding") != _strict_int(events[2]["sequence"], "lease_binding")
-            or _strict_int(lease[5], "lease_binding", minimum=0) != started_time
-            or _strict_int(lease[6], "lease_binding", minimum=0) != started_time + _LEASE_MS
+            _strict_int(lease[3], "lease_binding", minimum=0, maximum=1) != 1
+            or _strict_int(lease[4], "lease_binding", minimum=0, maximum=_MAX_EPOCH) != _strict_int(events[2]["sequence"], "lease_binding", minimum=0, maximum=_MAX_EPOCH)
+            or _strict_int(lease[5], "lease_binding", minimum=0, maximum=_MAX_EPOCH) != started_time
+            or _strict_int(lease[6], "lease_binding", minimum=0, maximum=_MAX_EPOCH) != lease_deadline
         ):
             _fail("lease_binding")
     elif lease is not None:
@@ -591,12 +609,63 @@ def _verify_temporal_bindings(
         terminal_time = event_times[-1]
         if events[-1]["kind"] not in {"BATCH_COMPLETED", "BATCH_HELD"} or updated != terminal_time:
             _fail("timestamp_binding")
-        if result is None or _strict_int(result[11], "timestamp_binding", minimum=0) != terminal_time:
+        if result is None or _strict_int(result[11], "timestamp_binding", minimum=0, maximum=_MAX_EPOCH) != terminal_time:
             _fail("result_timestamp_binding")
-        if attempt_row[8] is None or _strict_int(attempt_row[8], "timestamp_binding", minimum=0) != terminal_time:
+        if attempt_row[8] is None or _strict_int(attempt_row[8], "timestamp_binding", minimum=0, maximum=_MAX_EPOCH) != terminal_time:
             _fail("attempt_timestamp_binding")
+        if status in {"VERIFIED", "REJECTED"}:
+            if started_time is None or not valid_from <= terminal_time < valid_until:
+                _fail("validity_deadline")
+            if lease_deadline is None or terminal_time >= lease_deadline:
+                _fail("lease_deadline")
+        elif status == "HELD" and started_time is not None:
+            terminal_error = events[-1].get("error_code")
+            if terminal_error == "validity_expired":
+                if not (terminal_time < valid_from or terminal_time >= valid_until):
+                    _fail("validity_deadline")
+            elif terminal_error == "lease_expired":
+                if terminal_time < lease_deadline:
+                    _fail("lease_deadline")
+            elif terminal_error != "fresh_handoff_required" and not (valid_from <= terminal_time < valid_until and terminal_time < lease_deadline):
+                _fail("lease_deadline")
     if status in {"AWAITING_HANDOFF", "QUEUED", "LEASED"} and (result is not None or attempt_row[8] is not None):
         _fail("timestamp_binding")
+
+
+def _verify_terminal_bindings(
+    batch: tuple[Any, ...],
+    attempt_row: tuple[Any, ...],
+    result: tuple[Any, ...] | None,
+    events: list[dict[str, Any]],
+) -> None:
+    """Bind terminal status, error, receipt, and acceptance fields to the producer state machine."""
+
+    status = str(batch[11])
+    if status in {"AWAITING_HANDOFF", "QUEUED", "LEASED"}:
+        if batch[17] is not None or attempt_row[9] is not None:
+            _fail("terminal_error_binding")
+        return
+    if result is None or not events:
+        _fail("terminal_result_missing")
+    receipt = _parse_receipt(_db_bytes(result[3], "receipt"))
+    values = (batch[17], result[13], receipt["error_code"], events[-1].get("error_code"))
+    if any(value is None for value in values) and status != "VERIFIED":
+        _fail("terminal_error_binding")
+    if not all(value == values[0] for value in values):
+        _fail("terminal_error_binding")
+    proof_accepted = bool(result[4])
+    source_authenticated = bool(result[5])
+    if status == "VERIFIED":
+        if values[0] is not None or str(attempt_row[6]) != "ACCEPTED" or str(attempt_row[9]) != "accepted" or str(result[9]) != "accepted" or not (proof_accepted and source_authenticated) or receipt["error_code"] is not None or receipt["result_code"] != "accepted":
+            _fail("terminal_acceptance")
+    elif status == "REJECTED":
+        if values[0] is None or str(attempt_row[6]) != "REJECTED" or str(attempt_row[9]) != "rejected" or str(result[9]) != "rejected" or (proof_accepted and source_authenticated) or receipt["result_code"] != "rejected":
+            _fail("terminal_rejection")
+    elif status == "HELD":
+        if values[0] is None or str(attempt_row[6]) != "HELD" or str(attempt_row[9]) != str(values[0]) or str(result[9]) != str(values[0]) or proof_accepted or source_authenticated or receipt["result_code"] != str(values[0]):
+            _fail("terminal_hold")
+    else:
+        _fail("terminal_status")
 
 
 def _verify_composition(connection: sqlite3.Connection, *, config: Mapping[str, Any], queue_config_digest: bytes, batch_map: Mapping[bytes, tuple[Any, ...]], member_groups: Mapping[bytes, list[tuple[Any, ...]]]) -> dict[str, Any]:
@@ -681,10 +750,13 @@ def _verify_composition(connection: sqlite3.Connection, *, config: Mapping[str, 
 
 
 def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    # Composition and direct callers pass writable handles here.  Reject a
+    # retired schema before any setting PRAGMA can touch that handle.
+    _schema_version_gate(connection)
     try:
         # Verification is a read-only operation.  The schema/version gate has
-        # already run before this function, so only connection-local FK mode
-        # is enabled here; no PRAGMA assignment may alter the source DB.
+        # now run on this exact handle, so only connection-local FK mode is
+        # enabled here; no PRAGMA assignment may alter the source DB.
         connection.execute("PRAGMA foreign_keys=ON")
         # max_page_count is a connection-local SQLite limit on this build;
         # setting it on the read-only handle does not change the source file.
@@ -869,7 +941,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             _fail("attempt_chain")
         previous_after = after
         batch = batch_map[batch_id]
-        if attempt_epoch != int(config["source_key_epoch"]):
+        if int(batch[12]) != expected_id or attempt_epoch != int(config["source_key_epoch"]):
             _fail("attempt_binding")
         expected_status = {"AWAITING_HANDOFF": "RESERVED", "QUEUED": "RESERVED", "LEASED": "RESERVED", "VERIFIED": "ACCEPTED", "REJECTED": "REJECTED", "HELD": "HELD"}.get(str(batch[11]))
         if expected_status is not None and str(row[6]) != expected_status:
@@ -909,7 +981,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             event = json.loads(_db_bytes(row[5], "event").decode("ascii"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             _fail("transition_encoding")
-        if type(event) is not dict or _db_bytes(row[5], "event") != _json_bytes(event) or event.get("schema") != _SCHEMA or event.get("sequence") != index or event.get("batch_id") != _hex(batch_id) or event.get("kind") != str(row[1]) or event.get("status") not in _STATUSES or type(event.get("attempt")) is not int or not 0 <= event["attempt"] <= 1 or type(event.get("at_ms")) is not int or event["at_ms"] < 0:
+        if type(event) is not dict or _db_bytes(row[5], "event") != _json_bytes(event) or event.get("schema") != _SCHEMA or type(event.get("sequence")) is not int or event.get("sequence") != index or event.get("batch_id") != _hex(batch_id) or event.get("kind") != str(row[1]) or event.get("status") not in _STATUSES or type(event.get("attempt")) is not int or not 0 <= event["attempt"] <= 1 or type(event.get("at_ms")) is not int or event["at_ms"] < 0:
             _fail("transition_binding")
         allowed = {"schema", "sequence", "kind", "batch_id", "status", "error_code", "attempt", "at_ms", "member_count", "reservation_before", "reservation_after", "receipt_id", "identity_digest"}
         if set(event) - allowed or event.get("member_count") != _COUNT:
@@ -935,6 +1007,16 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         _forbidden_bytes((_db_bytes(row[5], "event"),))
     if _db_bytes(meta[12], "head_root") != expected_head or int(meta[13]) != len(transition_rows) or int(meta[14]) != len(batch_rows) * _COUNT:
         _fail("head_binding")
+    expected_issue_order = [batch_id for batch_id, _row in sorted(batch_map.items(), key=lambda item: int(item[1][12]))]
+    issue_records: list[tuple[int, bytes]] = []
+    for batch_id, events in events_by_batch.items():
+        issue_events = [event for event in events if event["kind"] == "BATCH_ISSUED"]
+        if len(issue_events) != 1:
+            _fail("issue_order")
+        issue_records.append((_strict_int(issue_events[0]["sequence"], "issue_order", minimum=1, maximum=_MAX_EPOCH), batch_id))
+    actual_issue_order = [batch_id for _sequence, batch_id in sorted(issue_records)]
+    if actual_issue_order != expected_issue_order:
+        _fail("issue_order")
     for batch_id, row in batch_map.items():
         attempt_row = attempt_map[batch_id]
         _verify_lifecycle(
@@ -952,6 +1034,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             result_map.get(batch_id),
             events_by_batch[batch_id],
         )
+        _verify_terminal_bindings(row, attempt_row, result_map.get(batch_id), events_by_batch[batch_id])
     composition = _verify_composition(connection, config=config, queue_config_digest=config_digest, batch_map=batch_map, member_groups=member_groups)
     return {"schema": _SCHEMA, "config": config, "config_digest": config_digest, "meta": tuple(meta), "batches": batch_map, "members": member_groups, "results": result_map, "transitions": transition_rows, "events": events_by_batch, "composition": composition, "head_root": _db_bytes(meta[12], "head_root"), "status_counts": status_counts, "transition_count": len(transition_rows), "verified_batch_count": status_counts["VERIFIED"], "accepted_operation_count": status_counts["VERIFIED"] * _COUNT, "verified_count": status_counts["VERIFIED"], "proof_bytes_persisted": False, "path_custody": False, "proof_suite_id": None, "production_usable": False, "activation": False}
 
