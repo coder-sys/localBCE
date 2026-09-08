@@ -12,6 +12,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -37,6 +38,7 @@ _MAX_WINDOW: Final[int] = 3_600_000
 _MAX_EPOCH: Final[int] = 2**64 - 1
 _MAX_RECEIPT: Final[int] = 16 * 1024
 _MAX_EVENT: Final[int] = 4096
+_LEASE_MS: Final[int] = 60_000
 _PUBLIC_COIN_BYTES: Final[int] = 96
 _PROOF_CONTEXT_BYTES: Final[int] = 64
 _PROFILE12_CONTEXT_PREIMAGE_BYTES: Final[int] = 405
@@ -172,6 +174,32 @@ def _fail(code: str) -> None:
     raise error
 
 
+def _strict_int(value: object, code: str, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    if type(value) is not int or (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+        _fail(code)
+    return value
+
+
+def _read_only_schema_gate(path: Path) -> None:
+    """Reject a non-Profile12 file before any writable/PRAGMA connection work."""
+
+    try:
+        uri = path.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=5.0)) as connection:
+            table = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='queue_metadata'"
+            ).fetchone()
+            if table is None or type(table[0]) is not str:
+                _fail("queue_schema_unsupported")
+            row = connection.execute("SELECT schema_version FROM queue_metadata WHERE id=1").fetchone()
+            if row is None or type(row[0]) is not int or row[0] != SCHEMA_VERSION:
+                _fail("queue_schema_unsupported")
+    except IndependentQueueError:
+        raise
+    except (OSError, sqlite3.Error, ValueError):
+        _fail("queue_schema_unsupported")
+
+
 def _sha(domain: bytes, *parts: bytes) -> bytes:
     digest = hashlib.sha3_512()
     digest.update(domain)
@@ -248,6 +276,8 @@ def _parse_flags(raw: bytes) -> tuple[str, ...]:
     if type(value) is not dict or set(value) != {"qualification_flags"} or type(value["qualification_flags"]) is not list:
         _fail("flags_shape")
     flags = tuple(value["qualification_flags"])
+    if any(type(flag) is not str for flag in flags):
+        _fail("flags_shape")
     if len(flags) > 32 or tuple(sorted(flags)) != flags or len(set(flags)) != len(flags):
         _fail("flags_shape")
     for flag in flags:
@@ -425,8 +455,11 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
     if type(value["source_key_epoch"]) is not int or not 1 <= value["source_key_epoch"] <= _MAX_EPOCH:
         _fail("receipt_source_epoch")
     _code(value["result_code"], "receipt_result_code")
-    flags = tuple(value["qualification_flags"]) if type(value["qualification_flags"]) is list else value["qualification_flags"]
-    _parse_flags(_json_bytes({"qualification_flags": list(flags)}))
+    if type(value["qualification_flags"]) is not list:
+        _fail("receipt_flags")
+    flags = tuple(value["qualification_flags"])
+    if _parse_flags(_json_bytes({"qualification_flags": list(flags)})) != flags:
+        _fail("receipt_flags")
     if value["error_code"] is not None:
         _code(value["error_code"], "receipt_error_code")
     return value
@@ -440,6 +473,8 @@ def _forbidden_bytes(blobs: tuple[bytes, ...]) -> None:
 
 
 def _verify_lifecycle(events: list[dict[str, Any]], status: str, attempt: int, *, reservation_before: int, reservation_after: int) -> None:
+    if type(attempt) is not int or status not in _STATUSES:
+        _fail("lifecycle_status")
     issued = events[0] if events else None
     if (
         issued is None
@@ -457,18 +492,18 @@ def _verify_lifecycle(events: list[dict[str, Any]], status: str, attempt: int, *
     ):
         _fail("lifecycle_issue")
     if status == "AWAITING_HANDOFF":
-        if len(events) != 1:
+        if attempt != 0 or len(events) != 1:
             _fail("lifecycle_awaiting")
         return
-    if status == "HELD" and len(events) == 2 and events[1]["kind"] == "BATCH_HELD" and events[1]["status"] == "HELD" and events[1]["attempt"] == 0:
+    if status == "HELD" and attempt == 0 and len(events) == 2 and events[1]["kind"] == "BATCH_HELD" and events[1]["status"] == "HELD" and events[1]["attempt"] == 0:
         return
     if len(events) < 2 or events[1]["kind"] != "HANDOFF_SUBMITTED" or events[1]["status"] != "QUEUED" or events[1]["attempt"] != 0 or events[1]["error_code"] is not None:
         _fail("lifecycle_handoff")
     if status == "QUEUED":
-        if len(events) != 2:
+        if attempt != 0 or len(events) != 2:
             _fail("lifecycle_queue")
         return
-    if status == "HELD" and len(events) == 3 and events[2]["kind"] == "BATCH_HELD" and events[2]["status"] == "HELD" and events[2]["attempt"] == 0:
+    if status == "HELD" and attempt == 0 and len(events) == 3 and events[2]["kind"] == "BATCH_HELD" and events[2]["status"] == "HELD" and events[2]["attempt"] == 0:
         return
     started = events[2] if len(events) >= 3 else None
     if (
@@ -501,6 +536,69 @@ def _verify_lifecycle(events: list[dict[str, Any]], status: str, attempt: int, *
         _fail("lifecycle_status")
 
 
+def _verify_temporal_bindings(
+    batch_id: bytes,
+    batch: tuple[Any, ...],
+    attempt_row: tuple[Any, ...],
+    lease: tuple[Any, ...] | None,
+    result: tuple[Any, ...] | None,
+    events: list[dict[str, Any]],
+) -> None:
+    if not events:
+        _fail("timestamp_binding")
+    event_times = [_strict_int(event.get("at_ms"), "timestamp_binding", minimum=0) for event in events]
+    if any(later < earlier for earlier, later in zip(event_times, event_times[1:])):
+        _fail("timestamp_binding")
+    created = _strict_int(batch[15], "timestamp_binding", minimum=0)
+    updated = _strict_int(batch[16], "timestamp_binding", minimum=0)
+    reserved = _strict_int(attempt_row[7], "timestamp_binding", minimum=0)
+    if event_times[0] != created or reserved != created:
+        _fail("timestamp_binding")
+
+    handoff_time: int | None = None
+    if len(events) >= 2 and events[1]["kind"] == "HANDOFF_SUBMITTED":
+        handoff_time = event_times[1]
+    expected_next_eligible = created if handoff_time is None else handoff_time
+    if _strict_int(batch[14], "timestamp_binding", minimum=0) != expected_next_eligible:
+        _fail("next_eligible_binding")
+
+    status = str(batch[11])
+    started_time: int | None = None
+    if len(events) >= 3 and events[2]["kind"] == "VERIFICATION_STARTED":
+        started_time = event_times[2]
+        if status == "LEASED" and lease is None:
+            _fail("lease_binding")
+        if lease is not None and (
+            _strict_int(lease[3], "lease_binding") != 1
+            or _strict_int(lease[4], "lease_binding") != _strict_int(events[2]["sequence"], "lease_binding")
+            or _strict_int(lease[5], "lease_binding", minimum=0) != started_time
+            or _strict_int(lease[6], "lease_binding", minimum=0) != started_time + _LEASE_MS
+        ):
+            _fail("lease_binding")
+    elif lease is not None:
+        _fail("lease_binding")
+
+    if status == "AWAITING_HANDOFF":
+        if updated != created:
+            _fail("timestamp_binding")
+    elif status == "QUEUED":
+        if handoff_time is None or updated != handoff_time:
+            _fail("timestamp_binding")
+    elif status == "LEASED":
+        if started_time is None or updated != started_time:
+            _fail("timestamp_binding")
+    else:
+        terminal_time = event_times[-1]
+        if events[-1]["kind"] not in {"BATCH_COMPLETED", "BATCH_HELD"} or updated != terminal_time:
+            _fail("timestamp_binding")
+        if result is None or _strict_int(result[11], "timestamp_binding", minimum=0) != terminal_time:
+            _fail("result_timestamp_binding")
+        if attempt_row[8] is None or _strict_int(attempt_row[8], "timestamp_binding", minimum=0) != terminal_time:
+            _fail("attempt_timestamp_binding")
+    if status in {"AWAITING_HANDOFF", "QUEUED", "LEASED"} and (result is not None or attempt_row[8] is not None):
+        _fail("timestamp_binding")
+
+
 def _verify_composition(connection: sqlite3.Connection, *, config: Mapping[str, Any], queue_config_digest: bytes, batch_map: Mapping[bytes, tuple[Any, ...]], member_groups: Mapping[bytes, list[tuple[Any, ...]]]) -> dict[str, Any]:
     meta = connection.execute("SELECT * FROM composition_meta WHERE id=1").fetchone()
     if meta is None or int(meta[1]) != 4 or type(meta[2]) is not bytes or type(meta[3]) is not bytes or len(meta[3]) != 64:
@@ -514,6 +612,16 @@ def _verify_composition(connection: sqlite3.Connection, *, config: Mapping[str, 
     tx_rows = [tuple(row) for row in connection.execute("SELECT * FROM composition_transactions ORDER BY operation_ref").fetchall()]
     event_rows = [tuple(row) for row in connection.execute("SELECT * FROM composition_events ORDER BY sequence").fetchall()]
     outbox_rows = [tuple(row) for row in connection.execute("SELECT * FROM composition_outbox ORDER BY operation_ref").fetchall()]
+    for index in (0, 1, 5, 16):
+        _strict_int(meta[index], "composition_numeric")
+    if meta[14] is not None:
+        _strict_int(meta[14], "composition_numeric")
+    for row in tx_rows:
+        for index in (3, 10, 11, 15, 16):
+            _strict_int(row[index], "composition_numeric")
+    for row in event_rows:
+        _strict_int(row[0], "composition_numeric")
+        _strict_int(row[8], "composition_numeric", minimum=0)
     tx_map: dict[bytes, tuple[Any, ...]] = {}
     for row in tx_rows:
         ref = _blob(_db_bytes(row[1], "composition_operation_ref"), 32, "composition_operation_ref")
@@ -574,14 +682,13 @@ def _verify_composition(connection: sqlite3.Connection, *, config: Mapping[str, 
 
 def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     try:
+        # Verification is a read-only operation.  The schema/version gate has
+        # already run before this function, so only connection-local FK mode
+        # is enabled here; no PRAGMA assignment may alter the source DB.
         connection.execute("PRAGMA foreign_keys=ON")
-        # SQLite exposes max_page_count as a connection setting on some
-        # Windows builds; re-assert it on every reconnect before checking the
-        # effective value and the durable metadata cap.
-        connection.execute("PRAGMA page_size=4096")
+        # max_page_count is a connection-local SQLite limit on this build;
+        # setting it on the read-only handle does not change the source file.
         connection.execute("PRAGMA max_page_count=32768")
-        connection.execute("PRAGMA journal_mode=DELETE")
-        connection.execute("PRAGMA synchronous=FULL")
         checks = {"foreign_keys": int(connection.execute("PRAGMA foreign_keys").fetchone()[0]), "page_size": int(connection.execute("PRAGMA page_size").fetchone()[0]), "max_page_count": int(connection.execute("PRAGMA max_page_count").fetchone()[0]), "journal_mode": str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower(), "synchronous": int(connection.execute("PRAGMA synchronous").fetchone()[0])}
     except sqlite3.Error:
         _fail("database_pragmas")
@@ -602,7 +709,18 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
     meta = connection.execute("SELECT * FROM queue_metadata WHERE id=1").fetchone()
     if meta is None or len(meta) != len(_TABLE_COLUMNS["queue_metadata"]):
         _fail("metadata")
-    if int(meta[1]) != SCHEMA_VERSION or int(meta[5]) != _ADMISSION_CAP or not 0 < int(meta[6]) < 5_000_000_000 or int(meta[7]) != 1 or int(meta[8]) != _DATABASE_PAGE_SIZE or int(meta[9]) != _DATABASE_MAX_PAGE_COUNT or str(meta[10]).lower() != "delete" or int(meta[11]) != 2 or int(meta[18]) != _PROOF_ATTEMPTS_CAP or int(meta[19]) < 0:
+    if (
+        _strict_int(meta[1], "metadata") != SCHEMA_VERSION
+        or _strict_int(meta[5], "metadata") != _ADMISSION_CAP
+        or not 0 < _strict_int(meta[6], "metadata") < 5_000_000_000
+        or _strict_int(meta[7], "metadata") != 1
+        or _strict_int(meta[8], "metadata") != _DATABASE_PAGE_SIZE
+        or _strict_int(meta[9], "metadata") != _DATABASE_MAX_PAGE_COUNT
+        or type(meta[10]) is not str or meta[10].lower() != "delete"
+        or _strict_int(meta[11], "metadata") != 2
+        or _strict_int(meta[18], "metadata") != _PROOF_ATTEMPTS_CAP
+        or _strict_int(meta[19], "metadata", minimum=0) < 0
+    ):
         _fail("metadata")
     config_raw = _db_bytes(meta[3], "config")
     config = _parse_config(config_raw, expected_config)
@@ -619,6 +737,27 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
     attempt_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_attempts ORDER BY attempt_id").fetchall()]
     result_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_results").fetchall()]
     transition_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_transitions ORDER BY sequence").fetchall()]
+    for index in (0, 1, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 18, 19):
+        _strict_int(meta[index], "metadata")
+    for row in batch_rows:
+        for index in (4, 6, 7, 12, 13, 14, 15, 16):
+            _strict_int(row[index], "batch_numeric")
+    for row in member_rows:
+        for index in (1, 3):
+            _strict_int(row[index], "member_numeric")
+    for row in lease_rows:
+        for index in (3, 4, 5, 6):
+            _strict_int(row[index], "lease_numeric")
+    for row in attempt_rows:
+        for index in (0, 2, 3, 4, 7):
+            _strict_int(row[index], "attempt_numeric")
+        if row[8] is not None:
+            _strict_int(row[8], "attempt_numeric")
+    for row in result_rows:
+        for index in (4, 5, 11, 12):
+            _strict_int(row[index], "result_numeric")
+    for row in transition_rows:
+        _strict_int(row[0], "transition_numeric")
     if len(lease_rows) > 1 or len(member_rows) != len(batch_rows) * _COUNT:
         _fail("batch_cardinality")
     batch_map = {_blob(_db_bytes(row[0], "batch_id"), 32, "batch_id"): row for row in batch_rows}
@@ -672,6 +811,18 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
     result_map = {_blob(_db_bytes(row[0], "result_batch_id"), 32, "result_batch_id"): row for row in result_rows}
     if len(result_map) != len(result_rows):
         _fail("result_duplicate")
+    if set(result_map) - set(batch_map):
+        _fail("result_orphan")
+    # Validate every result row, including rows that do not match a batch, so
+    # an orphan cannot hide arbitrary receipt bytes behind the batch loop.
+    for result in result_map.values():
+        _parse_receipt(_db_bytes(result[3], "receipt"))
+        _forbidden_bytes((_db_bytes(result[3], "receipt"),))
+    try:
+        if connection.execute("PRAGMA foreign_key_check").fetchall():
+            _fail("foreign_key_check")
+    except sqlite3.Error:
+        _fail("foreign_key_check")
     for batch_id, row in batch_map.items():
         status = str(row[11])
         result = result_map.get(batch_id)
@@ -684,6 +835,8 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             receipt = _parse_receipt(_db_bytes(result[3], "receipt"))
             if _parse_hex(receipt["batch_id"], 32, "receipt_batch_id") != batch_id or _parse_hex(receipt["batch_root"], 64, "receipt_root") != _db_bytes(row[1], "batch_root") or receipt["source_auth_profile"] != config["source_auth_profile"] or int(receipt["source_key_epoch"]) != int(config["source_key_epoch"]):
                 _fail("receipt_binding")
+            if type(receipt["qualification_flags"]) is not list or tuple(receipt["qualification_flags"]) != tuple(config["qualification_flags"]):
+                _fail("receipt_flags")
             if bool(result[4]) != bool(receipt["proof_accepted"]) or bool(result[5]) != bool(receipt["source_authenticated"]) or str(result[9]) != receipt["result_code"] or (None if result[13] is None else str(result[13])) != receipt["error_code"]:
                 _fail("receipt_result_binding")
             _code(result[9], "result_code")
@@ -791,6 +944,14 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             reservation_before=int(attempt_row[2]),
             reservation_after=int(attempt_row[3]),
         )
+        _verify_temporal_bindings(
+            batch_id,
+            row,
+            attempt_row,
+            lease_map.get(batch_id),
+            result_map.get(batch_id),
+            events_by_batch[batch_id],
+        )
     composition = _verify_composition(connection, config=config, queue_config_digest=config_digest, batch_map=batch_map, member_groups=member_groups)
     return {"schema": _SCHEMA, "config": config, "config_digest": config_digest, "meta": tuple(meta), "batches": batch_map, "members": member_groups, "results": result_map, "transitions": transition_rows, "events": events_by_batch, "composition": composition, "head_root": _db_bytes(meta[12], "head_root"), "status_counts": status_counts, "transition_count": len(transition_rows), "verified_batch_count": status_counts["VERIFIED"], "accepted_operation_count": status_counts["VERIFIED"] * _COUNT, "verified_count": status_counts["VERIFIED"], "proof_bytes_persisted": False, "path_custody": False, "proof_suite_id": None, "production_usable": False, "activation": False}
 
@@ -801,7 +962,8 @@ def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = 
     try:
         if path.stat().st_size > _DATABASE_CAP:
             _fail("database_bounds")
-        with closing(sqlite3.connect(str(path), timeout=5.0)) as connection:
+        _read_only_schema_gate(path)
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5.0)) as connection:
             return _verify_connection(connection, expected_config=expected_config)
     except sqlite3.Error:
         _fail("database_sqlite")
@@ -868,14 +1030,37 @@ def verify_export_bytes(raw: bytes, *, expected_config: Mapping[str, Any] | None
 
 
 def restore_export_to_fresh_database(*, export_bytes: bytes, destination: Path, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    if type(export_bytes) is not bytes or not export_bytes or len(export_bytes) > _DATABASE_CAP or not isinstance(destination, Path) or not destination.is_absolute() or not destination.parent.is_dir() or destination.exists():
+    if type(export_bytes) is not bytes or not export_bytes or len(export_bytes) > _DATABASE_CAP or not isinstance(destination, Path) or not destination.is_absolute() or not destination.parent.is_dir() or destination.exists() or destination.is_symlink():
         _fail("restore_path")
-    destination.write_bytes(export_bytes)
+    # Validate the complete export in a disposable read-only database before
+    # creating the destination.  A malformed/old export must never leave a
+    # destination artifact or overwrite a path that appeared during verify.
+    verify_export_bytes(export_bytes, expected_config=expected_config)
+    created_identity: tuple[int, int] | None = None
+    try:
+        with destination.open("xb") as output:
+            stat_result = destination.stat()
+            created_identity = (int(stat_result.st_dev), int(stat_result.st_ino))
+            output.write(export_bytes)
+            output.flush()
+            os.fsync(output.fileno())
+    except FileExistsError:
+        _fail("restore_path")
+    except OSError:
+        try:
+            current = destination.stat()
+            if created_identity == (int(current.st_dev), int(current.st_ino)) and not destination.is_symlink():
+                destination.unlink()
+        except OSError:
+            pass
+        _fail("restore_write")
     try:
         return verify_database(destination, expected_config=expected_config)
     except BaseException:
         try:
-            destination.unlink()
+            current = destination.stat()
+            if created_identity == (int(current.st_dev), int(current.st_ino)) and not destination.is_symlink():
+                destination.unlink()
         except OSError:
             pass
         raise

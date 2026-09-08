@@ -151,7 +151,7 @@ def _profile12_context(*, session_ref: bytes, ordered_batch_root: bytes, public_
         _raise_fixed(QueueIntegrityError("batch_root"))
     if type(public_coin) is not bytes or len(public_coin) != PUBLIC_COIN_BYTES or public_coin == bytes(PUBLIC_COIN_BYTES):
         _raise_fixed(QueueIntegrityError("profile12_public_coin"))
-    if type(valid_from_ms) is not int or type(valid_until_ms) is not int or not 0 <= valid_from_ms < valid_until_ms or valid_until_ms - valid_from_ms > MAX_VALIDITY_WINDOW_MS:
+    if type(valid_from_ms) is not int or type(valid_until_ms) is not int or not 0 <= valid_from_ms < valid_until_ms or valid_until_ms - valid_from_ms > MAX_VALIDITY_WINDOW_MS or valid_from_ms >= 2**64 or valid_until_ms >= 2**64:
         _raise_fixed(QueueIntegrityError("statement_window"))
     preimage = (
         b"BL/DIRECT-MASK/STATE-CONTEXT/v12\x00"
@@ -739,8 +739,9 @@ def parse_batch_verifier_result(value: object) -> BatchVerifierResult:
         _raise_fixed(QueueIntegrityError("verifier_result_unknown_field"))
     if type(value["proof_context"]) is not bytes or type(value["public_coin"]) is not bytes or type(value["batch_root"]) is not bytes:
         _raise_fixed(QueueIntegrityError("verifier_result_shape"))
-    flags = tuple(value["qualification_flags"]) if type(value["qualification_flags"]) is list else value["qualification_flags"]
-    return BatchVerifierResult(value["proof_accepted"], value["source_authenticated"], value["proof_context"], value["public_coin"], value["batch_root"], value["source_auth_profile"], value["source_key_epoch"], value["result_code"], flags)
+    if type(value["qualification_flags"]) is not list:
+        _raise_fixed(QueueIntegrityError("verifier_result_flags"))
+    return BatchVerifierResult(value["proof_accepted"], value["source_authenticated"], value["proof_context"], value["public_coin"], value["batch_root"], value["source_auth_profile"], value["source_key_epoch"], value["result_code"], tuple(value["qualification_flags"]))
 
 
 class VerifierPort(Protocol):
@@ -1531,6 +1532,8 @@ def _parse_flags(raw: bytes) -> tuple[str, ...]:
     if type(value) is not dict or set(value) != {"qualification_flags"} or type(value["qualification_flags"]) is not list:
         _raise_fixed(QueueIntegrityError("flags_shape"))
     flags = tuple(value["qualification_flags"])
+    if any(type(flag) is not str for flag in flags):
+        _raise_fixed(QueueIntegrityError("flags_shape"))
     if len(flags) > 32 or tuple(sorted(flags)) != flags or len(set(flags)) != len(flags):
         _raise_fixed(QueueIntegrityError("flags_shape"))
     for flag in flags:
@@ -1540,6 +1543,12 @@ def _parse_flags(raw: bytes) -> tuple[str, ...]:
     return flags
 
 
+def _db_int(value: object, code: str, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    if type(value) is not int or (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+        _raise_fixed(QueueIntegrityError(code))
+    return value
+
+
 def _statement_from_batch(connection: sqlite3.Connection, batch_row: tuple[Any, ...]) -> IssuedVerificationBatch:
     if len(batch_row) != len(_TABLE_COLUMNS["queue_batches"]):
         _raise_fixed(QueueIntegrityError("batch_statement"))
@@ -1547,15 +1556,22 @@ def _statement_from_batch(connection: sqlite3.Connection, batch_row: tuple[Any, 
     member_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_members WHERE batch_id=? ORDER BY batch_position", (batch_id,)).fetchall()]
     if len(member_rows) != RANGE100_COUNT:
         _raise_fixed(QueueIntegrityError("queue_batch_shape"))
-    if tuple(int(row[1]) for row in member_rows) != tuple(range(RANGE100_COUNT)):
+    if any(type(row[1]) is not int or type(row[3]) is not int for row in member_rows):
+        _raise_fixed(QueueIntegrityError("queue_batch_shape"))
+    if tuple(row[1] for row in member_rows) != tuple(range(RANGE100_COUNT)):
         _raise_fixed(QueueIntegrityError("queue_batch_order"))
-    admission_start = (int(batch_row[12]) - 1) * RANGE100_COUNT + 1
-    if tuple(int(row[3]) for row in member_rows) != tuple(range(admission_start, admission_start + RANGE100_COUNT)):
+    admission_seq = _db_int(batch_row[12], "admission_seq", minimum=1)
+    admission_start = (admission_seq - 1) * RANGE100_COUNT + 1
+    if tuple(row[3] for row in member_rows) != tuple(range(admission_start, admission_start + RANGE100_COUNT)):
         _raise_fixed(QueueIntegrityError("queue_batch_order"))
     refs = tuple(_blob(row[2], MAX_OPERATION_REF_BYTES, "operation_ref") for row in member_rows)
     batch_root = _blob(batch_row[1], 64, "batch_root")
     session_ref = _blob(batch_row[2], MAX_SESSION_REF_BYTES, "session_ref")
-    template = OperationTemplate(str(batch_row[3]), int(batch_row[4]), str(batch_row[5]), int(batch_row[6]), int(batch_row[7]), None if batch_row[8] is None else _blob(batch_row[8], 64, "source_registry_root"), _parse_flags(bytes(batch_row[9])))
+    if type(batch_row[3]) is not str or type(batch_row[5]) is not str:
+        _raise_fixed(QueueIntegrityError("batch_statement"))
+    if type(batch_row[9]) is not bytes or len(batch_row[9]) > 4096:
+        _raise_fixed(QueueIntegrityError("flags_encoding"))
+    template = OperationTemplate(batch_row[3], _db_int(batch_row[4], "batch_statement"), batch_row[5], _db_int(batch_row[6], "batch_statement"), _db_int(batch_row[7], "batch_statement"), None if batch_row[8] is None else _blob(batch_row[8], 64, "source_registry_root"), _parse_flags(batch_row[9]))
     public_coin = _blob(batch_row[18], PUBLIC_COIN_BYTES, "profile12_public_coin")
     proof_context = _profile12_context(
         session_ref=session_ref,
@@ -1564,7 +1580,7 @@ def _statement_from_batch(connection: sqlite3.Connection, batch_row: tuple[Any, 
         valid_from_ms=template.valid_from_ms,
         valid_until_ms=template.valid_until_ms,
     )
-    return IssuedVerificationBatch(batch_id, template, refs, batch_root, session_ref, public_coin, proof_context, int(batch_row[12]), _blob(batch_row[10], 64, "batch_identity"))
+    return IssuedVerificationBatch(batch_id, template, refs, batch_root, session_ref, public_coin, proof_context, admission_seq, _blob(batch_row[10], 64, "batch_identity"))
 
 
 class _VerificationQueueStore:
@@ -1604,6 +1620,11 @@ class _VerificationQueueStore:
             if self.path.exists():
                 if self.path.is_symlink() or self.path.stat().st_size > MAX_QUEUE_DATABASE_BYTES:
                     _raise_fixed(VerificationQueueError("queue_database_bounds"))
+                from app.minimal_clearance_verification_queue_independent import _read_only_schema_gate
+                try:
+                    _read_only_schema_gate(self.path)
+                except Exception:
+                    _raise_fixed(VerificationQueueError("queue_schema_unsupported"))
                 self._schema_check()
                 from app.minimal_clearance_verification_queue_independent import verify_database
                 verify_database(self.path, expected_config=self.config.as_json)
@@ -1651,7 +1672,10 @@ class _VerificationQueueStore:
                 raise
 
     def _schema_check(self) -> None:
-        with closing(self._connect()) as connection:
+        # Existing files are structurally inspected on a read-only handle.
+        # The writable/PRAGMA-configuring connection is reserved for a file
+        # that has already passed the Profile12 gate and full verification.
+        with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5.0)) as connection:
             tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
             from app.minimal_clearance_composition import _COMPOSITION_TABLES, _check_composition_schema
             if tables != _TABLES | _COMPOSITION_TABLES or any(_columns(connection, table) != _TABLE_COLUMNS[table] for table in _TABLES):
@@ -1687,6 +1711,17 @@ class _VerificationQueueStore:
         if row is None:
             _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
         return tuple(row)
+
+    def _revalidate_durable_state(self, connection: sqlite3.Connection) -> tuple[Any, ...]:
+        """Independently recheck the exact durable image before consuming RNG."""
+
+        from app.minimal_clearance_verification_queue_independent import _verify_connection
+
+        try:
+            verified = _verify_connection(connection, expected_config=self.config.as_json)
+        except BaseException:
+            _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+        return tuple(verified["meta"])
 
     def _fault(self, label: str) -> None:
         if self._before_fault is not None:
@@ -1730,15 +1765,17 @@ class _VerificationQueueStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                meta = self._meta(connection)
-                if int(meta[15]) * RANGE100_COUNT + RANGE100_COUNT > self.config.capacity:
+                meta = self._revalidate_durable_state(connection)
+                if type(meta[15]) is not int or type(meta[17]) is not int or type(meta[18]) is not int or type(meta[19]) is not int:
+                    _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+                if meta[15] * RANGE100_COUNT + RANGE100_COUNT > self.config.capacity:
                     _raise_fixed(QueueBackpressureError("queue_capacity"))
                 try:
-                    reservation_after = _reserve_proof_attempt(int(meta[17]), cap=min(int(meta[18]), PROOF_ATTEMPTS_CAP))
+                    reservation_after = _reserve_proof_attempt(meta[17], cap=min(meta[18], PROOF_ATTEMPTS_CAP))
                 except QueueBackpressureError:
                     _raise_fixed(QueueBackpressureError("computational_budget_exhausted"))
-                reservation_before = int(meta[17])
-                batch_admission_seq = int(meta[14]) // RANGE100_COUNT + 1
+                reservation_before = meta[17]
+                batch_admission_seq = meta[14] // RANGE100_COUNT + 1
                 operation_refs = _generate_operation_refs()
                 root = _compute_batch_root_from_refs(template, operation_refs)
                 session_ref = secrets.token_bytes(MAX_SESSION_REF_BYTES)
@@ -1747,7 +1784,7 @@ class _VerificationQueueStore:
                 proof_context = _profile12_context(session_ref=session_ref, ordered_batch_root=root, public_coin=public_coin, valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
                 provisional = IssuedVerificationBatch(batch_id, template, operation_refs, root, session_ref, public_coin, proof_context, batch_admission_seq, bytes(64))
                 batch = IssuedVerificationBatch(batch_id, template, operation_refs, root, session_ref, public_coin, proof_context, batch_admission_seq, _batch_identity_digest(provisional, self.config))
-                self._insert_batch(connection, batch=batch, now=int(self.clock.now_ms()), batch_admission_seq=batch_admission_seq, attempt_id=int(meta[19]) + 1, reservation_before=reservation_before, reservation_after=reservation_after)
+                self._insert_batch(connection, batch=batch, now=int(self.clock.now_ms()), batch_admission_seq=batch_admission_seq, attempt_id=meta[19] + 1, reservation_before=reservation_before, reservation_after=reservation_after)
                 self._fault("before_issue_commit")
                 connection.commit()
             except BaseException:
@@ -1888,7 +1925,19 @@ class _VerificationQueueStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                try:
+                    self._revalidate_durable_state(connection)
+                except VerificationQueueError:
+                    connection.rollback()
+                    self._last_claim_error = "queue_integrity_failed"
+                    return None
                 held = list(self._expire_locked(connection, now))
+                try:
+                    self._revalidate_durable_state(connection)
+                except VerificationQueueError:
+                    connection.rollback()
+                    self._last_claim_error = "queue_integrity_failed"
+                    return None
                 row = connection.execute("SELECT * FROM queue_batches WHERE status='QUEUED' AND next_eligible_ms<=? ORDER BY admission_seq LIMIT 1", (now,)).fetchone()
                 if row is None:
                     connection.commit()
@@ -1896,14 +1945,15 @@ class _VerificationQueueStore:
                         self._close_handoff_locked(batch_id)
                     self._last_claim_held_count = len(held)
                     return None
-                meta = self._meta(connection)
-                if int(meta[16]) != 0 or int(connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0]) != 0:
+                meta = self._revalidate_durable_state(connection)
+                lease_count = connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0]
+                if type(meta[16]) is not int or type(lease_count) is not int or meta[16] != 0 or lease_count != 0:
                     connection.rollback()
                     self._last_claim_error = "proof_session_active"
                     return None
                 batch_id = bytes(row[0])
                 attempt_row = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (batch_id,)).fetchone()
-                if attempt_row is None or int(attempt_row[0]) <= 0 or int(attempt_row[4]) != PROOF_ATTEMPTS_PER_BATCH or str(attempt_row[6]) != "RESERVED" or int(row[13]) != 0:
+                if attempt_row is None or type(attempt_row[0]) is not int or attempt_row[0] <= 0 or type(attempt_row[4]) is not int or attempt_row[4] != PROOF_ATTEMPTS_PER_BATCH or str(attempt_row[6]) != "RESERVED" or type(row[13]) is not int or row[13] != 0:
                     connection.rollback()
                     self._last_claim_error = "queue_integrity_failed"
                     return None
@@ -1927,9 +1977,13 @@ class _VerificationQueueStore:
                     connection.rollback()
                     self._last_claim_error = "queue_integrity_failed"
                     return None
-                before = int(attempt_row[2])
-                after = int(attempt_row[3])
-                claim_seq = int(meta[13]) + 1
+                before = attempt_row[2]
+                after = attempt_row[3]
+                if type(before) is not int or type(after) is not int or type(meta[13]) is not int:
+                    connection.rollback()
+                    self._last_claim_error = "queue_integrity_failed"
+                    return None
+                claim_seq = meta[13] + 1
                 token = secrets.token_bytes(32)
                 expires = now + _LEASE_MS
                 token_digest = hmac.new(token, _sha3(_LEASE, self.config.digest, batch_id, _u64(1), _u64(claim_seq), _u64(now), _u64(expires)), hashlib.sha3_512).digest()
@@ -2234,8 +2288,11 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
     if type(value["source_key_epoch"]) is not int or not 1 <= value["source_key_epoch"] <= MAX_SOURCE_KEY_EPOCH:
         _raise_fixed(QueueIntegrityError("receipt_source_epoch"))
     _code(value["result_code"], "receipt_result_code")
-    flags = tuple(value["qualification_flags"]) if type(value["qualification_flags"]) is list else value["qualification_flags"]
-    _parse_flags(_flags_bytes(flags))
+    if type(value["qualification_flags"]) is not list:
+        _raise_fixed(QueueIntegrityError("receipt_flags"))
+    flags = tuple(value["qualification_flags"])
+    if _parse_flags(_flags_bytes(flags)) != flags:
+        _raise_fixed(QueueIntegrityError("receipt_flags"))
     if value["error_code"] is not None:
         _code(value["error_code"], "receipt_error")
     return value

@@ -15,13 +15,15 @@ source epoch, coin/context, reservation, identity, and lifecycle bindings are ch
 mutation and by the independent checker. Reservations are never refunded; expiry, restart,
 ambiguous commit, malformed handoff, and consumed/partial handoff paths burn them.
 
-Measured bounded evidence in this child: Profile12 focused tests `9 passed`; queue tests `29
+Measured bounded evidence in this child: Profile12 focused tests `15 passed`; queue tests `29
 passed`; runtime tests `17 passed, 2 skipped`. The two skips are the native Profile12
 source-auth adapter/source-appliance identity tests, explicitly deferred by the active grant; the
 native adapter, verifier process, resource limits, C/crypto checkouts, and protected production
 paths were not modified. `py -3.14 -B -m py_compile` passed for the changed implementation and
-tests. `verify_database` passed in focused KAT, reservation, and hold tests. No broad suite,
-adapter test, old Profile11 probe, or large solver was run.
+tests. Focused read-only schema-gate, export/read/restore, lifecycle, counter, receipt-closure,
+orphan-result, timestamp, KAT, reservation, and hold checks passed through `verify_database` and
+the independent export/read/restore paths. No broad suite, adapter test, old Profile11 probe, or
+large solver was run.
 
 The implementation remains nonactivating and unqualified: `proofSuiteId=null`,
 `production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. No native
