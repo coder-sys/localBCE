@@ -186,3 +186,44 @@ ordering/epoch, consumed/replayed handoffs, rejected-verifier State nonmutation,
 completion, receiver failure, restart, and no duplicate rows/ACK side effects. No rejected C
 harness, old Profile11 probe, filtered-mode upgrade, production qualification, Lean linkage,
 real PHI/payment, official receiver, or activation is in scope.
+
+### Complete-path review correction — 2026-09-12
+
+The advertised E2E commit '00e864e2c9c1f9b550f667e3c5bf4759982f26b3' / tree
+'77b6e97880b39aa4419762ba6ee19c522f5f6e19' remains unchanged. This correction is published as
+a new child commit. The runtime is now held through its checked context hooks for issue,
+source, handoff, verifier, delivery, projection, and readback; primary and cleanup failures
+are preserved together, failed run directories are retained until release is known, and
+local capsule/handoff buffers are wiped on pre-submission failure.
+
+Native wrapper attempts are append-counted with per-stage measurement lists. The previous
+'verifier_calls' field was an assumed 'getattr(..., 1)' value and is withdrawn from the
+advertised evidence. The corrected valid path reports actual source_calls=1,
+verifier_calls=1, and state_port_calls=1. Persistence evidence now requires the exact
+post-close run file inventory ['state.sqlite']; source/verifier workspaces are independently
+empty. This is an isolated inventory check only, not a whole-host persistence or
+zeroization claim.
+
+Correction verification:
+
+- py_compile of the changed complete-path module/test: exit 0.
+- Four focused non-native fault tests: 4/4, 0 skipped, exit 0.
+- Final guarded command
+  '.\build-complete-path\run_guarded_complete_path_20260912.ps1 -Mode CTest
+  -RunSuffix native-complete-correction-final-20260912
+  -CTestRegex '^direct_mask_complete_path_integration$'': exit 0.
+- Raw CTest: 'Ran 9 tests in 19.355s', 'OK', '100% tests passed, 0 tests failed out of 1',
+  stderr bytes 0.
+- Outer guard: child exit 7/0, reserve 1073741824, minimum free bytes 2276630528,
+  peak working set 83345408, peak private bytes 53145600, cleanup PASS, mutex released.
+
+The valid evidence contains exactly 100 operations, one State-issued batch, one independent
+verifier acceptance, 100 State/composition transactions, 100 ACKs, 100 unique idempotency
+keys, zero duplicate dispatches, 100 receiver side effects, successful reopen with no work,
+source/verifier stdout bytes 539013/0, stderr bytes 0/0, and run_artifact_inventory
+['state.sqlite']. The source and verifier measurement records report cap_enforced=true,
+active_process_limit=1, child_process_count=2, process_tree_complete=true,
+measurement_complete=true, cleanup_complete=true, and pagefile_growth_evidence='unavailable'.
+No unchanged State, adapter, or ten-case malformed-native suites were rerun; the accepted
+prior raw outputs remain the evidence. Flags remain 'proofSuiteId=null',
+'production_usable=false', 'activation=false', 'NOT_QUALIFIED'/'INACTIVE'/'UNSELECTED'.

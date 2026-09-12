@@ -356,3 +356,36 @@ module, CMake file, and their tests are retained in Git for evidence but exclude
 'SOURCE_ONLY' classifications. Keep 'proofSuiteId=null', 'production_usable=false',
 'activation=false', 'NOT_QUALIFIED'/'INACTIVE'/'UNSELECTED'; synthetic State/receiver
 implementations do not confer official authority or production qualification.
+
+### Complete-path review correction — 2026-09-12
+
+The correction is a new child commit after the advertised E2E commit
+'00e864e2c9c1f9b550f667e3c5bf4759982f26b3' / tree
+'77b6e97880b39aa4419762ba6ee19c522f5f6e19'; the advertised commit is not amended. The
+runtime lifetime now uses its checked '__enter__'/'__exit__'/'close' ownership for the whole
+acquired span, groups primary and release failures, retains failed run directories while
+release or primary failure is unresolved, and wipes local capsule/handoff state before
+submission failure. Native wrapper attempts are counted in append-only per-stage measurement
+lists; the valid path requires exactly one source, one independent verifier, and one State-port
+call. The prior commit's 'verifier_calls' value came from 'getattr(..., 1)' and is withdrawn as
+independent measured evidence; only the corrected run's actual count is usable.
+
+The suffix-only proof-file scan was removed. After the first runtime closes, the exact file
+inventory is required to be ('state.sqlite',): no owner marker, SQLite journal/WAL/SHM sidecar,
+source workspace file, or verifier workspace file is accepted. This reports the isolated
+State/owner/SQLite inventory and does not claim OS zeroization, whole-host persistence
+absence, or arbitrary byte absence.
+
+The focused fault matrix passed 4/4 with no skips: source failure releases the owner while
+retaining the failed run directory, simultaneous primary/release failure preserves both
+exceptions and the directory, handoff-construction failure wipes the local capsule, and
+repeated native attempts are counted without overwriting measurements. The single required
+fresh guarded run passed 9/9 integration tests in 19.355s with outer child exit 7/0,
+physical reserve 1073741824, minimum free bytes 2276630528, process-tree peak below
+5000000000, cleanup PASS, and the shared mutex released. Its valid evidence is exactly
+100 operations, one batch, one verifier acceptance, 100 durable transactions, 100
+acknowledgments, 100 unique idempotency keys, zero duplicates, source_calls=1,
+verifier_calls=1, state_port_calls=1, source/verifier stdout bytes 539013/0, stderr bytes
+0/0, and run_artifact_inventory=['state.sqlite']. No unchanged State, adapter, or malformed
+native suites were rerun by instruction; their accepted prior raw gates remain the evidence.
+All nonactivation and source-only restrictions remain fixed.

@@ -287,3 +287,29 @@ are test authorities only; they do not claim official authority, production usab
 qualification, Lean linkage, PHI, payment, custody, or activation. Fixed flags remain
 'proofSuiteId=null', 'production_usable=false', 'activation=false',
 'NOT_QUALIFIED'/'INACTIVE'/'UNSELECTED'.
+
+## Complete-path review correction evidence — 2026-09-12
+
+The advertised E2E commit '00e864e2c9c1f9b550f667e3c5bf4759982f26b3' / tree
+'77b6e97880b39aa4419762ba6ee19c522f5f6e19' was not amended. The new correction uses the
+runtime's checked context ownership through the acquired lifetime, preserves primary plus
+release failures, retains failed directories while ownership is uncertain, and wipes local
+capsule/handoff state before submission transfer. Four focused non-native fault tests passed
+with zero skips.
+
+Native attempts are now counted from append-only wrapper records. The prior
+'verifier_calls' field was an assumed fallback and is withdrawn. The final corrected run
+measured source_calls=1, verifier_calls=1, and state_port_calls=1. Its exact post-close
+run-file inventory was ['state.sqlite']; source and verifier workspaces were empty. This
+supports only the isolated inventory and memory-only data-path claims, not whole-host
+persistence absence or OS zeroization.
+
+Final guarded CTest exited 0: 9/9 integration tests passed in 19.355s, stderr bytes 0.
+The outer guard recorded child exit 7/0, reserve 1073741824, minimum free bytes 2276630528,
+peak working set 83345408, peak private bytes 53145600, cleanup PASS, and released
+'Local\BlindLedgerDirectMaskBuild20260907'. The valid path recorded exactly 100 operations,
+one batch, one independent verifier acceptance, 100 transactions, 100 ACKs, 100 unique
+idempotency keys, zero duplicates, 100 receiver side effects, successful reopen with no work,
+source/verifier stdout bytes 539013/0, stderr bytes 0/0, and fixed nonactivation flags.
+Unchanged State/adapter/malformed-native suites were intentionally not rerun; their accepted
+raw handoff evidence remains authoritative.

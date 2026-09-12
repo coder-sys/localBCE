@@ -9,7 +9,7 @@ official authority, production qualification, Lean linkage, or activation.
 
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
@@ -42,6 +42,7 @@ from app.minimal_clearance_verification_queue import (
     OperationTemplate,
     QueueConfig,
     VerificationOutcome,
+    VolatileProofHandoff,
 )
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
 from tools.direct_mask_complete_path import source_boundary
@@ -87,6 +88,7 @@ COMPLETE_FIXED_NOW_MS = 7_000
 COMPLETE_VALID_FROM_MS = 6_000
 COMPLETE_VALID_UNTIL_MS = 9_000
 _REPARSE_POINT = 0x400
+_EXPECTED_RUN_FILE_INVENTORY = ("state.sqlite",)
 
 
 class CompletePathError(RuntimeError):
@@ -99,6 +101,35 @@ def _fail(code: str) -> None:
     error.__context__ = None
     error.__suppress_context__ = True
     raise error
+
+
+def _raise_failure_group(
+    label: str,
+    failures: tuple[BaseException, ...],
+    *,
+    run_root: Path | None = None,
+    retained: bool | None = None,
+) -> None:
+    if not failures:
+        _fail("complete_path_failure_group")
+    error: BaseException = (
+        failures[0]
+        if len(failures) == 1
+        else BaseExceptionGroup(label, failures)
+    )
+    if run_root is not None:
+        error.add_note(f"complete_path_run_root={run_root}")
+    if retained is not None:
+        error.add_note(f"complete_path_run_retained={retained}")
+    raise error from None
+
+
+def _wipe_bytearray(value: bytearray | None) -> None:
+    if type(value) is not bytearray:
+        return
+    for index in range(len(value)):
+        value[index] = 0
+    value.clear()
 
 
 def _assert_real_directory(path: Path, *, empty: bool) -> None:
@@ -361,6 +392,7 @@ class CompletePathEvidence:
     outbox_ack_ms: float
     total_path_ms: float
     state_port_calls: int
+    source_calls: int
     verifier_calls: int
     acknowledged_operation_count: int
     unconfirmed_operation_count: int
@@ -379,6 +411,7 @@ class CompletePathEvidence:
     verifier_workspace_empty: bool
     reopened_without_work: bool
     proof_files_persisted: bool
+    run_artifact_inventory: tuple[str, ...]
     proof_suite_id: None
     production_usable: bool
     activation: bool
@@ -396,6 +429,7 @@ class CompletePathEvidence:
             "outbox_ack_ms": round(self.outbox_ack_ms, 3),
             "total_path_ms": round(self.total_path_ms, 3),
             "state_port_calls": self.state_port_calls,
+            "source_calls": self.source_calls,
             "verifier_calls": self.verifier_calls,
             "acknowledged_operation_count": self.acknowledged_operation_count,
             "unconfirmed_operation_count": self.unconfirmed_operation_count,
@@ -414,6 +448,7 @@ class CompletePathEvidence:
             "verifier_workspace_empty": self.verifier_workspace_empty,
             "reopened_without_work": self.reopened_without_work,
             "proof_files_persisted": self.proof_files_persisted,
+            "run_artifact_inventory": list(self.run_artifact_inventory),
             "proof_suite_id": self.proof_suite_id,
             "production_usable": self.production_usable,
             "activation": self.activation,
@@ -470,17 +505,132 @@ def _native_measurement(
 def _wrap_native_runner(
     stage: str,
     original: Any,
-    measurements: dict[str, NativeStageMeasurement],
+    measurements: dict[str, list[NativeStageMeasurement]],
+    invocation_counts: dict[str, int],
 ) -> Any:
     def run(*args: Any, **kwargs: Any) -> Any:
+        invocation_counts[stage] = invocation_counts.get(stage, 0) + 1
         started_ns = time.perf_counter_ns()
         result = original(*args, **kwargs)
         if type(result) is not ContainedVerifierResult:
             _fail("complete_path_native_result")
-        measurements[stage] = _native_measurement(stage, started_ns, result)
+        measurements.setdefault(stage, []).append(
+            _native_measurement(stage, started_ns, result)
+        )
         return result
 
     return run
+
+
+def _assert_exact_native_invocations(
+    *,
+    invocation_counts: Mapping[str, int],
+    measurements: Mapping[str, list[NativeStageMeasurement]],
+    state_port_calls: int,
+) -> tuple[int, int, NativeStageMeasurement, NativeStageMeasurement]:
+    source_calls = int(invocation_counts.get("source_appliance", 0))
+    verifier_calls = int(invocation_counts.get("independent_verifier", 0))
+    source_measurements = tuple(measurements.get("source_appliance", ()))
+    verifier_measurements = tuple(measurements.get("independent_verifier", ()))
+    if (
+        source_calls != 1
+        or verifier_calls != 1
+        or state_port_calls != 1
+        or len(source_measurements) != 1
+        or len(verifier_measurements) != 1
+    ):
+        error = CompletePathError("complete_path_native_invocation_count")
+        error.add_note(f"complete_path_source_calls={source_calls}")
+        error.add_note(f"complete_path_verifier_calls={verifier_calls}")
+        error.add_note(f"complete_path_state_port_calls={state_port_calls}")
+        error.add_note(
+            f"complete_path_source_measurement_count={len(source_measurements)}"
+        )
+        error.add_note(
+            f"complete_path_verifier_measurement_count={len(verifier_measurements)}"
+        )
+        raise error
+    return (
+        source_calls,
+        verifier_calls,
+        source_measurements[0],
+        verifier_measurements[0],
+    )
+
+
+@contextmanager
+def _runtime_scope(
+    runtime: runtime_module.MinimalClearanceVerificationRuntime,
+    release_state: dict[str, bool],
+):
+    """Use the runtime's checked context hooks while retaining both failures."""
+
+    release_state["entered"] = False
+    release_state["release_attempted"] = False
+    release_state["released"] = False
+    release_state["release_failed"] = False
+    try:
+        runtime.__enter__()
+    except BaseException as primary:
+        release_state["release_attempted"] = True
+        try:
+            runtime.close()
+        except BaseException as cleanup:
+            release_state["release_failed"] = True
+            _raise_failure_group(
+                "complete_path_runtime_enter_and_cleanup",
+                (primary, cleanup),
+            )
+        release_state["released"] = True
+        raise
+    release_state["entered"] = True
+    try:
+        yield runtime
+    except BaseException as primary:
+        release_state["release_attempted"] = True
+        try:
+            runtime.__exit__(type(primary), primary, primary.__traceback__)
+        except BaseException as cleanup:
+            release_state["release_failed"] = True
+            _raise_failure_group(
+                "complete_path_runtime_and_cleanup",
+                (primary, cleanup),
+            )
+        release_state["released"] = True
+        raise
+    else:
+        release_state["release_attempted"] = True
+        try:
+            runtime.__exit__(None, None, None)
+        except BaseException:
+            release_state["release_failed"] = True
+            raise
+        release_state["released"] = True
+
+
+def _run_file_inventory(run_root: Path) -> tuple[str, ...]:
+    try:
+        return tuple(
+            sorted(
+                path.relative_to(run_root).as_posix()
+                for path in run_root.rglob("*")
+                if path.is_file() or path.is_symlink()
+            )
+        )
+    except OSError:
+        _fail("complete_path_artifact_inventory")
+
+
+def _assert_expected_run_file_inventory(run_root: Path) -> tuple[str, ...]:
+    inventory = _run_file_inventory(run_root)
+    if inventory != _EXPECTED_RUN_FILE_INVENTORY:
+        error = CompletePathError("complete_path_artifact_inventory")
+        error.add_note(f"complete_path_run_file_inventory={inventory!r}")
+        error.add_note(
+            f"complete_path_expected_run_file_inventory={_EXPECTED_RUN_FILE_INVENTORY!r}"
+        )
+        raise error
+    return inventory
 
 
 def _assert_projection(
@@ -536,20 +686,31 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
     clock = DeterministicClock()
     state_port = SyntheticStateDispositionPort(policy_result="MISSING")
     receiver = SyntheticReceiver(composition_config, clock)
-    measurements: dict[str, NativeStageMeasurement] = {}
+    measurements: dict[str, list[NativeStageMeasurement]] = {}
+    invocation_counts: dict[str, int] = {}
     source_workspace_empty = False
     verifier_workspace_empty = False
-    runtime: runtime_module.MinimalClearanceVerificationRuntime | None = None
     database: Path | None = None
     source_workspace: Path | None = None
     verifier_workspace: Path | None = None
+    source_calls = 0
     verifier_calls = 0
+    source_measurement: NativeStageMeasurement | None = None
+    verifier_measurement: NativeStageMeasurement | None = None
+    run_artifact_inventory: tuple[str, ...] = ()
+    evidence: CompletePathEvidence | None = None
+    release_states: list[dict[str, bool]] = []
+    primary_error: BaseException | None = None
+    cleanup_errors: list[BaseException] = []
 
-    with tempfile.TemporaryDirectory(
+    run_directory = tempfile.TemporaryDirectory(
         prefix="direct-mask-complete-run-",
         dir=str(build_root),
-    ) as run_directory:
-        run_root = Path(run_directory)
+        delete=False,
+    )
+    run_root = Path(run_directory.name)
+    try:
+        _assert_real_directory(run_root, empty=True)
         source_workspace = run_root / "source-workspace"
         verifier_workspace = run_root / "verifier-workspace"
         source_workspace.mkdir()
@@ -583,81 +744,113 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
             lookup=receiver,
             clock=clock,
         )
+        first_release_state: dict[str, bool] = {}
+        release_states.append(first_release_state)
         database = run_root / "state.sqlite"
-        template = OperationTemplate(
-            "direct-mask-e2e-assertion",
-            1,
-            queue_config.profile_version,
-            COMPLETE_VALID_FROM_MS,
-            COMPLETE_VALID_UNTIL_MS,
-        )
-        started_total_ns = time.perf_counter_ns()
-        issue_started_ns = time.perf_counter_ns()
-        batch = runtime.issue_batch(template=template)
-        state_issue_ms = (time.perf_counter_ns() - issue_started_ns) / 1_000_000
-
-        old_source_runner = source_boundary.run_contained_verifier_stream
-        old_verifier_runner = adapter_module.run_contained_verifier_stream
-        source_boundary.run_contained_verifier_stream = _wrap_native_runner(
-            "source_appliance",
-            old_source_runner,
-            measurements,
-        )
-        adapter_module.run_contained_verifier_stream = _wrap_native_runner(
-            "independent_verifier",
-            old_verifier_runner,
-            measurements,
-        )
-        try:
-            source_started_ns = time.perf_counter_ns()
-            capsule = source_caller.prove_one(batch=batch, source_key_epoch=1)
-            source_call_ms = (time.perf_counter_ns() - source_started_ns) / 1_000_000
-            from app.minimal_clearance_verification_queue import VolatileProofHandoff
-
-            handoff_started_ns = time.perf_counter_ns()
-            proof_stream = VolatileProofHandoff(capsule)
-            if capsule:
-                _fail("complete_path_capsule_cleanup")
-            runtime.submit_batch_handoff(
-                issued_batch=batch,
-                proof_stream=proof_stream,
+        with _runtime_scope(runtime, first_release_state):
+            template = OperationTemplate(
+                "direct-mask-e2e-assertion",
+                1,
+                queue_config.profile_version,
+                COMPLETE_VALID_FROM_MS,
+                COMPLETE_VALID_UNTIL_MS,
             )
-            handoff_ms = (time.perf_counter_ns() - handoff_started_ns) / 1_000_000
-            queue_started_ns = time.perf_counter_ns()
-            queue_result = runtime.run(max_batches=1)
-            queue_verify_state_ms = (
-                time.perf_counter_ns() - queue_started_ns
-            ) / 1_000_000
-            verifier_calls = getattr(runtime._verifier, "calls", 1)
-        finally:
-            source_boundary.run_contained_verifier_stream = old_source_runner
-            adapter_module.run_contained_verifier_stream = old_verifier_runner
+            started_total_ns = time.perf_counter_ns()
+            issue_started_ns = time.perf_counter_ns()
+            batch = runtime.issue_batch(template=template)
+            state_issue_ms = (time.perf_counter_ns() - issue_started_ns) / 1_000_000
 
-        outbox_started_ns = time.perf_counter_ns()
-        delivery = runtime.dispatch_outbox(max_batches=1)
-        outbox_ack_ms = (time.perf_counter_ns() - outbox_started_ns) / 1_000_000
-        summary = runtime.support_summary()
-        composition_snapshot = runtime._composition_store.snapshot()
-        _assert_projection(
-            runtime_result=queue_result,
-            delivery=delivery,
-            summary=summary,
-        )
-        runtime._verify_integrity()
-        transaction_count, transaction_unique, outbox_count, outbox_unique = (
-            _read_only_counts(database)
-        )
-        if (
-            transaction_count != 100
-            or transaction_unique != 100
-            or outbox_count != 100
-            or outbox_unique != 100
-        ):
-            _fail("complete_path_durable_counts")
-        runtime.close()
-        runtime = None
-        source_workspace_empty = not any(source_workspace.iterdir())
-        verifier_workspace_empty = not any(verifier_workspace.iterdir())
+            old_source_runner = source_boundary.run_contained_verifier_stream
+            old_verifier_runner = adapter_module.run_contained_verifier_stream
+            capsule: bytearray | None = None
+            proof_stream: VolatileProofHandoff | None = None
+            handoff_transferred = False
+            try:
+                source_boundary.run_contained_verifier_stream = _wrap_native_runner(
+                    "source_appliance",
+                    old_source_runner,
+                    measurements,
+                    invocation_counts,
+                )
+                adapter_module.run_contained_verifier_stream = _wrap_native_runner(
+                    "independent_verifier",
+                    old_verifier_runner,
+                    measurements,
+                    invocation_counts,
+                )
+                source_started_ns = time.perf_counter_ns()
+                capsule = source_caller.prove_one(batch=batch, source_key_epoch=1)
+                source_call_ms = (
+                    time.perf_counter_ns() - source_started_ns
+                ) / 1_000_000
+                if type(capsule) is not bytearray:
+                    _fail("complete_path_capsule_type")
+                handoff_started_ns = time.perf_counter_ns()
+                proof_stream = VolatileProofHandoff(capsule)
+                capsule = None
+                runtime.submit_batch_handoff(
+                    issued_batch=batch,
+                    proof_stream=proof_stream,
+                )
+                handoff_transferred = True
+                handoff_ms = (
+                    time.perf_counter_ns() - handoff_started_ns
+                ) / 1_000_000
+                queue_started_ns = time.perf_counter_ns()
+                try:
+                    queue_result = runtime.run(max_batches=1)
+                finally:
+                    if proof_stream is not None:
+                        proof_stream.close()
+                        proof_stream = None
+                queue_verify_state_ms = (
+                    time.perf_counter_ns() - queue_started_ns
+                ) / 1_000_000
+                (
+                    source_calls,
+                    verifier_calls,
+                    source_measurement,
+                    verifier_measurement,
+                ) = _assert_exact_native_invocations(
+                    invocation_counts=invocation_counts,
+                    measurements=measurements,
+                    state_port_calls=state_port.calls,
+                )
+                outbox_started_ns = time.perf_counter_ns()
+                delivery = runtime.dispatch_outbox(max_batches=1)
+                outbox_ack_ms = (
+                    time.perf_counter_ns() - outbox_started_ns
+                ) / 1_000_000
+                summary = runtime.support_summary()
+                composition_snapshot = runtime._composition_store.snapshot()
+                _assert_projection(
+                    runtime_result=queue_result,
+                    delivery=delivery,
+                    summary=summary,
+                )
+                runtime._verify_integrity()
+                transaction_count, transaction_unique, outbox_count, outbox_unique = (
+                    _read_only_counts(database)
+                )
+                if (
+                    transaction_count != 100
+                    or transaction_unique != 100
+                    or outbox_count != 100
+                    or outbox_unique != 100
+                ):
+                    _fail("complete_path_durable_counts")
+            finally:
+                if proof_stream is not None and not handoff_transferred:
+                    proof_stream.close()
+                _wipe_bytearray(capsule)
+                source_boundary.run_contained_verifier_stream = old_source_runner
+                adapter_module.run_contained_verifier_stream = old_verifier_runner
+
+        _assert_real_directory(source_workspace, empty=True)
+        _assert_real_directory(verifier_workspace, empty=True)
+        source_workspace_empty = True
+        verifier_workspace_empty = True
+        run_artifact_inventory = _assert_expected_run_file_inventory(run_root)
 
         reopened_without_work = False
         reopened = runtime_module.MinimalClearanceVerificationRuntime.from_source_auth(
@@ -669,7 +862,9 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
             lookup=receiver,
             clock=clock,
         )
-        try:
+        reopened_release_state: dict[str, bool] = {}
+        release_states.append(reopened_release_state)
+        with _runtime_scope(reopened, reopened_release_state):
             reopened_summary = reopened.support_summary()
             reopened_run = reopened.run()
             reopened_delivery = reopened.dispatch_outbox()
@@ -684,8 +879,6 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
                     "DELIVERY_UNCONFIRMED": 0,
                 }
             )
-        finally:
-            reopened.close()
 
         queue_verified = queue_independent.verify_database(
             database,
@@ -705,14 +898,7 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
             sum(composition_verified["transaction_counts"].values())
         )
         independent_outbox_count = int(composition_verified["outbox_count"])
-        proof_files = tuple(
-            path
-            for path in run_root.rglob("*")
-            if path.is_file()
-            and path.name != "state.sqlite"
-            and path.suffix.casefold() in {".proof", ".sig", ".capsule", ".ipc"}
-        )
-        proof_files_persisted = bool(proof_files)
+        proof_files_persisted = run_artifact_inventory != _EXPECTED_RUN_FILE_INVENTORY
         if (
             readback.batch.accepted_count != 100
             or independent_operation_count != 100
@@ -729,11 +915,9 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
         if len(receiver.acks) != 100 or len(set(receiver.dispatch_keys)) != 100:
             _fail("complete_path_ack_deduplication")
         total_path_ms = (time.perf_counter_ns() - started_total_ns) / 1_000_000
-        source_measurement = measurements.get("source_appliance")
-        verifier_measurement = measurements.get("independent_verifier")
         if source_measurement is None or verifier_measurement is None:
             _fail("complete_path_native_measurement")
-        return CompletePathEvidence(
+        evidence = CompletePathEvidence(
             operation_count=100,
             issued_batch_count=1,
             state_issue_ms=state_issue_ms,
@@ -743,6 +927,7 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
             outbox_ack_ms=outbox_ack_ms,
             total_path_ms=total_path_ms,
             state_port_calls=state_port.calls,
+            source_calls=source_calls,
             verifier_calls=verifier_calls,
             acknowledged_operation_count=delivery.acknowledged_operation_count,
             unconfirmed_operation_count=delivery.unconfirmed_operation_count,
@@ -763,12 +948,39 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
             verifier_workspace_empty=verifier_workspace_empty,
             reopened_without_work=reopened_without_work,
             proof_files_persisted=proof_files_persisted,
+            run_artifact_inventory=run_artifact_inventory,
             proof_suite_id=None,
             production_usable=False,
             activation=False,
             source_measurement=source_measurement,
             verifier_measurement=verifier_measurement,
         )
+    except BaseException as error:
+        primary_error = error
+    finally:
+        all_runtime_released = bool(release_states) and all(
+            state.get("released") is True for state in release_states
+        )
+        if primary_error is None and all_runtime_released and not cleanup_errors:
+            try:
+                run_directory.cleanup()
+            except BaseException as error:
+                cleanup_errors.append(error)
+
+    if primary_error is not None or cleanup_errors:
+        failures: list[BaseException] = []
+        if primary_error is not None:
+            failures.append(primary_error)
+        failures.extend(cleanup_errors)
+        _raise_failure_group(
+            "complete_path_failure_and_cleanup",
+            tuple(failures),
+            run_root=run_root,
+            retained=primary_error is not None or bool(cleanup_errors),
+        )
+    if evidence is None:
+        _fail("complete_path_evidence")
+    return evidence
 
 
 __all__ = (

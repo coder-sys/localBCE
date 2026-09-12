@@ -3,23 +3,20 @@ from __future__ import annotations
 from contextlib import closing
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import app.minimal_clearance_composition as composition
 import app.minimal_clearance_composition_independent as composition_independent
-import app.minimal_clearance_source_auth_verifier_adapter as adapter_module
 from app.minimal_clearance_composition import (
     CompositionConfigV2,
-    StateDispositionControl,
 )
-from app.minimal_clearance_source_auth_verifier_adapter import (
-    BatchVerifierResult,
-)
+from app.minimal_clearance_verifier_process import ContainedVerifierResult
 from app.minimal_clearance_verification_queue import (
+    BatchVerifierResult,
     IssuedVerificationBatch,
     OperationTemplate,
     QueueConflictError,
@@ -36,9 +33,13 @@ from tools.direct_mask_complete_path import source_boundary
 from tools.direct_mask_complete_path.complete_path import (
     COMPLETE_VALID_FROM_MS,
     COMPLETE_VALID_UNTIL_MS,
+    CompletePathError,
+    NativeStageMeasurement,
     SOURCE_APPLIANCE_EXECUTABLE,
     SyntheticReceiver,
     SyntheticStateDispositionPort,
+    _assert_exact_native_invocations,
+    _wrap_native_runner,
     build_complete_configs,
     run_one_fresh_native_proof,
 )
@@ -196,9 +197,11 @@ class DirectMaskCompletePathTests(unittest.TestCase):
                 evidence.proof_suite_id,
                 evidence.production_usable,
                 evidence.activation,
+                evidence.source_calls,
             ),
-            (100, 1, 100, 0, 100, 100, 100, 1, 100, 100, 100, 100, 100, 0, True, True, True, False, None, False, False),
+            (100, 1, 100, 0, 100, 100, 100, 1, 100, 100, 100, 100, 100, 0, True, True, True, False, None, False, False, 1),
         )
+        self.assertEqual(evidence.run_artifact_inventory, ("state.sqlite",))
         self.assertEqual(evidence.source_measurement.exit_code, 0)
         self.assertEqual(evidence.source_measurement.stdout_bytes, 539_013)
         self.assertEqual(evidence.source_measurement.stderr_bytes, 0)
@@ -206,6 +209,159 @@ class DirectMaskCompletePathTests(unittest.TestCase):
         self.assertEqual(evidence.verifier_measurement.stdout_bytes, 0)
         self.assertEqual(evidence.verifier_measurement.stderr_bytes, 0)
         print("COMPLETE_PATH_EVIDENCE " + json.dumps(evidence.as_json(), sort_keys=True))
+
+    def test_runtime_failure_releases_owner_and_preserves_failed_run_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="complete-path-lifetime-") as directory:
+            build_root = Path(directory)
+            close_calls: list[MinimalClearanceVerificationRuntime] = []
+            original_close = MinimalClearanceVerificationRuntime.close
+
+            def close_spy(instance: MinimalClearanceVerificationRuntime) -> None:
+                close_calls.append(instance)
+                original_close(instance)
+
+            try:
+                with patch.object(
+                    MinimalClearanceVerificationRuntime,
+                    "close",
+                    autospec=True,
+                    side_effect=close_spy,
+                ), patch.object(
+                    Profile12SourceBoundaryCaller,
+                    "prove_one",
+                    side_effect=RuntimeError("injected_source_failure"),
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "injected_source_failure",
+                    ):
+                        run_one_fresh_native_proof(build_root=build_root.resolve())
+                self.assertEqual(len(close_calls), 1)
+                retained = tuple(build_root.glob("direct-mask-complete-run-*"))
+                self.assertEqual(len(retained), 1)
+                run_root = retained[0]
+                self.assertTrue((run_root / "state.sqlite").is_file())
+                self.assertEqual(
+                    tuple(
+                        sorted(
+                            path.relative_to(run_root).as_posix()
+                            for path in run_root.rglob("*")
+                            if path.is_file() or path.is_symlink()
+                        )
+                    ),
+                    ("state.sqlite",),
+                )
+            finally:
+                for run_root in build_root.glob("direct-mask-complete-run-*"):
+                    shutil.rmtree(run_root)
+
+    def test_runtime_cleanup_failure_preserves_primary_and_run_evidence(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="complete-path-cleanup-") as directory:
+            build_root = Path(directory)
+            close_calls: list[MinimalClearanceVerificationRuntime] = []
+            original_close = MinimalClearanceVerificationRuntime.close
+
+            def failing_close(instance: MinimalClearanceVerificationRuntime) -> None:
+                close_calls.append(instance)
+                raise RuntimeError("injected_close_failure")
+
+            try:
+                with patch.object(
+                    MinimalClearanceVerificationRuntime,
+                    "close",
+                    autospec=True,
+                    side_effect=failing_close,
+                ), patch.object(
+                    Profile12SourceBoundaryCaller,
+                    "prove_one",
+                    side_effect=RuntimeError("injected_source_failure"),
+                ):
+                    with self.assertRaises(BaseExceptionGroup) as raised:
+                        run_one_fresh_native_proof(build_root=build_root.resolve())
+                error = raised.exception
+                self.assertEqual(
+                    tuple(str(member) for member in error.exceptions),
+                    ("injected_source_failure", "injected_close_failure"),
+                )
+                self.assertEqual(len(close_calls), 1)
+                self.assertIn("complete_path_run_retained=True", error.__notes__)
+                retained = tuple(build_root.glob("direct-mask-complete-run-*"))
+                self.assertEqual(len(retained), 1)
+                self.assertTrue((retained[0] / "state.sqlite").is_file())
+            finally:
+                if close_calls:
+                    original_close(close_calls[0])
+                for run_root in build_root.glob("direct-mask-complete-run-*"):
+                    shutil.rmtree(run_root)
+
+    def test_capsule_is_wiped_when_handoff_construction_fails(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="complete-path-capsule-") as directory:
+            build_root = Path(directory)
+            capsule = bytearray(b"volatile-capsule")
+            try:
+                with patch.object(
+                    Profile12SourceBoundaryCaller,
+                    "prove_one",
+                    return_value=capsule,
+                ), patch(
+                    "tools.direct_mask_complete_path.complete_path.VolatileProofHandoff",
+                    side_effect=RuntimeError("injected_handoff_failure"),
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "injected_handoff_failure",
+                    ):
+                        run_one_fresh_native_proof(build_root=build_root.resolve())
+                self.assertEqual(capsule, bytearray())
+                retained = tuple(build_root.glob("direct-mask-complete-run-*"))
+                self.assertEqual(len(retained), 1)
+            finally:
+                for run_root in build_root.glob("direct-mask-complete-run-*"):
+                    shutil.rmtree(run_root)
+
+    def test_native_attempts_are_counted_without_measurement_overwrite(self) -> None:
+        native_result = ContainedVerifierResult(
+            exit_code=0,
+            stdout=b"",
+            stderr=b"",
+            peak_job_commit_bytes=0,
+            cap_bytes=4_500_000_000,
+            cap_enforced=True,
+            active_process_limit=1,
+            timed_out=False,
+        )
+        measurements: dict[str, list[NativeStageMeasurement]] = {}
+        invocation_counts: dict[str, int] = {}
+        source_runner = _wrap_native_runner(
+            "source_appliance",
+            lambda: native_result,
+            measurements,
+            invocation_counts,
+        )
+        verifier_runner = _wrap_native_runner(
+            "independent_verifier",
+            lambda: native_result,
+            measurements,
+            invocation_counts,
+        )
+        source_runner()
+        source_runner()
+        verifier_runner()
+        self.assertEqual(invocation_counts, {"source_appliance": 2, "independent_verifier": 1})
+        self.assertEqual(len(measurements["source_appliance"]), 2)
+        self.assertEqual(len(measurements["independent_verifier"]), 1)
+        with self.assertRaisesRegex(
+            CompletePathError,
+            "complete_path_native_invocation_count",
+        ) as raised:
+            _assert_exact_native_invocations(
+                invocation_counts=invocation_counts,
+                measurements=measurements,
+                state_port_calls=1,
+            )
+        self.assertIn("complete_path_source_calls=2", raised.exception.__notes__)
 
     def test_source_context_coin_order_and_epoch_mutations_fail_before_native(self) -> None:
         config = QueueConfig("e2e-source-negative", 100, source_key_epoch=1)
