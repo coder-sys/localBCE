@@ -40,6 +40,14 @@ SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES: Final[int] = 275_968
 SOURCE_APPLIANCE_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
     "D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8"
 )
+CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE: Final[Path] = (
+    Path(__file__).resolve().parents[2]
+    / "build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe"
+)
+CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES: Final[int] = 276_480
+CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
+    "176B237D8277A1CF09EECE1DC58DBB9B012C9B6700C6FB8C04FEF46011FDD626"
+)
 SOURCE_APPLIANCE_PROCESS_ARGUMENTS: Final[tuple[str, ...]] = ()
 
 
@@ -116,15 +124,26 @@ class SourceApplianceConfig:
     executable_size_bytes: int
     executable_sha256: bytes = field(repr=False)
     timeout_seconds: float = SOURCE_APPLIANCE_TIMEOUT_SECONDS
+    identity_profile: str = "accepted"
 
     def __post_init__(self) -> None:
         if not isinstance(self.executable_path, Path) or not self.executable_path.is_absolute():
             _fail("source_executable_path")
         if not isinstance(self.workspace, Path) or not self.workspace.is_absolute() or not self.workspace.is_dir():
             _fail("source_workspace")
-        if self.executable_size_bytes != SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES:
+        if self.identity_profile == "accepted":
+            expected_size = SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES
+            expected_sha256 = SOURCE_APPLIANCE_EXECUTABLE_SHA256
+        elif self.identity_profile == "child-performance":
+            if self.executable_path.resolve() != CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE:
+                _fail("source_executable_identity")
+            expected_size = CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES
+            expected_sha256 = CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SHA256
+        else:
             _fail("source_executable_identity")
-        if type(self.executable_sha256) is not bytes or self.executable_sha256 != SOURCE_APPLIANCE_EXECUTABLE_SHA256:
+        if self.executable_size_bytes != expected_size:
+            _fail("source_executable_identity")
+        if type(self.executable_sha256) is not bytes or self.executable_sha256 != expected_sha256:
             _fail("source_executable_identity")
         if type(self.timeout_seconds) is not float or not 0 < self.timeout_seconds <= SOURCE_APPLIANCE_TIMEOUT_SECONDS:
             _fail("source_timeout")
@@ -232,6 +251,9 @@ __all__ = (
     "SOURCE_APPLIANCE_CONTEXT_BYTES",
     "SOURCE_APPLIANCE_EXECUTABLE_SHA256",
     "SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES",
+    "CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE",
+    "CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SHA256",
+    "CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES",
     "SOURCE_APPLIANCE_KEY_EPOCH",
     "SOURCE_APPLIANCE_MAX_FINAL_RETRIES",
     "SOURCE_APPLIANCE_PROCESS_ARGUMENTS",

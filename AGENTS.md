@@ -389,3 +389,163 @@ verifier_calls=1, state_port_calls=1, source/verifier stdout bytes 539013/0, std
 0/0, and run_artifact_inventory=['state.sqlite']. No unchanged State, adapter, or malformed
 native suites were rerun by instruction; their accepted prior raw gates remain the evidence.
 All nonactivation and source-only restrictions remain fixed.
+
+## Active native arithmetic performance assignment — 2026-09-12
+
+This fresh child is the only writable checkout for the shutdown-recovery performance phase:
+'C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\pq-direct-mask-performance-20260912'.
+It was created as a detached worktree from accepted E2E commit
+'51158c2db5c4d1b82c88875ea23707a6e7fa1d89' / tree
+'bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306'. The prior complete-path child and every input
+checkout remain read-only.
+
+### Immutable input identities
+
+The performance phase may source-select only committed blobs from these inputs:
+
+- 'pq-direct-mask-pipeline-20260908': commit
+  '530e880ef6cbd5fa4e023f42d3aa66a0d213d9e2', tree
+  'e1119b850c3a886a4df09f375fd50d9ac81e94d7'
+- 'pq-direct-mask-vole-20260907': commit
+  '392e53e2b3d5936cb9cb2681b9e2d803143b1e17', tree
+  '34dc614591712efd4faca0dedc064bfd63e51a92'
+- 'pq-direct-mask-fixture-20260908': commit
+  '5473dd9e97841621430a05f0874bee199f631ec1', tree
+  '1ec1a033fd31d891b402fd23c2072eebcc1f011f'
+- 'pq-aes-circuit-export-20260907': commit
+  '0bce17b884f0076f078026645bef8302b5ed1a53', tree
+  '0a0872d3e7ae5aefa6742921909f70b49e58566f'
+- 'vendor/faest-ref' source: commit
+  'ebefcbd8adda5faf447ef3dba5103794d17b4281', tree
+  'f0c2e69f3eb0735fd544d04dc3dcfcc12e275e31'; vendor files are read-only
+- ML-DSA input: 'C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-c-profile11-extmu-v1',
+  commit '9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2', tree
+  '178a5f20c6738f7272cd38f77315da83650bbac0'
+
+Imports must be exact committed paths only. Generated artifacts, dirty files, and vendor
+copies are not interchangeable with these identities.
+
+### Exact writable scope and invariants
+
+The child may add the tracked native directories 'tools/direct_mask_{authenticated_proof,
+circuit,kernel,native,pipeline,source_auth,source_proof,wire}' from the pinned pipeline plus
+the exact primitive/fixture directories. Native edits are limited to child-local field
+acceleration C/header sources under 'tools/direct_mask_vole', necessary nonsemantic hot-call
+site/layout changes in 'tools/direct_mask_kernel'/'tools/direct_mask_circuit', and CMake/build
+wiring in imported native directories. Source/proof/signature/codec implementations must remain
+byte-equivalent to their inputs; vendor files are protected. A constant-time replacement and
+explicitly linked symbol-isolated portable reference are allowed only if all consumers bind to
+the intended implementation.
+
+The complete-path files 'tools/direct_mask_complete_path/{complete_path.py,source_boundary.py,
+CMakeLists.txt}' and 'app/minimal_clearance_source_auth_verifier_adapter.py' may change only
+for explicit child-local rebuilt executable identity plumbing. State/runtime/composition/Queue
+semantics, protocol bytes, filtered mode, Profile13, custody, deployment, payment, PHI, Lean,
+operations, and formal sources are protected. Existing native probes may be adapted only for
+actual changed behavior; no generic benchmark/controller framework is authorized.
+
+Preserve canonical field representation/reduction, ABI/alignment/aliasing, secret-independent
+control and memory access, fresh entropy, source/witness/signature binding, six masks,
+transcript bytes, independent verifier linkage, retry limits, volatile proof/capsule/IPC,
+atomic State/outbox/ACK behavior, and all existing guards. Hardware dispatch needs a correct
+portable fallback, supported-instruction checks, and no global unsafe CPU flags or
+secret-indexed tables. Profile flags remain 'proofSuiteId=null', 'production_usable=false',
+inactive, unselected, and unqualified.
+
+### Performance and evidence boundary
+
+The accepted complete path measured 10.546812s source, 6.671242s verifier, and 17.870595s
+total for one synthetic State-issued 100-operation batch. The concrete hypothesis is the
+255-bit 'bf256_mul'/'bf256_mul_inplace' loop in pinned vendor 'fields.c:724-742', used by the
+kernel/algebra/circuit. Measure the actual dominant calls before and after; preserve an
+independently checkable portable reference and byte/arithmetic correspondence. Bounded paired
+fresh complete-path samples are evidence, not p95 or qualification.
+
+The accepted complete-path guard remains the only containment primitive: child exit 7/0
+preflight, non-null exit gate, physical reserve '1073741824', process-tree cap
+'<5000000000', native cap '4500000000', active process limit '1', mutex
+'Local\BlindLedgerDirectMaskBuild20260907', cleanup/resource telemetry, and raw failure
+retention. Adapt it only for the exact new child build/path/commands. Do not capture secret
+proof/witness bytes in logs or files.
+
+The phase is not complete until the affected native arithmetic/link/probe/acceptance/
+malformed gates and a freshly built guarded source -> independent verifier -> atomic
+State/ACK path pass, with exact before/after timings, retries, binary hashes, import hashes,
+changed paths, warnings, failures, skips, and unresolved gates recorded. Do not claim a
+material speedup, production security, official authority, or Profile13 readiness without
+current raw evidence.
+
+### Native arithmetic performance verified handoff — 2026-09-12
+
+Repository state is detached HEAD `51158c2db5c4d1b82c88875ea23707a6e7fa1d89`, HEAD tree
+`bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306`; the worktree is intentionally uncommitted and
+contains the authorized native imports, acceleration, CMake wiring, child-local executable
+identity wiring, and this evidence update. No input checkout or vendor tree was modified.
+
+The implementation adds `tools/direct_mask_vole/direct_mask_bf256_accel.{c,h}`: fixed 4x4
+PCLMUL carry-less multiplication and fixed-word reduction for the pinned
+`x^256+x^10+x^5+x^2+1` field, with public CPU-feature dispatch, alias-safe in-place use, and
+the renamed pinned-vendor implementation retained as an independently linked portable
+reference. The exact native source hashes are C
+`5FC9AA99647C7F38060545F05AC45C2394A1A442C8061C5E520D1F77C50C3625` and H
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`.
+
+Import verification against the committed pipeline/primitive/fixture inputs reported exactly
+`IMPORT_CHECKED=74`, `CMAKE_WIRING_DIFFS=9`, and `UNAUTHORIZED_IMPORT_ERRORS=0`. The only
+additional imported-tree files are `tools/direct_mask_vole/direct_mask_bf256_accel.c` and
+`.h`; `MISSING_EXPECTED_FILES=0`. All non-CMake imported source/proof/signature/codec/fixture
+blobs are byte-equivalent to their pinned inputs. The nine intentional CMake differences are
+the wiring files under `tools/direct_mask_authenticated_proof`, `tools/direct_mask_circuit`,
+`tools/direct_mask_kernel`, `tools/direct_mask_pipeline`, `tools/direct_mask_source_auth`,
+`tools/direct_mask_source_proof`, `tools/direct_mask_wire`, `tools/direct_mask_vole`, and
+`tools/direct_mask_fixture`.
+
+Current native gates:
+
+- Rebuilt arithmetic probe: `BF256_BACKEND=pclmul PCLMUL_AVAILABLE=1`; `BF256_OUT_OF_PLACE_MATCH=PASS BF256_IN_PLACE_MATCH=PASS`; build and process exits `0`.
+- Circuit probe: build/process exits `0`; `DIRECT_MASK_CIRCUIT status=PASS`; all listed negative descriptor/AES/inverse/bitness/transcript/direct-mask cases were rejected or detected.
+- Kernel: `1/1 Test #1: direct_mask_kernel_full_field ... Passed`, `100% tests passed, 0 tests failed out of 1`, CTest exit `0`.
+- VOLE: `VOLE_IDENTITY rows=1792 mismatches=0 delta_zero=0`, `SOURCE_PROVE_STATUS status=0 prover_calls=1`, `E2E_VERIFY_STATUS status=0`, `SOURCE_BOUND_COUNTS ... counts_equal=1`, `DIRECT_MASK_PROBE_COUNTS passed=53 failed=0`, `DIRECT_MASK_PROBE_STATUS=PASS`, build/process exits `0`.
+- Fixture: `FIXTURE_IMPORTED_LIBRARY_IDENTITY=PASS count=8`; `1/1` CTest passed, build/CTest exits `0`.
+- Integrated Release CTest: `100% tests passed, 0 tests failed out of 8`, total `34.02 sec`, exit `0`. The probe checks reported `CHECK_COUNT=114 FAILED=0`, `CHECK_COUNT=96 FAILED=0`, `CHECK_COUNT=58 FAILED=0`, and `CHECK_COUNT=86 FAILED=0`; all real-symbol/closure gates passed (`checked=3/2/3`, `forbidden=9/7/7`, and `checked=6/4/3/3`).
+
+The child-local candidate identities are source executable size `276480`, SHA-256
+`176B237D8277A1CF09EECE1DC58DBB9B012C9B6700C6FB8C04FEF46011FDD626`, and verifier size
+`240640`, SHA-256 `37EB37C8A86C010D3C69400E26BA5DCFA9E2A75C407F48DAEC1D03586D364AEF`.
+The key accelerated library `dm_faest_public.lib` is size `333298`, SHA-256
+`B664A72471120AAA1D236236AE1BF7C5BB46B3989471771712566BEBD39069ED`. The default
+accepted source/verifier pins remain unchanged at `275968/D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8` and
+`240128/38FB45E017D08AC11098D8837C78D02143B86753AA4F085174073C64353AC835`.
+
+The bounded guarded pair used the existing exit `7/0` preflight, 1-GiB reserve,
+`<5000000000` process-tree cap, `4500000000` native cap, active-process limit `1`, mutex,
+cleanup telemetry, and memory-only proof boundary. The final candidate raw
+`COMPLETE_PATH_EVIDENCE` reported `operation_count=100`, `issued_batch_count=1`,
+`independent_verified_batch_count=1`, `source_calls=1`, `verifier_calls=1`,
+`state_port_calls=1`, `transaction_count=100`, `outbox_acknowledged_count=100`,
+`unique_idempotency_keys=100`, `receiver_duplicate_dispatches=0`,
+`receiver_side_effects=100`, `reopened_without_work=true`,
+`run_artifact_inventory=["state.sqlite"]`, empty source/verifier workspaces, and fixed
+`proof_suite_id=null`, `production_usable=false`, `activation=false`. Candidate measured
+source/verifier/total times were `5267.863/2884.734/8851.049 ms`; baseline times were
+`10637.985/6845.545/18141.746 ms`, a single guarded sample reduction of
+`50.49%/57.86%/51.21%` (source/verifier/total), not a p95 or qualification result. Candidate
+outer telemetry was `PHYSICAL_PREFLIGHT free_bytes=3154444288 reserve_bytes=1073741824`,
+minimum free `3049099264`, peak working set `80388096`, peak private `54861824`, child
+exit `7/0`, cleanup `PASS`, mutex released. Baseline minimum free was `3463213056`, peak
+working set `82063360`, peak private `54972416`, with the same child/cleanup result.
+
+Intermediate command failures were corrected and are not unresolved gates: the original long
+path build hit MSVC `C1083`/`FTK1011` and was rerun through the validated `Q:` mapped path;
+one kernel configure received literal `$vendor`/`$oracle` paths and was rerun with quoted
+arguments; one integrated CTest run initially had three `Not Run` EXCLUDE_FROM_ALL probes and
+those exact nested targets were built; and a final no-configuration CTest invocation reported
+`0% tests passed, 8 tests failed out of 8` with all eight `Not Run` for `Missing "-C
+<config>"`, then `ctest -C Release` passed all eight. The VOLE probe explicitly reports
+`REMOVED_SYNTHETIC_CHECKS count=6 reason=obsolete_local_polynomial_and_hash_path_removed
+replacement=accepted_direct_mask_kernel_and_algebra_probes`; this is an existing probe
+disposition, not an unreported skip. Build warnings are pre-existing pinned-vendor warnings:
+`C4141` duplicate `inline`, `C4146` unsigned unary minus, and `C4244` conversion warnings;
+no new acceleration-source warning or error remained. No unresolved gates or authorized
+skips remain. Product, formal, custody, payment, PHI, deployment, filtered/Profile13, and
+production-qualification restrictions remain fixed.

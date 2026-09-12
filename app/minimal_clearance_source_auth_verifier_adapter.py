@@ -46,6 +46,14 @@ SOURCE_AUTH_EXECUTABLE_SIZE_BYTES: Final[int] = 240_128
 SOURCE_AUTH_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
     "38FB45E017D08AC11098D8837C78D02143B86753AA4F085174073C64353AC835"
 )
+CHILD_PERFORMANCE_VERIFIER_EXECUTABLE: Final[Path] = (
+    Path(__file__).resolve().parents[1]
+    / "build-performance/q/Release/dm_pipeline_verifier_cli.exe"
+)
+CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SIZE_BYTES: Final[int] = 240_640
+CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
+    "37EB37C8A86C010D3C69400E26BA5DCFA9E2A75C407F48DAEC1D03586D364AEF"
+)
 _SOURCE_AUTH_VERIFIER_MAGIC: Final[bytes] = b"DMVI0001"
 _VERIFIER_CALL_LOCK = threading.Lock()
 
@@ -78,15 +86,26 @@ class SourceAuthVerifierConfig:
     workspace: Path
     ml_dsa_87_public_key: bytes = field(repr=False, compare=False, hash=False)
     timeout_seconds: float = SOURCE_AUTH_TIMEOUT_SECONDS
+    identity_profile: str = "accepted"
 
     def __post_init__(self) -> None:
         if type(self.queue_config) is not QueueConfig:
             raise ValueError("source_auth_queue_config") from None
         if not isinstance(self.executable_path, Path) or not self.executable_path.is_absolute():
             raise ValueError("source_auth_executable_path") from None
-        if self.executable_size_bytes != SOURCE_AUTH_EXECUTABLE_SIZE_BYTES:
+        if self.identity_profile == "accepted":
+            expected_size = SOURCE_AUTH_EXECUTABLE_SIZE_BYTES
+            expected_sha256 = SOURCE_AUTH_EXECUTABLE_SHA256
+        elif self.identity_profile == "child-performance":
+            if self.executable_path.resolve() != CHILD_PERFORMANCE_VERIFIER_EXECUTABLE:
+                raise ValueError("source_auth_executable_identity") from None
+            expected_size = CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SIZE_BYTES
+            expected_sha256 = CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SHA256
+        else:
             raise ValueError("source_auth_executable_identity") from None
-        if self.executable_sha256 != SOURCE_AUTH_EXECUTABLE_SHA256:
+        if self.executable_size_bytes != expected_size:
+            raise ValueError("source_auth_executable_identity") from None
+        if self.executable_sha256 != expected_sha256:
             raise ValueError("source_auth_executable_identity") from None
         if not isinstance(self.workspace, Path) or not self.workspace.is_absolute():
             raise ValueError("source_auth_workspace") from None
@@ -281,6 +300,9 @@ __all__ = (
     "SOURCE_AUTH_FRAME_BYTES",
     "SOURCE_AUTH_EXECUTABLE_SHA256",
     "SOURCE_AUTH_EXECUTABLE_SIZE_BYTES",
+    "CHILD_PERFORMANCE_VERIFIER_EXECUTABLE",
+    "CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SHA256",
+    "CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SIZE_BYTES",
     "SOURCE_AUTH_IPC_PREFIX_BYTES",
     "SOURCE_AUTH_IPC_BYTES",
     "SOURCE_AUTH_PROCESS_ARGUMENTS",

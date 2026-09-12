@@ -33,6 +33,9 @@ from app.minimal_clearance_composition import (
     build_synthetic_acknowledgment,
 )
 from app.minimal_clearance_source_auth_verifier_adapter import (
+    CHILD_PERFORMANCE_VERIFIER_EXECUTABLE,
+    CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SHA256,
+    CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SIZE_BYTES,
     ML_DSA_87_PUBLIC_KEY_BYTES,
     SOURCE_AUTH_EXECUTABLE_SHA256,
     SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
@@ -47,6 +50,9 @@ from app.minimal_clearance_verification_queue import (
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
 from tools.direct_mask_complete_path import source_boundary
 from tools.direct_mask_complete_path.source_boundary import (
+    CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE,
+    CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SHA256,
+    CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
     Profile12SourceBoundaryCaller,
     SourceApplianceConfig,
     SOURCE_APPLIANCE_EXECUTABLE_SHA256,
@@ -681,6 +687,7 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
     """Run exactly one fresh valid source proof through the full local path."""
 
     _assert_real_directory(build_root, empty=False)
+    performance_native = os.environ.get("DIRECT_MASK_PERFORMANCE_NATIVE") == "1"
     public_key = load_frozen_public_key()
     queue_config, composition_config = build_complete_configs()
     clock = DeterministicClock()
@@ -717,23 +724,47 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
         verifier_workspace.mkdir()
         _assert_real_directory(source_workspace, empty=True)
         _assert_real_directory(verifier_workspace, empty=True)
+        if performance_native:
+            source_executable = CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE
+            source_executable_size = (
+                CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES
+            )
+            source_executable_sha256 = (
+                CHILD_PERFORMANCE_SOURCE_APPLIANCE_EXECUTABLE_SHA256
+            )
+            source_identity_profile = "child-performance"
+            verifier_executable = CHILD_PERFORMANCE_VERIFIER_EXECUTABLE
+            verifier_executable_size = CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SIZE_BYTES
+            verifier_executable_sha256 = CHILD_PERFORMANCE_VERIFIER_EXECUTABLE_SHA256
+            verifier_identity_profile = "child-performance"
+        else:
+            source_executable = SOURCE_APPLIANCE_EXECUTABLE
+            source_executable_size = SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES
+            source_executable_sha256 = SOURCE_APPLIANCE_EXECUTABLE_SHA256
+            source_identity_profile = "accepted"
+            verifier_executable = INDEPENDENT_VERIFIER_EXECUTABLE
+            verifier_executable_size = SOURCE_AUTH_EXECUTABLE_SIZE_BYTES
+            verifier_executable_sha256 = SOURCE_AUTH_EXECUTABLE_SHA256
+            verifier_identity_profile = "accepted"
         source_caller = Profile12SourceBoundaryCaller(
             SourceApplianceConfig(
-                executable_path=SOURCE_APPLIANCE_EXECUTABLE,
+                executable_path=source_executable,
                 workspace=source_workspace,
-                executable_size_bytes=SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
-                executable_sha256=SOURCE_APPLIANCE_EXECUTABLE_SHA256,
+                executable_size_bytes=source_executable_size,
+                executable_sha256=source_executable_sha256,
                 timeout_seconds=180.0,
+                identity_profile=source_identity_profile,
             )
         )
         source_auth_config = SourceAuthVerifierConfig(
             queue_config=queue_config,
-            executable_path=INDEPENDENT_VERIFIER_EXECUTABLE,
-            executable_size_bytes=SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
-            executable_sha256=SOURCE_AUTH_EXECUTABLE_SHA256,
+            executable_path=verifier_executable,
+            executable_size_bytes=verifier_executable_size,
+            executable_sha256=verifier_executable_sha256,
             workspace=verifier_workspace,
             ml_dsa_87_public_key=public_key,
             timeout_seconds=30.0,
+            identity_profile=verifier_identity_profile,
         )
         runtime = runtime_module.MinimalClearanceVerificationRuntime.from_source_auth(
             root=run_root,

@@ -227,3 +227,83 @@ measurement_complete=true, cleanup_complete=true, and pagefile_growth_evidence='
 No unchanged State, adapter, or ten-case malformed-native suites were rerun; the accepted
 prior raw outputs remain the evidence. Flags remain 'proofSuiteId=null',
 'production_usable=false', 'activation=false', 'NOT_QUALIFIED'/'INACTIVE'/'UNSELECTED'.
+
+### Active native arithmetic performance objective — 2026-09-12
+
+This fresh detached child starts at accepted E2E commit
+'51158c2db5c4d1b82c88875ea23707a6e7fa1d89' / tree
+'bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306'. It owns a cohesive optimization of the already
+accepted unfiltered native chain, not a protocol/profile redesign. Read-only inputs are the
+committed pipeline, primitive, fixture, circuit-export, vendor, and ML-DSA identities recorded
+in 'AGENTS.md'. The imported scope is exact field/kernel/circuit/native build material plus
+child-local complete-path executable identity wiring; State/runtime/composition/Queue semantics,
+vendor code, source/proof/signature/codec bytes, filtered mode, Profile13, and product/ops
+paths remain protected.
+
+The accepted baseline is source 10.546812s, independent verifier 6.671242s, total 17.870595s
+for one synthetic 100-operation path. Establish the actual hot arithmetic call chain and
+implement only exact constant-time field acceleration with a portable reference and safe CPU
+dispatch. Preserve field/reduction/ABI/aliasing/protocol/transcript/signature/coin/retry/
+containment/atomicity invariants. Use the existing guarded runner and mutex with its
+1073741824-byte reserve, '<5000000000' process-tree cap, 4500000000 native cap, and active
+process limit 1. No generic benchmark framework, extra controller, cache, raw proof logging,
+or qualification claim is allowed.
+
+Completion requires affected arithmetic equivalence, link-isolation, acceptance/rejection and
+malformed gates, exact rebuilt binary identities, bounded fresh before/after complete-path
+samples, and raw source/verifier/State/ACK timing and retry evidence. Reuse unchanged
+State/runtime/recovery evidence; do not rerun it without a changed identity/orchestration
+justification. Flags remain 'proofSuiteId=null', 'production_usable=false',
+'NOT_QUALIFIED'/'INACTIVE'/'UNSELECTED'.
+
+### Native arithmetic performance verified handoff — 2026-09-12
+
+This child remains at detached HEAD `51158c2db5c4d1b82c88875ea23707a6e7fa1d89` / tree
+`bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306`, with the authorized changes uncommitted. The
+optimization is confined to child-local `direct_mask_bf256_accel.{c,h}` and native CMake
+wiring, plus exact child-performance executable identity plumbing in the complete path. The
+field backend is fixed 4x4 PCLMUL with fixed-word reduction, public CPU dispatch, alias-safe
+in-place behavior, and an independently linked symbol-isolated portable vendor reference.
+
+Import identity is verified: `IMPORT_CHECKED=74`, `CMAKE_WIRING_DIFFS=9`,
+`UNAUTHORIZED_IMPORT_ERRORS=0`, `MISSING_EXPECTED_FILES=0`; the only two extra files are the
+acceleration C/H pair. Source/proof/signature/codec/fixture implementation blobs remain
+byte-equivalent to the pinned pipeline/primitive/fixture commits. The acceleration C/H hashes
+are `5FC9AA99647C7F38060545F05AC45C2394A1A442C8061C5E520D1F77C50C3625` and
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`.
+
+Verification results:
+
+- Current arithmetic probe: `BF256_BACKEND=pclmul PCLMUL_AVAILABLE=1`; both `BF256_OUT_OF_PLACE_MATCH=PASS` and `BF256_IN_PLACE_MATCH=PASS`; build/process exit `0`.
+- Circuit, kernel, VOLE, and fixture gates pass. Decisive raw lines include `DIRECT_MASK_CIRCUIT status=PASS`, `1/1 Test #1: direct_mask_kernel_full_field ... Passed`, `VOLE_IDENTITY rows=1792 mismatches=0 delta_zero=0`, `E2E_VERIFY_STATUS status=0`, `DIRECT_MASK_PROBE_COUNTS passed=53 failed=0`, `FIXTURE_IMPORTED_LIBRARY_IDENTITY=PASS count=8`, and fixture CTest `100% tests passed, 0 tests failed out of 1`.
+- Integrated Release CTest: `100% tests passed, 0 tests failed out of 8`, total `34.02 sec`, exit `0`; native probe counts are `114/96/58/86` with `FAILED=0`, and all real-symbol/closure checks pass.
+- Adapter unit tests: `Ran 14 tests in 4.367s`, `OK`, exit `0`.
+
+Final child-performance identities are source `276480/176B237D8277A1CF09EECE1DC58DBB9B012C9B6700C6FB8C04FEF46011FDD626`, verifier
+`240640/37EB37C8A86C010D3C69400E26BA5DCFA9E2A75C407F48DAEC1D03586D364AEF`, and accelerated
+`dm_faest_public.lib` `333298/B664A72471120AAA1D236236AE1BF7C5BB46B3989471771712566BEBD39069ED`.
+The default accepted pins remain source `275968/D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8` and verifier
+`240128/38FB45E017D08AC11098D8837C78D02143B86753AA4F085174073C64353AC835`.
+
+The final guarded candidate evidence is exactly one fresh synthetic 100-operation path:
+one issued/verified batch, 100 transactions, 100 ACKs, 100 unique idempotency keys, zero
+duplicate dispatches, 100 receiver side effects, successful reopen with no work, exact
+inventory `['state.sqlite']`, empty source/verifier workspaces, source/verifier calls
+`1/1`, State-port calls `1`, and fixed `proof_suite_id=null`, `production_usable=false`,
+`activation=false`. Candidate source/verifier/total measurements are
+`5267.863/2884.734/8851.049 ms`; paired baseline measurements are
+`10637.985/6845.545/18141.746 ms`, observed reductions `50.49%/57.86%/51.21%` in this
+single guarded sample. Candidate guard telemetry: preflight free `3154444288`, reserve
+`1073741824`, minimum free `3049099264`, peak working set `80388096`, peak private
+`54861824`, child exit `7/0`, cleanup `PASS`, mutex released. This is measured performance
+evidence only, not p95, production security, qualification, or Profile13 readiness.
+
+Corrected intermediate conditions are retained in the handoff: long-path MSVC `C1083`/
+`FTK1011`, literal `$vendor`/`$oracle` kernel arguments, three initially unavailable
+EXCLUDE_FROM_ALL integrated probes, and one no-`-C Release` CTest invocation (all eight
+`Not Run`, reported as 8 failed-to-run tests) were each corrected and rerun. The VOLE probe reports the explicit existing
+disposition `REMOVED_SYNTHETIC_CHECKS count=6 reason=obsolete_local_polynomial_and_hash_path_removed
+replacement=accepted_direct_mask_kernel_and_algebra_probes`; no final gate is skipped or
+unresolved. Warnings are limited to pinned-vendor `C4141`, `C4146`, and `C4244` warnings.
+State/runtime/composition/Queue semantics, vendor files, filtered mode, Profile13, product,
+custody, payment, PHI, deployment, Lean, and formal paths remain protected.

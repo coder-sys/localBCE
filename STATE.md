@@ -313,3 +313,88 @@ idempotency keys, zero duplicates, 100 receiver side effects, successful reopen 
 source/verifier stdout bytes 539013/0, stderr bytes 0/0, and fixed nonactivation flags.
 Unchanged State/adapter/malformed-native suites were intentionally not rerun; their accepted
 raw handoff evidence remains authoritative.
+
+## Active native arithmetic performance phase — 2026-09-12
+
+The new performance child is rooted at accepted E2E commit
+'51158c2db5c4d1b82c88875ea23707a6e7fa1d89' / tree
+'bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306'. It is a source-selected, nonactivating native
+optimization phase. The accepted baseline is one synthetic 100-operation complete path at
+source 10.546812s, independent verifier 6.671242s, total 17.870595s. The concrete
+optimization hypothesis is the pinned vendor 255-bit 'bf256_mul'/'bf256_mul_inplace' loop;
+the field, reduction, protocol, source/signature, transcript, verifier, State, outbox/ACK,
+and containment contracts are unchanged.
+
+Only exact committed native imports and child-local field/kernel/circuit/build wiring are in
+scope. Vendor, source/proof/codec, State/runtime/composition/Queue, filtered/Profile13,
+operations, custody, deployment, payment, PHI, Lean, and formal paths remain protected.
+The existing guarded runner, exit 7/0 probes, 1073741824-byte reserve, '<5000000000'
+process-tree cap, 4500000000 native cap, active process limit 1, mutex, cleanup telemetry,
+and memory-only proof boundary remain mandatory. No production, qualification, p95, or
+security claim follows from this phase.
+
+## Native arithmetic performance verified evidence — 2026-09-12
+
+The performance child remains detached at HEAD `51158c2db5c4d1b82c88875ea23707a6e7fa1d89`
+ / tree `bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306`, with authorized worktree changes not yet
+committed. The native change is child-local `direct_mask_bf256_accel.{c,h}` plus CMake
+wiring and complete-path identity plumbing. It implements fixed 4x4 PCLMUL GF(2^256)
+multiplication with fixed-word reduction, public CPU dispatch, alias-safe in-place operation,
+and a renamed, independently linked pinned-vendor portable reference. Native C/H SHA-256:
+`5FC9AA99647C7F38060545F05AC45C2394A1A442C8061C5E520D1F77C50C3625` /
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`.
+
+The exact import comparison reported `IMPORT_CHECKED=74`, `CMAKE_WIRING_DIFFS=9`,
+`UNAUTHORIZED_IMPORT_ERRORS=0`, `MISSING_EXPECTED_FILES=0`; only the two acceleration
+files are extra. The source/proof/signature/codec/fixture implementations remain byte-identical
+to the committed input identities. `dumpbin /symbols` on the accelerated library reported
+both public `bf256_mul`/`bf256_mul_inplace` and external
+`direct_mask_bf256_mul_portable`/`direct_mask_bf256_mul_inplace_portable`, with static
+`direct_mask_bf256_mul_pclmul`; dumpbin exit was `0`.
+
+Native and link evidence is current: the arithmetic probe reports
+`BF256_BACKEND=pclmul PCLMUL_AVAILABLE=1` and
+`BF256_OUT_OF_PLACE_MATCH=PASS BF256_IN_PLACE_MATCH=PASS`; circuit, kernel, VOLE, and
+fixture builds/probes pass. The VOLE raw evidence includes
+`VOLE_IDENTITY rows=1792 mismatches=0 delta_zero=0`, `SOURCE_PROVE_STATUS status=0
+prover_calls=1`, `E2E_VERIFY_STATUS status=0`, `SOURCE_BOUND_COUNTS ... counts_equal=1`,
+`DIRECT_MASK_PROBE_COUNTS passed=53 failed=0`, and `DIRECT_MASK_PROBE_STATUS=PASS`.
+Integrated Release CTest reports `100% tests passed, 0 tests failed out of 8`, total
+`34.02 sec`, exit `0`; the four native probe counts are `CHECK_COUNT=114/96/58/86
+FAILED=0`, and all real-symbol/closure gates pass. Fixture identity reports
+`FIXTURE_IMPORTED_LIBRARY_IDENTITY=PASS count=8`; adapter unit tests report `Ran 14 tests
+in 4.367s` and `OK`.
+
+Final child binaries are source `276480` bytes / SHA-256
+`176B237D8277A1CF09EECE1DC58DBB9B012C9B6700C6FB8C04FEF46011FDD626`, verifier `240640`
+bytes / SHA-256 `37EB37C8A86C010D3C69400E26BA5DCFA9E2A75C407F48DAEC1D03586D364AEF`, and
+`dm_faest_public.lib` `333298` bytes / SHA-256
+`B664A72471120AAA1D236236AE1BF7C5BB46B3989471771712566BEBD39069ED`. The old accepted
+default pins remain `275968/D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8`
+and `240128/38FB45E017D08AC11098D8837C78D02143B86753AA4F085174073C64353AC835`.
+
+The final guarded candidate `COMPLETE_PATH_EVIDENCE` is one fresh synthetic 100-operation
+run: `issued_batch_count=1`, `independent_verified_batch_count=1`, `source_calls=1`,
+`verifier_calls=1`, `state_port_calls=1`, `transaction_count=100`,
+`outbox_acknowledged_count=100`, `unique_idempotency_keys=100`,
+`receiver_duplicate_dispatches=0`, `receiver_side_effects=100`,
+`reopened_without_work=true`, `run_artifact_inventory=["state.sqlite"]`, empty source and
+verifier workspaces, and `proof_suite_id=null`, `production_usable=false`,
+`activation=false`. Source/verifier/total measured `5267.863/2884.734/8851.049 ms`; the
+paired baseline measured `10637.985/6845.545/18141.746 ms`, an observed single-sample
+reduction of `50.49%/57.86%/51.21%`, not p95 or qualification evidence. Candidate guard
+telemetry was preflight free `3154444288`, reserve `1073741824`, minimum free `3049099264`,
+peak working set `80388096`, peak private `54861824`, child exit `7/0`, cleanup `PASS`, and
+released mutex. Baseline minimum free was `3463213056`; it also passed child exit/cleanup.
+
+Intermediate failures and skips are explicitly accounted for: the original long-path build
+hit MSVC `C1083`/`FTK1011` and was moved to the validated `Q:` path; one kernel configure
+used literal `$vendor`/`$oracle` and was rerun quoted; three initially unavailable
+EXCLUDE_FROM_ALL integrated probes were explicitly built; and one no-`-C Release` CTest
+attempt showed all eight `Not Run` (8 failed-to-run tests) with `Missing "-C <config>"`, after which the exact
+Release command passed all eight. The existing VOLE probe reports
+`REMOVED_SYNTHETIC_CHECKS count=6 reason=obsolete_local_polynomial_and_hash_path_removed
+replacement=accepted_direct_mask_kernel_and_algebra_probes`. These are not unresolved
+gates. Build warnings are pinned-vendor `C4141`, `C4146`, and `C4244`; no new acceleration
+error remains. No State/runtime/composition/Queue, vendor, product, custody, payment, PHI,
+deployment, Lean, formal, filtered/Profile13, activation, or production status changed.
