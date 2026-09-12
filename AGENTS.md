@@ -296,3 +296,63 @@ Native adapter/process acceptance is explicitly pending the driver's exact ident
 must be reported as a dependency, never as a passed or silently skipped test. Keep
 `proofSuiteId=null`, `production_usable=false`, `activation=false`, and
 `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
+
+## Active E2E complete-path delegation — 2026-09-12
+
+The current driver packet supersedes the preceding native-adapter deferral only for this
+nonactivating integration stage. The child is the detached worktree
+'C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\pq-direct-mask-complete-path-20260912',
+created from State commit '6129625a88e94d005f5dfe5fd4f6fb8e05a19793' / tree
+'997e4a8e5543139ea9b81e70574eba5a44d53094d'. The accepted State/runtime correction is the
+source-selected commit '6aa9e634948b6b3a40d1c3c4f07299f8fd5493db' / tree
+'a8c6c2f1845686b80e9e079c807ad50c3f1deb92'; the accepted adapter source is commit
+'55b1d71fc5f6fa1860225e590a6dbff5af3db2e1'; the accepted Queue caller is commit
+'4f7d8d9475de5e4042af0f85c00a955259da737f'.
+
+### Exact active write scope
+
+The active integration may touch only:
+
+- 'app/minimal_clearance_source_auth_verifier_adapter.py'
+- 'tests/test_minimal_clearance_source_auth_verifier_adapter.py'
+- 'tests/test_minimal_clearance_verification_runtime.py'
+- 'app/minimal_clearance_verification_queue.py'
+- 'tests/test_minimal_clearance_verification_queue.py'
+- 'tests/test_direct_mask_state_profile12.py'
+- 'tools/direct_mask_complete_path/'
+- 'tests/test_direct_mask_source_boundary.py'
+- 'tests/test_direct_mask_complete_path.py'
+- exact source-only classifications in 'tools/release_manifest_gate.py' and their existing
+  dynamic expectations
+- narrow authority records in this file, 'CURRENT_TASK.md', and 'STATE.md'
+
+The source-selected State/runtime files are accepted handoffs, not a license to alter the
+independent verifier, composition implementation, C/vendor/crypto code, ops, selection/custody/
+payment paths, Lean/formal files, deployment/profile files, or any other protected path.
+
+### Frozen E2E boundary
+
+The valid proof run must be one fresh source-appliance request
+'DMSR0001 || u64LE1 || u32LE4096 || context64 || nonzeroU96' for exactly one State-issued
+100-member batch, through the accepted source caller, the independent native verifier, the
+atomic Queue/State/composition transaction, and the opaque outbox/ACK lane. The source capsule
+and verifier IPC remain memory-only. The source executable pin is 275968 bytes with SHA-256
+'D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8'; the verifier pin is
+240128 bytes with SHA-256
+'38FB45E017D08AC11098D8837C78D02143B86753AA4F085174073C64353AC835'. The public-key header
+pin is 19249 bytes with SHA-256
+'ED5B965981E766AA3EFB59303D33719B6C1579C0025D615BB8354AA63AC6FAC9', with decoded public
+bytes SHA-256 '91DC389CFAA01470B7F66EEE45A4AE9026D154817C754DFE22298B3FA241FFCD'.
+
+Preprovision exact empty non-reparse source/verifier workspaces under the child
+'build-complete-path' tree. The copied outer guard must retain child exit 7/0 preflight,
+physical reserve '1073741824', process-tree cap '<5000000000', active process limit '1',
+mutex 'Local\BlindLedgerDirectMaskBuild20260907', and cleanup/resource markers. The guard
+must not capture proof bytes; only the inner Python runner may pass volatile bytes between the
+source and verifier calls.
+
+The source-only release boundary is explicit: the fixture-bound source caller, complete-path
+module, CMake file, and their tests are retained in Git for evidence but excluded by exact
+'SOURCE_ONLY' classifications. Keep 'proofSuiteId=null', 'production_usable=false',
+'activation=false', 'NOT_QUALIFIED'/'INACTIVE'/'UNSELECTED'; synthetic State/receiver
+implementations do not confer official authority or production qualification.

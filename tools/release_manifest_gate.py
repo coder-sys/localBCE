@@ -198,9 +198,15 @@ EXCLUDED_SUFFIXES = frozenset(
 # but are not publishable release inputs. Keep this boundary explicit and finite.
 RELEASE_SOURCE_ONLY_PATHS = frozenset(
     {
+        "tests/test_direct_mask_complete_path.py",
+        "tests/test_direct_mask_source_boundary.py",
         "profile11_complete_path.py",
         "profile11_complete_path_manifest.json",
         "profile11_source_boundary.py",
+        "tools/direct_mask_complete_path/CMakeLists.txt",
+        "tools/direct_mask_complete_path/__init__.py",
+        "tools/direct_mask_complete_path/complete_path.py",
+        "tools/direct_mask_complete_path/source_boundary.py",
     }
 )
 

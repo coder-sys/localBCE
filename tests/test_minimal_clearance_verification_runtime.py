@@ -12,6 +12,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app.minimal_clearance_composition as composition
+from app.minimal_clearance_source_auth_verifier_adapter import (
+    ML_DSA_87_PUBLIC_KEY_BYTES,
+    MinimalClearanceSourceAuthVerifierAdapter,
+    SOURCE_AUTH_EXECUTABLE_SHA256,
+    SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
+    SourceAuthVerifierConfig,
+)
 import app.minimal_clearance_verification_queue as queue_module
 import app.minimal_clearance_verification_runtime as runtime_module
 from app.minimal_clearance_composition import CompositionConfigV2, StateDispositionControl, build_synthetic_acknowledgment
@@ -218,15 +225,73 @@ class _BlockingReceiver(_Receiver):
         return super().dispatch(envelope_bytes, idempotency_key)
 
 
+_SOURCE_AUTH_VERIFIER_PATH = Path(
+    r"C:\Users\neers\Documents\Codex\2026-09-04\pmb-20260908\Release\dm_pipeline_verifier_cli.exe"
+)
+_PREPROVISIONED_PROFILE12_PUBLIC_KEY = bytes(
+    (index * 17 + 3) % 256 for index in range(ML_DSA_87_PUBLIC_KEY_BYTES)
+)
+
+
+def _source_auth_config(root: Path, queue_id: str) -> SourceAuthVerifierConfig:
+    workspace = root / "verifier-workspace"
+    workspace.mkdir()
+    return SourceAuthVerifierConfig(
+        queue_config=QueueConfig(queue_id, 100),
+        executable_path=_SOURCE_AUTH_VERIFIER_PATH,
+        executable_size_bytes=SOURCE_AUTH_EXECUTABLE_SIZE_BYTES,
+        executable_sha256=SOURCE_AUTH_EXECUTABLE_SHA256,
+        workspace=workspace,
+        ml_dsa_87_public_key=_PREPROVISIONED_PROFILE12_PUBLIC_KEY,
+        timeout_seconds=30.0,
+    )
+
+
 class RuntimeV12Tests(unittest.TestCase):
 
-    @unittest.skip("native Profile12 adapter/source identity is deferred by the active grant")
     def test_from_source_auth_passes_the_state_port_boundary(self) -> None:
-        self.fail("native adapter dependency is pending")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_config = _source_auth_config(root, "runtime-source-auth-boundary")
+            port = _DispositionPort()
+            runtime = MinimalClearanceVerificationRuntime.from_source_auth(
+                root=root,
+                source_auth_config=source_config,
+                state_disposition_port=port,
+            )
+            try:
+                self.assertIsInstance(
+                    runtime._verifier,
+                    MinimalClearanceSourceAuthVerifierAdapter,
+                )
+                self.assertIs(runtime._state_disposition_port, port)
+                self.assertEqual(runtime._store.config, source_config.queue_config)
+                self.assertTrue((root / "state.sqlite").is_file())
+                self.assertFalse((root / "queue.sqlite").exists())
+                self.assertFalse((root / "composition.sqlite").exists())
+            finally:
+                runtime.close()
 
-    @unittest.skip("native Profile12 adapter/source identity is deferred by the active grant")
     def test_from_source_auth_remains_nonactivating_and_unified(self) -> None:
-        self.fail("native adapter dependency is pending")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_config = _source_auth_config(root, "runtime-source-auth-nonactivating")
+            runtime = MinimalClearanceVerificationRuntime.from_source_auth(
+                root=root,
+                source_auth_config=source_config,
+            )
+            try:
+                summary = runtime.support_summary()
+                self.assertEqual(summary["schema"], queue_module._SCHEMA)
+                self.assertIsNone(summary["proof_suite_id"])
+                self.assertFalse(summary["production_usable"])
+                self.assertFalse(summary["activation"])
+                self.assertFalse(summary["proof_bytes_persisted"])
+                self.assertFalse(summary["path_custody"])
+                self.assertFalse(summary["backend_qualified"])
+                self.assertFalse(summary["resource_product_credit"])
+            finally:
+                runtime.close()
 
     def test_runtime_uses_state_port_only_after_accepted_verifier_fact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -660,14 +725,23 @@ class RuntimeV12Tests(unittest.TestCase):
             config = QueueConfig("runtime-v10-concurrent-owner", 100)
             barrier = threading.Barrier(2)
             winners: list[MinimalClearanceVerificationRuntime] = []
-            failures: list[str] = []
+            failures: list[dict[str, str | None]] = []
 
             def create_runtime() -> None:
                 barrier.wait()
                 try:
                     runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort())
-                except VerificationRuntimeError as error:
-                    failures.append(str(error))
+                except BaseException as error:
+                    context = error.__context__
+                    cause = error.__cause__
+                    failures.append({
+                        "type": type(error).__name__,
+                        "message": str(error),
+                        "context_type": None if context is None else type(context).__name__,
+                        "context_message": None if context is None else str(context),
+                        "cause_type": None if cause is None else type(cause).__name__,
+                        "cause_message": None if cause is None else str(cause),
+                    })
                 else:
                     winners.append(runtime)
 
@@ -677,7 +751,9 @@ class RuntimeV12Tests(unittest.TestCase):
             for thread in threads:
                 thread.join()
             self.assertEqual(len(winners), 1)
-            self.assertEqual(failures, ["runtime_already_owned"])
+            self.assertEqual(len(failures), 1, failures)
+            self.assertEqual(failures[0]["type"], "VerificationRuntimeError", failures)
+            self.assertEqual(failures[0]["message"], "runtime_already_owned", failures)
             runtime = winners[0]
             try:
                 now = int(time.time() * 1000)

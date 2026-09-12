@@ -2,7 +2,7 @@
 
 Updated: 2026-09-12
 
-## Profile12 Queue/State implementation — unverified/in progress
+## Profile12 Queue/State implementation — corrected, unverified/in progress
 
 This child is the exclusive writable checkout for the Profile12 Queue/schema/independent/runtime/
 accounting stage. The earlier project-wide cleanup objective is historical evidence only and is no
@@ -124,19 +124,65 @@ and HOLD for driver review. Flags remain `proofSuiteId=null`, `production_usable
 
 ### Measured stage evidence — 2026-09-12
 
-The current bounded implementation has passed `py -3.14 -B -m py_compile` for the changed
-implementation/tests, Profile12 focused tests `28 passed`, Queue tests `29 passed`, and Runtime
-tests `17 passed, 2 skipped`. The two runtime skips are the native Profile12 adapter/source
-identity tests, explicitly deferred by the active grant pending the driver's accepted exact C
-binary/source-appliance packet. The focused matrix covers 15 serializer/config mutations, five
-producer/independent context bindings, six missing/orphan association families across
-verify/read/export/restore, 16 issue/claim counter sequence cases, actual zero-then-nonzero
-sampler draws, genuine Profile11 WAL/SHM preservation, exact-u64 clock rejection, lifecycle,
-receipt/error closure, timestamps, reservation, context, KAT, and hold checks. The independent
-checker now binds both reservation-bearing events to the durable attempt row, validates every
-result row and foreign-key closure, and claim validates coin/context, reservation shape, and
-source epoch before lease mutation. One initial full Runtime run had a transient concurrent-owner
-result of `0` winners; the isolated test rerun and final full Runtime run passed with the same two
-explicit native skips. No adapter/source-auth test, Profile11 proof probe, large solver, or
-unrelated broad suite was run.
-The stage remains synthetic, nonactivating, unqualified, and held for driver review.
+The bounded State/runtime reliability correction is committed on top of the Profile12
+implementation. Final focused gates were `py -3.14 -B -m py_compile` exit `0`; Queue tests
+`Ran 30 tests in 8.983s`, `OK`; Runtime tests `Ran 19 tests in 5.182s`, `OK (skipped=2)`; and
+Profile12 tests `Ran 29 tests in 15.660s`, `OK`. The two Runtime skips are exactly
+`test_from_source_auth_passes_the_state_port_boundary` and
+`test_from_source_auth_remains_nonactivating_and_unified`, both skipped because native Profile12
+adapter/source identity is deferred by the active grant pending the driver's accepted exact C
+binary/source-appliance packet.
+
+The pre-fix concurrency diagnostic retained the actual per-contender chain: in 3 of 20 barrier
+iterations both contenders returned `VerificationRuntimeError: runtime_scope` and
+`state.sqlite.runtime-lock` remained; the instrumented native chain showed one contender's
+`WriteFile` received Windows error 33 while the other read an empty marker. The corrected owner
+holds a weakly-keyed in-process gate for the full native-owner lifetime, makes the newly-created
+Windows handle deny concurrent write/open sharing while preserving read/delete identity tests,
+maps the nested sharing/access-denied open to `runtime_already_owned`, and releases the process
+gate only after native cleanup is known. A deterministic Windows partial-initialization test now
+passes with one acquired owner and a `VerificationQueueError:runtime_already_owned` loser. A
+100-iteration barrier stress passed `100/100`: one winner, one `runtime_already_owned` loser,
+and no cleanup race.
+
+The runtime concurrency test retains each contender's exception type, message, context type and
+message, and cause type and message instead of only a string. The focused matrix still covers
+the Profile12 KAT, serializer/config/context bindings, association closure across
+verify/read/export/restore, exact counters and sampler draws, lifecycle/timestamp/receipt/error
+closure, genuine Profile11 WAL/SHM rejection, crash/reopen, handoff wipe, and owner cleanup.
+The added v12 WAL drift test proves the immutable main-image version check is only preliminary:
+the live read follows WAL schema state and rejects a v11 drift before mutable PRAGMA use while
+preserving the main DB and WAL bytes. No adapter/source-auth test, Profile11 proof probe, large
+solver, unrelated broad suite, or protected production path was run. The stage remains synthetic,
+nonactivating, unqualified, and held for driver review.
+
+### Active E2E integration objective — 2026-09-12
+
+This section is the current objective and supersedes the preceding 'native identity deferred'
+wording for this child only. Integrate the accepted State/runtime correction
+'6aa9e634948b6b3a40d1c3c4f07299f8fd5493db' / tree
+'a8c6c2f1845686b80e9e079c807ad50c3f1deb92', accepted adapter source commit
+'55b1d71fc5f6fa1860225e590a6dbff5af3db2e1', and accepted Queue caller commit
+'4f7d8d9475de5e4042af0f85c00a955259da737f' by exact path selection. Do not wholesale-copy
+authority files from those checkouts.
+
+The deliverable is one runnable, guarded, nonactivating complete path:
+
+'State issue (100 operations) -> public DMSR0001 source request -> fresh source capsule in
+memory -> independent native verifier -> atomic Queue/State/composition commit -> opaque
+outbox/ACK delivery -> independent readback/reopen'.
+
+The valid proof path must use the pinned source executable, pinned independent verifier, and
+frozen public-key header from the driver packet. It must report measured source, verifier,
+State/queue, and outbox stages, exact operation/batch/row/ACK counts, workspace cleanup,
+independent readback, and restart/deduplication evidence without writing proof/capsule/IPC
+bytes. Use the accepted shared guard under 'build-complete-path'; the guard retains the
+1-GiB reserve, '<5e9' process-tree cap, active-process limit 1, child exit 7/0 preflight,
+mutex, and cleanup checks.
+
+Required negatives are the already accepted ten native malformed-source cases from the Queue
+handoff with matching inputs, plus only meaningful integration checks for altered context/U/
+ordering/epoch, consumed/replayed handoffs, rejected-verifier State nonmutation, atomic
+completion, receiver failure, restart, and no duplicate rows/ACK side effects. No rejected C
+harness, old Profile11 probe, filtered-mode upgrade, production qualification, Lean linkage,
+real PHI/payment, official receiver, or activation is in scope.

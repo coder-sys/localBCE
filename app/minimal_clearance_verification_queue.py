@@ -21,6 +21,8 @@ import re
 import secrets
 import sqlite3
 import stat
+import threading
+import weakref
 from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
 
 from app.minimal_clearance_resource_limits import (
@@ -772,6 +774,21 @@ _RUNTIME_LOCK_MARKER_PREFIX: Final[bytes] = b"BL/RUNTIME-LOCK/v1/"
 _RUNTIME_LOCK_PID_BYTES: Final[int] = 10
 _RUNTIME_LOCK_RELEASED_MARKER: Final[bytes] = _RUNTIME_LOCK_MARKER_PREFIX + b"FREE"
 _RUNTIME_REPARSE_POINT: Final[int] = 0x400
+_RUNTIME_LOCAL_LOCKS_GUARD = threading.Lock()
+_RUNTIME_LOCAL_LOCKS: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
+
+
+def _runtime_local_lock(path: Path) -> threading.Lock:
+    try:
+        key = os.path.normcase(os.path.normpath(os.fspath(path.resolve(strict=False))))
+    except (OSError, RuntimeError):
+        _raise_fixed(VerificationQueueError("runtime_scope"))
+    with _RUNTIME_LOCAL_LOCKS_GUARD:
+        lock = _RUNTIME_LOCAL_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _RUNTIME_LOCAL_LOCKS[key] = lock
+        return lock
 
 
 def _runtime_file_identity(info: os.stat_result) -> tuple[int, int, int]:
@@ -827,6 +844,7 @@ if os.name == "nt":
     _RUNTIME_WIN_LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
     _RUNTIME_WIN_FILE_DISPOSITION_INFO = 4
     _RUNTIME_WIN_ERROR_FILE_NOT_FOUND = 2
+    _RUNTIME_WIN_ERROR_ACCESS_DENIED = 5
     _RUNTIME_WIN_ERROR_INVALID_HANDLE = 6
     _RUNTIME_WIN_ERROR_SHARING_VIOLATION = 32
     _RUNTIME_WIN_ERROR_LOCK_VIOLATION = 33
@@ -928,10 +946,18 @@ if os.name == "nt":
                 raise OSError(ctypes.get_last_error(), "CloseHandle")
 
     def _runtime_win_open(path: Path, *, disposition: int) -> object:
+        # Do not expose a newly-created, partially-initialized lock path to
+        # another writer/opener. Retain read/delete sharing so identity-bound
+        # replacement checks and native delete-on-close cleanup remain valid.
+        share_mode = (
+            _RUNTIME_WIN_FILE_SHARE_READ | _RUNTIME_WIN_FILE_SHARE_DELETE
+            if disposition == _RUNTIME_WIN_CREATE_NEW
+            else _RUNTIME_WIN_FILE_SHARE_READ | _RUNTIME_WIN_FILE_SHARE_WRITE | _RUNTIME_WIN_FILE_SHARE_DELETE
+        )
         handle = _RUNTIME_WIN_CreateFileW(
             str(path),
             _RUNTIME_WIN_GENERIC_READ | _RUNTIME_WIN_GENERIC_WRITE | _RUNTIME_WIN_DELETE,
-            _RUNTIME_WIN_FILE_SHARE_READ | _RUNTIME_WIN_FILE_SHARE_WRITE | _RUNTIME_WIN_FILE_SHARE_DELETE,
+            share_mode,
             None,
             disposition,
             _RUNTIME_WIN_FILE_FLAG_OPEN_REPARSE_POINT | _RUNTIME_WIN_FILE_ATTRIBUTE_NORMAL,
@@ -1056,6 +1082,7 @@ class _QueueRuntimeOwnership:
         "_lock_path", "_parent", "_closed", "_pid", "_created", "_identity",
         "_path_removed", "_marker_rebound", "_release_unknown", "_fd", "_flock_held",
         "_fd_release_unknown", "_handle", "_overlapped", "_handle_release_unknown",
+        "_local_lock", "_local_lock_held",
     )
 
     def __init__(self, *, lock_path: Path, parent: Path) -> None:
@@ -1076,7 +1103,12 @@ class _QueueRuntimeOwnership:
         self._handle: object | None = None
         self._overlapped = None
         self._handle_release_unknown = False
+        self._local_lock = _runtime_local_lock(lock_path)
+        self._local_lock_held = False
         try:
+            if not self._local_lock.acquire(blocking=False):
+                _raise_fixed(VerificationQueueError("runtime_already_owned"))
+            self._local_lock_held = True
             self._acquire()
         except BaseException:
             try:
@@ -1173,7 +1205,12 @@ class _QueueRuntimeOwnership:
         except OSError as error:
             code = _runtime_win_error(error)
             if code in {_RUNTIME_WIN_ERROR_FILE_EXISTS, _RUNTIME_WIN_ERROR_ALREADY_EXISTS}:
-                self._handle = _runtime_win_open(self._lock_path, disposition=_RUNTIME_WIN_OPEN_EXISTING)
+                try:
+                    self._handle = _runtime_win_open(self._lock_path, disposition=_RUNTIME_WIN_OPEN_EXISTING)
+                except OSError as open_error:
+                    if _runtime_win_error(open_error) in {_RUNTIME_WIN_ERROR_ACCESS_DENIED, _RUNTIME_WIN_ERROR_SHARING_VIOLATION}:
+                        _raise_fixed(VerificationQueueError("runtime_already_owned"))
+                    raise
             elif code == _RUNTIME_WIN_ERROR_SHARING_VIOLATION:
                 _raise_fixed(VerificationQueueError("runtime_already_owned"))
             else:
@@ -1306,6 +1343,20 @@ class _QueueRuntimeOwnership:
         else:
             self._fd = None
 
+    def _release_local(self) -> None:
+        if not self._local_lock_held:
+            return
+        if (
+            self._release_unknown
+            or self._fd is not None
+            or self._handle is not None
+            or self._flock_held
+            or self._overlapped is not None
+        ):
+            return
+        self._local_lock.release()
+        self._local_lock_held = False
+
     def _constructor_cleanup(self) -> None:
         errors: list[BaseException] = []
         if self._created and self._lock_is_held() and os.name == "nt":
@@ -1319,7 +1370,8 @@ class _QueueRuntimeOwnership:
             except BaseException as error:
                 errors.append(error)
         self._release_os(errors)
-        if self._release_unknown or errors:
+        self._release_local()
+        if self._release_unknown or errors or self._local_lock_held:
             _raise_fixed(VerificationQueueError("runtime_scope"))
 
     def _startup_cleanup(self) -> None:
@@ -1338,7 +1390,16 @@ class _QueueRuntimeOwnership:
             except BaseException as error:
                 errors.append(error)
         self._release_os(errors)
-        if self._release_unknown or errors or self._fd is not None or self._handle is not None:
+        self._release_local()
+        if (
+            self._release_unknown
+            or errors
+            or self._fd is not None
+            or self._handle is not None
+            or self._flock_held
+            or self._overlapped is not None
+            or self._local_lock_held
+        ):
             _raise_fixed(VerificationQueueError("runtime_scope"))
         self._closed = True
 
@@ -1392,7 +1453,16 @@ class _QueueRuntimeOwnership:
             self._write_marker(_RUNTIME_LOCK_RELEASED_MARKER)
         errors: list[BaseException] = []
         self._release_os(errors)
-        if self._release_unknown or errors or self._fd is not None or self._handle is not None:
+        self._release_local()
+        if (
+            self._release_unknown
+            or errors
+            or self._fd is not None
+            or self._handle is not None
+            or self._flock_held
+            or self._overlapped is not None
+            or self._local_lock_held
+        ):
             _raise_fixed(VerificationQueueError("runtime_scope"))
         self._closed = True
 

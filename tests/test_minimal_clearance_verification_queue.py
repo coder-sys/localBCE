@@ -78,6 +78,43 @@ else:
 '''
 
 
+_OWNER_INITIALIZATION_CHILD_SOURCE = r'''
+import json
+import sys
+import time
+from pathlib import Path
+import app.minimal_clearance_verification_queue as queue_module
+from app.minimal_clearance_verification_queue import _QueueRuntimeOwnership, _RUNTIME_LOCK_RELEASED_MARKER
+
+lock = Path(sys.argv[1])
+ready = Path(sys.argv[2])
+gate = Path(sys.argv[3])
+original = queue_module._runtime_win_write_marker
+
+def gated(handle, marker):
+    if marker == _RUNTIME_LOCK_RELEASED_MARKER:
+        ready.write_text("before-marker", encoding="ascii")
+        deadline = time.monotonic() + 10
+        while not gate.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+    return original(handle, marker)
+
+queue_module._runtime_win_write_marker = gated
+try:
+    owner = _QueueRuntimeOwnership(lock_path=lock, parent=lock.parent)
+except BaseException as error:
+    print(json.dumps({"status": "error", "type": type(error).__name__, "message": str(error)}), flush=True)
+else:
+    result = {"status": "acquired"}
+    try:
+        owner.close()
+        result["close"] = "ok"
+    except BaseException as error:
+        result["close"] = f"{type(error).__name__}:{error}"
+    print(json.dumps(result), flush=True)
+'''
+
+
 def _child_result(completed: subprocess.CompletedProcess[str]) -> dict[str, str]:
     if completed.stderr:
         raise AssertionError(completed.stderr)
@@ -506,6 +543,48 @@ class QueueV12Tests(unittest.TestCase):
                 if process is not None and process.poll() is None:
                     process.terminate()
                     process.wait(timeout=5)
+            if lock.exists():
+                lock.unlink()
+
+    @unittest.skipUnless(os.name == "nt", "Windows initialization-sharing branch is not executed on POSIX")
+    def test_runtime_owner_does_not_expose_partial_windows_initialization(self) -> None:
+        self.store._close()
+        self.owner.close()
+        lock = self.root / "state.sqlite.runtime-lock"
+        ready = self.root / "initialization-ready"
+        gate = self.root / "initialization-gate"
+        cwd = str(Path(__file__).resolve().parents[1])
+        first = subprocess.Popen(
+            [sys.executable, "-B", "-c", _OWNER_INITIALIZATION_CHILD_SOURCE, str(lock), str(ready), str(gate)],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while not ready.exists() and first.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready.exists())
+            second = subprocess.run(
+                [sys.executable, "-B", "-c", _OWNER_CHILD_SOURCE, str(lock), "plain", str(ready), str(gate)],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            second_result = _child_result(second)
+            self.assertEqual(second_result, {"status": "error", "type": "VerificationQueueError", "message": "runtime_already_owned"})
+            gate.write_text("go", encoding="ascii")
+            first_output, first_error = first.communicate(timeout=5)
+            self.assertEqual(first_error, "")
+            first_result = _child_result(subprocess.CompletedProcess(first.args, first.returncode, first_output, first_error))
+            self.assertEqual(first_result, {"status": "acquired", "close": "ok"})
+        finally:
+            gate.write_text("go", encoding="ascii")
+            if first.poll() is None:
+                first.terminate()
+                first.wait(timeout=5)
             if lock.exists():
                 lock.unlink()
 

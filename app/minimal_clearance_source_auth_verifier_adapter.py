@@ -1,4 +1,4 @@
-"""Nonactivating Queue adapter for the signed Native Profile 11 source boundary.
+"""Nonactivating Queue adapter for the signed Native Profile 12 source boundary.
 
 The adapter owns only volatile frame assembly and the narrow process call.  It
 does not parse proof material, select a disposition, or persist source,
@@ -19,7 +19,8 @@ from app.minimal_clearance_resource_limits import (
 from app.minimal_clearance_verification_queue import (
     BatchVerifierResult,
     IssuedVerificationBatch,
-    PROOF_STATEMENT_BYTES,
+    PROOF_CONTEXT_BYTES,
+    PUBLIC_COIN_BYTES,
     QueueConfig,
     QueueHeldError,
     QueueIntegrityError,
@@ -32,19 +33,20 @@ from app.minimal_clearance_verifier_process import (
 )
 
 
-SOURCE_AUTH_PROOF_ENVELOPE_BYTES: Final[int] = 16_294_348
-SOURCE_AUTH_SIGNED_PREFIX_BYTES: Final[int] = 16_297_640
+SOURCE_AUTH_PROOF_ENVELOPE_BYTES: Final[int] = 534_370
+SOURCE_AUTH_SIGNED_PREFIX_BYTES: Final[int] = 4_643
 SOURCE_AUTH_SIGNATURE_BYTES: Final[int] = 4_627
-SOURCE_AUTH_FRAME_BYTES: Final[int] = 16_302_267
+SOURCE_AUTH_FRAME_BYTES: Final[int] = 539_013
 ML_DSA_87_PUBLIC_KEY_BYTES: Final[int] = 2_592
-SOURCE_AUTH_IPC_PREFIX_BYTES: Final[int] = 6_168
-SOURCE_AUTH_IPC_BYTES: Final[int] = 16_308_435
+SOURCE_AUTH_IPC_PREFIX_BYTES: Final[int] = 2_768
+SOURCE_AUTH_IPC_BYTES: Final[int] = 541_781
 SOURCE_AUTH_PROCESS_ARGUMENTS: Final[tuple[str, ...]] = ()
 SOURCE_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0
-SOURCE_AUTH_EXECUTABLE_SIZE_BYTES: Final[int] = 52_736
+SOURCE_AUTH_EXECUTABLE_SIZE_BYTES: Final[int] = 240_128
 SOURCE_AUTH_EXECUTABLE_SHA256: Final[bytes] = bytes.fromhex(
-    "4834D0A6A7E198A98EA0018F1009F6C180C510680EE61F2757E8342EF8B4032C"
+    "38FB45E017D08AC11098D8837C78D02143B86753AA4F085174073C64353AC835"
 )
+_SOURCE_AUTH_VERIFIER_MAGIC: Final[bytes] = b"DMVI0001"
 _VERIFIER_CALL_LOCK = threading.Lock()
 
 
@@ -137,21 +139,18 @@ def _build_ipc_input(*, batch: IssuedVerificationBatch, source_key_epoch: int, p
         _hold("batch_binding")
     ipc = bytearray(SOURCE_AUTH_IPC_BYTES)
     offset = 0
+    ipc[offset : offset + 8] = _SOURCE_AUTH_VERIFIER_MAGIC
+    offset += 8
     ipc[offset : offset + 8] = source_key_epoch.to_bytes(8, "little")
     offset += 8
-    ipc[offset : offset + 64] = batch.batch_root
-    offset += 64
-    refs = b"".join(batch.operation_refs)
-    if len(refs) != 3_200:
-        _hold("batch_binding")
-    ipc[offset : offset + 3_200] = refs
-    offset += 3_200
-    ipc[offset : offset + PROOF_STATEMENT_BYTES] = batch.proof_statement
-    offset += PROOF_STATEMENT_BYTES
+    ipc[offset : offset + PROOF_CONTEXT_BYTES] = batch.proof_context
+    offset += PROOF_CONTEXT_BYTES
+    ipc[offset : offset + PUBLIC_COIN_BYTES] = batch.public_coin
+    offset += PUBLIC_COIN_BYTES
     ipc[offset : offset + ML_DSA_87_PUBLIC_KEY_BYTES] = public_key
     offset += ML_DSA_87_PUBLIC_KEY_BYTES
     ipc[offset:] = frame
-    if offset + len(frame) != SOURCE_AUTH_IPC_BYTES:
+    if offset != SOURCE_AUTH_IPC_PREFIX_BYTES or offset + len(frame) != SOURCE_AUTH_IPC_BYTES:
         _raise_fixed(QueueIntegrityError("verifier_result_shape"))
     return ipc
 
@@ -186,7 +185,7 @@ def _validate_contained_result(result: object) -> ContainedVerifierResult:
 
 
 class MinimalClearanceSourceAuthVerifierAdapter:
-    """Direct Queue VerifierPort adapter for the unqualified Profile 11 C process."""
+    """Direct Queue VerifierPort adapter for the unqualified Profile 12 C process."""
 
     __slots__ = ("_config",)
 
@@ -220,6 +219,7 @@ class MinimalClearanceSourceAuthVerifierAdapter:
                     timeout_seconds=self._config.timeout_seconds,
                     expected_executable_size_bytes=self._config.executable_size_bytes,
                     expected_executable_sha256=self._config.executable_sha256,
+                    expected_input_bytes=SOURCE_AUTH_IPC_BYTES,
                 )
             except VerifierProcessError as error:
                 if str(error).startswith("verifier_timeout"):
@@ -232,7 +232,8 @@ class MinimalClearanceSourceAuthVerifierAdapter:
                 return BatchVerifierResult(
                     True,
                     True,
-                    issued_batch.proof_statement,
+                    issued_batch.proof_context,
+                    issued_batch.public_coin,
                     issued_batch.batch_root,
                     self._config.queue_config.source_auth_profile,
                     self._config.queue_config.source_key_epoch,
@@ -243,7 +244,8 @@ class MinimalClearanceSourceAuthVerifierAdapter:
                 return BatchVerifierResult(
                     False,
                     False,
-                    issued_batch.proof_statement,
+                    issued_batch.proof_context,
+                    issued_batch.public_coin,
                     issued_batch.batch_root,
                     self._config.queue_config.source_auth_profile,
                     self._config.queue_config.source_key_epoch,

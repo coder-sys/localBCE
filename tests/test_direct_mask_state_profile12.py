@@ -549,6 +549,34 @@ class Profile12StateTests(unittest.TestCase):
                 wal_connection.close()
             legacy_temp.cleanup()
 
+    def test_live_v12_wal_schema_drift_is_not_accepted_from_immutable_main_image(self) -> None:
+        self.store._close()
+        self.owner.close()
+        path = self.root / "v12-wal-drift.sqlite"
+        path.write_bytes((self.root / "state.sqlite").read_bytes())
+        wal_connection = sqlite3.connect(str(path))
+        try:
+            self.assertEqual(wal_connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower(), "wal")
+            wal_connection.execute("PRAGMA wal_autocheckpoint=0")
+            trigger_sql = wal_connection.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='queue_metadata_config_guard'").fetchone()[0]
+            wal_connection.execute("DROP TRIGGER queue_metadata_config_guard")
+            wal_connection.execute("UPDATE queue_metadata SET schema_version=11 WHERE id=1")
+            wal_connection.execute(trigger_sql)
+            wal_connection.commit()
+            sidecars = (path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm"))
+            self.assertTrue(all(sidecar.exists() for sidecar in sidecars))
+            snapshots = {path: path.read_bytes(), sidecars[0]: sidecars[0].read_bytes()}
+            # The immutable main image still reports v12. The authoritative
+            # live read must follow WAL state and reject the v11 drift before
+            # any mutable PRAGMA is attempted.
+            with self.assertRaisesRegex(IndependentQueueError, "queue_schema_unsupported"):
+                verify_database(path)
+            for preserved_path, original in snapshots.items():
+                self.assertEqual(preserved_path.read_bytes(), original, preserved_path.name)
+            self.assertTrue(sidecars[1].exists())
+        finally:
+            wal_connection.close()
+
     def test_valid_restore_prevalidates_then_creates_exclusive_destination(self) -> None:
         source_bytes = (self.root / "state.sqlite").read_bytes()
         destination = self.root / "restored.sqlite"

@@ -2,7 +2,7 @@
 
 Updated: 2026-09-12
 
-## Active Profile12 Queue/State stage — unverified/in progress
+## Active Profile12 Queue/State stage — corrected, unverified/in progress
 
 This exclusive child implements the owner-delegated Profile12 Queue/schema/independent/runtime
 stage from starting HEAD `98a3d9ea7f156653633996170c17236db804eed7` / tree
@@ -15,19 +15,25 @@ source epoch, coin/context, reservation, identity, and lifecycle bindings are ch
 mutation and by the independent checker. Reservations are never refunded; expiry, restart,
 ambiguous commit, malformed handoff, and consumed/partial handoff paths burn them.
 
-Measured bounded evidence in this child: Profile12 focused tests `28 passed`; queue tests `29
-passed`; runtime tests `17 passed, 2 skipped`. The two skips are the native Profile12
-source-auth adapter/source-appliance identity tests, explicitly deferred by the active grant; the
-native adapter, verifier process, resource limits, C/crypto checkouts, and protected production
-paths were not modified. `py -3.14 -B -m py_compile` passed for the changed implementation and
-tests. The focused matrix covers 15 serializer/config mutations, five producer/independent
-context bindings, six missing/orphan association families across verify/read/export/restore, 16
-issue/claim counter sequence cases, actual zero-then-nonzero sampler draws, genuine Profile11
-WAL/SHM preservation, exact-u64 clock rejection, lifecycle, receipt/error closure, timestamps,
-KAT, reservation, and hold checks. One initial full Runtime run had a transient concurrent-owner
-result of `0` winners; the isolated test rerun and final full Runtime run passed with the same two
-explicit native skips. No broad suite, adapter test, old Profile11 proof probe, or large solver was
-run.
+Measured bounded evidence in this child: `py -3.14 -B -m py_compile` exit `0`; Queue tests `30
+passed`; Runtime tests `17 passed, 2 skipped`; and Profile12 focused tests `29 passed`. The two
+skips are exactly the native Profile12 source-auth adapter/source-appliance identity tests,
+explicitly deferred by the active grant; the native adapter, verifier process, resource limits,
+C/crypto checkouts, and protected production paths were not modified. The prior concurrency
+diagnostic had 3/20 iterations where both contenders returned `runtime_scope`, with an empty
+marker/Windows WriteFile error chain and a remaining runtime-lock path. The corrected owner now
+serializes same-process contenders, closes the Windows initialization-sharing gap, preserves
+identity-bound replacement/cleanup, and retains actual per-contender error-chain fields in the
+Runtime regression test. The deterministic partial-initialization test and final barrier stress
+passed; the stress result was `100/100` single-owner startups with one
+`runtime_already_owned` loser and no cleanup race. The focused matrix covers 15 serializer/config
+mutations, five producer/independent context bindings, six missing/orphan association families
+across verify/read/export/restore, 16 issue/claim counter sequence cases, actual zero-then-
+nonzero sampler draws, genuine Profile11 WAL/SHM preservation, exact-u64 clock rejection,
+lifecycle, receipt/error closure, timestamps, KAT, reservation, crash/reopen, and hold checks.
+The added v12 WAL drift test confirms the immutable image is only a preliminary version gate and
+the authoritative live read follows WAL state. No broad suite, adapter test, old Profile11 proof
+probe, or large solver was run.
 
 The implementation remains nonactivating and unqualified: `proofSuiteId=null`,
 `production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. No native
@@ -252,3 +258,32 @@ start from a clean reviewed manifest and independently verify builder receipt, c
 readback, three retained targets, equal hashes, and zero publication artifacts. After this
 cleanup, the next authorized semantic dependency is the Lean workstream;
 a model, differential test, or generated vector cannot replace it.
+
+## Active E2E complete-path evidence — 2026-09-12
+
+This is the current driver-authorized integration phase. The accepted clean State/runtime
+correction is '6aa9e634948b6b3a40d1c3c4f07299f8fd5493db' / tree
+'a8c6c2f1845686b80e9e079c807ad50c3f1deb92'; the accepted adapter source is
+'55b1d71fc5f6fa1860225e590a6dbff5af3db2e1'; and the accepted Queue source caller is
+'4f7d8d9475de5e4042af0f85c00a955259da737f'. The complete-path child is
+'pq-direct-mask-complete-path-20260912', currently rooted at the State candidate ancestor
+'6129625a88e94d005f5dfe5fd4f6fb8e05a19793' / tree
+'997e4a8e5543139ea9b81e70574eba5a44d53094d' with those handoffs source-selected by exact
+path.
+
+The complete path is source-only and nonactivating. Its single valid fresh run must use the
+driver-pinned 275968-byte source executable, 240128-byte independent verifier, and frozen
+public-key header, with exact empty non-reparse workspaces under 'build-complete-path'.
+The source capsule and verifier IPC are volatile memory-only values. The source and verifier
+processes stay inside the accepted contained-process primitive; the outer guard retains the
+child exit 7/0 preflight, 1-GiB physical reserve, '<5000000000' process-tree cap, active
+process limit 1, shared mutex, and cleanup markers.
+
+The valid evidence contract is exactly one State-issued batch of 100 operations, one
+independent verifier acceptance, one atomic State/composition transaction covering 100 rows,
+100 opaque idempotency keys, 100 synthetic ACKs, independent State/composition readback after
+reopen, and zero duplicate rows or receiver side effects. Synthetic State/receiver objects
+are test authorities only; they do not claim official authority, production usability,
+qualification, Lean linkage, PHI, payment, custody, or activation. Fixed flags remain
+'proofSuiteId=null', 'production_usable=false', 'activation=false',
+'NOT_QUALIFIED'/'INACTIVE'/'UNSELECTED'.
