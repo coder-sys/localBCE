@@ -1,6 +1,6 @@
 # Blind Ledger current task
 
-Updated: 2026-09-08
+Updated: 2026-09-12
 
 ## Profile12 Queue/State implementation — unverified/in progress
 
@@ -122,16 +122,21 @@ semantic identities are unchanged, report exact commit/tree/diff/tests/warnings/
 and HOLD for driver review. Flags remain `proofSuiteId=null`, `production_usable=false`,
 `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
 
-### Measured stage evidence — 2026-09-08
+### Measured stage evidence — 2026-09-12
 
 The current bounded implementation has passed `py -3.14 -B -m py_compile` for the changed
-implementation/tests, Profile12 focused tests `15 passed`, Queue tests `29 passed`, and Runtime
+implementation/tests, Profile12 focused tests `28 passed`, Queue tests `29 passed`, and Runtime
 tests `17 passed, 2 skipped`. The two runtime skips are the native Profile12 adapter/source
 identity tests, explicitly deferred by the active grant pending the driver's accepted exact C
-binary/source-appliance packet. Focused read-only schema-gate, export/read/restore, lifecycle,
-counter, receipt-closure, orphan-result, timestamp, reservation, context, and held-state checks
-passed. The independent checker now binds both reservation-bearing events to the durable attempt
-row, validates every result row and foreign-key closure, and claim validates coin/context,
-reservation shape, and source epoch before lease mutation. No adapter/source-auth test, Profile11
-probe, large solver, or broad suite was run.
+binary/source-appliance packet. The focused matrix covers 15 serializer/config mutations, five
+producer/independent context bindings, six missing/orphan association families across
+verify/read/export/restore, 16 issue/claim counter sequence cases, actual zero-then-nonzero
+sampler draws, genuine Profile11 WAL/SHM preservation, exact-u64 clock rejection, lifecycle,
+receipt/error closure, timestamps, reservation, context, KAT, and hold checks. The independent
+checker now binds both reservation-bearing events to the durable attempt row, validates every
+result row and foreign-key closure, and claim validates coin/context, reservation shape, and
+source epoch before lease mutation. One initial full Runtime run had a transient concurrent-owner
+result of `0` winners; the isolated test rerun and final full Runtime run passed with the same two
+explicit native skips. No adapter/source-auth test, Profile11 proof probe, large solver, or
+unrelated broad suite was run.
 The stage remains synthetic, nonactivating, unqualified, and held for driver review.

@@ -247,7 +247,7 @@ _ALLOWED_CODES: Final[frozenset[str]] = frozenset({
     "receipt_result_code", "receipt_error", "flags_bounds", "flags_encoding",
     "flags_shape", "event_fields", "event_bounds", "handoff_not_consumed",
     "runtime_backend_unqualified", "runtime_result", "runtime_max_batches",
-    "state_disposition", "state_disposition_shape", "state_control_set", "state_control_shape", "composition_schema", "proof_session_active",
+    "state_disposition", "state_disposition_shape", "state_control_set", "state_control_shape", "composition_schema", "proof_session_active", "queue_clock",
 })
 
 
@@ -1731,9 +1731,18 @@ class _VerificationQueueStore:
         if self._after_commit_fault is not None:
             self._after_commit_fault(label)
 
+    def _now_ms(self) -> int:
+        """Read a durable timestamp without coercing malformed clock output."""
+
+        value = self.clock.now_ms()
+        if type(value) is not int or not 0 <= value < 2**64:
+            _raise_fixed(QueueIntegrityError("queue_clock"))
+        return value
+
     def _append_event(self, connection: sqlite3.Connection, *, kind: str, batch_id: bytes, status: str, error_code: str | None, attempt: int, at_ms: int, extra: Mapping[str, Any] | None = None) -> None:
         if status not in _STATUSES or type(attempt) is not int or not 0 <= attempt <= 1:
             _raise_fixed(QueueIntegrityError("event_fields"))
+        _u64(at_ms)
         if error_code is not None:
             error_code = _code(error_code, "event_code")
         meta = self._meta(connection)
@@ -1776,6 +1785,7 @@ class _VerificationQueueStore:
                     _raise_fixed(QueueBackpressureError("computational_budget_exhausted"))
                 reservation_before = meta[17]
                 batch_admission_seq = meta[14] // RANGE100_COUNT + 1
+                now = self._now_ms()
                 operation_refs = _generate_operation_refs()
                 root = _compute_batch_root_from_refs(template, operation_refs)
                 session_ref = secrets.token_bytes(MAX_SESSION_REF_BYTES)
@@ -1784,7 +1794,7 @@ class _VerificationQueueStore:
                 proof_context = _profile12_context(session_ref=session_ref, ordered_batch_root=root, public_coin=public_coin, valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
                 provisional = IssuedVerificationBatch(batch_id, template, operation_refs, root, session_ref, public_coin, proof_context, batch_admission_seq, bytes(64))
                 batch = IssuedVerificationBatch(batch_id, template, operation_refs, root, session_ref, public_coin, proof_context, batch_admission_seq, _batch_identity_digest(provisional, self.config))
-                self._insert_batch(connection, batch=batch, now=int(self.clock.now_ms()), batch_admission_seq=batch_admission_seq, attempt_id=meta[19] + 1, reservation_before=reservation_before, reservation_after=reservation_after)
+                self._insert_batch(connection, batch=batch, now=now, batch_admission_seq=batch_admission_seq, attempt_id=meta[19] + 1, reservation_before=reservation_before, reservation_after=reservation_after)
                 self._fault("before_issue_commit")
                 connection.commit()
             except BaseException:
@@ -1806,6 +1816,10 @@ class _VerificationQueueStore:
         status = str(row[11])
         if status in _TERMINAL:
             return False
+        if type(now) is not int or not 0 <= now < 2**64:
+            _raise_fixed(QueueIntegrityError("queue_clock"))
+        if type(row[15]) is not int or type(row[16]) is not int or now < row[16] or now < row[15]:
+            _raise_fixed(QueueIntegrityError("queue_clock"))
         attempt = int(row[13])
         attempt_row = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (batch_id,)).fetchone()
         if attempt_row is None or str(attempt_row[6]) != "RESERVED" or int(attempt_row[4]) != PROOF_ATTEMPTS_PER_BATCH:
@@ -1846,13 +1860,15 @@ class _VerificationQueueStore:
                         _raise_fixed(QueueConflictError("batch_unknown"))
                     durable = _statement_from_batch(connection, tuple(row))
                     if durable != issued_batch or _batch_identity_digest(durable, self.config) != durable.identity_digest:
-                        held = self._hold_batch_locked(connection, batch_id=issued_batch.batch_id, now=int(self.clock.now_ms()), code="batch_binding")
+                        held = self._hold_batch_locked(connection, batch_id=issued_batch.batch_id, now=self._now_ms(), code="batch_binding")
                         connection.commit()
                         if held:
                             self._close_handoff_locked(issued_batch.batch_id)
                             handoff.close()
                         _raise_fixed(QueueConflictError("batch_binding"))
-                    now = int(self.clock.now_ms())
+                    now = self._now_ms()
+                    if type(row[15]) is not int or type(row[16]) is not int or now < row[16] or now < row[15]:
+                        _raise_fixed(QueueIntegrityError("queue_clock"))
                     if str(row[11]) != "AWAITING_HANDOFF":
                         held = self._hold_batch_locked(connection, batch_id=issued_batch.batch_id, now=now, code="fresh_handoff_required")
                         connection.commit()
@@ -1901,7 +1917,7 @@ class _VerificationQueueStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                now = int(self.clock.now_ms())
+                now = self._now_ms()
                 held: list[bytes] = []
                 for (batch_id,) in connection.execute("SELECT batch_id FROM queue_batches WHERE status IN ('AWAITING_HANDOFF','QUEUED','LEASED') ORDER BY admission_seq").fetchall():
                     if self._hold_batch_locked(connection, batch_id=bytes(batch_id), now=now, code="fresh_handoff_required"):
@@ -1921,7 +1937,7 @@ class _VerificationQueueStore:
         self._assert_owner()
         self._last_claim_error = None
         self._last_claim_held_count = 0
-        now = int(self.clock.now_ms())
+        now = self._now_ms()
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -2101,14 +2117,14 @@ class _VerificationQueueStore:
                         _raise_fixed(QueueLeaseError("completion_not_live"))
                     existing_result = self._verified_duplicate_result(connection, work, verifier_result)
                     from app.minimal_clearance_composition import _apply_verified_jobs_in_transaction
-                    _apply_verified_jobs_in_transaction(connection, config=self.composition_config, jobs=self._composition_jobs(work, verifier_result), state_controls=state_controls, now=int(self.clock.now_ms()))  # type: ignore[arg-type]
+                    _apply_verified_jobs_in_transaction(connection, config=self.composition_config, jobs=self._composition_jobs(work, verifier_result), state_controls=state_controls, now=self._now_ms())  # type: ignore[arg-type]
                     connection.commit()
                     self._close_handoff_locked(work.batch.batch_id)
                     return QueueResult(work.batch.batch_id, "VERIFIED", bytes(existing_result[3]), None if existing_result[13] is None else str(existing_result[13]), RANGE100_COUNT)
                 row, lease = self._lease_fence(connection, work)
                 # Recheck the clock after the live lease fence, within the
                 # same completion transaction that closes the reservation.
-                now = int(self.clock.now_ms())
+                now = self._now_ms()
                 if now < work.batch.template.valid_from_ms or now >= work.batch.template.valid_until_ms:
                     status = "HELD"
                     result_code = "validity_expired"
@@ -2152,7 +2168,7 @@ class _VerificationQueueStore:
                 row = connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
                 if row is not None and str(row[0]) == "LEASED":
                     self._lease_fence(connection, work)
-                    self._hold_batch_locked(connection, batch_id=work.batch.batch_id, now=int(self.clock.now_ms()), code="fresh_handoff_required")
+                    self._hold_batch_locked(connection, batch_id=work.batch.batch_id, now=self._now_ms(), code="fresh_handoff_required")
                     connection.commit()
                     self._close_handoff_locked(work.batch.batch_id)
                 else:

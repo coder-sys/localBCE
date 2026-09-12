@@ -1,4 +1,6 @@
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import closing
@@ -19,6 +21,8 @@ from app.minimal_clearance_verification_queue import (
     PROFILE_FINGERPRINT,
     QueueBackpressureError,
     QueueConfig,
+    QueueIntegrityError,
+    QueueHeldError,
     VerificationQueueError,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
@@ -35,6 +39,27 @@ from app.minimal_clearance_verification_queue_independent import (
     verify_export_bytes,
 )
 from app.minimal_clearance_verification_queue_independent import IndependentQueueError
+
+
+_IMMUTABLE_V11_PRODUCT = Path(r"C:\Users\neers\Documents\Codex\2026-08-30\cleanup-v2\work\aggressive-obsolete-removal-20260907")
+_V11_BUILDER = r'''
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path.cwd()))
+from app.minimal_clearance_composition import CompositionConfigV2
+from app.minimal_clearance_verification_queue import QueueConfig, _QueueRuntimeOwnership, _VerificationQueueStore
+root = Path(sys.argv[1])
+config = QueueConfig("legacy-v11-shape", 100)
+owner = _QueueRuntimeOwnership(lock_path=root / "state.sqlite.runtime-lock", parent=root)
+store = _VerificationQueueStore(
+    path=root / "state.sqlite",
+    config=config,
+    owner=owner,
+    composition_config=CompositionConfigV2(config.queue_id, config.digest, capacity=100),
+)
+store._close()
+owner.close()
+'''
 
 
 def _controls(operation_refs: tuple[bytes, ...]) -> dict[bytes, StateDispositionControl]:
@@ -158,9 +183,11 @@ class Profile12StateTests(unittest.TestCase):
             with self.subTest(entrypoint=name):
                 with self.assertRaisesRegex(Exception, code):
                     check()
+                self.assertEqual(path.read_bytes(), raw)
         destination = self.root / destination_name
         with self.assertRaisesRegex(Exception, code):
             restore_export_to_fresh_database(export_bytes=raw, destination=destination)
+        self.assertEqual(path.read_bytes(), raw)
         self.assertFalse(destination.exists())
 
     def test_independent_context_kat_and_runtime_context_are_exact(self) -> None:
@@ -179,6 +206,88 @@ class Profile12StateTests(unittest.TestCase):
             queue._profile12_context(session_ref=bytes(64), ordered_batch_root=batch.batch_root, public_coin=batch.public_coin, valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
         with self.assertRaisesRegex(VerificationQueueError, "batch_root"):
             queue._profile12_context(session_ref=batch.session_ref, ordered_batch_root=bytes(64), public_coin=batch.public_coin, valid_from_ms=batch.template.valid_from_ms, valid_until_ms=batch.template.valid_until_ms)
+
+    def test_profile12_serializer_and_context_binding_matrix(self) -> None:
+        template = OperationTemplate(
+            "profile12-serializer",
+            1,
+            self.config.profile_version,
+            self.clock.now - 100,
+            self.clock.now + 60_000,
+            bytes([7]) * 64,
+            ("alpha", "zeta"),
+        )
+        batch = self.store.issue_batch(template=template)
+        self.assertEqual(json.loads(self.config.canonical_bytes.decode("ascii")), self.config.as_json)
+        self.assertEqual(json.loads(template.canonical_bytes.decode("ascii")), template.as_json)
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            metadata = tuple(connection.execute("SELECT * FROM queue_metadata WHERE id=1").fetchone())
+            batch_row = tuple(connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone())
+            members = tuple(tuple(row) for row in connection.execute("SELECT * FROM queue_members WHERE batch_id=? ORDER BY batch_position", (batch.batch_id,)).fetchall())
+        parsed_config = independent._parse_config(bytes(metadata[3]), self.config.as_json)
+        self.assertEqual(parsed_config, self.config.as_json)
+        self.assertEqual(independent._template_bytes(batch_row), template.canonical_bytes)
+        self.assertEqual(independent._expected_batch_root(batch_row, members), batch.batch_root)
+        self.assertEqual(queue._compute_batch_root_from_refs(template, batch.operation_refs), batch.batch_root)
+        self.assertEqual(independent._identity_digest(batch_row, members, parsed_config), batch.identity_digest)
+
+        base_context_args = {
+            "session_ref": batch.session_ref,
+            "batch_root": batch.batch_root,
+            "public_coin": batch.public_coin,
+            "valid_from_ms": template.valid_from_ms,
+            "valid_until_ms": template.valid_until_ms,
+        }
+        context_mutations = {
+            "session_ref": bytes([batch.session_ref[0] ^ 1]) + batch.session_ref[1:],
+            "batch_root": bytes([batch.batch_root[0] ^ 1]) + batch.batch_root[1:],
+            "public_coin": bytes([batch.public_coin[0] ^ 1]) + batch.public_coin[1:],
+            "valid_from_ms": template.valid_from_ms + 1,
+            "valid_until_ms": template.valid_until_ms + 1,
+        }
+        self.assertEqual(len(context_mutations), 5)
+        for binding, mutated in context_mutations.items():
+            args = dict(base_context_args)
+            args[binding] = mutated
+            checker_args = dict(args)
+            with self.subTest(context_binding=binding):
+                producer = queue._profile12_context(ordered_batch_root=args.pop("batch_root"), **args)
+                checker = independent._profile12_context(**checker_args)
+                self.assertEqual(producer, checker)
+                self.assertNotEqual(producer, batch.proof_context)
+
+        config_mutations = (
+            ("handoff_protocol", 1, "config_shape"),
+            ("schema_version", 12.0, "config_shape"),
+            ("queue_id", 1, "config_queue_id"),
+            ("capacity", 100.0, "config_capacity"),
+            ("admission_cap_bytes", float(queue.ADMISSION_CAP_BYTES), "config_limits"),
+            ("active_process_limit", 1.0, "config_limits"),
+            ("database_page_size", float(queue.DATABASE_PAGE_SIZE), "config_database"),
+            ("database_synchronous", 2.0, "config_database"),
+            ("proof_attempts_cap", float(queue.PROOF_ATTEMPTS_CAP), "config_database"),
+            ("proof_context_bytes", 64.0, "config_database"),
+            ("profile_digest", "00" * 64, "config_profile"),
+            ("profile_epoch", 12.0, "config_profile_epoch"),
+            ("source_key_epoch", 1.0, "config_source_epoch"),
+            ("qualification_flags", ["zeta", "alpha"], "config_flags"),
+            ("directives", list(reversed(queue.DIRECTIVES)), "config_nonactivation"),
+        )
+        self.assertEqual(len(config_mutations), 15)
+        base_path = self.root / "state.sqlite"
+        for field, value, expected in config_mutations:
+            path = self.root / f"serializer-config-{field}.sqlite"
+            path.write_bytes(base_path.read_bytes())
+            with closing(sqlite3.connect(str(path))) as connection:
+                raw_config = json.loads(bytes(connection.execute("SELECT config_json FROM queue_metadata WHERE id=1").fetchone()[0]).decode("ascii"))
+                raw_config[field] = value
+                encoded = json.dumps(raw_config, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+                connection.execute("DROP TRIGGER queue_metadata_config_guard")
+                connection.execute("UPDATE queue_metadata SET config_json=?,config_digest=? WHERE id=1", (encoded, queue._sha3(queue._MATERIAL, encoded)))
+                connection.execute(dict(queue._TRIGGER_DEFS)["queue_metadata_config_guard"])
+                connection.commit()
+            with self.subTest(config_binding=field):
+                self._assert_all_entrypoints_reject(path, expected, destination_name=f"restore-serializer-{field}.sqlite")
 
     def test_public_coin_zero_retry_and_malformed_sample_fail_closed(self) -> None:
         nonzero = bytes([7]) * 96
@@ -368,6 +477,78 @@ class Profile12StateTests(unittest.TestCase):
             restore_export_to_fresh_database(export_bytes=source_bytes, destination=destination)
         self.assertFalse(destination.exists())
 
+    def test_genuine_v11_shape_rejects_before_pragmas_and_preserves_wal_sidecars(self) -> None:
+        self.assertTrue(_IMMUTABLE_V11_PRODUCT.is_dir())
+        legacy_temp = tempfile.TemporaryDirectory()
+        legacy_root = Path(legacy_temp.name)
+        wal_connection = None
+        try:
+            built = subprocess.run(
+                [sys.executable, "-B", "-c", _V11_BUILDER, str(legacy_root)],
+                cwd=_IMMUTABLE_V11_PRODUCT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual((built.returncode, built.stderr), (0, ""), built.stdout)
+            path = legacy_root / "state.sqlite"
+            # Keep a connection open while exercising every reader.  SQLite checkpoints
+            # and removes WAL/SHM sidecars when the final connection closes; closing the
+            # setup connection here would make the preservation assertion vacuous.
+            wal_connection = sqlite3.connect(str(path))
+            connection = wal_connection
+            self.assertEqual(connection.execute("SELECT schema_version FROM queue_metadata").fetchone()[0], 11)
+            self.assertNotIn("public_coin", tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_batches)")))
+            trigger_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='queue_metadata_config_guard'").fetchone()[0]
+            self.assertEqual(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower(), "wal")
+            connection.execute("PRAGMA wal_autocheckpoint=0")
+            connection.execute("DROP TRIGGER queue_metadata_config_guard")
+            connection.execute("UPDATE queue_metadata SET next_transition_seq=next_transition_seq+1 WHERE id=1")
+            connection.execute(trigger_sql)
+            connection.commit()
+            sidecars = (path.with_name("state.sqlite-wal"), path.with_name("state.sqlite-shm"))
+            self.assertTrue(all(sidecar.exists() for sidecar in sidecars))
+            snapshots = {path: path.read_bytes(), **{sidecar: sidecar.read_bytes() for sidecar in sidecars}}
+
+            config = QueueConfig("profile12-v11-reject", 100)
+            owner = _QueueRuntimeOwnership(lock_path=legacy_root / "state.sqlite.runtime-lock", parent=legacy_root)
+            try:
+                with self.assertRaisesRegex(VerificationQueueError, "queue_schema_unsupported"):
+                    _VerificationQueueStore(path=path, config=config, owner=owner, composition_config=CompositionConfigV2(config.queue_id, config.digest, capacity=100))
+            finally:
+                owner.close()
+            for preserved_path, original in snapshots.items():
+                self.assertEqual(preserved_path.read_bytes(), original, preserved_path.name)
+
+            with self.assertRaisesRegex(Exception, "queue_schema_unsupported"):
+                verify_database(path)
+            for preserved_path, original in snapshots.items():
+                self.assertEqual(preserved_path.read_bytes(), original)
+
+            with closing(sqlite3.connect(path.resolve().as_uri() + "?immutable=1", uri=True)) as connection:
+                trace: list[str] = []
+                connection.set_trace_callback(trace.append)
+                with self.assertRaisesRegex(IndependentQueueError, "queue_schema_unsupported"):
+                    _verify_connection(connection)
+                self.assertEqual([statement for statement in trace if statement.upper().lstrip().startswith("PRAGMA")], [])
+
+            export_bytes = snapshots[path]
+            backup = legacy_root / "original-export.sqlite"
+            backup.write_bytes(export_bytes)
+            destination = legacy_root / "restored-v11.sqlite"
+            with self.assertRaisesRegex(Exception, "queue_schema_unsupported"):
+                verify_export_bytes(export_bytes)
+            with self.assertRaisesRegex(Exception, "queue_schema_unsupported"):
+                restore_export_to_fresh_database(export_bytes=backup.read_bytes(), destination=destination)
+            self.assertEqual(backup.read_bytes(), export_bytes)
+            self.assertFalse(destination.exists())
+            for preserved_path, original in snapshots.items():
+                self.assertEqual(preserved_path.read_bytes(), original, preserved_path.name)
+        finally:
+            if wal_connection is not None:
+                wal_connection.close()
+            legacy_temp.cleanup()
+
     def test_valid_restore_prevalidates_then_creates_exclusive_destination(self) -> None:
         source_bytes = (self.root / "state.sqlite").read_bytes()
         destination = self.root / "restored.sqlite"
@@ -405,6 +586,135 @@ class Profile12StateTests(unittest.TestCase):
             self.assertIsNone(self.store._claim_next_batch())
         self.assertEqual(sampler.call_count, 0)
         self.assertEqual(self.store._last_claim_error, "queue_integrity_failed")
+
+    def test_issue_claim_counter_sequence_matrix_and_actual_sampler_draw_count(self) -> None:
+        counter_cases = (
+            ("issue-next-transition-rollback", "next_transition_seq", -1, "issue"),
+            ("issue-next-transition-overstatement", "next_transition_seq", 1, "issue"),
+            ("issue-next-admission-rollback", "next_admission_seq", -1, "issue"),
+            ("issue-next-admission-overstatement", "next_admission_seq", 100, "issue"),
+            ("issue-next-attempt-rollback", "next_attempt_seq", -1, "issue"),
+            ("issue-next-attempt-overstatement", "next_attempt_seq", 1, "issue"),
+            ("issue-proof-attempts-rollback", "proof_attempts_used", -1, "issue"),
+            ("issue-proof-attempts-overstatement", "proof_attempts_used", 101, "issue"),
+            ("claim-next-transition-rollback", "next_transition_seq", 1, "claim"),
+            ("claim-next-transition-overstatement", "next_transition_seq", 999, "claim"),
+            ("claim-next-admission-rollback", "next_admission_seq", 0, "claim"),
+            ("claim-next-admission-overstatement", "next_admission_seq", 200, "claim"),
+            ("claim-next-attempt-rollback", "next_attempt_seq", 0, "claim"),
+            ("claim-next-attempt-overstatement", "next_attempt_seq", 2, "claim"),
+            ("claim-proof-attempts-rollback", "proof_attempts_used", 0, "claim"),
+            ("claim-proof-attempts-overstatement", "proof_attempts_used", 202, "claim"),
+        )
+        self.assertEqual(len(counter_cases), 16)
+
+        def fresh(label: str, capacity: int = 200) -> tuple[tempfile.TemporaryDirectory[str], Path, _Clock, QueueConfig, _QueueRuntimeOwnership, _VerificationQueueStore]:
+            temp = tempfile.TemporaryDirectory()
+            root = Path(temp.name)
+            clock = _Clock()
+            config = QueueConfig(f"profile12-counter-{label.replace('claim', 'lease')}", capacity)
+            owner = _QueueRuntimeOwnership(lock_path=root / "state.sqlite.runtime-lock", parent=root)
+            store = _VerificationQueueStore(path=root / "state.sqlite", config=config, owner=owner, clock=clock, composition_config=CompositionConfigV2(config.queue_id, config.digest, capacity=capacity))
+            return temp, root, clock, config, owner, store
+
+        for label, column, value, phase in counter_cases:
+            temp, root, clock, config, owner, store = fresh(label)
+            try:
+                if phase == "claim":
+                    issued = store.issue_batch(template=OperationTemplate("profile12-assertion", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
+                    store.submit_batch_handoff(issued_batch=issued, proof_stream=VolatileProofHandoff(bytearray(b"counter-proof")))
+                with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                    connection.execute(f"UPDATE queue_metadata SET {column}=? WHERE id=1", (value,))
+                    connection.commit()
+                tampered = (root / "state.sqlite").read_bytes()
+                with patch.object(queue.secrets, "token_bytes", side_effect=AssertionError("counter gate must precede RNG")) as sampler:
+                    if phase == "issue":
+                        with self.assertRaisesRegex(VerificationQueueError, "queue_integrity_failed"):
+                            store.issue_batch(template=OperationTemplate("profile12-assertion", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
+                    else:
+                        self.assertIsNone(store._claim_next_batch())
+                self.assertEqual(sampler.call_count, 0)
+                if phase == "claim":
+                    self.assertEqual(store._last_claim_error, "queue_integrity_failed")
+                self.assertEqual((root / "state.sqlite").read_bytes(), tampered)
+            finally:
+                store._close()
+                owner.close()
+                temp.cleanup()
+
+        temp, root, clock, config, owner, store = fresh("sampler", 200)
+        draw_sizes: list[int] = []
+        coin_draws = 0
+
+        def deterministic_token_bytes(size: int) -> bytes:
+            nonlocal coin_draws
+            draw_sizes.append(size)
+            if size == queue.PUBLIC_COIN_BYTES:
+                coin_draws += 1
+                return bytes(size) if coin_draws == 1 else bytes([0xA5]) * size
+            return len(draw_sizes).to_bytes(size, "big")
+
+        try:
+            with patch.object(queue.secrets, "token_bytes", side_effect=deterministic_token_bytes):
+                issued = store.issue_batch(template=OperationTemplate("profile12-assertion", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
+            self.assertEqual(coin_draws, 2)
+            self.assertEqual(draw_sizes.count(queue.PUBLIC_COIN_BYTES), 2)
+            self.assertEqual(draw_sizes.count(queue.MAX_OPERATION_REF_BYTES), 101)
+            self.assertNotEqual(issued.public_coin, bytes(queue.PUBLIC_COIN_BYTES))
+            verify_database(root / "state.sqlite", expected_config=config.as_json)
+        finally:
+            store._close()
+            owner.close()
+            temp.cleanup()
+
+    def test_issue_and_handoff_clock_contract_rejects_malformed_backward_and_u64_values(self) -> None:
+        clock_values = ("malformed", -1, 2**64, 1.5)
+        self.assertEqual(len(clock_values), 4)
+        for index, value in enumerate(clock_values):
+            temp = tempfile.TemporaryDirectory()
+            root = Path(temp.name)
+            clock = _Clock()
+            config = QueueConfig(f"profile12-clock-{index}", 100)
+            owner = _QueueRuntimeOwnership(lock_path=root / "state.sqlite.runtime-lock", parent=root)
+            store = _VerificationQueueStore(path=root / "state.sqlite", config=config, owner=owner, clock=clock, composition_config=CompositionConfigV2(config.queue_id, config.digest, capacity=100))
+            try:
+                before = (root / "state.sqlite").read_bytes()
+                clock.now = value
+                with patch.object(queue.secrets, "token_bytes", side_effect=AssertionError("clock gate must precede RNG")) as sampler:
+                    with self.assertRaisesRegex(QueueIntegrityError, "queue_clock"):
+                        store.issue_batch(template=OperationTemplate("profile12-assertion", 1, config.profile_version, 0, 10_000))
+                self.assertEqual(sampler.call_count, 0)
+                self.assertEqual((root / "state.sqlite").read_bytes(), before)
+                verify_database(root / "state.sqlite", expected_config=config.as_json)
+            finally:
+                store._close()
+                owner.close()
+                temp.cleanup()
+
+        for index, value in enumerate((999, 2**64, "malformed")):
+            temp = tempfile.TemporaryDirectory()
+            root = Path(temp.name)
+            clock = _Clock(1000)
+            config = QueueConfig(f"profile12-handoff-clock-{index}", 100)
+            owner = _QueueRuntimeOwnership(lock_path=root / "state.sqlite.runtime-lock", parent=root)
+            store = _VerificationQueueStore(path=root / "state.sqlite", config=config, owner=owner, clock=clock, composition_config=CompositionConfigV2(config.queue_id, config.digest, capacity=100))
+            try:
+                issued = store.issue_batch(template=OperationTemplate("profile12-assertion", 1, config.profile_version, 900, 2_000))
+                before = (root / "state.sqlite").read_bytes()
+                clock.now = value
+                handoff = VolatileProofHandoff(bytearray(b"clock-handoff"))
+                with self.assertRaisesRegex(QueueIntegrityError, "queue_clock"):
+                    store.submit_batch_handoff(issued_batch=issued, proof_stream=handoff)
+                self.assertTrue(handoff.closed)
+                self.assertEqual((root / "state.sqlite").read_bytes(), before)
+                with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                    self.assertEqual(connection.execute("SELECT status FROM queue_batches").fetchone()[0], "AWAITING_HANDOFF")
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_transitions").fetchone()[0], 1)
+                verify_database(root / "state.sqlite", expected_config=config.as_json)
+            finally:
+                store._close()
+                owner.close()
+                temp.cleanup()
 
     def test_receipt_flags_and_orphan_results_are_closed(self) -> None:
         batch = self.store.issue_batch(template=self._template())
@@ -446,6 +756,187 @@ class Profile12StateTests(unittest.TestCase):
             connection.execute(dict(queue._TRIGGER_DEFS)["queue_results_no_delete"])
             connection.commit()
         self._assert_all_entrypoints_reject(missing_path, "result_set", destination_name="restore-missing-result.sqlite")
+
+    def test_association_closure_matrix_rejects_missing_and_orphan_rows_everywhere(self) -> None:
+        batch = self.store.issue_batch(template=self._template())
+        base = (self.root / "state.sqlite").read_bytes()
+        orphan_batch_id = bytes([0xE1]) * 32
+
+        issue_cases = (
+            ("member_missing", "batch_cardinality"),
+            ("member_orphan", "member_binding"),
+            ("attempt_missing", "attempt_missing"),
+            ("attempt_orphan", "attempt_orphan"),
+            ("transition_missing", "head_binding"),
+            ("transition_orphan", "transition_orphan"),
+        )
+        self.assertEqual(len(issue_cases), 6)
+        for label, expected in issue_cases:
+            path = self.root / f"association-{label}.sqlite"
+            path.write_bytes(base)
+            with closing(sqlite3.connect(str(path))) as connection:
+                if label == "member_missing":
+                    connection.execute("DROP TRIGGER queue_members_no_delete")
+                    connection.execute("DELETE FROM queue_members WHERE batch_id=? AND batch_position=99", (batch.batch_id,))
+                    connection.execute(dict(queue._TRIGGER_DEFS)["queue_members_no_delete"])
+                elif label == "member_orphan":
+                    connection.execute("DROP TRIGGER queue_members_no_delete")
+                    connection.execute("DELETE FROM queue_members WHERE batch_id=? AND batch_position=99", (batch.batch_id,))
+                    connection.execute("INSERT INTO queue_members VALUES (?,?,?,?)", (orphan_batch_id, 99, bytes([0xE2]) * 32, 100))
+                    connection.execute(dict(queue._TRIGGER_DEFS)["queue_members_no_delete"])
+                elif label == "attempt_missing":
+                    connection.execute("DROP TRIGGER queue_attempts_no_delete")
+                    connection.execute("DELETE FROM queue_attempts WHERE batch_id=?", (batch.batch_id,))
+                    connection.execute(dict(queue._TRIGGER_DEFS)["queue_attempts_no_delete"])
+                elif label == "attempt_orphan":
+                    connection.execute("INSERT INTO queue_attempts VALUES (?,?,?,?,?,?,?,?,?,?)", (2, orphan_batch_id, 101, 202, 101, (1).to_bytes(8, "big"), "RESERVED", self.clock.now_ms(), None, None))
+                elif label == "transition_missing":
+                    connection.execute("DROP TRIGGER queue_transitions_no_delete")
+                    connection.execute("DELETE FROM queue_transitions WHERE sequence=1")
+                    connection.execute(dict(queue._TRIGGER_DEFS)["queue_transitions_no_delete"])
+                else:
+                    connection.execute("INSERT INTO queue_transitions VALUES (?,?,?,?,?,?,?)", (2, "BATCH_ISSUED", orphan_batch_id, bytes(64), bytes(64), b"{}", bytes(64)))
+                connection.commit()
+            with self.subTest(association=label):
+                self._assert_all_entrypoints_reject(path, expected, destination_name=f"restore-association-{label}.sqlite")
+
+        lease_temp = tempfile.TemporaryDirectory()
+        lease_root = Path(lease_temp.name)
+        lease_clock = _Clock()
+        lease_config = QueueConfig("profile12-assoc-lease", 200)
+        lease_owner = _QueueRuntimeOwnership(lock_path=lease_root / "state.sqlite.runtime-lock", parent=lease_root)
+        lease_store = _VerificationQueueStore(path=lease_root / "state.sqlite", config=lease_config, owner=lease_owner, clock=lease_clock, composition_config=CompositionConfigV2(lease_config.queue_id, lease_config.digest, capacity=200))
+        try:
+            lease_batch = lease_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, lease_config.profile_version, lease_clock.now - 100, lease_clock.now + 60_000))
+            lease_store.submit_batch_handoff(issued_batch=lease_batch, proof_stream=VolatileProofHandoff(bytearray(b"lease-proof")))
+            self.assertIsNotNone(lease_store._claim_next_batch())
+            lease_base = (lease_root / "state.sqlite").read_bytes()
+            for label, expected in (("lease_missing", "lease_binding"), ("lease_orphan", "lease_orphan")):
+                path = lease_root / f"association-{label}.sqlite"
+                path.write_bytes(lease_base)
+                with closing(sqlite3.connect(str(path))) as connection:
+                    connection.execute("DELETE FROM queue_leases WHERE batch_id=?", (lease_batch.batch_id,))
+                    if label == "lease_orphan":
+                        connection.execute("INSERT INTO queue_leases VALUES (?,?,?,?,?,?,?)", (orphan_batch_id, "queue-v12-worker", bytes([0xE3]) * 64, 1, 3, lease_clock.now, lease_clock.now + 60_000))
+                    connection.commit()
+                with self.subTest(association=label):
+                    self._assert_all_entrypoints_reject(path, expected, destination_name=f"restore-association-{label}.sqlite")
+        finally:
+            lease_store._close()
+            lease_owner.close()
+            lease_temp.cleanup()
+
+    def test_writer_generated_handled_held_failures_preserve_result_error_separation(self) -> None:
+        class _TransportVerifier:
+            def verify(self, _stream, _batch):
+                raise QueueHeldError("verifier_transport")
+
+        class _ShapeVerifier:
+            def verify(self, stream, _batch):
+                while stream.read(23):
+                    pass
+                return []
+
+        class _AcceptedVerifier:
+            def __init__(self, config: QueueConfig) -> None:
+                self.config = config
+
+            def verify(self, stream, batch):
+                while stream.read(23):
+                    pass
+                return BatchVerifierResult(
+                    True,
+                    True,
+                    batch.proof_context,
+                    batch.public_coin,
+                    batch.batch_root,
+                    self.config.source_auth_profile,
+                    self.config.source_key_epoch,
+                    "accepted",
+                    self.config.qualification_flags,
+                )
+
+        cases = (
+            ("transport", _TransportVerifier, "verifier_transport"),
+            ("shape", _ShapeVerifier, "verifier_result_shape"),
+            ("state_controls", _AcceptedVerifier, "state_disposition"),
+        )
+        for label, verifier_type, error_code in cases:
+            with self.subTest(handled_failure=label):
+                temp = tempfile.TemporaryDirectory()
+                root = Path(temp.name)
+                clock = _Clock()
+                config = QueueConfig(f"profile12-held-{label}", 100)
+                owner = _QueueRuntimeOwnership(lock_path=root / "state.sqlite.runtime-lock", parent=root)
+                store = _VerificationQueueStore(path=root / "state.sqlite", config=config, owner=owner, clock=clock, composition_config=CompositionConfigV2(config.queue_id, config.digest, capacity=100))
+                try:
+                    batch = store.issue_batch(template=OperationTemplate("profile12-assertion", 1, config.profile_version, clock.now - 100, clock.now + 120_000))
+                    store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"handled-failure-proof")))
+                    verifier = verifier_type(config) if label == "state_controls" else verifier_type()
+                    result = store._process_one_batch(verifier=verifier, state_disposition_port=None)
+                    self.assertIsNotNone(result)
+                    assert result is not None
+                    self.assertEqual((result.status, result.error_code), ("HELD", error_code))
+                    with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                        batch_row = connection.execute("SELECT status,last_error_code FROM queue_batches").fetchone()
+                        attempt_row = connection.execute("SELECT status,result_code,reservation_before,reservation_after FROM queue_attempts").fetchone()
+                        result_row = connection.execute("SELECT terminal_status,result_code,error_code,attempt FROM queue_results").fetchone()
+                        receipt = json.loads(bytes(connection.execute("SELECT receipt_bytes FROM queue_results").fetchone()[0]).decode("ascii"))
+                        event = json.loads(bytes(connection.execute("SELECT event_bytes FROM queue_transitions ORDER BY sequence DESC LIMIT 1").fetchone()[0]).decode("ascii"))
+                        composition_counts = tuple(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in ("composition_transactions", "composition_events", "composition_outbox"))
+                        self.assertEqual(batch_row, ("HELD", error_code))
+                        self.assertEqual(attempt_row, ("HELD", "fresh_handoff_required", 0, 101))
+                        self.assertEqual(result_row, ("HELD", "fresh_handoff_required", error_code, 1))
+                        self.assertEqual((receipt["result_code"], receipt["error_code"]), ("fresh_handoff_required", error_code))
+                        self.assertEqual((event["kind"], event["error_code"]), ("BATCH_HELD", error_code))
+                        self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 101)
+                        self.assertEqual(composition_counts, (0, 0, 0))
+                    verify_database(root / "state.sqlite", expected_config=config.as_json)
+                    promoted = read_verified_batch(root / "state.sqlite")
+                    self.assertEqual((promoted.batch.accepted_count, promoted.jobs), (0, ()))
+                    raw = (root / "state.sqlite").read_bytes()
+                    verify_export_bytes(raw, expected_config=config.as_json)
+                    restored = root / "restored.sqlite"
+                    restore_export_to_fresh_database(export_bytes=raw, destination=restored, expected_config=config.as_json)
+                    verify_database(restored, expected_config=config.as_json)
+
+                    contradictory_receipt = root / "contradictory-receipt.sqlite"
+                    contradictory_receipt.write_bytes(raw)
+                    with closing(sqlite3.connect(str(contradictory_receipt))) as connection:
+                        receipt_value = json.loads(bytes(connection.execute("SELECT receipt_bytes FROM queue_results").fetchone()[0]).decode("ascii"))
+                        receipt_value["error_code"] = "fresh_handoff_required"
+                        connection.execute("DROP TRIGGER queue_results_no_update")
+                        connection.execute("UPDATE queue_results SET receipt_bytes=?", (json.dumps(receipt_value, sort_keys=True, separators=(",", ":")).encode("ascii"),))
+                        connection.execute(dict(queue._TRIGGER_DEFS)["queue_results_no_update"])
+                        connection.commit()
+                    self._assert_all_entrypoints_reject(contradictory_receipt, "receipt_result_binding", destination_name=f"restore-contradictory-receipt-{label}.sqlite")
+
+                    contradictory_attempt = root / "contradictory-attempt.sqlite"
+                    contradictory_attempt.write_bytes(raw)
+                    with closing(sqlite3.connect(str(contradictory_attempt))) as connection:
+                        connection.execute("DROP TRIGGER queue_attempts_transition_guard")
+                        connection.execute("UPDATE queue_attempts SET result_code='verifier_transport'")
+                        connection.execute(dict(queue._TRIGGER_DEFS)["queue_attempts_transition_guard"])
+                        connection.commit()
+                    self._assert_all_entrypoints_reject(contradictory_attempt, "attempt_result_binding", destination_name=f"restore-contradictory-attempt-{label}.sqlite")
+
+                    store._close()
+                    owner.close()
+                    reopened_owner = _QueueRuntimeOwnership(lock_path=root / "state.sqlite.runtime-lock", parent=root)
+                    reopened = _VerificationQueueStore(path=root / "state.sqlite", config=config, owner=reopened_owner, clock=clock, composition_config=CompositionConfigV2(config.queue_id, config.digest, capacity=100))
+                    try:
+                        next_batch = reopened.issue_batch(template=OperationTemplate("profile12-assertion", 1, config.profile_version, clock.now - 100, clock.now + 120_000))
+                        self.assertNotEqual(next_batch.batch_id, batch.batch_id)
+                        with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                            self.assertEqual(connection.execute("SELECT proof_attempts_used FROM queue_metadata").fetchone()[0], 202)
+                    finally:
+                        reopened._close()
+                        reopened_owner.close()
+                finally:
+                    if not store._closed:
+                        store._close()
+                    owner.close()
+                    temp.cleanup()
 
     def test_missing_attempt_and_config_drift_block_issue_and_claim_before_rng(self) -> None:
         def fresh() -> tuple[tempfile.TemporaryDirectory[str], Path, _Clock, QueueConfig, _QueueRuntimeOwnership, _VerificationQueueStore]:
@@ -733,6 +1224,106 @@ class Profile12StateTests(unittest.TestCase):
             rejected_store._close()
             rejected_owner.close()
             rejected_temp.cleanup()
+
+    def test_lifecycle_specific_expiry_contract_rejects_coherent_prelease_expiry_recode(self) -> None:
+        expired_temp = tempfile.TemporaryDirectory()
+        expired_root = Path(expired_temp.name)
+        expired_clock = _Clock()
+        expired_config = QueueConfig("profile12-prelease-expiry", 100)
+        expired_owner = _QueueRuntimeOwnership(lock_path=expired_root / "state.sqlite.runtime-lock", parent=expired_root)
+        expired_store = _VerificationQueueStore(path=expired_root / "state.sqlite", config=expired_config, owner=expired_owner, clock=expired_clock, composition_config=CompositionConfigV2(expired_config.queue_id, expired_config.digest, capacity=100))
+        try:
+            expired_batch = expired_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, expired_config.profile_version, expired_clock.now - 100, expired_clock.now - 1))
+            with self.assertRaisesRegex(Exception, "validity_expired"):
+                expired_store.submit_batch_handoff(issued_batch=expired_batch, proof_stream=VolatileProofHandoff(bytearray(b"expired-handoff")))
+            verify_database(expired_root / "state.sqlite", expected_config=expired_config.as_json)
+            with closing(sqlite3.connect(str(expired_root / "state.sqlite"))) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_transitions").fetchone()[0], 2)
+                self.assertEqual(connection.execute("SELECT last_error_code FROM queue_batches").fetchone()[0], "validity_expired")
+        finally:
+            expired_store._close()
+            expired_owner.close()
+            expired_temp.cleanup()
+
+        queued_temp = tempfile.TemporaryDirectory()
+        queued_root = Path(queued_temp.name)
+        queued_clock = _Clock()
+        queued_config = QueueConfig("profile12-queued-expiry", 100)
+        queued_owner = _QueueRuntimeOwnership(lock_path=queued_root / "state.sqlite.runtime-lock", parent=queued_root)
+        queued_store = _VerificationQueueStore(path=queued_root / "state.sqlite", config=queued_config, owner=queued_owner, clock=queued_clock, composition_config=CompositionConfigV2(queued_config.queue_id, queued_config.digest, capacity=100))
+        try:
+            queued_batch = queued_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, queued_config.profile_version, queued_clock.now - 100, queued_clock.now + 100))
+            queued_store.submit_batch_handoff(issued_batch=queued_batch, proof_stream=VolatileProofHandoff(bytearray(b"queued-expiry")))
+            queued_clock.now += 101
+            self.assertIsNone(queued_store._claim_next_batch())
+            verify_database(queued_root / "state.sqlite", expected_config=queued_config.as_json)
+            with closing(sqlite3.connect(str(queued_root / "state.sqlite"))) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_transitions").fetchone()[0], 3)
+                self.assertEqual(connection.execute("SELECT last_error_code FROM queue_batches").fetchone()[0], "validity_expired")
+        finally:
+            queued_store._close()
+            queued_owner.close()
+            queued_temp.cleanup()
+
+        recovery_temp = tempfile.TemporaryDirectory()
+        recovery_root = Path(recovery_temp.name)
+        recovery_clock = _Clock()
+        recovery_config = QueueConfig("profile12-recovery-fresh", 100)
+        recovery_owner = _QueueRuntimeOwnership(lock_path=recovery_root / "state.sqlite.runtime-lock", parent=recovery_root)
+        recovery_store = _VerificationQueueStore(path=recovery_root / "state.sqlite", config=recovery_config, owner=recovery_owner, clock=recovery_clock, composition_config=CompositionConfigV2(recovery_config.queue_id, recovery_config.digest, capacity=100))
+        try:
+            recovery_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, recovery_config.profile_version, recovery_clock.now - 100, recovery_clock.now + 10))
+            recovery_store._close()
+            recovery_owner.close()
+            recovery_clock.now += 100_000
+            reopened_owner = _QueueRuntimeOwnership(lock_path=recovery_root / "state.sqlite.runtime-lock", parent=recovery_root)
+            reopened = _VerificationQueueStore(path=recovery_root / "state.sqlite", config=recovery_config, owner=reopened_owner, clock=recovery_clock, composition_config=CompositionConfigV2(recovery_config.queue_id, recovery_config.digest, capacity=100))
+            try:
+                verify_database(recovery_root / "state.sqlite", expected_config=recovery_config.as_json)
+                with closing(sqlite3.connect(str(recovery_root / "state.sqlite"))) as connection:
+                    self.assertEqual(connection.execute("SELECT last_error_code FROM queue_batches").fetchone()[0], "fresh_handoff_required")
+            finally:
+                reopened._close()
+                reopened_owner.close()
+        finally:
+            if not recovery_store._closed:
+                recovery_store._close()
+            recovery_owner.close()
+            recovery_temp.cleanup()
+
+        batch = self.store.issue_batch(template=self._template())
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self.store._hold_batch_locked(connection, batch_id=batch.batch_id, now=self.clock.now, code="fresh_handoff_required")
+            connection.commit()
+        base = (self.root / "state.sqlite").read_bytes()
+        for label, code, expected in (("lease", "lease_expired", "terminal_error_binding"), ("validity", "validity_expired", "validity_deadline")):
+            path = self.root / f"prelease-recode-{label}.sqlite"
+            path.write_bytes(base)
+            with closing(sqlite3.connect(str(path))) as connection:
+                raw_receipt = bytes(connection.execute("SELECT receipt_bytes FROM queue_results").fetchone()[0])
+                receipt = json.loads(raw_receipt.decode("ascii"))
+                receipt["result_code"] = code
+                receipt["error_code"] = code
+                encoded_receipt = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("ascii")
+                event_raw = bytes(connection.execute("SELECT event_bytes FROM queue_transitions ORDER BY sequence DESC LIMIT 1").fetchone()[0])
+                event = json.loads(event_raw.decode("ascii"))
+                event["error_code"] = code
+                encoded_event = json.dumps(event, sort_keys=True, separators=(",", ":")).encode("ascii")
+                connection.execute("DROP TRIGGER queue_attempts_transition_guard")
+                connection.execute("DROP TRIGGER queue_results_no_update")
+                connection.execute("DROP TRIGGER queue_transitions_no_update")
+                connection.execute("UPDATE queue_batches SET last_error_code=? WHERE batch_id=?", (code, batch.batch_id))
+                connection.execute("UPDATE queue_attempts SET result_code=? WHERE batch_id=?", (code, batch.batch_id))
+                connection.execute("UPDATE queue_results SET result_code=?,error_code=?,receipt_bytes=? WHERE batch_id=?", (code, code, encoded_receipt, batch.batch_id))
+                connection.execute("UPDATE queue_transitions SET event_bytes=? WHERE sequence=(SELECT MAX(sequence) FROM queue_transitions)", (encoded_event,))
+                connection.execute(dict(queue._TRIGGER_DEFS)["queue_attempts_transition_guard"])
+                connection.execute(dict(queue._TRIGGER_DEFS)["queue_results_no_update"])
+                connection.execute(dict(queue._TRIGGER_DEFS)["queue_transitions_no_update"])
+                connection.commit()
+            self._rehash_transitions(path)
+            with self.subTest(prelease_expiry_recode=label):
+                self._assert_all_entrypoints_reject(path, expected, destination_name=f"restore-prelease-recode-{label}.sqlite")
 
     def test_reservation_and_issue_event_order_are_cross_bound(self) -> None:
         temp = tempfile.TemporaryDirectory()

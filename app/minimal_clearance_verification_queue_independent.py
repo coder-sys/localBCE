@@ -117,7 +117,16 @@ _ALLOWED_CODES = frozenset({
     "receipt_acceptance", "receipt_batch_id", "receipt_statement", "receipt_root", "receipt_source_profile",
     "receipt_source_epoch", "receipt_result_code", "receipt_error", "flags_bounds", "flags_encoding", "flags_shape",
     "event_fields", "event_bounds", "handoff_not_consumed", "runtime_backend_unqualified", "runtime_result", "runtime_max_batches",
+    "state_disposition", "state_control_set", "state_control_shape",
 })
+_HELD_DIRECT_CODES: Final[frozenset[str]] = frozenset(("batch_binding", "fresh_handoff_required", "validity_expired", "lease_expired"))
+_HELD_PROCESS_ERRORS: Final[frozenset[str]] = frozenset((
+    "verifier_stream_not_consumed", "verifier_result_unknown_field", "verifier_result_shape",
+    "verifier_result_flags", "verifier_key_epoch", "verifier_result_code", "verifier_transport",
+    "state_disposition", "state_control_set", "state_control_shape",
+))
+_HELD_PRELEASE_ERRORS: Final[frozenset[str]] = frozenset(("batch_binding", "fresh_handoff_required", "validity_expired"))
+_HELD_STARTED_ERRORS: Final[frozenset[str]] = frozenset(("fresh_handoff_required", "validity_expired", "lease_expired")) | _HELD_PROCESS_ERRORS
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "queue_metadata": ("id", "schema_version", "queue_id", "config_json", "config_digest", "admission_cap_bytes", "process_tree_peak_cap_bytes", "active_process_limit", "page_size", "max_page_count", "journal_mode", "synchronous", "head_root", "next_transition_seq", "next_admission_seq", "nonterminal_count", "live_lease_count", "proof_attempts_used", "proof_attempts_cap", "next_attempt_seq"),
@@ -202,7 +211,12 @@ def _read_only_schema_gate(path: Path) -> None:
     """Reject a non-Profile12 file before any writable/PRAGMA connection work."""
 
     try:
-        uri = path.resolve().as_uri() + "?mode=ro"
+        # The gate must not even acquire SQLite's shared-memory lock on a
+        # retired WAL database: opening a normal read-only handle can rewrite
+        # lock bytes in the -shm sidecar before the version rejection.  The
+        # immutable handle reads only the database image needed for this
+        # structural gate and performs no PRAGMA or writable work.
+        uri = path.resolve().as_uri() + "?immutable=1"
         with closing(sqlite3.connect(uri, uri=True, timeout=5.0)) as connection:
             _schema_version_gate(connection)
     except IndependentQueueError:
@@ -315,20 +329,20 @@ def _parse_config(raw: bytes, expected_config: Mapping[str, Any] | None = None) 
     required = {"schema_version", "handoff_protocol", "queue_id", "capacity", "admission_cap_bytes", "process_tree_peak_cap_bytes", "active_process_limit", "database_page_size", "database_max_page_count", "database_journal_mode", "database_synchronous", "proof_attempts_cap", "public_coin_bytes", "proof_context_bytes", "profile12_context_preimage_bytes", "profile_version", "profile_digest", "profile_epoch", "source_auth_profile", "source_key_epoch", "qualification_flags", "directives", "proof_suite_id", "production_usable", "activation"}
     if type(value) is not dict or set(value) != required:
         _fail("config_shape")
-    if value["schema_version"] != SCHEMA_VERSION or value["handoff_protocol"] != "BATCH_ISSUE_THEN_HANDOFF_V1":
+    if type(value["schema_version"]) is not int or value["schema_version"] != SCHEMA_VERSION or type(value["handoff_protocol"]) is not str or value["handoff_protocol"] != "BATCH_ISSUE_THEN_HANDOFF_V1":
         _fail("config_shape")
     if type(value["capacity"]) is not int or not 100 <= value["capacity"] <= 512:
         _fail("config_capacity")
-    if value["admission_cap_bytes"] != _ADMISSION_CAP or type(value["process_tree_peak_cap_bytes"]) is not int or not 0 < value["process_tree_peak_cap_bytes"] < 5_000_000_000 or value["active_process_limit"] != 1:
+    if type(value["admission_cap_bytes"]) is not int or value["admission_cap_bytes"] != _ADMISSION_CAP or type(value["process_tree_peak_cap_bytes"]) is not int or not 0 < value["process_tree_peak_cap_bytes"] < 5_000_000_000 or type(value["active_process_limit"]) is not int or value["active_process_limit"] != 1:
         _fail("config_limits")
-    if value["database_page_size"] != _DATABASE_PAGE_SIZE or value["database_max_page_count"] != _DATABASE_MAX_PAGE_COUNT or value["database_journal_mode"] != "delete" or value["database_synchronous"] != 2 or value["proof_attempts_cap"] != _PROOF_ATTEMPTS_CAP or value["public_coin_bytes"] != _PUBLIC_COIN_BYTES or value["proof_context_bytes"] != _PROOF_CONTEXT_BYTES or value["profile12_context_preimage_bytes"] != _PROFILE12_CONTEXT_PREIMAGE_BYTES:
+    if type(value["database_page_size"]) is not int or value["database_page_size"] != _DATABASE_PAGE_SIZE or type(value["database_max_page_count"]) is not int or value["database_max_page_count"] != _DATABASE_MAX_PAGE_COUNT or type(value["database_journal_mode"]) is not str or value["database_journal_mode"] != "delete" or type(value["database_synchronous"]) is not int or value["database_synchronous"] != 2 or type(value["proof_attempts_cap"]) is not int or value["proof_attempts_cap"] != _PROOF_ATTEMPTS_CAP or type(value["public_coin_bytes"]) is not int or value["public_coin_bytes"] != _PUBLIC_COIN_BYTES or type(value["proof_context_bytes"]) is not int or value["proof_context_bytes"] != _PROOF_CONTEXT_BYTES or type(value["profile12_context_preimage_bytes"]) is not int or value["profile12_context_preimage_bytes"] != _PROFILE12_CONTEXT_PREIMAGE_BYTES:
         _fail("config_database")
     _token(value["queue_id"], "config_queue_id", 96)
     if value["profile_version"] != _PROFILE_TOKEN or _parse_hex(value["profile_digest"], 64, "config_profile_digest") != _PROFILE:
         _fail("config_profile")
     if type(value["profile_epoch"]) is not int or value["profile_epoch"] != _PROFILE_EPOCH:
         _fail("config_profile_epoch")
-    if value["source_auth_profile"] != _SOURCE_AUTH_PROFILE:
+    if type(value["source_auth_profile"]) is not str or value["source_auth_profile"] != _SOURCE_AUTH_PROFILE:
         _fail("config_source_profile")
     if type(value["source_key_epoch"]) is not int or not 1 <= value["source_key_epoch"] <= _MAX_EPOCH:
         _fail("config_source_epoch")
@@ -337,7 +351,7 @@ def _parse_config(raw: bytes, expected_config: Mapping[str, Any] | None = None) 
         _fail("config_flags")
     for flag in flags:
         _token(flag, "config_flag", 96)
-    if value["directives"] != _DIRECTIVES or value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False:
+    if type(value["directives"]) is not list or value["directives"] != _DIRECTIVES or value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False:
         _fail("config_nonactivation")
     if expected_config is not None and value != dict(expected_config):
         _fail("config_binding")
@@ -613,14 +627,20 @@ def _verify_temporal_bindings(
             _fail("result_timestamp_binding")
         if attempt_row[8] is None or _strict_int(attempt_row[8], "timestamp_binding", minimum=0, maximum=_MAX_EPOCH) != terminal_time:
             _fail("attempt_timestamp_binding")
+        terminal_error = events[-1].get("error_code")
         if status in {"VERIFIED", "REJECTED"}:
             if started_time is None or not valid_from <= terminal_time < valid_until:
                 _fail("validity_deadline")
             if lease_deadline is None or terminal_time >= lease_deadline:
                 _fail("lease_deadline")
-        elif status == "HELD" and started_time is not None:
-            terminal_error = events[-1].get("error_code")
-            if terminal_error == "validity_expired":
+        elif status == "HELD":
+            allowed_errors = _HELD_PRELEASE_ERRORS if started_time is None else _HELD_STARTED_ERRORS
+            if terminal_error not in allowed_errors:
+                _fail("terminal_error_binding")
+            if started_time is None:
+                if terminal_error == "validity_expired" and not (terminal_time < valid_from or terminal_time >= valid_until):
+                    _fail("validity_deadline")
+            elif terminal_error == "validity_expired":
                 if not (terminal_time < valid_from or terminal_time >= valid_until):
                     _fail("validity_deadline")
             elif terminal_error == "lease_expired":
@@ -653,6 +673,9 @@ def _verify_terminal_bindings(
         _fail("terminal_error_binding")
     if not all(value == values[0] for value in values):
         _fail("terminal_error_binding")
+    result_codes = (attempt_row[9], result[9], receipt["result_code"])
+    if not all(code == result_codes[0] for code in result_codes):
+        _fail("terminal_result_binding")
     proof_accepted = bool(result[4])
     source_authenticated = bool(result[5])
     if status == "VERIFIED":
@@ -662,7 +685,19 @@ def _verify_terminal_bindings(
         if values[0] is None or str(attempt_row[6]) != "REJECTED" or str(attempt_row[9]) != "rejected" or str(result[9]) != "rejected" or (proof_accepted and source_authenticated) or receipt["result_code"] != "rejected":
             _fail("terminal_rejection")
     elif status == "HELD":
-        if values[0] is None or str(attempt_row[6]) != "HELD" or str(attempt_row[9]) != str(values[0]) or str(result[9]) != str(values[0]) or proof_accepted or source_authenticated or receipt["result_code"] != str(values[0]):
+        result_code = result_codes[0]
+        error_code = values[0]
+        if (
+            error_code is None
+            or result_code not in _HELD_DIRECT_CODES | {"fresh_handoff_required"}
+            or not (
+                result_code == error_code and result_code in _HELD_DIRECT_CODES
+                or result_code == "fresh_handoff_required" and error_code in _HELD_PROCESS_ERRORS
+            )
+            or str(attempt_row[6]) != "HELD"
+            or proof_accepted
+            or source_authenticated
+        ):
             _fail("terminal_hold")
     else:
         _fail("terminal_status")
@@ -890,6 +925,18 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
     for result in result_map.values():
         _parse_receipt(_db_bytes(result[3], "receipt"))
         _forbidden_bytes((_db_bytes(result[3], "receipt"),))
+    attempt_batch_ids = {_blob(_db_bytes(row[1], "attempt_batch"), 32, "attempt_batch") for row in attempt_rows}
+    if len(attempt_rows) != len(batch_rows) or attempt_batch_ids != set(batch_map):
+        _fail("attempt_missing" if set(batch_map) - attempt_batch_ids else "attempt_orphan")
+    lease_batch_ids = {_blob(_db_bytes(row[0], "lease_batch_id"), 32, "lease_batch_id") for row in lease_rows}
+    expected_lease_ids = {batch_id for batch_id, row in batch_map.items() if row[11] == "LEASED"}
+    if lease_batch_ids - set(batch_map):
+        _fail("lease_orphan")
+    if lease_batch_ids != expected_lease_ids:
+        _fail("lease_binding")
+    transition_batch_ids = {_blob(_db_bytes(row[2], "transition_batch"), 32, "transition_batch") for row in transition_rows}
+    if transition_batch_ids - set(batch_map):
+        _fail("transition_orphan")
     try:
         if connection.execute("PRAGMA foreign_key_check").fetchall():
             _fail("foreign_key_check")
