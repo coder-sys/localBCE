@@ -552,3 +552,145 @@ HEAD/tree/parent, detached HEAD with no tracked modifications, and clean `git di
 the only remaining status item is the intentionally preserved untracked `build-performance/`
 evidence tree. The bounded corrective phase is complete and the evidence is handed directly to
 the Driver. Claims remain synthetic, nonactivating, and unqualified.
+
+## Native arithmetic fallback correction and bounded optimization decision — 2026-09-12
+
+The open fallback obligation was corrected from the exact reviewed state
+`f73378a3bf33f5356887ba1e46b758a544392507` / tree
+`3418585dc5f5f6091b37db90cd50291a4db69ff6` (parent `800030a4a6b4899e38799934efaaefb5832a6bf6`,
+actual parent tree `afbe96235f4c5d711ca0d3e689502b5e28c86b17`). The forced capability is a
+compile-only CMake configuration of the existing kernel probe. It calls the public
+`bf256_mul`/`bf256_mul_inplace` APIs and reports the backend selected by the public dispatcher;
+the normal and forced builds are not direct calls to a test wrapper.
+
+Exact arithmetic gates:
+
+```text
+BF256_ARITHMETIC_MODE=normal_dispatch
+BF256_ARITHMETIC_BACKEND=pclmul PCLMUL_AVAILABLE=1
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=460775 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+DIRECT_MASK_KERNEL status=PASS skips=0 fixture_rng=deterministic cpu_seconds=22.326
+KERNEL_FINAL_CURRENT_CTEST_EXIT=0
+
+BF256_ARITHMETIC_MODE=forced_capability_false
+BF256_ARITHMETIC_BACKEND=portable PCLMUL_AVAILABLE=0
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=460775 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+DIRECT_MASK_KERNEL_ARITHMETIC_ONLY status=PASS
+KERNEL_PORTABLE_FINAL_CURRENT_CTEST_EXIT=0
+```
+
+The initial forced public path was retained as a failure because the pinned portable
+implementation overwrote an aliased RHS: `case=public_dst_rhs_alias`, expected basis products
+were nonzero, actual values were zero, and the final count was `CHECKS=460775 MISMATCHES=131325`.
+The production dispatch now copies both public inputs before calling the unchanged pinned
+reference. The failed raw transcript is
+`build-performance/kernel-portable/ctest-verbose-20260912.log`; its size/SHA are
+`53244937/D29F1460601F01B1EC5A5CF3D542567EFFF5A3AE5D7B3B91CA5BF5F6938ED253`.
+
+The authorized Karatsuba candidate used nine 64-bit carry-less products and preserved the
+field/reduction/constant-time/alias/dispatch/reference invariants. Its corrected arithmetic,
+forced arithmetic, candidate library identity, and guarded path all passed, but the one
+fresh guarded sample regressed against the one baseline sample:
+
+```text
+BASELINE source_ms=3126.333 verifier_ms=2656.820 total_ms=6355.661
+KARATSUBA source_ms=3505.107 verifier_ms=2696.914 total_ms=6771.051
+TOTAL_REGRESSION_PERCENT=6.535748
+SOURCE_REGRESSION_PERCENT=12.115600
+VERIFIER_REGRESSION_PERCENT=1.509097
+```
+
+The candidate was therefore removed and the original 4x4 PCLMUL implementation retained. The
+first incorrect cross-term run is preserved at
+`build-performance/kernel-candidate/ctest-verbose-20260912-karatsuba.log`,
+`75923051/FFF5D13BAEFDB7FA1C89F57FB7ED09E05CDB9CAFFB97858076E7DD6FCB1C947F`. The baseline
+copy manifest is preserved at `build-performance/baseline-karatsuba-20260912/`.
+
+Final retained identity/gate evidence:
+
+- native C/H SHA-256:
+  `08923E5EB209FFBFB89CC489D2C21770769F0AB45F31984BBC075DDDDCF52399` /
+  `00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`;
+- source appliance `276480/25254DCBEB4FAB9A20911C874D7F633BD9953E804FE999F3AFD1C4BFAC649069`;
+- verifier `241152/59F5CFF5C0C0B4979705BFE3FC69329FCCB2062A73748BC72F7E6A39760CB756`;
+- q library 8 `dm_faest_public.lib`: `333932/F023C33E752DE95DC9D04332212D47333792EEF2424377E1B6E047E9F9B76593`;
+- fixture identity: exact child root, all eight candidate libraries, exit `0`, warning/error
+  lines `0` in the final incremental build;
+- q rebuild: exit `0`, temporary mapping removal exit `0`, 48 `warning C4141` lines, zero
+  C4146/C4244 lines;
+- adapter identity: `Ran 14 tests in 4.407s`, `OK`, exit `0`;
+- production symbol readback:
+  `DUMPBIN_FINAL_CURRENT_EXIT=0`, `DUMPBIN_FINAL_CURRENT_SYMBOL_LINES=3293`,
+  `DUMPBIN_FINAL_CURRENT_TEST_ONLY_MATCHES=0`, public/portable/static matches `27/7/6`.
+
+Final retained complete-path raw evidence is
+`build-performance/complete-path-candidate/guarded-ctest-retained-current-20260912.stdout.log`
+and the matching outer log. The exact JSON line reports:
+
+```text
+acknowledged_operation_count=100
+independent_event_count=100
+independent_operation_count=100
+independent_outbox_count=100
+independent_transaction_count=100
+independent_verified_batch_count=1
+issued_batch_count=1
+operation_count=100
+outbox_acknowledged_count=100
+queue_verify_state_ms=2883.041
+receiver_duplicate_dispatches=0
+receiver_side_effects=100
+reopened_without_work=true
+run_artifact_inventory=["state.sqlite"]
+source_call_ms=3428.429
+source_calls=1
+source_measurement.elapsed_ms=3426.666
+source_measurement.exit_code=0
+source_measurement.cleanup_complete=true
+source_measurement.cap_enforced=true
+source_measurement.active_process_limit=1
+source_measurement.child_process_count=2
+source_measurement.process_tree_complete=true
+source_measurement.measurement_complete=true
+source_measurement.pagefile_growth_evidence=unavailable
+state_issue_ms=12.484
+state_port_calls=1
+state_sequence=100
+total_path_ms=6770.956
+transaction_count=100
+unconfirmed_operation_count=0
+unique_idempotency_keys=100
+verifier_calls=1
+verifier_measurement.elapsed_ms=2695.773
+verifier_measurement.exit_code=0
+verifier_measurement.cleanup_complete=true
+verifier_measurement.cap_enforced=true
+verifier_measurement.active_process_limit=1
+verifier_measurement.child_process_count=2
+verifier_measurement.process_tree_complete=true
+verifier_measurement.measurement_complete=true
+verifier_measurement.pagefile_growth_evidence=unavailable
+source_workspace_empty=true
+verifier_workspace_empty=true
+proof_suite_id=null
+production_usable=false
+activation=false
+```
+
+The raw CTest result is `Ran 9 tests in 8.219s`, `100% tests passed, 0 tests failed out of 1`,
+total `8.84 sec`, stderr bytes `0`, exit `0`. Outer guard telemetry is preflight free
+`3608154112`, reserve `1073741824`, minimum free `3477954560`, peak working set `80916480`,
+peak private `54906880`, child exits `7/0`, cleanup `PASS`, mutex released, and outer exit `0`.
+No test was silently skipped; the raw stdout/stderr/outer sizes and hashes are
+`5680/0/3411`, `12C7E45F0ADE5BC85982084E3AE00C4C58DCF278761895DD035FEA918C1344E6` /
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` /
+`19413D75AB2C37A7E9C468DB0BF3123F5CE3CACBA7E749699330BF7AF8C065C4`.
+
+All prior q-cache, fixture-argument, stale-pin, identity-negative, warning, and unavailable
+old-probe failures remain retained in their historical records. No supported speedup, p95,
+qualification, production-security, activation, or Profile13 claim follows. The current
+status is synthetic, nonactivating, and unqualified (`proof_suite_id=null`,
+`production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`).
+Remaining action is immutable commit verification and direct Driver handoff.

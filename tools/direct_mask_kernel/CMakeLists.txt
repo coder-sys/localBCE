@@ -4,6 +4,14 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(FAEST_REF_DIR "" CACHE PATH "Read-only FAEST ebefcbd8 input")
 set(NATIVE_ORACLE_DIR "" CACHE PATH "Read-only native oracle 7b1e79d input")
+option(DIRECT_MASK_BF256_FORCE_PORTABLE
+  "Compile the standalone probe with the public CPU capability forced false" OFF)
+option(DIRECT_MASK_BF256_ARITHMETIC_ONLY
+  "Run only the existing standalone arithmetic correspondence checks" OFF)
+if(DIRECT_MASK_BF256_ARITHMETIC_ONLY AND NOT DIRECT_MASK_BF256_FORCE_PORTABLE)
+  message(FATAL_ERROR
+    "DIRECT_MASK_BF256_ARITHMETIC_ONLY requires DIRECT_MASK_BF256_FORCE_PORTABLE")
+endif()
 set(DIRECT_MASK_BF256_ACCEL_SOURCE
     "${CMAKE_CURRENT_LIST_DIR}/../direct_mask_vole/direct_mask_bf256_accel.c")
 if(NOT EXISTS "${FAEST_REF_DIR}/fields.c" OR
@@ -19,7 +27,13 @@ set_source_files_properties(
 set_source_files_properties(
   "${DIRECT_MASK_BF256_ACCEL_SOURCE}"
   PROPERTIES
-    COMPILE_DEFINITIONS "DIRECT_MASK_BF256_TEST_SEAM")
+    COMPILE_DEFINITIONS "")
+if(DIRECT_MASK_BF256_FORCE_PORTABLE)
+  set_source_files_properties(
+    "${DIRECT_MASK_BF256_ACCEL_SOURCE}"
+    PROPERTIES
+      COMPILE_DEFINITIONS "DIRECT_MASK_BF256_TEST_SEAM;DIRECT_MASK_BF256_FORCE_PORTABLE")
+endif()
 add_library(faest_primitives STATIC
   "${FAEST_REF_DIR}/aes.c" "${FAEST_REF_DIR}/compat.c" "${FAEST_REF_DIR}/cpu.c"
   "${FAEST_REF_DIR}/fields.c" "${DIRECT_MASK_BF256_ACCEL_SOURCE}"
@@ -38,8 +52,15 @@ target_link_libraries(direct_mask_kernel PUBLIC faest_primitives)
 add_executable(direct_mask_kernel_probe direct_mask_kernel_probe.c
   "${NATIVE_ORACLE_DIR}/direct_mask_circuit.c")
 target_include_directories(direct_mask_kernel_probe PRIVATE "${NATIVE_ORACLE_DIR}")
-target_compile_definitions(direct_mask_kernel_probe PRIVATE
-  FAEST_TESTS DIRECT_MASK_BF256_TEST_SEAM)
+target_compile_definitions(direct_mask_kernel_probe PRIVATE FAEST_TESTS)
+if(DIRECT_MASK_BF256_FORCE_PORTABLE)
+  target_compile_definitions(direct_mask_kernel_probe PRIVATE
+    DIRECT_MASK_BF256_FORCE_PORTABLE)
+endif()
+if(DIRECT_MASK_BF256_ARITHMETIC_ONLY)
+  target_compile_definitions(direct_mask_kernel_probe PRIVATE
+    DIRECT_MASK_BF256_ARITHMETIC_ONLY)
+endif()
 target_link_libraries(direct_mask_kernel_probe PRIVATE direct_mask_kernel)
 if(MSVC)
   target_compile_options(direct_mask_kernel PRIVATE /W4)

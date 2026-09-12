@@ -24,8 +24,15 @@
 typedef void (*direct_mask_bf256_mul_fn)(bf256_t* dst, const bf256_t* lhs,
                                          const bf256_t* rhs);
 
+#if defined(DIRECT_MASK_BF256_FORCE_PORTABLE) && \
+    !defined(DIRECT_MASK_BF256_TEST_SEAM)
+#error "DIRECT_MASK_BF256_FORCE_PORTABLE is test-only"
+#endif
+
 static int direct_mask_bf256_cpu_has_pclmul(void) {
-#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#if defined(DIRECT_MASK_BF256_FORCE_PORTABLE)
+  return 0;
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
   int regs[4] = {0, 0, 0, 0};
   __cpuid(regs, 0);
   if (regs[0] < 1) {
@@ -93,6 +100,17 @@ static void direct_mask_bf256_mul_pclmul(bf256_t* dst, const bf256_t* lhs,
 }
 #endif
 
+/* The pinned portable implementation permits a destination aliasing lhs but
+ * overwrites rhs before all rhs bits have been consumed.  Copy both public
+ * inputs at this dispatch boundary so the supported public alias contract is
+ * identical for the portable and accelerated backends. */
+static void direct_mask_bf256_mul_portable_alias_safe(
+    bf256_t* dst, const bf256_t* lhs, const bf256_t* rhs) {
+  bf256_t lhs_copy = *lhs;
+  bf256_t rhs_copy = *rhs;
+  direct_mask_bf256_mul_portable(dst, &lhs_copy, &rhs_copy);
+}
+
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
 static volatile PVOID direct_mask_bf256_mul_impl;
 
@@ -105,7 +123,7 @@ static direct_mask_bf256_mul_fn direct_mask_bf256_select_impl(void) {
 
   direct_mask_bf256_mul_fn selected = direct_mask_bf256_cpu_has_pclmul()
                                           ? direct_mask_bf256_mul_pclmul
-                                          : direct_mask_bf256_mul_portable;
+                                          : direct_mask_bf256_mul_portable_alias_safe;
   current = InterlockedCompareExchangePointer(
       &direct_mask_bf256_mul_impl, (PVOID)selected, NULL);
   return current == NULL ? selected : (direct_mask_bf256_mul_fn)current;
@@ -123,9 +141,9 @@ static direct_mask_bf256_mul_fn direct_mask_bf256_select_impl(void) {
   direct_mask_bf256_mul_fn selected =
 #if defined(__x86_64__) || defined(__i386__)
       direct_mask_bf256_cpu_has_pclmul() ? direct_mask_bf256_mul_pclmul
-                                         : direct_mask_bf256_mul_portable;
+                                         : direct_mask_bf256_mul_portable_alias_safe;
 #else
-      direct_mask_bf256_mul_portable;
+      direct_mask_bf256_mul_portable_alias_safe;
 #endif
   if (__atomic_compare_exchange_n(&direct_mask_bf256_mul_impl, &current, selected, 0,
                                   __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
@@ -135,7 +153,7 @@ static direct_mask_bf256_mul_fn direct_mask_bf256_select_impl(void) {
 }
 #else
 static direct_mask_bf256_mul_fn direct_mask_bf256_select_impl(void) {
-  return direct_mask_bf256_mul_portable;
+  return direct_mask_bf256_mul_portable_alias_safe;
 }
 #endif
 
@@ -150,30 +168,12 @@ void bf256_mul_inplace(bf256_t* lhs, const bf256_t* rhs) {
   *lhs = result;
 }
 
-#if defined(DIRECT_MASK_BF256_TEST_SEAM)
-/* This entry point exists only in the standalone kernel probe build.  It
- * forces the same public dispatch boundary to the independently linked
- * portable implementation on hosts where PCLMUL is available. */
-void direct_mask_bf256_test_portable_dispatch(bf256_t* dst,
-                                               const bf256_t* lhs,
-                                               const bf256_t* rhs) {
-  direct_mask_bf256_mul_portable(dst, lhs, rhs);
-}
-
-void direct_mask_bf256_test_portable_dispatch_inplace(bf256_t* lhs,
-                                                      const bf256_t* rhs) {
-  bf256_t lhs_copy = *lhs;
-  bf256_t result;
-  direct_mask_bf256_mul_portable(&result, &lhs_copy, rhs);
-  *lhs = result;
-}
-#endif
-
 const char* direct_mask_bf256_backend_name(void) {
 #if (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))) || \
     defined(__GNUC__) || defined(__clang__)
-  return direct_mask_bf256_select_impl() == direct_mask_bf256_mul_portable ? "portable"
-                                                                            : "pclmul";
+  return direct_mask_bf256_select_impl() == direct_mask_bf256_mul_portable_alias_safe
+             ? "portable"
+             : "pclmul";
 #else
   return "portable";
 #endif

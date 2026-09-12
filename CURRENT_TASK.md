@@ -371,3 +371,59 @@ Commit verification is complete. The native-performance correction is committed 
 only the intentionally retained untracked `build-performance/` evidence tree remains, and
 `git diff --check` is clean. The bounded phase is complete; direct Driver handoff is the next
 action. Claims remain synthetic, nonactivating, and unqualified.
+
+### Native arithmetic fallback correction and bounded optimization decision — 2026-09-12
+
+This append-only record closes the fallback obligation and the one authorized optimization
+attempt. It started from `f73378a3bf33f5356887ba1e46b758a544392507` / tree
+`3418585dc5f5f6091b37db90cd50291a4db69ff6`, whose parent is
+`800030a4a6b4899e38799934efaaefb5832a6bf6` and whose actual tree is
+`afbe96235f4c5d711ca0d3e689502b5e28c86b17`. The six implementation/gate paths are the
+acceleration C seam, kernel CMake/probe, fixture identity script, source-boundary identity, and
+actual adapter identity. Vendor and protected protocol/source/proof/State/runtime/Queue,
+filtered/PQ, containment, and product paths were untouched.
+
+Fallback verification now uses a CMake-only forced-capability build of the existing probe and
+the actual public `bf256_mul`/`bf256_mul_inplace` functions. Normal dispatch selected `pclmul`
+with `PCLMUL_AVAILABLE=1`; forced dispatch selected `portable` with `PCLMUL_AVAILABLE=0`.
+Both ran 65,536 basis pairs plus 289 boundary pairs, `CHECKS=460775 MISMATCHES=0`; normal
+full-field CTest and forced arithmetic-only CTest both passed with exit `0`. The production
+`dumpbin /symbols` readback exited `0` and found `DUMPBIN_FINAL_CURRENT_TEST_ONLY_MATCHES=0`.
+The initial forced run caught the pinned portable reference's unsupported `dst=rhs` alias and
+was retained as `MISMATCHES=131325`; the production fallback now copies both inputs at the
+dispatch boundary. No pinned vendor file changed.
+
+The tested two-level Karatsuba candidate passed corrected normal/forced arithmetic and the
+eight-library identity gate, but the required guarded comparison regressed:
+
+```text
+BASELINE source_ms=3126.333 verifier_ms=2656.820 total_ms=6355.661
+KARATSUBA source_ms=3505.107 verifier_ms=2696.914 total_ms=6771.051
+TOTAL_REGRESSION_PERCENT=6.535748
+SOURCE_REGRESSION_PERCENT=12.115600
+VERIFIER_REGRESSION_PERCENT=1.509097
+```
+
+It is rejected and removed; the correct current 4x4 PCLMUL implementation is retained. The
+initial Karatsuba arithmetic failure and the forced-alias failure remain in the untracked raw
+evidence tree. No additional tuning or benchmark was authorized or run.
+
+The rebuilt retained identities are source appliance `276480/25254DCBEB4FAB9A20911C874D7F633BD9953E804FE999F3AFD1C4BFAC649069`,
+verifier `241152/59F5CFF5C0C0B4979705BFE3FC69329FCCB2062A73748BC72F7E6A39760CB756`, native C
+`08923E5EB209FFBFB89CC489D2C21770769F0AB45F31984BBC075DDDDCF52399`, and unchanged header
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`. The final q rebuild
+exited `0` with exactly 48 pinned-vendor C4141 warnings and no C4146/C4244; fixture identity
+passed all eight libraries at the exact child root; the adapter identity suite was `Ran 14
+tests in 4.407s`, `OK`, exit `0`.
+
+The final retained guarded path passed CTest `Ran 9 tests in 8.219s`, `100% tests passed, 0
+tests failed out of 1`, total `8.84 sec`, stderr `0`, and outer exit `0`. Its exact evidence
+has one issued/independently verified batch, 100 operations/transactions/ACKs/unique keys,
+source/verifier/State calls `1/1/1`, zero duplicate dispatches, 100 receiver side effects,
+clean reopen, `['state.sqlite']` inventory, empty workspaces, and
+`proof_suite_id=null`/`production_usable=false`/`activation=false`. Guard telemetry is
+child exit `7/0`, reserve `1073741824`, minimum free `3477954560`, peak working set
+`80916480`, peak private `54906880`, cleanup `PASS`, mutex released, and pagefile evidence
+`unavailable`. All prior failures, controlled identity negatives, warnings, unavailable old
+probe output, and skipped-count statements remain preserved and are not relabelled. Remaining
+action is immutable commit verification and direct Driver handoff.

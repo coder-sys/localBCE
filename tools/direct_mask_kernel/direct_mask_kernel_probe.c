@@ -8,6 +8,11 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(DIRECT_MASK_BF256_ARITHMETIC_ONLY) && \
+    !defined(DIRECT_MASK_BF256_FORCE_PORTABLE)
+#error "DIRECT_MASK_BF256_ARITHMETIC_ONLY requires forced portable capability"
+#endif
+
 typedef struct probe_state {
   bf256_t delta;
   bf256_t *evaluations;
@@ -19,13 +24,6 @@ static int equal(bf256_t x, bf256_t y) {
   uint8_t a[32],b[32]; bf256_store(a,&x); bf256_store(b,&y);
   return memcmp(a,b,32)==0;
 }
-
-#if defined(DIRECT_MASK_BF256_TEST_SEAM)
-extern void direct_mask_bf256_test_portable_dispatch(
-    bf256_t* dst, const bf256_t* lhs, const bf256_t* rhs);
-extern void direct_mask_bf256_test_portable_dispatch_inplace(
-    bf256_t* lhs, const bf256_t* rhs);
-#endif
 
 static void set_words(bf256_t *value, uint64_t w0, uint64_t w1,
                       uint64_t w2, uint64_t w3) {
@@ -82,12 +80,6 @@ static int check_arithmetic_pair(const char *suite, unsigned int lhs_index,
   if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_out_of_place",
                                &expected, &actual, checks, mismatches)) ok = 0;
 
-#if defined(DIRECT_MASK_BF256_TEST_SEAM)
-  direct_mask_bf256_test_portable_dispatch(&actual, lhs, rhs);
-  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "forced_portable_dispatch",
-                               &expected, &actual, checks, mismatches)) ok = 0;
-#endif
-
   bf256_t lhs_alias = *lhs;
   bf256_mul(&lhs_alias, &lhs_alias, rhs);
   if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_dst_lhs_alias",
@@ -121,12 +113,6 @@ static int check_arithmetic_pair(const char *suite, unsigned int lhs_index,
   if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_self_inplace",
                                &expected_self, &self_inplace, checks, mismatches)) ok = 0;
 
-#if defined(DIRECT_MASK_BF256_TEST_SEAM)
-  bf256_t forced_portable_inplace = *lhs;
-  direct_mask_bf256_test_portable_dispatch_inplace(&forced_portable_inplace, rhs);
-  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "forced_portable_inplace",
-                               &expected, &forced_portable_inplace, checks, mismatches)) ok = 0;
-#endif
   return ok;
 }
 
@@ -157,8 +143,12 @@ static int run_bf256_arithmetic_checks(void) {
   int ok = 1;
 
   printf("BF256_ARITHMETIC_BEGIN\n");
-  printf("BF256_ARITHMETIC_BACKEND=%s PCLMUL_AVAILABLE=%d "
-         "FORCED_PORTABLE_SEAM=compiled\n",
+#if defined(DIRECT_MASK_BF256_FORCE_PORTABLE)
+  printf("BF256_ARITHMETIC_MODE=forced_capability_false\n");
+#else
+  printf("BF256_ARITHMETIC_MODE=normal_dispatch\n");
+#endif
+  printf("BF256_ARITHMETIC_BACKEND=%s PCLMUL_AVAILABLE=%d\n",
          direct_mask_bf256_backend_name(), direct_mask_bf256_pclmul_available());
   for (unsigned int i = 0; i != 256u; ++i) basis[i] = basis_element(i);
   for (unsigned int i = 0; i != BOUNDARY_VECTOR_COUNT; ++i) {
@@ -248,6 +238,10 @@ static int check_negative(const char *name,const dmk_instance *x,const uint8_t *
 int main(void) {
   const clock_t start=clock();
   int ok=run_bf256_arithmetic_checks();
+#if defined(DIRECT_MASK_BF256_ARITHMETIC_ONLY)
+  printf("DIRECT_MASK_KERNEL_ARITHMETIC_ONLY status=%s\n", ok ? "PASS" : "FAIL");
+  return ok?0:1;
+#endif
   uint8_t root[32]; for(unsigned i=0;i<32;++i) root[i]=(uint8_t)(i*7u+3u);
   uint64_t values[100];
   for(unsigned i=0;i<100;++i) values[i]=(i%2u) ? DMK_LOWER : DMK_UPPER;

@@ -694,3 +694,156 @@ the matching tree and parent, clean tracked status, and clean `git diff --check`
 intentionally preserved untracked `build-performance/` evidence tree remains. The source/gate
 correction, retained raw evidence, and nonactivation boundary are complete and are handed
 directly to the Driver for review.
+
+### Native arithmetic fallback correction and bounded optimization decision — 2026-09-12
+
+This append-only record supersedes the immediately preceding review's open fallback obligation
+and records the one authorized optimization attempt. The phase started from detached HEAD
+`f73378a3bf33f5356887ba1e46b758a544392507`, tree
+`3418585dc5f5f6091b37db90cd50291a4db69ff6`, parent
+`800030a4a6b4899e38799934efaaefb5832a6bf6`; the actual tree of `800030a` is
+`afbe96235f4c5d711ca0d3e689502b5e28c86b17`. Before this phase there were no tracked changes;
+the untracked `build-performance/` evidence tree was preserved. No vendor, protocol, field,
+relation, source/proof/signature/codec, State/runtime/Queue, filtered/PQ, containment, or
+product path was touched.
+
+The fallback correction is now a compile-only forced-capability configuration of the existing
+kernel probe. The forced build uses the public `bf256_mul` and `bf256_mul_inplace` dispatch
+functions, with the existing probe's arithmetic-only mode; it does not call a private portable
+wrapper. The normal and forced transcripts both compare against the independently linked,
+per-source-renamed pinned portable reference over all 65,536 basis pairs and 289 boundary
+pairs. Their decisive raw lines are:
+
+```text
+BF256_ARITHMETIC_MODE=normal_dispatch
+BF256_ARITHMETIC_BACKEND=pclmul PCLMUL_AVAILABLE=1
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=460775 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+DIRECT_MASK_KERNEL status=PASS skips=0 fixture_rng=deterministic cpu_seconds=22.326
+KERNEL_FINAL_CURRENT_CTEST_EXIT=0
+
+BF256_ARITHMETIC_MODE=forced_capability_false
+BF256_ARITHMETIC_BACKEND=portable PCLMUL_AVAILABLE=0
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=460775 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+DIRECT_MASK_KERNEL_ARITHMETIC_ONLY status=PASS
+KERNEL_PORTABLE_FINAL_CURRENT_CTEST_EXIT=0
+```
+
+The normal raw build/test logs are
+`build-performance/kernel-candidate/{build-20260912-final-current.log,ctest-verbose-20260912-final-current.log}`;
+the forced logs are
+`build-performance/kernel-portable/{build-20260912-final-current.log,ctest-verbose-20260912-final-current.log}`.
+The production `dm_faest_public.lib` readback used `dumpbin /symbols`, exited `0`, had
+`DUMPBIN_FINAL_CURRENT_SYMBOL_LINES=3293`, public BF256 matches `27`, portable-reference
+matches `7`, static accelerator matches `6`, and
+`DUMPBIN_FINAL_CURRENT_TEST_ONLY_MATCHES=0`. Its raw log is
+`build-performance/q/dumpbin-faest-public-symbols-20260912-final-current.log` with SHA-256
+`378E1B77EEBD1E1DAB6F0C7AE95E0E3691B5A8AAC1903E7296FEA0932EE8BA84`. The source compile guard
+rejects `DIRECT_MASK_BF256_FORCE_PORTABLE` without the standalone-only
+`DIRECT_MASK_BF256_TEST_SEAM`; production has neither override nor test-seam symbols.
+
+The first forced public-dispatch run exposed a real alias contract issue in the pinned portable
+implementation: the retained raw log
+`build-performance/kernel-portable/ctest-verbose-20260912.log` begins with
+`case=public_dst_rhs_alias` and ends with `CHECKS=460775 MISMATCHES=131325` and arithmetic-only
+failure. The production dispatch boundary now copies both inputs before calling the unchanged
+pinned portable reference, making `dst=lhs`, `dst=rhs`, and in-place public behavior match the
+accelerated alias contract. The pinned vendor source was not edited. The failed raw log is
+`53244937` bytes with SHA-256
+`D29F1460601F01B1EC5A5CF3D542567EFFF5A3AE5D7B3B91CA5BF5F6938ED253`.
+
+The single authorized performance hypothesis was implemented as a fixed two-level Karatsuba
+candidate (nine 64-bit carry-less products), preserving the existing field modulus, reduction,
+constant-time control, alias safety, public dispatch, and portable reference. Corrected normal
+and forced arithmetic gates passed (`460775/0`), the candidate q rebuild exited `0` with the
+retained pinned-vendor warning profile, the candidate fixture identity gate passed all eight
+libraries, and the candidate production symbol check found zero test-only symbols. The initial
+incorrect cross-term implementation failed and is preserved at
+`build-performance/kernel-candidate/ctest-verbose-20260912-karatsuba.log` (75,923,051 bytes,
+SHA-256 `FFF5D13BAEFDB7FA1C89F57FB7ED09E05CDB9CAFFB97858076E7DD6FCB1C947F`). Its corrected
+arithmetic and forced-fallback logs remain at
+`build-performance/kernel-candidate/ctest-verbose-20260912-karatsuba-fallback-alias.log` and
+`build-performance/kernel-portable/ctest-verbose-20260912-fallback-alias.log`.
+
+The required fresh guarded comparison used one baseline sample captured before replacing q
+binaries and one candidate sample, each through the existing source -> independent verifier ->
+atomic State/ACK path. The exact measured stages were:
+
+```text
+BASELINE source_ms=3126.333 verifier_ms=2656.820 total_ms=6355.661
+KARATSUBA source_ms=3505.107 verifier_ms=2696.914 total_ms=6771.051
+TOTAL_REGRESSION_PERCENT=6.535748
+SOURCE_REGRESSION_PERCENT=12.115600
+VERIFIER_REGRESSION_PERCENT=1.509097
+```
+
+The baseline raw outer/test files are
+`build-performance/complete-path-candidate/guarded-baseline-karatsuba-20260912.log` and its
+matching `guarded-ctest-baseline-karatsuba-20260912.{stdout,stderr}.log`; the candidate files
+are `guarded-candidate-karatsuba-20260912.log` and its matching stdout/stderr files. The
+candidate complete-path evidence passed with one issued/verified batch, 100 operations,
+source/verifier/State calls `1/1/1`, 100 transactions and ACKs, 100 unique idempotency keys,
+zero duplicate dispatches, 100 receiver side effects, successful reopen with no work,
+`["state.sqlite"]` inventory, empty source/verifier workspaces, `proof_suite_id=null`,
+`production_usable=false`, and `activation=false`. Candidate outer telemetry was preflight
+free `3730313216`, reserve `1073741824`, minimum free `3648487424`, peak working set
+`81895424`, peak private `55009280`, child exits `7/0`, cleanup `PASS`, and released mutex
+`Local\\BlindLedgerDirectMaskBuild20260907`. The Karatsuba candidate regressed, so it was
+rejected and removed; no second optimization campaign or extra benchmark was run. The correct
+retained implementation is the original fixed 4x4 PCLMUL path plus the corrected portable
+alias-safe dispatch boundary.
+
+The final retained q rebuild exited `0` and removed the temporary `Q:` mapping with exit `0`.
+It contains exactly 48 pinned-vendor `warning C4141` lines and zero C4146/C4244 lines. The
+final fixture identity build reports `FIXTURE_IMPORTED_LIBRARY_IDENTITY=PASS count=8`,
+`FIXTURE_CANDIDATE_LIBRARY_IDENTITY=PASS` for the exact child root, exit `0`, warning lines
+`0`, and error lines `0`. The final adapter identity unit reports `Ran 14 tests in 4.407s`,
+`OK`, exit `0`. The final retained source appliance is `276480` bytes,
+`25254DCBEB4FAB9A20911C874D7F633BD9953E804FE999F3AFD1C4BFAC649069`; the verifier is
+`241152` bytes,
+`59F5CFF5C0C0B4979705BFE3FC69329FCCB2062A73748BC72F7E6A39760CB756`. The final native
+source/header hashes are
+`08923E5EB209FFBFB89CC489D2C21770769F0AB45F31984BBC075DDDDCF52399` and
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`.
+
+The final eight candidate Release-library identities bound by the existing fixture target are:
+
+```text
+Release/dm_pipeline_source.lib 3432 01809151898F2E7C9E814A0885D25EA3AF092FA412DAB7ECA0DE1C3DA44BFA94
+Release/dm_pipeline_codec.lib 8486 C5CD2229B8A92C704E1F290114D09FAC18011C01C50B5D771055E32E20A62755
+dm_source_proof_build/Release/dm_source_proof.lib 18486 3AF9D80DA4EE4C26D2CD464D4488A0CBCC87819971A86CD48A7B7D9D85C167B2
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_source_auth.lib 18232 09735205900E2B2A1F19C02155113D1F60F171869ED537BBF0F58EC425443E6D
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_wire_codec.lib 270926 89AC129A25A84870066114EDF61B978D274474BF95FD64AA6890B2691FF4EBE9
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/mldsa_source_auth_wrapper.lib 141094 5DD4B6DB42FBDF78F7C0090E975ECC834A74D2E42C5F810E6C5E743C4B2228DE
+dm_source_proof_build/Release/dm_native_fixture_source_proof.lib 33998 13A79E7AA7D44D2EA3F09D37E60D2E601954E1F9B6F8A5BDBBC19C34A3E56CFC
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_faest_public.lib 333932 F023C33E752DE95DC9D04332212D47333792EEF2424377E1B6E047E9F9B76593
+Release/dm_pipeline_source_cli.exe 261120 4E1B9EAF13A30918F9C4FEDBEA64DF81BFCD38909A8015148394FAF46E26ED02
+Release/dm_pipeline_verifier_cli.exe 241152 59F5CFF5C0C0B4979705BFE3FC69329FCCB2062A73748BC72F7E6A39760CB756
+```
+
+The final retained guarded path raw test reports `Ran 9 tests in 8.219s`, `100% tests
+passed, 0 tests failed out of 1`, CTest exit `0`, and stderr bytes `0`. Its exact
+`COMPLETE_PATH_EVIDENCE` is retained in
+`build-performance/complete-path-candidate/guarded-ctest-retained-current-20260912.stdout.log`;
+the measured source/verifier/total stages are `3428.429/2695.773/6770.956 ms`, with source
+measurement elapsed `3426.666 ms`, one source and verifier call, and one State port call. The
+record has 100 operations/transactions/ACKs/unique keys, one issued and independently verified
+batch, zero unconfirmed operations and duplicate dispatches, 100 receiver side effects,
+`reopened_without_work=true`, `run_artifact_inventory=["state.sqlite"]`, empty workspaces,
+`proof_suite_id=null`, `production_usable=false`, `activation=false`, and
+`pagefile_growth_evidence="unavailable"`. The final guard reports preflight free
+`3608154112`, reserve `1073741824`, minimum free `3477954560`, peak working set `80916480`,
+peak private `54906880`, child exits `7/0`, cleanup `PASS`, released mutex, and outer exit `0`.
+The stdout/stderr/outer log sizes and hashes are retained with the raw files; stdout is 5680
+bytes with SHA-256 `12C7E45F0ADE5BC85982084E3AE00C4C58DCF278761895DD035FEA918C1344E6`, stderr
+is 0 bytes with SHA-256 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`, and
+the outer log is 3411 bytes with SHA-256
+`19413D75AB2C37A7E9C468DB0BF3123F5CE3CACBA7E749699330BF7AF8C065C4`.
+
+All earlier physical q-cache, missing-`PMB_BUILD_DIR`, stale-verifier-pin, wrong-root,
+missing-root, wrong-library, warning, and unavailable-old-probe evidence remains preserved in
+its prior records and raw files. The newly exposed Karatsuba cross-term and portable-alias
+failures remain preserved above. No item was silently skipped; no final gate is unresolved.
+The phase remains synthetic, nonactivating, and unqualified: `proof_suite_id=null`,
+`production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
