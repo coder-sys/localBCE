@@ -541,3 +541,14 @@ terminal-only run and is unavailable; it was not reconstructed. Earlier terminal
 VOLE evidence and old warning totals/conversion wording remain unknown. No final gate is skipped.
 This child remains synthetic, nonactivating, and unqualified: `proofSuiteId=null`,
 `production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
+
+## Immutable correction commit closure — 2026-09-12
+
+The source/gate/identity correction is committed as
+`800030a4a6b4899e38799934efaaefb5832a6bf6`, tree
+`afbe96235f4c5d711ca0d3e689502b5e28c86b17`, parent
+`e42d3dc8ccf7891aebad8576402950cedac9ce07`. Post-commit verification reported exact matching
+HEAD/tree/parent, detached HEAD with no tracked modifications, and clean `git diff --check`;
+the only remaining status item is the intentionally preserved untracked `build-performance/`
+evidence tree. The bounded corrective phase is complete and the evidence is handed directly to
+the Driver. Claims remain synthetic, nonactivating, and unqualified.

@@ -683,3 +683,14 @@ source or output was reconstructed. Earlier terminal-only circuit/VOLE output an
 totals/conversion wording remain unknown and are not relabelled as current raw evidence. Profile
 flags remain `proofSuiteId=null`, `production_usable=false`, inactive, unselected, and
 unqualified.
+
+### Immutable correction commit closure — 2026-09-12
+
+The authorized native-performance correction is committed as
+`800030a4a6b4899e38799934efaaefb5832a6bf6`, tree
+`afbe96235f4c5d711ca0d3e689502b5e28c86b17`, parent
+`e42d3dc8ccf7891aebad8576402950cedac9ce07`. Post-commit verification reported that exact HEAD,
+the matching tree and parent, clean tracked status, and clean `git diff --check`; only the
+intentionally preserved untracked `build-performance/` evidence tree remains. The source/gate
+correction, retained raw evidence, and nonactivation boundary are complete and are handed
+directly to the Driver for review.

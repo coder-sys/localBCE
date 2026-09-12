@@ -361,3 +361,13 @@ contains zero warning/error lines. No final gate is skipped. This remains synthe
 performance evidence only: `proofSuiteId=null`, `production_usable=false`, inactive,
 unselected, and unqualified. Remaining action is immutable commit verification and direct Driver
 handoff.
+
+### Immutable correction commit closure — 2026-09-12
+
+Commit verification is complete. The native-performance correction is committed as
+`800030a4a6b4899e38799934efaaefb5832a6bf6`, tree
+`afbe96235f4c5d711ca0d3e689502b5e28c86b17`, parent
+`e42d3dc8ccf7891aebad8576402950cedac9ce07`. HEAD is detached with no tracked modifications;
+only the intentionally retained untracked `build-performance/` evidence tree remains, and
+`git diff --check` is clean. The bounded phase is complete; direct Driver handoff is the next
+action. Claims remain synthetic, nonactivating, and unqualified.
