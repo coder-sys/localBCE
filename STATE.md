@@ -694,3 +694,14 @@ qualification, production-security, activation, or Profile13 claim follows. The 
 status is synthetic, nonactivating, and unqualified (`proof_suite_id=null`,
 `production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`).
 Remaining action is immutable commit verification and direct Driver handoff.
+
+## Immutable bounded native closure — 2026-09-12
+
+The first immutable phase commit is
+`4dd3ea2ece80b43e29befe63c644e3b6b46eea61`, tree
+`3061d6b77e60bb28f92ea4667bdbe72fcd7c2e50`, parent
+`f73378a3bf33f5356887ba1e46b758a544392507`. It contains the six authorized implementation/
+identity paths and the three append-only records. Exact post-commit verification reported
+matching HEAD/tree/parent, detached HEAD, no tracked modifications, and clean diff-check; the
+only remaining item is the intentionally preserved untracked `build-performance/` evidence
+tree. The final docs-only closure commit and direct Driver handoff remain.

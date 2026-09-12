@@ -847,3 +847,14 @@ its prior records and raw files. The newly exposed Karatsuba cross-term and port
 failures remain preserved above. No item was silently skipped; no final gate is unresolved.
 The phase remains synthetic, nonactivating, and unqualified: `proof_suite_id=null`,
 `production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
+
+### Immutable bounded native closure — 2026-09-12
+
+The implementation and evidence record above are committed in the first immutable phase
+commit `4dd3ea2ece80b43e29befe63c644e3b6b46eea61`, tree
+`3061d6b77e60bb28f92ea4667bdbe72fcd7c2e50`, parent
+`f73378a3bf33f5356887ba1e46b758a544392507`. This commit contains only the six authorized
+implementation/identity paths and the three narrow current records. Post-commit verification
+matched HEAD/tree/parent, reported no tracked modifications, and kept only the intentionally
+untracked `build-performance/` evidence tree. The final docs-only closure commit is the next
+and final mutation in this child.

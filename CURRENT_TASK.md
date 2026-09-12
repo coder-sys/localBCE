@@ -427,3 +427,12 @@ child exit `7/0`, reserve `1073741824`, minimum free `3477954560`, peak working 
 `unavailable`. All prior failures, controlled identity negatives, warnings, unavailable old
 probe output, and skipped-count statements remain preserved and are not relabelled. Remaining
 action is immutable commit verification and direct Driver handoff.
+
+### Immutable bounded native closure — 2026-09-12
+
+The first immutable commit is `4dd3ea2ece80b43e29befe63c644e3b6b46eea61`, tree
+`3061d6b77e60bb28f92ea4667bdbe72fcd7c2e50`, parent
+`f73378a3bf33f5356887ba1e46b758a544392507`. It contains the six scoped implementation/identity
+paths and this phase's append-only records. Verification found no tracked modifications after
+the commit; only the preserved untracked `build-performance/` evidence remains. A final
+docs-only closure commit and direct Driver handoff remain.
