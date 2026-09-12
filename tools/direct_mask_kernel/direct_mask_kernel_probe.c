@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "direct_mask_kernel.h"
 #include "direct_mask_circuit.h"
+#include "../direct_mask_vole/direct_mask_bf256_accel.h"
 #include "../direct_mask_circuit/dmc_range_constraints.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +19,174 @@ static int equal(bf256_t x, bf256_t y) {
   uint8_t a[32],b[32]; bf256_store(a,&x); bf256_store(b,&y);
   return memcmp(a,b,32)==0;
 }
+
+#if defined(DIRECT_MASK_BF256_TEST_SEAM)
+extern void direct_mask_bf256_test_portable_dispatch(
+    bf256_t* dst, const bf256_t* lhs, const bf256_t* rhs);
+extern void direct_mask_bf256_test_portable_dispatch_inplace(
+    bf256_t* lhs, const bf256_t* rhs);
+#endif
+
+static void set_words(bf256_t *value, uint64_t w0, uint64_t w1,
+                      uint64_t w2, uint64_t w3) {
+  *value = bf256_zero();
+  BF_VALUE(*value, 0) = w0;
+  BF_VALUE(*value, 1) = w1;
+  BF_VALUE(*value, 2) = w2;
+  BF_VALUE(*value, 3) = w3;
+}
+
+static bf256_t basis_element(unsigned int bit) {
+  bf256_t value = bf256_zero();
+  BF_VALUE(value, bit / 64u) = UINT64_C(1) << (bit % 64u);
+  return value;
+}
+
+static void print_arithmetic_mismatch(const char *suite, unsigned int lhs_index,
+                                      unsigned int rhs_index, const char *case_name,
+                                      const bf256_t *expected, const bf256_t *actual) {
+  printf("BF256_ARITHMETIC_MISMATCH suite=%s lhs=%u rhs=%u case=%s "
+         "expected=%016llx:%016llx:%016llx:%016llx "
+         "actual=%016llx:%016llx:%016llx:%016llx\n",
+         suite, lhs_index, rhs_index, case_name,
+         (unsigned long long)BF_VALUE(*expected, 3),
+         (unsigned long long)BF_VALUE(*expected, 2),
+         (unsigned long long)BF_VALUE(*expected, 1),
+         (unsigned long long)BF_VALUE(*expected, 0),
+         (unsigned long long)BF_VALUE(*actual, 3),
+         (unsigned long long)BF_VALUE(*actual, 2),
+         (unsigned long long)BF_VALUE(*actual, 1),
+         (unsigned long long)BF_VALUE(*actual, 0));
+}
+
+static int check_arithmetic_result(const char *suite, unsigned int lhs_index,
+                                   unsigned int rhs_index, const char *case_name,
+                                   const bf256_t *expected, const bf256_t *actual,
+                                   unsigned long long *checks, unsigned int *mismatches) {
+  ++*checks;
+  if (equal(*expected, *actual)) return 1;
+  ++*mismatches;
+  print_arithmetic_mismatch(suite, lhs_index, rhs_index, case_name, expected, actual);
+  return 0;
+}
+
+static int check_arithmetic_pair(const char *suite, unsigned int lhs_index,
+                                 unsigned int rhs_index, const bf256_t *lhs,
+                                 const bf256_t *rhs, unsigned long long *checks,
+                                 unsigned int *mismatches) {
+  int ok = 1;
+  bf256_t expected, actual;
+  direct_mask_bf256_mul_portable(&expected, lhs, rhs);
+
+  bf256_mul(&actual, lhs, rhs);
+  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_out_of_place",
+                               &expected, &actual, checks, mismatches)) ok = 0;
+
+#if defined(DIRECT_MASK_BF256_TEST_SEAM)
+  direct_mask_bf256_test_portable_dispatch(&actual, lhs, rhs);
+  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "forced_portable_dispatch",
+                               &expected, &actual, checks, mismatches)) ok = 0;
+#endif
+
+  bf256_t lhs_alias = *lhs;
+  bf256_mul(&lhs_alias, &lhs_alias, rhs);
+  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_dst_lhs_alias",
+                               &expected, &lhs_alias, checks, mismatches)) ok = 0;
+
+  bf256_t rhs_alias = *rhs;
+  bf256_mul(&rhs_alias, lhs, &rhs_alias);
+  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_dst_rhs_alias",
+                               &expected, &rhs_alias, checks, mismatches)) ok = 0;
+
+  bf256_t lhs_inplace = *lhs;
+  bf256_mul_inplace(&lhs_inplace, rhs);
+  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_inplace_lhs",
+                               &expected, &lhs_inplace, checks, mismatches)) ok = 0;
+
+  bf256_t expected_rhs, rhs_inplace;
+  direct_mask_bf256_mul_portable(&expected_rhs, rhs, lhs);
+  rhs_inplace = *rhs;
+  bf256_mul_inplace(&rhs_inplace, lhs);
+  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_inplace_rhs",
+                               &expected_rhs, &rhs_inplace, checks, mismatches)) ok = 0;
+
+  bf256_t expected_self, self_alias, self_inplace;
+  direct_mask_bf256_mul_portable(&expected_self, lhs, lhs);
+  self_alias = *lhs;
+  bf256_mul(&self_alias, &self_alias, &self_alias);
+  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_self_alias",
+                               &expected_self, &self_alias, checks, mismatches)) ok = 0;
+  self_inplace = *lhs;
+  bf256_mul_inplace(&self_inplace, &self_inplace);
+  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "public_self_inplace",
+                               &expected_self, &self_inplace, checks, mismatches)) ok = 0;
+
+#if defined(DIRECT_MASK_BF256_TEST_SEAM)
+  bf256_t forced_portable_inplace = *lhs;
+  direct_mask_bf256_test_portable_dispatch_inplace(&forced_portable_inplace, rhs);
+  if (!check_arithmetic_result(suite, lhs_index, rhs_index, "forced_portable_inplace",
+                               &expected, &forced_portable_inplace, checks, mismatches)) ok = 0;
+#endif
+  return ok;
+}
+
+static int run_bf256_arithmetic_checks(void) {
+  enum { BOUNDARY_VECTOR_COUNT = 17 };
+  const uint64_t boundary_words[BOUNDARY_VECTOR_COUNT][4] = {
+      {UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0)},
+      {UINT64_C(1), UINT64_C(0), UINT64_C(0), UINT64_C(0)},
+      {UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX},
+      {UINT64_MAX, UINT64_C(0), UINT64_C(0), UINT64_C(0)},
+      {UINT64_C(0), UINT64_MAX, UINT64_C(0), UINT64_C(0)},
+      {UINT64_C(0), UINT64_C(0), UINT64_MAX, UINT64_C(0)},
+      {UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_MAX},
+      {UINT64_C(1) << 63, UINT64_C(0), UINT64_C(0), UINT64_C(0)},
+      {UINT64_C(0), UINT64_C(1), UINT64_C(0), UINT64_C(0)},
+      {UINT64_C(0), UINT64_C(0), UINT64_C(1) << 63, UINT64_C(0)},
+      {UINT64_C(0), UINT64_C(0), UINT64_C(1), UINT64_C(0)},
+      {UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(1) << 63},
+      {UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(1)},
+      {UINT64_MAX, UINT64_C(1), UINT64_C(0), UINT64_C(0)},
+      {UINT64_C(0), UINT64_MAX, UINT64_C(1), UINT64_C(0)},
+      {UINT64_C(0), UINT64_C(0), UINT64_MAX, UINT64_C(1)},
+      {UINT64_C(1), UINT64_MAX, UINT64_MAX, UINT64_C(1)},
+  };
+  bf256_t basis[256], boundary[BOUNDARY_VECTOR_COUNT];
+  unsigned long long checks = 0;
+  unsigned int mismatches = 0;
+  int ok = 1;
+
+  printf("BF256_ARITHMETIC_BEGIN\n");
+  printf("BF256_ARITHMETIC_BACKEND=%s PCLMUL_AVAILABLE=%d "
+         "FORCED_PORTABLE_SEAM=compiled\n",
+         direct_mask_bf256_backend_name(), direct_mask_bf256_pclmul_available());
+  for (unsigned int i = 0; i != 256u; ++i) basis[i] = basis_element(i);
+  for (unsigned int i = 0; i != BOUNDARY_VECTOR_COUNT; ++i) {
+    set_words(&boundary[i], boundary_words[i][0], boundary_words[i][1],
+              boundary_words[i][2], boundary_words[i][3]);
+  }
+
+  for (unsigned int i = 0; i != 256u; ++i) {
+    for (unsigned int j = 0; j != 256u; ++j) {
+      if (!check_arithmetic_pair("basis", i, j, &basis[i], &basis[j],
+                                 &checks, &mismatches)) ok = 0;
+    }
+  }
+  for (unsigned int i = 0; i != BOUNDARY_VECTOR_COUNT; ++i) {
+    for (unsigned int j = 0; j != BOUNDARY_VECTOR_COUNT; ++j) {
+      if (!check_arithmetic_pair("boundary", i, j, &boundary[i], &boundary[j],
+                                 &checks, &mismatches)) ok = 0;
+    }
+  }
+  printf("BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=%u "
+         "BOUNDARY_PAIRS=%u CHECKS=%llu MISMATCHES=%u\n",
+         BOUNDARY_VECTOR_COUNT,
+         BOUNDARY_VECTOR_COUNT * BOUNDARY_VECTOR_COUNT,
+         checks, mismatches);
+  printf("BF256_ARITHMETIC_STATUS=%s\n", ok ? "PASS" : "FAIL");
+  return ok;
+}
+
 static bf256_t add(bf256_t a,bf256_t b) { bf256_t r; bf256_add(&r,&a,&b); return r; }
 static bf256_t mul(bf256_t a,bf256_t b) { bf256_t r; bf256_mul(&r,&a,&b); return r; }
 static uint64_t rng_state=UINT64_C(0xb3204829fe125618);
@@ -78,7 +247,7 @@ static int check_negative(const char *name,const dmk_instance *x,const uint8_t *
 }
 int main(void) {
   const clock_t start=clock();
-  int ok=1;
+  int ok=run_bf256_arithmetic_checks();
   uint8_t root[32]; for(unsigned i=0;i<32;++i) root[i]=(uint8_t)(i*7u+3u);
   uint64_t values[100];
   for(unsigned i=0;i<100;++i) values[i]=(i%2u) ? DMK_LOWER : DMK_UPPER;

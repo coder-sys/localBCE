@@ -150,6 +150,25 @@ void bf256_mul_inplace(bf256_t* lhs, const bf256_t* rhs) {
   *lhs = result;
 }
 
+#if defined(DIRECT_MASK_BF256_TEST_SEAM)
+/* This entry point exists only in the standalone kernel probe build.  It
+ * forces the same public dispatch boundary to the independently linked
+ * portable implementation on hosts where PCLMUL is available. */
+void direct_mask_bf256_test_portable_dispatch(bf256_t* dst,
+                                               const bf256_t* lhs,
+                                               const bf256_t* rhs) {
+  direct_mask_bf256_mul_portable(dst, lhs, rhs);
+}
+
+void direct_mask_bf256_test_portable_dispatch_inplace(bf256_t* lhs,
+                                                      const bf256_t* rhs) {
+  bf256_t lhs_copy = *lhs;
+  bf256_t result;
+  direct_mask_bf256_mul_portable(&result, &lhs_copy, rhs);
+  *lhs = result;
+}
+#endif
+
 const char* direct_mask_bf256_backend_name(void) {
 #if (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))) || \
     defined(__GNUC__) || defined(__clang__)

@@ -549,3 +549,137 @@ disposition, not an unreported skip. Build warnings are pre-existing pinned-vend
 no new acceleration-source warning or error remained. No unresolved gates or authorized
 skips remain. Product, formal, custody, payment, PHI, deployment, filtered/Profile13, and
 production-qualification restrictions remain fixed.
+
+### Native performance source review and remaining gates — corrective closure — 2026-09-12
+
+The immediately preceding native-performance handoff is preserved historical evidence. Its
+`51158c2db5c4d1b82c88875ea23707a6e7fa1d89` / `bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306`
+identity and its statement that the work was uncommitted describe an earlier state and are
+superseded here. The correction started from the clean committed
+`e42d3dc8ccf7891aebad8576402950cedac9ce07` / tree
+`544ac79a7964a5d6cad032bdb38a64aa07aa7107`; the worktree then contained exactly seven tracked
+paths and the preserved untracked `build-performance/` evidence tree. No vendor checkout,
+pinned input, protected Queue/runtime/composition/State path, protocol byte, filtered/Profile13
+path, or deployment/product path was changed.
+
+The exact corrective scope is limited to the existing arithmetic/kernel probe and its CMake,
+the existing fixture CMake/library-identity script, the child-local acceleration C seam, and
+child-local executable identity constants:
+
+- `tools/direct_mask_kernel/direct_mask_kernel_probe.c`
+- `tools/direct_mask_kernel/CMakeLists.txt`
+- `tools/direct_mask_vole/direct_mask_bf256_accel.c`
+- `tools/direct_mask_fixture/CMakeLists.txt`
+- `tools/direct_mask_fixture/verify_imported_libraries.cmake`
+- `tools/direct_mask_complete_path/source_boundary.py`
+- `app/minimal_clearance_source_auth_verifier_adapter.py`
+
+The actual adapter path is `app/minimal_clearance_source_auth_verifier_adapter.py`. The prior
+supplement's `tools/direct_mask_complete_path/app/adapter.py` path does not exist and must not be
+used as an identity or evidence reference.
+
+The arithmetic probe now compares the accelerated public API against the independently linked,
+per-source-renamed pinned portable `fields.c` reference over all `256x256` polynomial basis pairs
+and 289 pairs from 17 zero/one/all-ones and dense limb-boundary vectors. Each pair checks public
+out-of-place, forced portable test-seam out-of-place, public destination-as-lhs, public
+destination-as-rhs, public in-place lhs, public in-place rhs, public self-alias, public
+self-in-place, and forced portable in-place behavior. The seam is compile-guarded by
+`DIRECT_MASK_BF256_TEST_SEAM` and is present only in the standalone kernel target; the current
+production `dm_faest_public.lib` symbol readback contains zero `direct_mask_bf256_test_*`
+symbols. The current acceleration source/header SHA-256 identities are
+`EF831E68E2589F68E9D99753D13758DADFE0C8F78432D9E2DCF90FD7FB8ACDDC` and
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`.
+
+The complete raw kernel transcript is retained at
+`build-performance/kernel-candidate/ctest-verbose-20260912-after-callsite.log`. Its decisive
+lines are:
+
+```text
+BF256_ARITHMETIC_BACKEND=pclmul PCLMUL_AVAILABLE=1 FORCED_PORTABLE_SEAM=compiled
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=592425 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+DIRECT_MASK_KERNEL status=PASS skips=0 fixture_rng=deterministic cpu_seconds=23.055
+1/1 Test #1: direct_mask_kernel_full_field ....   Passed
+100% tests passed, 0 tests failed out of 1
+KERNEL_CTEST_AFTER_CALLSITE_EXIT=0
+```
+
+The existing fixture target now validates the exact child candidate root `build-performance/q`,
+all eight candidate Release libraries by exact size and SHA-256, and retains the baseline
+eight-library identity check independently. The successful candidate build raw log is
+`build-performance/fixture-candidate/build-candidate-identity-20260912-after-arg.log`; it
+reports `FIXTURE_IMPORTED_LIBRARY_IDENTITY=PASS count=8`, eight candidate library records,
+`FIXTURE_CANDIDATE_LIBRARY_IDENTITY=PASS ... count=8`, build exit `0`, warning lines `0`, and
+error lines `0`. The generated Release link-input records remain at
+`build-performance/fixture-candidate/candidate-release-link-inputs-20260912.log` and
+`build-performance/q/pipeline-source-cli-release-link-inputs-20260912.log`; the former is tied
+to the eight candidate libraries and `direct_mask_fixture_source.c`, and the latter records the
+q source CLI's eight-library link and `direct_mask_pipeline_source_main.c`.
+
+The current candidate library identities are:
+
+```text
+Release/dm_pipeline_source.lib 3432 01809151898F2E7C9E814A0885D25EA3AF092FA412DAB7ECA0DE1C3DA44BFA94
+Release/dm_pipeline_codec.lib 8486 C5CD2229B8A92C704E1F290114D09FAC18011C01C50B5D771055E32E20A62755
+dm_source_proof_build/Release/dm_source_proof.lib 18486 3AF9D80DA4EE4C26D2CD464D4488A0CBCC87819971A86CD48A7B7D9D85C167B2
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_source_auth.lib 18232 09735205900E2B2A1F19C02155113D1F60F171869ED537BBF0F58EC425443E6D
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_wire_codec.lib 270926 89AC129A25A84870066114EDF61B978D274474BF95FD64AA6890B2691FF4EBE9
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/mldsa_source_auth_wrapper.lib 141094 5DD4B6DB42FBDF78F7C0090E975ECC834A74D2E42C5F810E6C5E743C4B2228DE
+dm_source_proof_build/Release/dm_native_fixture_source_proof.lib 33998 13A79E7AA7D44D2EA3F09D37E60D2E601954E1F9B6F8A5BDBBC19C34A3E56CFC
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_faest_public.lib 333298 B7DBCBE97A19C9C1B5D77AE2A8E0D595A6EE6D98669F13856D81BB2CB8E1E551
+```
+
+The identity gate rejected all three controlled negatives with expected exit `1`: wrong root,
+missing root, and wrong library. Their complete logs are
+`build-performance/identity-negatives-20260912/{wrong-root,missing-root,wrong-library}.log`.
+The wrong-root raw error was `candidate performance build root mismatch`; the missing-root raw
+error was `candidate performance build root is not a directory`; the wrong-library raw error
+was `pinned library identity mismatch` with actual `8486/C5CD2229...` versus expected
+`3432/018091518...`. The negative copied root is intentionally retained as generated evidence.
+
+The current q verifier is size `240640`, SHA-256
+`FF7E69D004BF21C5E3F7C2A43F4EDD45F73BBF3E2E812AC9A6E657416F86DA93`; the source appliance is
+size `276480`, SHA-256
+`3BC225CE230433BC14DF94FEBAC47C713D94759505158BBA8FCE84B7E22C3285`. The adapter identity
+unit suite was rerun after correcting the pin: `Ran 14 tests in 4.656s`, `OK`, exit `0`, with
+raw log `build-performance/complete-path-candidate/adapter-unit-correction-20260912.log`.
+The first corrected guarded attempt is retained, not deleted: it exposed the one-nibble stale
+verifier pin, ended `HELD` with `verifier_transport`, and recorded source/verifier/state-port
+counts `1/1/0`. The corrected pin is the `...004BF21C5...` identity above.
+
+The required single fresh corrected guarded candidate path then passed. Raw outer telemetry is
+in `build-performance/complete-path-candidate/guarded-candidate-correction-2-20260912.log`;
+CTest stdout/stderr are the matching `guarded-ctest-candidate-correction-2-20260912.stdout.log`
+and `.stderr.log` (5679 and 0 bytes). The raw CTest result is `Ran 9 tests in 8.660s`, `OK`,
+`1/1 Test #2 ... Passed`, `100% tests passed, 0 tests failed out of 1`, and CTest exit `0`.
+Its exact `COMPLETE_PATH_EVIDENCE` records one issued/verified batch and 100 operations,
+source/verifier/state-port calls `1/1/1`, 100 transactions and ACKs, 100 unique idempotency
+keys, zero duplicate dispatches, 100 receiver side effects, successful reopen with no work,
+`["state.sqlite"]` inventory, empty source/verifier workspaces, and
+`proof_suite_id=null`, `production_usable=false`, `activation=false`. The current measured
+source/verifier/total stages are `3817.523/2711.830/7134.644 ms` (one bounded candidate sample).
+The guard recorded preflight free `3948408832`, reserve `1073741824`, minimum free
+`3815194624`, peak working set `81043456`, peak private `55885824`, child exits `7/0`, cleanup
+`PASS`, and mutex release. The earlier accepted baseline sample was intentionally not rerun
+because it is unchanged; comparisons remain single-sample evidence, not p95, qualification,
+production security, or activation evidence.
+
+All intermediate failures remain retained and accurately classified. The first physical-path q
+rebuild failed because its cache still named `Q:` (`Q_CANDIDATE_REBUILD_EXIT=-2`) and is retained
+at `build-performance/q/rebuild-candidate-libraries-20260912.log`; the validated restored `Q:`
+mapping rebuilt the eight libraries and both CLIs with exit `0`, 48 warning-code lines, and zero
+error-code lines in `rebuild-candidate-libraries-20260912-after-subst.log`. The first candidate
+fixture build omitted `PMB_BUILD_DIR`, failed with `MSB8066`/exit `1`, and remains at
+`build-performance/fixture-candidate/build-candidate-identity-20260912.log`; the CMake command
+was corrected and the exact target passed. A diagnostic `subst Q:` listing command printed
+`Invalid parameter - Q:`; `Test-Path` verified both required mapped paths and the subsequent
+build passed, so no successful mapping claim is based on that failed listing command.
+
+The corrected q and kernel build logs each contain exactly 48 `warning C4141` lines, all from
+the pinned vendor `fields.h` duplicate-`inline` warning; neither corrected log contains C4146
+or C4244. The candidate fixture build reports zero warning/error lines. The earlier deleted
+one-vector probe source/output remains unavailable and is terminal-only historical evidence; no
+source or output was reconstructed. Earlier terminal-only circuit/VOLE output and old warning
+totals/conversion wording remain unknown and are not relabelled as current raw evidence. Profile
+flags remain `proofSuiteId=null`, `production_usable=false`, inactive, unselected, and
+unqualified.

@@ -398,3 +398,146 @@ replacement=accepted_direct_mask_kernel_and_algebra_probes`. These are not unres
 gates. Build warnings are pinned-vendor `C4141`, `C4146`, and `C4244`; no new acceleration
 error remains. No State/runtime/composition/Queue, vendor, product, custody, payment, PHI,
 deployment, Lean, formal, filtered/Profile13, activation, or production status changed.
+
+## Native performance source review and remaining gates — corrective closure — 2026-09-12
+
+The preceding native-performance entries are retained historical evidence. They describe the
+earlier detached `51158c2db5c4d1b82c88875ea23707a6e7fa1d89` / `bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306`
+state and incorrectly describe the later `e42d3dc8ccf7891aebad8576402950cedac9ce07` correction
+as uncommitted. The actual correction began at clean committed HEAD
+`e42d3dc8ccf7891aebad8576402950cedac9ce07`, tree
+`544ac79a7964a5d6cad032bdb38a64aa07aa7107`, parent
+`cd8d3517f40ba75e7871db2d3ded1fa10daf5abe`. Before the new immutable commit, exactly these
+seven tracked paths were modified: the kernel probe/CMake, fixture CMake/identity script,
+child-local acceleration C seam, source-boundary executable pin, and the actual adapter
+`app/minimal_clearance_source_auth_verifier_adapter.py`. The generated `build-performance/`
+tree is retained untracked evidence. No vendor/input/protected implementation changed.
+
+### Arithmetic correspondence
+
+The existing `direct_mask_kernel_full_field` probe now checks the accelerated public
+`bf256_mul`/`bf256_mul_inplace` against the independently linked pinned portable `fields.c`
+reference under its CMake-only symbol rename. It covers all 65,536 ordered polynomial basis
+pairs and 289 ordered pairs from 17 vectors: zero, one, all ones, each all-one limb, bit 63/64,
+127/128, 191/192, 255, three dense crossing patterns, and a final dense limb-boundary vector.
+Each pair checks public out-of-place, a forced portable dispatch seam, destination-as-lhs,
+destination-as-rhs, public in-place lhs/rhs, public self-alias/self-in-place, and forced portable
+in-place. The seam is compile-guarded by `DIRECT_MASK_BF256_TEST_SEAM`, and current production
+symbol readback found zero test-seam symbols.
+
+The complete raw transcript is
+`build-performance/kernel-candidate/ctest-verbose-20260912-after-callsite.log` and reports:
+
+```text
+BF256_ARITHMETIC_BACKEND=pclmul PCLMUL_AVAILABLE=1 FORCED_PORTABLE_SEAM=compiled
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=592425 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+FIELD_IDENTITY delta_case=0 prover=0 verifier=0 rows=172232 nonzero_leading=0 mismatches=0
+DIRECT_MASK_KERNEL status=PASS skips=0 fixture_rng=deterministic cpu_seconds=23.055
+1/1 Test #1: direct_mask_kernel_full_field ....   Passed
+100% tests passed, 0 tests failed out of 1
+KERNEL_CTEST_AFTER_CALLSITE_EXIT=0
+```
+
+Current acceleration source/header SHA-256 values are
+`EF831E68E2589F68E9D99753D13758DADFE0C8F78432D9E2DCF90FD7FB8ACDDC` and
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`.
+
+### Candidate library identity and link closure
+
+The existing fixture target validates the exact candidate root
+`build-performance/q`, preserves the baseline `FIXTURE_IMPORTED_LIBRARY_IDENTITY` check, and
+checks all eight candidate Release libraries by exact size and SHA-256 before the candidate
+source executable target links. The successful raw log is
+`build-performance/fixture-candidate/build-candidate-identity-20260912-after-arg.log`; its
+decisive lines include `FIXTURE_IMPORTED_LIBRARY_IDENTITY=PASS count=8`, eight candidate
+identity records, `FIXTURE_CANDIDATE_LIBRARY_IDENTITY=PASS root=.../build-performance/q count=8`,
+build exit `0`, warning lines `0`, and error lines `0`. Generated candidate/source-main link
+inputs are retained in
+`build-performance/fixture-candidate/candidate-release-link-inputs-20260912.log` and
+`build-performance/q/pipeline-source-cli-release-link-inputs-20260912.log`.
+
+The eight current candidate library identities, in script order, are:
+
+```text
+0 C:/.../build-performance/q/Release/dm_pipeline_source.lib 3432 01809151898F2E7C9E814A0885D25EA3AF092FA412DAB7ECA0DE1C3DA44BFA94
+1 C:/.../build-performance/q/Release/dm_pipeline_codec.lib 8486 C5CD2229B8A92C704E1F290114D09FAC18011C01C50B5D771055E32E20A62755
+2 C:/.../build-performance/q/dm_source_proof_build/Release/dm_source_proof.lib 18486 3AF9D80DA4EE4C26D2CD464D4488A0CBCC87819971A86CD48A7B7D9D85C167B2
+3 C:/.../build-performance/q/dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_source_auth.lib 18232 09735205900E2B2A1F19C02155113D1F60F171869ED537BBF0F58EC425443E6D
+4 C:/.../build-performance/q/dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_wire_codec.lib 270926 89AC129A25A84870066114EDF61B978D274474BF95FD64AA6890B2691FF4EBE9
+5 C:/.../build-performance/q/dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/mldsa_source_auth_wrapper.lib 141094 5DD4B6DB42FBDF78F7C0090E975ECC834A74D2E42C5F810E6C5E743C4B2228DE
+6 C:/.../build-performance/q/dm_source_proof_build/Release/dm_native_fixture_source_proof.lib 33998 13A79E7AA7D44D2EA3F09D37E60D2E601954E1F9B6F8A5BDBBC19C34A3E56CFC
+7 C:/.../build-performance/q/dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_faest_public.lib 333298 B7DBCBE97A19C9C1B5D77AE2A8E0D595A6EE6D98669F13856D81BB2CB8E1E551
+```
+
+The controlled negative logs at `build-performance/identity-negatives-20260912/` record three
+expected exit-1 rejections: exact-root mismatch, nonexistent candidate root, and a wrong first
+library with actual `8486/C5CD2229...` versus expected `3432/018091518...`. The current
+`dumpbin /symbols` log is
+`build-performance/q/dumpbin-faest-public-symbols-20260912.log`; it reports public
+`bf256_mul`/`bf256_mul_inplace`, external `direct_mask_bf256_mul_portable`/
+`direct_mask_bf256_mul_inplace_portable`, static `direct_mask_bf256_mul_pclmul`, exit `0`, and
+`PRODUCTION_TEST_SEAM_SYMBOL_LINES=0`.
+
+### Corrected child binaries and guarded path
+
+The current child source appliance is size `276480`, SHA-256
+`3BC225CE230433BC14DF94FEBAC47C713D94759505158BBA8FCE84B7E22C3285`; the current child
+verifier is size `240640`, SHA-256
+`FF7E69D004BF21C5E3F7C2A43F4EDD45F73BBF3E2E812AC9A6E657416F86DA93`. The actual adapter unit
+suite after the pin correction reports `Ran 14 tests in 4.656s`, `OK`, exit `0`; raw log:
+`build-performance/complete-path-candidate/adapter-unit-correction-20260912.log`.
+
+The first corrected candidate run is intentionally retained as a failure: its raw CTest output
+reports `complete_path_native_invocation_count`, `source_calls=1`, `verifier_calls=1`,
+`state_port_calls=0`, `source_measurement_count=1`, `verifier_measurement_count=0`; the database
+ended `HELD` with `verifier_transport`. The direct file hash then showed the one-nibble mismatch
+between the adapter's `...004BB21C5...` pin and actual `...004BF21C5...`, which was corrected
+within the allowed adapter identity plumbing. The failed raw logs remain at
+`build-performance/complete-path-candidate/guarded-candidate-correction-20260912.log` and its
+matching stdout/stderr files.
+
+The required one fresh corrected guarded candidate path passed. Outer raw log:
+`build-performance/complete-path-candidate/guarded-candidate-correction-2-20260912.log`;
+CTest stdout/stderr:
+`build-performance/complete-path-candidate/guarded-ctest-candidate-correction-2-20260912.stdout.log`
+and `.stderr.log`, with stdout `5679` bytes and stderr `0` bytes. Exact raw CTest result:
+
+```text
+Ran 9 tests in 8.660s
+OK
+1/1 Test #2: direct_mask_complete_path_integration ...   Passed    9.30 sec
+100% tests passed, 0 tests failed out of 1
+Total Test time (real) =   9.31 sec
+```
+
+The raw `COMPLETE_PATH_EVIDENCE` line records one issued/verified batch, 100 operations, one
+independent verifier acceptance, source/verifier/state-port calls `1/1/1`, 100 transactions,
+100 ACKs, 100 unique idempotency keys, zero duplicate dispatches, 100 receiver side effects,
+successful reopen with no work, exact inventory `["state.sqlite"]`, empty source/verifier
+workspaces, and `proof_suite_id=null`, `production_usable=false`, `activation=false`.
+Measured stages are source `3817.523 ms`, verifier `2711.830 ms`, total `7134.644 ms`.
+Guard telemetry is preflight free `3948408832`, reserve `1073741824`, minimum free `3815194624`,
+peak working set `81043456`, peak private `55885824`, child exits `7/0`, cleanup `PASS`, and
+released `Local\\BlindLedgerDirectMaskBuild20260907`. The old accepted baseline sample was not
+rerun because it is unchanged; this is one corrected candidate sample, not p95 or qualification.
+
+### Failures, warnings, skips, and claim boundary
+
+The physical-path q rebuild cache failure is retained at
+`build-performance/q/rebuild-candidate-libraries-20260912.log` with
+`Q_CANDIDATE_REBUILD_EXIT=-2`; the restored mapped-path rebuild is retained at
+`rebuild-candidate-libraries-20260912-after-subst.log` with exit `0`, 48 warning-code lines,
+and zero error-code lines. The first fixture target's missing `PMB_BUILD_DIR` failure is retained
+at `build-performance/fixture-candidate/build-candidate-identity-20260912.log` with exit `1`;
+the corrected target passed. A failed diagnostic `subst Q:` listing printed `Invalid parameter - Q:`;
+`Test-Path` verified the mapping and the subsequent build passed, so that command is not treated
+as successful evidence.
+
+The corrected q and kernel build logs each contain exactly 48 pinned-vendor `warning C4141`
+lines for duplicate `inline`; neither contains C4146 or C4244, and the candidate fixture build
+contains zero warning/error lines. The old one-vector probe source/output was deleted after its
+terminal-only run and is unavailable; it was not reconstructed. Earlier terminal-only circuit/
+VOLE evidence and old warning totals/conversion wording remain unknown. No final gate is skipped.
+This child remains synthetic, nonactivating, and unqualified: `proofSuiteId=null`,
+`production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.

@@ -307,3 +307,57 @@ replacement=accepted_direct_mask_kernel_and_algebra_probes`; no final gate is sk
 unresolved. Warnings are limited to pinned-vendor `C4141`, `C4146`, and `C4244` warnings.
 State/runtime/composition/Queue semantics, vendor files, filtered mode, Profile13, product,
 custody, payment, PHI, deployment, Lean, and formal paths remain protected.
+
+### Native performance source review and remaining gates — corrective closure — 2026-09-12
+
+The preceding native-performance records are historical. Their `51158c2...` / `bc779ad...`
+identity and uncommitted-state wording are superseded by the clean committed base
+`e42d3dc8ccf7891aebad8576402950cedac9ce07` / tree
+`544ac79a7964a5d6cad032bdb38a64aa07aa7107`, followed by this correction's seven-path worktree
+diff. The exact adapter is `app/minimal_clearance_source_auth_verifier_adapter.py`; the prior
+`tools/direct_mask_complete_path/app/adapter.py` reference is invalid. Vendor, pinned
+source/proof/signature/codec implementations, State/runtime/composition/Queue semantics,
+filtered/Profile13, and product/custody/payment/PHI/deployment/formal paths remain untouched.
+
+The existing standalone kernel probe now performs 65,825 pairs and 592,425 checks against the
+independently linked pinned portable reference, including exact lhs/rhs/self alias and in-place
+cases plus the compile-guarded portable dispatch seam. The retained raw result is
+`build-performance/kernel-candidate/ctest-verbose-20260912-after-callsite.log`:
+
+```text
+BF256_ARITHMETIC_BACKEND=pclmul PCLMUL_AVAILABLE=1 FORCED_PORTABLE_SEAM=compiled
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=592425 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+DIRECT_MASK_KERNEL status=PASS skips=0 fixture_rng=deterministic cpu_seconds=23.055
+1/1 Test #1: direct_mask_kernel_full_field ....   Passed
+100% tests passed, 0 tests failed out of 1
+```
+
+The fixture candidate identity target validates exact root `build-performance/q` and all eight
+current candidate libraries. The successful raw build is
+`build-performance/fixture-candidate/build-candidate-identity-20260912-after-arg.log`; link
+inputs are retained at `build-performance/fixture-candidate/candidate-release-link-inputs-20260912.log`
+and `build-performance/q/pipeline-source-cli-release-link-inputs-20260912.log`. Controlled
+negative logs for wrong root, missing root, and wrong library are retained under
+`build-performance/identity-negatives-20260912/`; all three rejected with expected exit `1`.
+
+Current child binaries are source `276480/3BC225CE230433BC14DF94FEBAC47C713D94759505158BBA8FCE84B7E22C3285`
+and verifier `240640/FF7E69D004BF21C5E3F7C2A43F4EDD45F73BBF3E2E812AC9A6E657416F86DA93`.
+The adapter suite passed `14` tests (`OK`, exit `0`) after the verifier-pin correction. One
+fresh corrected guarded candidate path passed 9/9 complete-path tests with raw stdout
+`build-performance/complete-path-candidate/guarded-ctest-candidate-correction-2-20260912.stdout.log`
+and outer telemetry `build-performance/complete-path-candidate/guarded-candidate-correction-2-20260912.log`.
+Its evidence is one batch/100 operations, source/verifier/state-port `1/1/1`, 100 transactions,
+100 ACKs, zero duplicates, 100 receiver effects, successful reopen, `['state.sqlite']`, empty
+workspaces, and fixed nonactivation flags. Current stage times are
+`3817.523/2711.830/7134.644 ms`; the unchanged baseline was not rerun.
+
+All failures and limitations remain retained: the physical q-cache-path rebuild failure
+(`Q_CANDIDATE_REBUILD_EXIT=-2`), the first fixture custom-target `PMB_BUILD_DIR` failure (exit
+`1`), the first guarded candidate's stale one-nibble verifier pin (`HELD/verifier_transport`,
+state-port `0`), the deleted old one-vector source/output, and unknown old warning totals. The
+corrected q/kernel logs contain 48 pinned-vendor C4141 lines each; the candidate fixture build
+contains zero warning/error lines. No final gate is skipped. This remains synthetic measured
+performance evidence only: `proofSuiteId=null`, `production_usable=false`, inactive,
+unselected, and unqualified. Remaining action is immutable commit verification and direct Driver
+handoff.

@@ -144,7 +144,20 @@ target_link_libraries(direct_mask_fixture_source PRIVATE
 
 if (DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR)
   get_filename_component(DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR
-    "${DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR}" ABSOLUTE)
+    "${DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR}" REALPATH)
+  get_filename_component(DIRECT_MASK_PERFORMANCE_CHILD_ROOT
+    "${CMAKE_CURRENT_LIST_DIR}/../.." REALPATH)
+  set(DIRECT_MASK_PERFORMANCE_EXPECTED_ROOT
+    "${DIRECT_MASK_PERFORMANCE_CHILD_ROOT}/build-performance/q")
+  get_filename_component(DIRECT_MASK_PERFORMANCE_EXPECTED_ROOT
+    "${DIRECT_MASK_PERFORMANCE_EXPECTED_ROOT}" REALPATH)
+  if (NOT DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR STREQUAL
+      DIRECT_MASK_PERFORMANCE_EXPECTED_ROOT)
+    message(FATAL_ERROR
+      "candidate performance build root must be the exact child root: "
+      "expected ${DIRECT_MASK_PERFORMANCE_EXPECTED_ROOT}; "
+      "actual ${DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR}")
+  endif()
   set(DIRECT_MASK_PERF_PIPELINE_SOURCE
     "${DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR}/Release/dm_pipeline_source.lib")
   set(DIRECT_MASK_PERF_PIPELINE_CODEC
@@ -206,6 +219,16 @@ if (DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR)
   set_target_properties(direct_mask_performance_faest_public PROPERTIES
     IMPORTED_LOCATION_RELEASE "${DIRECT_MASK_PERF_FAEST_PUBLIC}")
 
+  add_custom_target(fixture_performance_candidate_identity_check ALL
+    COMMAND ${CMAKE_COMMAND}
+      -DPMB_BUILD_DIR=${PMB_BUILD_DIR}
+      -DDIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR=${DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR}
+      -DDIRECT_MASK_PERFORMANCE_EXPECTED_ROOT=${DIRECT_MASK_PERFORMANCE_EXPECTED_ROOT}
+      -P "${FIXTURE_SOURCE_DIR}/verify_imported_libraries.cmake"
+    VERBATIM)
+  add_dependencies(fixture_performance_candidate_identity_check
+                   fixture_imported_identity_check)
+
   add_executable(direct_mask_fixture_source_performance direct_mask_fixture_source.c)
   target_include_directories(direct_mask_fixture_source_performance PRIVATE
     ${FIXTURE_INCLUDE_DIRS})
@@ -225,6 +248,8 @@ if (DIRECT_MASK_PERFORMANCE_PIPELINE_BUILD_DIR)
     ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib)
   set_target_properties(direct_mask_fixture_source_performance PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release")
+  add_dependencies(direct_mask_fixture_source_performance
+                   fixture_performance_candidate_identity_check)
 endif()
 
 add_executable(direct_mask_fixture_public_key direct_mask_fixture_public_key.c)
