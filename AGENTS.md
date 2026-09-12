@@ -529,7 +529,7 @@ cleanup telemetry, and memory-only proof boundary. The final candidate raw
 `proof_suite_id=null`, `production_usable=false`, `activation=false`. Candidate measured
 source/verifier/total times were `5267.863/2884.734/8851.049 ms`; baseline times were
 `10637.985/6845.545/18141.746 ms`, a single guarded sample reduction of
-`50.49%/57.86%/51.21%` (source/verifier/total), not a p95 or qualification result. Candidate
+`50.48%/57.86%/51.21%` (source/verifier/total), not a p95 or qualification result. Candidate
 outer telemetry was `PHYSICAL_PREFLIGHT free_bytes=3154444288 reserve_bytes=1073741824`,
 minimum free `3049099264`, peak working set `80388096`, peak private `54861824`, child
 exit `7/0`, cleanup `PASS`, mutex released. Baseline minimum free was `3463213056`, peak

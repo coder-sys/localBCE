@@ -382,7 +382,7 @@ run: `issued_batch_count=1`, `independent_verified_batch_count=1`, `source_calls
 verifier workspaces, and `proof_suite_id=null`, `production_usable=false`,
 `activation=false`. Source/verifier/total measured `5267.863/2884.734/8851.049 ms`; the
 paired baseline measured `10637.985/6845.545/18141.746 ms`, an observed single-sample
-reduction of `50.49%/57.86%/51.21%`, not p95 or qualification evidence. Candidate guard
+reduction of `50.48%/57.86%/51.21%`, not p95 or qualification evidence. Candidate guard
 telemetry was preflight free `3154444288`, reserve `1073741824`, minimum free `3049099264`,
 peak working set `80388096`, peak private `54861824`, child exit `7/0`, cleanup `PASS`, and
 released mutex. Baseline minimum free was `3463213056`; it also passed child exit/cleanup.

@@ -292,7 +292,7 @@ inventory `['state.sqlite']`, empty source/verifier workspaces, source/verifier 
 `1/1`, State-port calls `1`, and fixed `proof_suite_id=null`, `production_usable=false`,
 `activation=false`. Candidate source/verifier/total measurements are
 `5267.863/2884.734/8851.049 ms`; paired baseline measurements are
-`10637.985/6845.545/18141.746 ms`, observed reductions `50.49%/57.86%/51.21%` in this
+`10637.985/6845.545/18141.746 ms`, observed reductions `50.48%/57.86%/51.21%` in this
 single guarded sample. Candidate guard telemetry: preflight free `3154444288`, reserve
 `1073741824`, minimum free `3049099264`, peak working set `80388096`, peak private
 `54861824`, child exit `7/0`, cleanup `PASS`, mutex released. This is measured performance
