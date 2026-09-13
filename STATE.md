@@ -967,3 +967,67 @@ tracked files. Verification matched the commit HEAD/tree/parent, reported empty 
 unstaged diffs and clean `git diff --check`, and left only the intentionally untracked
 `build-performance/` native evidence tree. This record-only closure is the final permitted
 mutation; implementation files remain immutable.
+
+### Durable admission correction closure — 2026-09-13
+
+This append-only closure records the authorized correction from Docs HEAD
+758345491bffa14df305c994c30d50f5a7d15680, tree
+392b5fc6b24a2b1228fd6fff6d87b725a5d89f45. The implementation commit is
+9e86d8ff75f00db6e52554e8494f99cb009b3033, tree
+a8dc5c2b8ccc29e2586cb968d522e500d30a27f3, parent
+758345491bffa14df305c994c30d50f5a7d15680, subject Close source and verifier launch races.
+It changes exactly the seven tracked paths recorded in CURRENT_TASK.md.
+
+The three reviewed boundaries are closed. SourceAdmission rejects unknown or mismatched
+profile/size/SHA-256 identity before source rows, SOURCE_AUTHORIZED events, or A/S/M burns;
+the accepted pin is (275968,
+D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8) and the assigned
+child-performance binary is (275968,
+E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9). Fresh terminal
+VERIFIED/REJECTED completion requires verifier STARTED; HELD prelaunch/postlaunch semantics
+remain UNRESERVED/UNKNOWN; independent reconstruction requires exactly
+VERIFIER_STARTED/VERIFIER_COMPLETED and COMPLETED. Source authorization consumption is
+serialized, and the concurrent test proves one native invocation and one winner. Direct
+fixtures reserve verifier work; the only composition edit is a narrow current-API fixture
+correction, with no composition implementation change.
+
+Focused non-native gates were actual passes:
+  py -3.14 -B -m py_compile ... -> exit 0
+  queue plus runtime: Ran 50 tests in 15.055s, OK
+  state plus source boundary: Ran 43 tests in 18.695s, OK
+  composition plus adapter: Ran 33 tests in 17.684s, OK
+  standalone queue: Ran 31 tests in 8.220s, OK
+The initial state rerun (36 tests, 7 failures), first shared-store no-verifier attempt
+(QueueBackpressureError: queue_capacity), first null script-directory guard attempt, and
+first unquoted Git metadata probe were corrected or discarded as no-op diagnostics; their
+raw conditions and reasons are recorded in CURRENT_TASK.md.
+
+The assigned binaries were not rebuilt: source size 275968 SHA-256
+E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9; verifier size 240640
+SHA-256 F35F6AF28EC2D269831CFB6DD1C2414D439FFEC2B26C73CC39495720D9B9E5D. The one fresh
+guarded synthetic CTest path used the existing mutex/resource/exit/cleanup gates and passed:
+outer PHYSICAL_PREFLIGHT free_bytes=2853015552 reserve_bytes=1073741824, exit7=7, exit0=0,
+CTest exit=0, samples=13, min_free_bytes=2770128896, cleanup PASS, mutex RELEASED. The
+child reported Ran 9 tests in 6.723s, OK, one test passed, and the exact
+COMPLETE_PATH_EVIDENCE JSON is retained in CURRENT_TASK.md and the raw child log.
+It contains operation_count/transaction_count/independent_operation_count/ACK count/
+unique_idempotency_keys all 100, one source call, one verifier call, one verified batch,
+zero duplicate dispatches, receiver_side_effects=100, reopened_without_work=true, and
+source_workspace_empty/verifier_workspace_empty=true. It remains activation=false,
+production_usable=false, proofSuiteId=null, NOT_QUALIFIED/INACTIVE/UNSELECTED.
+
+Raw evidence inventory:
+  build-performance/guarded-configure-source-admission-20260913.stdout.log
+  build-performance/guarded-outer-configure-source-admission-20260913.log
+  build-performance/guarded-ctest-source-admission-20260913.stdout.log
+  build-performance/guarded-outer-ctest-source-admission-20260913.log
+Their sizes/hashes and empty stderr hashes are recorded in CURRENT_TASK.md. The earlier
+claimed Ran 9 tests in 20.572s run had no retained raw guard evidence and was not rebuilt.
+The prior documentation-governance warning remains: Ran 11 tests in 9.754s, FAILED (errors=2),
+from six pre-existing unregistered README paths; protected registrations were not edited.
+
+Post-implementation verification matched commit 9e86d8ff75f00db6e52554e8494f99cb009b3033,
+tree a8dc5c2b8ccc29e2586cb968d522e500d30a27f3, parent
+758345491bffa14df305c994c30d50f5a7d15680; tracked status and git diff --check were clean.
+Only the intentionally untracked build-performance/ evidence tree remains. This record-only
+append is the final permitted mutation; implementation files are immutable.

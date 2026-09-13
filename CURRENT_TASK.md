@@ -703,3 +703,141 @@ parent, commit subject `Enforce durable source admission and launch accounting`,
 unstaged diffs, clean `git diff --check`, and only the preserved untracked `build-performance/`
 tree. A final docs-only closure records this post-commit state; no implementation file is to be
 modified further.
+
+### Durable admission correction closure — 2026-09-13
+
+This append-only record supersedes the immediately preceding open correction wording. The
+authorized correction started from immutable HEAD/tree
+758345491bffa14df305c994c30d50f5a7d15680 /
+392b5fc6b24a2b1228fd6fff6d87b725a5d89f45. The implementation correction is committed as
+9e86d8ff75f00db6e52554e8494f99cb009b3033, tree
+a8dc5c2b8ccc29e2586cb968d522e500d30a27f3, parent
+758345491bffa14df305c994c30d50f5a7d15680, subject Close source and verifier launch races.
+It contains exactly these seven tracked paths:
+app/minimal_clearance_verification_queue.py,
+app/minimal_clearance_verification_queue_independent.py,
+tests/test_direct_mask_source_boundary.py,
+tests/test_direct_mask_state_profile12.py,
+tests/test_minimal_clearance_composition_v2.py,
+tests/test_minimal_clearance_verification_queue.py, and
+tests/test_minimal_clearance_verification_runtime.py.
+
+Correction evidence:
+
+- SourceAdmission validates explicit identity pins before any admission row, event, or A/S/M
+  accounting mutation. The accepted pin is size 275968 and SHA-256
+  D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8; the assigned
+  child-performance pin is size 275968 and SHA-256
+  E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9. The negative
+  runtime test covers unknown profile, mismatched size, and mismatched hash and verifies zero
+  source rows, zero SOURCE_AUTHORIZED events, and A/S/M (0, 0, 0); independent verification
+  still passes.
+- Fresh VERIFIED/REJECTED completion requires a live verifier lease in STARTED. Rejection is
+  before receipt/result/State/outbox/V writes; the focused test verifies unchanged counts, a
+  LEASED batch, (RESERVED, UNRESERVED), zero V burn, and passing independent verification.
+  HELD remains valid prelaunch with UNRESERVED and postlaunch with UNKNOWN; STARTED becomes
+  UNKNOWN on hold.
+- Independent reconstruction requires exact verifier events
+  VERIFIER_STARTED, VERIFIER_COMPLETED and verifier status COMPLETED for terminal
+  VERIFIED/REJECTED batches. A fabricated terminal record without those events is rejected
+  with lifecycle_verifier.
+- SourceLaunchAuthorization check-and-set is serialized by a small lock. The focused concurrent
+  boundary test records exactly one native-stub invocation and one winner; the loser receives
+  source_authorization, cannot finalize the winner as UNKNOWN, and produces no second
+  entropy/work/refund effect.
+- Direct completion fixtures reserve verifier work explicitly. The only composition change is a
+  narrow stale _Verifier fixture correction to the current proof-context/public-coin/batch-root
+  constructor; no composition implementation was changed.
+
+Final non-native focused verification produced these actual results, all with OK:
+
+  py -3.14 -B -m py_compile app/minimal_clearance_verification_queue.py app/minimal_clearance_verification_queue_independent.py tests/test_direct_mask_source_boundary.py tests/test_direct_mask_state_profile12.py tests/test_minimal_clearance_composition_v2.py tests/test_minimal_clearance_verification_queue.py tests/test_minimal_clearance_verification_runtime.py
+  exit=0
+  py -3.14 -m unittest tests.test_minimal_clearance_verification_queue tests.test_minimal_clearance_verification_runtime
+  Ran 50 tests in 15.055s
+  OK
+  py -3.14 -m unittest tests.test_direct_mask_state_profile12 tests.test_direct_mask_source_boundary
+  Ran 43 tests in 18.695s
+  OK
+  py -3.14 -m unittest tests.test_minimal_clearance_composition_v2 tests.test_minimal_clearance_source_auth_verifier_adapter
+  Ran 33 tests in 17.684s
+  OK
+  py -3.14 -m unittest tests.test_minimal_clearance_verification_queue
+  Ran 31 tests in 8.220s
+  OK
+
+Correction diagnostics are retained explicitly. The first state rerun reported Ran 36 tests in
+17.355s, FAILED (failures=7): two stale source-configuration fixture expectations were exposed
+by the pin check, and hard-coded event sequence assumptions caused the temporal and event
+mutation checks to hit timestamp_binding and terminal_error_binding. Locating BATCH_COMPLETED
+and preserving configuration-digest precedence corrected these fixtures. The first two-status
+no-verifier attempt hit QueueBackpressureError: queue_capacity because both live leases shared
+one store; isolated temporary stores corrected it. The first in-memory guard scriptblock attempt
+failed before launch with Cannot bind argument to parameter Path because it is null; fixing only
+the script-directory adaptation caused the guarded runs below. A first post-commit metadata probe
+also produced the non-mutating fatal: fatal: ambiguous argument dAByAGUAZQA=; the quoted
+read-only probe then verified the exact metadata below. None launched native work or is evidence.
+
+Assigned binaries were not rebuilt and were rehashed after the guarded run:
+  build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe
+  SIZE=275968 SHA256=E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9
+  build-performance/q/Release/dm_pipeline_verifier_cli.exe
+  SIZE=240640 SHA256=F35F6AF28EC2D269831CFB6DD1C2414D439FFEC2B26C73CC39495720D9B9E5D
+
+The adapted existing guard configured the current checkout without native build. Raw child
+stdout: build-performance/guarded-configure-source-admission-20260913.stdout.log, 428 bytes,
+SHA256 768DEA7EC005B2CE51D5338BCED272F050D0DC451075FBBAACDF0BC628292D00. Raw outer log:
+build-performance/guarded-outer-configure-source-admission-20260913.log, 1862 bytes, SHA256
+8CFC939F919E63F87D8A574BC36789275317C3AD588970AE1783E4282D060EBF. Stderr was empty with
+SHA256 E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855. Decisive lines:
+  PHYSICAL_PREFLIGHT free_bytes=2870927360 reserve_bytes=1073741824
+  CHILD_EXIT_CHECK exit7=7 exit0=0
+  CHILD_EXIT_STATUS label=Configure exit=0
+  BUILD_LOG_FAILURE=FALSE mode=Configure
+  CLEANUP=PASS label=Configure owned_process_tree=empty
+  MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+
+Exactly one fresh guarded synthetic CTest child-performance path ran with
+DIRECT_MASK_PERFORMANCE_NATIVE=1 and regex ^direct_mask_complete_path_integration$. There was
+no native rebuild, unchanged native/PQ suite replay, arithmetic replay, filtered integration,
+cap/target change, qualification, activation, or benchmark campaign. Raw child stdout:
+build-performance/guarded-ctest-source-admission-20260913.stdout.log, 5546 bytes, SHA256
+82F08E74C7479EB3A126E895F04B99C14974CC5706BEE13CCC1ECE8A0B0702B0. Raw outer log:
+build-performance/guarded-outer-ctest-source-admission-20260913.log, 2885 bytes, SHA256
+889FE1FE52B70B372E21BC33D28CD2AB6EC66AE615CF1A6EE5E284C5DF69BC3D. Stderr was empty with
+SHA256 E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855.
+
+Actual guarded outer lines:
+  PHYSICAL_PREFLIGHT free_bytes=2853015552 reserve_bytes=1073741824
+  CHILD_EXIT_CHECK exit7=7 exit0=0
+  CHILD_EXIT_STATUS label=CTest exit=0
+  LIVE_PHYSICAL_SUMMARY label=CTest samples=13 min_free_bytes=2770128896 reserve_bytes=1073741824 peak_working_set_bytes=80138240 peak_private_bytes=52404224
+  CLEANUP=PASS label=CTest owned_process_tree=empty
+  MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+
+Actual child gate:
+  Ran 9 tests in 6.723s
+  OK
+  1/1 Test #2: direct_mask_complete_path_integration ... Passed 7.17 sec
+  100% tests passed, 0 tests failed out of 1
+  COMPLETE_PATH_EVIDENCE {"acknowledged_operation_count": 100, "activation": false, "handoff_ms": 46.825, "independent_event_count": 100, "independent_operation_count": 100, "independent_outbox_count": 100, "independent_transaction_count": 100, "independent_verified_batch_count": 1, "issued_batch_count": 1, "operation_count": 100, "outbox_ack_ms": 151.837, "outbox_acknowledged_count": 100, "production_usable": false, "proof_files_persisted": false, "proof_suite_id": null, "queue_verify_state_ms": 1884.726, "receiver_duplicate_dispatches": 0, "receiver_side_effects": 100, "reopened_without_work": true, "run_artifact_inventory": ["state.sqlite"], "source_call_ms": 2562.087, "source_calls": 1, "source_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 2539.9, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_private_commit_bytes": 20447232, "peak_working_set_bytes": 18817024, "private_commit_delta_bytes": 20234240, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "source_appliance", "stderr_bytes": 0, "stdout_bytes": 539013, "timed_out": false}, "source_workspace_empty": true, "state_issue_ms": 15.218, "state_port_calls": 1, "state_sequence": 100, "total_path_ms": 4918.295, "transaction_count": 100, "unconfirmed_operation_count": 0, "unique_idempotency_keys": 100, "verifier_calls": 1, "verifier_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 1703.88, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_private_commit_bytes": 19169280, "peak_working_set_bytes": 17129472, "private_commit_delta_bytes": 18583552, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "independent_verifier", "stderr_bytes": 0, "timed_out": false}, "verifier_workspace_empty": true}
+
+Earlier claimed guarded run Ran 9 tests in 20.572s has no retained raw guard evidence in the
+reviewed build inventory. It was not reconstructed; the current raw child output above is the
+only accepted guarded run for this correction.
+
+The prior documentation-governance warning remains explicit and unchanged:
+py -3.14 -m unittest tests.test_documentation_governance reported Ran 11 tests in 9.754s,
+FAILED (errors=2), both errors listing six pre-existing unregistered Markdown paths:
+tools/direct_mask_authenticated_proof/README.md, tools/direct_mask_fixture/README.md,
+tools/direct_mask_pipeline/README.md, tools/direct_mask_source_auth/README.md,
+tools/direct_mask_source_proof/README.md, and tools/direct_mask_wire/README.md. Required
+active-marker errors were corrected; protected release-boundary registrations were not edited.
+
+Post-commit read-only verification matched HEAD 9e86d8ff75f00db6e52554e8494f99cb009b3033,
+tree a8dc5c2b8ccc29e2586cb968d522e500d30a27f3, and parent
+758345491bffa14df305c994c30d50f5a7d15680; git diff --check was clean and tracked status was
+clean. Only intentionally untracked build-performance/ evidence remains. The stage is synthetic
+and nonactivating: proofSuiteId=null, production_usable=false, activation=false,
+NOT_QUALIFIED/INACTIVE/UNSELECTED. No implementation files remain to be modified; this record
+and STATE.md are the only permitted final closure edits.
