@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class DocumentationGovernanceTests(unittest.TestCase):
     def test_live_markdown_tree_is_registered_and_linked(self) -> None:
         result = governance.validate_markdown_tree(ROOT)
-        self.assertEqual(19, len(governance.MARKDOWN_REGISTRY))
+        self.assertEqual(25, len(governance.MARKDOWN_REGISTRY))
         self.assertEqual(len(governance.MARKDOWN_REGISTRY), result["markdown_count"])
         self.assertEqual(5, result["root_authority_count"])
         self.assertEqual(0, result["root_protected_compatibility_count"])
@@ -91,7 +91,7 @@ class DocumentationGovernanceTests(unittest.TestCase):
     def test_incompatible_active_instruction_fails_closed(self) -> None:
         original = governance._INCOMPATIBLE_ACTIVE_INSTRUCTIONS
         governance._INCOMPATIBLE_ACTIVE_INSTRUCTIONS = (
-            ("README.md", governance.re.compile(r"(?m)^# Blind Ledger$")),
+            ("README.md", governance.re.compile(r"(?m)^# RightRail financial workflow$")),
         )
         try:
             with self.assertRaisesRegex(

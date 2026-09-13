@@ -1,9 +1,26 @@
 # Clearance database + conditional mandatory-ZK architecture
 
 Status: authoritative transaction boundary; proof boundary is `NATIVE_V3_ARCHITECTURE.md`
-Updated: 2026-09-05
+Updated: 2026-09-13
 Owner: this document defines the verifier-to-database, retry, recovery, migration, and
 anti-rollback boundary. It does not select a backend or claim production persistence.
+
+## Current application scope — 2026-09-13
+
+This document remains the authority for the retained Blind Ledger direct-clearance transaction:
+Queue schema 13/Profile 12, Composition schema 4, source ownership/reservation, exact 100 opaque
+operation references, independent reconstruction, and one queue/State/outbox atomic commit. That
+generation is synthetic and nonactivating. It cannot certify the new 20-hospital financial amounts
+or serve as a second financial ledger.
+
+The active financial workflow uses an explicit versioned owner schema and independent checker for
+Control Packs, populations, obligations, evidence, evaluations, cases, determinations, corrections,
+balances, actions, and delivery state. A required financial verification mode must reject when the
+business predicate is not bound; it may not copy an existing proof-acceptance boolean or route
+provider financial data through the retained V1 batch. A future bridge must bind the exact financial
+schema, owner, authority, revision, and atomic transaction rather than dual-write or reinterpret
+opaque Queue references. Financial business records and existing proof/source records remain
+separate durability domains.
 
 ## Boundary
 
@@ -34,9 +51,9 @@ gates recorded by their owners.
 
 ## Transaction boundary
 
-### Queue/Proof Handoff Profile 11 clean break
+### Historical Profile 11 Queue/Proof Handoff generation
 
-The current Queue integration candidate is Profile 11 and remains unqualified, unselected,
+The retained historical Queue integration candidate was Profile 11 and remains unqualified, unselected,
 nonactivating, and non-production. Profile 10 and earlier databases, artifact readers, filesystem
 snapshot/refetch paths, proof-bound disposition receipts, migration, fallback, relabeling, and dual
 acceptance are unsupported and fail closed. Native-v3 owns the exact Profile 11 identity, statement,

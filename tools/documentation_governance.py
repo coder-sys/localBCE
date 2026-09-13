@@ -91,6 +91,24 @@ MARKDOWN_REGISTRY = {
     "docs/REJECTED_ARCHITECTURES.md": _registration(
         "README.md", "rejected-architectures", "current prohibitions against retired directions"
     ),
+    "tools/direct_mask_authenticated_proof/README.md": _registration(
+        "README.md", "direct-mask-authenticated-proof-readme", "retained direct-mask authenticated-proof tool boundary"
+    ),
+    "tools/direct_mask_fixture/README.md": _registration(
+        "README.md", "direct-mask-fixture-readme", "retained direct-mask synthetic fixture boundary"
+    ),
+    "tools/direct_mask_pipeline/README.md": _registration(
+        "README.md", "direct-mask-pipeline-readme", "retained direct-mask pipeline tool boundary"
+    ),
+    "tools/direct_mask_source_auth/README.md": _registration(
+        "README.md", "direct-mask-source-auth-readme", "retained direct-mask source-auth tool boundary"
+    ),
+    "tools/direct_mask_source_proof/README.md": _registration(
+        "README.md", "direct-mask-source-proof-readme", "retained direct-mask source-proof tool boundary"
+    ),
+    "tools/direct_mask_wire/README.md": _registration(
+        "README.md", "direct-mask-wire-readme", "retained direct-mask wire tool boundary"
+    ),
 }
 
 # These are the executable paths named by the maintained command instructions.  The check is

@@ -81,13 +81,15 @@ generated/private artifacts remain outside release selection.
 
 ## Future formal dependency
 
-The authorized next semantic dependency is the Lean formal kernel. No implementation or deployed
-link exists. Before any production direct evaluator or private proof can authorize a clearance
-transition, the workstream must pin the project and theorem statements, implement the evaluator and
-bounded decoder, prove the required semantic/state properties, compile one pinned artifact behind a
-narrow Rust adapter, and pass theorem-manifest, axiom, independent-kernel, KAT, mutation, and
-resource gates. `docs/LEAN_FORMAL_KERNEL.md` is the exact authority; a separate model, differential
-test, or generated vector is not formal-verification credit.
+The authorized next semantic dependency is the Lean formal kernel. Separate Lean source and a
+transport adapter exist in earlier semantic workstreams, but no accepted executable artifact is
+linked to this integration runtime and no formal credit exists here. Before any production direct
+evaluator or private proof can authorize a clearance transition, the workstream must pin the project
+and theorem statements, implement the evaluator and bounded decoder, prove the required semantic/
+state properties, compile one pinned artifact behind a narrow Rust adapter, and pass theorem-manifest,
+axiom, independent-kernel, KAT, mutation, and resource gates. `docs/LEAN_FORMAL_KERNEL.md` is the
+exact authority; a separate model, differential test, or generated vector is not formal-verification
+credit.
 
 ## Future implementation after theorem closure
 

@@ -41,6 +41,16 @@ Corporate egress is disabled by default and all fixtures are synthetic. Continui
 bounded shadow/test operation with dispatch disabled and no second live writer. Current claims remain
 `proofSuiteId=null`, `production_usable=false`, `activation=false`, and non-payment/non-PHI.
 
+## Current application pointer — 2026-09-13
+
+The active application is the exclusive synthetic State-owner assignment in
+`work/rightrail-financial-workflow-20260913`. Read `CURRENT_TASK.md` for the A–E sequence and
+`STATE.md` for verified evidence. The user-authorized scope includes the versioned financial owner
+and independent checker, necessary Queue/Composition schema/owner integration, and same-owner
+Mirror/Continuity surfaces in this checkout. It preserves the current Queue schema 13/Profile 12,
+Composition schema 4, exact 100-operation protocol, native/security budgets, and all separate
+research checkouts. The current claims are nonactivating; no other checkout is an authority.
+
 ## Document precedence
 
 `AGENTS.md` owns execution and safety rules. `CURRENT_TASK.md` owns only the current bounded
@@ -117,13 +127,15 @@ bounded Continuity D, and the twelve acceptance cases plus isolated native regre
 measurements E.
 
 The exact writable scope is this integration checkout only: the governing Markdown and focused
-tests; new financial-workflow implementation and its independent checker; the existing composition
-files only for a reproduced, smallest reconciliation-capacity correction; and the existing Mirror
-files only for the same-owner query/command and bounded continuity surface required by this slice.
-The normally protected composition and Mirror paths are explicitly delegated for this assignment;
-no other checkout, native/C/crypto/Lean/ops/archive/vendor path, model, proof construction, source
-authority, or production control is delegated. Do not create a success-mock repository or a second
-authoritative ledger.
+tests; the versioned financial owner and independent checker; necessary additions to
+`minimal_clearance_verification_queue.py`, `minimal_clearance_verification_queue_independent.py`,
+`minimal_clearance_composition.py`, `minimal_clearance_composition_independent.py`, and
+`minimal_clearance_verification_runtime.py` for an explicit owner/schema bridge; and existing
+Mirror files only for the same-owner query/command and bounded Continuity surface required by this
+slice. The normally protected Queue/Composition/Mirror paths are explicitly delegated for this
+assignment. No other checkout, native/C/crypto/Lean/ops/archive/vendor path, model, proof
+construction, source authority, or production control is delegated. Do not create a success-mock
+repository or a second authoritative ledger.
 
 The fictional fixture is fixed at twenty hospitals and $1,000,000 total: H is $100,000 and the
 other nineteen total $900,000. Expected values are hand-derived constants in tests, not generated
@@ -142,12 +154,6 @@ changed files, command identifiers/log paths, raw trust-critical output, sample 
 rate, peak memory, restart/storage behavior, and remaining numerical target unknowns. A commit is
 not a clean-worktree claim; verify both. The current active task is `CURRENT_TASK.md` and the
 verified evidence is `STATE.md`; the historical delegation records below are not active grants.
-
-## Historical delegation records
-
-The following Profile12, complete-path, and native-performance sections preserve prior reviewed
-authority and evidence. Their old grants are closed historical records and must not redirect the
-current RightRail financial-workflow assignment.
 
 ## Gate governance and continued execution
 
@@ -280,6 +286,12 @@ If a successful archive refresh is attempted but the staging, manifest-generatio
 publication seam is missing, do not claim the archive was refreshed. Continue implementing or
 repairing that seam as the next safe dependency; the run may remain nonactivating and lower-claim
 while this is resolved.
+
+## Historical delegation records
+
+The following Profile12, complete-path, and native-performance sections preserve prior reviewed
+authority and evidence. Their old grants are closed historical records and must not redirect the
+current RightRail financial-workflow assignment.
 
 ## Historical Profile12 protected-path delegation — 2026-09-08
 

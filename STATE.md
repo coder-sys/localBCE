@@ -4,13 +4,17 @@ Updated: 2026-09-13
 
 ## Current verified snapshot — financial workflow assignment
 
-The active integration checkout is
+The initial integration baseline before this documentation checkpoint was
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
 branch `rightrail-financial-workflow-20260913`, at HEAD
 `be712f56117ee71f2f2477f139a9894a209a2985`, tree
 `11191daf7d1604969649262300efb6a62b25fcff`, parent
 `1306e38901b73790dfb2a973b4ac44daf2ff6869`. The tracked worktree was clean before this
 documentation pass; only the driver-supplied `build-performance/` directory was untracked.
+
+The documentation checkpoint is commit `254ac91b493ac6b0731d8345b38e83ddc5091ac2`, tree
+`4ca4eec86175f743f28875104bf9500d03cf82df`, with the baseline as parent. The current working
+tree remains unchanged by application behavior; its only untracked content is `build-performance/`.
 
 The user request is retained by SHA-256
 `54F95E47140F7EC6C082F5EDD2D007C91BAB45B4F3E809EE7CE5FD3170FA4033`. The local reference plan
@@ -29,7 +33,7 @@ Driver-supplied native inputs are unchanged and remain separate regressions:
 
 | Path | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe` | 275968 | `E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D` |
+| `build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe` | 275968 | `E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9` |
 | `build-performance/q/Release/dm_pipeline_verifier_cli.exe` | 240640 | `F35F6AF28EC2D269831CFB6DD1C2414D439FFEC2B26C73CC39495720D9B9E5D` |
 
 All current claims are synthetic and nonactivating: `proofSuiteId=null`,

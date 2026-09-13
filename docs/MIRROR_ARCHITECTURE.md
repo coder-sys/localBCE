@@ -1,15 +1,30 @@
 # Mirror architecture
 
-Updated: 2026-09-05
-Status: synthetic, read-only, nonactivating architecture candidate
+Updated: 2026-09-13
+Status: synthetic, nonactivating architecture candidate; source boundary remains read-only
 Owner: Mirror source trust, evidence custody, reconciliation, and recovery boundary
 
-Mirror is RightRail's read-only evidence, reconciliation, and operational-continuity product.
-Provider Trust Graph is its current narrow first wedge, not the whole product. Mirror never
-adjudicates a claim, issues a Blind Ledger directive, moves money, or converts observed incumbent
-behavior into approved state policy.
+Mirror is RightRail's evidence, reconciliation, and operational-continuity product. Its source
+admission, Ingress, Core, and existing Recovery owner remain read-only with respect to source truth.
+The active financial slice adds a same-owner local query/read model and explicitly authorized
+commands over the new financial owner's records; Mirror does not become a second ledger, adjudicate
+a claim, issue a clearance directive, move money, or convert observed behavior into approved policy.
 
-## Smallest current boundary
+## Current financial-workflow surface — 2026-09-13
+
+The financial owner is authoritative for rules, populations, obligations, evidence references,
+evaluations, cases, determinations, corrections, balances, actions, and delivery identity. Mirror
+reads those projections with bounded pagination and sends commands back to that owner. Commands are
+authority-checked, revision-fenced, idempotent, and recorded in the owner's history/outbox in the
+same transaction. Evidence drill-downs return typed local references, not raw source data or PHI.
+
+Continuity State exports a versioned, bounded package from that same owner and restores only into an
+approved shadow/test database with dispatch disabled. Existing source Recovery remains responsible
+for its own sanitized observation chain and publication points; it is not silently reused as the
+financial owner and no second live writer is permitted. The financial package has its own schema
+version and independent checker, and restore validates before publication.
+
+## Retained source boundary
 
 ```text
 synthetic acquisition port (production authorization remains external)

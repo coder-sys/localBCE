@@ -1,14 +1,29 @@
 # Native-v3 proof architecture
 
-Updated: 2026-09-05
-Status: production-shaped target architecture; current qualification status is authoritative in
-`STATE.md` and `CURRENT_TASK.md`, and no backend is selected.
+Updated: 2026-09-13
+Status: retained native/proof authority; current financial workflow remains separate, synthetic,
+nonactivating, and does not select a backend.
 Owner: private-proof, security, state, privacy, and resource qualification authority. The commercial
 Mirror wedge is governed by its own read-only boundary and does not inherit private-proof claims.
 
 This document is the active proof, security, state, and resource qualification authority. The former
 Privacy V2, binary-field, Binius64, and decisive-composition narratives have been retired; Git
 history and retained archives preserve their exact evidence.
+
+## Current application scope — 2026-09-13
+
+The current Queue implementation is schema 13/Profile 12 with retained Composition schema 4 and
+exact 100-reference/source-ownership/opportunity semantics. Its native/proof boundary is unchanged
+by the financial workflow assignment. The 20-hospital financial records are not a proof statement,
+not a source assertion, and not a private-proof input; they use a separate versioned financial owner
+and checker. If a future financial mode requires cryptographic verification, it must bind the exact
+business predicate and financial schema or reject. Copying an existing acceptance boolean, changing
+Queue dimensions, altering the native/C/crypto artifacts, or claiming a formal linkage is forbidden.
+
+The financial workflow may consume only an explicitly typed, non-dispositive result at a later
+reviewed bridge. All current native inputs are separate regression evidence. The retained Profile 11
+values below are historical generation records, not the active Queue profile or a new financial
+authority.
 
 ## Product invariant
 
@@ -38,14 +53,14 @@ ceremony around evidence the verifier already owns.
 No L2, rollup, sequencer, bridge, Solidity ABI, or public data-availability layer is part of this
 boundary. Ethereum is not a dependency.
 
-## Current experimental engineering boundary
+## Retained native experimental boundary
 
-The current native-v3 proof and application code are experimental engineering only. Exactly three
+The retained native-v3 proof and application code are experimental engineering only. Exactly three
 pre-admission modes exist: `DIRECT_STATE_OWNED` for state-owned canonical non-PHI facts,
 `AUTHORITATIVE_ASSERTION` for an operation-scoped minimally disclosed derived assertion with a
 qualified PQ source signature, and `PRIVATE_ZK` for a proof over a hidden source-bound assertion.
 The verifier-owned control set selects one mode before admission; no runtime fallback or downgrade
-exists. The current Queue integration candidate is the nonactivating Profile 11 contract: it issues a state-generated ordered set of exactly 100 opaque 32-byte operation
+exists. The current Queue integration is the nonactivating Profile 12 contract: it issues a state-generated ordered set of exactly 100 opaque 32-byte operation
 references and one shared immutable allowlisted statement before a volatile handoff; batch positions
 and the ordered batch root are state-computed before handoff.
 
@@ -63,7 +78,7 @@ restarted, or ambiguous handoff becomes `HELD` and requires a fresh state operat
 These controls do not close the profile theorem, malicious-verifier/QROM, grinding, SHA3, Lean,
 deployment, custody, or source-authorization gates.
 
-### Profile 11 Queue integration candidate
+### Historical Profile 11 Queue integration candidate
 
 The Queue checkout integrates the mechanically interoperable, nonactivating Profile 11 statement/proof
 boundary as an unqualified candidate. Its exact identifiers are `PROFILE_VERSION=11`,
