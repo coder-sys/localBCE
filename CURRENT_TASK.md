@@ -841,3 +841,21 @@ clean. Only intentionally untracked build-performance/ evidence remains. The sta
 and nonactivating: proofSuiteId=null, production_usable=false, activation=false,
 NOT_QUALIFIED/INACTIVE/UNSELECTED. No implementation files remain to be modified; this record
 and STATE.md are the only permitted final closure edits.
+
+### Raw evidence fidelity addendum — 2026-09-13
+
+A post-closure byte audit corrected two transcription omissions in the immediately preceding
+closure text. The assigned verifier binary is unchanged and its actual SHA-256 is
+F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D (size 240640), matching
+the parent grant and the retained file. The raw child line below is authoritative; it includes
+peak_job_commit_bytes=21721088 in source_measurement, peak_job_commit_bytes=20447232 and
+stdout_bytes=0 in verifier_measurement. The preceding closure line omitted those raw fields
+and transcribed the verifier hash with one B missing; no binary or raw log changed.
+
+  2: COMPLETE_PATH_EVIDENCE {"acknowledged_operation_count": 100, "activation": false, "handoff_ms": 46.825, "independent_event_count": 100, "independent_operation_count": 100, "independent_outbox_count": 100, "independent_transaction_count": 100, "independent_verified_batch_count": 1, "issued_batch_count": 1, "operation_count": 100, "outbox_ack_ms": 151.837, "outbox_acknowledged_count": 100, "production_usable": false, "proof_files_persisted": false, "proof_suite_id": null, "queue_verify_state_ms": 1884.726, "receiver_duplicate_dispatches": 0, "receiver_side_effects": 100, "reopened_without_work": true, "run_artifact_inventory": ["state.sqlite"], "source_call_ms": 2562.087, "source_calls": 1, "source_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 2539.9, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_job_commit_bytes": 21721088, "peak_private_commit_bytes": 20447232, "peak_working_set_bytes": 18817024, "private_commit_delta_bytes": 20234240, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "source_appliance", "stderr_bytes": 0, "stdout_bytes": 539013, "timed_out": false}, "source_workspace_empty": true, "state_issue_ms": 15.218, "state_port_calls": 1, "state_sequence": 100, "total_path_ms": 4918.295, "transaction_count": 100, "unconfirmed_operation_count": 0, "unique_idempotency_keys": 100, "verifier_calls": 1, "verifier_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 1703.88, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_job_commit_bytes": 20447232, "peak_private_commit_bytes": 19169280, "peak_working_set_bytes": 17129472, "private_commit_delta_bytes": 18583552, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "independent_verifier", "stderr_bytes": 0, "stdout_bytes": 0, "timed_out": false}, "verifier_workspace_empty": true}
+
+Raw file identity remains
+build-performance/guarded-ctest-source-admission-20260913.stdout.log, size 5546, SHA-256
+82F08E74C7479EB3A126E895F04B99C14974CC5706BEE13CCC1ECE8A0B0702B0. The prior closure
+record is superseded by this fidelity addendum wherever the literal raw fields or verifier hash
+differ.

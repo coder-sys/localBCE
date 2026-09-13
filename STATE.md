@@ -1031,3 +1031,17 @@ tree a8dc5c2b8ccc29e2586cb968d522e500d30a27f3, parent
 758345491bffa14df305c994c30d50f5a7d15680; tracked status and git diff --check were clean.
 Only the intentionally untracked build-performance/ evidence tree remains. This record-only
 append is the final permitted mutation; implementation files are immutable.
+
+### Raw evidence fidelity addendum — 2026-09-13
+
+The final byte audit found transcription omissions in the preceding closure only. The actual
+assigned verifier identity is size 240640, SHA-256
+F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D, matching the parent
+grant and retained binary. The retained raw COMPLETE_PATH_EVIDENCE line also contains
+source_measurement.peak_job_commit_bytes=21721088, verifier_measurement.peak_job_commit_bytes=20447232,
+and verifier_measurement.stdout_bytes=0; those fields were omitted from the preceding
+transcription. No binary or raw log changed. The exact literal line and raw-file hash are
+recorded in CURRENT_TASK.md.
+
+This addendum supersedes the preceding closure wherever the literal raw fields or verifier hash
+differ. Implementation files remain immutable.
