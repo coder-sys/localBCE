@@ -2,7 +2,9 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
 import json
@@ -28,6 +30,7 @@ from app.minimal_clearance_verification_queue import (
     QueueLeaseError,
     QueueConflictError,
     SourceAdmission,
+    SourceLaunchAuthorization,
     VerificationQueueError,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
@@ -45,15 +48,25 @@ from app.minimal_clearance_verification_queue_independent import (
     verify_export_bytes,
 )
 from app.minimal_clearance_verification_queue_independent import IndependentQueueError
+from app.minimal_clearance_verifier_process import ContainedVerifierResult
+from tools.direct_mask_complete_path import source_boundary
 from tools.direct_mask_complete_path.source_boundary import (
+    Profile12SourceBoundaryCaller,
+    SourceApplianceConfig,
+    SourceBoundaryError,
     SOURCE_APPLIANCE_EXECUTABLE_SHA256,
     SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
+    SOURCE_APPLIANCE_CAPSULE_BYTES,
     build_source_request,
     source_request_digest,
 )
 
 
 _IMMUTABLE_V11_PRODUCT = Path(r"C:\Users\neers\Documents\Codex\2026-08-30\cleanup-v2\work\aggressive-obsolete-removal-20260907")
+_SOURCE_EXECUTABLE = Path(
+    r"C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work"
+    r"\pq-direct-mask-fixture-20260908\build-fixture\Release\direct_mask_fixture_source.exe"
+)
 _V11_BUILDER = r'''
 from pathlib import Path
 import sys
@@ -512,10 +525,10 @@ class Profile12StateTests(unittest.TestCase):
         self.assertFalse(authorization.consumed)
         with self.assertRaisesRegex(QueueConflictError, "fresh_handoff_required"):
             self.store.start_source_launch(admission=admission)
-        authorization.consume()
+        ownership = authorization.consume()
         with self.assertRaisesRegex(QueueConflictError, "source_authorization_used"):
             authorization.consume()
-        self.store.finish_source_launch(authorization=authorization, success=True)
+        self.store.finish_source_launch(authorization=authorization, ownership=ownership, success=True)
         self.store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"source-admission-proof")))
         work = self.store._claim_next_batch()
         self.assertIsNotNone(work)
@@ -533,6 +546,129 @@ class Profile12StateTests(unittest.TestCase):
         verified = verify_database(self.root / "state.sqlite", expected_config=self.config.as_json)
         self.assertEqual(verified["source_accounting"], {"a_used": 1, "s_used": 4_096, "m_used": 100, "u_used": 1, "v_used": 1})
         self.assertEqual(verified["source_admission_count"], 1)
+
+    def test_source_completion_ownership_isolated_from_loser_cleanup(self) -> None:
+        batch = self.store.issue_batch(template=self._template())
+        admission = self.store.admit_source_launch(batch=batch, **self._source_arguments(batch))
+        authorization = self.store.start_source_launch(admission=admission)
+        winner_ownership = authorization.consume()
+        stale_authorization = SourceLaunchAuthorization(admission)
+        stale_ownership = stale_authorization.consume()
+        source_workspace = self.root / "ownership-source-workspace"
+        source_workspace.mkdir()
+        caller = Profile12SourceBoundaryCaller(
+            SourceApplianceConfig(
+                executable_path=_SOURCE_EXECUTABLE,
+                workspace=source_workspace,
+                executable_size_bytes=SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
+                executable_sha256=SOURCE_APPLIANCE_EXECUTABLE_SHA256,
+                timeout_seconds=180.0,
+            )
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        native_lock = threading.Lock()
+        native_calls = 0
+
+        def runner(*_args: object, **_kwargs: object) -> ContainedVerifierResult:
+            nonlocal native_calls
+            with native_lock:
+                native_calls += 1
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("native stub was not released")
+            return ContainedVerifierResult(
+                exit_code=0,
+                stdout=b"c" * SOURCE_APPLIANCE_CAPSULE_BYTES,
+                stderr=b"",
+                peak_job_commit_bytes=1024,
+                cap_bytes=4_500_000_000,
+                cap_enforced=True,
+                active_process_limit=1,
+                timed_out=False,
+                child_process_count=1,
+                process_tree_complete=True,
+                measurement_complete=True,
+                cleanup_complete=True,
+            )
+
+        def loser_cleanup() -> tuple[BaseException, BaseException]:
+            try:
+                authorization.consume()
+            except BaseException as primary:
+                try:
+                    self.store.finish_source_launch(
+                        authorization=authorization,
+                        ownership=None,
+                        success=False,
+                    )
+                except BaseException as cleanup:
+                    return primary, cleanup
+                raise AssertionError("loser cleanup unexpectedly succeeded")
+            raise AssertionError("loser consumption unexpectedly succeeded")
+
+        def snapshot() -> tuple[object, ...]:
+            with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+                return (
+                    connection.execute(
+                        "SELECT source_status FROM queue_source_admissions WHERE batch_id=?",
+                        (batch.batch_id,),
+                    ).fetchone()[0],
+                    connection.execute(
+                        "SELECT source_a_used,source_s_used,source_m_used,source_u_used,verifier_v_used FROM queue_metadata"
+                    ).fetchone(),
+                    tuple(
+                        row[0]
+                        for row in connection.execute(
+                            "SELECT transition_kind FROM queue_transitions ORDER BY sequence"
+                        )
+                    ),
+                )
+
+        with patch.object(source_boundary, "run_contained_verifier_stream", side_effect=runner):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                winner = pool.submit(
+                    caller.prove_one,
+                    ownership=winner_ownership,
+                    source_key_epoch=1,
+                )
+                self.assertTrue(entered.wait(5))
+                primary, cleanup = pool.submit(loser_cleanup).result(timeout=5)
+                self.assertIsInstance(primary, QueueConflictError)
+                self.assertEqual(str(primary), "source_authorization_used")
+                self.assertIsInstance(cleanup, QueueConflictError)
+                self.assertEqual(str(cleanup), "source_authorization")
+                self.assertEqual(
+                    snapshot(),
+                    (
+                        "STARTED",
+                        (1, SOURCE_ADMISSION_RETRY_LIMIT, 100, 1, 0),
+                        ("BATCH_ISSUED", "SOURCE_AUTHORIZED", "SOURCE_STARTED"),
+                    ),
+                )
+                with self.assertRaisesRegex(QueueConflictError, "source_authorization"):
+                    self.store.finish_source_launch(
+                        authorization=authorization,
+                        ownership=stale_ownership,
+                        success=False,
+                    )
+                release.set()
+                capsule = winner.result(timeout=5)
+                with self.assertRaisesRegex(SourceBoundaryError, "source_authorization"):
+                    caller.prove_one(
+                        ownership=winner_ownership,
+                        source_key_epoch=1,
+                    )
+        self.assertEqual(native_calls, 1)
+        self.store.finish_source_launch(
+            authorization=authorization,
+            ownership=winner_ownership,
+            success=True,
+        )
+        capsule.clear()
+        self.assertEqual(snapshot()[0:2], ("COMPLETED", (1, SOURCE_ADMISSION_RETRY_LIMIT, 100, 1, 0)))
+        self.assertEqual(snapshot()[2][-1], "SOURCE_COMPLETED")
+        verify_database(self.root / "state.sqlite", expected_config=self.config.as_json)
 
     def test_source_admission_rejects_version_request_and_executable_identity_mutations(self) -> None:
         batch = self.store.issue_batch(template=self._template())
@@ -582,10 +718,10 @@ class Profile12StateTests(unittest.TestCase):
         batch = self.store.issue_batch(template=self._template())
         admission = self.store.admit_source_launch(batch=batch, **self._source_arguments(batch))
         authorization = self.store.start_source_launch(admission=admission)
-        authorization.consume()
+        ownership = authorization.consume()
         self.store._after_commit_fault = lambda label: (_ for _ in ()).throw(RuntimeError("completion postcommit")) if label == "after_source_complete" else None
         with self.assertRaisesRegex(RuntimeError, "completion postcommit"):
-            self.store.finish_source_launch(authorization=authorization, success=True)
+            self.store.finish_source_launch(authorization=authorization, ownership=ownership, success=True)
         self.store._after_commit_fault = None
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             self.assertEqual(connection.execute("SELECT status,last_error_code FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone(), ("HELD", "fresh_handoff_required"))

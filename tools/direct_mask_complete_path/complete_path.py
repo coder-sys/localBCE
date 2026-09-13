@@ -44,6 +44,7 @@ from app.minimal_clearance_source_auth_verifier_adapter import (
 from app.minimal_clearance_verification_queue import (
     OperationTemplate,
     QueueConfig,
+    SourceLaunchOwnership,
     VerificationOutcome,
     VolatileProofHandoff,
 )
@@ -794,6 +795,7 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
             old_source_runner = source_boundary.run_contained_verifier_stream
             old_verifier_runner = adapter_module.run_contained_verifier_stream
             capsule: bytearray | None = None
+            ownership: SourceLaunchOwnership | None = None
             proof_stream: VolatileProofHandoff | None = None
             handoff_transferred = False
             try:
@@ -820,19 +822,42 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
                 )
                 source_started_ns = time.perf_counter_ns()
                 try:
+                    ownership = authorization.consume()
+                except BaseException as primary:
+                    try:
+                        runtime.finish_source_launch(
+                            authorization=authorization,
+                            ownership=ownership,
+                            success=False,
+                        )
+                    except BaseException as cleanup:
+                        _raise_failure_group(
+                            "complete_path_source_and_cleanup",
+                            (primary, cleanup),
+                        )
+                    raise
+                try:
                     capsule = source_caller.prove_one(
-                        authorization=authorization,
+                        ownership=ownership,
                         source_key_epoch=1,
                     )
-                except BaseException:
-                    runtime.finish_source_launch(
-                        authorization=authorization,
-                        success=False,
-                    )
+                except BaseException as primary:
+                    try:
+                        runtime.finish_source_launch(
+                            authorization=authorization,
+                            ownership=ownership,
+                            success=False,
+                        )
+                    except BaseException as cleanup:
+                        _raise_failure_group(
+                            "complete_path_source_and_cleanup",
+                            (primary, cleanup),
+                        )
                     raise
                 else:
                     runtime.finish_source_launch(
                         authorization=authorization,
+                        ownership=ownership,
                         success=True,
                     )
                 source_call_ms = (

@@ -23,6 +23,7 @@ from app.minimal_clearance_verification_queue import (
     SOURCE_ADMISSION_RETRY_LIMIT,
     SourceAdmission,
     SourceLaunchAuthorization,
+    SourceLaunchOwnership,
     source_configuration_digest,
 )
 from app.minimal_clearance_verifier_process import (
@@ -270,19 +271,23 @@ class Profile12SourceBoundaryCaller:
         except BaseException:
             _fail("source_admission")
 
-    def prove_one(self, *, authorization: SourceLaunchAuthorization | object = None, source_key_epoch: int, batch: IssuedVerificationBatch | None = None) -> bytearray:
-        if authorization is None or batch is not None:
-            _fail("source_authorization_required")
-        if type(authorization) is not SourceLaunchAuthorization:
+    def prove_one(self, *, ownership: SourceLaunchOwnership | object = None, authorization: SourceLaunchAuthorization | object = None, source_key_epoch: int, batch: IssuedVerificationBatch | None = None) -> bytearray:
+        if batch is not None or (ownership is None and authorization is None) or (ownership is not None and authorization is not None):
             _fail("source_authorization_required")
         if type(source_key_epoch) is not int or source_key_epoch != SOURCE_APPLIANCE_KEY_EPOCH:
             _fail("source_key_epoch")
-        try:
-            admission = authorization.consume()
-        except SourceBoundaryError:
-            raise
-        except BaseException:
-            _fail("source_authorization")
+        if authorization is not None:
+            if type(authorization) is not SourceLaunchAuthorization:
+                _fail("source_authorization_required")
+            try:
+                ownership = authorization.consume()
+            except SourceBoundaryError:
+                raise
+            except BaseException:
+                _fail("source_authorization")
+        if type(ownership) is not SourceLaunchOwnership:
+            _fail("source_authorization_required")
+        admission = ownership.admission
         if (
             type(admission) is not SourceAdmission
             or admission.profile_version != PROFILE_VERSION_TOKEN
@@ -302,6 +307,12 @@ class Profile12SourceBoundaryCaller:
         try:
             if source_request_digest(request) != admission.request_digest:
                 _fail("source_request_binding")
+            try:
+                ownership._begin_native()
+            except SourceBoundaryError:
+                raise
+            except BaseException:
+                _fail("source_authorization")
             return self._run_one_request(request)
         finally:
             try:

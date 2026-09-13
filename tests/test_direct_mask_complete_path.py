@@ -222,8 +222,7 @@ class DirectMaskCompletePathTests(unittest.TestCase):
                 close_calls.append(instance)
                 original_close(instance)
 
-            def fail_source(*, authorization, source_key_epoch: int):
-                authorization.consume()
+            def fail_source(*, ownership, source_key_epoch: int):
                 raise RuntimeError("injected_source_failure")
 
             try:
@@ -271,8 +270,7 @@ class DirectMaskCompletePathTests(unittest.TestCase):
                 close_calls.append(instance)
                 raise RuntimeError("injected_close_failure")
 
-            def fail_source(*, authorization, source_key_epoch: int):
-                authorization.consume()
+            def fail_source(*, ownership, source_key_epoch: int):
                 raise RuntimeError("injected_source_failure")
 
             try:
@@ -309,8 +307,7 @@ class DirectMaskCompletePathTests(unittest.TestCase):
             build_root = Path(directory)
             capsule = bytearray(b"volatile-capsule")
 
-            def return_capsule(*, authorization, source_key_epoch: int):
-                authorization.consume()
+            def return_capsule(*, ownership, source_key_epoch: int):
                 return capsule
 
             try:

@@ -19,6 +19,7 @@ from app.minimal_clearance_verification_queue import (
     QueueConfig,
     SourceAdmission,
     SourceLaunchAuthorization,
+    SourceLaunchOwnership,
     VerificationQueueError,
     VerificationOutcome,
     VolatileProofHandoff,
@@ -395,9 +396,9 @@ class MinimalClearanceVerificationRuntime:
         with self._operation():
             return self._store.start_source_launch(admission=admission)
 
-    def finish_source_launch(self, *, authorization: SourceLaunchAuthorization, success: bool) -> None:
+    def finish_source_launch(self, *, authorization: SourceLaunchAuthorization, ownership: SourceLaunchOwnership | object = None, success: bool) -> None:
         with self._operation():
-            self._store.finish_source_launch(authorization=authorization, success=success)
+            self._store.finish_source_launch(authorization=authorization, ownership=ownership, success=success)
 
     def _verify_integrity(self) -> None:
         with self._operation():

@@ -702,10 +702,36 @@ class SourceAdmission:
             _raise_fixed(QueueIntegrityError("source_admission_bounds"))
 
 
+class SourceLaunchOwnership:
+    """Opaque volatile receipt returned only to the successful consumer."""
+
+    __slots__ = ("_authorization", "_admission", "_token", "_entry_lock", "_native_entered")
+
+    def __init__(self, authorization: "SourceLaunchAuthorization", admission: SourceAdmission, token: object) -> None:
+        if type(authorization) is not SourceLaunchAuthorization or type(admission) is not SourceAdmission or type(token) is not object:
+            _raise_fixed(QueueIntegrityError("source_authorization"))
+        self._authorization = authorization
+        self._admission = admission
+        self._token = token
+        self._entry_lock = threading.Lock()
+        self._native_entered = False
+
+    @property
+    def admission(self) -> SourceAdmission:
+        return self._admission
+
+    def _begin_native(self) -> SourceAdmission:
+        with self._entry_lock:
+            if self._native_entered:
+                _raise_fixed(QueueConflictError("source_authorization_used"))
+            self._native_entered = True
+            return self._admission
+
+
 class SourceLaunchAuthorization:
     """One-shot volatile capability returned only after the durable claim commit."""
 
-    __slots__ = ("_admission", "_consumed", "_lock")
+    __slots__ = ("_admission", "_consumed", "_lock", "_claim_token")
 
     def __init__(self, admission: SourceAdmission) -> None:
         if type(admission) is not SourceAdmission:
@@ -713,18 +739,29 @@ class SourceLaunchAuthorization:
         self._admission = admission
         self._consumed = False
         self._lock = threading.Lock()
+        self._claim_token = object()
 
     @property
     def consumed(self) -> bool:
         with self._lock:
             return self._consumed
 
-    def consume(self) -> SourceAdmission:
+    def consume(self) -> SourceLaunchOwnership:
         with self._lock:
             if self._consumed:
                 _raise_fixed(QueueConflictError("source_authorization_used"))
             self._consumed = True
-            return self._admission
+            return SourceLaunchOwnership(self, self._admission, self._claim_token)
+
+    def _owns(self, ownership: object) -> bool:
+        with self._lock:
+            return (
+                self._consumed
+                and type(ownership) is SourceLaunchOwnership
+                and ownership._authorization is self
+                and ownership._admission is self._admission
+                and ownership._token is self._claim_token
+            )
 
 
 def _generate_operation_refs() -> tuple[bytes, ...]:
@@ -2210,15 +2247,16 @@ class _VerificationQueueStore:
                 connection.rollback()
                 raise
 
-    def finish_source_launch(self, *, authorization: SourceLaunchAuthorization, success: bool) -> None:
-        """Close a consumed source capability without persisting source bytes."""
+    def finish_source_launch(self, *, authorization: SourceLaunchAuthorization, ownership: SourceLaunchOwnership | object = None, success: bool) -> None:
+        """Close the exact consuming invocation without persisting source bytes."""
 
         self._assert_owner()
-        if type(authorization) is not SourceLaunchAuthorization or not authorization.consumed:
+        if type(authorization) is not SourceLaunchAuthorization or not authorization._owns(ownership):
             _raise_fixed(QueueConflictError("source_authorization"))
         if type(success) is not bool:
             _raise_fixed(QueueConflictError("source_outcome"))
-        admission = authorization._admission
+        assert type(ownership) is SourceLaunchOwnership
+        admission = ownership.admission
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -2863,5 +2901,5 @@ __all__ = (
     "DIRECTIVES", "MAX_QUEUE_DATABASE_BYTES", "MAX_QUEUE_CAPACITY", "MAX_TERMINAL_GROWTH_PER_NONTERMINAL", "PROCESS_TREE_PEAK_CAP_BYTES",
     "CIRCUIT_FINGERPRINT", "MAX_SESSION_REF_BYTES", "POLICY_SCHEMA_VERSION", "PROFILE12_CONTEXT_KAT", "PROFILE12_CONTEXT_PREIMAGE_BYTES", "PROFILE_FINGERPRINT", "PROFILE_VERSION", "PUBLIC_COIN_BYTES", "PROOF_CONTEXT_BYTES", "RANGE100_COUNT", "PROOF_ATTEMPTS_CAP", "PROOF_ATTEMPTS_PER_BATCH", "SOURCE_ADMISSION_RETRY_LIMIT", "SOURCE_ADMISSION_A_UPPER", "SOURCE_ADMISSION_S_UPPER", "SOURCE_ADMISSION_M_UPPER", "SOURCE_ADMISSION_U_ISSUANCES", "VERIFIER_LAUNCH_V_UPPER",
     "BatchVerifierResult", "IssuedOperationStatement", "IssuedVerificationBatch", "OperationTemplate", "QueueBackpressureError", "QueueClock", "QueueConfig",
-    "QueueConflictError", "QueueDeterministicRejectError", "QueueHeldError", "QueueIndeterminateError", "QueueIntegrityError", "QueueLeaseError", "QueueResult", "QueueRetryableError", "SourceAdmission", "SourceLaunchAuthorization", "SystemQueueClock", "VerificationOutcome", "VerificationQueueError", "VerifierPort", "VolatileProofHandoff", "parse_batch_verifier_result", "source_configuration_digest", "_QueueRuntimeOwnership", "_VerificationQueueStore", "_compute_batch_root", "_parse_receipt", "_profile12_context", "_reserve_proof_attempt", "_sample_public_coin", "_validate_profile12_context", "BOOTSTRAP_CAPABILITY_LIMITATION_COUNT",
+    "QueueConflictError", "QueueDeterministicRejectError", "QueueHeldError", "QueueIndeterminateError", "QueueIntegrityError", "QueueLeaseError", "QueueResult", "QueueRetryableError", "SourceAdmission", "SourceLaunchAuthorization", "SourceLaunchOwnership", "SystemQueueClock", "VerificationOutcome", "VerificationQueueError", "VerifierPort", "VolatileProofHandoff", "parse_batch_verifier_result", "source_configuration_digest", "_QueueRuntimeOwnership", "_VerificationQueueStore", "_compute_batch_root", "_parse_receipt", "_profile12_context", "_reserve_proof_attempt", "_sample_public_coin", "_validate_profile12_context", "BOOTSTRAP_CAPABILITY_LIMITATION_COUNT",
 )
