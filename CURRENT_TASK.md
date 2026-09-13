@@ -962,3 +962,27 @@ verifier_measurement stdout_bytes=0 field. The retained raw line, copied byte-fo
 is authoritative and supersedes that one transcription omission; no binary or log changed.
 
   2: COMPLETE_PATH_EVIDENCE {"acknowledged_operation_count": 100, "activation": false, "handoff_ms": 42.229, "independent_event_count": 100, "independent_operation_count": 100, "independent_outbox_count": 100, "independent_transaction_count": 100, "independent_verified_batch_count": 1, "issued_batch_count": 1, "operation_count": 100, "outbox_ack_ms": 205.729, "outbox_acknowledged_count": 100, "production_usable": false, "proof_files_persisted": false, "proof_suite_id": null, "queue_verify_state_ms": 1839.465, "receiver_duplicate_dispatches": 0, "receiver_side_effects": 100, "reopened_without_work": true, "run_artifact_inventory": ["state.sqlite"], "source_call_ms": 2437.472, "source_calls": 1, "source_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 2415.184, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_job_commit_bytes": 21688320, "peak_private_commit_bytes": 20422656, "peak_working_set_bytes": 18243584, "private_commit_delta_bytes": 20201472, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "source_appliance", "stderr_bytes": 0, "stdout_bytes": 539013, "timed_out": false}, "source_workspace_empty": true, "state_issue_ms": 11.877, "state_port_calls": 1, "state_sequence": 100, "total_path_ms": 4905.138, "transaction_count": 100, "unconfirmed_operation_count": 0, "unique_idempotency_keys": 100, "verifier_calls": 1, "verifier_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 1613.941, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_job_commit_bytes": 20389888, "peak_private_commit_bytes": 19132416, "peak_working_set_bytes": 16588800, "private_commit_delta_bytes": 18460672, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "independent_verifier", "stderr_bytes": 0, "stdout_bytes": 0, "timed_out": false}, "verifier_workspace_empty": true}
+
+### Ownership receipt native-entry binding correction — 2026-09-13
+
+Starting identity was immutable HEAD ed079dd8f68970ad2732345a747f32a4d2216a5f / tree b5c6ef2efa2ecb7609e0e3d3c349464750965eaa, with only the existing untracked build-performance/ tree. The public counterexample was confirmed: SourceLaunchOwnership(real_authorization, real_admission, object()) reached native because _begin_native checked only its local one-use flag; finish rejected it too late.
+
+The correction adds the existing SourceLaunchAuthorization._owns() predicate inside the existing ownership entry lock, before _native_entered is set. Existing failure semantics remain source_authorization_used for receipt reuse and source_authorization for unissued, wrong-token, or unconsumed ownership. No source-boundary API, durable schema/accounting, native binary, request, orchestration, entropy, counter, or retry opportunity changed.
+
+The existing Profile12 ownership test now constructs the fabricated public receipt with the real durable STARTED authorization/admission. It asserts SourceBoundaryError("source_authorization"), authorization.consumed == False, native_calls == 0, and unchanged durable snapshot (STARTED, (1, 4096, 100, 1, 0), (BATCH_ISSUED, SOURCE_AUTHORIZED, SOURCE_STARTED)). It then legitimately consumes the authorization and retains the paused winner/loser cleanup/no-refund interleaving, including exactly one native stub call and exact-owner completion.
+
+Raw focused checks:
+py -3.14 -B -m py_compile app/minimal_clearance_verification_queue.py tests/test_direct_mask_state_profile12.py
+exit_code=0
+test_source_completion_ownership_isolated_from_loser_cleanup (tests.test_direct_mask_state_profile12.Profile12StateTests.test_source_completion_ownership_isolated_from_loser_cleanup) ... ok
+Ran 1 test in 0.248s
+OK
+exit_code=0
+test_one_use_authorization_serializes_concurrent_native_entry (tests.test_direct_mask_source_boundary.DirectMaskSourceBoundaryTests.test_one_use_authorization_serializes_concurrent_native_entry) ... ok
+Ran 1 test in 0.017s
+OK
+exit_code=0
+
+Only queue.py and the existing Profile12 ownership test changed: 22 insertions, 3 deletions; git diff --check was clean. Post-test SHA-256 identities: queue B944E3B1D6103992DA8134561E5135C66A367F519B04C07EDA4DF1D4C073CC31; focused test F4A54985F128401702A9FEC44CCAD3348C0AFBBE34BFD20F292A53F8AF82357C; unchanged source_boundary.py 0CB820384F20101D6FABBE2A9614911FFA1573B5C052157B0519F0C4A093155D.
+
+Skipped with explicit count/reason: new guarded/native executions 0 because valid issued receipt, request, orchestration, binaries, and prior reviewed guarded containing path are unchanged; full/unchanged suites, builds, benchmarks, filtered integration, production/activation, and real-data runs 0 because the request required focused checks only and prohibited campaign expansion. No new test, warning, or identity failure occurred. The inherited documentation-governance warning remains the recorded 11-test/2-error warning for six pre-existing unregistered README paths. Qualification remains proofSuiteId=null, production_usable=false, activation=false, NOT_QUALIFIED/INACTIVE/UNSELECTED.

@@ -724,6 +724,8 @@ class SourceLaunchOwnership:
         with self._entry_lock:
             if self._native_entered:
                 _raise_fixed(QueueConflictError("source_authorization_used"))
+            if not self._authorization._owns(self):
+                _raise_fixed(QueueConflictError("source_authorization"))
             self._native_entered = True
             return self._admission
 

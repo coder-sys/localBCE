@@ -1088,3 +1088,13 @@ This is the final authorized ownership-correction record; implementation files r
 Raw fidelity note: the exact retained verifier_measurement includes stdout_bytes=0; the
 preceding summary line omitted only that field. The byte-faithful raw JSON is recorded in
 CURRENT_TASK.md, and no binary or raw log changed.
+
+### Ownership receipt native-entry binding correction — 2026-09-13
+
+At immutable HEAD ed079dd8f68970ad2732345a747f32a4d2216a5f / tree b5c6ef2efa2ecb7609e0e3d3c349464750965eaa, the public SourceLaunchOwnership(real_authorization, real_admission, object()) counterexample reached _begin_native() before finish rejected it. The correction adds authorization._owns(ownership) under the existing entry lock before setting _native_entered.
+
+The direct Profile12 ownership test proves the fabricated receipt is rejected as SourceBoundaryError("source_authorization") before the stub, leaves authorization unconsumed, records native_calls=0, and leaves durable STARTED/accounting/transitions unchanged. Legitimate consumption then preserves the existing durable loser-cleanup/no-refund race and exactly one native call.
+
+Focused raw results: py_compile exit_code=0; state ownership test Ran 1 test in 0.248s, OK, exit_code=0; source-boundary one-use test Ran 1 test in 0.017s, OK, exit_code=0. Only queue.py and the existing ownership test changed, with 22 insertions and 3 deletions. SHA-256 identities are queue B944E3B1D6103992DA8134561E5135C66A367F519B04C07EDA4DF1D4C073CC31, test F4A54985F128401702A9FEC44CCAD3348C0AFBBE34BFD20F292A53F8AF82357C, unchanged source_boundary.py 0CB820384F20101D6FABBE2A9614911FFA1573B5C052157B0519F0C4A093155D.
+
+Skipped with explicit count/reason: new native/guarded runs 0 because prior valid native evidence and binaries are unchanged; full suites/builds/benchmarks/integration and qualification/activation runs 0 because this correction was restricted to focused checks. No new failures or warnings occurred; the inherited documentation-governance warning remains six unregistered README paths, 11 tests, 2 errors. The phase remains synthetic and nonactivating: proofSuiteId=null, production_usable=false, activation=false, NOT_QUALIFIED/INACTIVE/UNSELECTED.

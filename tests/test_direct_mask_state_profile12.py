@@ -31,6 +31,7 @@ from app.minimal_clearance_verification_queue import (
     QueueConflictError,
     SourceAdmission,
     SourceLaunchAuthorization,
+    SourceLaunchOwnership,
     VerificationQueueError,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
@@ -551,9 +552,6 @@ class Profile12StateTests(unittest.TestCase):
         batch = self.store.issue_batch(template=self._template())
         admission = self.store.admit_source_launch(batch=batch, **self._source_arguments(batch))
         authorization = self.store.start_source_launch(admission=admission)
-        winner_ownership = authorization.consume()
-        stale_authorization = SourceLaunchAuthorization(admission)
-        stale_ownership = stale_authorization.consume()
         source_workspace = self.root / "ownership-source-workspace"
         source_workspace.mkdir()
         caller = Profile12SourceBoundaryCaller(
@@ -624,6 +622,25 @@ class Profile12StateTests(unittest.TestCase):
                         )
                     ),
                 )
+
+        fabricated_ownership = SourceLaunchOwnership(authorization, admission, object())
+        with patch.object(source_boundary, "run_contained_verifier_stream", side_effect=runner):
+            with self.assertRaisesRegex(SourceBoundaryError, "source_authorization"):
+                caller.prove_one(ownership=fabricated_ownership, source_key_epoch=1)
+        self.assertFalse(authorization.consumed)
+        self.assertEqual(native_calls, 0)
+        self.assertEqual(
+            snapshot(),
+            (
+                "STARTED",
+                (1, SOURCE_ADMISSION_RETRY_LIMIT, 100, 1, 0),
+                ("BATCH_ISSUED", "SOURCE_AUTHORIZED", "SOURCE_STARTED"),
+            ),
+        )
+
+        winner_ownership = authorization.consume()
+        stale_authorization = SourceLaunchAuthorization(admission)
+        stale_ownership = stale_authorization.consume()
 
         with patch.object(source_boundary, "run_contained_verifier_stream", side_effect=runner):
             with ThreadPoolExecutor(max_workers=2) as pool:
