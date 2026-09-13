@@ -177,6 +177,40 @@ static int run_bf256_arithmetic_checks(void) {
   return ok;
 }
 
+static int run_byte_embedding_correspondence(void) {
+  enum { VECTOR_COUNT = 4 };
+  bf256_t basis[8], input[VECTOR_COUNT][8];
+  unsigned int mismatches = 0;
+
+  for (unsigned int i = 0; i != 8u; ++i)
+    bf256_byte_combine_bits(&basis[i], (uint8_t)(1u << i));
+  for (unsigned int i = 0; i != 8u; ++i) {
+    input[0][i] = bf256_from_bit((UINT8_C(0xa5) >> i) & 1u);
+    input[1][i] = basis_element((37u * i + 5u) & 255u);
+    bf256_t lhs = basis_element((53u * i + 17u) & 255u);
+    bf256_t rhs = basis_element((91u * i + 29u) & 255u);
+    bf256_add(&input[2][i], &lhs, &rhs);
+    set_words(&input[3][i],
+              UINT64_C(0x0102030405060708) ^ UINT64_C(0x1111111111111111) * i,
+              UINT64_C(0x1020304050607080) ^ UINT64_C(0x0101010101010101) * i,
+              UINT64_C(0x8899aabbccddeeff) ^ UINT64_C(0x2222222222222222) * i,
+              UINT64_C(0xffeeddccbbaa9988) ^ UINT64_C(0x0303030303030303) * i);
+  }
+
+  for (unsigned int vector = 0; vector != VECTOR_COUNT; ++vector) {
+    bf256_t expected, actual = input[vector][0], product;
+    bf256_byte_combine(&expected, input[vector]);
+    for (unsigned int i = 1; i != 8u; ++i) {
+      bf256_mul(&product, &input[vector][i], &basis[i]);
+      bf256_add_inplace(&actual, &product);
+    }
+    if (!equal(expected, actual)) ++mismatches;
+  }
+  printf("BYTE_EMBEDDING_CORRESPONDENCE vectors=%u products=%u mismatches=%u status=%s\n",
+         VECTOR_COUNT, VECTOR_COUNT * 7u, mismatches, mismatches == 0 ? "PASS" : "FAIL");
+  return mismatches == 0;
+}
+
 static bf256_t add(bf256_t a,bf256_t b) { bf256_t r; bf256_add(&r,&a,&b); return r; }
 static bf256_t mul(bf256_t a,bf256_t b) { bf256_t r; bf256_mul(&r,&a,&b); return r; }
 static uint64_t rng_state=UINT64_C(0xb3204829fe125618);
@@ -242,6 +276,7 @@ int main(void) {
   printf("DIRECT_MASK_KERNEL_ARITHMETIC_ONLY status=%s\n", ok ? "PASS" : "FAIL");
   return ok?0:1;
 #endif
+  ok = run_byte_embedding_correspondence() && ok;
   uint8_t root[32]; for(unsigned i=0;i<32;++i) root[i]=(uint8_t)(i*7u+3u);
   uint64_t values[100];
   for(unsigned i=0;i<100;++i) values[i]=(i%2u) ? DMK_LOWER : DMK_UPPER;

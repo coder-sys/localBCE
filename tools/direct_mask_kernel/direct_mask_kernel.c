@@ -24,6 +24,7 @@ typedef struct kernel_state {
   dmk_evaluation_sink evaluation_sink;
   void *sink_context;
   dmk_counts counts;
+  bf256_t byte_basis[8];
   aes_byte round_key[240];
   aes_byte state[16];
 } kernel_state;
@@ -122,13 +123,22 @@ static int emit_bitness(kernel_state *s, uint32_t index) {
   return result;
 }
 
-static linear_wire embed_byte(aes_byte byte) {
-  bf256_t a[8], b[8];
-  for (unsigned i = 0; i < 8; ++i) { a[i] = byte.bits[i].a; b[i] = byte.bits[i].b; }
+static void initialize_byte_embedding_basis(bf256_t basis[8]) {
+  for (unsigned i = 0; i < 8; ++i)
+    bf256_byte_combine_bits(&basis[i], (uint8_t)(1u << i));
+}
+static linear_wire embed_byte(const aes_byte *byte, const bf256_t basis[8]) {
   linear_wire result;
-  bf256_byte_combine(&result.a, a);
-  bf256_byte_combine(&result.b, b);
-  erase(a, sizeof(a)); erase(b, sizeof(b));
+  result.a = byte->bits[0].a;
+  result.b = byte->bits[0].b;
+  bf256_t product;
+  for (unsigned i = 1; i < 8; ++i) {
+    bf256_mul(&product, &byte->bits[i].a, &basis[i]);
+    bf256_add_inplace(&result.a, &product);
+    bf256_mul(&product, &byte->bits[i].b, &basis[i]);
+    bf256_add_inplace(&result.b, &product);
+  }
+  erase(&product, sizeof(product));
   return result;
 }
 
@@ -189,7 +199,8 @@ static int sub_byte(kernel_state *s, aes_byte input, aes_byte *output) {
   if (s->next_inverse >= DMK_SBOX_COUNT) return DMK_ERR_INTERNAL;
   aes_byte y = byte_from_witness(s, DMK_INVERSE_BASE + 8u * s->next_inverse++);
   ++s->counts.sboxes;
-  int result = emit_inverse(s, embed_byte(input), embed_byte(y));
+  int result = emit_inverse(s, embed_byte(&input, s->byte_basis),
+                            embed_byte(&y, s->byte_basis));
   if (result) return result;
   for (unsigned i = 0; i < 8; ++i) {
     linear_wire r = y.bits[i];
@@ -372,6 +383,7 @@ static int run_kernel(const dmk_instance *instance, const uint8_t *w,
   s->verifier = delta != NULL;
   s->coefficient_sink = csink; s->evaluation_sink = esink; s->sink_context = context;
   s->counts.witness_bits = DMK_WITNESS_BITS;
+  initialize_byte_embedding_basis(s->byte_basis);
   if (delta) { s->delta = *delta; s->delta2 = square(*delta); s->delta3 = mul(s->delta2,*delta); }
   int result = walk_relation(s);
   *counts = s->counts;

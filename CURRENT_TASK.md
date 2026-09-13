@@ -436,3 +436,186 @@ The first immutable commit is `4dd3ea2ece80b43e29befe63c644e3b6b46eea61`, tree
 paths and this phase's append-only records. Verification found no tracked modifications after
 the commit; only the preserved untracked `build-performance/` evidence remains. A final
 docs-only closure commit and direct Driver handoff remain.
+
+### Native arithmetic performance integration closure — corrected child-performance pair — 2026-09-12
+
+This append-only record corrects the prior performance comparison and closes the authorized
+source/fixture/native arithmetic integration. It started at detached HEAD
+48268072892afe4db41d3acc50a62e555f0f2f4b, tree
+3b720ca35b9943bb7b7be4f27f7c4cd0e8b20d46, parent
+4dd3ea2ece80b43e29befe63c644e3b6b46eea61. The authorized tracked implementation delta is
+exactly five paths; these two records are the only documentation paths added to the batch.
+AGENTS.md is unchanged. Protected Queue/composition/runtime, State, vendor,
+protocol/source/proof/signature/codec, filtered/PQ, product, custody/payment/PHI, deployment,
+Lean, and formal paths were not touched.
+
+Implementation identities at the start of this record are:
+
+- app/minimal_clearance_source_auth_verifier_adapter.py:
+  12580 bytes, SHA-256 E5E53A0C971BAF2E8F1AABBE340D3DFF6F6F4DF6BA2C5BE37CBCA7B7F5FF2F5C;
+- tools/direct_mask_complete_path/source_boundary.py:
+  11284 bytes, SHA-256 37CF0BFC9D6CB15AB69EBB3C85F78F3097482E2EE13033B8893463B413D5666D;
+- tools/direct_mask_fixture/verify_imported_libraries.cmake:
+  4457 bytes, SHA-256 72D3ACA9FFA63D3A1A1408966DB7ABE37A5078E3B548855FC888F3819A0064A9;
+- tools/direct_mask_kernel/direct_mask_kernel.c:
+  17495 bytes, SHA-256 23CE8AE880305931E526568E1E49329E10B097764696E3E818D7BDC8D07E3050;
+- tools/direct_mask_kernel/direct_mask_kernel_probe.c:
+  16612 bytes, SHA-256 CC0AEE1A77E7BFF720C63D6B3893671ED830363B8334FDD6702C16C76995B88D.
+
+The two kernel C files are byte-equal to the reviewed read-only
+pq-direct-mask-filter-native-20260912 checkout. The unchanged public accelerator inputs remain
+direct_mask_bf256_accel.c 6013 bytes SHA-256
+08923E5EB209FFBFB89CC489D2C21770769F0AB45F31984BBC075DDDDCF52399 and
+direct_mask_bf256_accel.h 830 bytes SHA-256
+00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2. The candidate wire
+identity is 271884 bytes SHA-256
+F28965F597907880CEC5218BF9558C608A48324124A363FEC1B4CDA5E97CB926; the baseline wire
+identity remains 270926 bytes SHA-256
+89AC129A25A84870066114EDF61B978D274474BF95FD64AA6890B2691FF4EBE9.
+
+The prior reported pair is not child-performance evidence. Its raw CTest stdout files are
+build-performance/complete-path-candidate/guarded-ctest-baseline-byte-embedding-20260912.stdout.log
+(5682 bytes, SHA-256 D67661DDF12FF653FABA93F7689B5B7FA78A325224AC7DA22021AC03EE4A07A4) and
+guarded-ctest-candidate-byte-embedding-20260912.stdout.log (5682 bytes, SHA-256
+676CF280084594F2F607DBFE77961819D060D9B1E6D157728532FD34D70489D3); both matching stderr
+files were 0 bytes with SHA-256
+E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855. The reported baseline
+source/verifier/queue/total values were
+12627.230/6598.550/6731.938/19812.133 ms and the reported candidate values were
+9884.882/6591.731/6720.608/17021.238 ms. Both ran 9/9 tests, but
+DIRECT_MASK_PERFORMANCE_NATIVE was absent. complete_path.py:690 selects the
+child-performance paths only when that variable equals 1; lines 727-739 then bind the child
+paths and child identity profile, while lines 740-748 bind the default accepted paths. The
+prior pair therefore exercised the default accepted source
+275968/D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8 and verifier
+240128/38FB45E017D08AC11098D8837C78D02143B86753AA4F085174073C64353AC835. It is retained
+as historical raw evidence but excluded from the performance decision.
+
+Preserved child-performance artifacts were verified before selection. The baseline source is
+276480 bytes SHA-256
+25254DCBEB4FAB9A20911C874D7F633BD9953E804FE999F3AFD1C4BFAC649069 at
+build-performance/baseline-byte-embedding-20260912/build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe;
+the baseline verifier is 241152 bytes SHA-256
+59F5CFF5C0C0B4979705BFE3FC69329FCCB2062A73748BC72F7E6A39760CB756 at
+build-performance/baseline-byte-embedding-20260912/build-performance/q/Release/dm_pipeline_verifier_cli.exe.
+The baseline child pins were applied only temporarily, the active binaries were checked against
+those exact hashes, and the existing runner was invoked with
+DIRECT_MASK_PERFORMANCE_NATIVE=1. The candidate copies were restored in the baseline-run
+finally path and rechecked before restoring the candidate pins. The final active candidate
+source is 275968 bytes SHA-256
+E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9 and the final active
+candidate verifier is 240640 bytes SHA-256
+F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D. No mismatched
+source/pin selection was run. Final source_boundary.py pins are 275968/E07865D9...3FE5D9;
+final adapter pins are 240640/F35F6AF2...B9E5D.
+
+The existing complete-path runner was used for both samples:
+build-performance/complete-path-candidate/run_guarded_complete_path_20260912.ps1,
+SHA-256 0D7FE1FF42E31756BF91CD239F66BC1FFA4814448332CDBD7223D07DD1EA8193. The common
+guard remains Local\BlindLedgerDirectMaskBuild20260907 with a 1073741824-byte physical
+reserve and a 5000000000-byte process-tree cap; the per-stage evidence cap is
+4500000000 bytes and active-process limit is 1. Both samples used the same CTest build root,
+CMake 4.3.3, Visual Studio 17 2022 x64, Release /O2 /Ob2 /DNDEBUG configuration, and
+Python 3.14. No host priority, affinity, power, privilege, or other runtime setting was
+changed. The read-only public host snapshot was AMD Ryzen 7 7840HS w/ Radeon 780M Graphics,
+AuthenticAMD, 16 logical processors, 8 cores, max/current clock 3801/2516 MHz, 64-bit
+address/data; pre-pair free/total visible memory was 2898832/16053108 KiB and boot was
+9/12/2026 1:40:48 PM. The existing guarded public backend probe reported exactly:
+
+BF256_BACKEND=pclmul PCLMUL_AVAILABLE=1
+BF256_OUT_OF_PLACE_MATCH=PASS BF256_IN_PLACE_MATCH=PASS
+
+Its stdout is 98 bytes SHA-256
+5E8E15C057DECA9884BFC8742B928748F86AC03A4C12B4131A791DEBBA982613 and its stderr is
+0 bytes SHA-256 E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855.
+
+Corrected matched-pair raw files and identities:
+
+- baseline CTest stdout:
+  build-performance/complete-path-candidate/guarded-ctest-extra-pair-baseline-byte-embedding-20260912.stdout.log,
+  5678 bytes, SHA-256 AA53A354DB94CF4207B4284783B54CCE31CECC99F4888B8E7999951B6CD37501;
+- baseline CTest stderr: matching .stderr.log, 0 bytes, SHA-256
+  E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855;
+- baseline outer guard:
+  build-performance/complete-path-candidate/guarded-extra-pair-baseline-byte-embedding-20260912.log,
+  3250 bytes, SHA-256 5553F145BD68C529C4DC8AA0F8BFBCF8699595BD49437E9646DB6B2746D8B907;
+- candidate CTest stdout:
+  build-performance/complete-path-candidate/guarded-ctest-extra-pair-candidate-byte-embedding-20260912.stdout.log,
+  5680 bytes, SHA-256 C091155DE76AACFB2FEB42A346A85A789251BDA3F1B6F5A861ABA47AF908753D;
+- candidate CTest stderr: matching .stderr.log, 0 bytes, SHA-256
+  E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855;
+- candidate outer guard:
+  build-performance/complete-path-candidate/guarded-extra-pair-candidate-byte-embedding-20260912.log,
+  3005 bytes, SHA-256 5725A282C569E9CDA8FBBA724762035AB5E97860AB57D34F1B00A12DDB72B7C0.
+
+Raw CTest gates were:
+
+BASELINE: Ran 9 tests in 8.593s; OK; 1/1 test passed in 10.07 sec;
+100% tests passed, 0 tests failed out of 1; Total Test time (real) = 10.10 sec.
+CANDIDATE: Ran 9 tests in 7.181s; OK; 1/1 test passed in 7.87 sec;
+100% tests passed, 0 tests failed out of 1; Total Test time (real) = 7.88 sec.
+
+The parsed raw COMPLETE_PATH_EVIDENCE decision fields were:
+
+BASELINE source_call_ms=3359.885 source_measurement.elapsed_ms=3358.222
+verifier_measurement.elapsed_ms=2826.300 queue_verify_state_ms=3019.394
+total_path_ms=6923.729; source/verifier/state_port calls=1/1/1;
+issued and independently verified batches=1/1; operations/transactions/ACKs/unique keys=100/100/100/100;
+receiver_duplicate_dispatches=0 receiver_side_effects=100 reopened_without_work=true
+run_artifact_inventory=["state.sqlite"] source_workspace_empty=true
+verifier_workspace_empty=true proof_files_persisted=false proof_suite_id=null
+production_usable=false activation=false. Source and verifier both had exit_code=0,
+cap_enforced=true, active_process_limit=1, child_process_count=2,
+process_tree_complete=true, measurement_complete=true, cleanup_complete=true,
+pagefile_growth_evidence=unavailable, timed_out=false, stderr_bytes=0; stdout_bytes were
+539013 and 0 respectively. The outer guard had preflight free 3111669760 bytes, minimum
+free 3021303808 bytes, peak working/private 81965056/51642368 bytes, child exits 7/0,
+cleanup PASS, and released the mutex.
+
+CANDIDATE source_call_ms=3197.229 source_measurement.elapsed_ms=3195.852
+verifier_measurement.elapsed_ms=1668.185 queue_verify_state_ms=1857.626
+total_path_ms=5555.323; source/verifier/state_port calls=1/1/1;
+issued and independently verified batches=1/1; operations/transactions/ACKs/unique keys=100/100/100/100;
+receiver_duplicate_dispatches=0 receiver_side_effects=100 reopened_without_work=true
+run_artifact_inventory=["state.sqlite"] source_workspace_empty=true
+verifier_workspace_empty=true proof_files_persisted=false proof_suite_id=null
+production_usable=false activation=false. Source and verifier both had exit_code=0,
+cap_enforced=true, active_process_limit=1, child_process_count=2,
+process_tree_complete=true, measurement_complete=true, cleanup_complete=true,
+pagefile_growth_evidence=unavailable, timed_out=false, stderr_bytes=0; stdout_bytes were
+539013 and 0 respectively. The outer guard had preflight free 3005677568 bytes, minimum
+free 2940284928 bytes, peak working/private 82608128/55283712 bytes, child exits 7/0,
+cleanup PASS, and released the mutex.
+
+The corrected pair supports retaining the current implementation for this bounded measurement:
+source call delta 162.656 ms / 4.841118%, measured source delta 162.370 ms / 4.834999%,
+measured verifier delta 1158.115 ms / 40.976365%, total path delta 1368.406 ms /
+19.764003%, and queue-verify/state delta 1161.768 ms. This is one matched pair on one host;
+it is not p95, a qualification campaign, a production benchmark, or evidence of
+production readiness.
+
+Existing gates were not rerun in this closure because no input or defect changed and the
+delegation prohibited campaign expansion: new q 8-test executions=0, new adapter 14-test
+executions=0, new malformed-suite executions=0, and new 65536-pair arithmetic executions=0.
+The earlier q 8/8, fixture eight-library identity, adapter 14-test, malformed ten-case,
+normal/forced 460775-check arithmetic, and public symbol gates remain the recorded evidence;
+no final gate is silently skipped. The current q/kernel build warning profile remains exactly
+48 pinned-vendor warning C4141 lines, zero C4146/C4244 lines, and zero compiler/link error
+markers; the final candidate fixture identity build had zero warning/error lines.
+
+All earlier guarded failures, stale/missing/wrong-root identity attempts, q mapping/cache and
+PMB_BUILD_DIR failures, malformed-wrapper quoting failure, forced-alias and rejected
+Karatsuba failures, the failed out-of-checkout patch attempt, and their raw hashes remain
+historical no-ops or rejected evidence and were not relabelled. This closure added three
+procedural no-ops only: one initial command-construction syntax error before shell execution,
+one read-only probe of the nonexistent shallow baseline verifier path before correcting to the
+preserved deeper path, and one first parser attempt that assumed the CTest line began with
+COMPLETE_PATH_EVIDENCE instead of the observed 2: prefix. None changed a file, launched a
+test, or was used as evidence; the corrected parser reported
+EXTRA_PAIR_EVIDENCE_GATE=PASS samples=2 failures=0. No additional pair or campaign was run.
+
+The repository remains synthetic, nonactivating, and unqualified:
+proofSuiteId=null, production_usable=false, activation=false,
+NOT_QUALIFIED/INACTIVE/UNSELECTED. The implementation and this evidence record are ready for
+the new immutable commit; final commit/tree/parent and clean tracked-state verification are
+returned in the Driver handoff.
