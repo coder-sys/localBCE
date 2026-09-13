@@ -1,12 +1,22 @@
 # Blind Ledger architecture
 
-Updated: 2026-09-05
+Updated: 2026-09-13
 
 Blind Ledger is RightRail's state-side payment-clearance product. It answers one narrow question:
 may this proposed payment proceed under the deterministic rules the state has approved for
 automatic enforcement? It does not adjudicate an entire claim, decide ambiguous medical policy,
 move money, replace the official payment system, or act as an L2, rollup, blockchain execution
 system, or Solidity application.
+
+## Current implementation boundary
+
+This checkout is a synthetic, nonactivating candidate. The accepted source-admission and ownership
+implementation is commit `1306e38901b73790dfb2a973b4ac44daf2ff6869`, tree
+`1d04b16d29b2b298dc93817375cd258c9762b7ef`; its reviewed 100-operation path is evidence only.
+Lean source and an adapter exist in separate earlier semantic checkouts, but no accepted executable
+Lean artifact is linked to this runtime. The current State integration is a synthetic port, so
+formal correspondence, theorem/axiom gates, PQ qualification, production readiness, and payment
+authority remain open. See `STATE.md` for the exact current flags and retained evidence.
 
 ## RightRail system context
 

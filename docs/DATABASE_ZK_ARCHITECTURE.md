@@ -132,9 +132,10 @@ for the READ/WRITE row roles; the producer compatibility object is not semantic 
 
 ## Formal semantic boundary
 
-Lean 4 is the authorized next executable authority for clearance meaning and the legal local
-transition. It is not implemented, linked, or production-qualified in the current synthetic
-transaction boundary. Before direct or private clearance authority,
+Lean 4 is the authorized executable authority for clearance meaning and the legal local transition.
+Lean source and an adapter exist in separate earlier semantic checkouts, but no accepted executable
+Lean artifact is implemented and linked in this candidate's synthetic transaction boundary. Before
+direct or private clearance authority,
 the future kernel must cover bounded decoding, the five directives, result separation, control sets,
 authoritative absence, chronology, exceptions, observation-only separation, replay, exact joins, and
 allowed after-state.

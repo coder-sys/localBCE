@@ -22,6 +22,21 @@ and nonactivating: `proofSuiteId=null`, `production_usable=false`, and
 deployed Lean kernel is authorized. Productionization is qualification and adapter substitution,
 not a semantic rewrite.
 
+## Current evidence boundary — 2026-09-13
+
+The accepted source-admission and ownership implementation is commit
+`1306e38901b73790dfb2a973b4ac44daf2ff6869`, tree
+`1d04b16d29b2b298dc93817375cd258c9762b7ef`. Its reviewed synthetic complete path processed 100
+operations through one source call, one independent verifier call, and one State-port call in
+`4905.138 ms`; this is evidence for the bounded candidate only, not a production, Lean, or PQ claim.
+
+Lean source and a transport adapter exist in separate earlier semantic checkouts at the recorded
+commits `eb29b18a` and `21528c55`. They are not linked to this candidate's runtime, and their
+available executable identity was not accepted as the current artifact. The current path still
+uses a synthetic State port; the formal-linkage, fresh build identity, theorem/axiom, and
+independent-checker gates remain open. The four fresh Lean engineering children are separate
+workstreams and are not part of this checkout's current authority.
+
 ## Read in this order
 
 1. [`AGENTS.md`](AGENTS.md) — execution rules and precedence.

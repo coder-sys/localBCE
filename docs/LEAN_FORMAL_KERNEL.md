@@ -1,11 +1,12 @@
 # Lean formal security kernel
 
 Updated: 2026-09-05
-Status: approved next formal-workstream target and production-shaped semantic plug-in. Current
-qualification status is authoritative in `STATE.md` and `CURRENT_TASK.md`; the kernel is not yet
-implemented or linked to the deployed path and is not production credit until its gates pass.
+Status: approved formal-workstream target and production-shaped semantic plug-in. Current
+qualification status is authoritative in `STATE.md` and `CURRENT_TASK.md`; Lean source and a
+transport adapter exist in separate earlier semantic checkouts, but no accepted executable artifact
+is linked to this candidate's runtime and no formal credit exists until the gates pass.
 Owner: mandatory formal semantic/state-transition gate. This document specifies the target and
-theorem contract; it contains no Lean implementation.
+theorem contract; it contains no implementation from the separate semantic checkouts.
 
 ## Purpose
 

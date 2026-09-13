@@ -1098,3 +1098,15 @@ The direct Profile12 ownership test proves the fabricated receipt is rejected as
 Focused raw results: py_compile exit_code=0; state ownership test Ran 1 test in 0.248s, OK, exit_code=0; source-boundary one-use test Ran 1 test in 0.017s, OK, exit_code=0. Only queue.py and the existing ownership test changed, with 22 insertions and 3 deletions. SHA-256 identities are queue B944E3B1D6103992DA8134561E5135C66A367F519B04C07EDA4DF1D4C073CC31, test F4A54985F128401702A9FEC44CCAD3348C0AFBBE34BFD20F292A53F8AF82357C, unchanged source_boundary.py 0CB820384F20101D6FABBE2A9614911FFA1573B5C052157B0519F0C4A093155D.
 
 Skipped with explicit count/reason: new native/guarded runs 0 because prior valid native evidence and binaries are unchanged; full suites/builds/benchmarks/integration and qualification/activation runs 0 because this correction was restricted to focused checks. No new failures or warnings occurred; the inherited documentation-governance warning remains six unregistered README paths, 11 tests, 2 errors. The phase remains synthetic and nonactivating: proofSuiteId=null, production_usable=false, activation=false, NOT_QUALIFIED/INACTIVE/UNSELECTED.
+
+### Documentation reconciliation status — 2026-09-13
+
+The source-admission/ownership candidate remains synthetic and nonactivating at commit
+`1306e38901b73790dfb2a973b4ac44daf2ff6869`, tree
+`1d04b16d29b2b298dc93817375cd258c9762b7ef`. A reviewed 100-operation complete path exists, but
+it does not establish Lean linkage, PQ qualification, production readiness, payment authority, or
+activation. Earlier semantic checkouts contain Lean source and an adapter at their recorded
+commits; their executable identity and integration into this candidate remain unaccepted. The
+current runtime uses a synthetic State port. The fresh Lean Engine, State, Queue, and Security
+children are separate owner-authorized workstreams and do not change this record until their
+actual source/build/artifact evidence is reviewed.

@@ -529,9 +529,11 @@ the complete path.
 
 ## Implementation order
 
-The Lean item below is the authorized next formal-kernel workstream after the current
-documentation/release integrity pass. No Lean implementation or deployed link exists in this
-candidate, and the formal gates remain open before production clearance or payment authority.
+The Lean item below is the authorized formal-kernel workstream after the current
+documentation/release integrity pass. Earlier semantic checkouts contain Lean source and a
+transport adapter, but no accepted executable Lean artifact is linked to this candidate; the
+current runtime still uses a synthetic State port. The formal gates remain open before production
+clearance or payment authority.
 
 1. Freeze the canonical native-v3 statement, typed receipt, five-directive operation table,
    source/exception-registry contract, privacy adversary, and declared laptop-class state-side
