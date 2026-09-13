@@ -70,6 +70,12 @@ _ZERO = bytes(64)
 _INITIAL_PAYMENT = bytes(64)
 _LEASE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/LEASE/v4\x00"
 _OUTBOX_BATCH_CAPACITY: Final[int] = 100
+# The v4 outbox schema deliberately has one lease-owner column shared by the
+# direct and reconciliation lanes. A private control-character prefix gives
+# the reconciliation lane a durable, collision-free discriminator without
+# changing the retained schema or allowing a direct worker to consume the
+# reconciliation lease budget.
+_RECONCILIATION_WORKER_PREFIX: Final[str] = "\x1eRIGHTrRail/reconciliation/"
 _EVENT_PAYLOAD_KEYS = {"APPLIED": frozenset({"operation_ref", "proof_accepted", "policy_result", "effective_directive", "state_receipt_digest", "sequence_before", "sequence_after"})}
 
 
@@ -110,6 +116,11 @@ def _token(value: object, code: str) -> str:
     if type(value) is not str or _TOKEN.fullmatch(value) is None:
         _fail(CompositionIntegrityError, code)
     return value
+
+
+def _reconciliation_worker_id(worker_id: str) -> str:
+    """Return the private durable owner identity for a reconciliation lease."""
+    return _RECONCILIATION_WORKER_PREFIX + worker_id
 
 
 def _code(value: object, code: str) -> str:
@@ -757,14 +768,26 @@ class ClearanceCompositionStoreV2:
         return CompositionOutboxBatchWorkV2(self.config.composition_id, worker_id, tuple(works), has_more)
 
     def _claim_reconciliation_batch(self, worker_id: str) -> CompositionReconciliationBatchWorkV2 | None:
-        """Claim at most 100 reconciliation rows with independent lease material."""
+        """Claim a bounded reconciliation lease set with independent material.
+
+        Reconciliation capacity is a durable, cross-worker limit on outstanding
+        reconciliation leases, not merely a per-call LIMIT. The immediate
+        transaction serializes concurrent claimers, and expired leases are
+        released before the remaining capacity is calculated.
+        """
         _token(worker_id, "worker_id")
+        lease_worker_id = _reconciliation_worker_id(worker_id)
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 now = int(self.clock.now_ms())
                 self._expire_outbox_locked(connection, now)
-                rows = connection.execute("SELECT operation_ref,effective_directive,attempt FROM composition_outbox WHERE status='DELIVERY_UNCONFIRMED' AND attempt<? ORDER BY updated_ms,operation_ref LIMIT ?", (self.config.max_attempts, _OUTBOX_BATCH_CAPACITY)).fetchall()
+                active_reconciliation = int(connection.execute("SELECT COUNT(*) FROM composition_outbox WHERE status='LEASED' AND substr(worker_id,1,?)=?", (len(_RECONCILIATION_WORKER_PREFIX), _RECONCILIATION_WORKER_PREFIX)).fetchone()[0])
+                remaining_capacity = self.config.reconciliation_capacity - active_reconciliation
+                if remaining_capacity <= 0:
+                    connection.execute("COMMIT")
+                    return None
+                rows = connection.execute("SELECT operation_ref,effective_directive,attempt FROM composition_outbox WHERE status='DELIVERY_UNCONFIRMED' AND attempt<? ORDER BY updated_ms,operation_ref LIMIT ?", (self.config.max_attempts, min(_OUTBOX_BATCH_CAPACITY, remaining_capacity))).fetchall()
                 if not rows:
                     connection.execute("COMMIT")
                     return None
@@ -773,12 +796,12 @@ class ClearanceCompositionStoreV2:
                     ref, directive, attempt = bytes(row[0]), str(row[1]), int(row[2]) + 1
                     token = secrets.token_bytes(32)
                     expires = now + self.config.reconciliation_lease_seconds * 1000
-                    updated = connection.execute("UPDATE composition_outbox SET status='LEASED',attempt=?,worker_id=?,lease_token=?,lease_expires_ms=?,updated_ms=? WHERE operation_ref=? AND status='DELIVERY_UNCONFIRMED' AND attempt<?", (attempt, worker_id, _sha(_LEASE, token), expires, now, ref, self.config.max_attempts))
+                    updated = connection.execute("UPDATE composition_outbox SET status='LEASED',attempt=?,worker_id=?,lease_token=?,lease_expires_ms=?,updated_ms=? WHERE operation_ref=? AND status='DELIVERY_UNCONFIRMED' AND attempt<?", (attempt, lease_worker_id, _sha(_LEASE, token), expires, now, ref, self.config.max_attempts))
                     if updated.rowcount != 1:
                         _fail(CompositionLeaseError, "reconciliation_claim_conflict")
                     self._fault("after_reconciliation_claim_update")
                     envelope = _envelope(ref, directive, self.config)
-                    works.append(CompositionReconciliationWorkV2(self.config.composition_id, _hex(ref), ref, attempt, worker_id, token, expires, directive, _sha(_MATERIAL, envelope), _sha(_MATERIAL, ref, directive.encode("ascii"))))
+                    works.append(CompositionReconciliationWorkV2(self.config.composition_id, _hex(ref), ref, attempt, lease_worker_id, token, expires, directive, _sha(_MATERIAL, envelope), _sha(_MATERIAL, ref, directive.encode("ascii"))))
                 has_more = connection.execute("SELECT 1 FROM composition_outbox WHERE status='DELIVERY_UNCONFIRMED' AND attempt<? LIMIT 1", (self.config.max_attempts,)).fetchone() is not None
                 self._fault("before_reconciliation_claim_commit")
                 connection.execute("COMMIT")

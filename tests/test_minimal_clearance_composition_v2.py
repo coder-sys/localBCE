@@ -248,7 +248,7 @@ class CompositionV11Tests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.clock = _Clock()
         self.queue_config = QueueConfig("composition-state-v11", 200)
-        self.composition_config = CompositionConfigV2(self.queue_config.queue_id, self.queue_config.digest, capacity=200)
+        self.composition_config = CompositionConfigV2(self.queue_config.queue_id, self.queue_config.digest, capacity=200, reconciliation_capacity=100)
         self.owner = _QueueRuntimeOwnership(lock_path=self.root / "state.sqlite.runtime-lock", parent=self.root)
         self.queue = _VerificationQueueStore(path=self.root / "state.sqlite", config=self.queue_config, owner=self.owner, clock=self.clock, composition_config=self.composition_config)
         self.port = _Port()
@@ -570,6 +570,55 @@ class CompositionV11Tests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT status,COUNT(*) FROM composition_outbox GROUP BY status").fetchall(), [("ACKNOWLEDGED", 25), ("DELIVERY_UNCONFIRMED", 75)])
             self.assertEqual(connection.execute("SELECT MIN(attempt),MAX(attempt),active_dispatch_count FROM composition_outbox,composition_meta").fetchone(), (2, 2, 75))
         store.verify_integrity()
+
+    def test_reconciliation_capacity_is_global_across_concurrent_leases_and_reusable_after_settlement(self) -> None:
+        with tempfile.TemporaryDirectory() as isolated:
+            root = Path(isolated)
+            clock = _Clock()
+            queue_config = QueueConfig("reconciliation-capacity-v1", 200)
+            composition_config = composition.CompositionConfigV2(queue_config.queue_id, queue_config.digest, capacity=200, reconciliation_capacity=16)
+            owner = _QueueRuntimeOwnership(lock_path=root / "state.sqlite.runtime-lock", parent=root)
+            queue = _VerificationQueueStore(path=root / "state.sqlite", config=queue_config, owner=owner, clock=clock, composition_config=composition_config)
+            try:
+                port = _Port()
+                template = OperationTemplate("reconciliation-capacity", 1, queue_config.profile_version, clock.now - 100, clock.now + 60_000)
+                batch = queue.issue_batch(template=template)
+                queue.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"volatile-proof")))
+                result = queue._process_one_batch(verifier=_Verifier(queue_config), state_disposition_port=port)
+                self.assertEqual((result.status, result.accepted_count), ("VERIFIED", 100))
+                store_a = ClearanceCompositionStoreV2(path=root / "state.sqlite", config=composition_config, clock=clock)
+                store_b = ClearanceCompositionStoreV2(path=root / "state.sqlite", config=composition_config, clock=clock)
+                try:
+                    lost = _Receiver(composition_config, clock, modes=("missing",))
+                    direct = store_a.dispatch_outbox_batch("receiver", receiver=lost)
+                    self.assertIsNotNone(direct)
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        futures = (
+                            executor.submit(store_a._claim_reconciliation_batch, "reconciler-a"),
+                            executor.submit(store_b._claim_reconciliation_batch, "reconciler-b"),
+                        )
+                        claimed = tuple(future.result() for future in futures)
+                    nonempty = tuple(item for item in claimed if item is not None)
+                    self.assertEqual(len(nonempty), 1)
+                    first = nonempty[0]
+                    assert first is not None
+                    self.assertEqual(len(first.works), 16)
+                    self.assertTrue(first.has_more)
+                    with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                        self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox WHERE status='LEASED' AND substr(worker_id,1,?)=?", (len(composition._RECONCILIATION_WORKER_PREFIX), composition._RECONCILIATION_WORKER_PREFIX)).fetchone()[0], 16)
+                        self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox WHERE status='DELIVERY_UNCONFIRMED'").fetchone()[0], 84)
+                    settled = store_a._settle_delivery_batch(worker_id="reconciler-a", operation="RECONCILIATION", works=first.works, acknowledgments=(None,) * 16, has_more=first.has_more)
+                    self.assertEqual((len(settled.results), sum(item.status == "DELIVERY_UNCONFIRMED" for item in settled.results)), (16, 16))
+                    next_batch = store_b._claim_reconciliation_batch("reconciler-b")
+                    self.assertIsNotNone(next_batch)
+                    assert next_batch is not None
+                    self.assertEqual(len(next_batch.works), 16)
+                finally:
+                    store_a.close()
+                    store_b.close()
+            finally:
+                queue._close()
+                owner.close()
 
     def test_reconciliation_claim_returns_two_exact_100_row_batches(self) -> None:
         self._accepted_two()
