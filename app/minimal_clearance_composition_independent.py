@@ -32,7 +32,7 @@ _EVENT_COLUMNS = ("sequence", "operation_ref", "event_kind", "before_state", "af
 _OUTBOX = ("operation_ref", "effective_directive", "status", "attempt", "worker_id", "lease_token", "lease_expires_ms", "updated_ms")
 _EVENT_PAYLOAD_KEYS = {"APPLIED": frozenset({"operation_ref", "proof_accepted", "policy_result", "effective_directive", "state_receipt_digest", "sequence_before", "sequence_after"})}
 _ZERO = bytes(64)
-_QUEUE_TABLES = frozenset(("queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions"))
+_QUEUE_TABLES = frozenset(("queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_source_admissions", "queue_results", "queue_transitions"))
 _COMPOSITION_TABLES = frozenset(("composition_meta", "composition_transactions", "composition_events", "composition_outbox"))
 
 

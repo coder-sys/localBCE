@@ -619,3 +619,75 @@ proofSuiteId=null, production_usable=false, activation=false,
 NOT_QUALIFIED/INACTIVE/UNSELECTED. The implementation and this evidence record are ready for
 the new immutable commit; final commit/tree/parent and clean tracked-state verification are
 returned in the Driver handoff.
+
+## Source-admission and verifier-launch closure — 2026-09-13
+
+The source-admission child is the exclusive writable checkout for the parent-authorized durable
+source-claim and verifier-launch accounting stage. The exact starting HEAD/tree were
+`9971e7a70937ff652d4008efaf021bcb7b119e53` / `c4ee02e15b8ec7ffe029f8056586ea11f3d037c4`.
+Immutable input base commit: `9971e7a70937ff652d4008efaf021bcb7b119e53`
+Input base tree: `c4ee02e15b8ec7ffe029f8056586ea11f3d037c4`
+Next bounded action: immutable commit and post-commit HEAD/tree/parent plus clean tracked-state verification.
+The preserved untracked native inputs are source
+`build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe`,
+275968 bytes, SHA-256
+`E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9`, and verifier
+`build-performance/q/Release/dm_pipeline_verifier_cli.exe`, 240640 bytes, SHA-256
+`F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D`.
+
+The implementation adds schema/ledger v13 source admission bound to the exact Profile12 batch,
+context, public coin, DMSR0001 request digest, retry policy, executable identity/configuration
+digest, and public admission bounds; commits one AUTHORIZED to STARTED winner before source work;
+returns and consumes a one-shot volatile launch authority; marks ambiguous source and verifier
+claims UNKNOWN and holds without reproof; and charges the verifier launch once immediately before
+the verifier call. The independent checker reconstructs the same request/configuration identity,
+source/verifier event chains, counters, timestamps, status transitions, and shared queue schema.
+The caller and complete path now use admission, start, prove, finish, and handoff in that order;
+source capsule, proof, keys, and private payloads remain volatile.
+
+Verified focused gates (all exit 0):
+
+- `py -3.14 -B -m py_compile` over all changed Python implementation and test files: no output,
+  exit `0`.
+- `py -3.14 -m unittest tests.test_minimal_clearance_verification_queue tests.test_minimal_clearance_verification_runtime`:
+  `Ran 49 tests in 13.666s`, `OK`.
+- `py -3.14 -m unittest tests.test_direct_mask_source_boundary tests.test_direct_mask_state_profile12`:
+  `Ran 40 tests in 17.618s`, `OK`.
+- `py -3.14 -m unittest tests.test_minimal_clearance_source_auth_verifier_adapter`:
+  `Ran 14 tests in 4.620s`, `OK`.
+- Three source fault/recovery tests: `Ran 3 tests in 0.721s`, `OK`.
+- Shared schema/identity cross-check:
+  `QUEUE_SHARED_COLUMNS_MATCH True`, `QUEUE_SHARED_SQL_MATCH True`,
+  `COMPOSITION_TABLES_MATCH True`, `COMPOSITION_SQL_KEYS_MATCH True`,
+  `SCHEMA_MATCH True`, `GENESIS_HEAD_MATCH True`, `CONFIG_DIGEST_DOMAIN_AVAILABLE True 64`.
+
+The one authorized native guarded complete path remains the only native run. Its raw gate was
+`Ran 9 tests in 20.572s`, `OK`, with one source call, one verifier call, one State-port call,
+one independently verified batch, 100 operations/transactions/ACKs/unique idempotency keys,
+zero duplicate dispatches, `activation=false`, `production_usable=false`, and exact final
+inventory `['state.sqlite']`. It was not rerun during this non-native closure; no native arithmetic
+or filtered integration was replayed.
+
+One diagnostic run of the protected legacy composition suite was not accepted as a gate:
+`py -3.14 -m unittest tests.test_minimal_clearance_composition_v2 tests.test_minimal_clearance_source_auth_verifier_adapter`
+reported `Ran 33 tests in 7.338s`, `FAILED (failures=18)`. Every failure was the same assertion
+`('HELD', 0) != ('VERIFIED', 100)` from the unchanged composition fixture's
+`batch.proof_statement` access; baseline `HEAD` already has no `proof_statement` field and the
+composition implementation/test were not changed in this child. The adapter portion passed
+independently (14/14 above). Two exploratory schema commands also used unavailable private names
+or an incomplete QueueConfig constructor; they changed no files and were not evidence. These
+diagnostics are recorded, not silently skipped.
+
+The focused documentation-governance command was also run after adding the required active
+markers: `py -3.14 -m unittest tests.test_documentation_governance` reported `Ran 11 tests in
+9.754s`, `FAILED (errors=2)`. Both errors are the same six pre-existing unregistered Markdown
+paths: `tools/direct_mask_authenticated_proof/README.md`, `tools/direct_mask_fixture/README.md`,
+`tools/direct_mask_pipeline/README.md`, `tools/direct_mask_source_auth/README.md`,
+`tools/direct_mask_source_proof/README.md`, and `tools/direct_mask_wire/README.md`. The active
+marker errors were corrected; these protected release-boundary registrations were not edited.
+
+The repository remains synthetic, nonactivating, and unqualified:
+`proofSuiteId=null`, `production_usable=false`, `activation=false`,
+`NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. The required next action is immutable commit and
+post-commit HEAD/tree/parent plus clean tracked-state verification; only the preserved untracked
+`build-performance/` tree may remain.

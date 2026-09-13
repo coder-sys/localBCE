@@ -854,8 +854,8 @@ class QueueV12Tests(unittest.TestCase):
     def test_state_database_derives_profile12_context_without_durable_copy(self) -> None:
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-            self.assertEqual(tables, {"queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_results", "queue_transitions", "composition_meta", "composition_transactions", "composition_events", "composition_outbox"})
-            self.assertEqual(connection.execute("SELECT schema_version FROM queue_metadata").fetchone()[0], 12)
+            self.assertEqual(tables, {"queue_metadata", "queue_batches", "queue_members", "queue_leases", "queue_attempts", "queue_source_admissions", "queue_results", "queue_transitions", "composition_meta", "composition_transactions", "composition_events", "composition_outbox"})
+            self.assertEqual(connection.execute("SELECT schema_version FROM queue_metadata").fetchone()[0], 13)
             self.assertEqual(connection.execute("SELECT schema_version FROM composition_meta").fetchone()[0], 4)
             self.assertEqual(connection.execute("PRAGMA foreign_key_list(composition_transactions)").fetchone()[2], "queue_members")
             self.assertEqual(tuple(row[1] for row in connection.execute("PRAGMA table_info(queue_batches)"))[-1], "public_coin")

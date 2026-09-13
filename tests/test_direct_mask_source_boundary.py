@@ -11,7 +11,13 @@ from app.minimal_clearance_resource_limits import ACTIVE_PROCESS_LIMIT, ADMISSIO
 from app.minimal_clearance_verification_queue import (
     IssuedVerificationBatch,
     OperationTemplate,
+    PROFILE_FINGERPRINT,
+    PROFILE_VERSION_TOKEN,
     QueueConfig,
+    SOURCE_AUTH_PROFILE_DEFAULT,
+    SOURCE_ADMISSION_RETRY_LIMIT,
+    SourceAdmission,
+    SourceLaunchAuthorization,
     _compute_batch_root_from_refs,
     _profile12_context,
 )
@@ -42,6 +48,7 @@ from tools.direct_mask_complete_path.source_boundary import (
     SOURCE_APPLIANCE_STDOUT_CAP_BYTES,
     SOURCE_APPLIANCE_U_BYTES,
     build_source_request,
+    source_request_digest,
 )
 
 
@@ -140,6 +147,40 @@ class DirectMaskSourceBoundaryTests(unittest.TestCase):
     def _config(self) -> SourceApplianceConfig:
         return self.caller.config
 
+    def _authorization(self, batch: IssuedVerificationBatch, *, request_digest: bytes | None = None) -> SourceLaunchAuthorization:
+        if request_digest is None:
+            try:
+                request = build_source_request(batch=batch, source_key_epoch=1)
+            except SourceBoundaryError:
+                request = bytearray(SOURCE_APPLIANCE_REQUEST_BYTES)
+                request[: len(SOURCE_APPLIANCE_REQUEST_MAGIC)] = SOURCE_APPLIANCE_REQUEST_MAGIC
+                request[SOURCE_APPLIANCE_REQUEST_EPOCH_OFFSET:16] = (1).to_bytes(8, "little")
+                request[SOURCE_APPLIANCE_REQUEST_RETRIES_OFFSET:20] = SOURCE_APPLIANCE_MAX_FINAL_RETRIES.to_bytes(4, "little")
+                request[SOURCE_APPLIANCE_REQUEST_CONTEXT_OFFSET:84] = batch.proof_context
+                request[SOURCE_APPLIANCE_REQUEST_U_OFFSET:] = batch.public_coin
+            try:
+                request_digest = source_request_digest(request)
+            finally:
+                for index in range(len(request)):
+                    request[index] = 0
+                request.clear()
+        admission = SourceAdmission(
+            batch=batch,
+            profile_version=PROFILE_VERSION_TOKEN,
+            profile_digest=PROFILE_FINGERPRINT,
+            source_auth_profile=SOURCE_AUTH_PROFILE_DEFAULT,
+            source_key_epoch=1,
+            proof_context=batch.proof_context,
+            public_coin=batch.public_coin,
+            request_digest=request_digest,
+            retry_limit=SOURCE_ADMISSION_RETRY_LIMIT,
+            source_configuration_digest=self.caller.configuration_digest,
+            source_identity_profile="accepted",
+            source_executable_size_bytes=SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
+            source_executable_sha256=SOURCE_APPLIANCE_EXECUTABLE_SHA256,
+        )
+        return SourceLaunchAuthorization(admission)
+
     def _run_actual_stream(self, payload: bytes | bytearray, arguments: tuple[str, ...] = ()) -> ContainedVerifierResult:
         return run_contained_verifier_stream(
             SOURCE_EXECUTABLE,
@@ -187,7 +228,7 @@ class DirectMaskSourceBoundaryTests(unittest.TestCase):
             return _contained(stdout=b"c" * SOURCE_APPLIANCE_CAPSULE_BYTES)
 
         with patch.object(source_boundary, "run_contained_verifier_stream", side_effect=runner) as mocked:
-            capsule = self.caller.prove_one(batch=batch, source_key_epoch=1)
+            capsule = self.caller.prove_one(authorization=self._authorization(batch), source_key_epoch=1)
         self.assertEqual(capsule, bytearray(b"c" * SOURCE_APPLIANCE_CAPSULE_BYTES))
         self.assertEqual(mocked.call_count, 1)
         self.assertEqual(captured["executable"], SOURCE_EXECUTABLE)
@@ -211,11 +252,11 @@ class DirectMaskSourceBoundaryTests(unittest.TestCase):
             with self.subTest(name=name):
                 with patch.object(source_boundary, "run_contained_verifier_stream") as runner:
                     with self.assertRaisesRegex(SourceBoundaryError, code):
-                        self.caller.prove_one(batch=batch, source_key_epoch=epoch)  # type: ignore[arg-type]
+                        self.caller.prove_one(authorization=self._authorization(batch), source_key_epoch=epoch)  # type: ignore[arg-type]
                 runner.assert_not_called()
         for name, field_name, value, code in (
-            ("context", "proof_context", b"x" * (SOURCE_APPLIANCE_CONTEXT_BYTES - 1), "source_batch_binding"),
-            ("coin", "public_coin", b"x" * (SOURCE_APPLIANCE_U_BYTES - 1), "source_batch_binding"),
+            ("context", "proof_context", b"x" * SOURCE_APPLIANCE_CONTEXT_BYTES, "source_batch_binding"),
+            ("coin", "public_coin", b"x" * SOURCE_APPLIANCE_U_BYTES, "source_batch_binding"),
             ("zero-coin", "public_coin", bytes(SOURCE_APPLIANCE_U_BYTES), "source_batch_binding"),
             ("batch-root", "batch_root", b"x" * 64, "source_batch_binding"),
         ):
@@ -229,7 +270,7 @@ class DirectMaskSourceBoundaryTests(unittest.TestCase):
                 object.__setattr__(mutated, field_name, value)
                 with patch.object(source_boundary, "run_contained_verifier_stream") as runner:
                     with self.assertRaisesRegex(SourceBoundaryError, code):
-                        self.caller.prove_one(batch=mutated, source_key_epoch=1)
+                        self.caller.prove_one(authorization=self._authorization(mutated), source_key_epoch=1)
                 runner.assert_not_called()
 
     def test_config_pin_timeout_and_type_fail_closed(self) -> None:
@@ -287,7 +328,7 @@ class DirectMaskSourceBoundaryTests(unittest.TestCase):
             with self.subTest(code=code, result=result):
                 with patch.object(source_boundary, "run_contained_verifier_stream", return_value=result):
                     with self.assertRaisesRegex(SourceBoundaryError, code):
-                        self.caller.prove_one(batch=self._batch(), source_key_epoch=1)
+                        self.caller.prove_one(authorization=self._authorization(self._batch()), source_key_epoch=1)
 
     def test_runner_failures_and_wipe_failures_are_fixed(self) -> None:
         batch = self._batch()
@@ -302,7 +343,7 @@ class DirectMaskSourceBoundaryTests(unittest.TestCase):
             with self.subTest(code=code):
                 with patch.object(source_boundary, "run_contained_verifier_stream", side_effect=failure):
                     with self.assertRaisesRegex(SourceBoundaryError, code) as raised:
-                        self.caller.prove_one(batch=batch, source_key_epoch=1)
+                        self.caller.prove_one(authorization=self._authorization(batch), source_key_epoch=1)
                 self.assertEqual(str(raised.exception), code)
         with patch.object(
             source_boundary,
@@ -310,7 +351,7 @@ class DirectMaskSourceBoundaryTests(unittest.TestCase):
             return_value=_contained(stdout=b"c" * SOURCE_APPLIANCE_CAPSULE_BYTES),
         ), patch.object(source_boundary, "_wipe", side_effect=RuntimeError("wipe detail")):
             with self.assertRaisesRegex(SourceBoundaryError, "source_cleanup"):
-                self.caller.prove_one(batch=batch, source_key_epoch=1)
+                self.caller.prove_one(authorization=self._authorization(batch), source_key_epoch=1)
 
     def test_real_source_rejects_exactly_ten_malformed_cases(self) -> None:
         valid = bytes(build_source_request(batch=self._batch(), source_key_epoch=1))

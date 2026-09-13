@@ -9,12 +9,22 @@ witness, secret key, proof, signature, or persistent source state.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 from typing import Final, NoReturn
 
 from app.minimal_clearance_resource_limits import ACTIVE_PROCESS_LIMIT, ADMISSION_CAP_BYTES
 from app.minimal_clearance_source_auth_verifier_adapter import SOURCE_AUTH_FRAME_BYTES
-from app.minimal_clearance_verification_queue import IssuedVerificationBatch
+from app.minimal_clearance_verification_queue import (
+    IssuedVerificationBatch,
+    PROFILE_FINGERPRINT,
+    PROFILE_VERSION_TOKEN,
+    SOURCE_AUTH_PROFILE_DEFAULT,
+    SOURCE_ADMISSION_RETRY_LIMIT,
+    SourceAdmission,
+    SourceLaunchAuthorization,
+    source_configuration_digest,
+)
 from app.minimal_clearance_verifier_process import (
     ContainedVerifierResult,
     VerifierProcessError,
@@ -26,6 +36,7 @@ SOURCE_APPLIANCE_REQUEST_MAGIC: Final[bytes] = b"DMSR0001"
 SOURCE_APPLIANCE_KEY_EPOCH: Final[int] = 1
 SOURCE_APPLIANCE_MAX_FINAL_RETRIES: Final[int] = 4_096
 SOURCE_APPLIANCE_REQUEST_BYTES: Final[int] = 180
+SOURCE_APPLIANCE_REQUEST_DIGEST_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/SOURCE-REQUEST/v1\x00"
 SOURCE_APPLIANCE_REQUEST_EPOCH_OFFSET: Final[int] = 8
 SOURCE_APPLIANCE_REQUEST_RETRIES_OFFSET: Final[int] = 16
 SOURCE_APPLIANCE_REQUEST_CONTEXT_OFFSET: Final[int] = 20
@@ -113,6 +124,15 @@ def build_source_request(*, batch: IssuedVerificationBatch, source_key_epoch: in
     if len(request) != SOURCE_APPLIANCE_REQUEST_BYTES:
         _fail("source_request_shape")
     return request
+
+
+def source_request_digest(request: bytes | bytearray) -> bytes:
+    if type(request) not in (bytes, bytearray) or len(request) != SOURCE_APPLIANCE_REQUEST_BYTES:
+        _fail("source_request_shape")
+    digest = hashlib.sha3_512()
+    digest.update(SOURCE_APPLIANCE_REQUEST_DIGEST_DOMAIN)
+    digest.update(bytes(request))
+    return digest.digest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,9 +225,83 @@ class Profile12SourceBoundaryCaller:
     def config(self) -> SourceApplianceConfig:
         return self._config
 
-    def prove_one(self, *, batch: IssuedVerificationBatch, source_key_epoch: int) -> bytearray:
+    @property
+    def configuration_digest(self) -> bytes:
+        return source_configuration_digest(
+            identity_profile=self._config.identity_profile,
+            executable_size_bytes=self._config.executable_size_bytes,
+            executable_sha256=self._config.executable_sha256,
+            retry_limit=SOURCE_ADMISSION_RETRY_LIMIT,
+        )
+
+    def admit_one(self, *, runtime: object, batch: IssuedVerificationBatch, source_key_epoch: int) -> SourceAdmission:
         request = build_source_request(batch=batch, source_key_epoch=source_key_epoch)
         try:
+            admit = getattr(runtime, "admit_source_launch", None)
+            if not callable(admit):
+                _fail("source_admission")
+            return admit(
+                batch=batch,
+                request_digest=source_request_digest(request),
+                retry_limit=SOURCE_ADMISSION_RETRY_LIMIT,
+                source_configuration_digest=self.configuration_digest,
+                source_identity_profile=self._config.identity_profile,
+                source_executable_size_bytes=self._config.executable_size_bytes,
+                source_executable_sha256=self._config.executable_sha256,
+            )
+        except SourceBoundaryError:
+            raise
+        except BaseException:
+            _fail("source_admission")
+        finally:
+            try:
+                _wipe(request)
+            except BaseException:
+                _fail("source_cleanup")
+
+    def start_one(self, *, runtime: object, admission: SourceAdmission) -> SourceLaunchAuthorization:
+        try:
+            start = getattr(runtime, "start_source_launch", None)
+            if not callable(start):
+                _fail("source_admission")
+            return start(admission=admission)
+        except SourceBoundaryError:
+            raise
+        except BaseException:
+            _fail("source_admission")
+
+    def prove_one(self, *, authorization: SourceLaunchAuthorization | object = None, source_key_epoch: int, batch: IssuedVerificationBatch | None = None) -> bytearray:
+        if authorization is None or batch is not None:
+            _fail("source_authorization_required")
+        if type(authorization) is not SourceLaunchAuthorization:
+            _fail("source_authorization_required")
+        if type(source_key_epoch) is not int or source_key_epoch != SOURCE_APPLIANCE_KEY_EPOCH:
+            _fail("source_key_epoch")
+        try:
+            admission = authorization.consume()
+        except SourceBoundaryError:
+            raise
+        except BaseException:
+            _fail("source_authorization")
+        if (
+            type(admission) is not SourceAdmission
+            or admission.profile_version != PROFILE_VERSION_TOKEN
+            or admission.profile_digest != PROFILE_FINGERPRINT
+            or admission.source_auth_profile != SOURCE_AUTH_PROFILE_DEFAULT
+            or admission.source_key_epoch != source_key_epoch
+            or admission.retry_limit != SOURCE_ADMISSION_RETRY_LIMIT
+            or admission.source_identity_profile != self._config.identity_profile
+            or admission.source_executable_size_bytes != self._config.executable_size_bytes
+            or admission.source_executable_sha256 != self._config.executable_sha256
+            or admission.source_configuration_digest != self.configuration_digest
+            or admission.proof_context != admission.batch.proof_context
+            or admission.public_coin != admission.batch.public_coin
+        ):
+            _fail("source_admission")
+        request = build_source_request(batch=admission.batch, source_key_epoch=source_key_epoch)
+        try:
+            if source_request_digest(request) != admission.request_digest:
+                _fail("source_request_binding")
             return self._run_one_request(request)
         finally:
             try:
@@ -268,4 +362,5 @@ __all__ = (
     "SOURCE_APPLIANCE_TIMEOUT_SECONDS",
     "SOURCE_APPLIANCE_U_BYTES",
     "build_source_request",
+    "source_request_digest",
 )

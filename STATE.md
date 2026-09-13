@@ -888,3 +888,70 @@ proofSuiteId=null, production_usable=false, activation=false,
 NOT_QUALIFIED/INACTIVE/UNSELECTED. The implementation and this evidence record are ready for
 the new immutable commit; final commit/tree/parent and clean tracked-state verification are
 returned in the Driver handoff.
+
+### Source-admission and verifier-launch closure — 2026-09-13
+
+This append-only record supersedes the older Profile12-in-progress wording for the current
+source-admission child. It started from immutable HEAD/tree
+`9971e7a70937ff652d4008efaf021bcb7b119e53` / `c4ee02e15b8ec7ffe029f8056586ea11f3d037c4`.
+Only the authorized queue, independent checker, runtime plumbing, source caller, complete-path
+orchestration, focused tests, and current records are changed. The native binaries remain
+untracked preserved inputs: source 275968 bytes SHA-256
+`E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9` and verifier 240640 bytes
+SHA-256 `F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D`.
+
+Queue/independent schema v13 now carries a single durable public source-admission row per batch,
+exact request/configuration/executable bindings, A/S_upper/M_upper/E_U and V accounting, source
+AUTHORIZATION/STARTED/COMPLETED/UNKNOWN transitions, and verifier STARTED/COMPLETED/UNKNOWN
+transitions. Issue atomically burns the one U issuance and the 101-unit proof reservation before
+returning the batch; source admission burns A/S_upper/M_upper only after durable batch validation;
+verifier V is charged in the committed lease-fenced transaction immediately before execution.
+Consumed volatile authority, rollback/postcommit handling, restart recovery, handoff gating, and
+independent reconstruction all fail closed without reproof or refund. No raw proof, private source
+payload, key, provider identity, or secret material is persisted.
+
+Exact successful gates were:
+
+- `py -3.14 -B -m py_compile` over all changed implementation/test files: exit `0`, no output.
+- Queue plus runtime: `Ran 49 tests in 13.666s`, `OK`.
+- Source boundary plus Profile12 State: `Ran 40 tests in 17.618s`, `OK`.
+- Source-auth verifier adapter: `Ran 14 tests in 4.620s`, `OK`.
+- New source postcommit/ambiguous/recovery matrix: `Ran 3 tests in 0.721s`, `OK`.
+- Shared schema/identity output was exactly:
+  `QUEUE_SHARED_COLUMNS_MATCH True`; `QUEUE_SHARED_SQL_MATCH True`;
+  `COMPOSITION_TABLES_MATCH True`; `COMPOSITION_SQL_KEYS_MATCH True`;
+  `SCHEMA_MATCH True`; `GENESIS_HEAD_MATCH True`;
+  `CONFIG_DIGEST_DOMAIN_AVAILABLE True 64`.
+
+The single authorized native guarded complete-path run remains raw evidence only for the state at
+that run: `Ran 9 tests in 20.572s`, `OK`; source/verifier/State-port calls `1/1/1`; one issued
+and independently verified batch; 100 operations, transactions, ACKs, and unique keys; zero
+duplicate dispatches; source/verifier stderr `0/0`; `run_artifact_inventory=["state.sqlite"]`;
+`source_workspace_empty=true`; `verifier_workspace_empty=true`; `proof_files_persisted=false`;
+`proof_suite_id=null`; `production_usable=false`; `activation=false`. It was deliberately not
+rerun after the non-native closure edits, and no native arithmetic or filtered integration was
+replayed.
+
+A diagnostic protected-composition command ran 33 tests in 7.338s and failed 18 times with the
+same raw assertion `AssertionError: Tuples differ: ('HELD', 0) != ('VERIFIED', 100)`. The
+unchanged fixture accesses `batch.proof_statement`, which is absent in the immutable baseline
+Queue API; the composition implementation and test were not changed here. The 14 adapter tests
+in that combined command passed independently and are recorded above. Exploratory schema checks
+that referenced unavailable private names or omitted QueueConfig constructor arguments changed no
+files and were discarded as non-evidence. This is an explicit pre-existing/inapplicable warning,
+not a silently skipped gate.
+
+Documentation governance was run after the current-task marker correction:
+`py -3.14 -m unittest tests.test_documentation_governance` reported `Ran 11 tests in 9.754s`,
+`FAILED (errors=2)`. Both errors list the same six pre-existing unregistered Markdown paths:
+`tools/direct_mask_authenticated_proof/README.md`, `tools/direct_mask_fixture/README.md`,
+`tools/direct_mask_pipeline/README.md`, `tools/direct_mask_source_auth/README.md`,
+`tools/direct_mask_source_proof/README.md`, and `tools/direct_mask_wire/README.md`. The marker
+errors were fixed in the current record; protected release-boundary registrations remain
+unchanged and this warning is explicit.
+
+The stage remains synthetic and nonactivating, with
+`proofSuiteId=null`, `production_usable=false`, `activation=false`,
+`NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. Final immutable commit/tree/parent and clean tracked
+status verification remain to be recorded after the implementation commit; only untracked
+`build-performance/` evidence is expected to remain.

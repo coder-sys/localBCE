@@ -24,9 +24,9 @@ class IndependentQueueError(RuntimeError):
     pass
 
 
-SCHEMA_VERSION: Final[int] = 12
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v12"
-_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v12\x00"
+SCHEMA_VERSION: Final[int] = 13
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v13"
+_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v13\x00"
 _ADMISSION_CAP: Final[int] = 4_500_000_000
 _DATABASE_PAGE_SIZE: Final[int] = 4096
 _DATABASE_MAX_PAGE_COUNT: Final[int] = 32768
@@ -34,6 +34,19 @@ _DATABASE_CAP: Final[int] = _DATABASE_PAGE_SIZE * _DATABASE_MAX_PAGE_COUNT
 _COUNT: Final[int] = 100
 _PROOF_ATTEMPTS_PER_BATCH: Final[int] = 101
 _PROOF_ATTEMPTS_CAP: Final[int] = 2**32
+_SOURCE_ADMISSION_RETRY_LIMIT: Final[int] = 4_096
+_SOURCE_ADMISSION_A_UPPER: Final[int] = 1
+_SOURCE_ADMISSION_S_UPPER: Final[int] = _SOURCE_ADMISSION_RETRY_LIMIT
+_SOURCE_ADMISSION_M_UPPER: Final[int] = _COUNT
+_SOURCE_ADMISSION_U_ISSUANCES: Final[int] = 1
+_VERIFIER_LAUNCH_V_UPPER: Final[int] = 1
+_SOURCE_REQUEST_MAGIC: Final[bytes] = b"DMSR0001"
+_SOURCE_REQUEST_BYTES: Final[int] = 180
+_SOURCE_REQUEST_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/SOURCE-REQUEST/v1\x00"
+_SOURCE_IDENTITY_PINS: Final[dict[str, tuple[int, bytes]]] = {
+    "accepted": (275_968, bytes.fromhex("D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8")),
+    "child-performance": (275_968, bytes.fromhex("E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9")),
+}
 _MAX_WINDOW: Final[int] = 3_600_000
 _MAX_EPOCH: Final[int] = 2**64 - 1
 _MAX_RECEIPT: Final[int] = 16 * 1024
@@ -75,9 +88,9 @@ _PROFILE12_CONTEXT_KAT: Final[bytes] = bytes.fromhex(
 _DIRECTIVES: Final[list[str]] = ["CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"]
 _BATCH_LEAF: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-LEAF/v12\x00"
 _BATCH_ROOT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-ROOT/v12\x00"
-_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v12\x00"
-_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v12\x00"
-_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v12\x00"
+_GENESIS: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/GENESIS/v13\x00"
+_EVENT: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/EVENT/v13\x00"
+_HEAD: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/HEAD/v13\x00"
 _MEMBER_SET: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MEMBER-SET/v12\x00"
 _COMPOSITION_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v4"
 _COMPOSITION_MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v4\x00"
@@ -129,11 +142,12 @@ _HELD_PRELEASE_ERRORS: Final[frozenset[str]] = frozenset(("batch_binding", "fres
 _HELD_STARTED_ERRORS: Final[frozenset[str]] = frozenset(("fresh_handoff_required", "validity_expired", "lease_expired")) | _HELD_PROCESS_ERRORS
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
-    "queue_metadata": ("id", "schema_version", "queue_id", "config_json", "config_digest", "admission_cap_bytes", "process_tree_peak_cap_bytes", "active_process_limit", "page_size", "max_page_count", "journal_mode", "synchronous", "head_root", "next_transition_seq", "next_admission_seq", "nonterminal_count", "live_lease_count", "proof_attempts_used", "proof_attempts_cap", "next_attempt_seq"),
+    "queue_metadata": ("id", "schema_version", "queue_id", "config_json", "config_digest", "admission_cap_bytes", "process_tree_peak_cap_bytes", "active_process_limit", "page_size", "max_page_count", "journal_mode", "synchronous", "head_root", "next_transition_seq", "next_admission_seq", "nonterminal_count", "live_lease_count", "proof_attempts_used", "proof_attempts_cap", "next_attempt_seq", "source_a_used", "source_s_used", "source_m_used", "source_u_used", "verifier_v_used"),
     "queue_batches": ("batch_id", "batch_root", "session_ref", "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms", "valid_until_ms", "approved_source_registry_root", "qualification_flags", "identity_digest", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code", "public_coin"),
     "queue_members": ("batch_id", "batch_position", "operation_ref", "admission_seq"),
     "queue_leases": ("batch_id", "worker_id", "token_digest", "attempt", "claim_sequence", "leased_ms", "expires_ms"),
-    "queue_attempts": ("attempt_id", "batch_id", "reservation_before", "reservation_after", "proof_attempts", "source_key_epoch", "status", "reserved_ms", "closed_ms", "result_code"),
+    "queue_attempts": ("attempt_id", "batch_id", "reservation_before", "reservation_after", "proof_attempts", "source_key_epoch", "status", "reserved_ms", "closed_ms", "result_code", "verifier_status", "verifier_v_upper"),
+    "queue_source_admissions": ("batch_id", "profile_version", "profile_digest", "source_auth_profile", "source_key_epoch", "proof_context", "public_coin", "request_digest", "retry_limit", "source_configuration_digest", "source_identity_profile", "source_executable_size_bytes", "source_executable_sha256", "a_upper", "s_upper", "m_upper", "u_issuances", "source_status"),
     "queue_results": ("batch_id", "terminal_status", "receipt_id", "receipt_bytes", "proof_accepted", "source_authenticated", "batch_root", "source_auth_profile", "source_key_epoch", "result_code", "qualification_flags", "completed_ms", "attempt", "error_code"),
     "queue_transitions": ("sequence", "transition_kind", "batch_id", "before_root", "after_root", "event_bytes", "event_digest"),
     "composition_meta": ("id", "schema_version", "config_json", "config_digest", "event_head", "next_event_sequence", "state_profile_identity", "state_id", "state_bytes", "state_epoch", "state_sequence", "state_continuity_root", "state_audit_head", "state_clearance_root", "state_clearance_count", "payment_root", "active_dispatch_count"),
@@ -143,11 +157,12 @@ _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
 }
 _TABLES = frozenset(_TABLE_COLUMNS)
 _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
-    "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL, queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), admission_cap_bytes INTEGER NOT NULL, process_tree_peak_cap_bytes INTEGER NOT NULL, active_process_limit INTEGER NOT NULL, page_size INTEGER NOT NULL CHECK(page_size=4096), max_page_count INTEGER NOT NULL CHECK(max_page_count=32768), journal_mode TEXT NOT NULL CHECK(journal_mode='delete'), synchronous INTEGER NOT NULL CHECK(synchronous=2), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL, next_admission_seq INTEGER NOT NULL, nonterminal_count INTEGER NOT NULL, live_lease_count INTEGER NOT NULL, proof_attempts_used INTEGER NOT NULL, proof_attempts_cap INTEGER NOT NULL CHECK(proof_attempts_cap=4294967296), next_attempt_seq INTEGER NOT NULL)",
+    "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL, queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), admission_cap_bytes INTEGER NOT NULL, process_tree_peak_cap_bytes INTEGER NOT NULL, active_process_limit INTEGER NOT NULL, page_size INTEGER NOT NULL CHECK(page_size=4096), max_page_count INTEGER NOT NULL CHECK(max_page_count=32768), journal_mode TEXT NOT NULL CHECK(journal_mode='delete'), synchronous INTEGER NOT NULL CHECK(synchronous=2), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL, next_admission_seq INTEGER NOT NULL, nonterminal_count INTEGER NOT NULL, live_lease_count INTEGER NOT NULL, proof_attempts_used INTEGER NOT NULL, proof_attempts_cap INTEGER NOT NULL CHECK(proof_attempts_cap=4294967296), next_attempt_seq INTEGER NOT NULL, source_a_used INTEGER NOT NULL, source_s_used INTEGER NOT NULL, source_m_used INTEGER NOT NULL, source_u_used INTEGER NOT NULL, verifier_v_used INTEGER NOT NULL)",
     "queue_batches": "CREATE TABLE queue_batches (batch_id BLOB PRIMARY KEY CHECK(length(batch_id)=32), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), session_ref BLOB NOT NULL CHECK(length(session_ref)=64), assertion_identifier TEXT NOT NULL, assertion_version INTEGER NOT NULL, state_profile_version TEXT NOT NULL, valid_from_ms INTEGER NOT NULL, valid_until_ms INTEGER NOT NULL, approved_source_registry_root BLOB, qualification_flags BLOB NOT NULL, identity_digest BLOB NOT NULL CHECK(length(identity_digest)=64), status TEXT NOT NULL CHECK(status IN ('AWAITING_HANDOFF','QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), next_eligible_ms INTEGER NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, last_error_code TEXT, public_coin BLOB NOT NULL CHECK(length(public_coin)=96), CHECK(approved_source_registry_root IS NULL OR length(approved_source_registry_root)=64), CHECK(valid_from_ms<valid_until_ms))",
     "queue_members": "CREATE TABLE queue_members (batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), batch_position INTEGER NOT NULL CHECK(batch_position BETWEEN 0 AND 99), operation_ref BLOB NOT NULL CHECK(length(operation_ref)=32), admission_seq INTEGER NOT NULL CHECK(admission_seq>=1), PRIMARY KEY(batch_id,batch_position), UNIQUE(operation_ref), UNIQUE(admission_seq))",
     "queue_leases": "CREATE TABLE queue_leases (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt=1), claim_sequence INTEGER NOT NULL, leased_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms))",
-    "queue_attempts": "CREATE TABLE queue_attempts (attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id), reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before), proof_attempts INTEGER NOT NULL CHECK(proof_attempts=101), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL, closed_ms INTEGER, result_code TEXT)",
+    "queue_attempts": "CREATE TABLE queue_attempts (attempt_id INTEGER PRIMARY KEY, batch_id BLOB NOT NULL UNIQUE REFERENCES queue_batches(batch_id), reservation_before INTEGER NOT NULL CHECK(reservation_before>=0), reservation_after INTEGER NOT NULL CHECK(reservation_after>reservation_before), proof_attempts INTEGER NOT NULL CHECK(proof_attempts=101), source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), status TEXT NOT NULL CHECK(status IN ('RESERVED','ACCEPTED','REJECTED','HELD')), reserved_ms INTEGER NOT NULL, closed_ms INTEGER, result_code TEXT, verifier_status TEXT NOT NULL CHECK(verifier_status IN ('UNRESERVED','STARTED','COMPLETED','UNKNOWN')), verifier_v_upper INTEGER NOT NULL CHECK(verifier_v_upper=1))",
+    "queue_source_admissions": "CREATE TABLE queue_source_admissions (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), profile_version TEXT NOT NULL, profile_digest BLOB NOT NULL CHECK(length(profile_digest)=64), source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), proof_context BLOB NOT NULL CHECK(length(proof_context)=64), public_coin BLOB NOT NULL CHECK(length(public_coin)=96), request_digest BLOB NOT NULL CHECK(length(request_digest)=64), retry_limit INTEGER NOT NULL CHECK(retry_limit=4096), source_configuration_digest BLOB NOT NULL CHECK(length(source_configuration_digest)=64), source_identity_profile TEXT NOT NULL, source_executable_size_bytes INTEGER NOT NULL, source_executable_sha256 BLOB NOT NULL CHECK(length(source_executable_sha256)=32), a_upper INTEGER NOT NULL CHECK(a_upper=1), s_upper INTEGER NOT NULL CHECK(s_upper=4096), m_upper INTEGER NOT NULL CHECK(m_upper=100), u_issuances INTEGER NOT NULL CHECK(u_issuances=1), source_status TEXT NOT NULL CHECK(source_status IN ('AUTHORIZED','STARTED','COMPLETED','UNKNOWN')))",
     "queue_results": "CREATE TABLE queue_results (batch_id BLOB PRIMARY KEY REFERENCES queue_batches(batch_id), terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_id BLOB NOT NULL CHECK(length(receipt_id)=32), receipt_bytes BLOB NOT NULL, proof_accepted INTEGER NOT NULL CHECK(proof_accepted IN (0,1)), source_authenticated INTEGER NOT NULL CHECK(source_authenticated IN (0,1)), batch_root BLOB NOT NULL CHECK(length(batch_root)=64), source_auth_profile TEXT NOT NULL, source_key_epoch BLOB NOT NULL CHECK(length(source_key_epoch)=8), result_code TEXT NOT NULL, qualification_flags BLOB NOT NULL, completed_ms INTEGER NOT NULL, attempt INTEGER NOT NULL CHECK(attempt IN (0,1)), error_code TEXT)",
     "queue_transitions": "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL, batch_id BLOB NOT NULL REFERENCES queue_batches(batch_id), before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL, event_digest BLOB NOT NULL CHECK(length(event_digest)=64))",
     "composition_meta": "CREATE TABLE composition_meta (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=4), config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), event_head BLOB NOT NULL CHECK(length(event_head)=64), next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence>=0), state_profile_identity BLOB, state_id BLOB, state_bytes BLOB, state_epoch INTEGER, state_sequence INTEGER, state_continuity_root BLOB, state_audit_head BLOB, state_clearance_root BLOB, state_clearance_count INTEGER, payment_root BLOB NOT NULL CHECK(length(payment_root)=64), active_dispatch_count INTEGER NOT NULL CHECK(active_dispatch_count>=0))",
@@ -157,6 +172,8 @@ _TABLE_SCHEMA_SQL: Final[dict[str, str]] = {
 }
 _STATUSES = frozenset(("AWAITING_HANDOFF", "QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD"))
 _TERMINAL = frozenset(("VERIFIED", "REJECTED", "HELD"))
+_SOURCE_STATUSES = frozenset(("AUTHORIZED", "STARTED", "COMPLETED", "UNKNOWN"))
+_EVENT_KINDS = frozenset(("BATCH_ISSUED", "SOURCE_AUTHORIZED", "SOURCE_STARTED", "SOURCE_COMPLETED", "SOURCE_UNKNOWN", "HANDOFF_SUBMITTED", "VERIFICATION_STARTED", "VERIFIER_STARTED", "VERIFIER_COMPLETED", "VERIFIER_UNKNOWN", "BATCH_COMPLETED", "BATCH_HELD"))
 _TRIGGER_DEFS: Final[tuple[tuple[str, str], ...]] = (
     ("queue_batches_identity_guard", "CREATE TRIGGER queue_batches_identity_guard BEFORE UPDATE OF batch_id,batch_root,session_ref,assertion_identifier,assertion_version,state_profile_version,valid_from_ms,valid_until_ms,approved_source_registry_root,qualification_flags,identity_digest,admission_seq,created_ms,public_coin ON queue_batches BEGIN SELECT RAISE(ABORT,'queue_batch_identity_guard'); END"),
     ("queue_batches_no_delete", "CREATE TRIGGER queue_batches_no_delete BEFORE DELETE ON queue_batches BEGIN SELECT RAISE(ABORT,'queue_batch_delete_guard'); END"),
@@ -166,8 +183,10 @@ _TRIGGER_DEFS: Final[tuple[tuple[str, str], ...]] = (
     ("queue_results_no_delete", "CREATE TRIGGER queue_results_no_delete BEFORE DELETE ON queue_results BEGIN SELECT RAISE(ABORT,'queue_result_delete_guard'); END"),
     ("queue_transitions_no_update", "CREATE TRIGGER queue_transitions_no_update BEFORE UPDATE ON queue_transitions BEGIN SELECT RAISE(ABORT,'queue_transition_update_guard'); END"),
     ("queue_transitions_no_delete", "CREATE TRIGGER queue_transitions_no_delete BEFORE DELETE ON queue_transitions BEGIN SELECT RAISE(ABORT,'queue_transition_delete_guard'); END"),
-    ("queue_attempts_transition_guard", "CREATE TRIGGER queue_attempts_transition_guard BEFORE UPDATE ON queue_attempts WHEN NOT (OLD.status='RESERVED' AND NEW.status IN ('ACCEPTED','REJECTED','HELD') AND OLD.attempt_id=NEW.attempt_id AND OLD.batch_id=NEW.batch_id AND OLD.reservation_before=NEW.reservation_before AND OLD.reservation_after=NEW.reservation_after AND OLD.proof_attempts=NEW.proof_attempts AND OLD.source_key_epoch=NEW.source_key_epoch AND OLD.reserved_ms=NEW.reserved_ms AND NEW.closed_ms IS NOT NULL AND (OLD.result_code IS NULL OR NEW.result_code=OLD.result_code OR NEW.result_code IS NOT NULL)) BEGIN SELECT RAISE(ABORT,'queue_attempt_transition_guard'); END"),
+    ("queue_attempts_transition_guard", "CREATE TRIGGER queue_attempts_transition_guard BEFORE UPDATE ON queue_attempts WHEN NOT ((OLD.attempt_id=NEW.attempt_id AND OLD.batch_id=NEW.batch_id AND OLD.reservation_before=NEW.reservation_before AND OLD.reservation_after=NEW.reservation_after AND OLD.proof_attempts=NEW.proof_attempts AND OLD.source_key_epoch=NEW.source_key_epoch AND OLD.reserved_ms=NEW.reserved_ms AND OLD.verifier_v_upper=NEW.verifier_v_upper AND OLD.status='RESERVED' AND NEW.status='RESERVED' AND ((OLD.verifier_status='UNRESERVED' AND NEW.verifier_status='STARTED') OR (OLD.verifier_status='STARTED' AND NEW.verifier_status='UNKNOWN')) AND OLD.closed_ms IS NEW.closed_ms AND OLD.result_code IS NEW.result_code) OR (OLD.attempt_id=NEW.attempt_id AND OLD.batch_id=NEW.batch_id AND OLD.reservation_before=NEW.reservation_before AND OLD.reservation_after=NEW.reservation_after AND OLD.proof_attempts=NEW.proof_attempts AND OLD.source_key_epoch=NEW.source_key_epoch AND OLD.reserved_ms=NEW.reserved_ms AND OLD.verifier_v_upper=NEW.verifier_v_upper AND OLD.status='RESERVED' AND NEW.status IN ('ACCEPTED','REJECTED','HELD') AND NEW.closed_ms IS NOT NULL AND ((OLD.verifier_status='UNRESERVED' AND NEW.verifier_status='UNRESERVED') OR (OLD.verifier_status='STARTED' AND NEW.verifier_status IN ('COMPLETED','UNKNOWN')) OR (OLD.verifier_status='UNKNOWN' AND NEW.verifier_status='UNKNOWN')) AND (OLD.result_code IS NULL OR NEW.result_code=OLD.result_code OR NEW.result_code IS NOT NULL))) BEGIN SELECT RAISE(ABORT,'queue_attempt_transition_guard'); END"),
     ("queue_attempts_no_delete", "CREATE TRIGGER queue_attempts_no_delete BEFORE DELETE ON queue_attempts BEGIN SELECT RAISE(ABORT,'queue_attempt_delete_guard'); END"),
+    ("queue_source_admissions_transition_guard", "CREATE TRIGGER queue_source_admissions_transition_guard BEFORE UPDATE ON queue_source_admissions WHEN NOT (OLD.batch_id=NEW.batch_id AND OLD.profile_version=NEW.profile_version AND OLD.profile_digest=NEW.profile_digest AND OLD.source_auth_profile=NEW.source_auth_profile AND OLD.source_key_epoch=NEW.source_key_epoch AND OLD.proof_context=NEW.proof_context AND OLD.public_coin=NEW.public_coin AND OLD.request_digest=NEW.request_digest AND OLD.retry_limit=NEW.retry_limit AND OLD.source_configuration_digest=NEW.source_configuration_digest AND OLD.source_identity_profile=NEW.source_identity_profile AND OLD.source_executable_size_bytes=NEW.source_executable_size_bytes AND OLD.source_executable_sha256=NEW.source_executable_sha256 AND OLD.a_upper=NEW.a_upper AND OLD.s_upper=NEW.s_upper AND OLD.m_upper=NEW.m_upper AND OLD.u_issuances=NEW.u_issuances AND ((OLD.source_status='AUTHORIZED' AND NEW.source_status IN ('STARTED','UNKNOWN')) OR (OLD.source_status='STARTED' AND NEW.source_status IN ('COMPLETED','UNKNOWN')))) BEGIN SELECT RAISE(ABORT,'queue_source_admission_transition_guard'); END"),
+    ("queue_source_admissions_no_delete", "CREATE TRIGGER queue_source_admissions_no_delete BEFORE DELETE ON queue_source_admissions BEGIN SELECT RAISE(ABORT,'queue_source_admission_delete_guard'); END"),
     ("queue_metadata_config_guard", "CREATE TRIGGER queue_metadata_config_guard BEFORE UPDATE OF schema_version,queue_id,config_json,config_digest,admission_cap_bytes,process_tree_peak_cap_bytes,active_process_limit,page_size,max_page_count,journal_mode,synchronous,proof_attempts_cap ON queue_metadata BEGIN SELECT RAISE(ABORT,'queue_metadata_config_guard'); END"),
     ("composition_transactions_no_delete", "CREATE TRIGGER composition_transactions_no_delete BEFORE DELETE ON composition_transactions BEGIN SELECT RAISE(ABORT,'composition_append_only'); END"),
     ("composition_events_no_update", "CREATE TRIGGER composition_events_no_update BEFORE UPDATE ON composition_events BEGIN SELECT RAISE(ABORT,'composition_append_only'); END"),
@@ -256,6 +275,19 @@ def _u64le(value: int) -> bytes:
     if type(value) is not int or not 0 <= value < 2**64:
         _fail("integer")
     return value.to_bytes(8, "little")
+
+
+_SOURCE_CONFIGURATION_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/SOURCE-CONFIG/v1\x00"
+
+
+def _source_configuration_digest(*, identity_profile: str, executable_size_bytes: int, executable_sha256: bytes, retry_limit: int) -> bytes:
+    _token(identity_profile, "source_identity_profile", 64)
+    if type(executable_size_bytes) is not int or not 0 < executable_size_bytes < 5_000_000_000:
+        _fail("source_executable_identity")
+    _blob(executable_sha256, 32, "source_executable_identity")
+    if type(retry_limit) is not int or retry_limit != _SOURCE_ADMISSION_RETRY_LIMIT:
+        _fail("source_retry_policy")
+    return _sha(_SOURCE_CONFIGURATION_DOMAIN, identity_profile.encode("ascii"), _u64le(executable_size_bytes), executable_sha256, _u64le(retry_limit))
 
 
 def _blob(value: object, size: int, code: str) -> bytes:
@@ -410,6 +442,21 @@ def _identity_digest(batch: tuple[Any, ...], members: tuple[tuple[Any, ...], ...
     return _sha(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/BATCH-IDENTITY/v12\x00", _blob(_db_bytes(batch[0], "batch_id"), 32, "batch_id"), root, session_ref, public_coin, context, _template_bytes(batch), _u64(_COUNT), refs, _u64(int(batch[6])), _u64(int(batch[7])), str(config["source_auth_profile"]).encode("ascii"), _u64(int(config["source_key_epoch"])))
 
 
+def _expected_source_request_digest(batch: tuple[Any, ...], config: Mapping[str, Any]) -> bytes:
+    public_coin = _blob(_db_bytes(batch[18], "source_public_coin"), _PUBLIC_COIN_BYTES, "source_public_coin")
+    context = _profile12_context(
+        session_ref=_blob(_db_bytes(batch[2], "session_ref"), 64, "source_session_ref"),
+        batch_root=_blob(_db_bytes(batch[1], "batch_root"), 64, "source_batch_root"),
+        public_coin=public_coin,
+        valid_from_ms=_strict_int(batch[6], "source_window", minimum=0, maximum=_MAX_EPOCH),
+        valid_until_ms=_strict_int(batch[7], "source_window", minimum=0, maximum=_MAX_EPOCH),
+    )
+    request = _SOURCE_REQUEST_MAGIC + _u64le(int(config["source_key_epoch"])) + _SOURCE_ADMISSION_RETRY_LIMIT.to_bytes(4, "little") + context + public_coin
+    if len(request) != _SOURCE_REQUEST_BYTES:
+        _fail("source_request_shape")
+    return _sha(_SOURCE_REQUEST_DOMAIN, request)
+
+
 @dataclass(frozen=True, slots=True)
 class IndependentVerifiedQueueJob:
     queue_id: str
@@ -500,10 +547,11 @@ def _forbidden_bytes(blobs: tuple[bytes, ...]) -> None:
 def _verify_lifecycle(events: list[dict[str, Any]], status: str, attempt: int, *, reservation_before: int, reservation_after: int) -> None:
     if type(attempt) is not int or status not in _STATUSES:
         _fail("lifecycle_status")
-    issued = events[0] if events else None
+    if not events:
+        _fail("lifecycle_issue")
+    issued = events[0]
     if (
-        issued is None
-        or issued["kind"] != "BATCH_ISSUED"
+        issued["kind"] != "BATCH_ISSUED"
         or issued["status"] != "AWAITING_HANDOFF"
         or issued["attempt"] != 0
         or issued["error_code"] is not None
@@ -516,25 +564,75 @@ def _verify_lifecycle(events: list[dict[str, Any]], status: str, attempt: int, *
         or issued["reservation_after"] != issued["reservation_before"] + _PROOF_ATTEMPTS_PER_BATCH
     ):
         _fail("lifecycle_issue")
+
+    def check_event(event: dict[str, Any], kind: str, expected_status: str, expected_attempt: int) -> None:
+        if event["kind"] != kind or event["status"] != expected_status or event["attempt"] != expected_attempt or event["error_code"] is not None or event.get("member_count") != _COUNT:
+            _fail("lifecycle_event")
+
+    def check_terminal(event: dict[str, Any], kind: str, expected_status: str, expected_attempt: int) -> None:
+        if event["kind"] != kind or event["status"] != expected_status or event["attempt"] != expected_attempt or event.get("member_count") != _COUNT:
+            _fail("lifecycle_terminal")
+
+    position = 1
+    source_state: str | None = None
+    if position < len(events) and events[position]["kind"].startswith("SOURCE_"):
+        check_event(events[position], "SOURCE_AUTHORIZED", "AWAITING_HANDOFF", 0)
+        source_state = "AUTHORIZED"
+        position += 1
+        if position < len(events) and events[position]["kind"] == "SOURCE_STARTED":
+            check_event(events[position], "SOURCE_STARTED", "AWAITING_HANDOFF", 0)
+            source_state = "STARTED"
+            position += 1
+        if position < len(events) and events[position]["kind"] in {"SOURCE_COMPLETED", "SOURCE_UNKNOWN"}:
+            expected = events[position]["kind"]
+            check_event(events[position], expected, "AWAITING_HANDOFF", 0)
+            source_state = "COMPLETED" if expected == "SOURCE_COMPLETED" else "UNKNOWN"
+            position += 1
+        if position < len(events) and events[position]["kind"].startswith("SOURCE_"):
+            _fail("lifecycle_source")
+
+    if source_state == "UNKNOWN":
+        if status != "HELD" or attempt != 0 or position >= len(events):
+            _fail("lifecycle_source")
+        check_terminal(events[position], "BATCH_HELD", "HELD", 0)
+        if position + 1 != len(events):
+            _fail("lifecycle_terminal")
+        return
+    if source_state in {"AUTHORIZED", "STARTED"}:
+        if status != "AWAITING_HANDOFF" or attempt != 0 or position != len(events):
+            _fail("lifecycle_source")
+        return
     if status == "AWAITING_HANDOFF":
-        if attempt != 0 or len(events) != 1:
+        if attempt != 0 or position != len(events):
             _fail("lifecycle_awaiting")
         return
-    if status == "HELD" and attempt == 0 and len(events) == 2 and events[1]["kind"] == "BATCH_HELD" and events[1]["status"] == "HELD" and events[1]["attempt"] == 0:
+    if position < len(events) and events[position]["kind"] == "BATCH_HELD":
+        if status != "HELD" or attempt != 0:
+            _fail("lifecycle_prelease")
+        check_terminal(events[position], "BATCH_HELD", "HELD", 0)
+        if position + 1 != len(events):
+            _fail("lifecycle_terminal")
         return
-    if len(events) < 2 or events[1]["kind"] != "HANDOFF_SUBMITTED" or events[1]["status"] != "QUEUED" or events[1]["attempt"] != 0 or events[1]["error_code"] is not None:
+    if position >= len(events) or events[position]["kind"] != "HANDOFF_SUBMITTED":
         _fail("lifecycle_handoff")
+    check_event(events[position], "HANDOFF_SUBMITTED", "QUEUED", 0)
+    position += 1
+    if position < len(events) and events[position]["kind"] == "BATCH_HELD":
+        if status != "HELD" or attempt != 0:
+            _fail("lifecycle_prelease")
+        check_terminal(events[position], "BATCH_HELD", "HELD", 0)
+        if position + 1 != len(events):
+            _fail("lifecycle_terminal")
+        return
     if status == "QUEUED":
-        if attempt != 0 or len(events) != 2:
+        if attempt != 0 or position != len(events):
             _fail("lifecycle_queue")
         return
-    if status == "HELD" and attempt == 0 and len(events) == 3 and events[2]["kind"] == "BATCH_HELD" and events[2]["status"] == "HELD" and events[2]["attempt"] == 0:
-        return
-    started = events[2] if len(events) >= 3 else None
+    if position >= len(events) or events[position]["kind"] != "VERIFICATION_STARTED":
+        _fail("lifecycle_verification_started")
+    started = events[position]
     if (
-        started is None
-        or started["kind"] != "VERIFICATION_STARTED"
-        or started["status"] != "LEASED"
+        started["status"] != "LEASED"
         or started["attempt"] != 1
         or started["error_code"] is not None
         or type(started.get("reservation_before")) is not int
@@ -542,23 +640,45 @@ def _verify_lifecycle(events: list[dict[str, Any]], status: str, attempt: int, *
         or started["reservation_before"] != reservation_before
         or started["reservation_after"] != reservation_after
         or started["reservation_after"] != started["reservation_before"] + _PROOF_ATTEMPTS_PER_BATCH
+        or started.get("member_count") != _COUNT
     ):
         _fail("lifecycle_verification_started")
+    position += 1
+    verifier_state: str | None = None
+    if position < len(events) and events[position]["kind"] == "VERIFIER_STARTED":
+        check_event(events[position], "VERIFIER_STARTED", "LEASED", 1)
+        verifier_state = "STARTED"
+        position += 1
+        if position < len(events) and events[position]["kind"] in {"VERIFIER_COMPLETED", "VERIFIER_UNKNOWN"}:
+            expected = events[position]["kind"]
+            check_event(events[position], expected, "LEASED", 1)
+            verifier_state = "COMPLETED" if expected == "VERIFIER_COMPLETED" else "UNKNOWN"
+            position += 1
+    if position < len(events) and events[position]["kind"].startswith("VERIFIER_"):
+        _fail("lifecycle_verifier")
     if status == "LEASED":
-        if len(events) != 3 or attempt != 1:
+        if attempt != 1 or position != len(events) or verifier_state not in {None, "STARTED"}:
             _fail("lifecycle_leased")
         return
-    if attempt != 1 or len(events) != 4:
+    if attempt != 1:
         _fail("lifecycle_terminal")
-    terminal = events[3]
     if status in {"VERIFIED", "REJECTED"}:
-        if terminal["kind"] != "BATCH_COMPLETED" or terminal["status"] != status or terminal["attempt"] != 1:
-            _fail("lifecycle_completion")
+        if verifier_state not in {None, "COMPLETED"}:
+            _fail("lifecycle_verifier")
+        expected_kind = "BATCH_COMPLETED"
+        expected_status = status
     elif status == "HELD":
-        if terminal["kind"] != "BATCH_HELD" or terminal["status"] != "HELD" or terminal["attempt"] != 1:
-            _fail("lifecycle_held")
+        if verifier_state not in {None, "UNKNOWN"}:
+            _fail("lifecycle_verifier")
+        expected_kind = "BATCH_HELD"
+        expected_status = "HELD"
     else:
         _fail("lifecycle_status")
+    if position >= len(events):
+        _fail("lifecycle_terminal")
+    check_terminal(events[position], expected_kind, expected_status, 1)
+    if position + 1 != len(events):
+        _fail("lifecycle_terminal")
 
 
 def _verify_temporal_bindings(
@@ -583,18 +703,44 @@ def _verify_temporal_bindings(
     if event_times[0] != created or reserved != created:
         _fail("timestamp_binding")
 
+    positions = {event["kind"]: index for index, event in enumerate(events)}
     handoff_time: int | None = None
-    if len(events) >= 2 and events[1]["kind"] == "HANDOFF_SUBMITTED":
-        handoff_time = event_times[1]
+    if "HANDOFF_SUBMITTED" in positions:
+        handoff_index = positions["HANDOFF_SUBMITTED"]
+        if handoff_index != max(index for index, event in enumerate(events) if event["kind"] == "HANDOFF_SUBMITTED"):
+            _fail("timestamp_binding")
+        handoff_time = event_times[handoff_index]
     expected_next_eligible = created if handoff_time is None else handoff_time
     if next_eligible != expected_next_eligible:
         _fail("next_eligible_binding")
 
+    source_indices = [index for index, event in enumerate(events) if event["kind"].startswith("SOURCE_")]
+    if source_indices:
+        if source_indices[0] != 1 or any(index > (handoff_index - 1 if "HANDOFF_SUBMITTED" in positions else len(events) - 1) for index in source_indices):
+            _fail("source_temporal_binding")
+        source_kinds = [events[index]["kind"] for index in source_indices]
+        if source_kinds not in (["SOURCE_AUTHORIZED"], ["SOURCE_AUTHORIZED", "SOURCE_STARTED"], ["SOURCE_AUTHORIZED", "SOURCE_COMPLETED"], ["SOURCE_AUTHORIZED", "SOURCE_STARTED", "SOURCE_COMPLETED"], ["SOURCE_AUTHORIZED", "SOURCE_UNKNOWN"], ["SOURCE_AUTHORIZED", "SOURCE_STARTED", "SOURCE_UNKNOWN"]):
+            _fail("source_temporal_binding")
+        for index in source_indices:
+            if events[index]["status"] != "AWAITING_HANDOFF" or events[index]["attempt"] != 0:
+                _fail("source_temporal_binding")
+        if "SOURCE_STARTED" in positions:
+            source_started_time = event_times[positions["SOURCE_STARTED"]]
+            if not valid_from <= source_started_time < valid_until:
+                _fail("validity_deadline")
+        if "SOURCE_COMPLETED" in positions and "SOURCE_STARTED" in positions and event_times[positions["SOURCE_COMPLETED"]] < event_times[positions["SOURCE_STARTED"]]:
+            _fail("source_temporal_binding")
+        if "SOURCE_UNKNOWN" in positions and "SOURCE_STARTED" in positions and event_times[positions["SOURCE_UNKNOWN"]] < event_times[positions["SOURCE_STARTED"]]:
+            _fail("source_temporal_binding")
+
     status = str(batch[11])
     started_time: int | None = None
     lease_deadline: int | None = None
-    if len(events) >= 3 and events[2]["kind"] == "VERIFICATION_STARTED":
-        started_time = event_times[2]
+    verification_index = positions.get("VERIFICATION_STARTED")
+    if verification_index is not None:
+        if "HANDOFF_SUBMITTED" not in positions or verification_index <= positions["HANDOFF_SUBMITTED"]:
+            _fail("timestamp_binding")
+        started_time = event_times[verification_index]
         if started_time > _MAX_EPOCH - _LEASE_MS or not valid_from <= started_time < valid_until:
             _fail("validity_deadline")
         lease_deadline = started_time + _LEASE_MS
@@ -602,13 +748,29 @@ def _verify_temporal_bindings(
             _fail("lease_binding")
         if lease is not None and (
             _strict_int(lease[3], "lease_binding", minimum=0, maximum=1) != 1
-            or _strict_int(lease[4], "lease_binding", minimum=0, maximum=_MAX_EPOCH) != _strict_int(events[2]["sequence"], "lease_binding", minimum=0, maximum=_MAX_EPOCH)
+            or _strict_int(lease[4], "lease_binding", minimum=0, maximum=_MAX_EPOCH) != _strict_int(events[verification_index]["sequence"], "lease_binding", minimum=0, maximum=_MAX_EPOCH)
             or _strict_int(lease[5], "lease_binding", minimum=0, maximum=_MAX_EPOCH) != started_time
             or _strict_int(lease[6], "lease_binding", minimum=0, maximum=_MAX_EPOCH) != lease_deadline
         ):
             _fail("lease_binding")
     elif lease is not None:
         _fail("lease_binding")
+
+    verifier_indices = [index for index, event in enumerate(events) if event["kind"].startswith("VERIFIER_")]
+    if verifier_indices:
+        if verification_index is None or verifier_indices[0] != verification_index + 1:
+            _fail("verifier_temporal_binding")
+        terminal_index = min((index for index, event in enumerate(events) if event["kind"] in {"BATCH_COMPLETED", "BATCH_HELD"}), default=len(events))
+        if any(index >= terminal_index for index in verifier_indices):
+            _fail("verifier_temporal_binding")
+        verifier_kinds = [events[index]["kind"] for index in verifier_indices]
+        if verifier_kinds not in (["VERIFIER_STARTED"], ["VERIFIER_STARTED", "VERIFIER_COMPLETED"], ["VERIFIER_STARTED", "VERIFIER_UNKNOWN"]):
+            _fail("verifier_temporal_binding")
+        verifier_start_time = event_times[verifier_indices[0]]
+        if started_time is None or verifier_start_time < started_time or lease_deadline is None or verifier_start_time >= lease_deadline:
+            _fail("verifier_temporal_binding")
+        if len(verifier_indices) == 2 and event_times[verifier_indices[1]] < verifier_start_time:
+            _fail("verifier_temporal_binding")
 
     if status == "AWAITING_HANDOFF":
         if updated != created:
@@ -661,9 +823,16 @@ def _verify_terminal_bindings(
     """Bind terminal status, error, receipt, and acceptance fields to the producer state machine."""
 
     status = str(batch[11])
+    verifier_event_kinds = [event["kind"] for event in events if event["kind"].startswith("VERIFIER_")]
+    if verifier_event_kinds not in ([], ["VERIFIER_STARTED"], ["VERIFIER_STARTED", "VERIFIER_COMPLETED"], ["VERIFIER_STARTED", "VERIFIER_UNKNOWN"]):
+        _fail("verifier_status")
+    verifier_status = str(attempt_row[10])
+    expected_active_verifier_statuses = {"UNRESERVED", "STARTED"}
     if status in {"AWAITING_HANDOFF", "QUEUED", "LEASED"}:
         if batch[17] is not None or attempt_row[9] is not None:
             _fail("terminal_error_binding")
+        if (status in {"AWAITING_HANDOFF", "QUEUED"} and verifier_status != "UNRESERVED") or (status == "LEASED" and verifier_status not in expected_active_verifier_statuses):
+            _fail("verifier_status")
         return
     if result is None or not events:
         _fail("terminal_result_missing")
@@ -679,10 +848,10 @@ def _verify_terminal_bindings(
     proof_accepted = bool(result[4])
     source_authenticated = bool(result[5])
     if status == "VERIFIED":
-        if values[0] is not None or str(attempt_row[6]) != "ACCEPTED" or str(attempt_row[9]) != "accepted" or str(result[9]) != "accepted" or not (proof_accepted and source_authenticated) or receipt["error_code"] is not None or receipt["result_code"] != "accepted":
+        if values[0] is not None or str(attempt_row[6]) != "ACCEPTED" or str(attempt_row[9]) != "accepted" or str(result[9]) != "accepted" or not (proof_accepted and source_authenticated) or receipt["error_code"] is not None or receipt["result_code"] != "accepted" or verifier_status != ("COMPLETED" if verifier_event_kinds else "UNRESERVED"):
             _fail("terminal_acceptance")
     elif status == "REJECTED":
-        if values[0] is None or str(attempt_row[6]) != "REJECTED" or str(attempt_row[9]) != "rejected" or str(result[9]) != "rejected" or (proof_accepted and source_authenticated) or receipt["result_code"] != "rejected":
+        if values[0] is None or str(attempt_row[6]) != "REJECTED" or str(attempt_row[9]) != "rejected" or str(result[9]) != "rejected" or (proof_accepted and source_authenticated) or receipt["result_code"] != "rejected" or verifier_status != ("COMPLETED" if verifier_event_kinds else "UNRESERVED"):
             _fail("terminal_rejection")
     elif status == "HELD":
         result_code = result_codes[0]
@@ -697,6 +866,7 @@ def _verify_terminal_bindings(
             or str(attempt_row[6]) != "HELD"
             or proof_accepted
             or source_authenticated
+            or verifier_status != ("UNKNOWN" if verifier_event_kinds else "UNRESERVED")
         ):
             _fail("terminal_hold")
     else:
@@ -827,6 +997,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         or _strict_int(meta[11], "metadata") != 2
         or _strict_int(meta[18], "metadata") != _PROOF_ATTEMPTS_CAP
         or _strict_int(meta[19], "metadata", minimum=0) < 0
+        or any(_strict_int(meta[index], "metadata", minimum=0, maximum=_PROOF_ATTEMPTS_CAP) < 0 for index in (20, 21, 22, 23, 24))
     ):
         _fail("metadata")
     config_raw = _db_bytes(meta[3], "config")
@@ -842,9 +1013,10 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
     member_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_members ORDER BY admission_seq").fetchall()]
     lease_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_leases").fetchall()]
     attempt_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_attempts ORDER BY attempt_id").fetchall()]
+    source_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_source_admissions ORDER BY batch_id").fetchall()]
     result_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_results").fetchall()]
     transition_rows = [tuple(row) for row in connection.execute("SELECT * FROM queue_transitions ORDER BY sequence").fetchall()]
-    for index in (0, 1, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 18, 19):
+    for index in (0, 1, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24):
         _strict_int(meta[index], "metadata")
     for row in batch_rows:
         for index in (4, 6, 7, 12, 13, 14, 15, 16):
@@ -856,10 +1028,13 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         for index in (3, 4, 5, 6):
             _strict_int(row[index], "lease_numeric")
     for row in attempt_rows:
-        for index in (0, 2, 3, 4, 7):
+        for index in (0, 2, 3, 4, 7, 11):
             _strict_int(row[index], "attempt_numeric")
         if row[8] is not None:
             _strict_int(row[8], "attempt_numeric")
+    for row in source_rows:
+        for index in (8, 11, 13, 14, 15, 16):
+            _strict_int(row[index], "source_numeric")
     for row in result_rows:
         for index in (4, 5, 11, 12):
             _strict_int(row[index], "result_numeric")
@@ -915,6 +1090,53 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         status_counts[str(row[11])] += 1
         _code(row[17], "batch_last_error") if row[17] is not None else None
         _forbidden_bytes((_db_bytes(row[9], "flags"), str(row[17]).encode("ascii") if row[17] is not None else b""))
+    source_map: dict[bytes, tuple[Any, ...]] = {}
+    for source in source_rows:
+        batch_id = _blob(_db_bytes(source[0], "source_batch_id"), 32, "source_batch_id")
+        if batch_id in source_map or batch_id not in batch_map:
+            _fail("source_batch_binding")
+        batch = batch_map[batch_id]
+        if _token(source[1], "source_profile_version", 96) != config["profile_version"]:
+            _fail("source_profile_binding")
+        if type(batch[5]) is not str or batch[5] != source[1]:
+            _fail("source_profile_binding")
+        if _blob(_db_bytes(source[2], "source_profile_digest"), 64, "source_profile_digest") != _parse_hex(config["profile_digest"], 64, "source_profile_digest"):
+            _fail("source_profile_binding")
+        if type(source[3]) is not str or source[3] != config["source_auth_profile"]:
+            _fail("source_profile_binding")
+        if _epoch(source[4], "source_key_epoch") != int(config["source_key_epoch"]):
+            _fail("source_key_epoch")
+        expected_context = _profile12_context(session_ref=_blob(_db_bytes(batch[2], "source_session_ref"), 64, "source_session_ref"), batch_root=_blob(_db_bytes(batch[1], "source_batch_root"), 64, "source_batch_root"), public_coin=_blob(_db_bytes(batch[18], "source_public_coin"), _PUBLIC_COIN_BYTES, "source_public_coin"), valid_from_ms=int(batch[6]), valid_until_ms=int(batch[7]))
+        if _blob(_db_bytes(source[5], "source_context"), _PROOF_CONTEXT_BYTES, "source_context") != expected_context or _blob(_db_bytes(source[6], "source_public_coin"), _PUBLIC_COIN_BYTES, "source_public_coin") != _db_bytes(batch[18], "source_public_coin"):
+            _fail("source_batch_binding")
+        if _blob(_db_bytes(source[7], "source_request_digest"), 64, "source_request_digest") != _expected_source_request_digest(batch, config):
+            _fail("source_request_binding")
+        if _strict_int(source[8], "source_retry_policy") != _SOURCE_ADMISSION_RETRY_LIMIT:
+            _fail("source_retry_policy")
+        source_identity_profile = _token(source[10], "source_identity_profile", 64)
+        pin = _SOURCE_IDENTITY_PINS.get(source_identity_profile)
+        if pin is None or _strict_int(source[11], "source_executable_identity") != pin[0] or _blob(_db_bytes(source[12], "source_executable_identity"), 32, "source_executable_identity") != pin[1]:
+            _fail("source_executable_identity")
+        if _blob(_db_bytes(source[9], "source_configuration_digest"), 64, "source_configuration_digest") != _source_configuration_digest(identity_profile=source_identity_profile, executable_size_bytes=int(source[11]), executable_sha256=_db_bytes(source[12], "source_executable_identity"), retry_limit=int(source[8])):
+            _fail("source_configuration_binding")
+        if tuple(source[13:17]) != (_SOURCE_ADMISSION_A_UPPER, _SOURCE_ADMISSION_S_UPPER, _SOURCE_ADMISSION_M_UPPER, _SOURCE_ADMISSION_U_ISSUANCES):
+            _fail("source_admission_bounds")
+        if type(source[17]) is not str or source[17] not in _SOURCE_STATUSES:
+            _fail("source_status")
+        source_map[batch_id] = source
+    if int(meta[20]) != sum(int(row[13]) for row in source_rows) or int(meta[21]) != sum(int(row[14]) for row in source_rows) or int(meta[22]) != sum(int(row[15]) for row in source_rows) or int(meta[23]) != len(batch_rows) or int(meta[24]) != sum(1 for row in attempt_rows if str(row[10]) != "UNRESERVED"):
+        _fail("source_accounting")
+    if len(source_rows) > len(batch_rows):
+        _fail("source_cardinality")
+    for batch_id, source in source_map.items():
+        status = str(batch_map[batch_id][11])
+        source_status = str(source[17])
+        if source_status in {"AUTHORIZED", "STARTED"} and status != "AWAITING_HANDOFF":
+            _fail("source_status_binding")
+        if source_status == "UNKNOWN" and status != "HELD":
+            _fail("source_status_binding")
+        if source_status == "COMPLETED" and status not in _STATUSES:
+            _fail("source_status_binding")
     result_map = {_blob(_db_bytes(row[0], "result_batch_id"), 32, "result_batch_id"): row for row in result_rows}
     if len(result_map) != len(result_rows):
         _fail("result_duplicate")
@@ -984,7 +1206,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             _fail("attempt_chain")
         before, after, proof_attempts = row[2], row[3], row[4]
         attempt_epoch = _epoch(row[5], "attempt_source_epoch")
-        if int(row[0]) != expected_id or batch_id not in batch_map or before != previous_after or after != before + _PROOF_ATTEMPTS_PER_BATCH or proof_attempts != _PROOF_ATTEMPTS_PER_BATCH or not 1 <= attempt_epoch <= _MAX_EPOCH or str(row[6]) not in {"RESERVED", "ACCEPTED", "REJECTED", "HELD"} or int(row[7]) < 0 or (row[8] is not None and int(row[8]) < int(row[7])):
+        if int(row[0]) != expected_id or batch_id not in batch_map or before != previous_after or after != before + _PROOF_ATTEMPTS_PER_BATCH or proof_attempts != _PROOF_ATTEMPTS_PER_BATCH or not 1 <= attempt_epoch <= _MAX_EPOCH or str(row[6]) not in {"RESERVED", "ACCEPTED", "REJECTED", "HELD"} or int(row[7]) < 0 or (row[8] is not None and int(row[8]) < int(row[7])) or str(row[10]) not in {"UNRESERVED", "STARTED", "COMPLETED", "UNKNOWN"} or int(row[11]) != _VERIFIER_LAUNCH_V_UPPER:
             _fail("attempt_chain")
         previous_after = after
         batch = batch_map[batch_id]
@@ -1028,7 +1250,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             event = json.loads(_db_bytes(row[5], "event").decode("ascii"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             _fail("transition_encoding")
-        if type(event) is not dict or _db_bytes(row[5], "event") != _json_bytes(event) or event.get("schema") != _SCHEMA or type(event.get("sequence")) is not int or event.get("sequence") != index or event.get("batch_id") != _hex(batch_id) or event.get("kind") != str(row[1]) or event.get("status") not in _STATUSES or type(event.get("attempt")) is not int or not 0 <= event["attempt"] <= 1 or type(event.get("at_ms")) is not int or event["at_ms"] < 0:
+        if type(event) is not dict or _db_bytes(row[5], "event") != _json_bytes(event) or event.get("schema") != _SCHEMA or type(event.get("sequence")) is not int or event.get("sequence") != index or event.get("batch_id") != _hex(batch_id) or event.get("kind") != str(row[1]) or event.get("kind") not in _EVENT_KINDS or event.get("status") not in _STATUSES or type(event.get("attempt")) is not int or not 0 <= event["attempt"] <= 1 or type(event.get("at_ms")) is not int or event["at_ms"] < 0:
             _fail("transition_binding")
         allowed = {"schema", "sequence", "kind", "batch_id", "status", "error_code", "attempt", "at_ms", "member_count", "reservation_before", "reservation_after", "receipt_id", "identity_digest"}
         if set(event) - allowed or event.get("member_count") != _COUNT:
@@ -1054,6 +1276,40 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         _forbidden_bytes((_db_bytes(row[5], "event"),))
     if _db_bytes(meta[12], "head_root") != expected_head or int(meta[13]) != len(transition_rows) or int(meta[14]) != len(batch_rows) * _COUNT:
         _fail("head_binding")
+    verifier_started_count = 0
+    for batch_id, events in events_by_batch.items():
+        source_kinds = [event["kind"] for event in events if event["kind"].startswith("SOURCE_")]
+        source = source_map.get(batch_id)
+        if source is None:
+            if source_kinds:
+                _fail("source_event_binding")
+        else:
+            expected_source_kinds = {
+                "AUTHORIZED": ["SOURCE_AUTHORIZED"],
+                "STARTED": ["SOURCE_AUTHORIZED", "SOURCE_STARTED"],
+                "COMPLETED": ["SOURCE_AUTHORIZED", "SOURCE_STARTED", "SOURCE_COMPLETED"],
+                "UNKNOWN": ["SOURCE_AUTHORIZED", "SOURCE_UNKNOWN"],
+            }
+            if str(source[17]) == "UNKNOWN" and source_kinds == ["SOURCE_AUTHORIZED", "SOURCE_STARTED", "SOURCE_UNKNOWN"]:
+                pass
+            elif source_kinds != expected_source_kinds.get(str(source[17])):
+                _fail("source_event_binding")
+        attempt_row = attempt_map.get(batch_id)
+        if attempt_row is None:
+            _fail("attempt_missing")
+        verifier_kinds = [event["kind"] for event in events if event["kind"].startswith("VERIFIER_")]
+        if verifier_kinds:
+            verifier_started_count += verifier_kinds.count("VERIFIER_STARTED")
+        expected_verifier_kinds = {
+            "UNRESERVED": [],
+            "STARTED": ["VERIFIER_STARTED"],
+            "COMPLETED": ["VERIFIER_STARTED", "VERIFIER_COMPLETED"],
+            "UNKNOWN": ["VERIFIER_STARTED", "VERIFIER_UNKNOWN"],
+        }
+        if verifier_kinds != expected_verifier_kinds.get(str(attempt_row[10])):
+            _fail("verifier_event_binding")
+    if verifier_started_count != int(meta[24]):
+        _fail("verifier_accounting")
     expected_issue_order = [batch_id for batch_id, _row in sorted(batch_map.items(), key=lambda item: int(item[1][12]))]
     issue_records: list[tuple[int, bytes]] = []
     for batch_id, events in events_by_batch.items():
@@ -1083,7 +1339,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         )
         _verify_terminal_bindings(row, attempt_row, result_map.get(batch_id), events_by_batch[batch_id])
     composition = _verify_composition(connection, config=config, queue_config_digest=config_digest, batch_map=batch_map, member_groups=member_groups)
-    return {"schema": _SCHEMA, "config": config, "config_digest": config_digest, "meta": tuple(meta), "batches": batch_map, "members": member_groups, "results": result_map, "transitions": transition_rows, "events": events_by_batch, "composition": composition, "head_root": _db_bytes(meta[12], "head_root"), "status_counts": status_counts, "transition_count": len(transition_rows), "verified_batch_count": status_counts["VERIFIED"], "accepted_operation_count": status_counts["VERIFIED"] * _COUNT, "verified_count": status_counts["VERIFIED"], "proof_bytes_persisted": False, "path_custody": False, "proof_suite_id": None, "production_usable": False, "activation": False}
+    return {"schema": _SCHEMA, "config": config, "config_digest": config_digest, "meta": tuple(meta), "batches": batch_map, "members": member_groups, "source_admissions": source_map, "results": result_map, "transitions": transition_rows, "events": events_by_batch, "composition": composition, "head_root": _db_bytes(meta[12], "head_root"), "status_counts": status_counts, "transition_count": len(transition_rows), "verified_batch_count": status_counts["VERIFIED"], "accepted_operation_count": status_counts["VERIFIED"] * _COUNT, "verified_count": status_counts["VERIFIED"], "source_admission_count": len(source_map), "source_accounting": {"a_used": int(meta[20]), "s_used": int(meta[21]), "m_used": int(meta[22]), "u_used": int(meta[23]), "v_used": int(meta[24])}, "proof_bytes_persisted": False, "path_custody": False, "proof_suite_id": None, "production_usable": False, "activation": False}
 
 
 def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:

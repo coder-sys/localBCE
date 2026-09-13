@@ -17,6 +17,8 @@ from app.minimal_clearance_verification_queue import (
     OperationTemplate,
     QueueClock,
     QueueConfig,
+    SourceAdmission,
+    SourceLaunchAuthorization,
     VerificationQueueError,
     VerificationOutcome,
     VolatileProofHandoff,
@@ -384,6 +386,18 @@ class MinimalClearanceVerificationRuntime:
     def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: VolatileProofHandoff) -> IssuedVerificationBatch:
         with self._operation():
             return self._store.submit_batch_handoff(issued_batch=issued_batch, proof_stream=proof_stream)
+
+    def admit_source_launch(self, *, batch: IssuedVerificationBatch, request_digest: bytes, retry_limit: int, source_configuration_digest: bytes, source_identity_profile: str, source_executable_size_bytes: int, source_executable_sha256: bytes) -> SourceAdmission:
+        with self._operation():
+            return self._store.admit_source_launch(batch=batch, request_digest=request_digest, retry_limit=retry_limit, source_configuration_digest=source_configuration_digest, source_identity_profile=source_identity_profile, source_executable_size_bytes=source_executable_size_bytes, source_executable_sha256=source_executable_sha256)
+
+    def start_source_launch(self, *, admission: SourceAdmission) -> SourceLaunchAuthorization:
+        with self._operation():
+            return self._store.start_source_launch(admission=admission)
+
+    def finish_source_launch(self, *, authorization: SourceLaunchAuthorization, success: bool) -> None:
+        with self._operation():
+            self._store.finish_source_launch(authorization=authorization, success=success)
 
     def _verify_integrity(self) -> None:
         with self._operation():

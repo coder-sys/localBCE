@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import closing
+from dataclasses import replace
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -19,15 +20,20 @@ from app.minimal_clearance_verification_queue import (
     PROOF_ATTEMPTS_CAP,
     PROOF_ATTEMPTS_PER_BATCH,
     PROFILE_FINGERPRINT,
+    SOURCE_ADMISSION_RETRY_LIMIT,
     QueueBackpressureError,
     QueueConfig,
     QueueIntegrityError,
     QueueHeldError,
+    QueueLeaseError,
+    QueueConflictError,
+    SourceAdmission,
     VerificationQueueError,
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
     _VerificationQueueStore,
     _reserve_proof_attempt,
+    source_configuration_digest,
 )
 from app.minimal_clearance_verification_queue_independent import (
     _verify_connection,
@@ -39,6 +45,12 @@ from app.minimal_clearance_verification_queue_independent import (
     verify_export_bytes,
 )
 from app.minimal_clearance_verification_queue_independent import IndependentQueueError
+from tools.direct_mask_complete_path.source_boundary import (
+    SOURCE_APPLIANCE_EXECUTABLE_SHA256,
+    SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
+    build_source_request,
+    source_request_digest,
+)
 
 
 _IMMUTABLE_V11_PRODUCT = Path(r"C:\Users\neers\Documents\Codex\2026-08-30\cleanup-v2\work\aggressive-obsolete-removal-20260907")
@@ -128,6 +140,29 @@ class Profile12StateTests(unittest.TestCase):
 
     def _template(self) -> OperationTemplate:
         return OperationTemplate("profile12-assertion", 1, self.config.profile_version, self.clock.now - 100, self.clock.now + 60_000)
+
+    def _source_arguments(self, batch: object) -> dict[str, object]:
+        request = build_source_request(batch=batch, source_key_epoch=self.config.source_key_epoch)  # type: ignore[arg-type]
+        try:
+            request_digest = source_request_digest(request)
+        finally:
+            for index in range(len(request)):
+                request[index] = 0
+            request.clear()
+        executable_sha256 = SOURCE_APPLIANCE_EXECUTABLE_SHA256
+        return {
+            "request_digest": request_digest,
+            "retry_limit": SOURCE_ADMISSION_RETRY_LIMIT,
+            "source_configuration_digest": source_configuration_digest(
+                identity_profile="accepted",
+                executable_size_bytes=SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
+                executable_sha256=executable_sha256,
+                retry_limit=SOURCE_ADMISSION_RETRY_LIMIT,
+            ),
+            "source_identity_profile": "accepted",
+            "source_executable_size_bytes": SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
+            "source_executable_sha256": executable_sha256,
+        }
 
     def _verified_batch(self, *, valid_from_ms: int | None = None, valid_until_ms: int | None = None) -> object:
         start = self.clock.now - 100 if valid_from_ms is None else valid_from_ms
@@ -441,6 +476,165 @@ class Profile12StateTests(unittest.TestCase):
                 _reserve_proof_attempt(used)
         with self.assertRaisesRegex(VerificationQueueError, "proof_attempt_ledger"):
             _reserve_proof_attempt(-1)
+
+    def test_source_admission_replay_is_single_use_and_verifier_claim_is_nonrefundable(self) -> None:
+        batch = self.store.issue_batch(template=self._template())
+        arguments = self._source_arguments(batch)
+        admission = self.store.admit_source_launch(batch=batch, **arguments)
+        self.assertIsInstance(admission, SourceAdmission)
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT source_a_used,source_s_used,source_m_used,source_u_used,verifier_v_used FROM queue_metadata").fetchone(), (1, 4_096, 100, 1, 0))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_source_admissions").fetchone()[0], 1)
+            self.assertEqual(tuple(row[0] for row in connection.execute("SELECT transition_kind FROM queue_transitions ORDER BY sequence")), ("BATCH_ISSUED", "SOURCE_AUTHORIZED"))
+
+        replay = self.store.admit_source_launch(batch=batch, **arguments)
+        self.assertEqual(replay, admission)
+        mutated_arguments = dict(arguments)
+        mutated_arguments["request_digest"] = bytes([arguments["request_digest"][0] ^ 1]) + arguments["request_digest"][1:]  # type: ignore[index]
+        with self.assertRaisesRegex(QueueIntegrityError, "source_request_binding"):
+            self.store.admit_source_launch(batch=batch, **mutated_arguments)
+
+        authorization = self.store.start_source_launch(admission=admission)
+        self.assertFalse(authorization.consumed)
+        with self.assertRaisesRegex(QueueConflictError, "fresh_handoff_required"):
+            self.store.start_source_launch(admission=admission)
+        authorization.consume()
+        with self.assertRaisesRegex(QueueConflictError, "source_authorization_used"):
+            authorization.consume()
+        self.store.finish_source_launch(authorization=authorization, success=True)
+        self.store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"source-admission-proof")))
+        work = self.store._claim_next_batch()
+        self.assertIsNotNone(work)
+        assert work is not None
+        self.store._reserve_verifier_launch(work)
+        with self.assertRaisesRegex(QueueLeaseError, "completion_not_live"):
+            self.store._reserve_verifier_launch(work)
+        verifier_result = BatchVerifierResult(True, True, batch.proof_context, batch.public_coin, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", self.config.qualification_flags)
+        self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=_controls(batch.operation_refs))
+
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT source_status FROM queue_source_admissions WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "COMPLETED")
+            self.assertEqual(connection.execute("SELECT status,verifier_status FROM queue_attempts WHERE batch_id=?", (batch.batch_id,)).fetchone(), ("ACCEPTED", "COMPLETED"))
+            self.assertEqual(connection.execute("SELECT source_a_used,source_s_used,source_m_used,source_u_used,verifier_v_used FROM queue_metadata").fetchone(), (1, 4_096, 100, 1, 1))
+        verified = verify_database(self.root / "state.sqlite", expected_config=self.config.as_json)
+        self.assertEqual(verified["source_accounting"], {"a_used": 1, "s_used": 4_096, "m_used": 100, "u_used": 1, "v_used": 1})
+        self.assertEqual(verified["source_admission_count"], 1)
+
+    def test_source_admission_rejects_version_request_and_executable_identity_mutations(self) -> None:
+        batch = self.store.issue_batch(template=self._template())
+        admission = self.store.admit_source_launch(batch=batch, **self._source_arguments(batch))
+        for field_name, value, code in (
+            ("profile_version", "BLIND-DIRECT-MASK-FAEST256F-DEG3-V0", "source_profile_version"),
+            ("profile_digest", bytes(64), "source_profile_digest"),
+            ("request_digest", b"r" * 64, "source_request_binding"),
+            ("source_identity_profile", "accepted-alt", "source_configuration_digest"),
+            ("source_executable_sha256", b"x" * 32, "source_configuration_digest"),
+        ):
+            with self.subTest(field=field_name):
+                with self.assertRaisesRegex(QueueIntegrityError, code):
+                    replace(admission, **{field_name: value})
+
+    def test_source_completion_postcommit_fault_holds_without_reproof(self) -> None:
+        batch = self.store.issue_batch(template=self._template())
+        admission = self.store.admit_source_launch(batch=batch, **self._source_arguments(batch))
+        authorization = self.store.start_source_launch(admission=admission)
+        authorization.consume()
+        self.store._after_commit_fault = lambda label: (_ for _ in ()).throw(RuntimeError("completion postcommit")) if label == "after_source_complete" else None
+        with self.assertRaisesRegex(RuntimeError, "completion postcommit"):
+            self.store.finish_source_launch(authorization=authorization, success=True)
+        self.store._after_commit_fault = None
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status,last_error_code FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone(), ("HELD", "fresh_handoff_required"))
+            self.assertEqual(connection.execute("SELECT source_status FROM queue_source_admissions WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "COMPLETED")
+        verify_database(self.root / "state.sqlite", expected_config=self.config.as_json)
+
+    def test_ambiguous_source_cannot_submit_a_verifier_handoff(self) -> None:
+        batch = self.store.issue_batch(template=self._template())
+        admission = self.store.admit_source_launch(batch=batch, **self._source_arguments(batch))
+        self.store.start_source_launch(admission=admission)
+        handoff = VolatileProofHandoff(bytearray(b"ambiguous-source"))
+        with self.assertRaisesRegex(QueueConflictError, "fresh_handoff_required"):
+            self.store.submit_batch_handoff(issued_batch=batch, proof_stream=handoff)
+        self.assertTrue(handoff.closed)
+        self.assertEqual(len(handoff._buffer), 0)
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status,last_error_code FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone(), ("HELD", "fresh_handoff_required"))
+            self.assertEqual(connection.execute("SELECT source_status FROM queue_source_admissions WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "UNKNOWN")
+        verify_database(self.root / "state.sqlite", expected_config=self.config.as_json)
+
+    def test_source_admission_faults_and_startup_recovery_fail_closed(self) -> None:
+        batch = self.store.issue_batch(template=self._template())
+        arguments = self._source_arguments(batch)
+        self.store._before_fault = lambda label: (_ for _ in ()).throw(RuntimeError("admission precommit")) if label == "before_source_admission_commit" else None
+        with self.assertRaisesRegex(RuntimeError, "admission precommit"):
+            self.store.admit_source_launch(batch=batch, **arguments)
+        self.store._before_fault = None
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_source_admissions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT source_a_used,source_s_used,source_m_used,source_u_used,verifier_v_used FROM queue_metadata").fetchone(), (0, 0, 0, 1, 0))
+        verify_database(self.root / "state.sqlite", expected_config=self.config.as_json)
+
+        self.store._after_commit_fault = lambda label: (_ for _ in ()).throw(RuntimeError("admission postcommit")) if label == "after_source_admission" else None
+        with self.assertRaisesRegex(RuntimeError, "admission postcommit"):
+            self.store.admit_source_launch(batch=batch, **arguments)
+        self.store._after_commit_fault = None
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status,last_error_code FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone(), ("AWAITING_HANDOFF", None))
+            self.assertEqual(connection.execute("SELECT source_status FROM queue_source_admissions WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "AUTHORIZED")
+        admission = self.store.admit_source_launch(batch=batch, **arguments)
+        self.store._after_commit_fault = lambda label: (_ for _ in ()).throw(RuntimeError("admission postcommit")) if label == "after_source_start" else None
+        with self.assertRaisesRegex(RuntimeError, "admission postcommit"):
+            self.store.start_source_launch(admission=admission)
+        self.store._after_commit_fault = None
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT status,last_error_code FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone(), ("HELD", "fresh_handoff_required"))
+            self.assertEqual(connection.execute("SELECT source_status FROM queue_source_admissions WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "UNKNOWN")
+        verify_database(self.root / "state.sqlite", expected_config=self.config.as_json)
+
+        recovery_temp = tempfile.TemporaryDirectory()
+        recovery_root = Path(recovery_temp.name)
+        recovery_clock = _Clock()
+        recovery_config = QueueConfig("profile12-source-recovery", 100)
+        recovery_composition = CompositionConfigV2(recovery_config.queue_id, recovery_config.digest, capacity=100)
+        recovery_owner = _QueueRuntimeOwnership(lock_path=recovery_root / "state.sqlite.runtime-lock", parent=recovery_root)
+        recovery_store = _VerificationQueueStore(path=recovery_root / "state.sqlite", config=recovery_config, owner=recovery_owner, clock=recovery_clock, composition_config=recovery_composition)
+        try:
+            recovery_batch = recovery_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, recovery_config.profile_version, recovery_clock.now - 100, recovery_clock.now + 60_000))
+            recovery_request = build_source_request(batch=recovery_batch, source_key_epoch=recovery_config.source_key_epoch)
+            try:
+                recovery_digest = source_request_digest(recovery_request)
+            finally:
+                for index in range(len(recovery_request)):
+                    recovery_request[index] = 0
+                recovery_request.clear()
+            recovery_arguments = {
+                "request_digest": recovery_digest,
+                "retry_limit": SOURCE_ADMISSION_RETRY_LIMIT,
+                "source_configuration_digest": source_configuration_digest(identity_profile="accepted", executable_size_bytes=SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES, executable_sha256=SOURCE_APPLIANCE_EXECUTABLE_SHA256, retry_limit=SOURCE_ADMISSION_RETRY_LIMIT),
+                "source_identity_profile": "accepted",
+                "source_executable_size_bytes": SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES,
+                "source_executable_sha256": SOURCE_APPLIANCE_EXECUTABLE_SHA256,
+            }
+            recovery_admission = recovery_store.admit_source_launch(batch=recovery_batch, **recovery_arguments)
+            recovery_store.start_source_launch(admission=recovery_admission)
+            recovery_store._close()
+            recovery_owner.close()
+            reopened_owner = _QueueRuntimeOwnership(lock_path=recovery_root / "state.sqlite.runtime-lock", parent=recovery_root)
+            reopened = _VerificationQueueStore(path=recovery_root / "state.sqlite", config=recovery_config, owner=reopened_owner, clock=recovery_clock, composition_config=recovery_composition)
+            try:
+                self.assertEqual(reopened._startup_recovered_count, 1)
+                with closing(sqlite3.connect(str(recovery_root / "state.sqlite"))) as connection:
+                    self.assertEqual(connection.execute("SELECT status,last_error_code FROM queue_batches").fetchone(), ("HELD", "fresh_handoff_required"))
+                    self.assertEqual(connection.execute("SELECT source_status FROM queue_source_admissions").fetchone()[0], "UNKNOWN")
+                verify_database(recovery_root / "state.sqlite", expected_config=recovery_config.as_json)
+            finally:
+                reopened._close()
+                reopened_owner.close()
+        finally:
+            if not recovery_store._closed:
+                recovery_store._close()
+            recovery_owner.close()
+            recovery_temp.cleanup()
 
     def test_hold_at_issue_burns_reservation_without_refund(self) -> None:
         batch = self.store.issue_batch(template=self._template())
@@ -817,7 +1011,7 @@ class Profile12StateTests(unittest.TestCase):
                     connection.execute("DELETE FROM queue_attempts WHERE batch_id=?", (batch.batch_id,))
                     connection.execute(dict(queue._TRIGGER_DEFS)["queue_attempts_no_delete"])
                 elif label == "attempt_orphan":
-                    connection.execute("INSERT INTO queue_attempts VALUES (?,?,?,?,?,?,?,?,?,?)", (2, orphan_batch_id, 101, 202, 101, (1).to_bytes(8, "big"), "RESERVED", self.clock.now_ms(), None, None))
+                    connection.execute("INSERT INTO queue_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (2, orphan_batch_id, 101, 202, 101, (1).to_bytes(8, "big"), "RESERVED", self.clock.now_ms(), None, None, "UNRESERVED", 1))
                 elif label == "transition_missing":
                     connection.execute("DROP TRIGGER queue_transitions_no_delete")
                     connection.execute("DELETE FROM queue_transitions WHERE sequence=1")

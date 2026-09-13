@@ -809,8 +809,32 @@ def run_one_fresh_native_proof(*, build_root: Path) -> CompletePathEvidence:
                     measurements,
                     invocation_counts,
                 )
+                admission = source_caller.admit_one(
+                    runtime=runtime,
+                    batch=batch,
+                    source_key_epoch=1,
+                )
+                authorization = source_caller.start_one(
+                    runtime=runtime,
+                    admission=admission,
+                )
                 source_started_ns = time.perf_counter_ns()
-                capsule = source_caller.prove_one(batch=batch, source_key_epoch=1)
+                try:
+                    capsule = source_caller.prove_one(
+                        authorization=authorization,
+                        source_key_epoch=1,
+                    )
+                except BaseException:
+                    runtime.finish_source_launch(
+                        authorization=authorization,
+                        success=False,
+                    )
+                    raise
+                else:
+                    runtime.finish_source_launch(
+                        authorization=authorization,
+                        success=True,
+                    )
                 source_call_ms = (
                     time.perf_counter_ns() - source_started_ns
                 ) / 1_000_000

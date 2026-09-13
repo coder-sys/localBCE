@@ -222,6 +222,10 @@ class DirectMaskCompletePathTests(unittest.TestCase):
                 close_calls.append(instance)
                 original_close(instance)
 
+            def fail_source(*, authorization, source_key_epoch: int):
+                authorization.consume()
+                raise RuntimeError("injected_source_failure")
+
             try:
                 with patch.object(
                     MinimalClearanceVerificationRuntime,
@@ -231,7 +235,7 @@ class DirectMaskCompletePathTests(unittest.TestCase):
                 ), patch.object(
                     Profile12SourceBoundaryCaller,
                     "prove_one",
-                    side_effect=RuntimeError("injected_source_failure"),
+                    side_effect=fail_source,
                 ):
                     with self.assertRaisesRegex(
                         RuntimeError,
@@ -267,6 +271,10 @@ class DirectMaskCompletePathTests(unittest.TestCase):
                 close_calls.append(instance)
                 raise RuntimeError("injected_close_failure")
 
+            def fail_source(*, authorization, source_key_epoch: int):
+                authorization.consume()
+                raise RuntimeError("injected_source_failure")
+
             try:
                 with patch.object(
                     MinimalClearanceVerificationRuntime,
@@ -276,7 +284,7 @@ class DirectMaskCompletePathTests(unittest.TestCase):
                 ), patch.object(
                     Profile12SourceBoundaryCaller,
                     "prove_one",
-                    side_effect=RuntimeError("injected_source_failure"),
+                    side_effect=fail_source,
                 ):
                     with self.assertRaises(BaseExceptionGroup) as raised:
                         run_one_fresh_native_proof(build_root=build_root.resolve())
@@ -300,11 +308,16 @@ class DirectMaskCompletePathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="complete-path-capsule-") as directory:
             build_root = Path(directory)
             capsule = bytearray(b"volatile-capsule")
+
+            def return_capsule(*, authorization, source_key_epoch: int):
+                authorization.consume()
+                return capsule
+
             try:
                 with patch.object(
                     Profile12SourceBoundaryCaller,
                     "prove_one",
-                    return_value=capsule,
+                    side_effect=return_capsule,
                 ), patch(
                     "tools.direct_mask_complete_path.complete_path.VolatileProofHandoff",
                     side_effect=RuntimeError("injected_handoff_failure"),
@@ -408,10 +421,10 @@ class DirectMaskCompletePathTests(unittest.TestCase):
                 ):
                     with self.subTest(name=name), self.assertRaisesRegex(
                         SourceBoundaryError,
-                        "source_batch_binding",
+                        "source_authorization_required",
                     ):
                         caller.prove_one(batch=mutated, source_key_epoch=1)
-                with self.assertRaisesRegex(SourceBoundaryError, "source_key_epoch"):
+                with self.assertRaisesRegex(SourceBoundaryError, "source_authorization_required"):
                     caller.prove_one(batch=batch, source_key_epoch=2)
                 native.assert_not_called()
 
