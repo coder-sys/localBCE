@@ -691,3 +691,15 @@ The repository remains synthetic, nonactivating, and unqualified:
 `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. The required next action is immutable commit and
 post-commit HEAD/tree/parent plus clean tracked-state verification; only the preserved untracked
 `build-performance/` tree may remain.
+
+### Immutable implementation commit — 2026-09-13
+
+The implementation and pre-commit evidence above are now committed as
+`6c65b6601af17d3f2a88f12eaf171dc174b83f69`, tree
+`fa23ad45dc2bce7ea4039291e4daf40bd66979c1`, parent
+`9971e7a70937ff652d4008efaf021bcb7b119e53`. The commit contains exactly the 13 authorized
+tracked files listed by the staged diff. Post-commit verification reported matching HEAD/tree/
+parent, commit subject `Enforce durable source admission and launch accounting`, empty staged and
+unstaged diffs, clean `git diff --check`, and only the preserved untracked `build-performance/`
+tree. A final docs-only closure records this post-commit state; no implementation file is to be
+modified further.

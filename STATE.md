@@ -955,3 +955,15 @@ The stage remains synthetic and nonactivating, with
 `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. Final immutable commit/tree/parent and clean tracked
 status verification remain to be recorded after the implementation commit; only untracked
 `build-performance/` evidence is expected to remain.
+
+### Immutable implementation commit — 2026-09-13
+
+The source-admission implementation is committed as
+`6c65b6601af17d3f2a88f12eaf171dc174b83f69`, tree
+`fa23ad45dc2bce7ea4039291e4daf40bd66979c1`, parent
+`9971e7a70937ff652d4008efaf021bcb7b119e53`, subject
+`Enforce durable source admission and launch accounting`. The commit has exactly 13 authorized
+tracked files. Verification matched the commit HEAD/tree/parent, reported empty staged and
+unstaged diffs and clean `git diff --check`, and left only the intentionally untracked
+`build-performance/` native evidence tree. This record-only closure is the final permitted
+mutation; implementation files remain immutable.
