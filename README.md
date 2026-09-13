@@ -1,41 +1,47 @@
-# Blind Ledger
+# RightRail financial workflow
 
-Blind Ledger is RightRail's state-side payment-clearance layer. It evaluates state-approved
-deterministic controls; the incumbent adjudicates the claim and the official state system moves
-money.
+RightRail's first concrete responsibility in this checkout is a synthetic, state-local financial
+workflow. It keeps five logical responsibilities explicit: State Control Pack, Blind Ledger,
+Mirror, Continuity State, and Switch. The official processor/payment system remains the authority
+for funds movement. This repository records obligations, evidence, evaluations, determinations,
+authorized actions, delivery state, and descriptive cash/reporting evidence; it does not move money
+or authorize a live payment.
 
-Mirror is RightRail's read-only evidence, reconciliation, and operational-visibility product.
-Provider Trust Graph is its narrow first wedge. Mirror reports evidence-backed coverage, findings,
-discrepancies, remediation/retest, parity, responsibility, money, and transition artifacts; it does
-not expose a Blind Ledger receipt or authorize an economic mutation. The five-directive harness is
-internal.
+The financial owner is the sole writer for the durable workflow. Mirror commands and queries that
+owner, and Continuity exports/restores a bounded versioned view of the same records. Evidence,
+official determination, action authorization, dispatch/acknowledgment, and cash completion are
+separate facts. An acknowledgment is never cash evidence. A synthetic trusted authority is injected
+for local tests; missing, stale, or unauthorized authority fails closed.
 
-When an undisclosed payment-relevant assertion crosses the clearance boundary and affects
-automation, a verifier-owned native proof must be accepted before the database applies the exact
-transition atomically. Lawfully state-owned plaintext may use the verifier-owned deterministic
-control set without a purposeless ZK wrapper. Proof or signature acceptance is never `CLEAR`, and
-`policyResult` remains distinct from `effectiveDirective`.
+The fictional fixture is fixed: twenty hospitals and $1,000,000 total; H is owed $100,000 and the
+other nineteen total $900,000. All inputs, canaries, reports, and acceptance data are synthetic.
+Expected values are manually derived constants. Current claims remain nonactivating:
+`proofSuiteId=null`, `production_usable=false`, and `activation=false`.
 
-This is a production-shaped candidate, but current evidence is synthetic, local/current-Windows,
-and nonactivating: `proofSuiteId=null`, `production_usable=false`, and
-`activation=false`. No real PHI, live credentials, payment movement, production proof backend, or
-deployed Lean kernel is authorized. Productionization is qualification and adapter substitution,
-not a semantic rewrite.
+The fixed cents are H `10,000,000`, eighteen other items `4,700,000` each, and one other item
+`5,400,000`; the other-item total is `90,000,000` cents and the program total is `100,000,000`.
+The acceptance branches use reviewer-supplied expectations for `9,700,000` cash, a `300,000`
+claimed offset, unique correction payment `P2`, reversal, and distinct replacement `P3`.
 
-## Current evidence boundary — 2026-09-13
+The retained direct-clearance V1, queue/source ownership and reservation rules, queue/State/outbox
+atomicity, exact 100-reference protocol, non-`CLEAR` economic guard, cryptographic/native paths,
+and Lean/formal research remain separate generations. This financial slice does not change their
+bytes, security parameters, artifacts, operations policy, archives, or production status.
 
-The accepted source-admission and ownership implementation is commit
-`1306e38901b73790dfb2a973b4ac44daf2ff6869`, tree
-`1d04b16d29b2b298dc93817375cd258c9762b7ef`. Its reviewed synthetic complete path processed 100
-operations through one source call, one independent verifier call, and one State-port call in
-`4905.138 ms`; this is evidence for the bounded candidate only, not a production, Lean, or PQ claim.
+## Integration baseline — 2026-09-13
 
-Lean source and a transport adapter exist in separate earlier semantic checkouts at the recorded
-commits `eb29b18a` and `21528c55`. They are not linked to this candidate's runtime, and their
-available executable identity was not accepted as the current artifact. The current path still
-uses a synthetic State port; the formal-linkage, fresh build identity, theorem/axiom, and
-independent-checker gates remain open. The four fresh Lean engineering children are separate
-workstreams and are not part of this checkout's current authority.
+The implementation checkout is branch `rightrail-financial-workflow-20260913` at
+`be712f56117ee71f2f2477f139a9894a209a2985`, tree
+`11191daf7d1604969649262300efb6a62b25fcff`, parent
+`1306e38901b73790dfb2a973b4ac44daf2ff6869`. Before the documentation checkpoint, tracked status
+was clean and only the driver-supplied `build-performance/` evidence directory was untracked.
+The request hash and reference-plan PDF hash are recorded in `CURRENT_TASK.md` and `STATE.md`.
+
+The work is staged as: governing documentation and pins; focused seam checks and baseline
+reproductions; a durable financial owner with an independent checker; same-owner Mirror queries/
+commands and bounded shadow Continuity export/restore; then the twelve acceptance cases, separate
+native regressions, and guarded bounded measurements. Numerical financial SLAs are not supplied by
+the reference plan, so measurements must report provisional budgets and unknown targets honestly.
 
 ## Read in this order
 
@@ -57,7 +63,17 @@ fixtures are owned by [`docs/NATIVE_V3_ARCHITECTURE.md`](docs/NATIVE_V3_ARCHITEC
 executable sources/tests. Git preserves superseded source and narrative; the rejected-architectures
 record is the only live place for concise prohibitions against revival.
 
-## Local verification
+## Current financial-workflow verification
+
+Run from this checkout with the existing Python toolchain and the existing guarded wrapper for any
+build, checker, test, or native batch. The current gate sequence is: focused source seam checks and
+reported-defect reproductions; independent financial schema/history checks; all twelve synthetic
+acceptance cases through real persistence; same-owner Mirror and Continuity checks; separate native
+regressions; then a bounded measurement run. Never use a formula under test to generate an expected
+financial answer. Record exact commands, raw trust-critical output, skipped counts/reasons, and
+resource limits in `STATE.md`.
+
+## Retained Blind Ledger verification
 
 Run from the repository root with existing offline toolchains. Use a new empty session directory for
 each trust-boundary run.
@@ -94,7 +110,7 @@ The semantic gate reads `tools/semantic_assurance_manifest.json` and remains syn
 nonactivating evidence; it does not establish refinement to Rust, database durability,
 cryptographic soundness, deployment, payment movement, or activation.
 
-## Profile 11 complete-path screen
+## Retained Profile 11 complete-path screen
 
 Profile 11 is a source-only, nonactivating preparation harness. It exercises one state-generated
 ordered batch, an external verifier boundary, one atomic State/outbox batch, and acknowledgements;

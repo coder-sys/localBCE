@@ -1,13 +1,50 @@
-# Native-v3 implementation roadmap
+# RightRail implementation roadmap
 
-Updated: 2026-09-05
-Owner: dependency order for Native-v3, the authorized Lean formal workstream, and the nonpayment Mirror wedge. It is
-not a proof-backend selection or activation record.
+Updated: 2026-09-13
+Owner: dependency order for the synthetic financial workflow and its retained Blind Ledger/Mirror
+boundaries. Native-v3, Lean, and activation remain separate future workstreams; this is not a
+proof-backend selection or activation record.
 
-This roadmap follows the smallest dependency chain that can produce a trustworthy state-side
-clearance system. Rejected architectures are recorded separately and are not milestones.
+This roadmap follows the smallest dependency chain that can produce a reconstructible, state-local
+financial responsibility without creating a second ledger or weakening existing trust boundaries.
+Rejected architectures are recorded separately and are not milestones.
 
-## Current release gate
+## Active roadmap — financial workflow 2026-09-13
+
+The integration branch is `rightrail-financial-workflow-20260913`, initially
+`be712f56117ee71f2f2477f139a9894a209a2985` / tree
+`11191daf7d1604969649262300efb6a62b25fcff`. All evidence is synthetic and nonactivating.
+
+1. **A — Documentation and pins.** Correct the governing Markdown, pin the branch and native
+   inputs, record ownership and the no-change boundaries, and retain prior evidence under historical
+   headings.
+2. **B — Focused seams and baselines.** Reproduce the exact-schema rejection, queue/State/outbox
+   atomicity, reconciliation-capacity behavior, independent checker dependencies, and inherited
+   documentation-governance warning before any smallest authorized correction. Run only relevant
+   baseline tests under isolated storage.
+3. **C — Durable financial owner.** Add versioned Control Pack/population, obligations, typed
+   evidence, exact-cents accounting, evaluations, cases, determinations, corrections, action/outbox
+   identity, stale fences, injected synthetic authority, and an independent history/schema checker.
+4. **D — Same-owner Mirror and Continuity.** Add a bounded local CLI/read model and authorized
+   commands over the same owner. Export and validate/restore a versioned responsibility package into
+   a shadow/test database with dispatch disabled and no second live writer.
+5. **E — Acceptance and bounded measurement.** Run all twelve real persistence cases, native-path
+   regressions separately, bounded privacy/egress/oversize checks, and guarded measurements. Report
+   sample counts, latency/rate distributions, peak parent/child memory, restart/storage behavior,
+   and numerical targets that remain unspecified.
+
+The first-state fixture is fixed at twenty hospitals and $1,000,000 total: H is $100,000 and the
+other nineteen total $900,000. Hand-derived expected constants are required. The financial owner
+must preserve evidence versus authority versus action versus acknowledgment versus cash/reporting
+completion. It must not change the retained exact-100 protocol, source ownership/reservation,
+queue/State/outbox atomicity, non-`CLEAR` economic guard, native/C/crypto/Lean artifacts, operations
+policy, or archives.
+
+Every phase ends with exact Git identity, changed/untracked paths, commands and raw trust-critical
+output, failures/warnings/skips, and the next safe action. Missing production targets are recorded as
+unknown; the retained native arithmetic floor is not a financial ingestion SLA.
+
+## Retained Native-v3 release gate
 
 `ops/launch_blockers.json` is the machine-readable launch-blocker authority; this section is its
 current human-readable summary. The blockers are capability/profile-scoped: an activated
@@ -33,7 +70,7 @@ being misread as a universal private-proof gate:
 | `BL-OFFICIAL-RECEIVER` | Activation of any mode that emits an operative clearance directive |
 | `BL-GOVERNMENT-CONNECTORS` | Activation of any mode using official external authority |
 
-## Current position
+## Retained Native-v3 position
 
 The current candidate is a nonactivating, unselected integration of the reviewed source/release
 closure and Mirror observation boundary. `STATE.md` owns the measured release counts and retained
@@ -42,7 +79,7 @@ roadmap does not create a second readiness record or change application trust bo
 bytes, verifier semantics, activation, or the read-only/nonpayment claim. Source-only harnesses and
 generated/private artifacts remain outside release selection.
 
-## Next formal dependency
+## Future formal dependency
 
 The authorized next semantic dependency is the Lean formal kernel. No implementation or deployed
 link exists. Before any production direct evaluator or private proof can authorize a clearance
@@ -52,7 +89,7 @@ narrow Rust adapter, and pass theorem-manifest, axiom, independent-kernel, KAT, 
 resource gates. `docs/LEAN_FORMAL_KERNEL.md` is the exact authority; a separate model, differential
 test, or generated vector is not formal-verification credit.
 
-## Next implementation after theorem closure
+## Future implementation after theorem closure
 
 1. Freeze the smallest complete narrow private statement/receipt and fixed evaluator profile.
 2. Build a bounded-memory source-local prover and a genuinely independent state-side verifier;

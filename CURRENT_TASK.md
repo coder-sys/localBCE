@@ -1,8 +1,72 @@
-# Blind Ledger current task
+# RightRail current task
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 
-## Profile12 Queue/State implementation — corrected, unverified/in progress
+## Financial workflow A–E — active bounded assignment
+
+Work only in the integration checkout
+`C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
+branch `rightrail-financial-workflow-20260913`. The verified baseline is HEAD
+`be712f56117ee71f2f2477f139a9894a209a2985`, tree
+`11191daf7d1604969649262300efb6a62b25fcff`, parent
+`1306e38901b73790dfb2a973b4ac44daf2ff6869`. Before the documentation pass, tracked status was
+clean and only driver-supplied `build-performance/` was untracked.
+
+The assignment request SHA-256 is
+`54F95E47140F7EC6C082F5EDD2D007C91BAB45B4F3E809EE7CE5FD3170FA4033`. The reference PDF is
+24 pages, SHA-256 `6F8D5201DEDDA81644901FA2E574A0CDCF560EFF61878DBB72C48E159EAB730C`.
+
+### Objective
+
+Implement one coherent, synthetic, nonactivating financial responsibility with five logical parts:
+State Control Pack, Blind Ledger financial owner, same-owner Mirror, bounded shadow Continuity State,
+and a deferred Switch boundary. The fixed fictional program has twenty hospitals and $1,000,000
+total: H is owed $100,000 and the other nineteen total $900,000. Tests use manually derived expected
+constants, not production-formula-generated answers.
+
+The reviewer-fixed cents are: H `10,000,000`; eighteen other items `4,700,000` each; and one final
+other item `5,400,000`. The other-item total is `90,000,000` cents and the program total is
+`100,000,000` cents. Use stable generic item IDs and fixture-only display labels. Preserve the exact
+branch expectations: no H cash leaves a `10,000,000` shortfall; `9,700,000` cash plus an unapproved
+`300,000` offset leaves a `300,000` shortfall; an authorized offset satisfies the amount without
+changing cash; rejected-offset correction authorization leaves the shortfall until unique correction
+payment `P2` arrives; duplicate/second confirmation does not add cash; conflicting `P2` is visible
+without mutation; reversal returns the shortfall; and a distinct replacement `P3` restores the
+amount. Reporting and timeliness remain separate dimensions.
+
+### Stage sequence and resume point
+
+- **A — documentation and pins:** completed in the current documentation checkpoint; verify its
+  commit and diff before proceeding.
+- **B — focused source checks/baselines:** reproduce exact-schema rejection, queue/State/outbox
+  atomicity, the reconciliation-capacity behavior, independent-checker dependencies, and the
+  inherited documentation-governance failure. Fix only demonstrated defects and keep raw failures.
+- **C — durable financial slice:** implement versioned packs/populations, obligations, typed
+  evidence, exact cents/overflow/duplicate/reversal accounting, evaluations, cases,
+  determinations, corrections, stale fences, immutable actions, atomic history/projection/outbox,
+  and the independently implemented schema/history checker.
+- **D — Mirror/Continuity:** expose real same-owner queries/commands and evidence references; export
+  and validate/restore a bounded versioned responsibility package into a shadow database with
+  dispatch disabled and no second live writer.
+- **E — acceptance/performance:** run all twelve acceptance cases, separate unchanged native
+  regressions, bounded oversized-input/privacy/egress checks, and guarded measurements.
+
+### Protected boundaries and nonclaims
+
+The user/Driver explicitly delegates this integration checkout's focused composition and Mirror
+changes, but no other checkout or protected boundary. Preserve the direct-clearance V1 seam,
+queue/source ownership and reservation, exact 100-reference protocol, queue/State/outbox atomicity,
+non-`CLEAR` economic guard, crypto/native/C/Lean artifacts, operations policy, archives, and formal
+claims. Do not use real PHI, credentials, payments, external dispatch, archive refresh, broad imports,
+or a success-mock repository. Corporate egress is disabled by default; canaries are synthetic.
+
+Use the existing guarded wrapper/mutex and physical reserve/cap for every test/build/checker/native
+batch. One bounded batch at a time. The retained native arithmetic floor is not a financial SLA.
+At each phase record exact Git identity, changed/untracked paths, commands/logs, raw trust-critical
+output, counts, latency/rates, peak parent/child memory, restart/storage behavior, failures,
+warnings/skips, and unknown numerical targets.
+
+## Historical Profile12 Queue/State implementation — corrected, unverified/in progress
 
 This child is the exclusive writable checkout for the Profile12 Queue/schema/independent/runtime/
 accounting stage. The earlier project-wide cleanup objective is historical evidence only and is no
@@ -156,7 +220,7 @@ preserving the main DB and WAL bytes. No adapter/source-auth test, Profile11 pro
 solver, unrelated broad suite, or protected production path was run. The stage remains synthetic,
 nonactivating, unqualified, and held for driver review.
 
-### Active E2E integration objective — 2026-09-12
+### Historical E2E integration objective — 2026-09-12
 
 This section is the current objective and supersedes the preceding 'native identity deferred'
 wording for this child only. Integrate the accepted State/runtime correction
@@ -228,7 +292,7 @@ No unchanged State, adapter, or ten-case malformed-native suites were rerun; the
 prior raw outputs remain the evidence. Flags remain 'proofSuiteId=null',
 'production_usable=false', 'activation=false', 'NOT_QUALIFIED'/'INACTIVE'/'UNSELECTED'.
 
-### Active native arithmetic performance objective — 2026-09-12
+### Historical native arithmetic performance objective — 2026-09-12
 
 This fresh detached child starts at accepted E2E commit
 '51158c2db5c4d1b82c88875ea23707a6e7fa1d89' / tree

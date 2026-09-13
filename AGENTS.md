@@ -1,4 +1,4 @@
-# Agent instructions for Blind Ledger
+# Agent instructions for RightRail
 
 Blind Ledger is RightRail's database-backed payment-clearance system. Treat proof, policy, state,
 signature, custody, clearance-transition, and downstream payment-interface code as trust-critical.
@@ -18,32 +18,28 @@ signature, custody, clearance-transition, and downstream payment-interface code 
 
 ## Current architecture boundary
 
-- The application database is the operational source of truth for Blind Ledger clearance state; the
-  official state payment system remains the source of truth for actual funds movement.
-- An undisclosed payment-relevant assertion crossing the clearance trust boundary and affecting
-  automation requires a mandatory application ZK proof. Evidence already lawfully held in plaintext by the state
-  clearance service uses the same inspectable deterministic rule and atomic state machine without
-  purposeless ZK ceremony.
-- The verifier-owned automatic control set fixes the evidence mode and evaluator identity before
-  admission. A caller cannot select `DIRECT_STATE_OWNED`, and a failed `PRIVATE_ZK` request cannot
-  downgrade to it.
-- The native verifier must accept before one atomic private-path database transaction can consume
-  nullifiers and update clearance state. Proof acceptance never defaults to `CLEAR`.
-- The later mandatory target gives an executable Lean kernel authority over clearance semantics and
-  legal state transitions. It is not active now: Rust retains cryptographic proof acceptance and
-  the database retains durability/concurrency until the kernel is linked and every theorem/build
-  gate passes.
-- The fixed directives are `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and
-  `EXCEPTION_APPROVED`; the last requires a governed signed state authorization.
-- Government and oracle signatures authenticate provenance and authority; they do not prove that the underlying facts are true.
-- No L2, rollup, sequencer, bridge, public data-availability layer, or Solidity settlement contract is part of the current design.
-- Ethereum is a committed later L1 checkpoint capability, not a Phase 0-2 dependency, settlement
-  role, or fixed-cadence requirement.
-- The executable chronology is strict: `rule_effective < event < observation < decision`. The same
-  four times are bound across the request, decision, receipt, and exact retry.
-- The database boundary admits one decision and exactly two accesses indexed `[0,1]`: `decision_index=0`,
-  `access_count=2`, and each access carries the matching `decision_id`. Reads use observation time;
-  the clearance-state write uses decision time.
+RightRail's current assignment is a synthetic, state-local financial-responsibility workflow. It
+has five logical responsibilities: State Control Pack, Blind Ledger, Mirror, Continuity State, and
+Switch. Provider/payment systems and official processors retain their own authority; this checkout
+records descriptive financial history and authorized local actions but never moves money, authorizes
+a live payment, or claims production readiness.
+
+The financial owner is the sole writer for obligations, evaluations, cases, determinations,
+corrections, balances, and action/outbox identity. Mirror sends commands to that owner and reads its
+projections. Evidence, official determination, authorized action, dispatch/acknowledgment, and
+cash/reporting completion are separate facts. An acknowledgment never proves cash receipt. The
+trusted authority is explicitly injected and synthetic in this assignment; missing, stale, or
+unauthorized authority fails closed.
+
+The retained direct-clearance V1, queue/State/outbox atomicity, source ownership/reservation, exact
+100-reference protocol dimensions, non-`CLEAR` economic mutation guard, and cryptographic/native/
+formal boundaries remain separate generations. No financial-workflow change may reinterpret their
+bytes, counters, roots, proof/security parameters, or authority. Lean, Engine/Queue/Security
+research, native/C/crypto code, operations policy, and source archives remain outside this task.
+
+Corporate egress is disabled by default and all fixtures are synthetic. Continuity restore is a
+bounded shadow/test operation with dispatch disabled and no second live writer. Current claims remain
+`proofSuiteId=null`, `production_usable=false`, `activation=false`, and non-payment/non-PHI.
 
 ## Document precedence
 
@@ -109,6 +105,49 @@ passes.
 The repository is nonactivating. `proofSuiteId` remains null and `production_usable=false`. Do not
 claim production readiness, a deployed formally verified kernel, independent audit acceptance,
 real-PHI safety, real-payment authorization, or Ethereum settlement without current raw evidence.
+
+## Current RightRail financial-workflow assignment — 2026-09-13
+
+This is the active execution record for branch `rightrail-financial-workflow-20260913` in the
+integration checkout. The assignment begins from `be712f56117ee71f2f2477f139a9894a209a2985` /
+tree `11191daf7d1604969649262300efb6a62b25fcff`, with the two driver-supplied native executables
+under untracked `build-performance/`. The user-authorized sequence is documentation A, focused
+source checks and baselines B, the durable synthetic financial slice C, same-owner Mirror and
+bounded Continuity D, and the twelve acceptance cases plus isolated native regressions and bounded
+measurements E.
+
+The exact writable scope is this integration checkout only: the governing Markdown and focused
+tests; new financial-workflow implementation and its independent checker; the existing composition
+files only for a reproduced, smallest reconciliation-capacity correction; and the existing Mirror
+files only for the same-owner query/command and bounded continuity surface required by this slice.
+The normally protected composition and Mirror paths are explicitly delegated for this assignment;
+no other checkout, native/C/crypto/Lean/ops/archive/vendor path, model, proof construction, source
+authority, or production control is delegated. Do not create a success-mock repository or a second
+authoritative ledger.
+
+The fictional fixture is fixed at twenty hospitals and $1,000,000 total: H is $100,000 and the
+other nineteen total $900,000. Expected values are hand-derived constants in tests, not generated
+by the implementation under test. Exact cents, bounded arithmetic, duplicate/common-origin and
+reversal handling, stale revision fences, immutable action payloads, atomic history/projection/
+outbox writes, isolated restore, and disabled corporate egress are required. Every skipped item,
+failure, warning, and unresolved numerical target must be recorded with its reason.
+
+Use the existing guarded build/run wrapper and mutex for every build, checker, test, or native
+batch. Preserve its reserve/tree cap, one-active-native-process limit, and existing cap values.
+Do not stress the laptop, relax the guard, replay unchanged native suites, refresh archives, or
+claim that the retained native arithmetic floor is a financial-ingestion SLA.
+
+At every phase boundary record the exact HEAD/tree/parent, tracked diff and untracked evidence,
+changed files, command identifiers/log paths, raw trust-critical output, sample counts, latency,
+rate, peak memory, restart/storage behavior, and remaining numerical target unknowns. A commit is
+not a clean-worktree claim; verify both. The current active task is `CURRENT_TASK.md` and the
+verified evidence is `STATE.md`; the historical delegation records below are not active grants.
+
+## Historical delegation records
+
+The following Profile12, complete-path, and native-performance sections preserve prior reviewed
+authority and evidence. Their old grants are closed historical records and must not redirect the
+current RightRail financial-workflow assignment.
 
 ## Gate governance and continued execution
 
@@ -242,7 +281,7 @@ publication seam is missing, do not claim the archive was refreshed. Continue im
 repairing that seam as the next safe dependency; the run may remain nonactivating and lower-claim
 while this is resolved.
 
-## Active Profile12 protected-path delegation — 2026-09-08
+## Historical Profile12 protected-path delegation — 2026-09-08
 
 The owner-delegated driver packet authorizes this existing child to implement one cohesive,
 nonactivating Profile12 Queue/State integration stage. This exact grant supersedes the stale cleanup
@@ -297,7 +336,7 @@ must be reported as a dependency, never as a passed or silently skipped test. Ke
 `proofSuiteId=null`, `production_usable=false`, `activation=false`, and
 `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
 
-## Active E2E complete-path delegation — 2026-09-12
+## Historical E2E complete-path delegation — 2026-09-12
 
 The current driver packet supersedes the preceding native-adapter deferral only for this
 nonactivating integration stage. The child is the detached worktree
@@ -309,7 +348,7 @@ source-selected commit '6aa9e634948b6b3a40d1c3c4f07299f8fd5493db' / tree
 '55b1d71fc5f6fa1860225e590a6dbff5af3db2e1'; the accepted Queue caller is commit
 '4f7d8d9475de5e4042af0f85c00a955259da737f'.
 
-### Exact active write scope
+### Historical exact write scope
 
 The active integration may touch only:
 
@@ -390,7 +429,7 @@ verifier_calls=1, state_port_calls=1, source/verifier stdout bytes 539013/0, std
 native suites were rerun by instruction; their accepted prior raw gates remain the evidence.
 All nonactivation and source-only restrictions remain fixed.
 
-## Active native arithmetic performance assignment — 2026-09-12
+## Historical native arithmetic performance assignment — 2026-09-12
 
 This fresh child is the only writable checkout for the shutdown-recovery performance phase:
 'C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\pq-direct-mask-performance-20260912'.

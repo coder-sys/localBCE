@@ -1,8 +1,43 @@
-# Blind Ledger current state
+# RightRail current state
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 
-## Active Profile12 Queue/State stage — corrected, unverified/in progress
+## Current verified snapshot — financial workflow assignment
+
+The active integration checkout is
+`C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
+branch `rightrail-financial-workflow-20260913`, at HEAD
+`be712f56117ee71f2f2477f139a9894a209a2985`, tree
+`11191daf7d1604969649262300efb6a62b25fcff`, parent
+`1306e38901b73790dfb2a973b4ac44daf2ff6869`. The tracked worktree was clean before this
+documentation pass; only the driver-supplied `build-performance/` directory was untracked.
+
+The user request is retained by SHA-256
+`54F95E47140F7EC6C082F5EDD2D007C91BAB45B4F3E809EE7CE5FD3170FA4033`. The local reference plan
+`C:\Users\neers\OneDrive\Desktop\RightRail\RightRail_Architecture_and_Operating_Plan.pdf` is
+24 pages with SHA-256 `6F8D5201DEDDA81644901FA2E574A0CDCF560EFF61878DBB72C48E159EAB730C`.
+
+Stage A is the current documentation checkpoint. The governing files now describe the five-part
+financial responsibility, the sole financial owner, same-owner Mirror, bounded shadow Continuity,
+the Switch boundary, the fixed 20-hospital/$1,000,000 synthetic fixture, and the retained
+direct-clearance/queue/native/Lean boundaries. No application behavior or tests have been changed
+or run for this checkpoint. The next safe phase is B: reproduce the exact-schema, atomic-apply,
+reconciliation-capacity, and documentation-governance evidence before the smallest authorized code
+change.
+
+Driver-supplied native inputs are unchanged and remain separate regressions:
+
+| Path | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe` | 275968 | `E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D` |
+| `build-performance/q/Release/dm_pipeline_verifier_cli.exe` | 240640 | `F35F6AF28EC2D269831CFB6DD1C2414D439FFEC2B26C73CC39495720D9B9E5D` |
+
+All current claims are synthetic and nonactivating: `proofSuiteId=null`,
+`production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
+No real PHI, credentials, payment movement, live dispatch, deployed Lean authority, native
+rebuild, or archive refresh is authorized by this snapshot.
+
+## Historical Profile12 Queue/State stage — corrected, unverified/in progress
 
 This exclusive child implements the owner-delegated Profile12 Queue/schema/independent/runtime
 stage from starting HEAD `98a3d9ea7f156653633996170c17236db804eed7` / tree
@@ -40,7 +75,7 @@ The implementation remains nonactivating and unqualified: `proofSuiteId=null`,
 adapter acceptance, production proof backend, Lean deployment, real PHI, payment movement,
 custody, or formal-verification claim follows from these synthetic local tests.
 
-## Current cleanup disposition
+## Historical cleanup disposition
 
 This bounded cleanup started from exact clean commit
 `5fe29fad1f44df961ea20f8e3397c8d2e02783d0` (tree
@@ -75,7 +110,7 @@ governance negative-list/test references. The protected Queue V6 metadata commen
 and does not authorize deleting active Queue or Native-v3 code. No operations bytes, archive,
 activation state, or external checkout is changed.
 
-## Prior candidate and release closure
+## Historical prior candidate and release closure
 
 The final bounded source correction is commit
 `365536cc344889e4d111e7dc996cdd17c8f76d8f` (tree
@@ -259,7 +294,7 @@ readback, three retained targets, equal hashes, and zero publication artifacts. 
 cleanup, the next authorized semantic dependency is the Lean workstream;
 a model, differential test, or generated vector cannot replace it.
 
-## Active E2E complete-path evidence — 2026-09-12
+## Historical E2E complete-path evidence — 2026-09-12
 
 This is the current driver-authorized integration phase. The accepted clean State/runtime
 correction is '6aa9e634948b6b3a40d1c3c4f07299f8fd5493db' / tree
@@ -314,7 +349,7 @@ source/verifier stdout bytes 539013/0, stderr bytes 0/0, and fixed nonactivation
 Unchanged State/adapter/malformed-native suites were intentionally not rerun; their accepted
 raw handoff evidence remains authoritative.
 
-## Active native arithmetic performance phase — 2026-09-12
+## Historical native arithmetic performance phase — 2026-09-12
 
 The new performance child is rooted at accepted E2E commit
 '51158c2db5c4d1b82c88875ea23707a6e7fa1d89' / tree
