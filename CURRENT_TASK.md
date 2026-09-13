@@ -859,3 +859,106 @@ build-performance/guarded-ctest-source-admission-20260913.stdout.log, size 5546,
 82F08E74C7479EB3A126E895F04B99C14974CC5706BEE13CCC1ECE8A0B0702B0. The prior closure
 record is superseded by this fidelity addendum wherever the literal raw fields or verifier hash
 differ.
+
+### Source completion ownership correction closure — 2026-09-13
+
+This append-only record closes the Driver-granted ownership correction from immutable HEAD
+b1b8843a86cb69b1efb5703f11b8e8b533e2faea, tree
+11303a2c94fad8fc3e725c7d3f71cafecb9252b4. The implementation commit is
+0fb0ca1cae3ab6e77e8f3860f5e9b0a05b8fa226, tree
+5617f1e7052fdda5d20d2aae55ac90263deffdc5, parent
+b1b8843a86cb69b1efb5703f11b8e8b533e2faea, subject Bind source completion to consuming
+invocation. It contains exactly these six tracked paths:
+app/minimal_clearance_verification_queue.py,
+app/minimal_clearance_verification_runtime.py,
+tools/direct_mask_complete_path/source_boundary.py,
+tools/direct_mask_complete_path/complete_path.py,
+tests/test_direct_mask_state_profile12.py, and
+tests/test_direct_mask_complete_path.py.
+
+The shared authorization now returns an opaque volatile SourceLaunchOwnership receipt with
+object-identity binding to its exact authorization and admission. The receipt has a one-shot
+native-entry claim. Durable finish requires that exact receipt; authorization.consumed alone,
+a wrong receipt, a stale receipt, or an unconsumed value cannot mutate the STARTED row.
+complete_path acquires ownership before the native call and passes it through both success and
+failure cleanup; primary and cleanup failures remain grouped. The source boundary rejects a
+reused receipt before a second native entry. Crash/restart and no-refund semantics remain
+unchanged.
+
+The focused durable interleaving test records the actual result: one durable STARTED admission,
+winner paused in the existing source native stub, loser consume error
+QueueConflictError(source_authorization_used), loser cleanup error
+QueueConflictError(source_authorization), pre-winner source snapshot STARTED with metadata
+(1, 4096, 100, 1, 0) and transitions
+(BATCH_ISSUED, SOURCE_AUTHORIZED, SOURCE_STARTED), stale receipt rejected, reused winner
+receipt rejected as SourceBoundaryError(source_authorization), native_calls=1, winner
+completed with SOURCE_COMPLETED, and independent verify_database passed. No second entropy,
+work, refund, or durable transition occurred before the winner completed.
+
+Final affected checks were actual passes:
+  py -3.14 -B -m py_compile [six changed Python files] -> exit 0
+  py -3.14 -m unittest tests.test_direct_mask_state_profile12
+  Ran 37 tests in 18.885s / OK
+  py -3.14 -m unittest tests.test_direct_mask_source_boundary
+  Ran 7 tests in 0.631s / OK
+  py -3.14 -m unittest tests.test_direct_mask_complete_path
+  Ran 9 tests in 20.497s / OK
+  py -3.14 -m unittest tests.test_minimal_clearance_verification_queue tests.test_minimal_clearance_verification_runtime
+  Ran 50 tests in 14.827s / OK
+  py -3.14 -m unittest tests.test_minimal_clearance_composition_v2 tests.test_minimal_clearance_source_auth_verifier_adapter
+  Ran 33 tests in 18.701s / OK
+
+The assigned binaries were unchanged:
+  build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe
+  SIZE=275968 SHA256=E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9
+  build-performance/q/Release/dm_pipeline_verifier_cli.exe
+  SIZE=240640 SHA256=F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D
+
+Exactly one fresh guarded containing path ran through the existing guard with no rebuild.
+The guard used DIRECT_MASK_PERFORMANCE_NATIVE=1 and regex
+^direct_mask_complete_path_integration$. No unchanged native/PQ suite replay, benchmark,
+filtered integration, cap/target change, qualification, or activation was performed. Raw
+files are:
+  build-performance/guarded-ctest-source-ownership-20260913.stdout.log
+  size=5549 SHA256=6882B2E5FD07A10B3D6154F7755D422FD7F27565FD34D399469FE8ADBF81D510
+  build-performance/guarded-ctest-source-ownership-20260913.stderr.log
+  size=0 SHA256=E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855
+  build-performance/guarded-outer-ctest-source-ownership-20260913.log
+  size=2884 SHA256=5FF4C7DB3DB5E436E1297E83DECD4C6CB17A6630BE83E567A1CF9C456030C517
+
+The actual outer guard output was:
+  PHYSICAL_PREFLIGHT free_bytes=2758893568 reserve_bytes=1073741824
+  CHILD_EXIT_CHECK exit7=7 exit0=0
+  CHILD_EXIT_STATUS label=CTest exit=0
+  LIVE_PHYSICAL_SUMMARY label=CTest samples=13 min_free_bytes=2653110272 reserve_bytes=1073741824 peak_working_set_bytes=82153472 peak_private_bytes=53911552
+  CLEANUP=PASS label=CTest owned_process_tree=empty
+  MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+
+The actual child output was:
+  Ran 9 tests in 7.075s
+  OK
+  1/1 Test #2: direct_mask_complete_path_integration ... Passed 7.53 sec
+  100% tests passed, 0 tests failed out of 1
+
+The raw child COMPLETE_PATH_EVIDENCE line was:
+  2: COMPLETE_PATH_EVIDENCE {"acknowledged_operation_count": 100, "activation": false, "handoff_ms": 42.229, "independent_event_count": 100, "independent_operation_count": 100, "independent_outbox_count": 100, "independent_transaction_count": 100, "independent_verified_batch_count": 1, "issued_batch_count": 1, "operation_count": 100, "outbox_ack_ms": 205.729, "outbox_acknowledged_count": 100, "production_usable": false, "proof_files_persisted": false, "proof_suite_id": null, "queue_verify_state_ms": 1839.465, "receiver_duplicate_dispatches": 0, "receiver_side_effects": 100, "reopened_without_work": true, "run_artifact_inventory": ["state.sqlite"], "source_call_ms": 2437.472, "source_calls": 1, "source_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 2415.184, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_job_commit_bytes": 21688320, "peak_private_commit_bytes": 20422656, "peak_working_set_bytes": 18243584, "private_commit_delta_bytes": 20201472, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "source_appliance", "stderr_bytes": 0, "stdout_bytes": 539013, "timed_out": false}, "source_workspace_empty": true, "state_issue_ms": 11.877, "state_port_calls": 1, "state_sequence": 100, "total_path_ms": 4905.138, "transaction_count": 100, "unconfirmed_operation_count": 0, "unique_idempotency_keys": 100, "verifier_calls": 1, "verifier_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 1613.941, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_job_commit_bytes": 20389888, "peak_private_commit_bytes": 19132416, "peak_working_set_bytes": 16588800, "private_commit_delta_bytes": 18460672, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "independent_verifier", "stderr_bytes": 0, "timed_out": false}, "verifier_workspace_empty": true}
+
+The earlier accepted 6.723s guarded run remains prior input evidence; it was not recreated.
+The inherited documentation-governance warning remains explicit: 11 tests in 9.754s,
+FAILED (errors=2), listing the six pre-existing unregistered README paths recorded above.
+No new correction-phase test failure remained. The initial wrong architecture-path probe and
+forward-slash nested apply-patch path attempt were read-only/no-op procedural failures; both
+were corrected without changing protected files.
+
+Post-implementation verification matched HEAD 0fb0ca1cae3ab6e77e8f3860f5e9b0a05b8fa226,
+tree 5617f1e7052fdda5d20d2aae55ac90263deffdc5, parent
+b1b8843a86cb69b1efb5703f11b8e8b533e2faea; tracked status was clean before this record
+append and git diff --check was clean. The stage remains synthetic and nonactivating:
+proofSuiteId=null, production_usable=false, activation=false, NOT_QUALIFIED/INACTIVE/UNSELECTED.
+proofSuiteId=null, production_usable=false, activation=false, NOT_QUALIFIED/INACTIVE/UNSELECTED.
+
+Raw child fidelity note: the preceding ownership closure transcription omitted the literal
+verifier_measurement stdout_bytes=0 field. The retained raw line, copied byte-for-byte below,
+is authoritative and supersedes that one transcription omission; no binary or log changed.
+
+  2: COMPLETE_PATH_EVIDENCE {"acknowledged_operation_count": 100, "activation": false, "handoff_ms": 42.229, "independent_event_count": 100, "independent_operation_count": 100, "independent_outbox_count": 100, "independent_transaction_count": 100, "independent_verified_batch_count": 1, "issued_batch_count": 1, "operation_count": 100, "outbox_ack_ms": 205.729, "outbox_acknowledged_count": 100, "production_usable": false, "proof_files_persisted": false, "proof_suite_id": null, "queue_verify_state_ms": 1839.465, "receiver_duplicate_dispatches": 0, "receiver_side_effects": 100, "reopened_without_work": true, "run_artifact_inventory": ["state.sqlite"], "source_call_ms": 2437.472, "source_calls": 1, "source_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 2415.184, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_job_commit_bytes": 21688320, "peak_private_commit_bytes": 20422656, "peak_working_set_bytes": 18243584, "private_commit_delta_bytes": 20201472, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "source_appliance", "stderr_bytes": 0, "stdout_bytes": 539013, "timed_out": false}, "source_workspace_empty": true, "state_issue_ms": 11.877, "state_port_calls": 1, "state_sequence": 100, "total_path_ms": 4905.138, "transaction_count": 100, "unconfirmed_operation_count": 0, "unique_idempotency_keys": 100, "verifier_calls": 1, "verifier_measurement": {"active_process_limit": 1, "cap_bytes": 4500000000, "cap_enforced": true, "child_process_count": 2, "cleanup_complete": true, "elapsed_ms": 1613.941, "exit_code": 0, "measurement_complete": true, "pagefile_growth_evidence": "unavailable", "peak_job_commit_bytes": 20389888, "peak_private_commit_bytes": 19132416, "peak_working_set_bytes": 16588800, "private_commit_delta_bytes": 18460672, "process_tree_complete": true, "scratch_peak_bytes": 0, "stage": "independent_verifier", "stderr_bytes": 0, "stdout_bytes": 0, "timed_out": false}, "verifier_workspace_empty": true}

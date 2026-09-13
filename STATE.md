@@ -1045,3 +1045,46 @@ recorded in CURRENT_TASK.md.
 
 This addendum supersedes the preceding closure wherever the literal raw fields or verifier hash
 differ. Implementation files remain immutable.
+
+### Source completion ownership correction closure — 2026-09-13
+
+The Driver-granted ownership correction started from Docs HEAD
+b1b8843a86cb69b1efb5703f11b8e8b533e2faea/tree11303a2c94fad8fc3e725c7d3f71cafecb9252b4
+and is implemented in 0fb0ca1cae3ab6e77e8f3860f5e9b0a05b8fa226/tree
+5617f1e7052fdda5d20d2aae55ac90263deffdc5. Completion now requires the exact opaque
+SourceLaunchOwnership receipt bound to the consuming authorization and admission; the receipt
+also permits only one native entry. complete_path claims ownership before native work and uses
+that receipt for success/failure cleanup. Authorization alone, wrong/stale receipts, and
+reused receipts cannot finalize or re-enter another invocation.
+
+The focused durable interleaving passed in the state suite: real STARTED row, paused winner,
+loser consume source_authorization_used, loser cleanup source_authorization, unchanged
+STARTED/accounting/transitions, stale receipt rejection, one native stub call, reused receipt
+rejection, exact-owner SOURCE_COMPLETED finish, and independent verification. Owner failure,
+postcommit, startup recovery, and no-refund seams remain covered by the existing tests.
+
+Final affected results: compile exit 0; state 37/18.885s OK; source boundary 7/0.631s OK;
+complete path 9/20.497s OK; queue/runtime 50/14.827s OK; composition/adapter 33/18.701s OK.
+
+One fresh guarded synthetic containing path passed through the existing guard. Assigned binaries
+were unchanged: source 275968/E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9,
+verifier 240640/F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D. The raw
+CTest stdout is 5549 bytes SHA256 6882B2E5FD07A10B3D6154F7755D422FD7F27565FD34D399469FE8ADBF81D510;
+stderr is empty SHA256 E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855; outer
+is 2884 bytes SHA256 5FF4C7DB3DB5E436E1297E83DECD4C6CB17A6630BE83E567A1CF9C456030C517. Guard
+output recorded free preflight 2758893568, reserve 1073741824, exit7/0, CTest exit 0,
+13 samples, minimum free 2653110272, cleanup PASS, and released mutex. Child output was
+9 tests in 7.075s, OK, one passed, and its raw complete-path JSON is retained in CURRENT_TASK.md.
+Counts were 100 operations/transactions/ACKs/unique keys, one source/verifier/State call,
+zero duplicate dispatches, successful reopen, state.sqlite-only inventory, and empty workspaces.
+proofSuiteId=null, production_usable=false, activation=false, NOT_QUALIFIED/INACTIVE/UNSELECTED.
+
+The earlier 6.723s guarded evidence remains prior input and was not recreated. The inherited
+documentation-governance warning remains six pre-existing unregistered README paths with 11
+tests/2 errors; no protected registration or unrelated path was changed. This is the final
+authorized ownership-correction record; implementation files remain immutable.
+This is the final authorized ownership-correction record; implementation files remain immutable.
+
+Raw fidelity note: the exact retained verifier_measurement includes stdout_bytes=0; the
+preceding summary line omitted only that field. The byte-faithful raw JSON is recorded in
+CURRENT_TASK.md, and no binary or raw log changed.
