@@ -977,6 +977,31 @@ class QueueV12Tests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT proof_attempts_used,live_lease_count FROM queue_metadata").fetchone(), (101, 1))
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
 
+    def test_terminal_completion_requires_verifier_reservation_without_state_or_outbox_effects(self) -> None:
+        for status, accepted, error_code in (("VERIFIED", True, None), ("REJECTED", False, "proof_or_source_not_accepted")):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                clock = _Clock()
+                config, _composition_config, owner, store = _new_store(root, clock)
+                try:
+                    batch = _prepare(store, config, clock)
+                    work = store._claim_next_batch()
+                    self.assertIsNotNone(work)
+                    verifier_result = _verifier_result(config, batch, accepted=accepted)
+                    controls = _controls(batch.operation_refs)
+                    before = _counts(root / "state.sqlite")
+                    with self.assertRaisesRegex(QueueLeaseError, "completion_not_live"):
+                        store._complete_batch(work, status=status, verifier_result=verifier_result, error_code=error_code, state_controls=controls)
+                    self.assertEqual(_counts(root / "state.sqlite"), before)
+                    with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                        self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "LEASED")
+                        self.assertEqual(connection.execute("SELECT status,verifier_status FROM queue_attempts WHERE batch_id=?", (batch.batch_id,)).fetchone(), ("RESERVED", "UNRESERVED"))
+                        self.assertEqual(connection.execute("SELECT verifier_v_used FROM queue_metadata WHERE id=1").fetchone()[0], 0)
+                    verify_database(root / "state.sqlite")
+                finally:
+                    store._close()
+                    owner.close()
+
     def test_accepted_batch_commits_queue_and_all_state_rows_once(self) -> None:
         batch = _prepare(self.store, self.config, self.clock, proof=b"raw_proof raw_signature frame_payload challenge_bytes opening_bytes response_bytes")
         verifier = _Verifier(self.config)
@@ -1039,6 +1064,7 @@ class QueueV12Tests(unittest.TestCase):
                 try:
                     batch = _prepare(store, config, clock)
                     work = store._claim_next_batch()
+                    store._reserve_verifier_launch(work)
                     controls = _controls(batch.operation_refs)
                     verifier_result = _verifier_result(config, batch)
                     store._before_fault = lambda actual, expected=label: (_ for _ in ()).throw(RuntimeError("injected")) if actual == expected else None
@@ -1046,7 +1072,7 @@ class QueueV12Tests(unittest.TestCase):
                         store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
                     with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
                         self.assertEqual(connection.execute("SELECT status FROM queue_batches WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "LEASED")
-                        self.assertEqual(connection.execute("SELECT status FROM queue_attempts WHERE batch_id=?", (batch.batch_id,)).fetchone()[0], "RESERVED")
+                        self.assertEqual(connection.execute("SELECT status,verifier_status FROM queue_attempts WHERE batch_id=?", (batch.batch_id,)).fetchone(), ("RESERVED", "STARTED"))
                         self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0], 1)
                         self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_results").fetchone()[0], 0)
                         self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
@@ -1059,6 +1085,7 @@ class QueueV12Tests(unittest.TestCase):
     def test_stale_lease_token_is_fenced_without_any_state_write(self) -> None:
         batch = _prepare(self.store, self.config, self.clock)
         work = self.store._claim_next_batch()
+        self.store._reserve_verifier_launch(work)
         controls = _controls(batch.operation_refs)
         verifier_result = _verifier_result(self.config, batch)
         stale = replace(work, lease_token=bytes(32))
@@ -1070,6 +1097,7 @@ class QueueV12Tests(unittest.TestCase):
     def test_duplicate_replay_requires_complete_outbox_and_event_chain(self) -> None:
         batch = _prepare(self.store, self.config, self.clock)
         work = self.store._claim_next_batch()
+        self.store._reserve_verifier_launch(work)
         controls = _controls(batch.operation_refs)
         verifier_result = _verifier_result(self.config, batch)
         self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)
@@ -1093,6 +1121,7 @@ class QueueV12Tests(unittest.TestCase):
     def test_duplicate_replay_fences_durable_identity_before_composition(self) -> None:
         batch = _prepare(self.store, self.config, self.clock)
         work = self.store._claim_next_batch()
+        self.store._reserve_verifier_launch(work)
         controls = _controls(batch.operation_refs)
         verifier_result = _verifier_result(self.config, batch)
         first = self.store._complete_batch(work, status="VERIFIED", verifier_result=verifier_result, state_controls=controls)

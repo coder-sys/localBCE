@@ -171,6 +171,7 @@ class Profile12StateTests(unittest.TestCase):
         self.store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"proof")))
         work = self.store._claim_next_batch()
         self.assertIsNotNone(work)
+        self.store._reserve_verifier_launch(work)
         result = BatchVerifierResult(True, True, batch.proof_context, batch.public_coin, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", self.config.qualification_flags)
         self.store._complete_batch(work, status="VERIFIED", verifier_result=result, state_controls=_controls(batch.operation_refs))
         return batch
@@ -462,6 +463,19 @@ class Profile12StateTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentQueueError, "lifecycle_verification_started"):
             _verify_lifecycle(events, "LEASED", 1, reservation_before=0, reservation_after=101)
 
+    def test_independent_rejects_terminal_completion_without_verifier_events(self) -> None:
+        def event(kind: str, status: str, attempt: int, **extra: object) -> dict[str, object]:
+            return {"kind": kind, "status": status, "attempt": attempt, "error_code": None, "member_count": 100, **extra}
+
+        events = [
+            event("BATCH_ISSUED", "AWAITING_HANDOFF", 0, identity_digest="00" * 64, reservation_before=0, reservation_after=101),
+            event("HANDOFF_SUBMITTED", "QUEUED", 0),
+            event("VERIFICATION_STARTED", "LEASED", 1, reservation_before=0, reservation_after=101),
+            event("BATCH_COMPLETED", "VERIFIED", 1),
+        ]
+        with self.assertRaisesRegex(IndependentQueueError, "lifecycle_verifier"):
+            _verify_lifecycle(events, "VERIFIED", 1, reservation_before=0, reservation_after=101)
+
     def test_capacity_rejection_happens_before_any_rng(self) -> None:
         self.store.issue_batch(template=self._template())
         with patch.object(queue.secrets, "token_bytes", side_effect=AssertionError("rng must not run")) as sampler:
@@ -533,6 +547,36 @@ class Profile12StateTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 with self.assertRaisesRegex(QueueIntegrityError, code):
                     replace(admission, **{field_name: value})
+
+    def test_source_admission_rejects_unpinned_identity_before_row_or_accounting_mutation(self) -> None:
+        batch = self.store.issue_batch(template=self._template())
+        base = self._source_arguments(batch)
+        cases = (
+            ("unknown-profile", "not-an-approved-source", SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES, SOURCE_APPLIANCE_EXECUTABLE_SHA256),
+            ("mismatched-size", "accepted", SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES + 1, SOURCE_APPLIANCE_EXECUTABLE_SHA256),
+            ("mismatched-hash", "accepted", SOURCE_APPLIANCE_EXECUTABLE_SIZE_BYTES, b"x" * 32),
+        )
+        for name, identity_profile, size, executable_sha256 in cases:
+            with self.subTest(identity=name):
+                arguments = dict(base)
+                arguments.update(
+                    source_configuration_digest=source_configuration_digest(
+                        identity_profile=identity_profile,
+                        executable_size_bytes=size,
+                        executable_sha256=executable_sha256,
+                        retry_limit=SOURCE_ADMISSION_RETRY_LIMIT,
+                    ),
+                    source_identity_profile=identity_profile,
+                    source_executable_size_bytes=size,
+                    source_executable_sha256=executable_sha256,
+                )
+                with self.assertRaisesRegex(QueueIntegrityError, "source_executable_identity"):
+                    self.store.admit_source_launch(batch=batch, **arguments)
+        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_source_admissions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT source_a_used,source_s_used,source_m_used FROM queue_metadata WHERE id=1").fetchone(), (0, 0, 0))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_transitions WHERE transition_kind='SOURCE_AUTHORIZED'").fetchone()[0], 0)
+        verify_database(self.root / "state.sqlite", expected_config=self.config.as_json)
 
     def test_source_completion_postcommit_fault_holds_without_reproof(self) -> None:
         batch = self.store.issue_batch(template=self._template())
@@ -1335,7 +1379,8 @@ class Profile12StateTests(unittest.TestCase):
                 connection.execute(dict(queue._TRIGGER_DEFS)["queue_attempts_transition_guard"])
                 connection.execute(dict(queue._TRIGGER_DEFS)["queue_results_no_update"])
                 connection.commit()
-            self._set_event_time(path, 4, timestamp)
+                terminal_sequence = int(connection.execute("SELECT sequence FROM queue_transitions WHERE transition_kind='BATCH_COMPLETED'").fetchone()[0])
+            self._set_event_time(path, terminal_sequence, timestamp)
 
         validity_path = self._copy_state("terminal-at-validity-boundary.sqlite")
         shift_terminal(validity_path, valid_until)
@@ -1360,6 +1405,7 @@ class Profile12StateTests(unittest.TestCase):
             boundary_store.submit_batch_handoff(issued_batch=issued, proof_stream=VolatileProofHandoff(bytearray(b"proof")))
             work = boundary_store._claim_next_batch()
             self.assertIsNotNone(work)
+            boundary_store._reserve_verifier_launch(work)
             result = BatchVerifierResult(True, True, issued.proof_context, issued.public_coin, issued.batch_root, boundary_config.source_auth_profile, boundary_config.source_key_epoch, "accepted", boundary_config.qualification_flags)
             boundary_store._complete_batch(work, status="VERIFIED", verifier_result=result, state_controls=_controls(issued.operation_refs))
             verify_database(boundary_root / "state.sqlite", expected_config=boundary_config.as_json)
@@ -1417,12 +1463,12 @@ class Profile12StateTests(unittest.TestCase):
         event_path = self.root / "verified-event-error.sqlite"
         event_path.write_bytes(verified_bytes)
         with closing(sqlite3.connect(str(event_path))) as connection:
-            raw = bytes(connection.execute("SELECT event_bytes FROM queue_transitions WHERE sequence=4").fetchone()[0])
+            raw = bytes(connection.execute("SELECT event_bytes FROM queue_transitions WHERE transition_kind='BATCH_COMPLETED'").fetchone()[0])
             event = json.loads(raw.decode("ascii"))
             event["error_code"] = "lease_expired"
             encoded = json.dumps(event, sort_keys=True, separators=(",", ":")).encode("ascii")
             connection.execute("DROP TRIGGER queue_transitions_no_update")
-            connection.execute("UPDATE queue_transitions SET event_bytes=? WHERE sequence=4", (encoded,))
+            connection.execute("UPDATE queue_transitions SET event_bytes=? WHERE transition_kind='BATCH_COMPLETED'", (encoded,))
             connection.execute(dict(queue._TRIGGER_DEFS)["queue_transitions_no_update"])
             connection.commit()
         self._rehash_transitions(event_path)
@@ -1439,6 +1485,7 @@ class Profile12StateTests(unittest.TestCase):
             rejected_store.submit_batch_handoff(issued_batch=rejected_batch, proof_stream=VolatileProofHandoff(bytearray(b"proof")))
             rejected_work = rejected_store._claim_next_batch()
             self.assertIsNotNone(rejected_work)
+            rejected_store._reserve_verifier_launch(rejected_work)
             rejected_result = BatchVerifierResult(False, True, rejected_batch.proof_context, rejected_batch.public_coin, rejected_batch.batch_root, rejected_config.source_auth_profile, rejected_config.source_key_epoch, "rejected", rejected_config.qualification_flags)
             rejected_store._complete_batch(rejected_work, status="REJECTED", verifier_result=rejected_result, error_code="proof_or_source_not_accepted")
             verify_database(rejected_root / "state.sqlite", expected_config=rejected_config.as_json)

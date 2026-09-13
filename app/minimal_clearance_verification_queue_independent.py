@@ -663,7 +663,7 @@ def _verify_lifecycle(events: list[dict[str, Any]], status: str, attempt: int, *
     if attempt != 1:
         _fail("lifecycle_terminal")
     if status in {"VERIFIED", "REJECTED"}:
-        if verifier_state not in {None, "COMPLETED"}:
+        if verifier_state != "COMPLETED":
             _fail("lifecycle_verifier")
         expected_kind = "BATCH_COMPLETED"
         expected_status = status
@@ -848,10 +848,10 @@ def _verify_terminal_bindings(
     proof_accepted = bool(result[4])
     source_authenticated = bool(result[5])
     if status == "VERIFIED":
-        if values[0] is not None or str(attempt_row[6]) != "ACCEPTED" or str(attempt_row[9]) != "accepted" or str(result[9]) != "accepted" or not (proof_accepted and source_authenticated) or receipt["error_code"] is not None or receipt["result_code"] != "accepted" or verifier_status != ("COMPLETED" if verifier_event_kinds else "UNRESERVED"):
+        if values[0] is not None or str(attempt_row[6]) != "ACCEPTED" or str(attempt_row[9]) != "accepted" or str(result[9]) != "accepted" or not (proof_accepted and source_authenticated) or receipt["error_code"] is not None or receipt["result_code"] != "accepted" or verifier_event_kinds != ["VERIFIER_STARTED", "VERIFIER_COMPLETED"] or verifier_status != "COMPLETED":
             _fail("terminal_acceptance")
     elif status == "REJECTED":
-        if values[0] is None or str(attempt_row[6]) != "REJECTED" or str(attempt_row[9]) != "rejected" or str(result[9]) != "rejected" or (proof_accepted and source_authenticated) or receipt["result_code"] != "rejected" or verifier_status != ("COMPLETED" if verifier_event_kinds else "UNRESERVED"):
+        if values[0] is None or str(attempt_row[6]) != "REJECTED" or str(attempt_row[9]) != "rejected" or str(result[9]) != "rejected" or (proof_accepted and source_authenticated) or receipt["result_code"] != "rejected" or verifier_event_kinds != ["VERIFIER_STARTED", "VERIFIER_COMPLETED"] or verifier_status != "COMPLETED":
             _fail("terminal_rejection")
     elif status == "HELD":
         result_code = result_codes[0]

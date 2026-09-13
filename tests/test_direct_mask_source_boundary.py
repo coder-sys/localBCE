@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -272,6 +274,38 @@ class DirectMaskSourceBoundaryTests(unittest.TestCase):
                     with self.assertRaisesRegex(SourceBoundaryError, code):
                         self.caller.prove_one(authorization=self._authorization(mutated), source_key_epoch=1)
                 runner.assert_not_called()
+
+    def test_one_use_authorization_serializes_concurrent_native_entry(self) -> None:
+        batch = self._batch()
+        authorization = self._authorization(batch)
+        entered = threading.Event()
+        release = threading.Event()
+        call_lock = threading.Lock()
+        native_calls = 0
+
+        def runner(executable: Path, arguments: tuple[str, ...], payload: bytearray, **kwargs: object) -> ContainedVerifierResult:
+            nonlocal native_calls
+            del executable, arguments, payload, kwargs
+            with call_lock:
+                native_calls += 1
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("native stub was not released")
+            return _contained(stdout=b"c" * SOURCE_APPLIANCE_CAPSULE_BYTES)
+
+        with patch.object(source_boundary, "run_contained_verifier_stream", side_effect=runner):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                winner = pool.submit(self.caller.prove_one, authorization=authorization, source_key_epoch=1)
+                self.assertTrue(entered.wait(5))
+                loser = pool.submit(self.caller.prove_one, authorization=authorization, source_key_epoch=1)
+                with self.assertRaisesRegex(SourceBoundaryError, "source_authorization"):
+                    loser.result(timeout=5)
+                release.set()
+                capsule = winner.result(timeout=5)
+        self.assertEqual(native_calls, 1)
+        self.assertTrue(authorization.consumed)
+        self.assertEqual(capsule, bytearray(b"c" * SOURCE_APPLIANCE_CAPSULE_BYTES))
+        capsule.clear()
 
     def test_config_pin_timeout_and_type_fail_closed(self) -> None:
         cases = (

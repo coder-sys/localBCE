@@ -107,7 +107,7 @@ class _Verifier:
         self.calls += 1
         while stream.read(17):
             pass
-        return BatchVerifierResult(True, True, batch.proof_statement, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
+        return BatchVerifierResult(True, True, batch.proof_context, batch.public_coin, batch.batch_root, self.config.source_auth_profile, self.config.source_key_epoch, "accepted", ())
 
 
 class _Port:

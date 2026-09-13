@@ -98,6 +98,16 @@ SOURCE_ADMISSION_S_UPPER: Final[int] = SOURCE_ADMISSION_RETRY_LIMIT
 SOURCE_ADMISSION_M_UPPER: Final[int] = RANGE100_COUNT
 SOURCE_ADMISSION_U_ISSUANCES: Final[int] = 1
 VERIFIER_LAUNCH_V_UPPER: Final[int] = 1
+_SOURCE_IDENTITY_PINS: Final[dict[str, tuple[int, bytes]]] = {
+    "accepted": (
+        275_968,
+        bytes.fromhex("D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8"),
+    ),
+    "child-performance": (
+        275_968,
+        bytes.fromhex("E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9"),
+    ),
+}
 MAX_VALIDITY_WINDOW_MS: Final[int] = 3_600_000
 MAX_SOURCE_KEY_EPOCH: Final[int] = 2**64 - 1
 DIRECTIVES: Final[tuple[str, ...]] = (
@@ -685,6 +695,9 @@ class SourceAdmission:
             retry_limit=self.retry_limit,
         ) != self.source_configuration_digest:
             _raise_fixed(QueueIntegrityError("source_configuration_digest"))
+        expected_identity = _SOURCE_IDENTITY_PINS.get(self.source_identity_profile)
+        if expected_identity is None or (self.source_executable_size_bytes, self.source_executable_sha256) != expected_identity:
+            _raise_fixed(QueueIntegrityError("source_executable_identity"))
         if self.a_upper != SOURCE_ADMISSION_A_UPPER or self.s_upper != SOURCE_ADMISSION_S_UPPER or self.m_upper != SOURCE_ADMISSION_M_UPPER or self.u_issuances != SOURCE_ADMISSION_U_ISSUANCES:
             _raise_fixed(QueueIntegrityError("source_admission_bounds"))
 
@@ -692,23 +705,26 @@ class SourceAdmission:
 class SourceLaunchAuthorization:
     """One-shot volatile capability returned only after the durable claim commit."""
 
-    __slots__ = ("_admission", "_consumed")
+    __slots__ = ("_admission", "_consumed", "_lock")
 
     def __init__(self, admission: SourceAdmission) -> None:
         if type(admission) is not SourceAdmission:
             _raise_fixed(QueueIntegrityError("source_authorization"))
         self._admission = admission
         self._consumed = False
+        self._lock = threading.Lock()
 
     @property
     def consumed(self) -> bool:
-        return self._consumed
+        with self._lock:
+            return self._consumed
 
     def consume(self) -> SourceAdmission:
-        if self._consumed:
-            _raise_fixed(QueueConflictError("source_authorization_used"))
-        self._consumed = True
-        return self._admission
+        with self._lock:
+            if self._consumed:
+                _raise_fixed(QueueConflictError("source_authorization_used"))
+            self._consumed = True
+            return self._admission
 
 
 def _generate_operation_refs() -> tuple[bytes, ...]:
@@ -2656,6 +2672,8 @@ class _VerificationQueueStore:
                 if attempt_row is None or str(attempt_row[6]) != "RESERVED":
                     _raise_fixed(QueueLeaseError("completion_not_live"))
                 verifier_status = str(attempt_row[_ATTEMPT_VERIFIER_STATUS])
+                if status in {"VERIFIED", "REJECTED"} and verifier_status != "STARTED":
+                    _raise_fixed(QueueLeaseError("completion_not_live"))
                 verifier_status_after = verifier_status
                 if verifier_status == "STARTED":
                     verifier_status_after = "COMPLETED" if status in {"VERIFIED", "REJECTED"} else "UNKNOWN"

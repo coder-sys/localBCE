@@ -809,6 +809,7 @@ now = 1700000000000
 batch = store.issue_batch(template=OperationTemplate("crash", 1, config.profile_version, now - 100, now + 60000))
 store.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"crash-proof")))
 work = store._claim_next_batch()
+store._reserve_verifier_launch(work)
 result = BatchVerifierResult(False, False, batch.proof_context, batch.public_coin, batch.batch_root, config.source_auth_profile, config.source_key_epoch, "rejected", ())
 store._complete_batch(work, status="REJECTED", verifier_result=result, error_code="proof_or_source_not_accepted")
 '''
