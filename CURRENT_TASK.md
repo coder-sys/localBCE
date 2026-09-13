@@ -36,20 +36,14 @@ amount. Reporting and timeliness remain separate dimensions.
 
 ### Stage sequence and resume point
 
-- **A — documentation and pins:** completed in the current documentation checkpoint; verify its
-  commit and diff before proceeding.
-- **B — focused source checks/baselines:** reproduce exact-schema rejection, queue/State/outbox
-  atomicity, the reconciliation-capacity behavior, independent-checker dependencies, and the
-  inherited documentation-governance failure. Fix only demonstrated defects and keep raw failures.
-- **C — durable financial slice:** implement versioned packs/populations, obligations, typed
-  evidence, exact cents/overflow/duplicate/reversal accounting, evaluations, cases,
-  determinations, corrections, stale fences, immutable actions, atomic history/projection/outbox,
-  and the independently implemented schema/history checker.
-- **D — Mirror/Continuity:** expose real same-owner queries/commands and evidence references; export
-  and validate/restore a bounded versioned responsibility package into a shadow database with
-  dispatch disabled and no second live writer.
-- **E — acceptance/performance:** run all twelve acceptance cases, separate unchanged native
-  regressions, bounded oversized-input/privacy/egress checks, and guarded measurements.
+- **A — documentation and pins:** completed in the documentation checkpoint.
+- **B — focused source checks/baselines:** completed with the retained exact-schema, atomicity,
+  reconciliation-capacity, independent-checker, and documentation-governance evidence.
+- **C — durable financial slice:** implemented and independently verified in the source checkpoint.
+- **D — Mirror/Continuity:** implemented and independently verified with shadow-only restore,
+  dispatch disabled, and no second live writer.
+- **E — acceptance/performance:** completed for the twelve synthetic cases, bounded privacy/egress
+  checks, and one guarded measurement; unchanged native regressions were intentionally not replayed.
 
 ### Protected boundaries and nonclaims
 
@@ -1061,3 +1055,101 @@ Lean artifact is linked here, and no PQ, production, payment, PHI, or activation
 Earlier semantic checkouts contain Lean source and an adapter, but their artifact identity and
 formal linkage to this candidate remain open. Fresh Lean Engine/State/Queue/Security workstreams
 are separate and not part of this completed task's claims.
+
+### Financial workflow implementation and acceptance closure — 2026-09-13
+
+The bounded financial-workflow phase started from source checkpoint
+`ed6f51426d0b410759d15ff69728fff708690192`, tree
+`944114b77cb0faf230eb0518daeb86bc2a344427`, parent
+`dfc74027439c97cac39d589d680d07f19360ce89`. The source implementation is committed at
+`99d28687df0e7d5cf6a46e73db22f42a9902b789`, tree
+`82087b8f740e00c55d85a4717cd45617e96d9bc8`, parent
+`ed6f51426d0b410759d15ff69728fff708690192`. That commit contains exactly these eight authorized
+paths: `app/right_rail_financial_owner.py`, `app/right_rail_financial_owner_independent.py`,
+`app/right_rail_financial_mirror.py`, `tests/rightrail_financial_expected_cases.py`,
+`tests/test_right_rail_financial_acceptance.py`, `tests/test_right_rail_financial_independent.py`,
+`tests/test_right_rail_financial_mirror.py`, and `tools/right_rail_financial_cli.py`.
+
+The implementation is a synthetic, local, nonactivating financial owner with a sole-writer
+versioned schema, exact integer cents and bounded inputs, typed evidence, immutable history/
+projection/outbox transitions, authority and revision fences, duplicate/common-origin/conflict/
+reversal handling, redacted same-owner Mirror queries/commands, and bounded Continuity export/
+validation/shadow restore. Dispatch is disabled and restore creates no second live writer. The
+fixed fixture remains twenty hospitals and 100,000,000 cents with hand-derived expected values;
+no production formula or external payment/PHI source is used.
+
+The final guarded acceptance command used the existing wrapper
+`C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\pq-wide-seed-native-20260913\build-filter-native\run_guarded_v3.ps1`
+and the existing mutex/cap/reserve values. Run r8 retained the complete child stderr at
+`C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\pq-wide-seed-native-20260913\build-filter-native\guarded-command-financial-owner-acceptance-mirror-20260913-r8.stderr.log`
+(5666 bytes, SHA-256
+`F0859F3DC4496CD775F627DB09F70E3026EC0122C19CC197A398799F607E7D98`); matching stdout was
+0 bytes with SHA-256 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`. The
+raw decisive output is:
+
+```text
+Ran 29 tests in 7.582s
+
+OK
+```
+
+The 29 passing tests are 9 independent-checker/tamper tests, 13 acceptance tests covering
+CASE_01 through CASE_12 plus fixture independence, and 7 same-owner Mirror/Continuity tests.
+The run had no warning lines. Guard telemetry was
+`PHYSICAL_PREFLIGHT free_bytes=2779701248 reserve_bytes=3221225472 reserve_floor_bytes=2576980378 tolerance_percent=20`;
+the child exited `7/0`, main-run minimum free memory was `2687946752`, peak working-set/private
+memory was `38440960/23179264`, cleanup was `PASS`, the mutex was released, and the outer exit was
+`0`.
+
+The final bounded measurement was run through the same guard after its launcher was corrected.
+Its stdout is retained at
+`C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\pq-wide-seed-native-20260913\build-filter-native\guarded-command-financial-owner-measurement-20260913-r11.stdout.log`
+(484 bytes, SHA-256
+`B2013379A5E8EFAAB55A7A7BE2234C38F9E02B68132E7C684E5ABDE24FF88905`); stderr was 0 bytes with
+SHA-256 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`. Its complete raw
+measurement line is:
+
+```text
+FINANCIAL_MEASUREMENT {"acceptance_cases_exercised": 1, "activation": false, "build_population_ms": 273.799, "continuity_package_bytes": 123215, "continuity_table_count": 15, "final_action_count": 1, "final_conflict_count": 1, "final_evidence_count": 27, "final_flow_ms": 73.507, "final_payment_count": 3, "independent_verify_and_continuity_ms": 29.173, "population_items": 20, "production_usable": false, "support_records": 20, "target_status": "NOT_SUPPLIED", "total_ms": 379.703}
+```
+
+Measurement guard telemetry was `PHYSICAL_PREFLIGHT free_bytes=2964697088` with the unchanged
+reserve floor, child exit `7/0`, main-run minimum free memory `2922229760`, peak working-set/private
+memory `33034240/18784256`, cleanup `PASS`, mutex released, and outer exit `0`. This is one
+bounded sample, not a percentile, capacity commitment, or financial-ingestion SLA; the reference
+plan supplies no numerical financial SLA target.
+
+The retained failed attempts were corrected and not relabeled as passes. r1 recorded `Ran 29
+tests ... FAILED (errors=23)` after the shared owner `IndexError: tuple index out of range`; r2
+recorded `Ran 29 tests ... FAILED (failures=2, errors=20)` with claim chronology, the acceptance
+`NameError: name 'self' is not defined`, continuity failure, and Windows cleanup-lock evidence;
+r7 recorded `Ran 29 tests ... FAILED (errors=4)` with the continuity byte-parser and staged-item
+duplicate defects. Their retained stderr identities are respectively r1 81310 bytes /
+`CB9CE773373AB522ECE6360FAEF5F0E519BE6A41B1DDCF873822E255D983B1B1`, r2 39346 bytes /
+`D738A3E9DEE8C88B5A3399350EEBAA19F0C7E45BF99F455B78A432B58B9511E2`, and r7 13914 bytes /
+`A24CACCCA8CABE4D87D6B23007ADB1F130692B6518BE9832B4CA9E1986379441`. The source corrections
+were the SQLite row-index fix, mutation-time chronology fence, instance assertion helper,
+Windows-safe independent-checker connection closure, byte decoding before continuity parsing, and
+population-scoped duplicate detection.
+
+Procedural and resource skips remain explicit: r3 stopped at the wrapper error
+`Parameter cannot be processed because parameter name 'c' is ambiguous`; r4 produced zero child
+stdout/stderr and therefore no test evidence despite an outer exit `0`; r5 and r6 stopped before
+launch because free memory was `2525577216` and `2428116992`, respectively, below the unchanged
+`2576980378` reserve floor; r9 likewise stopped at `2574143488`; and r10 stopped with
+`ModuleNotFoundError: No module named 'app'` (retained stderr 356 bytes, SHA-256
+`8CFA8E928117A9511807D6016B98DC234059313C05158D390B28734A35C76877`) before r11 was corrected.
+No cap, predicate, mutex, or physical reserve was changed.
+
+Unchanged native regression executions: 0, explicitly skipped because the driver prohibited
+replay of unchanged native suites and the assigned pins were unchanged. The retained pins are
+source executable 275968 bytes / SHA-256
+`E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9`, verifier executable 240640
+bytes / SHA-256 `F35F6AF28EC2D269831CFB6DD1C2414D439FFEC2B26C73CC39495720D9B9E5D`, and public
+header SHA-256 `ED5B965981E766AA3EFB59303D33719B6C1579C0025D615BB8354AA63AC6FAC9`. Archive
+refreshes: 0; production/activation runs: 0; real PHI/payment runs: 0. The inherited B-stage
+documentation-governance warning remains six pre-existing unregistered README paths with 11
+tests and 2 errors; it was not hidden or weakened. The only untracked evidence remains the
+driver-supplied `build-performance/` directory. Claims remain
+`proofSuiteId=null`, `production_usable=false`, `activation=false`,
+`NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.

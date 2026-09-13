@@ -1,7 +1,7 @@
 # Mirror architecture
 
 Updated: 2026-09-13
-Status: synthetic, nonactivating architecture candidate; source boundary remains read-only
+Status: synthetic, nonactivating implementation checkpoint; source boundary remains read-only
 Owner: Mirror source trust, evidence custody, reconciliation, and recovery boundary
 
 Mirror is RightRail's evidence, reconciliation, and operational-continuity product. Its source
@@ -23,6 +23,10 @@ approved shadow/test database with dispatch disabled. Existing source Recovery r
 for its own sanitized observation chain and publication points; it is not silently reused as the
 financial owner and no second live writer is permitted. The financial package has its own schema
 version and independent checker, and restore validates before publication.
+
+The source implementation checkpoint is `99d28687df0e7d5cf6a46e73db22f42a9902b789`. Its guarded
+independent-checker, twelve-case acceptance, Mirror, and continuity tests pass; the remaining
+qualification dependencies below are unchanged.
 
 ## Retained source boundary
 

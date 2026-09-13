@@ -37,11 +37,15 @@ The implementation checkout is branch `rightrail-financial-workflow-20260913` at
 was clean and only the driver-supplied `build-performance/` evidence directory was untracked.
 The request hash and reference-plan PDF hash are recorded in `CURRENT_TASK.md` and `STATE.md`.
 
-The work is staged as: governing documentation and pins; focused seam checks and baseline
-reproductions; a durable financial owner with an independent checker; same-owner Mirror queries/
-commands and bounded shadow Continuity export/restore; then the twelve acceptance cases, separate
-native regressions, and guarded bounded measurements. Numerical financial SLAs are not supplied by
-the reference plan, so measurements must report provisional budgets and unknown targets honestly.
+The source implementation checkpoint is
+`99d28687df0e7d5cf6a46e73db22f42a9902b789`, tree
+`82087b8f740e00c55d85a4717cd45617e96d9bc8`, parent
+`ed6f51426d0b410759d15ff69728fff708690192`. It contains the durable financial owner, independent
+checker, same-owner Mirror, bounded shadow Continuity, fixed-value acceptance fixture, and local
+CLI. The twelve acceptance cases, bounded privacy/egress checks, and one guarded measurement pass;
+unchanged native regressions remain separate and were not replayed. Numerical financial SLAs are
+not supplied by the reference plan, so the measurement reports provisional observations and an
+unknown target honestly.
 
 ## Read in this order
 

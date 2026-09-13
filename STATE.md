@@ -1149,3 +1149,55 @@ commits; their executable identity and integration into this candidate remain un
 current runtime uses a synthetic State port. The fresh Lean Engine, State, Queue, and Security
 children are separate owner-authorized workstreams and do not change this record until their
 actual source/build/artifact evidence is reviewed.
+
+### Financial workflow implementation and acceptance closure — 2026-09-13
+
+The financial source phase began at `ed6f51426d0b410759d15ff69728fff708690192` /
+`944114b77cb0faf230eb0518daeb86bc2a344427` with parent
+`dfc74027439c97cac39d589d680d07f19360ce89`, and is implemented by source commit
+`99d28687df0e7d5cf6a46e73db22f42a9902b789` /
+`82087b8f740e00c55d85a4717cd45617e96d9bc8`, parent
+`ed6f51426d0b410759d15ff69728fff708690192`. The commit contains exactly the eight authorized
+financial owner, independent checker, Mirror, fixture, test, and CLI paths listed in
+`CURRENT_TASK.md`; no protected native, Lean, archive, production, payment, or PHI path changed.
+
+Verified guarded acceptance evidence is retained in the external `build-filter-native` evidence
+directory. The final r8 child output is 5666 bytes, SHA-256
+`F0859F3DC4496CD775F627DB09F70E3026EC0122C19CC197A398799F607E7D98`, and its raw decisive result
+is exactly:
+
+```text
+Ran 29 tests in 7.582s
+
+OK
+```
+
+The pass covers 9 independent-checker tests, 13 acceptance tests (CASE_01–CASE_12 plus fixture
+independence), and 7 Mirror/Continuity tests. The unchanged guard recorded preflight free
+`2779701248`, reserve `3221225472`, reserve floor `2576980378`, minimum free `2687946752`, peak
+working-set/private `38440960/23179264`, child exits `7/0`, cleanup `PASS`, and mutex release;
+the child had no warning lines and the outer command exited `0`.
+
+The final r11 measurement retained stdout 484 bytes, SHA-256
+`B2013379A5E8EFAAB55A7A7BE2234C38F9E02B68132E7C684E5ABDE24FF88905`, stderr 0 bytes, and the
+following raw line:
+
+```text
+FINANCIAL_MEASUREMENT {"acceptance_cases_exercised": 1, "activation": false, "build_population_ms": 273.799, "continuity_package_bytes": 123215, "continuity_table_count": 15, "final_action_count": 1, "final_conflict_count": 1, "final_evidence_count": 27, "final_flow_ms": 73.507, "final_payment_count": 3, "independent_verify_and_continuity_ms": 29.173, "population_items": 20, "production_usable": false, "support_records": 20, "target_status": "NOT_SUPPLIED", "total_ms": 379.703}
+```
+
+The measurement guard recorded preflight free `2964697088`, minimum free `2922229760`, peak
+working-set/private `33034240/18784256`, child exits `7/0`, cleanup `PASS`, mutex release, and
+outer exit `0`. This is one bounded observation only; no percentile, financial SLA, qualification,
+or production claim follows.
+
+The retained r1/r2/r7 failures and corrections are documented in `CURRENT_TASK.md`; none was
+silently converted to a pass. r3 was a PowerShell `-c` parameter ambiguity, r4 had zero child
+output and no evidence, r5/r6/r9 were unchanged physical-reserve preflight refusals, and r10 was
+the corrected-launcher `ModuleNotFoundError: No module named 'app'`. Unchanged native regression
+executions were 0 because replay was prohibited and pins were unchanged; archive refresh,
+production/activation, and real-data/payment executions were also 0. The six pre-existing
+unregistered README paths remain the inherited documentation-governance warning (11 tests, 2
+errors). The only untracked path is `build-performance/`. Claims remain synthetic and
+nonactivating: `proofSuiteId=null`, `production_usable=false`, `activation=false`,
+`NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.

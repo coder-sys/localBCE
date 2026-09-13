@@ -10,11 +10,13 @@ application.
 
 ## Current integration boundary — implemented versus proposed
 
-The integration branch starts at `be712f56117ee71f2f2477f139a9894a209a2985`, tree
-`11191daf7d1604969649262300efb6a62b25fcff`. It is synthetic, local, nonactivating, and currently
-documentation-first. The durable financial slice, independent checker, same-owner Mirror surface,
-and Continuity shadow export/restore are the active implementation target; their status is recorded
-as implemented only after the corresponding tests pass.
+The integration branch started at `be712f56117ee71f2f2477f139a9894a209a2985`, tree
+`11191daf7d1604969649262300efb6a62b25fcff`. It remains synthetic, local, and nonactivating. The
+durable financial slice, independently implemented checker, same-owner Mirror surface, and bounded
+Continuity shadow export/restore are implemented at source checkpoint
+`99d28687df0e7d5cf6a46e73db22f42a9902b789`, tree
+`82087b8f740e00c55d85a4717cd45617e96d9bc8`, after the guarded acceptance and measurement gates
+recorded in `CURRENT_TASK.md` and `STATE.md`.
 
 The retained source-admission/ownership candidate at `1306e38901b73790dfb2a973b4ac44daf2ff6869`
 and its 100-operation evidence remain a separate bounded generation. Lean source/adapters in other
