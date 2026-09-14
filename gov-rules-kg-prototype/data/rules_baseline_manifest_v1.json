@@ -1,0 +1,32 @@
+{
+  "schema_version": "localbce-rules-baseline-manifest-v1",
+  "runtime_activation": false,
+  "proof_binding": false,
+  "adjudication_effect": false,
+  "legal_verification_status": "not_verified",
+  "expected_counts": {
+    "source_candidates": 226,
+    "mapping_records": 221,
+    "promotion_records": 221,
+    "qa_pass_records": 191,
+    "programs": 51,
+    "missing_lineage": 5
+  },
+  "artifacts": [
+    {
+      "role": "source_candidates",
+      "path": "reports/claude_web_candidate_corpus.json",
+      "sha256": "902bfdb754811f7e3b4681200b0087b66d588ee2ca156b7e022e353d8a0f0bd5"
+    },
+    {
+      "role": "mapping_qa",
+      "path": "reports/claude_web_mapping_qa.json",
+      "sha256": "ab7ca08c9a7fc53885dfac164375934d7d688be336191c9713bd7671a4b0e847"
+    },
+    {
+      "role": "promotion_reviews",
+      "path": "reports/claude_web_promotion_ready.json",
+      "sha256": "914952623fbc5d18e07e2d8061899796feab1d7653d52c3369f00ee57f5cfb15"
+    }
+  ]
+}

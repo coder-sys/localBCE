@@ -122,8 +122,14 @@ proof, submit a transaction, or alter `adjudication_result.json`.
 ## Full Validation
 
 ```bash
+python3 scripts/validate_rules_baseline.py
 bash scripts/validate_rules_pipeline.sh
 ```
+
+The baseline validator pins the raw candidate, mapping-QA, and promotion-review
+artifacts by SHA-256. It also rechecks the 226/221/191 lineage counts, all 51
+programs, HTTPS provenance, and the non-runtime, non-proof, legally unverified
+boundary before derivative promotion-queue reports are rebuilt.
 
 The live STARK settlement validator also opts into `versioned_g1_g10`, so
 approved and denied proof/settlement tests cover the rules engine and proof

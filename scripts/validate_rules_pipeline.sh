@@ -22,6 +22,9 @@ export PYTHONPATH="${ROOT_DIR}/gov-rules-kg-prototype/src${PYTHONPATH:+:${PYTHON
   exit 1
 }
 
+echo "==> Validate tracked rules baseline integrity"
+"${PYTHON}" "${ROOT_DIR}/scripts/validate_rules_baseline.py"
+
 echo "==> Government rules mapping tests"
 (
   cd "${ROOT_DIR}/gov-rules-kg-prototype"
