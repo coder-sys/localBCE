@@ -17,15 +17,17 @@ The source/docs batch started from the integration branch
 `4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. All evidence is synthetic and
 nonactivating. The preceding source/docs checkpoint is commit
 `1effa625800c778367579416cb15a07555264754`, tree
-`85bd334d002446c598cde41dd61283736c1e006e`; the follow-on changes below are
-the next commit boundary. The persisted owner/Continuity candidate is v3,
+`85bd334d002446c598cde41dd61283736c1e006e`. The follow-on source/test/harness
+implementation is committed at `691d3965f37e935889782215415368d83a9b0b25`,
+tree `b50853d20935e28616e87e51c478ee398d4e3f3c`; the current boundary is
+post-commit review. The persisted owner/Continuity candidate is v3,
 while retained v2/v3 measurement artifacts remain immutable.
 
 1. **A — Documentation and pins.** The maintained Markdown records the current
    v3 identity, ownership, guard, TEST/non-live Continuity boundary, measured
-   evidence, historical measurement boundary, and protected paths. One new
-   source/docs/harness commit remains to be created; it is not a production
-   acceptance record.
+   evidence, historical measurement boundary, and protected paths. The
+   source/docs/harness commit is complete; this is not a production acceptance
+   record.
 2. **B — Focused seams and source correction.** The four initial correctness
    blockers are addressed in the owner, independent checker, Mirror/CLI, and
    acceptance fixtures. Event header integrity, population lifecycle order, and
@@ -63,9 +65,8 @@ Every implementation phase ends with exact Git identity, changed/untracked
 paths, commands and raw trust-critical output, failures/warnings/skips, and
 the next safe action. Missing production targets are recorded as unknown; the
 retained native arithmetic floor is not a financial ingestion SLA. The next
-safe action is final path/status/link/snapshot verification, one new
-source/docs/harness commit, and the bounded Driver/Security review, not a
-prose acceptance declaration.
+safe action is the bounded Driver/Security review of the committed source
+checkpoint, not another source refactor or a prose acceptance declaration.
 
 ## Retained Native-v3 release gate
 

@@ -36,13 +36,16 @@ The documentation/source batch started from branch
 `4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. The preceding source/docs
 checkpoint is parent commit
 `1effa625800c778367579416cb15a07555264754`, tree
-`85bd334d002446c598cde41dd61283736c1e006e`; this follow-on change is the
-next commit boundary. The owner is explicitly versioned as
+`85bd334d002446c598cde41dd61283736c1e006e`. The follow-on source/test/harness
+implementation is committed at
+`691d3965f37e935889782215415368d83a9b0b25`, tree
+`b50853d20935e28616e87e51c478ee398d4e3f3c`; this maintained-document state is
+post-commit. The owner is explicitly versioned as
 `RR/FINANCIAL/OWNER/v3`; Continuity is
 `RR/FINANCIAL/CONTINUITY/v3`. v3 binds event header fields into event IDs and
 heads and reconstructs population lifecycle order independently. The
-follow-on also binds reconstructed imported counts to persisted population
-state, adds an explicit non-live TEST restore/continuation mode, and keeps
+follow-on binds reconstructed imported counts to persisted population state,
+adds an explicit non-live TEST restore/continuation mode, and keeps
 dispatch/egress disabled.
 
 The final guarded affected source/test result is:

@@ -14,7 +14,10 @@ below; they are not touched or staged in this batch.
 
 The preceding source/docs checkpoint is parent commit
 `1effa625800c778367579416cb15a07555264754`, tree
-`85bd334d002446c598cde41dd61283736c1e006e`. The persisted candidate contract
+`85bd334d002446c598cde41dd61283736c1e006e`. The follow-on source/test/harness
+checkpoint is commit `691d3965f37e935889782215415368d83a9b0b25`, tree
+`b50853d20935e28616e87e51c478ee398d4e3f3c`; later documentation-only
+corrections do not alter that source checkpoint. The persisted candidate contract
 is `RR/FINANCIAL/OWNER/v3` with Continuity
 `RR/FINANCIAL/CONTINUITY/v3`. Event IDs/heads bind before/after revisions and
 commit time; the independent checker reconstructs population lifecycle order

@@ -48,12 +48,12 @@ identity rather than retroactively changing this input receipt.
 The prior source/docs batch is committed at parent checkpoint
 `1effa625800c778367579416cb15a07555264754`, tree
 `85bd334d002446c598cde41dd61283736c1e006e`; its parent source checkpoint is
-`a0267e08ec400e0e96003d60cfca6b19df61c796`. The current follow-on working
-tree adds the persisted incomplete-population imported-count binding, explicit
-TEST-only Continuity restoration and recovered Case 11 continuation, and the
-named measurement harness update. This boundary is not a production or
-whole-system acceptance claim. One new commit is required; the next review
-action is the bounded Driver/Security review of that commit.
+`a0267e08ec400e0e96003d60cfca6b19df61c796`. The follow-on source/test/harness
+implementation is committed at `691d3965f37e935889782215415368d83a9b0b25`,
+tree `b50853d20935e28616e87e51c478ee398d4e3f3c`. The current boundary is
+post-commit review; later maintained-document correction commits do not alter
+that source checkpoint. This is not a production or whole-system acceptance
+claim. The next review action is the bounded Driver/Security review.
 
 ## Current reauthorized source checkpoint — 2026-09-19
 

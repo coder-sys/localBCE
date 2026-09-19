@@ -24,8 +24,10 @@ hospitals and $1,000,000 total; H is owed $100,000 and the other nineteen total
 $900,000. Expected cents and branch answers are manually derived constants.
 The previous source/docs checkpoint is commit
 `1effa625800c778367579416cb15a07555264754` (tree
-`85bd334d002446c598cde41dd61283736c1e006e`). The current follow-on boundary
-is a v3 candidate with `RR/FINANCIAL/OWNER/v3` and
+`85bd334d002446c598cde41dd61283736c1e006e`). The follow-on source/test/harness
+implementation is committed at `691d3965f37e935889782215415368d83a9b0b25`
+(tree `b50853d20935e28616e87e51c478ee398d4e3f3c`); the current boundary is
+post-commit review. The candidate remains v3 with `RR/FINANCIAL/OWNER/v3` and
 `RR/FINANCIAL/CONTINUITY/v3`; old v2/v3 measurement databases/logs remain
 immutable historical evidence.
 
@@ -82,17 +84,15 @@ remain pending/not applicable rather than being treated as financial SLAs.
 ## Current ownership and handoff
 
 State owns application source, tests, fixtures, and generated evidence. Docs
-owns only the maintained Markdown named by the child `AGENTS.md`; the current
-parent assignment authorizes the eight named financial source/test/CLI paths
-for this one coherent commit. Native/C, crypto, Lean, operations, archives,
+owns only the maintained Markdown named by the child `AGENTS.md`; the completed
+parent assignment authorized the eight named financial source/test/CLI paths
+and the named measurement harness for this bounded batch. Native/C, crypto, Lean, operations, archives,
 and other work roots remain separate.
 At every implementation phase record exact Git identity, changed/untracked
 paths, commands, raw trust-critical output, counts, warnings/failures/skips,
-and unknown numerical targets. The next safe action is final
-path/status/link/snapshot verification followed by one new source/docs/
-harness commit and the bounded Driver/Security review. This is not a prose
-declaration of production acceptance.
-This is not a prose declaration of production acceptance.
+and unknown numerical targets. The next safe action is the bounded
+Driver/Security review of the committed source checkpoint, not another source
+refactor or a production acceptance declaration.
 
 ## Historical records (reference only)
 
