@@ -881,7 +881,7 @@ Assigned binaries were not rebuilt and were rehashed after the guarded run:
   build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe
   SIZE=275968 SHA256=E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9
   build-performance/q/Release/dm_pipeline_verifier_cli.exe
-  SIZE=240640 SHA256=F35F6AF28EC2D269831CFB6DD1C2414D439FFEC2B26C73CC39495720D9B9E5D
+  SIZE=240640 SHA256=F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D
 
 The adapted existing guard configured the current checkout without native build. Raw child
 stdout: build-performance/guarded-configure-source-admission-20260913.stdout.log, 428 bytes,
@@ -1186,7 +1186,7 @@ Unchanged native regression executions: 0, explicitly skipped because the driver
 replay of unchanged native suites and the assigned pins were unchanged. The retained pins are
 source executable 275968 bytes / SHA-256
 `E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9`, verifier executable 240640
-bytes / SHA-256 `F35F6AF28EC2D269831CFB6DD1C2414D439FFEC2B26C73CC39495720D9B9E5D`, and public
+bytes / SHA-256 `F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D`, and public
 header SHA-256 `ED5B965981E766AA3EFB59303D33719B6C1579C0025D615BB8354AA63AC6FAC9`. Archive
 refreshes: 0; production/activation runs: 0; real PHI/payment runs: 0. The inherited B-stage
 documentation-governance warning remains six pre-existing unregistered README paths with 11

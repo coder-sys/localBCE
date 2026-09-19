@@ -83,7 +83,7 @@ Driver-supplied native inputs are unchanged and remain separate regressions:
 | Path | Bytes | SHA-256 |
 | --- | ---: | --- |
 | `build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe` | 275968 | `E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9` |
-| `build-performance/q/Release/dm_pipeline_verifier_cli.exe` | 240640 | `F35F6AF28EC2D269831CFB6DD1C2414D439FFEC2B26C73CC39495720D9B9E5D` |
+| `build-performance/q/Release/dm_pipeline_verifier_cli.exe` | 240640 | `F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D` |
 
 ## Historical verified records (reference only)
 
@@ -1092,7 +1092,7 @@ raw conditions and reasons are recorded in CURRENT_TASK.md.
 
 The assigned binaries were not rebuilt: source size 275968 SHA-256
 E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9; verifier size 240640
-SHA-256 F35F6AF28EC2D269831CFB6DD1C2414D439FFEC2B26C73CC39495720D9B9E5D. The one fresh
+SHA-256 F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D. The one fresh
 guarded synthetic CTest path used the existing mutex/resource/exit/cleanup gates and passed:
 outer PHYSICAL_PREFLIGHT free_bytes=2853015552 reserve_bytes=1073741824, exit7=7, exit0=0,
 CTest exit=0, samples=13, min_free_bytes=2770128896, cleanup PASS, mutex RELEASED. The
