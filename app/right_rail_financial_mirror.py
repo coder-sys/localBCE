@@ -3,8 +3,8 @@
 The financial owner remains the only writer and the only balance calculator.  This
 module owns no database, opens no SQLite connection, and persists no projection.
 It only delegates to one :class:`FinancialOwner`, bounds read pages, removes raw
-event/action payloads from the read model, and enforces the shadow-only continuity
-boundary around the owner's public API.
+event/action payloads from the read model, and enforces the shadow/test-only
+continuity boundary around the owner's public API.
 """
 
 from __future__ import annotations
@@ -490,9 +490,11 @@ class FinancialMirror:
         if package.get("dispatch_enabled") is not False or package.get("egress_enabled") is not False:
             _fail(FinancialMirrorContinuityError, "continuity_nonactivating_boundary")
 
-    def restore_continuity(self, package_bytes: bytes, recovered_path: Path) -> "FinancialMirror":
-        """Validate and restore into a new, independently verified SHADOW owner."""
+    def _restore_continuity(self, package_bytes: bytes, recovered_path: Path, *, restore_mode: str) -> "FinancialMirror":
+        """Validate and restore into a new independently verified non-live owner."""
 
+        if restore_mode not in {"SHADOW", "TEST"}:
+            _fail(FinancialMirrorContinuityError, "continuity_restore_mode")
         if not isinstance(recovered_path, Path):
             _fail(FinancialMirrorContinuityError, "continuity_destination")
         self.validate_continuity_package(package_bytes)
@@ -513,12 +515,14 @@ class FinancialMirror:
                     package_bytes=package_bytes,
                     recovered_path=recovered_path,
                     trusted_authority=self.owner.trusted_authority,
+                    restore_mode=restore_mode,
                 )
                 summary = restored_owner.summary()
                 integrity = restored_owner.verify_integrity()
-                if restored_owner.mode != "SHADOW" or summary.get("dispatch_enabled") is not False or summary.get("egress_enabled") is not False or integrity.get("mode") != "SHADOW":
-                    _fail(FinancialMirrorContinuityError, "continuity_shadow_boundary")
-                if restored_owner.owner_id != "continuity-shadow-owner-v1":
+                expected_owner_id = "continuity-shadow-owner-v1" if restore_mode == "SHADOW" else "continuity-test-owner-v1"
+                if restored_owner.mode != restore_mode or summary.get("dispatch_enabled") is not False or summary.get("egress_enabled") is not False or integrity.get("mode") != restore_mode:
+                    _fail(FinancialMirrorContinuityError, f"continuity_{restore_mode.lower()}_boundary")
+                if restored_owner.owner_id != expected_owner_id:
                     _fail(FinancialMirrorContinuityError, "continuity_owner_identity")
                 return type(self)(restored_owner)
             except BaseException:
@@ -527,7 +531,18 @@ class FinancialMirror:
             finally:
                 _ACTIVE_DESTINATIONS.discard(destination_name)
 
+    def restore_continuity(self, package_bytes: bytes, recovered_path: Path) -> "FinancialMirror":
+        """Validate and restore into a new, independently verified SHADOW owner."""
+
+        return self._restore_continuity(package_bytes, recovered_path, restore_mode="SHADOW")
+
+    def restore_test_continuity(self, package_bytes: bytes, recovered_path: Path) -> "FinancialMirror":
+        """Restore into an explicitly TEST-only owner for synthetic continuation."""
+
+        return self._restore_continuity(package_bytes, recovered_path, restore_mode="TEST")
+
     restore_shadow = restore_continuity
+    restore_test = restore_test_continuity
 
 
 RightRailFinancialMirror = FinancialMirror

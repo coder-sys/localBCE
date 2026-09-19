@@ -15,32 +15,42 @@ The source/docs batch started from the integration branch
 `rightrail-financial-workflow-20260913` at HEAD
 `de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
 `4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. All evidence is synthetic and
-nonactivating. The current pre-commit source checkpoint is HEAD
-`a0267e08ec400e0e96003d60cfca6b19df61c796`; the persisted owner/Continuity
-candidate is v3, while retained v2 measurement artifacts remain immutable.
+nonactivating. The preceding source/docs checkpoint is commit
+`1effa625800c778367579416cb15a07555264754`, tree
+`85bd334d002446c598cde41dd61283736c1e006e`; the follow-on changes below are
+the next commit boundary. The persisted owner/Continuity candidate is v3,
+while retained v2/v3 measurement artifacts remain immutable.
 
 1. **A — Documentation and pins.** The maintained Markdown records the current
-   v3 identity, ownership, guard, historical v2 evidence boundary, and
-   protected paths. One coherent source/docs commit remains to be created.
+   v3 identity, ownership, guard, TEST/non-live Continuity boundary, measured
+   evidence, historical measurement boundary, and protected paths. One new
+   source/docs/harness commit remains to be created; it is not a production
+   acceptance record.
 2. **B — Focused seams and source correction.** The four initial correctness
    blockers are addressed in the owner, independent checker, Mirror/CLI, and
-   acceptance fixtures. Event header integrity and population lifecycle order
-   are now explicit persisted invariants.
-3. **C — Guarded affected verification.** The existing guard ran the focused
-   compile gate and the affected source suite. The accepted result is exactly
-   `Ran 45 tests in 10.758s` followed by `OK`; the raw stderr log is retained.
-4. **D — Same-owner Mirror and Continuity.** Mirror and bounded shadow
-   Continuity remain dispatch-disabled with no second live writer. Case 11 now
-   verifies evidence availability and shadow read-only behavior before the
-   original live owner continues to P3 completion.
-5. **E — Candidate measurement and review.** The guarded v3 measurement series
-   completed at `work/financial-measurements-v3-r2` with 3 measured samples
-   plus 1 warmup at each of sizes 5, 10, and 20, 12 retained SQLite databases,
-   and independently verified restarts. Total-ms medians were 161.885, 208.391,
-   and 302.164; this is a bounded observation, not an SLA. Native metrics are
-   pending and queue wait/age is not applicable. Whole-system/old-suite,
-   native/Lean, lock-time, independent-audit, and production gates remain
-   open. The earlier v2 result and measurement are historical only.
+   acceptance fixtures. Event header integrity, population lifecycle order, and
+   persisted imported-count binding are now explicit invariants.
+3. **C — Guarded affected verification.** The final guard ran the focused
+   harness compile and affected source suite. The exact source result is
+   `Ran 46 tests in 14.878s` followed by `OK`; the raw stderr log is retained.
+4. **D — Same-owner Mirror and Continuity.** Default Continuity restore remains
+   SHADOW/read-only. The explicit TEST restore has fixed identity, cannot open
+   as LIVE, keeps dispatch/egress disabled, and Case 11 reaches H_P3_REPLACED
+   after restart without changing source bytes or redispatching a duplicate
+   action identity.
+5. **E — Candidate measurement and review.** The guarded v4 series completed at
+   `work/financial-measurements-v4-r1` with 3 measured samples plus 1 warmup at
+   each of sizes 5, 10, and 20, 12 owner databases and 12 TEST restore
+   databases. Total-ms medians were 329.150, 440.241, and 590.361 ms;
+   lock wait-to-acquire/transaction-held medians were 20.024/9.507,
+   15.852/9.710, and 15.148/9.661 ms. Each measured probe used one holder,
+   one waiter, and one successful acquisition; all 9 measured TEST restores
+   left source bytes unchanged. This is a bounded observation, not an SLA.
+   Native metrics remain pending and queue wait/age is not applicable. No
+   separate older financial suite exists beyond the three named RightRail
+   financial test modules; unrelated repository suites were not in scope.
+   Whole-system/native/Lean, independent-audit, and production gates remain
+   open. The earlier v2/v3 results and measurements are historical only.
 
 The first-state fixture is fixed at twenty hospitals and $1,000,000 total: H is $100,000 and the
 other nineteen total $900,000. Hand-derived expected constants are required. The financial owner
@@ -53,8 +63,9 @@ Every implementation phase ends with exact Git identity, changed/untracked
 paths, commands and raw trust-critical output, failures/warnings/skips, and
 the next safe action. Missing production targets are recorded as unknown; the
 retained native arithmetic floor is not a financial ingestion SLA. The next
-safe action is final path/status/link/snapshot verification and the one
-coherent source/docs commit, not a prose acceptance declaration.
+safe action is final path/status/link/snapshot verification, one new
+source/docs/harness commit, and the bounded Driver/Security review, not a
+prose acceptance declaration.
 
 ## Retained Native-v3 release gate
 

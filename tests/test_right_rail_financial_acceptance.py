@@ -29,6 +29,7 @@ from app.right_rail_financial_owner import (
     PopulationItem,
     SyntheticTrustedAuthority,
 )
+from app.right_rail_financial_mirror import FinancialMirror
 from app.right_rail_financial_owner_independent import verify_database, verify_continuity_package
 from tests import rightrail_financial_expected_cases as expected
 
@@ -590,7 +591,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(reopened.summary(), before)
         self._assert_verified(reopened)
 
-    def test_case_11_shadow_export_restore_and_live_owner_continuation(self) -> None:
+    def test_case_11_shadow_export_restore_and_test_owner_continuation(self) -> None:
         self.assertEqual(expected.CASE_11.number, 11)
         store = self._build_base()
         self._prepare_acknowledged(store)
@@ -631,15 +632,58 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             shadow.dispatch_outbox()
         self._assert_verified(shadow)
         self.assertEqual(store.path.read_bytes(), source_before_restore)
-        duplicate_action = store.retry_action(
+        source_mirror = FinancialMirror(store)
+        test_destination = self._path("test-continuation.sqlite")
+        test_mirror = source_mirror.restore_test_continuity(package, test_destination)
+        test_store = test_mirror.owner
+        self.assertEqual(test_store.mode, "TEST")
+        self.assertEqual(test_store.owner_id, owner._TEST_OWNER_ID)
+        self.assertFalse(test_store.summary()["dispatch_enabled"])
+        self.assertFalse(test_store.summary()["egress_enabled"])
+        self.assertEqual(test_store.verify_integrity()["mode"], "TEST")
+        self._assert_snapshot(test_store, expected.H_ACKNOWLEDGED)
+        test_package = test_store.export_continuity()
+        self.assertEqual(FinancialOwner.validate_continuity_package(test_package)["mode"], "TEST")
+        self._assert_verified(test_store, package=test_package)
+        test_sequence = test_store.summary()["sequence"]
+        duplicate_action = test_store.retry_action(
             expected.ACTION_CORRECTION_ID,
-            payload=store.action_payload(expected.ACTION_CORRECTION_ID)["payload"],
+            payload=test_store.action_payload(expected.ACTION_CORRECTION_ID)["payload"],
         )
         self.assertEqual(duplicate_action["status"], "DUPLICATE")
+        self.assertEqual(test_store.summary()["sequence"], test_sequence)
         self.assertEqual(store.path.read_bytes(), source_before_restore)
-        self._finish_after_acknowledgment(store)
-        self._assert_snapshot(store, expected.H_P3_REPLACED)
-        self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialDispatchError, "dispatch_disabled"):
+            test_store.dispatch_outbox()
+        self._finish_after_acknowledgment(test_store)
+        self._assert_snapshot(test_store, expected.H_P3_REPLACED)
+        self._assert_verified(test_store)
+        test_bytes_after_completion = test_destination.read_bytes()
+        test_config = test_store.config
+        test_store.close()
+        with self.assertRaisesRegex(FinancialIntegrityError, "nonactivating_boundary"):
+            FinancialOwner(
+                path=test_destination,
+                config=test_config,
+                trusted_authority=self.authority,
+                clock=_Clock(),
+                mode="LIVE",
+                owner_id=owner._TEST_OWNER_ID,
+            )
+        reopened_test = FinancialOwner(
+            path=test_destination,
+            config=test_config,
+            trusted_authority=self.authority,
+            clock=_Clock(),
+            mode="TEST",
+            owner_id=owner._TEST_OWNER_ID,
+        )
+        self.assertEqual(reopened_test.verify_integrity()["mode"], "TEST")
+        self._assert_snapshot(reopened_test, expected.H_P3_REPLACED)
+        self._assert_verified(reopened_test)
+        reopened_test.close()
+        self.assertEqual(test_destination.read_bytes(), test_bytes_after_completion)
+        self.assertEqual(store.path.read_bytes(), source_before_restore)
 
     def test_case_12_scope_oversize_and_egress_boundaries(self) -> None:
         self.assertEqual(expected.CASE_12.number, 12)

@@ -33,37 +33,41 @@ bytes, security parameters, artifacts, operations policy, archives, or productio
 The documentation/source batch started from branch
 `rightrail-financial-workflow-20260913` at HEAD
 `de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
-`4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. Tracked status was clean; the only
-untracked paths were the two generated executables listed in `STATE.md`.
-The current reauthorized working-tree checkpoint is HEAD
-`a0267e08ec400e0e96003d60cfca6b19df61c796` with source/test/docs changes
-pending one coherent commit. The owner is explicitly versioned as
+`4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. The preceding source/docs
+checkpoint is parent commit
+`1effa625800c778367579416cb15a07555264754`, tree
+`85bd334d002446c598cde41dd61283736c1e006e`; this follow-on change is the
+next commit boundary. The owner is explicitly versioned as
 `RR/FINANCIAL/OWNER/v3`; Continuity is
 `RR/FINANCIAL/CONTINUITY/v3`. v3 binds event header fields into event IDs and
-heads, reconstructs population lifecycle order independently, and preserves
-stable idempotency for omitted reporting timestamps through owner, Mirror, and
-CLI paths. The initial four source-review blockers are addressed in this
-worktree and the affected guarded suite passed 45 tests.
+heads and reconstructs population lifecycle order independently. The
+follow-on also binds reconstructed imported counts to persisted population
+state, adds an explicit non-live TEST restore/continuation mode, and keeps
+dispatch/egress disabled.
 
-The raw accepted source/test result is:
+The final guarded affected source/test result is:
 
 ```text
-Ran 45 tests in 10.758s
+Ran 46 tests in 14.878s
 OK
 ```
 
-The earlier v2 measurement databases/logs are retained unchanged and remain
-historical v2 evidence. The guarded v3 measurement series completed at
-`work/financial-measurements-v3-r2` with 3 measured samples plus 1 warmup for
-each of sizes 5, 10, and 20 (12 retained SQLite databases). All samples report
-owner schema v3 and independently verified restarts. Total-ms medians were
-161.885, 208.391, and 302.164 for sizes 5, 10, and 20. This is a bounded
-observation, not a financial SLA; native metrics remain pending and queue
-wait/age is not applicable. The prior raw v2 result (`Ran 29 tests in 7.582s`,
-`OK`) and one 20-item observation of 379.703 ms remain historical only.
-Whole-system review, old-suite/native/Lean replay, lock-time evidence,
-independent audit, and production qualification remain open; this candidate
-remains synthetic, nonactivating, nonpayment, and non-PHI.
+The follow-on measurement series completed at
+`work/financial-measurements-v4-r1` with 3 measured samples plus 1 warmup at
+each of sizes 5, 10, and 20 (12 owner databases and 12 TEST restore
+databases). All measured owner and TEST restarts independently verified, and
+all 9 measured restores left source bytes unchanged. Total-ms medians were
+329.150, 440.241, and 590.361 ms. Lock wait-to-acquire/transaction-held
+medians were 20.024/9.507, 15.852/9.710, and 15.148/9.661 ms. Each measured
+sample used one holder statement, one waiter attempt, and one successful
+acquisition. This is a bounded observation, not a financial SLA; native
+metrics remain pending and queue wait/age is not applicable. The prior v2/v3
+measurement databases/logs remain historical evidence. Separate older
+financial suites were not present beyond the three named RightRail financial
+test modules, so no additional older financial suite was run; unrelated
+repository suites remain outside this bounded verification. Whole-system,
+native/Lean, independent-audit, and production qualification remain open;
+this candidate remains synthetic, nonactivating, nonpayment, and non-PHI.
 
 ## Read in this order
 
@@ -98,12 +102,12 @@ a formula under test to generate an expected financial answer. Record exact
 commands, raw trust-critical output, skipped counts/reasons, and resource
 limits in `STATE.md`.
 
-The accepted source/test run used the existing guarded wrapper with the exact
-absolute `work/run_financial_blocker_checks.py` path. The first relative-path
-attempt failed before tests with a preserved 321-byte stderr; the corrected
-v3-r4 run passed. The measurement had one earlier pre-launch mutex stop and a
-later successful v3-r2 run. The maintained financial boundary still requires
-guarded execution for any future test/build/checker/native command.
+The final affected source/test run used the existing guarded wrapper with the
+absolute child `tests` path and Python unittest discovery; its exact result and
+resource evidence are recorded in `STATE.md`. Earlier v3-r4 and v3-r2 logs
+remain retained historical evidence, as does the earlier pre-launch mutex
+stop. The maintained financial boundary still requires guarded execution for
+any future test/build/checker/native command.
 
 ## Retained Blind Ledger verification
 

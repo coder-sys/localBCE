@@ -43,38 +43,54 @@ checkpoint is `99d28687df0e7d5cf6a46e73db22f42a9902b789`. Any final documentatio
 commit will necessarily change HEAD; the handoff must report that final
 identity rather than retroactively changing this input receipt.
 
+## Current follow-on review boundary — 2026-09-19
+
+The prior source/docs batch is committed at parent checkpoint
+`1effa625800c778367579416cb15a07555264754`, tree
+`85bd334d002446c598cde41dd61283736c1e006e`; its parent source checkpoint is
+`a0267e08ec400e0e96003d60cfca6b19df61c796`. The current follow-on working
+tree adds the persisted incomplete-population imported-count binding, explicit
+TEST-only Continuity restoration and recovered Case 11 continuation, and the
+named measurement harness update. This boundary is not a production or
+whole-system acceptance claim. One new commit is required; the next review
+action is the bounded Driver/Security review of that commit.
+
 ## Current reauthorized source checkpoint — 2026-09-19
 
 The current parent assignment reauthorizes the exact financial application
-source, focused tests, CLI path, and the five maintained child Markdown files
-for one coherent commit. The worktree is a v3 candidate: the owner schema is
+source, focused tests, CLI path, the named measurement harness, and the five
+maintained child Markdown files for one coherent commit. The worktree is a v3
+candidate: the owner schema is
 `RR/FINANCIAL/OWNER/v3`, Continuity is
 `RR/FINANCIAL/CONTINUITY/v3`, and event/header domains are versioned so the
 persisted v2 identity contract is not silently reinterpreted. The source
 correction includes Control Pack/period/population/lineage enforcement, event
-header binding, population lifecycle reconstruction, stable default-timestamp
-report retries, CLI coverage, and live-owner continuation after shadow
-restore.
+header binding, population lifecycle reconstruction and persisted imported-count
+binding, stable default-timestamp report retries, CLI coverage, and TEST-only
+continuation after shadow restore.
 
-The guarded affected financial run passed 45 tests. Its raw stderr is retained
-by the guard as `guarded-command-financial-blockers-v3-r4.stderr.log` and ends
+The final guarded affected financial run passed 46 tests. Its raw stderr is
+retained by the guard as
+`guarded-command-financial-followon-blockers-r10-final.stderr.log` and ends
 with:
 
 ```text
-Ran 45 tests in 10.758s
+Ran 46 tests in 14.878s
 OK
 ```
 
-The v3 measurement series completed under the same guard at
-`work/financial-measurements-v3-r2`: 3 measured samples plus 1 warmup for
-each of sizes 5, 10, and 20, 12 retained SQLite databases, all reporting
-`RR/FINANCIAL/OWNER/v3`, with every restart independently verified. Total-ms
-medians were 161.885, 208.391, and 302.164 for sizes 5, 10, and 20; this is
-bounded observation only, not an SLA. Native metrics remain pending and queue
-wait/age is not applicable. The retained v2 measurement databases/logs remain
-immutable and are historical v2 evidence, not v3 evidence. The first corrected
-blocker launch also remains retained as a path-error record; its absolute-path
-rerun is the accepted source/test run above.
+The follow-on measurement series completed under the same guard at
+`work/financial-measurements-v4-r1`: 3 measured samples plus 1 warmup for
+each of sizes 5, 10, and 20, 12 owner SQLite databases and 12 TEST restore
+databases. All measured owner and TEST databases independently verified and
+all 9 measured restores left source bytes unchanged. Total-ms medians were
+329.150, 440.241, and 590.361 ms; lock wait-to-acquire/transaction-held
+medians were 20.024/9.507, 15.852/9.710, and 15.148/9.661 ms for sizes 5,
+10, and 20. Each measured sample used one holder statement, one waiter
+attempt, and one successful acquisition. This is bounded observation only,
+not an SLA. Native metrics remain pending and queue wait/age is not
+applicable. The retained v2/v3 measurement databases/logs remain immutable
+historical evidence.
 
 ## Product boundary and claims
 
@@ -105,11 +121,11 @@ Claims remain `proofSuiteId=null`, `production_usable=false`,
 `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`, synthetic,
 non-payment, and non-PHI. The implementation has tested synthetic behavior,
 not production qualification. Final Driver source and whole-system review is
-pending. The four initial source-review blockers are addressed in the current
-worktree and covered by the 45-test guarded run; this does not close the
-remaining whole-system, old-suite, native, Lean, performance, lock-time, or
-independent-audit gaps. Lean checkpoints are not integrated into this Python
-application; native DMV1 proof and DMV3 work are separate.
+pending. The four initial source-review blockers and the follow-on population
+and TEST-continuation checks are covered by the final 46-test guarded run; this
+does not close the remaining whole-system, old-suite, native, Lean,
+independent-audit, or production gaps. Lean checkpoints are not integrated
+into this Python application; native DMV1 proof and DMV3 work are separate.
 
 ## Current evidence boundary
 
@@ -122,10 +138,11 @@ OK
 
 One retained v2 20-item measurement was 379.703 ms. The reference plan
 supplies no financial numerical SLA, so this is an observation, not a target or
-guarantee. The current v3 source run is 45 tests in 10.758s with `OK`. The
-bounded v3 measurement series has 9 measured samples and 3 warmups across
-sizes 5, 10, and 20; it reports no native or queue SLA. Financial-phase native
-regression runs are zero. Do not inflate these facts into whole-system,
+guarantee. The current follow-on source run is 46 tests in 14.878s with `OK`.
+The bounded v4 measurement series has 9 measured samples and 3 warmups across
+sizes 5, 10, and 20, plus 12 owner and 12 TEST restore databases; it reports
+actual lock wait/held timings but no native or queue SLA. Financial-phase
+native regression runs are zero. Do not inflate these facts into whole-system,
 native, Lean, independent-audit, or production evidence.
 
 ## Protected paths and ownership
@@ -160,11 +177,12 @@ and the mutex is `Local\BlindLedgerDirectMaskBuild20260907`. The polling guard
 is not an instant allocation guarantee. Preserve the wrapper and backups.
 
 The current parent assignment reauthorizes only the named financial source,
-focused tests, CLI path, maintained Markdown, and their guarded verification;
-it does not authorize protected Queue, Composition, native, C, crypto, Lean,
-operations, archive, or external workspaces. Repeated resource or mutex stops
-remain evidence; they do not authorize cap relaxation, process killing, policy
-waiver, or a guessed Lean target/default.
+focused tests, CLI path, maintained Markdown, the named
+`work/right_rail_financial_measurement_series.py` harness, and their guarded
+verification; it does not authorize protected Queue, Composition, native, C,
+crypto, Lean, operations, archive, or external workspaces. Repeated resource
+or mutex stops remain evidence; they do not authorize cap relaxation, process
+killing, policy waiver, or a guessed Lean target/default.
 
 ## Documentation allowlist
 
@@ -179,6 +197,7 @@ and test paths in addition to the maintained Markdown:
 - `tests/test_right_rail_financial_independent.py`
 - `tests/test_right_rail_financial_mirror.py`
 - `tools/right_rail_financial_cli.py`
+- `work/right_rail_financial_measurement_series.py`
 
 The maintained Markdown allowlist remains:
 
@@ -189,10 +208,10 @@ The maintained Markdown allowlist remains:
 - `docs/IMPLEMENTATION_ROADMAP.md`
 
 Do not edit fixtures, generated executables, native/C/crypto/Lean files,
-operations policy, archives, logs, secrets, or any other work root. Preserve
-historical narrative under an explicit historical heading or use the immutable
-snapshot pointer. Do not create another framework, status register, or
-duplicate readiness record.
+operations policy, archives, logs, secrets, or any other work root except the
+named measurement harness above. Preserve historical narrative under an
+explicit historical heading or use the immutable snapshot pointer. Do not
+create another framework, status register, or duplicate readiness record.
 
 ## Safe operations and stop gates
 
@@ -211,9 +230,10 @@ skip a file. Report every retained warning, failure, and skip with its reason.
 ## Commit and handoff
 
 For this reauthorized source/docs batch, stage only the eight named source,
-test, and CLI files plus the five allowlisted Markdown files above and create
-one new commit; do not amend. Leave the two generated executables, retained
-measurement evidence, guard logs, and all unrelated dirty work unstaged.
+test, and CLI files, the named measurement harness, and the five allowlisted
+Markdown files above and create one new commit; do not amend. Leave the two
+generated executables, retained measurement evidence, guard logs, and all
+unrelated dirty work unstaged.
 Verify `git diff --check`, changed paths, final HEAD/tree, status, maintained
 link targets, and the unchanged instruction snapshots. Report exact guarded
 test/measurement statuses rather than implying a pass for a blocked gate.

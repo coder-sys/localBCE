@@ -22,9 +22,12 @@ State Control Pack, Blind Ledger financial owner, same-owner Mirror, bounded
 shadow Continuity State, and deferred Switch. The fixed fixture is twenty
 hospitals and $1,000,000 total; H is owed $100,000 and the other nineteen total
 $900,000. Expected cents and branch answers are manually derived constants.
-The current reauthorized source/test/docs checkpoint is a v3 candidate:
-`RR/FINANCIAL/OWNER/v3` and `RR/FINANCIAL/CONTINUITY/v3`; old v2 measurement
-databases/logs remain immutable historical evidence.
+The previous source/docs checkpoint is commit
+`1effa625800c778367579416cb15a07555264754` (tree
+`85bd334d002446c598cde41dd61283736c1e006e`). The current follow-on boundary
+is a v3 candidate with `RR/FINANCIAL/OWNER/v3` and
+`RR/FINANCIAL/CONTINUITY/v3`; old v2/v3 measurement databases/logs remain
+immutable historical evidence.
 
 ## Current implementation and blockers
 
@@ -32,27 +35,34 @@ The durable financial slice, same-owner Mirror, and bounded Continuity are
 implemented in the current working tree. The four initial source blockers are
 addressed: Control Pack policy/role binding, exact period identity, bounded
 population staging, and reporting lineage checks. The persisted event contract
-also now binds event headers, and the independent checker reconstructs
-population lifecycle order. Default report/evidence retries reuse stored
-timestamps before stale-revision checks.
+also binds event headers, the independent checker reconstructs population
+lifecycle order and binds reconstructed imported counts to persisted state,
+and default report/evidence retries reuse stored timestamps before
+stale-revision checks. Continuity keeps default restore in SHADOW and exposes
+an explicitly TEST-only restore for synthetic continuation; TEST has fixed
+identity, cannot become LIVE, and remains dispatch/egress disabled.
 
-The accepted guarded affected run was:
+The final guarded affected run was:
 
 ```text
-Ran 45 tests in 10.758s
+Ran 46 tests in 14.878s
 OK
 ```
 
 This is source-local synthetic evidence, not final acceptance or qualification.
-The guarded v3 measurement series completed with 3 measured samples plus 1
-warmup at each of sizes 5, 10, and 20; all 12 retained databases report owner
-schema v3 and verified restarts. Total-ms medians were 161.885, 208.391, and
-302.164. This is bounded observation only, not an SLA; native metrics remain
-pending and queue wait/age is not applicable. The retained v2 29-test result
-and 20-item observation remain historical only. Final Driver source/whole-system
-review, old-suite replay, native/Lean replay, lock-time evidence, independent
-audit, and production qualification remain pending. Financial-phase native
-runs remain zero. Lean is not integrated into this Python application.
+The guarded v4 measurement series completed with 3 measured samples plus 1
+warmup at each of sizes 5, 10, and 20; it retained 12 owner databases and 12
+TEST restore databases. Total-ms medians were 329.150, 440.241, and 590.361
+ms; lock wait-to-acquire/transaction-held medians were 20.024/9.507,
+15.852/9.710, and 15.148/9.661 ms. Nine measured TEST restores all verified
+with unchanged source bytes; each measured lock probe used one holder statement,
+one waiter attempt, and one successful acquisition. Native metrics remain
+pending and queue wait/age is not applicable. Separate older financial suites
+were not present beyond the three named RightRail financial test modules, so
+none was skipped silently; unrelated repository suites were outside scope.
+Whole-system/native/Lean replay, independent audit, and production
+qualification remain pending. Financial-phase native runs remain zero. Lean
+is not integrated into this Python application.
 
 ## Protected boundaries and nonclaims
 
@@ -79,7 +89,9 @@ and other work roots remain separate.
 At every implementation phase record exact Git identity, changed/untracked
 paths, commands, raw trust-critical output, counts, warnings/failures/skips,
 and unknown numerical targets. The next safe action is final
-path/status/link/snapshot verification and the single source/docs commit.
+path/status/link/snapshot verification followed by one new source/docs/
+harness commit and the bounded Driver/Security review. This is not a prose
+declaration of production acceptance.
 This is not a prose declaration of production acceptance.
 
 ## Historical records (reference only)

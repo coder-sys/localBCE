@@ -149,13 +149,20 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             supersedes="evidence:report:H:correction",
         )
 
-    def _verify(self, path: Path | None = None, *, continuity_package: bytes | None = None) -> dict[str, object]:
+    def _verify(
+        self,
+        path: Path | None = None,
+        *,
+        mode: str = "LIVE",
+        owner_id: str = "financial-owner-v1",
+        continuity_package: bytes | None = None,
+    ) -> dict[str, object]:
         return independent.verify_database(
             path or self.db,
             expected_scope=self.scope,
             expected_authority=self.authority_binding,
-            expected_mode="LIVE",
-            expected_owner_id="financial-owner-v1",
+            expected_mode=mode,
+            expected_owner_id=owner_id,
             continuity_package=continuity_package,
         )
 
@@ -238,6 +245,148 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         )
         self.store.validate_population(population_id)
         self.store.publish_population(population_id)
+
+    def _make_partial_import(self, name: str = "partial-import.sqlite") -> Path:
+        path = Path(self.temp_dir.name) / name
+        partial = owner.FinancialOwner(
+            path=path,
+            config=self.config,
+            trusted_authority=self.authority,
+            clock=_Clock(),
+        )
+        pack = owner.ControlPack(
+            pack_id="pack:test",
+            state_id=self.config.state_id,
+            deployment_id=self.config.deployment_id,
+            program_id=self.config.program_id,
+            period_id=self.config.period_id,
+            version=1,
+            source_refs=("source:test",),
+            effective_start_ms=1,
+            effective_end_ms=20_000,
+            recorded_at_ms=2,
+            approved_at_ms=3,
+            calculation_rule_id="calculation:per-recipient:v1",
+            adjustment_rule_id="adjustment:offset:v1",
+            authorized_roles=("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR", "RECEIVER"),
+            expected_tests=(
+                "program-total=100000000",
+                "H-owed=10000000",
+                "other-total=90000000",
+                "timeliness-separate",
+            ),
+        )
+        partial.publish_control_pack(pack)
+        population_id = "population:partial-history"
+        items = tuple(
+            owner.PopulationItem(
+                population_id=population_id,
+                item_id=f"item:partial-{index}",
+                display_label=f"Partial item {index}",
+                owed_cents=1,
+                due_at_ms=10_000 + index,
+            )
+            for index in range(1, 5)
+        )
+        result = partial.stage_population(
+            population_id=population_id,
+            pack_id=pack.pack_id,
+            cutoff_ms=4,
+            inclusion_rules=("INCLUDED",),
+            expected_count=5,
+            items=items,
+            chunk_size=2,
+        )
+        self.assertEqual(result["imported_count"], 4)
+        self.assertFalse(result["source_complete"])
+        partial.close()
+        return path
+
+    @staticmethod
+    def _rehash_partial_history(path: Path, variant: str) -> None:
+        if variant not in {"removed", "reduced"}:
+            raise ValueError(variant)
+        with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = [dict(row) for row in connection.execute("SELECT * FROM financial_events ORDER BY event_sequence")]
+            stage_rows = [row for row in rows if row["aggregate_id"] == "population:partial-history" and row["kind"] == "POPULATION_STAGED"]
+            assert len(stage_rows) == 2
+            target = stage_rows[-1]
+            removed_sequence: int | None = None
+            if variant == "removed":
+                removed_sequence = int(target["event_sequence"])
+                rows = [row for row in rows if row["event_sequence"] != target["event_sequence"]]
+            else:
+                payload = json.loads(str(target["payload_json"]))
+                payload["imported_count"] = 3
+                payload["chunk_count"] = 1
+                payload_bytes = independent._canonical(payload, "test:partial-payload")
+                target["payload_json"] = payload_bytes.decode("ascii")
+                target["payload_digest"] = independent._digest(independent.EVENT_DOMAIN, payload_bytes)
+                target["after_revision"] = 3
+            offset = 100_000
+            connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
+            if removed_sequence is not None:
+                connection.execute("DELETE FROM financial_events WHERE event_sequence=?", (removed_sequence + offset,))
+            meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
+            assert meta is not None
+            base_committed_at = min(int(row["committed_at_ms"]) for row in rows)
+            scope = {
+                "state_id": str(meta["state_id"]),
+                "deployment_id": str(meta["deployment_id"]),
+                "program_id": str(meta["program_id"]),
+                "period_id": str(meta["period_id"]),
+                "currency": str(meta["currency"]),
+            }
+            previous = independent._digest(
+                independent.GENESIS_DOMAIN,
+                independent._canonical(scope, "test:genesis-scope"),
+                bytes(meta["trusted_authority_digest"]),
+            )
+            for sequence, row in enumerate(rows, start=1):
+                committed_at = base_committed_at + sequence
+                payload_bytes = str(row["payload_json"]).encode("ascii")
+                payload_digest = independent._digest(independent.EVENT_DOMAIN, payload_bytes)
+                row["payload_digest"] = payload_digest
+                header = independent._event_header(
+                    int(row["before_revision"]),
+                    int(row["after_revision"]),
+                    committed_at,
+                    "test:event-header",
+                )
+                event_id = independent._digest(
+                    independent.EVENT_DOMAIN,
+                    sequence.to_bytes(8, "big"),
+                    str(row["aggregate_type"]).encode("ascii"),
+                    str(row["aggregate_id"]).encode("ascii"),
+                    str(row["kind"]).encode("ascii"),
+                    header,
+                    payload_digest,
+                )
+                head = independent._digest(
+                    independent.HEAD_DOMAIN,
+                    previous,
+                    event_id,
+                    header,
+                    payload_digest,
+                )
+                connection.execute(
+                    "UPDATE financial_events SET event_sequence=?,before_revision=?,after_revision=?,event_id=?,previous_head=?,head=?,committed_at_ms=?,payload_json=?,payload_digest=? WHERE event_sequence=?",
+                    (
+                        sequence,
+                        row["before_revision"],
+                        row["after_revision"],
+                        event_id,
+                        previous,
+                        head,
+                        committed_at,
+                        row["payload_json"],
+                        payload_digest,
+                        int(row["event_sequence"]) + offset,
+                    ),
+                )
+                previous = head
+            connection.execute("UPDATE financial_meta SET sequence=?,history_head=? WHERE id=1", (len(rows), previous))
 
     @staticmethod
     def _reorder_and_rehash_population_events(
@@ -397,6 +546,76 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-completion-order"):
             self._verify(after_validation)
+
+    def test_partial_population_history_binds_persisted_count_through_restart_and_restore(self) -> None:
+        valid_path = self._make_partial_import()
+        valid_result = self._verify(valid_path)
+        self.assertEqual(valid_result["counts"]["populations"], 1)
+        self.assertEqual(valid_result["sequence"], 3)
+
+        reopened = owner.FinancialOwner(
+            path=valid_path,
+            config=self.config,
+            trusted_authority=self.authority,
+            clock=_Clock(),
+        )
+        self.assertEqual(reopened.verify_integrity()["mode"], "LIVE")
+        package = reopened.export_continuity()
+        independent.verify_continuity_package(
+            package,
+            expected_scope=self.scope,
+            expected_authority=self.authority_binding,
+        )
+        restored_path = Path(self.temp_dir.name) / "partial-valid-shadow.sqlite"
+        restored = owner.FinancialOwner.restore_continuity(
+            package_bytes=package,
+            recovered_path=restored_path,
+            trusted_authority=self.authority,
+            clock=_Clock(),
+        )
+        self.assertEqual(restored.verify_integrity()["mode"], "SHADOW")
+        restored.close()
+        reopened.close()
+
+        for variant in ("removed", "reduced"):
+            target = Path(self.temp_dir.name) / f"partial-{variant}.sqlite"
+            shutil.copy2(valid_path, target)
+            self._rehash_partial_history(target, variant)
+            try:
+                self._verify(target)
+            except independent.IndependentFinancialError as error:
+                self.assertEqual(str(error), "history:population-imported-binding", f"variant={variant}")
+            else:
+                self.fail(f"variant={variant} was accepted")
+
+            tampered_owner = owner.FinancialOwner(
+                path=target,
+                config=self.config,
+                trusted_authority=self.authority,
+                clock=_Clock(),
+            )
+            try:
+                tampered_owner.verify_integrity()
+            except independent.IndependentFinancialError as error:
+                self.assertEqual(str(error), "history:population-imported-binding", f"variant={variant}")
+            else:
+                self.fail(f"variant={variant} was accepted by owner verification")
+            tampered_package = tampered_owner.export_continuity()
+            independent.verify_continuity_package(
+                tampered_package,
+                expected_scope=self.scope,
+                expected_authority=self.authority_binding,
+            )
+            rejected_restore = Path(self.temp_dir.name) / f"partial-{variant}-restore.sqlite"
+            with self.assertRaisesRegex(owner.FinancialContinuityError, "continuity_restore_integrity"):
+                owner.FinancialOwner.restore_continuity(
+                    package_bytes=tampered_package,
+                    recovered_path=rejected_restore,
+                    trusted_authority=self.authority,
+                    clock=_Clock(),
+                )
+            self.assertFalse(rejected_restore.exists())
+            tampered_owner.close()
 
     def test_event_head_tamper_fails_closed_without_repair(self) -> None:
         target = self._copy_database("event-head-tamper.sqlite")

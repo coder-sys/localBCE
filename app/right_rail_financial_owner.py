@@ -67,6 +67,9 @@ _MAX_CENTS: Final[int] = (1 << 63) - 1
 _MAX_ROWS: Final[int] = 10_000
 _MAX_DUPLICATE_INPUTS: Final[int] = 256
 _MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
+_MODES: Final[frozenset[str]] = frozenset({"LIVE", "SHADOW", "TEST"})
+_TEST_OWNER_ID: Final[str] = "continuity-test-owner-v1"
+_SHADOW_OWNER_ID: Final[str] = "continuity-shadow-owner-v1"
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _ROLE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _KIND = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
@@ -593,7 +596,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             trusted_authority_id TEXT NOT NULL,
             trusted_authority_epoch INTEGER NOT NULL CHECK (trusted_authority_epoch>=1),
             trusted_authority_digest BLOB NOT NULL CHECK (length(trusted_authority_digest)=64),
-            mode TEXT NOT NULL CHECK (mode IN ('LIVE','SHADOW')),
+            mode TEXT NOT NULL CHECK (mode IN ('LIVE','SHADOW','TEST')),
             owner_id TEXT NOT NULL
         );
         CREATE TABLE control_packs (
@@ -828,7 +831,7 @@ class FinancialOwner:
     ) -> None:
         if not isinstance(path, Path) or not path.parent.is_dir() or path.is_symlink():
             _fail(FinancialIntegrityError, "owner_path")
-        if mode not in {"LIVE", "SHADOW"}:
+        if mode not in _MODES:
             _fail(FinancialInputError, "owner_mode")
         if trusted_authority is None or type(trusted_authority) is not SyntheticTrustedAuthority:
             _fail(FinancialAuthorityError, "trusted_authority_required")
@@ -840,6 +843,8 @@ class FinancialOwner:
         self.clock: FinancialClock = clock if clock is not None else _SystemClock()
         self.mode = mode
         self.owner_id = _id(owner_id, "owner_id")
+        if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
+            _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
         if existed and path.stat().st_size == 0:
             _fail(FinancialIntegrityError, "empty_database")
@@ -2033,7 +2038,7 @@ class FinancialOwner:
                     _fail(FinancialContinuityError, f"continuity_{field}")
             except ValueError:
                 _fail(FinancialContinuityError, f"continuity_{field}")
-        if package["dispatch_enabled"] is not False or package["egress_enabled"] is not False or package["mode"] not in {"LIVE", "SHADOW"}:
+        if package["dispatch_enabled"] is not False or package["egress_enabled"] is not False or package["mode"] not in _MODES:
             _fail(FinancialContinuityError, "continuity_package_binding")
         tables = package["tables"]
         if type(tables) is not dict or set(tables) != _TABLES:
@@ -2109,10 +2114,13 @@ class FinancialOwner:
         recovered_path: Path,
         trusted_authority: SyntheticTrustedAuthority | None,
         clock: FinancialClock | None = None,
+        restore_mode: str = "SHADOW",
     ) -> "FinancialOwner":
-        """Restore into a new SHADOW owner; no source file is overwritten."""
+        """Restore into a new SHADOW or explicitly approved TEST owner."""
         if not isinstance(recovered_path, Path) or recovered_path.exists() or recovered_path.is_symlink() or not recovered_path.parent.is_dir():
             _fail(FinancialContinuityError, "continuity_destination")
+        if restore_mode not in {"SHADOW", "TEST"}:
+            _fail(FinancialContinuityError, "continuity_restore_mode")
         package = cls.validate_continuity_package(package_bytes)
         if trusted_authority is None or type(trusted_authority) is not SyntheticTrustedAuthority:
             _fail(FinancialAuthorityError, "trusted_authority_required")
@@ -2121,7 +2129,8 @@ class FinancialOwner:
             _fail(FinancialAuthorityError, "continuity_authority_mismatch")
         config_map = package["scope"]
         config = FinancialOwnerConfig(state_id=str(config_map["state_id"]), deployment_id=str(config_map["deployment_id"]), program_id=str(config_map["program_id"]), period_id=str(config_map["period_id"]), currency=str(config_map["currency"]))
-        owner = cls(path=recovered_path, config=config, trusted_authority=trusted_authority, clock=clock, mode="SHADOW", owner_id="continuity-shadow-owner-v1")
+        restored_owner_id = _SHADOW_OWNER_ID if restore_mode == "SHADOW" else _TEST_OWNER_ID
+        owner = cls(path=recovered_path, config=config, trusted_authority=trusted_authority, clock=clock, mode=restore_mode, owner_id=restored_owner_id)
         insertion_order = ["control_packs", "population_imports", "population_items", "obligations", "evidence", "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox", "financial_events", "financial_conflicts", "evaluations"]
         with owner._write() as connection:
             for table in insertion_order:
@@ -2133,7 +2142,7 @@ class FinancialOwner:
             meta_values = [owner._import_value(meta_rows[0][column]) for column in meta_columns]
             if len(meta_values) != len(meta_columns):
                 _fail(FinancialContinuityError, "continuity_meta_columns")
-            overrides = {"mode": "SHADOW", "dispatch_enabled": 0, "egress_enabled": 0, "owner_id": "continuity-shadow-owner-v1"}
+            overrides = {"mode": restore_mode, "dispatch_enabled": 0, "egress_enabled": 0, "owner_id": restored_owner_id}
             meta_values = [overrides.get(column, value) for column, value in zip(meta_columns, meta_values)]
             assignments = ",".join(f"{column}=?" for column in meta_columns)
             connection.execute(f"UPDATE financial_meta SET {assignments} WHERE id=1", tuple(meta_values))
@@ -2154,8 +2163,8 @@ class FinancialOwner:
                 owner.path,
                 expected_config=config,
                 expected_authority={"authority_id": trusted_authority.authority_id, "epoch": trusted_authority.epoch, "digest": _hex(trusted_authority.digest)},
-                expected_mode="SHADOW",
-                expected_owner_id="continuity-shadow-owner-v1",
+                expected_mode=restore_mode,
+                expected_owner_id=restored_owner_id,
                 expected_continuity_epoch=int(package["continuity_epoch"]),
                 continuity_package=package_bytes,
             )
@@ -2170,7 +2179,27 @@ class FinancialOwner:
             raise
         return owner
 
+    @classmethod
+    def restore_test_continuity(
+        cls,
+        *,
+        package_bytes: bytes,
+        recovered_path: Path,
+        trusted_authority: SyntheticTrustedAuthority | None,
+        clock: FinancialClock | None = None,
+    ) -> "FinancialOwner":
+        """Restore into a separate non-live TEST owner for synthetic continuation."""
+
+        return cls.restore_continuity(
+            package_bytes=package_bytes,
+            recovered_path=recovered_path,
+            trusted_authority=trusted_authority,
+            clock=clock,
+            restore_mode="TEST",
+        )
+
     continuity_restore = restore_continuity
+    continuity_test_restore = restore_test_continuity
 
     def verify_integrity(self) -> dict[str, Any]:
         from app.right_rail_financial_owner_independent import verify_database

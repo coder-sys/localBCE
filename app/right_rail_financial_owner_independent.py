@@ -649,7 +649,7 @@ def _identity(
     mode = expected_mode
     if mode is None and expected_config is not None and hasattr(expected_config, "mode"):
         mode = getattr(expected_config, "mode")
-    if mode is not None and mode not in {"LIVE", "SHADOW"}:
+    if mode is not None and mode not in {"LIVE", "SHADOW", "TEST"}:
         _fail("identity:mode")
     owner_id = expected_owner_id
     if owner_id is None and expected_config is not None and hasattr(expected_config, "owner_id"):
@@ -764,7 +764,7 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object]) ->
     if _flag(row["dispatch_enabled"], "meta:dispatch") != 0 or _flag(row["egress_enabled"], "meta:egress") != 0:
         _fail("meta:nonactivating")
     mode = row["mode"]
-    if mode not in {"LIVE", "SHADOW"}:
+    if mode not in {"LIVE", "SHADOW", "TEST"}:
         _fail("meta:mode")
     if identity["mode"] is not None and mode != identity["mode"]:
         _fail("meta:mode-binding")
@@ -1238,6 +1238,9 @@ def _verify_population_history(
                     _fail("history:population-publication-binding")
                 published = True
 
+        persisted_imported = _integer(population["imported_count"], "history:population-imported", maximum=MAX_ROWS)
+        if imported != persisted_imported:
+            _fail("history:population-imported-binding")
         source_complete = _flag(population["source_complete"], "population:source-complete")
         if source_completed and imported != expected:
             _fail("history:population-completion-binding")
@@ -2041,7 +2044,7 @@ def verify_continuity_package(
     sequence = _integer(value["sequence"], "continuity:sequence", maximum=MAX_ROWS)
     history_head = _hex_digest(value["history_head"], "continuity:history-head")
     mode = value["mode"]
-    if mode not in {"LIVE", "SHADOW"} or value["dispatch_enabled"] is not False or value["egress_enabled"] is not False:
+    if mode not in {"LIVE", "SHADOW", "TEST"} or value["dispatch_enabled"] is not False or value["egress_enabled"] is not False:
         _fail("continuity:nonactivating")
     if expected_sequence is not None and sequence != _integer(expected_sequence, "continuity:expected-sequence", maximum=MAX_ROWS):
         _fail("continuity:sequence-binding")

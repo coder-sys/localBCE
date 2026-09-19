@@ -2,7 +2,7 @@
 
 Updated: 2026-09-19
 
-## Current verified snapshot — reauthorized v3 source batch
+## Current verified snapshot — follow-on v3 source/test batch
 
 The documentation/source batch started from the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
@@ -12,42 +12,47 @@ branch `rightrail-financial-workflow-20260913`, HEAD
 only untracked paths were the two driver-supplied generated executables listed
 below; they are not touched or staged in this batch.
 
-The current pre-commit source checkpoint is HEAD
-`a0267e08ec400e0e96003d60cfca6b19df61c796`. The persisted candidate contract
+The preceding source/docs checkpoint is parent commit
+`1effa625800c778367579416cb15a07555264754`, tree
+`85bd334d002446c598cde41dd61283736c1e006e`. The persisted candidate contract
 is `RR/FINANCIAL/OWNER/v3` with Continuity
 `RR/FINANCIAL/CONTINUITY/v3`. Event IDs/heads bind before/after revisions and
-commit time; the independent checker reconstructs population lifecycle order;
-and omitted report/evidence timestamps reuse stored identity fields.
+commit time; the independent checker reconstructs population lifecycle order
+and binds reconstructed imported counts to persisted `population_imports` state;
+omitted report/evidence timestamps reuse stored identity fields.
 
-The accepted guarded source/test result is exactly:
+The final guarded source/test result is exactly:
 
 ```text
-Ran 45 tests in 10.758s
+Ran 46 tests in 14.878s
 OK
 ```
 
-The v3-r4 guard exited `0`; its resource summary was
-`min_free_bytes=5017239552`, `reserve_floor_bytes=2576980378`,
-`peak_working_set_bytes=49455104`, `peak_private_bytes=25141248`,
+The final blocker guard exited `0`; its resource summary was
+`min_free_bytes=4072607744`, `reserve_floor_bytes=2576980378`,
+`peak_working_set_bytes=51580928`, `peak_private_bytes=27623424`,
 `CLEANUP=PASS`, and `MUTEX=RELEASED`. The complete stderr is retained in
-`guarded-command-financial-blockers-v3-r4.stderr.log` (9083 bytes, SHA-256
-`15A2A50E43299FE9FDD2B6A9674D7DFE20BFEBB12BE5CA9D3D894C3F5E5EB123`).
+`guarded-command-financial-followon-blockers-r10-final.stderr.log` (151 bytes,
+SHA-256
+`FE4014ADB6EC23EFAAE425078E8C89202273C5EA88296A0D00C69CFB815C0AB1`).
 
-The v3 measurement series completed at
-`work/financial-measurements-v3-r2`: 3 measured samples plus 1 warmup at each
-of sizes 5, 10, and 20, 12 retained SQLite databases, all reporting owner
-schema v3 and independently verified restarts. Total-ms medians were 161.885,
-208.391, and 302.164; this is bounded observation only, not an SLA. Native
-metrics remain pending and queue wait/age is not applicable. An earlier
-pre-launch v3 attempt did stop on
-`RUNNER_FAILURE reason=mutex is already held: Local\BlindLedgerDirectMaskBuild20260907`;
-it created no output and was not used as acceptance evidence.
+The follow-on measurement series completed at
+`work/financial-measurements-v4-r1`: 3 measured samples plus 1 warmup at each
+of sizes 5, 10, and 20, 12 owner SQLite databases and 12 TEST restore
+databases. All measured owner and TEST restarts independently verified; all 9
+measured TEST restores left source bytes unchanged. Total-ms medians were
+329.150, 440.241, and 590.361 ms. Lock wait-to-acquire/transaction-held
+medians were 20.024/9.507, 15.852/9.710, and 15.148/9.661 ms for sizes 5,
+10, and 20. Each measured sample used one holder statement, one waiter
+attempt, and one successful acquisition. Native metrics remain pending and
+queue wait/age is not applicable. The measurement plan was 3 retained samples
+plus 1 warmup per size; the output contains 12 owner and 12 TEST databases.
 
-The measurement guard exited `0` with `min_free_bytes=5020676096`,
-`reserve_floor_bytes=2576980378`, `peak_working_set_bytes=46436352`,
-`peak_private_bytes=25370624`, `CLEANUP=PASS`, and `MUTEX=RELEASED`.
-Its stdout log is 23957 bytes, SHA-256
-`C878E4E2C8B1CD33B40EA6B9F5A832BAB08B5D843C9F72F0A1A16D002DD23F48`;
+The measurement guard exited `0` with `min_free_bytes=3716636672`,
+`reserve_floor_bytes=2576980378`, `peak_working_set_bytes=47734784`,
+`peak_private_bytes=26390528`, `CLEANUP=PASS`, and `MUTEX=RELEASED`.
+Its stdout log is 35051 bytes, SHA-256
+`582E0328856AC75634E71C150AF6200300314400D8E54399A08EF0FC4D9565C3`;
 stderr is 0 bytes, SHA-256
 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
 
@@ -57,15 +62,20 @@ evidence. The earlier v2 result (`Ran 29 tests in 7.582s`, `OK`) and one
 20-item observation of 379.703 ms are not v3 evidence. No numerical financial
 SLA is supplied.
 
-The four initial source blockers are addressed in the current worktree and
-covered by the guarded run; this is source-local synthetic evidence, not final
-acceptance or qualification. Current claims remain synthetic and
-nonactivating: `proofSuiteId=null`, `production_usable=false`,
-`activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. There is no real
-PHI, credential, payment movement, live dispatch, deployed Lean authority,
-native rebuild, or archive refresh in this batch. Final Driver source and
-whole-system review, old-suite/native/Lean replay, performance distribution,
-lock-time evidence, independent audit, and production qualification remain
+The four initial source blockers and the follow-on P1 checks are covered by the
+guarded run; this is source-local synthetic evidence, not final acceptance or
+qualification. Case 11 verifies SHADOW read-only behavior and a separate
+TEST-only recovered owner through H_P3_REPLACED, including recovered restart,
+duplicate action identity, disabled dispatch/egress, and unchanged source
+bytes. Separate older financial suites were not present beyond the three named
+RightRail financial test modules, so no additional older financial suite was
+run; unrelated repository suites remain outside this bounded verification.
+Current claims remain synthetic and nonactivating:
+`proofSuiteId=null`, `production_usable=false`, `activation=false`,
+`NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. There is no real PHI, credential,
+payment movement, live dispatch, deployed Lean authority, native rebuild, or
+archive refresh in this batch. Final Driver whole-system review,
+native/Lean replay, independent audit, and production qualification remain
 pending.
 
 Driver-supplied native inputs are unchanged and remain separate regressions:
