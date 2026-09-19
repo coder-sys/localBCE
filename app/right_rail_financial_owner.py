@@ -353,6 +353,12 @@ def _identity_record(
         _fail(error_type, f"{code_prefix}:mode")
     if type(bound_owner_id) is not str or _ID.fullmatch(bound_owner_id) is None:
         _fail(error_type, f"{code_prefix}:owner")
+    if provenance == "CONTINUITY_RESTORE":
+        if bound_mode == "LIVE":
+            _fail(error_type, f"{code_prefix}:restore-live")
+        expected_owner_id = _SHADOW_OWNER_ID if bound_mode == "SHADOW" else _TEST_OWNER_ID
+        if bound_owner_id != expected_owner_id:
+            _fail(error_type, f"{code_prefix}:restore-owner")
     anchor_sequence = value["anchor_sequence"]
     if type(anchor_sequence) is not int or not 0 <= anchor_sequence <= _MAX_ROWS:
         _fail(error_type, f"{code_prefix}:anchor-sequence")
@@ -916,6 +922,10 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
         CREATE TRIGGER evidence_record_immutable
         BEFORE UPDATE OF evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,content_digest,record_digest,amount_cents,reversal_of,supersedes ON evidence
         BEGIN SELECT RAISE(ABORT,'evidence_record_immutable'); END;
+        CREATE TRIGGER financial_identity_insert_immutable
+        BEFORE INSERT ON financial_identity
+        WHEN EXISTS (SELECT 1 FROM financial_identity)
+        BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END;
         CREATE TRIGGER financial_identity_update_immutable
         BEFORE UPDATE OF schema_version,provenance,bound_mode,bound_owner_id,anchor_sequence,anchor_head,genesis_head,source_package_digest,identity_digest ON financial_identity
         BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END;
@@ -2409,7 +2419,7 @@ class FinancialOwner:
                 expected_mode=restore_mode,
                 expected_owner_id=restored_owner_id,
                 expected_continuity_epoch=int(package["continuity_epoch"]),
-                continuity_package=package_bytes,
+                restore_source_package=package_bytes,
             )
         except Exception as error:
             if error.__class__.__module__ == "app.right_rail_financial_owner_independent":

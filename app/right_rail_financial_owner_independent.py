@@ -57,6 +57,8 @@ IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
 CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v4\x00"
 IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
 ZERO_DIGEST = b"\x00" * 64
+TEST_OWNER_ID = "continuity-test-owner-v1"
+SHADOW_OWNER_ID = "continuity-shadow-owner-v1"
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _ROLE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
@@ -313,6 +315,7 @@ _TRIGGER_DEFS = {
     "action_payload_immutable": "CREATE TRIGGER action_payload_immutable BEFORE UPDATE OF action_id,obligation_id,determination_id,kind,revision,payload_json,payload_digest,idempotency_key,created_at_ms ON actions BEGIN SELECT RAISE(ABORT,'action_payload_immutable'); END",
     "action_outbox_payload_immutable": "CREATE TRIGGER action_outbox_payload_immutable BEFORE UPDATE OF action_id,payload_digest ON action_outbox BEGIN SELECT RAISE(ABORT,'action_outbox_payload_immutable'); END",
     "evidence_record_immutable": "CREATE TRIGGER evidence_record_immutable BEFORE UPDATE OF evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,content_digest,record_digest,amount_cents,reversal_of,supersedes ON evidence BEGIN SELECT RAISE(ABORT,'evidence_record_immutable'); END",
+    "financial_identity_insert_immutable": "CREATE TRIGGER financial_identity_insert_immutable BEFORE INSERT ON financial_identity WHEN EXISTS (SELECT 1 FROM financial_identity) BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
     "financial_identity_update_immutable": "CREATE TRIGGER financial_identity_update_immutable BEFORE UPDATE OF schema_version,provenance,bound_mode,bound_owner_id,anchor_sequence,anchor_head,genesis_head,source_package_digest,identity_digest ON financial_identity BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
     "financial_identity_delete_immutable": "CREATE TRIGGER financial_identity_delete_immutable BEFORE DELETE ON financial_identity BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
 }
@@ -598,6 +601,12 @@ def _identity_record(value: Mapping[str, object], code_prefix: str = "identity")
         _fail(f"{code_prefix}:provenance")
     if bound_mode not in {"LIVE", "SHADOW", "TEST"}:
         _fail(f"{code_prefix}:mode")
+    if provenance == "CONTINUITY_RESTORE":
+        if bound_mode == "LIVE":
+            _fail(f"{code_prefix}:restore-live")
+        expected_owner_id = SHADOW_OWNER_ID if bound_mode == "SHADOW" else TEST_OWNER_ID
+        if bound_owner_id != expected_owner_id:
+            _fail(f"{code_prefix}:restore-owner")
     anchor_sequence = _integer(value["anchor_sequence"], f"{code_prefix}:anchor-sequence", maximum=MAX_ROWS)
     anchor_head = _blob64(value["anchor_head"], f"{code_prefix}:anchor-head")
     genesis_head = _blob64(value["genesis_head"], f"{code_prefix}:genesis-head")
@@ -2096,6 +2105,60 @@ def _verify_package_rows(raw_rows: object, table: str) -> list[dict[str, object]
     return decoded_rows
 
 
+def _snapshot_row_key(row: Mapping[str, object], table: str) -> tuple[object, ...]:
+    primary_columns = [column for column, _declared_type, primary in _TABLE_DEFS[table] if primary]
+    return tuple(row[column] for column in primary_columns)
+
+
+def _database_snapshot_rows(connection: sqlite3.Connection) -> dict[str, list[dict[str, object]]]:
+    snapshot: dict[str, list[dict[str, object]]] = {}
+    for table in TABLES:
+        rows = _bounded_rows(connection, table)
+        snapshot[table] = [
+            {column: row[column] for column in TABLE_COLUMNS[table]}
+            for row in rows
+        ]
+    return snapshot
+
+
+def _verify_current_snapshot(
+    connection: sqlite3.Connection,
+    package_rows: dict[str, list[dict[str, object]]],
+) -> None:
+    """Bind a current-snapshot package to every allowlisted row in this database."""
+
+    database_rows = _database_snapshot_rows(connection)
+    for table in TABLES:
+        package_sorted = sorted(package_rows[table], key=lambda row: _snapshot_row_key(row, table))
+        database_sorted = sorted(database_rows[table], key=lambda row: _snapshot_row_key(row, table))
+        if package_sorted != database_sorted:
+            _fail("continuity:current-snapshot-mismatch")
+
+
+def _verify_restore_source_binding(
+    meta: dict[str, object],
+    package_result: dict[str, object],
+    package_rows: dict[str, list[dict[str, object]]],
+) -> None:
+    """Bind a restore-source package to the persisted target restore contract."""
+
+    identity = meta["identity"]
+    assert isinstance(identity, dict)
+    if identity["provenance"] != "CONTINUITY_RESTORE":
+        _fail("continuity:restore-source-provenance")
+    package_digest = package_result["package_digest"]
+    assert isinstance(package_digest, str)
+    if identity["source_package_digest"] != bytes.fromhex(package_digest):
+        _fail("continuity:restore-source-digest")
+    if identity["anchor_sequence"] != package_result["sequence"]:
+        _fail("continuity:restore-source-sequence")
+    if identity["anchor_head"] != bytes.fromhex(str(package_result["history_head"])):
+        _fail("continuity:restore-source-head")
+    source_identity = package_rows["financial_identity"]
+    if len(source_identity) != 1 or source_identity[0]["genesis_head"] != identity["genesis_head"]:
+        _fail("continuity:restore-source-genesis")
+
+
 def verify_continuity_package(
     raw: bytes,
     *,
@@ -2105,6 +2168,7 @@ def verify_continuity_package(
     expected_sequence: int | None = None,
     expected_history_head: bytes | str | None = None,
     expected_continuity_epoch: int | None = None,
+    _include_rows: bool = False,
 ) -> dict[str, object]:
     """Verify the bounded canonical continuity package grammar and digest."""
 
@@ -2223,7 +2287,7 @@ def verify_continuity_package(
     package_digest = value["package_digest"]
     if type(package_digest) is not str or package_digest != package_digest.upper() or _HEX128.fullmatch(package_digest) is None or package_digest != expected_digest:
         _fail("continuity:package-digest")
-    return {
+    result: dict[str, object] = {
         "schema": CONTINUITY_SCHEMA,
         "scope": dict(scope),
         "authority": {"authority_id": authority_id, "epoch": authority_epoch, "digest": authority_digest.hex().upper()},
@@ -2233,13 +2297,17 @@ def verify_continuity_package(
         "table_counts": counts,
         "package_digest": package_digest,
     }
+    if _include_rows:
+        result["_decoded_rows"] = decoded_rows
+    return result
 
 
 def _verify_connection(
     connection: sqlite3.Connection,
     *,
     identity: dict[str, object],
-    continuity_package: bytes | None,
+    current_snapshot_package: bytes | None,
+    restore_source_package: bytes | None,
 ) -> dict[str, object]:
     _verify_schema(connection)
     meta = _verify_meta(connection, identity)
@@ -2259,9 +2327,11 @@ def _verify_connection(
     _verify_event_references(events, packs, populations, obligations)
     projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, cases, determinations, actions, conflicts, evaluations)
     package_result: dict[str, object] | None = None
-    if continuity_package is not None:
+    if current_snapshot_package is not None and restore_source_package is not None:
+        _fail("continuity:duplicate-input")
+    if current_snapshot_package is not None:
         package_result = verify_continuity_package(
-            continuity_package,
+            current_snapshot_package,
             expected_scope=meta["scope"],
             expected_authority={
                 "authority_id": meta["authority_id"],
@@ -2271,10 +2341,30 @@ def _verify_connection(
             expected_sequence=meta["sequence"],
             expected_history_head=meta["history_head"],
             expected_continuity_epoch=meta["continuity_epoch"],
+            _include_rows=True,
         )
-        package_counts = package_result["table_counts"]
-        if package_counts != {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in TABLES}:
-            _fail("continuity:table-count-binding")
+        package_rows = package_result.pop("_decoded_rows")
+        assert isinstance(package_rows, dict)
+        _verify_current_snapshot(connection, package_rows)
+        package_result["role"] = "current_snapshot"
+    elif restore_source_package is not None:
+        package_result = verify_continuity_package(
+            restore_source_package,
+            expected_scope=meta["scope"],
+            expected_authority={
+                "authority_id": meta["authority_id"],
+                "epoch": meta["authority_epoch"],
+                "digest": meta["authority_digest"],
+            },
+            expected_sequence=meta["sequence"],
+            expected_history_head=meta["history_head"],
+            expected_continuity_epoch=meta["continuity_epoch"],
+            _include_rows=True,
+        )
+        package_rows = package_result.pop("_decoded_rows")
+        assert isinstance(package_rows, dict)
+        _verify_restore_source_binding(meta, package_result, package_rows)
+        package_result["role"] = "restore_source"
     return {
         "schema": SCHEMA,
         "schema_version": SCHEMA_VERSION,
@@ -2318,12 +2408,16 @@ def verify_database(
     expected_mode: str | None = None,
     expected_owner_id: str | None = None,
     expected_continuity_epoch: int | None = None,
-    continuity_package: bytes | None = None,
-    package: bytes | None = None,
+    current_snapshot_package: bytes | None = None,
+    restore_source_package: bytes | None = None,
 ) -> dict[str, object]:
-    """Read and independently verify one financial-owner SQLite database."""
+    """Read and independently verify one financial-owner SQLite database.
 
-    if continuity_package is not None and package is not None:
+    A supplied package must be named as either the current database snapshot or
+    the source package used to create a continuity-restored database.
+    """
+
+    if current_snapshot_package is not None and restore_source_package is not None:
         _fail("continuity:duplicate-input")
     identity = _identity(
         expected_config=expected_config,
@@ -2333,11 +2427,15 @@ def verify_database(
         expected_owner_id=expected_owner_id,
         expected_continuity_epoch=expected_continuity_epoch,
     )
-    selected_package = continuity_package if continuity_package is not None else package
     connection = _open_readonly(path)
     try:
         try:
-            return _verify_connection(connection, identity=identity, continuity_package=selected_package)
+            return _verify_connection(
+                connection,
+                identity=identity,
+                current_snapshot_package=current_snapshot_package,
+                restore_source_package=restore_source_package,
+            )
         except IndependentFinancialError:
             raise
         except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
@@ -2355,14 +2453,14 @@ def verify_database_connection(
     expected_mode: str | None = None,
     expected_owner_id: str | None = None,
     expected_continuity_epoch: int | None = None,
-    continuity_package: bytes | None = None,
-    package: bytes | None = None,
+    current_snapshot_package: bytes | None = None,
+    restore_source_package: bytes | None = None,
 ) -> dict[str, object]:
     """Verify an already-open connection without taking ownership of it."""
 
     if not isinstance(connection, sqlite3.Connection):
         _fail("database:connection")
-    if continuity_package is not None and package is not None:
+    if current_snapshot_package is not None and restore_source_package is not None:
         _fail("continuity:duplicate-input")
     identity = _identity(
         expected_config=expected_config,
@@ -2372,9 +2470,13 @@ def verify_database_connection(
         expected_owner_id=expected_owner_id,
         expected_continuity_epoch=expected_continuity_epoch,
     )
-    selected_package = continuity_package if continuity_package is not None else package
     try:
-        return _verify_connection(connection, identity=identity, continuity_package=selected_package)
+        return _verify_connection(
+            connection,
+            identity=identity,
+            current_snapshot_package=current_snapshot_package,
+            restore_source_package=restore_source_package,
+        )
     except IndependentFinancialError:
         raise
     except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):

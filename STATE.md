@@ -2,16 +2,17 @@
 
 Updated: 2026-09-19
 
-## Current verified snapshot — follow-on v4 identity-binding batch
+## Current verified snapshot — follow-on v4 identity-binding correction batch
 
 The current coherent batch is in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
 branch `rightrail-financial-workflow-20260913`. Its committed parent before
-the batch is HEAD `f3f426eec114aa91bd4ea06f8d5635234039bf91`, tree
-`0b4a626e0aafbdd86c120b64b0613ec760e769e4`. The batch has eight modified
-source/test/harness paths plus the five maintained Markdown paths; there are no
-other tracked changes. The only untracked paths are the two driver-supplied
-generated executables listed below; they are not touched or staged.
+the correction batch is HEAD `86e46ddede61f1e30322a4ee81bc841556bbe77f`, tree
+`b2869a266b25646b58e0530bf8b0d87781138356`. The correction batch has five
+modified source/test/harness paths plus the five maintained Markdown paths;
+there are no other tracked changes. The only untracked paths are the two
+driver-supplied generated executables listed below; they are not touched or
+staged.
 
 The persisted candidate contract in this batch is `RR/FINANCIAL/OWNER/v4`
 with Continuity `RR/FINANCIAL/CONTINUITY/v4`. The new immutable
@@ -19,13 +20,14 @@ with Continuity `RR/FINANCIAL/CONTINUITY/v4`. The new immutable
 owner, anchor sequence/head, genesis head, source package digest, and identity
 digest. The identity digest is included in genesis; owner reopen and the
 independent checker bind `financial_meta` to that immutable record and to the
-history anchor. Direct TEST-to-LIVE metadata promotion is therefore rejected
-on both verification paths. The independent checker still reconstructs
+history anchor. Identity replacement after initial creation, restored LIVE or
+mismatched restore-owner contracts, and direct TEST-to-LIVE metadata promotion
+are rejected on both verification paths. The independent checker still reconstructs
 population lifecycle order and binds reconstructed imported counts to persisted
 `population_imports` state; omitted report/evidence timestamps reuse stored
 identity fields.
 
-The final guarded compile and source/test results are exactly:
+The prior parent guarded compile and source/test results were:
 
 ```text
 CHILD_EXIT_STATUS label=Command exit=0
@@ -44,7 +46,44 @@ CLEANUP=PASS label=Command owned_process_tree=empty
 MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
 ```
 
-The final test child stderr is retained in
+The guarded P1/P2 correction gates then completed with these decisive lines:
+
+```text
+CHILD_EXIT_STATUS label=Command exit=0
+LIVE_PHYSICAL_SUMMARY label=Command samples=2 min_free_bytes=4589420544 reserve_floor_bytes=2576980378 peak_working_set_bytes=35147776 peak_private_bytes=15564800
+CLEANUP=PASS label=Command owned_process_tree=empty
+MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+
+...............................................
+----------------------------------------------------------------------
+Ran 47 tests in 14.303s
+
+OK
+CHILD_EXIT_STATUS label=Command exit=0
+LIVE_PHYSICAL_SUMMARY label=Command samples=22 min_free_bytes=4544749568 reserve_floor_bytes=2576980378 peak_working_set_bytes=48971776 peak_private_bytes=25812992
+CLEANUP=PASS label=Command owned_process_tree=empty
+MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+```
+
+The correction compile child also exited `0`; its wrapper reported
+`min_free_bytes=4589420544`, `peak_working_set_bytes=35147776`,
+`peak_private_bytes=15564800`, `CLEANUP=PASS`, and `MUTEX=RELEASED`. Its child
+stdout/stderr were empty.
+
+The focused correction gate passed three tests in 1.632s with `OK`; the first
+focused attempt failed one test because a test referenced a private owner
+constant by a public name. That test-only reference was corrected and the
+focused gate reran successfully. No financial test was skipped.
+
+The correction adds a conditional single-row identity INSERT guard, semantic
+rejection of restored LIVE or mismatched restore-owner identities in both
+validators, exact current-snapshot row binding including meta/identity, and
+explicit `current_snapshot_package` versus `restore_source_package` roles.
+Case 11 covers recursive-trigger-disabled `INSERT OR REPLACE`, direct metadata
+promotion rejection, completion, restart, round-trip restore, and unchanged
+source bytes. Same-count altered-content negatives cover both package roles.
+
+The prior parent test child stderr is retained in
 `guarded-command-financial-identity-v4-tests-r2.stderr.log` (151 bytes, SHA-256
 `E7E53732963E56690622B955BFCD6D4712F435454A2CC6D58FFB0D03D1CD5527`); its
 stdout is empty. The final compile child stdout and stderr are both empty
@@ -58,6 +97,13 @@ the pre-v4 genesis formula. Raw stderr is retained in
 reported `history:predecessor` instead of the expected lifecycle errors. The
 helpers were corrected to use the persisted v4 identity digest, and the
 affected compile/test gates were rerun. No test was skipped.
+
+The correction test child stderr is retained in
+`guarded-command-financial-p1p2-tests-r1.stderr.log` (152 bytes, SHA-256
+`78F46E2A9A8CB79DFBAB368F0CEBC0FADF26DA395397494D76217488889F7B9F`); its
+stdout is empty. The focused correction stderr is retained in
+`guarded-command-financial-p1p2-focused-r2.stderr.log` (1514 bytes, SHA-256
+`FADD5B9DF2F71F369E102E05CB11CF9AFF38371089062EDCFF4D0C8973CD3258`).
 
 The follow-on measurement series completed at
 `work/financial-measurements-v5-r1`: 3 measured samples plus 1 warmup at each
@@ -73,7 +119,9 @@ VERIFIED, unchanged source bytes, and zero actual lock-acquisition failures.
 | 10 | 54 | 51 | 3 | 1.815 | 6.052 |
 | 20 | 90 | 87 | 3 | 1.708 | 6.597 |
 
-All actual acquisitions succeeded. The retained synthetic contention diagnostic
+The retained aggregate wait/held values in this table are medians of three
+per-sample medians. The transaction totals are sums of per-sample counts. All
+actual acquisitions succeeded. The retained synthetic contention diagnostic
 is separate: its wait/held medians were 14.048/9.755, 16.045/9.706, and
 13.492/9.626 ms for sizes 5, 10, and 20, respectively; it is not the actual
 workload metric. Actual total-ms medians were 374.124, 388.860, and 579.820 ms.

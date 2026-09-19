@@ -500,10 +500,13 @@ def _aggregate(size: int, samples: list[dict[str, Any]]) -> dict[str, Any]:
         "population_items": size,
         "latency_ms": {field: _metric_summary(sample["latency_ms"][field] for sample in samples) for field in latency_fields},
         "lock_timing_ms": {
+            "aggregation": "median_of_per_sample_medians",
+            "sample_count": len(samples),
             "wait_to_acquire": _metric_summary(sample["lock_timing_ms"]["wait_to_acquire"]["median_ms"] for sample in samples),
             "transaction_held": _metric_summary(sample["lock_timing_ms"]["transaction_held"]["median_ms"] for sample in samples),
         },
         "lock_workload": {
+            "aggregation": "sum_of_per_sample_counts",
             "sample_count": len(samples),
             "owner_transactions": sum(sample["lock_workload"]["owner_transactions"] for sample in samples),
             "test_continuation_transactions": sum(sample["lock_workload"]["test_continuation_transactions"] for sample in samples),

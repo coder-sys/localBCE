@@ -155,7 +155,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         *,
         mode: str = "LIVE",
         owner_id: str = "financial-owner-v1",
-        continuity_package: bytes | None = None,
+        current_snapshot_package: bytes | None = None,
+        restore_source_package: bytes | None = None,
     ) -> dict[str, object]:
         return independent.verify_database(
             path or self.db,
@@ -163,7 +164,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             expected_authority=self.authority_binding,
             expected_mode=mode,
             expected_owner_id=owner_id,
-            continuity_package=continuity_package,
+            current_snapshot_package=current_snapshot_package,
+            restore_source_package=restore_source_package,
         )
 
     def _copy_database(self, name: str) -> Path:
@@ -788,14 +790,15 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
     def test_owner_continuity_package_digest_and_oversized_input_fail_closed(self) -> None:
         package = self.store.export_continuity()
-        valid = self._verify(continuity_package=package)
+        valid = self._verify(current_snapshot_package=package)
         self.assertIsNotNone(valid["continuity"])
+        self.assertEqual(valid["continuity"]["role"], "current_snapshot")
 
         tampered = json.loads(package.decode("ascii"))
         tampered["package_digest"] = "0" * 128
         tampered_bytes = json.dumps(tampered, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
         with self.assertRaisesRegex(independent.IndependentFinancialError, "continuity:package-digest"):
-            self._verify(continuity_package=tampered_bytes)
+            self._verify(current_snapshot_package=tampered_bytes)
         self.assertEqual(tampered_bytes, json.dumps(tampered, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii"))
 
         oversized = b"x" * (independent.MAX_PACKAGE_BYTES + 1)
@@ -804,4 +807,37 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 oversized,
                 expected_scope=self.scope,
                 expected_authority=self.authority_binding,
+            )
+
+    def test_package_roles_bind_content_and_restore_anchor(self) -> None:
+        package = json.loads(self.store.export_continuity().decode("ascii"))
+        package["tables"]["evidence"][0]["local_ref"] = "tampered:same-count-current"
+        body = dict(package)
+        del body["package_digest"]
+        package["package_digest"] = independent.continuity_package_digest(body)
+        altered_current = owner._canonical(package)
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "continuity:current-snapshot-mismatch"):
+            self._verify(current_snapshot_package=altered_current)
+
+        source_package = self.store.export_continuity()
+        restored_path = Path(self.temp_dir.name) / "role-test-restore.sqlite"
+        restored = owner.FinancialOwner.restore_test_continuity(
+            package_bytes=source_package,
+            recovered_path=restored_path,
+            trusted_authority=self.authority,
+            clock=self.clock,
+        )
+        restored.close()
+        altered_source = json.loads(source_package.decode("ascii"))
+        altered_source["tables"]["evidence"][0]["local_ref"] = "tampered:same-count-source"
+        source_body = dict(altered_source)
+        del source_body["package_digest"]
+        altered_source["package_digest"] = independent.continuity_package_digest(source_body)
+        altered_source_bytes = owner._canonical(altered_source)
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "continuity:restore-source-digest"):
+            self._verify(
+                restored_path,
+                mode="TEST",
+                owner_id=owner._TEST_OWNER_ID,
+                restore_source_package=altered_source_bytes,
             )

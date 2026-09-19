@@ -11,15 +11,17 @@ Rejected architectures are recorded separately and are not milestones.
 
 ## Active roadmap — financial workflow 2026-09-19
 
-The committed parent before this follow-on is branch
+The committed parent before this correction batch is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`f3f426eec114aa91bd4ea06f8d5635234039bf91`, tree
-`0b4a626e0aafbdd86c120b64b0613ec760e769e4`. All evidence is synthetic and
+`86e46ddede61f1e30322a4ee81bc841556bbe77f`, tree
+`b2869a266b25646b58e0530bf8b0d87781138356`. All evidence is synthetic and
 nonactivating. The persisted owner/Continuity candidate is v4:
 `RR/FINANCIAL/OWNER/v4` and `RR/FINANCIAL/CONTINUITY/v4`. Its immutable
 `financial_identity` row binds restore provenance, mode/owner identity, source
-package digest, genesis, and history anchor; the owner and independent checker
-reject direct TEST-to-LIVE metadata promotion. Retained v2/v3 and prior v4
+package digest, genesis, and history anchor; identity replacement is blocked
+after initial creation, restored LIVE/mismatched-owner contracts fail in both
+validators, and the checker separates current-snapshot row binding from
+restore-source anchor binding. Retained v2/v3 and prior v4
 measurement artifacts remain immutable historical evidence.
 
 1. **A — Documentation and pins.** The maintained Markdown records the current
@@ -30,10 +32,12 @@ measurement artifacts remain immutable historical evidence.
    blockers are addressed in the owner, independent checker, Mirror/CLI, and
    acceptance fixtures. Event header integrity, population lifecycle order,
    persisted imported-count binding, immutable restore provenance, and
-   history-anchored TEST identity are explicit invariants.
+   history-anchored TEST identity are explicit invariants. Current snapshots
+   and restore sources are explicit verifier roles rather than one guessed
+   continuity argument.
 3. **C — Guarded affected verification.** The final guard ran the focused
-   harness compile and affected source suite. The exact source result is
-   `Ran 46 tests in 14.686s` followed by `OK`; the raw stderr log is retained.
+   harness compile and affected source suite. The exact correction result is
+   `Ran 47 tests in 14.303s` followed by `OK`; the raw stderr log is retained.
 4. **D — Same-owner Mirror and Continuity.** Default Continuity restore remains
    SHADOW/read-only. The explicit TEST restore has fixed identity, cannot open
    as LIVE, keeps dispatch/egress disabled, and Case 11 reaches H_P3_REPLACED
@@ -43,8 +47,9 @@ measurement artifacts remain immutable historical evidence.
    `work/financial-measurements-v5-r1` with 3 measured samples plus 1 warmup at
    each of sizes 5, 10, and 20, 12 owner databases and 12 TEST restore
    databases. Actual `_write()` wait/held medians were 2.019/7.188,
-   1.815/6.052, and 1.708/6.597 ms; actual transaction totals were 36, 54,
-   and 90 with zero acquisition failures. All 9 measured TEST restores left
+   1.815/6.052, and 1.708/6.597 ms. These are medians of three per-sample
+   medians; transaction totals 36, 54, and 90 are sums of per-sample counts,
+   with zero acquisition failures. All 9 measured TEST restores left
    source bytes unchanged. The synthetic contention diagnostic remains
    separately labeled and receives no actual-workload credit. This is a bounded
    observation, not an SLA. Native metrics remain pending and queue wait/age

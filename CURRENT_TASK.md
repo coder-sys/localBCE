@@ -7,9 +7,9 @@ Updated: 2026-09-19
 Work only in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
 branch `rightrail-financial-workflow-20260913`. The committed parent identity
-at the start of this follow-on was HEAD
-`f3f426eec114aa91bd4ea06f8d5635234039bf91`, tree
-`0b4a626e0aafbdd86c120b64b0613ec760e769e4`; the only untracked paths remain
+before this correction batch is HEAD
+`86e46ddede61f1e30322a4ee81bc841556bbe77f`, tree
+`b2869a266b25646b58e0530bf8b0d87781138356`; the only untracked paths remain
 the two generated executables recorded in `STATE.md`. The v4 source/test/
 harness and maintained-document changes are the current coherent batch.
 
@@ -27,7 +27,11 @@ The candidate is now v4 with `RR/FINANCIAL/OWNER/v4` and
 `RR/FINANCIAL/CONTINUITY/v4`. The new immutable `financial_identity` contract
 binds ROOT/CONTINUITY_RESTORE provenance, mode, owner, source package digest,
 genesis, and the history anchor; owner reopen and independent verification
-reject direct TEST-to-LIVE metadata promotion. Old v2/v3 and prior v4
+reject direct TEST-to-LIVE metadata promotion. The correction also blocks
+identity replacement after initial creation, rejects restored LIVE or
+mismatched restore-owner identities in both validators, compares every
+allowlisted row for current-snapshot packages, and binds restore-source
+packages to the persisted source digest and history anchor. Old v2/v3 and prior v4
 measurement databases/logs remain immutable historical evidence.
 
 ## Current implementation and blockers
@@ -45,20 +49,22 @@ identity, cannot become LIVE even after direct metadata mode/owner mutation,
 and remains dispatch/egress disabled. The identity row is immutable and
 history-anchored across export, restore, round-trip restore, and restart.
 
-The final guarded compile and affected run were:
+The guarded correction compile and affected run were:
 
 ```text
 py -3.14 -B -m py_compile ...  exit=0
-Ran 46 tests in 14.686s
+Ran 47 tests in 14.303s
 OK
 ```
 
 This is source-local synthetic evidence, not final acceptance or qualification.
 The guarded v5 measurement series completed with 3 measured samples plus 1
 warmup at each of sizes 5, 10, and 20; it retained 12 owner databases and 12
-TEST restore databases (24 files total). Actual `_write()` wait/held medians
-were 2.019/7.188, 1.815/6.052, and 1.708/6.597 ms; actual transaction
-counts were 36, 54, and 90 with zero acquisition failures. All 9 measured
+TEST restore databases (24 files total). The retained aggregate lock timing is
+the median of three per-sample medians; actual `_write()` wait/held medians
+were 2.019/7.188, 1.815/6.052, and 1.708/6.597 ms. Actual transaction counts
+are sums of per-sample counts: 36, 54, and 90, with zero acquisition failures.
+All 9 measured
 TEST restores and restarts verified with unchanged source bytes. The harness
 retains a separate synthetic contention diagnostic, which is not the actual
 workload metric. Native metrics remain pending and queue wait/age is not

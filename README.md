@@ -30,24 +30,28 @@ bytes, security parameters, artifacts, operations policy, archives, or productio
 
 ## Current source/checkpoint — 2026-09-19
 
-The committed parent before this follow-on is branch
+The committed parent before this correction batch is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`f3f426eec114aa91bd4ea06f8d5635234039bf91`, tree
-`0b4a626e0aafbdd86c120b64b0613ec760e769e4`. The v4 source/test/harness change
-and this maintained-document update are the current coherent batch. The owner
+`86e46ddede61f1e30322a4ee81bc841556bbe77f`, tree
+`b2869a266b25646b58e0530bf8b0d87781138356`. The v4 source/test/harness
+correction and maintained-document update are the current coherent batch. The owner
 is explicitly versioned as `RR/FINANCIAL/OWNER/v4`; Continuity is
 `RR/FINANCIAL/CONTINUITY/v4`. v4 adds an immutable `financial_identity` row
 that binds provenance, mode, owner, continuity anchor, genesis, and source
 package digest; the identity digest is included in genesis and the independent
-checker verifies the same contract. TEST restore/continuation remains
-non-live, dispatch/egress-disabled, and direct `financial_meta` mode-only or
+checker verifies the same contract. The follow-on correction blocks identity
+replacement after initial creation, rejects restored `LIVE` and mismatched
+restore-owner identities in both semantic validators, and requires callers to
+name a package as either `current_snapshot_package` or
+`restore_source_package`. TEST restore/continuation remains non-live,
+dispatch/egress-disabled, and direct `financial_meta` mode-only or
 mode-plus-owner promotion is rejected on owner reopen and independent verify.
 
 The final guarded affected compile and source/test result is:
 
 ```text
 py -3.14 -B -m py_compile ...  exit=0
-Ran 46 tests in 14.686s
+Ran 47 tests in 14.303s
 OK
 ```
 
@@ -56,9 +60,11 @@ The follow-on measurement series completed at
 each of sizes 5, 10, and 20 (24 files: 12 owner databases and 12 TEST restore
 databases). All 9 measured owner/TEST restarts independently verified, all
 actual `_write()` acquisitions succeeded, and all 9 measured restores left
-source bytes unchanged. Actual wait-to-acquire/transaction-held medians were
+source bytes unchanged. The retained aggregate timing is the median of three
+per-sample medians; actual wait-to-acquire/transaction-held medians were
 2.019/7.188, 1.815/6.052, and 1.708/6.597 ms for sizes 5, 10, and 20; the
-actual transaction counts were 36, 54, and 90 with zero acquisition failures.
+actual transaction counts are sums of per-sample counts: 36, 54, and 90, with
+zero acquisition failures.
 The retained synthetic contention probe is reported separately and is not the
 workload metric. This is a bounded observation, not a financial SLA; native
 metrics remain pending and queue wait/age is not applicable. The prior v2/v3

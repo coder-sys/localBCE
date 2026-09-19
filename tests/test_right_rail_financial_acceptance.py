@@ -351,7 +351,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         }
         self.assertEqual(len(item_ids_with_evidence), expected_evidence_items)
 
-    def _assert_verified(self, store: FinancialOwner, *, package: bytes | None = None) -> dict[str, object]:
+    def _assert_verified(
+        self,
+        store: FinancialOwner,
+        *,
+        current_snapshot_package: bytes | None = None,
+        restore_source_package: bytes | None = None,
+    ) -> dict[str, object]:
         result = verify_database(
             store.path,
             expected_config=store.config,
@@ -362,7 +368,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             },
             expected_mode=store.mode,
             expected_owner_id=store.owner_id,
-            continuity_package=package,
+            current_snapshot_package=current_snapshot_package,
+            restore_source_package=restore_source_package,
         )
         self.assertEqual(result["scope"]["period_id"], store.config.period_id)
         return result
@@ -646,7 +653,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_snapshot(test_store, expected.H_ACKNOWLEDGED)
         test_package = test_store.export_continuity()
         self.assertEqual(FinancialOwner.validate_continuity_package(test_package)["mode"], "TEST")
-        self._assert_verified(test_store, package=test_package)
+        self._assert_verified(test_store, restore_source_package=package)
+        self._assert_verified(test_store, current_snapshot_package=test_package)
         test_sequence = test_store.summary()["sequence"]
         duplicate_action = test_store.retry_action(
             expected.ACTION_CORRECTION_ID,
@@ -694,8 +702,74 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=_Clock(),
         )
-        self._assert_verified(roundtrip, package=roundtrip_package)
+        self._assert_verified(roundtrip, restore_source_package=roundtrip_package)
+        roundtrip_current_package = roundtrip.export_continuity()
+        self._assert_verified(roundtrip, current_snapshot_package=roundtrip_current_package)
         roundtrip.close()
+
+        def _tamper_restore_identity(bound_mode: str, bound_owner_id: str) -> bytes:
+            candidate = json.loads(roundtrip_current_package.decode("ascii"))
+            identity_row = candidate["tables"]["financial_identity"][0]
+            identity_row["bound_mode"] = bound_mode
+            identity_row["bound_owner_id"] = bound_owner_id
+            identity_row["identity_digest"] = {
+                "hex": owner._hex(
+                    owner._identity_digest(
+                        provenance=identity_row["provenance"],
+                        bound_mode=bound_mode,
+                        bound_owner_id=bound_owner_id,
+                        anchor_sequence=identity_row["anchor_sequence"],
+                        source_package_digest=bytes.fromhex(identity_row["source_package_digest"]["hex"]),
+                    )
+                )
+            }
+            candidate["mode"] = bound_mode
+            meta_row = candidate["tables"]["financial_meta"][0]
+            meta_row["mode"] = bound_mode
+            meta_row["owner_id"] = bound_owner_id
+            body = dict(candidate)
+            del body["package_digest"]
+            candidate["package_digest"] = owner._hex(owner._digest(owner._CONTINUITY_DOMAIN, owner._canonical(body)))
+            return owner._canonical(candidate)
+
+        live_restore = _tamper_restore_identity("LIVE", "financial-owner-v1")
+        with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:restore-live"):
+            FinancialOwner.validate_continuity_package(live_restore)
+        with self.assertRaisesRegex(IndependentFinancialError, "continuity:identity:restore-live"):
+            verify_continuity_package(
+                live_restore,
+                expected_scope={
+                    "state_id": test_config.state_id,
+                    "deployment_id": test_config.deployment_id,
+                    "program_id": test_config.program_id,
+                    "period_id": test_config.period_id,
+                    "currency": test_config.currency,
+                },
+                expected_authority={
+                    "authority_id": self.authority.authority_id,
+                    "epoch": self.authority.epoch,
+                    "digest": self.authority.digest,
+                },
+            )
+        wrong_restore_owner = _tamper_restore_identity("SHADOW", owner._TEST_OWNER_ID)
+        with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:restore-owner"):
+            FinancialOwner.validate_continuity_package(wrong_restore_owner)
+        with self.assertRaisesRegex(IndependentFinancialError, "continuity:identity:restore-owner"):
+            verify_continuity_package(
+                wrong_restore_owner,
+                expected_scope={
+                    "state_id": test_config.state_id,
+                    "deployment_id": test_config.deployment_id,
+                    "program_id": test_config.program_id,
+                    "period_id": test_config.period_id,
+                    "currency": test_config.currency,
+                },
+                expected_authority={
+                    "authority_id": self.authority.authority_id,
+                    "epoch": self.authority.epoch,
+                    "digest": self.authority.digest,
+                },
+            )
 
         mode_only = self._path("test-promotion-mode-only.sqlite")
         mode_only.write_bytes(test_bytes_after_completion)
@@ -726,6 +800,25 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         mode_and_owner = self._path("test-promotion-mode-and-owner.sqlite")
         mode_and_owner.write_bytes(test_bytes_after_completion)
         with closing(sqlite3.connect(mode_and_owner, isolation_level=None)) as connection:
+            connection.execute("PRAGMA recursive_triggers=OFF")
+            identity_columns = owner._TABLE_COLUMNS["financial_identity"]
+            identity_row = connection.execute("SELECT * FROM financial_identity WHERE id=1").fetchone()
+            assert identity_row is not None
+            replacement = dict(zip(identity_columns, identity_row))
+            replacement["bound_mode"] = "LIVE"
+            replacement["bound_owner_id"] = "financial-owner-v1"
+            replacement["identity_digest"] = owner._identity_digest(
+                provenance=replacement["provenance"],
+                bound_mode=replacement["bound_mode"],
+                bound_owner_id=replacement["bound_owner_id"],
+                anchor_sequence=replacement["anchor_sequence"],
+                source_package_digest=replacement["source_package_digest"],
+            )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "financial_identity_immutable"):
+                connection.execute(
+                    f"INSERT OR REPLACE INTO financial_identity ({','.join(identity_columns)}) VALUES ({','.join('?' for _ in identity_columns)})",
+                    tuple(replacement[column] for column in identity_columns),
+                )
             connection.execute("UPDATE financial_meta SET mode='LIVE',owner_id='financial-owner-v1' WHERE id=1")
         with self.assertRaisesRegex(FinancialIntegrityError, "identity"):
             FinancialOwner(
@@ -1080,7 +1173,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=_Clock(),
         )
-        self._assert_verified(shadow, package=package)
+        self._assert_verified(shadow, restore_source_package=package)
 
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:
         self.assertEqual(tuple(case.number for case in expected.ACCEPTANCE_CASES), tuple(range(1, 13)))

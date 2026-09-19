@@ -49,11 +49,10 @@ The prior source/docs batch is committed at parent checkpoint
 `1effa625800c778367579416cb15a07555264754`, tree
 `85bd334d002446c598cde41dd61283736c1e006e`; its parent source checkpoint is
 `a0267e08ec400e0e96003d60cfca6b19df61c796`. The follow-on source/test/harness
-implementation is committed at `691d3965f37e935889782215415368d83a9b0b25`,
-tree `b50853d20935e28616e87e51c478ee398d4e3f3c`. The current boundary is
-post-commit review; later maintained-document correction commits do not alter
-that source checkpoint. This is not a production or whole-system acceptance
-claim. The next review action is the bounded Driver/Security review.
+implementation is committed at parent `86e46ddede61f1e30322a4ee81bc841556bbe77f`,
+tree `b2869a266b25646b58e0530bf8b0d87781138356`. The current boundary is
+the authorized P1/P2 source review and correction batch described below. This
+is not a production or whole-system acceptance claim.
 
 ## Current reauthorized source checkpoint — 2026-09-19
 
@@ -68,23 +67,28 @@ correction includes Control Pack/period/population/lineage enforcement, event
 header binding, population lifecycle reconstruction and persisted imported-count
 binding, stable default-timestamp report retries, CLI coverage, and an
 immutable provenance/mode/owner/history anchor for TEST-only continuation after
-shadow restore.
+shadow restore. The P1/P2 correction also blocks identity replacement after
+initial creation, rejects restored LIVE or mismatched restore-owner identities
+in both validators, and separates current-snapshot package binding from
+restore-source anchor binding.
 
-The final guarded affected financial run passed 46 tests. Its raw stderr is
+The guarded P1/P2 affected financial run passed 47 tests. Its raw stderr is
 retained by the guard as
-`guarded-command-financial-identity-v4-tests-r2.stderr.log` and ends with:
+`guarded-command-financial-p1p2-tests-r1.stderr.log` and ends with:
 
 ```text
-Ran 46 tests in 14.686s
+Ran 47 tests in 14.303s
 OK
 ```
 
 The follow-on measurement series completed under the same guard at
 `work/financial-measurements-v5-r1`: 3 measured samples plus 1 warmup for
 each of sizes 5, 10, and 20, 12 owner SQLite databases and 12 TEST restore
-databases. Actual `_write()` wait/held medians were 2.019/7.188, 1.815/6.052,
-and 1.708/6.597 ms; actual transaction totals were 36, 54, and 90 with zero
-acquisition failures. All 9 measured restores left source bytes unchanged.
+databases. The retained aggregate timing is explicitly the median of three
+per-sample medians; actual `_write()` wait/held medians were 2.019/7.188,
+1.815/6.052, and 1.708/6.597 ms. Transaction totals 36, 54, and 90 are sums
+of per-sample transaction counts, with zero acquisition failures. All 9
+measured restores left source bytes unchanged.
 The synthetic contention diagnostic remains separately labeled and is not the
 actual workload metric. This is bounded observation only, not an SLA. Native
 metrics remain pending and queue wait/age is not applicable. The retained
