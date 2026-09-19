@@ -34,7 +34,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             state_id="state:test",
             deployment_id="deployment:test",
             program_id="program:test",
-            period_id="PROGRAM",
+            period_id="period:test",
         )
         self.authority = owner.SyntheticTrustedAuthority()
         self.store = owner.FinancialOwner(
@@ -70,10 +70,15 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             effective_end_ms=20_000,
             recorded_at_ms=2,
             approved_at_ms=3,
-            calculation_rule_id="rule:calculation",
-            adjustment_rule_id="rule:adjustment",
-            authorized_roles=("FINANCE_DECISION",),
-            expected_tests=("financial-independent",),
+            calculation_rule_id="calculation:per-recipient:v1",
+            adjustment_rule_id="adjustment:offset:v1",
+            authorized_roles=("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR", "RECEIVER"),
+            expected_tests=(
+                "program-total=100000000",
+                "H-owed=10000000",
+                "other-total=90000000",
+                "timeliness-separate",
+            ),
         )
         self.store.publish_control_pack(pack)
         item = owner.PopulationItem(
@@ -123,10 +128,25 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             decision_at_ms=30,
         )
         self.store.acknowledge_action("action:offset:claim:H", "ack:H")
+        self.store.record_reporting_evidence(
+            item_id="item:H",
+            report_id="report:H:original",
+            evidence_id="evidence:report:H:original",
+            event_at_ms=35,
+        )
         self.store.record_reporting_correction(
             item_id="item:H",
-            report_id="report:H",
+            report_id="report:H:correction",
+            evidence_id="evidence:report:H:correction",
             event_at_ms=40,
+            supersedes="evidence:report:H:original",
+        )
+        self.store.record_reporting_correction(
+            item_id="item:H",
+            report_id="report:H:correction-2",
+            evidence_id="evidence:report:H:correction-2",
+            event_at_ms=45,
+            supersedes="evidence:report:H:correction",
         )
 
     def _verify(self, path: Path | None = None, *, continuity_package: bytes | None = None) -> dict[str, object]:
@@ -152,10 +172,142 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             self._verify(path)
         self.assertEqual(path.read_bytes(), tampered_bytes)
 
+    @staticmethod
+    def _report_record_digest(row: sqlite3.Row, supersedes: str) -> bytes:
+        return owner._digest(
+            owner._EVIDENCE_DOMAIN,
+            owner._canonical(
+                {
+                    "evidence_id": str(row["evidence_id"]),
+                    "item_id": str(row["item_id"]),
+                    "kind": str(row["kind"]),
+                    "common_origin_id": str(row["common_origin_id"]),
+                    "source_id": str(row["source_id"]),
+                    "source_version": str(row["source_version"]),
+                    "local_ref": str(row["local_ref"]),
+                    "applicable_at_ms": int(row["applicable_at_ms"]),
+                    "event_at_ms": int(row["event_at_ms"]),
+                    "received_at_ms": int(row["received_at_ms"]),
+                    "content_digest": bytes(row["content_digest"]).hex().upper(),
+                    "amount_cents": row["amount_cents"],
+                    "reversal_of": row["reversal_of"],
+                    "supersedes": supersedes,
+                }
+            ),
+        )
+
+    @staticmethod
+    def _rewrite_report_supersedes(path: Path, evidence_id: str, supersedes: str) -> None:
+        with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute("SELECT * FROM evidence WHERE evidence_id=?", (evidence_id,)).fetchone()
+            assert row is not None
+            record_digest = IndependentFinancialCheckerTests._report_record_digest(row, supersedes)
+            connection.execute("DROP TRIGGER evidence_record_immutable")
+            connection.execute(
+                "UPDATE evidence SET supersedes=?,record_digest=? WHERE evidence_id=?",
+                (supersedes, record_digest, evidence_id),
+            )
+            connection.execute(independent._TRIGGER_DEFS["evidence_record_immutable"])
+
+    def _add_published_history_population(self, population_id: str = "population:history") -> None:
+        items = (
+            owner.PopulationItem(
+                population_id=population_id,
+                item_id="item:history-1",
+                display_label="History one",
+                owed_cents=1,
+                due_at_ms=10_001,
+            ),
+            owner.PopulationItem(
+                population_id=population_id,
+                item_id="item:history-2",
+                display_label="History two",
+                owed_cents=1,
+                due_at_ms=10_002,
+            ),
+        )
+        self.store.stage_population(
+            population_id=population_id,
+            pack_id="pack:test",
+            cutoff_ms=4,
+            inclusion_rules=("INCLUDED",),
+            expected_count=2,
+            items=items,
+            chunk_size=1,
+        )
+        self.store.validate_population(population_id)
+        self.store.publish_population(population_id)
+
+    @staticmethod
+    def _reorder_and_rehash_population_events(
+        path: Path,
+        population_id: str,
+        left_kind: str,
+        left_index: int,
+        right_kind: str,
+        right_index: int,
+    ) -> None:
+        with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = list(connection.execute("SELECT * FROM financial_events ORDER BY event_sequence"))
+            left_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == left_kind]
+            right_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == right_kind]
+            left_position = left_candidates[left_index]
+            right_position = right_candidates[right_index]
+            rows[left_position], rows[right_position] = rows[right_position], rows[left_position]
+            offset = 100_000
+            connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
+            meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
+            assert meta is not None
+            base_committed_at = min(int(row["committed_at_ms"]) for row in rows)
+            scope = {
+                "state_id": str(meta["state_id"]),
+                "deployment_id": str(meta["deployment_id"]),
+                "program_id": str(meta["program_id"]),
+                "period_id": str(meta["period_id"]),
+                "currency": str(meta["currency"]),
+            }
+            previous = independent._digest(
+                independent.GENESIS_DOMAIN,
+                independent._canonical(scope, "test:genesis-scope"),
+                bytes(meta["trusted_authority_digest"]),
+            )
+            for sequence, row in enumerate(rows, start=1):
+                committed_at = base_committed_at + sequence
+                header = independent._event_header(
+                    int(row["before_revision"]),
+                    int(row["after_revision"]),
+                    committed_at,
+                    "test:event-header",
+                )
+                event_id = independent._digest(
+                    independent.EVENT_DOMAIN,
+                    sequence.to_bytes(8, "big"),
+                    str(row["aggregate_type"]).encode("ascii"),
+                    str(row["aggregate_id"]).encode("ascii"),
+                    str(row["kind"]).encode("ascii"),
+                    header,
+                    bytes(row["payload_digest"]),
+                )
+                head = independent._digest(
+                    independent.HEAD_DOMAIN,
+                    previous,
+                    event_id,
+                    header,
+                    bytes(row["payload_digest"]),
+                )
+                connection.execute(
+                    "UPDATE financial_events SET event_sequence=?,event_id=?,previous_head=?,head=?,committed_at_ms=? WHERE event_sequence=?",
+                    (sequence, event_id, previous, head, committed_at, int(row["event_sequence"]) + offset),
+                )
+                previous = head
+            connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
+
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
         obligation = next(iter(result["obligations"].values()))
-        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v1")
+        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v3")
         self.assertEqual(result["mode"], "LIVE")
         self.assertEqual(result["totals"], {
             "owed_cents": 10_000_000,
@@ -200,6 +352,52 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         self._assert_rejected_without_repair(target, tamper, "history:payload-digest")
 
+    def test_event_header_tamper_fails_owner_verification_without_repair(self) -> None:
+        target = self._copy_database("event-header-tamper.sqlite")
+        with closing(sqlite3.connect(target, isolation_level=None)) as connection:
+            connection.execute(
+                "UPDATE financial_events SET after_revision=after_revision+1 WHERE kind='POPULATION_SOURCE_COMPLETED'"
+            )
+        tampered_bytes = target.read_bytes()
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:event-id"):
+            reopened = owner.FinancialOwner(
+                path=target,
+                config=self.config,
+                trusted_authority=self.authority,
+                clock=self.clock,
+            )
+            reopened.verify_integrity()
+        self.assertEqual(target.read_bytes(), tampered_bytes)
+
+    def test_rehashed_population_history_rejects_invalid_completion_lifecycle(self) -> None:
+        population_id = "population:history"
+        self._add_published_history_population(population_id)
+        self._verify()
+
+        before_stage = self._copy_database("population-stage-order-tamper.sqlite")
+        self._reorder_and_rehash_population_events(
+            before_stage,
+            population_id,
+            "POPULATION_STAGED",
+            1,
+            "POPULATION_SOURCE_COMPLETED",
+            0,
+        )
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-stage-order"):
+            self._verify(before_stage)
+
+        after_validation = self._copy_database("population-completion-order-tamper.sqlite")
+        self._reorder_and_rehash_population_events(
+            after_validation,
+            population_id,
+            "POPULATION_SOURCE_COMPLETED",
+            0,
+            "POPULATION_VALIDATED",
+            0,
+        )
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-completion-order"):
+            self._verify(after_validation)
+
     def test_event_head_tamper_fails_closed_without_repair(self) -> None:
         target = self._copy_database("event-head-tamper.sqlite")
 
@@ -239,7 +437,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             with closing(sqlite3.connect(path, isolation_level=None)) as connection:
                 connection.execute(
                     "UPDATE obligations SET received_cash_cents=received_cash_cents+1 WHERE obligation_id=?",
-                    ("obligation:item:H:PROGRAM",),
+                    ("obligation:item:H:period:test",),
                 )
 
         self._assert_rejected_without_repair(target, tamper, "projection:received_cash_cents")
@@ -259,6 +457,83 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 )
 
         self._assert_rejected_without_repair(target, tamper, "evidence:record-digest")
+
+    def test_reporting_supersedes_missing_target_fails_closed_without_repair(self) -> None:
+        target = self._copy_database("reporting-lineage-tamper.sqlite")
+
+        def tamper(path: Path) -> None:
+            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                connection.execute(
+                    "DELETE FROM evidence WHERE evidence_id=?",
+                    ("evidence:report:H:original",),
+                )
+
+        self._assert_rejected_without_repair(target, tamper, "evidence:report-supersedes-missing")
+
+    def test_reporting_supersedes_fork_fails_closed_without_repair(self) -> None:
+        target = self._copy_database("reporting-lineage-fork.sqlite")
+
+        def tamper(path: Path) -> None:
+            evidence = self.store._new_evidence(
+                evidence_id="evidence:report:H:fork",
+                item_id="item:H",
+                kind="REPORT_CORRECTION",
+                common_origin_id="report:H:fork",
+                source_id="synthetic-report-source",
+                source_version="fixture-v1",
+                local_ref="report:report:H:fork",
+                applicable_at_ms=42,
+                event_at_ms=42,
+                received_at_ms=1_000,
+                supersedes="evidence:report:H:original",
+            )
+            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                connection.execute(
+                    "INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        evidence.evidence_id,
+                        evidence.item_id,
+                        evidence.kind,
+                        evidence.common_origin_id,
+                        evidence.source_id,
+                        evidence.source_version,
+                        evidence.local_ref,
+                        evidence.applicable_at_ms,
+                        evidence.event_at_ms,
+                        evidence.received_at_ms,
+                        evidence.content_digest,
+                        evidence.record_digest,
+                        evidence.amount_cents,
+                        evidence.reversal_of,
+                        evidence.supersedes,
+                    ),
+                )
+
+        self._assert_rejected_without_repair(target, tamper, "evidence:report-supersedes-fork")
+
+    def test_reporting_supersedes_cycle_fails_closed_without_repair(self) -> None:
+        target = self._copy_database("reporting-lineage-cycle.sqlite")
+
+        def tamper(path: Path) -> None:
+            self._rewrite_report_supersedes(
+                path,
+                "evidence:report:H:correction",
+                "evidence:report:H:correction-2",
+            )
+
+        self._assert_rejected_without_repair(target, tamper, "evidence:report-supersedes-chronology")
+
+    def test_population_completion_event_is_bound_to_source_flag(self) -> None:
+        target = self._copy_database("population-completion-tamper.sqlite")
+
+        def tamper(path: Path) -> None:
+            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                connection.execute(
+                    "UPDATE population_imports SET source_complete=0,status='STAGED',validated_count=0,validation_digest=NULL WHERE population_id=?",
+                    ("population:test",),
+                )
+
+        self._assert_rejected_without_repair(target, tamper, "history:population-completion-binding")
 
     def test_common_origin_duplicate_and_conflict_are_visible_without_cash_rewrite(self) -> None:
         duplicate = self.store.record_payment_evidence(

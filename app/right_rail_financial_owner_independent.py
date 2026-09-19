@@ -37,9 +37,9 @@ def _fail(code: str) -> NoReturn:
     raise error
 
 
-SCHEMA_VERSION = 1
-SCHEMA = "RR/FINANCIAL/OWNER/v1"
-CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v1"
+SCHEMA_VERSION = 3
+SCHEMA = "RR/FINANCIAL/OWNER/v3"
+CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v3"
 CURRENCY = "USD"
 MAX_CENTS = (1 << 63) - 1
 MAX_ROWS = 10_000
@@ -48,13 +48,13 @@ MAX_PACKAGE_BYTES = 8 * 1024 * 1024
 MAX_JSON_BYTES = 1 * 1024 * 1024
 MAX_PACKAGE_NODES = 250_000
 
-EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v1\x00"
-HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v1\x00"
-GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v1\x00"
+EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
+HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
+GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v2\x00"
 EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
-CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v1\x00"
+CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v3\x00"
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _ROLE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
@@ -111,6 +111,7 @@ _TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("cutoff_ms", "INTEGER", 0),
         ("inclusion_rules_json", "TEXT", 0),
         ("expected_count", "INTEGER", 0),
+        ("source_complete", "INTEGER", 0),
         ("imported_count", "INTEGER", 0),
         ("validated_count", "INTEGER", 0),
         ("validation_digest", "BLOB", 0),
@@ -302,7 +303,7 @@ _TRIGGER_DEFS = {
 
 _EVENT_KINDS = {
     "CONTROL_PACK": {"CONTROL_PACK_PUBLISHED"},
-    "POPULATION": {"POPULATION_STAGED", "POPULATION_VALIDATED", "POPULATION_PUBLISHED"},
+    "POPULATION": {"POPULATION_STAGED", "POPULATION_SOURCE_COMPLETED", "POPULATION_VALIDATED", "POPULATION_PUBLISHED"},
     "OBLIGATION": {
         "SUPPORT_EVIDENCE_RECORDED",
         "PAYMENT_RECEIVED",
@@ -313,11 +314,42 @@ _EVENT_KINDS = {
         "OFFSET_AUTHORIZED",
         "OFFSET_REJECTED_CORRECTION_AUTHORIZED",
         "ACTION_ACKNOWLEDGED",
+        "REPORTING_EVIDENCE_RECORDED",
         "REPORTING_CORRECTION_RECORDED",
         "EVALUATION_RECORDED",
     },
 }
 _PAYMENT_EVIDENCE_KINDS = {"PAYMENT_CONFIRMATION"}
+_WILDCARD_PERIODS = {"PROGRAM", "ALL"}
+_CONTROL_PACK_ALLOWED_ROLES = {"FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR", "RECEIVER"}
+_CONTROL_PACK_REQUIRED_ROLES = {"FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER"}
+_CONTROL_PACK_POLICIES = {
+    (
+        "calculation:per-recipient:v1",
+        "adjustment:offset:v1",
+    ): (
+        (
+            "program-total=100000000",
+            "H-owed=10000000",
+            "other-total=90000000",
+            "timeliness-separate",
+        ),
+        "PER_RECIPIENT",
+        "AUTHORIZED_OFFSET",
+    ),
+    (
+        "calculation:per-recipient:v2",
+        "adjustment:offset:v2",
+    ): (
+        (
+            "period-02-uses-rule-v2",
+            "period-01-evaluation-preserved",
+            "retrospective-authority-required",
+        ),
+        "PER_RECIPIENT",
+        "AUTHORIZED_OFFSET",
+    ),
+}
 _CASE_STATUSES = {"OPEN", "AUTHORIZED", "CORRECTION_REQUIRED", "ACTIONED", "RESOLVED"}
 _DELIVERY_STATUSES = {"NONE", "READY", "ACKNOWLEDGED", "CANCELLED"}
 _EVALUATION_VERIFICATION = {"MISSING_EVIDENCE", "SUPPORTED", "CONFLICT_VISIBLE"}
@@ -490,6 +522,13 @@ def _blob64(value: object, code: str) -> bytes:
     return bytes(value)
 
 
+def _event_header(before_revision: int, after_revision: int, committed_at_ms: int, code: str = "history:event-header") -> bytes:
+    before = _integer(before_revision, f"{code}:before", maximum=MAX_CENTS)
+    after = _integer(after_revision, f"{code}:after", maximum=MAX_CENTS)
+    committed = _time(committed_at_ms, f"{code}:committed")
+    return b"".join(value.to_bytes(8, "big") for value in (before, after, committed))
+
+
 def _hex_digest(value: object, code: str) -> bytes:
     if type(value) is bytes:
         return _blob64(value, code)
@@ -577,6 +616,8 @@ def _identity(
     }
     if scope["currency"] != CURRENCY:
         _fail("identity:currency")
+    if scope["period_id"] in _WILDCARD_PERIODS:
+        _fail("identity:period-scope")
     authority_source = expected_authority
     if authority_source is None and expected_config is not None:
         if isinstance(expected_config, Mapping):
@@ -789,12 +830,15 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
         expected_payload_digest = _digest(EVENT_DOMAIN, payload_bytes)
         if payload_digest != expected_payload_digest:
             _fail("history:payload-digest")
+        committed_at_ms = _time(row["committed_at_ms"], "history:committed-at")
+        header = _event_header(before, after, committed_at_ms)
         expected_event_id = _digest(
             EVENT_DOMAIN,
             index.to_bytes(8, "big"),
             aggregate_type.encode("ascii"),
             aggregate_id.encode("ascii"),
             kind.encode("ascii"),
+            header,
             payload_digest,
         )
         if event_id != expected_event_id:
@@ -803,10 +847,9 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
         head = _blob64(row["head"], "history:head")
         if previous_head != previous:
             _fail("history:predecessor")
-        expected_head = _digest(HEAD_DOMAIN, previous_head, event_id, payload_digest)
+        expected_head = _digest(HEAD_DOMAIN, previous_head, event_id, header, payload_digest)
         if head != expected_head:
             _fail("history:head")
-        _time(row["committed_at_ms"], "history:committed-at")
         previous = head
     if previous != meta["history_head"]:
         _fail("history:meta-head")
@@ -828,6 +871,22 @@ def _evidence_ids_json(raw: object, code: str) -> list[str]:
     if result != sorted(result) or len(set(result)) != len(result):
         _fail(f"{code}:order")
     return result
+
+
+def _control_pack_policy(
+    calculation_rule_id: object,
+    adjustment_rule_id: object,
+    authorized_roles: list[str],
+    expected_tests: list[str],
+) -> tuple[str, str]:
+    policy = _CONTROL_PACK_POLICIES.get((calculation_rule_id, adjustment_rule_id))
+    if policy is None or tuple(expected_tests) != policy[0]:
+        _fail("pack:policy")
+    if not authorized_roles or len(set(authorized_roles)) != len(authorized_roles):
+        _fail("pack:roles")
+    if not set(authorized_roles) <= _CONTROL_PACK_ALLOWED_ROLES or not _CONTROL_PACK_REQUIRED_ROLES <= set(authorized_roles):
+        _fail("pack:roles")
+    return policy[1], policy[2]
 
 
 def _verify_packs(connection: sqlite3.Connection, meta: dict[str, object]) -> dict[str, sqlite3.Row]:
@@ -859,6 +918,7 @@ def _verify_packs(connection: sqlite3.Connection, meta: dict[str, object]) -> di
             _fail("pack:role-duplicate")
         for value in expected_tests:
             _text(value, "pack:test")
+        _control_pack_policy(row["calculation_rule_id"], row["adjustment_rule_id"], authorized_roles, expected_tests)
         start = _time(row["effective_start_ms"], "pack:start")
         end = _time(row["effective_end_ms"], "pack:end")
         if start >= end:
@@ -936,6 +996,7 @@ def _verify_populations(
         for rule in rules:
             _text(rule, "population:rule")
         expected = _integer(row["expected_count"], "population:expected-count", minimum=1, maximum=MAX_ROWS)
+        source_complete = _flag(row["source_complete"], "population:source-complete")
         imported = _integer(row["imported_count"], "population:imported-count", maximum=MAX_ROWS)
         validated = _integer(row["validated_count"], "population:validated-count", maximum=MAX_ROWS)
         status = row["status"]
@@ -947,8 +1008,10 @@ def _verify_populations(
             _fail("population:chronology")
         if status == "STAGED" and validated != 0:
             _fail("population:staged-validation")
+        if source_complete == 1 and imported != expected:
+            _fail("population:source-count")
         if status in {"VALIDATED", "PUBLISHED"}:
-            if validated != imported or imported != expected:
+            if source_complete != 1 or validated != imported or imported != expected:
                 _fail("population:count")
             _blob64(row["validation_digest"], "population:validation-digest")
         elif row["validation_digest"] is not None:
@@ -1068,6 +1131,132 @@ def _verify_obligations(
     return obligations
 
 
+def _verify_population_history(
+    events: list[sqlite3.Row],
+    populations: dict[str, sqlite3.Row],
+    packs: dict[str, sqlite3.Row],
+) -> None:
+    """Reconstruct each population's lifecycle from ordered history events."""
+
+    by_population: dict[str, list[sqlite3.Row]] = {population_id: [] for population_id in populations}
+    for event in events:
+        if event["aggregate_type"] != "POPULATION":
+            continue
+        population_id = str(event["aggregate_id"])
+        if population_id not in populations:
+            _fail("history:population-reference")
+        by_population[population_id].append(event)
+
+    for population_id, population in populations.items():
+        expected = _integer(population["expected_count"], "history:population-expected", minimum=1, maximum=MAX_ROWS)
+        imported = 0
+        source_completed = False
+        validated = False
+        published = False
+        previous_committed_at: int | None = None
+        for event in by_population[population_id]:
+            committed_at = _time(event["committed_at_ms"], "history:population-committed-at")
+            if previous_committed_at is not None and committed_at < previous_committed_at:
+                _fail("history:population-chronology")
+            previous_committed_at = committed_at
+            before = _integer(event["before_revision"], "history:population-before", maximum=MAX_ROWS)
+            after = _integer(event["after_revision"], "history:population-after", maximum=MAX_ROWS)
+            payload = _parse_json(event["payload_json"], "history:population-payload")
+            if not isinstance(payload, dict):
+                _fail("history:population-payload")
+            kind = str(event["kind"])
+            if kind == "POPULATION_STAGED":
+                if source_completed or validated or published:
+                    _fail("history:population-stage-order")
+                if set(payload) != {"population_id", "imported_count", "chunk_count"}:
+                    _fail("history:population-stage-payload")
+                if payload["population_id"] != population_id:
+                    _fail("history:population-stage-population")
+                count = _integer(payload["imported_count"], "history:population-stage-imported", maximum=MAX_ROWS)
+                chunk_count = _integer(payload["chunk_count"], "history:population-stage-chunk", minimum=1, maximum=MAX_ROWS)
+                if before != imported or after != count or count != imported + chunk_count:
+                    _fail("history:population-stage-revision")
+                if count > expected:
+                    _fail("history:population-stage-count")
+                imported = count
+                continue
+
+            if kind == "POPULATION_SOURCE_COMPLETED":
+                if source_completed:
+                    _fail("history:population-completion-duplicate")
+                if validated or published:
+                    _fail("history:population-completion-order")
+                if set(payload) != {"population_id", "imported_count", "expected_count"}:
+                    _fail("history:population-completion-payload")
+                if payload["population_id"] != population_id:
+                    _fail("history:population-completion-population")
+                completed_imported = _integer(payload["imported_count"], "history:population-completion-imported", maximum=MAX_ROWS)
+                completed_expected = _integer(payload["expected_count"], "history:population-completion-expected", minimum=1, maximum=MAX_ROWS)
+                if before != 0 or after != completed_imported:
+                    _fail("history:population-completion-revision")
+                if _flag(population["source_complete"], "population:source-complete") != 1 or completed_imported != expected or completed_expected != expected:
+                    _fail("history:population-completion-binding")
+                source_completed = True
+                continue
+
+            if kind == "POPULATION_VALIDATED":
+                if not source_completed:
+                    _fail("history:population-completion-order")
+                if validated or published:
+                    _fail("history:population-validation-order")
+                if set(payload) != {"population_id", "validated_count", "validation_digest"}:
+                    _fail("history:population-validation-payload")
+                if payload["population_id"] != population_id:
+                    _fail("history:population-validation-population")
+                validated_count = _integer(payload["validated_count"], "history:population-validation-count", minimum=1, maximum=MAX_ROWS)
+                validation_digest = _hex_digest(payload["validation_digest"], "history:population-validation-digest")
+                if before != 0 or after != validated_count:
+                    _fail("history:population-validation-revision")
+                if validated_count != expected or validated_count != imported:
+                    _fail("history:population-validation-binding")
+                if population["status"] not in {"VALIDATED", "PUBLISHED"} or population["validated_count"] != validated_count or bytes(population["validation_digest"]) != validation_digest:
+                    _fail("history:population-validation-binding")
+                validated = True
+                continue
+
+            if kind == "POPULATION_PUBLISHED":
+                if not validated:
+                    _fail("history:population-validation-order")
+                if published:
+                    _fail("history:population-publication-duplicate")
+                if set(payload) != {"population_id", "item_count", "pack_id", "pack_version"}:
+                    _fail("history:population-publication-payload")
+                if payload["population_id"] != population_id:
+                    _fail("history:population-publication-population")
+                item_count = _integer(payload["item_count"], "history:population-publication-count", minimum=1, maximum=MAX_ROWS)
+                pack_id = _id(payload["pack_id"], "history:population-publication-pack")
+                pack_version = _integer(payload["pack_version"], "history:population-publication-version", minimum=1, maximum=MAX_ROWS)
+                pack = packs.get(str(population["pack_id"]))
+                if pack is None or pack_id != str(population["pack_id"]) or pack_version != int(pack["version"]):
+                    _fail("history:population-publication-binding")
+                if before != 0 or after != item_count or item_count != expected or item_count != imported or population["status"] != "PUBLISHED":
+                    _fail("history:population-publication-binding")
+                published = True
+
+        source_complete = _flag(population["source_complete"], "population:source-complete")
+        if source_completed and imported != expected:
+            _fail("history:population-completion-binding")
+        if source_complete == 1 and not source_completed:
+            _fail("history:population-completion-missing")
+        if source_complete == 0 and source_completed:
+            _fail("history:population-completion-unexpected")
+        status = str(population["status"])
+        if status == "STAGED":
+            if validated or published:
+                _fail("history:population-status-order")
+        elif status == "VALIDATED":
+            if not validated or published:
+                _fail("history:population-status-order")
+        elif status == "PUBLISHED":
+            if not validated or not published:
+                _fail("history:population-status-order")
+
+
 def _verify_evidence(
     connection: sqlite3.Connection,
     items: dict[str, sqlite3.Row],
@@ -1143,6 +1332,34 @@ def _verify_evidence(
         )
         if record_digest != expected_record:
             _fail("evidence:record-digest")
+    successor_by_target: dict[str, str] = {}
+    for row in evidence.values():
+        if row["kind"] != "REPORT_CORRECTION" or row["supersedes"] is None:
+            continue
+        target = str(row["supersedes"])
+        successor = str(row["evidence_id"])
+        prior_successor = successor_by_target.get(target)
+        if prior_successor is not None and prior_successor != successor:
+            _fail("evidence:report-supersedes-fork")
+        successor_by_target[target] = successor
+    for row in evidence.values():
+        kind = str(row["kind"])
+        supersedes = row["supersedes"]
+        if kind == "REPORT" and supersedes is not None:
+            _fail("evidence:report-supersedes")
+        if kind != "REPORT_CORRECTION":
+            continue
+        if supersedes is None:
+            _fail("evidence:report-supersedes-required")
+        prior = evidence.get(str(supersedes))
+        if prior is None:
+            _fail("evidence:report-supersedes-missing")
+        if prior["item_id"] != row["item_id"]:
+            _fail("evidence:report-supersedes-item")
+        if prior["kind"] not in {"REPORT", "REPORT_CORRECTION"}:
+            _fail("evidence:report-supersedes-kind")
+        if int(prior["event_at_ms"]) >= int(row["event_at_ms"]):
+            _fail("evidence:report-supersedes-chronology")
     return evidence
 
 
@@ -1261,6 +1478,8 @@ def _verify_determinations(
     connection: sqlite3.Connection,
     meta: dict[str, object],
     obligations: dict[str, sqlite3.Row],
+    populations: dict[str, sqlite3.Row],
+    packs: dict[str, sqlite3.Row],
     claims: dict[str, sqlite3.Row],
     evidence: dict[str, sqlite3.Row],
 ) -> dict[str, sqlite3.Row]:
@@ -1284,6 +1503,12 @@ def _verify_determinations(
         actor_role = _role(row["actor_role"], "determination:role")
         if isinstance(actor_roles, dict) and actor_id in actor_roles and actor_role not in actor_roles[actor_id]:
             _fail("determination:actor-role")
+        obligation = obligations[obligation_id]
+        population = populations[str(obligation["population_id"])]
+        pack = packs[str(population["pack_id"])]
+        authorized_roles = _values_json(pack["authorized_roles_json"], "pack:roles")
+        if actor_role not in authorized_roles:
+            _fail("determination:pack-role")
         authority_id = _id(row["authority_id"], "determination:authority-id")
         authority_epoch = _integer(row["authority_epoch"], "determination:authority-epoch", minimum=1, maximum=MAX_CENTS)
         authority_digest = _blob64(row["authority_digest"], "determination:authority-digest")
@@ -1578,6 +1803,8 @@ def _completion_time(
 def _verify_projections(
     meta: dict[str, object],
     obligations: dict[str, sqlite3.Row],
+    populations: dict[str, sqlite3.Row],
+    packs: dict[str, sqlite3.Row],
     evidence: dict[str, sqlite3.Row],
     payments: dict[str, sqlite3.Row],
     claims: dict[str, sqlite3.Row],
@@ -1593,6 +1820,12 @@ def _verify_projections(
     for row in determinations.values():
         determinations_by_obligation.setdefault(str(row["obligation_id"]), []).append(row)
     for obligation_id, obligation in obligations.items():
+        population = populations[str(obligation["population_id"])]
+        pack = packs[str(population["pack_id"])]
+        authorized_roles = _values_json(pack["authorized_roles_json"], "pack:roles")
+        calculation, adjustment = _control_pack_policy(pack["calculation_rule_id"], pack["adjustment_rule_id"], authorized_roles, _values_json(pack["expected_tests_json"], "pack:tests"))
+        if calculation != "PER_RECIPIENT" or adjustment != "AUTHORIZED_OFFSET":
+            _fail("projection:policy")
         active_payments = [row for row in payments.values() if row["obligation_id"] == obligation_id and row["active"] == 1]
         obligation_claims = [row for row in claims.values() if row["obligation_id"] == obligation_id]
         cash = _sum_cents([int(row["amount_cents"]) for row in active_payments], "projection:cash")
@@ -1780,7 +2013,7 @@ def verify_continuity_package(
     }
     if set(value) != required:
         _fail("continuity:keys")
-    if value["schema"] != CONTINUITY_SCHEMA or value["version"] != 1:
+    if value["schema"] != CONTINUITY_SCHEMA or value["version"] != 3:
         _fail("continuity:schema")
     scope = value["scope"]
     if not isinstance(scope, dict) or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
@@ -1876,17 +2109,18 @@ def _verify_connection(
     events = _verify_events(connection, meta)
     packs = _verify_packs(connection, meta)
     populations, items = _verify_populations(connection, meta, packs)
+    _verify_population_history(events, populations, packs)
     obligations = _verify_obligations(connection, meta, populations, items, packs)
     evidence = _verify_evidence(connection, items, obligations)
     payments = _verify_payments(connection, obligations, items, evidence)
     claims = _verify_adjustments(connection, obligations, evidence)
     cases = _verify_cases(connection, obligations)
-    determinations = _verify_determinations(connection, meta, obligations, claims, evidence)
+    determinations = _verify_determinations(connection, meta, obligations, populations, packs, claims, evidence)
     actions = _verify_actions(connection, meta, obligations, claims, determinations)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
     evaluations = _verify_evaluations(connection, meta, obligations, evidence)
     _verify_event_references(events, packs, populations, obligations)
-    projections, totals = _verify_projections(meta, obligations, evidence, payments, claims, cases, determinations, actions, conflicts, evaluations)
+    projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, cases, determinations, actions, conflicts, evaluations)
     package_result: dict[str, object] | None = None
     if continuity_package is not None:
         package_result = verify_continuity_package(

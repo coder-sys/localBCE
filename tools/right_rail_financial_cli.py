@@ -33,7 +33,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-id", required=True)
     parser.add_argument("--deployment-id", required=True)
     parser.add_argument("--program-id", required=True)
-    parser.add_argument("--period-id", default="PROGRAM")
+    parser.add_argument("--period-id", required=True)
     parser.add_argument("--currency", default="USD")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

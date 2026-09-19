@@ -11,35 +11,36 @@ Rejected architectures are recorded separately and are not milestones.
 
 ## Active roadmap — financial workflow 2026-09-19
 
-At the start of this documentation batch the integration branch was
+The source/docs batch started from the integration branch
 `rightrail-financial-workflow-20260913` at HEAD
 `de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
 `4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. All evidence is synthetic and
-nonactivating. The source implementation checkpoint is
-`99d28687df0e7d5cf6a46e73db22f42a9902b789`.
+nonactivating. The current pre-commit source checkpoint is HEAD
+`a0267e08ec400e0e96003d60cfca6b19df61c796`; the persisted owner/Continuity
+candidate is v3, while retained v2 measurement artifacts remain immutable.
 
-1. **A — Documentation and pins.** The active Markdown now points to the
-   current identities, ownership, guard, no-change boundaries, and historical
-   snapshots. This documentation batch does not change application behavior.
-2. **B — Focused seams and baselines.** Prior focused evidence exists, but the
-   current source review has four open correctness blockers. State owns the
-   smallest fixes and affected verification.
-3. **C — Durable financial owner.** The owner/checker slice is implemented and
-   has prior synthetic evidence; it is not accepted until the Control Pack,
-   period identity, population-bound, and lineage blockers are closed.
+1. **A — Documentation and pins.** The maintained Markdown records the current
+   v3 identity, ownership, guard, historical v2 evidence boundary, and
+   protected paths. One coherent source/docs commit remains to be created.
+2. **B — Focused seams and source correction.** The four initial correctness
+   blockers are addressed in the owner, independent checker, Mirror/CLI, and
+   acceptance fixtures. Event header integrity and population lifecycle order
+   are now explicit persisted invariants.
+3. **C — Guarded affected verification.** The existing guard ran the focused
+   compile gate and the affected source suite. The accepted result is exactly
+   `Ran 45 tests in 10.758s` followed by `OK`; the raw stderr log is retained.
 4. **D — Same-owner Mirror and Continuity.** Mirror and bounded shadow
-   Continuity are implemented with dispatch disabled and no second live writer;
-   final Driver whole-system review remains pending.
-5. **E — Acceptance and bounded measurement.** The prior 29-test result and
-   one 379.703 ms observation are retained, but acceptance is pending the four
-   blockers and affected checks. Native regressions and Lean work remain
-   separate; financial-phase native runs are zero.
-
-Current blockers are: (1) Control Pack policy fields are not enforced; (2)
-item-only lookup has ambiguous `PROGRAM`/`ALL` period identity; (3) population
-can exceed `expected_count` before validation; and (4) reporting supersedes
-accepts nonexistent or cross-item lineage. A passing prior test total does not
-close these findings.
+   Continuity remain dispatch-disabled with no second live writer. Case 11 now
+   verifies evidence availability and shadow read-only behavior before the
+   original live owner continues to P3 completion.
+5. **E — Candidate measurement and review.** The guarded v3 measurement series
+   completed at `work/financial-measurements-v3-r2` with 3 measured samples
+   plus 1 warmup at each of sizes 5, 10, and 20, 12 retained SQLite databases,
+   and independently verified restarts. Total-ms medians were 161.885, 208.391,
+   and 302.164; this is a bounded observation, not an SLA. Native metrics are
+   pending and queue wait/age is not applicable. Whole-system/old-suite,
+   native/Lean, lock-time, independent-audit, and production gates remain
+   open. The earlier v2 result and measurement are historical only.
 
 The first-state fixture is fixed at twenty hospitals and $1,000,000 total: H is $100,000 and the
 other nineteen total $900,000. Hand-derived expected constants are required. The financial owner
@@ -52,8 +53,8 @@ Every implementation phase ends with exact Git identity, changed/untracked
 paths, commands and raw trust-critical output, failures/warnings/skips, and
 the next safe action. Missing production targets are recorded as unknown; the
 retained native arithmetic floor is not a financial ingestion SLA. The next
-safe action after this documentation batch is State-owned correction and raw
-verification of the four blockers, not a prose acceptance declaration.
+safe action is final path/status/link/snapshot verification and the one
+coherent source/docs commit, not a prose acceptance declaration.
 
 ## Retained Native-v3 release gate
 

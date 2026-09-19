@@ -7,17 +7,21 @@ module never derives expected balances from owner code or reaches the database t
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
+import json
 from pathlib import Path
 import tempfile
 import threading
 import unittest
 
+from app import right_rail_financial_owner as owner
 from app.right_rail_financial_owner import (
     ControlPack,
     FinancialAuthorityError,
     FinancialConflictError,
     FinancialContinuityError,
     FinancialDispatchError,
+    FinancialInputError,
     FinancialIntegrityError,
     FinancialOwner,
     FinancialOwnerConfig,
@@ -219,6 +223,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     @staticmethod
     def _record_report(store: FinancialOwner) -> None:
+        original = expected.REPORT_ORIGINAL_EVIDENCE
+        store.record_reporting_evidence(
+            item_id=original.item_id,
+            report_id="report:h:v1",
+            evidence_id=original.evidence_id,
+            event_at_ms=original.event_at_ms,
+        )
         evidence = expected.REPORT_CORRECTION_EVIDENCE
         store.record_reporting_correction(
             item_id=evidence.item_id,
@@ -245,8 +256,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_report(store)
         return claim_id
 
-    def _prepare_final(self, store: FinancialOwner) -> str:
-        claim_id = self._prepare_reported(store)
+    def _finish_after_acknowledgment(self, store: FinancialOwner) -> None:
+        self._record_p2(store)
+        self._record_report(store)
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
         duplicate_result = store.record_payment_evidence(
             item_id=duplicate.item_id,
@@ -293,6 +305,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             source_version=replacement.source_version,
             local_ref=replacement.local_ref,
         )
+
+    def _prepare_final(self, store: FinancialOwner) -> str:
+        claim_id = self._prepare_acknowledged(store)
+        self._finish_after_acknowledgment(store)
         return claim_id
 
     def _assert_snapshot(self, store: FinancialOwner, value: expected.BalanceExpectation) -> None:
@@ -558,8 +574,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 items=interrupted_items(),
                 chunk_size=4,
             )
-        with self.assertRaisesRegex(FinancialIntegrityError, "population_incomplete"):
+        with self.assertRaisesRegex(FinancialIntegrityError, "population_source_incomplete"):
             store.validate_population(interrupted_population)
+        with store._read() as connection:
+            source_complete = connection.execute(
+                "SELECT source_complete FROM population_imports WHERE population_id=?",
+                (interrupted_population,),
+            ).fetchone()
+        assert source_complete is not None
+        self.assertEqual(int(source_complete[0]), 0)
         before = store.summary()
         with self.assertRaisesRegex(FinancialDispatchError, "dispatch_disabled"):
             store.dispatch_outbox()
@@ -567,11 +590,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(reopened.summary(), before)
         self._assert_verified(reopened)
 
-    def test_case_11_shadow_export_restore_preserves_references_without_writer(self) -> None:
+    def test_case_11_shadow_export_restore_and_live_owner_continuation(self) -> None:
         self.assertEqual(expected.CASE_11.number, 11)
         store = self._build_base()
         self._prepare_acknowledged(store)
         self._assert_snapshot(store, expected.H_ACKNOWLEDGED)
+        source_before_restore = store.path.read_bytes()
         package = store.export_continuity()
         package_result = verify_continuity_package(
             package,
@@ -599,12 +623,23 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(shadow.mode, "SHADOW")
         self.assertEqual(shadow.owner_id, "continuity-shadow-owner-v1")
         self._assert_snapshot(shadow, expected.H_ACKNOWLEDGED)
+        self.assertTrue(shadow.obligation_detail(expected.H_ITEM_ID)["evidence"])
         self.assertEqual(shadow.action_payload(expected.ACTION_CORRECTION_ID), store.action_payload(expected.ACTION_CORRECTION_ID))
         with self.assertRaisesRegex(FinancialDispatchError, "shadow_owner_read_only"):
             shadow.retry_action(expected.ACTION_CORRECTION_ID)
         with self.assertRaisesRegex(FinancialDispatchError, "dispatch_disabled"):
             shadow.dispatch_outbox()
         self._assert_verified(shadow)
+        self.assertEqual(store.path.read_bytes(), source_before_restore)
+        duplicate_action = store.retry_action(
+            expected.ACTION_CORRECTION_ID,
+            payload=store.action_payload(expected.ACTION_CORRECTION_ID)["payload"],
+        )
+        self.assertEqual(duplicate_action["status"], "DUPLICATE")
+        self.assertEqual(store.path.read_bytes(), source_before_restore)
+        self._finish_after_acknowledgment(store)
+        self._assert_snapshot(store, expected.H_P3_REPLACED)
+        self._assert_verified(store)
 
     def test_case_12_scope_oversize_and_egress_boundaries(self) -> None:
         self.assertEqual(expected.CASE_12.number, 12)
@@ -620,6 +655,323 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         package = store.export_continuity()
         self.assertNotIn(expected.BOUNDARY_EXPECTATIONS.synthetic_canary.encode("ascii"), package)
         self._assert_verified(store)
+
+    def test_continuity_restore_rejects_header_tamper_with_recomputed_package_digest(self) -> None:
+        store = self._build_base()
+        package = json.loads(store.export_continuity().decode("ascii"))
+        completion = next(
+            row for row in package["tables"]["financial_events"]
+            if row["kind"] == "POPULATION_SOURCE_COMPLETED"
+        )
+        completion["after_revision"] += 1
+        body = dict(package)
+        del body["package_digest"]
+        package["package_digest"] = owner._hex(owner._digest(owner._CONTINUITY_DOMAIN, owner._canonical(body)))
+        tampered = owner._canonical(package)
+        destination = self._path("tampered-continuity.sqlite")
+        with self.assertRaisesRegex(FinancialContinuityError, "continuity_restore_integrity"):
+            FinancialOwner.restore_continuity(
+                package_bytes=tampered,
+                recovered_path=destination,
+                trusted_authority=self.authority,
+                clock=_Clock(),
+            )
+        self.assertFalse(destination.exists())
+        self.assertTrue(store.path.exists())
+
+    def test_control_pack_policy_and_wildcard_periods_fail_closed(self) -> None:
+        with self.assertRaisesRegex(FinancialInputError, "period_scope_required"):
+            FinancialOwnerConfig(
+                state_id=expected.STATE_ID,
+                deployment_id=expected.DEPLOYMENT_ID,
+                program_id=expected.PROGRAM_ID,
+                period_id="PROGRAM",
+                currency=expected.CURRENCY,
+            )
+        store = self._make_owner()
+        unsupported_rule = replace(self._pack(expected.CONTROL_PACK_V1), calculation_rule_id="calculation:unsupported:v1")
+        with self.assertRaisesRegex(FinancialIntegrityError, "control_pack_policy_unsupported"):
+            store.publish_control_pack(unsupported_rule)
+        missing_receiver = replace(
+            self._pack(expected.CONTROL_PACK_V1),
+            authorized_roles=("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR"),
+        )
+        with self.assertRaisesRegex(FinancialIntegrityError, "control_pack_roles_unsupported"):
+            store.publish_control_pack(missing_receiver)
+
+    def test_population_count_backpressure_preserves_prior_chunks(self) -> None:
+        store = self._make_owner()
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        population_id = "population:fixture-overflow"
+        with self.assertRaisesRegex(FinancialIntegrityError, "population_count_exceeded"):
+            store.stage_population(
+                population_id=population_id,
+                pack_id=pack.pack_id,
+                cutoff_ms=pack.effective_start_ms,
+                inclusion_rules=("included:synthetic",),
+                expected_count=3,
+                items=self._items(population_id)[:4],
+                chunk_size=3,
+            )
+        with store._read() as connection:
+            imported = connection.execute(
+                "SELECT imported_count,status,source_complete FROM population_imports WHERE population_id=?",
+                (population_id,),
+            ).fetchone()
+            item_count = int(connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0])
+        assert imported is not None
+        self.assertEqual(tuple(imported), (3, "STAGED", 0))
+        self.assertEqual(item_count, 3)
+        with self.assertRaisesRegex(FinancialIntegrityError, "population_source_incomplete"):
+            store.validate_population(population_id)
+        self._assert_verified(store)
+        with store._read() as connection:
+            before_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
+        resumed = store.stage_population(
+            population_id=population_id,
+            pack_id=pack.pack_id,
+            cutoff_ms=pack.effective_start_ms,
+            inclusion_rules=("included:synthetic",),
+            expected_count=3,
+            items=self._items(population_id)[:3],
+            chunk_size=3,
+        )
+        self.assertTrue(resumed["source_complete"])
+        with store._read() as connection:
+            after_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
+        self.assertEqual(before_resume_events, ["POPULATION_STAGED"])
+        self.assertEqual(after_resume_events, ["POPULATION_STAGED", "POPULATION_SOURCE_COMPLETED"])
+        validated = store.validate_population(population_id)
+        self.assertEqual(validated["status"], "VALIDATED")
+        self.assertEqual(validated["validated_count"], 3)
+        published = store.publish_population(population_id)
+        self.assertEqual(published["item_count"], 3)
+        self._assert_verified(store)
+
+    def test_population_duplicate_input_limit_preserves_verifiable_prefix(self) -> None:
+        store = self._make_owner()
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        population_id = "population:fixture-duplicate-input-limit"
+        item = self._items(population_id)[0]
+        with self.assertRaisesRegex(FinancialIntegrityError, "population_input_limit"):
+            store.stage_population(
+                population_id=population_id,
+                pack_id=pack.pack_id,
+                cutoff_ms=pack.effective_start_ms,
+                inclusion_rules=("included:synthetic",),
+                expected_count=1,
+                items=(item,) * 258,
+                chunk_size=1,
+            )
+        with store._read() as connection:
+            imported = connection.execute(
+                "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",
+                (population_id,),
+            ).fetchone()
+            events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
+        assert imported is not None
+        self.assertEqual(tuple(imported), (1, 0))
+        self.assertEqual(events, ["POPULATION_STAGED"])
+        self._assert_verified(store)
+
+    def test_reporting_correction_requires_bound_prior_report(self) -> None:
+        store = self._build_base()
+        before = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        with self.assertRaisesRegex(FinancialIntegrityError, "report_supersedes_missing"):
+            store.record_reporting_correction(
+                item_id=expected.H_ITEM_ID,
+                report_id="report:missing-target",
+                evidence_id="evidence:report:missing-target",
+                expected_revision=before,
+                event_at_ms=expected.REPORT_CORRECTION_MS,
+                supersedes="evidence:report:not-present",
+            )
+        self.assertEqual(store.obligation_detail(expected.H_ITEM_ID)["revision"], before)
+        store.record_reporting_evidence(
+            item_id=expected.H_ITEM_ID,
+            report_id="report:original-bound",
+            evidence_id="evidence:report:original-bound",
+            event_at_ms=expected.P2_EVENT_MS,
+        )
+        h_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        item_revision = store.obligation_detail("item-01")["revision"]
+        with self.assertRaisesRegex(FinancialIntegrityError, "report_supersedes_item"):
+            store.record_reporting_correction(
+                item_id="item-01",
+                report_id="report:cross-item",
+                evidence_id="evidence:report:cross-item",
+                expected_revision=item_revision,
+                event_at_ms=expected.REPORT_CORRECTION_MS,
+                supersedes="evidence:report:original-bound",
+            )
+        with self.assertRaisesRegex(FinancialIntegrityError, "report_supersedes_chronology"):
+            store.record_reporting_correction(
+                item_id=expected.H_ITEM_ID,
+                report_id="report:too-early",
+                evidence_id="evidence:report:too-early",
+                expected_revision=h_revision,
+                event_at_ms=expected.P2_EVENT_MS,
+                supersedes="evidence:report:original-bound",
+            )
+        store.record_payment_evidence(
+            item_id=expected.H_ITEM_ID,
+            payment_id="payment:report-lineage-incompatible",
+            common_origin_id="origin:report-lineage-incompatible",
+            amount_cents=1,
+            evidence_id="evidence:payment:report-lineage-incompatible",
+            event_at_ms=expected.REPORT_CORRECTION_MS,
+        )
+        h_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        with self.assertRaisesRegex(FinancialIntegrityError, "report_supersedes_kind"):
+            store.record_reporting_correction(
+                item_id=expected.H_ITEM_ID,
+                report_id="report:incompatible-target",
+                evidence_id="evidence:report:incompatible-target",
+                expected_revision=h_revision,
+                event_at_ms=expected.REPORT_CORRECTION_MS + 1,
+                supersedes="evidence:payment:report-lineage-incompatible",
+            )
+        self._assert_verified(store)
+
+    def test_reporting_correction_retry_is_identity_stable_and_side_effect_free(self) -> None:
+        store = self._build_base()
+        store.record_reporting_evidence(
+            item_id=expected.H_ITEM_ID,
+            report_id="report:retry-original",
+            evidence_id="evidence:report:retry-original",
+            event_at_ms=expected.P2_EVENT_MS,
+        )
+        original_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        first = store.record_reporting_correction(
+            item_id=expected.H_ITEM_ID,
+            report_id="report:retry-correction",
+            evidence_id="evidence:report:retry-correction",
+            expected_revision=original_revision,
+            supersedes="evidence:report:retry-original",
+        )
+        self.assertEqual(first["status"], "RECORDED")
+        before_detail = store.obligation_detail(expected.H_ITEM_ID)
+        before_summary = store.summary()
+        correction_row = next(row for row in before_detail["evidence"] if row["evidence_id"] == "evidence:report:retry-correction")
+        before_digest = correction_row["record_digest"]
+        before_event_at = correction_row["event_at_ms"]
+        before_event_count = before_summary["sequence"]
+        before_evaluation_count = len(before_detail["evaluations"])
+        store.close()
+        reopened = self._make_owner(path=store.path)
+        retry = reopened.record_reporting_correction(
+            item_id=expected.H_ITEM_ID,
+            report_id="report:retry-correction",
+            evidence_id="evidence:report:retry-correction",
+            expected_revision=original_revision,
+            supersedes="evidence:report:retry-original",
+        )
+        self.assertEqual(retry["status"], "DUPLICATE")
+        after_detail = reopened.obligation_detail(expected.H_ITEM_ID)
+        after_summary = reopened.summary()
+        after_row = next(row for row in after_detail["evidence"] if row["evidence_id"] == "evidence:report:retry-correction")
+        self.assertEqual(after_row["record_digest"], before_digest)
+        self.assertEqual(after_row["event_at_ms"], before_event_at)
+        self.assertEqual(after_summary["sequence"], before_event_count)
+        self.assertEqual(len(after_detail["evaluations"]), before_evaluation_count)
+        self.assertEqual(after_detail["revision"], before_detail["revision"])
+        with self.assertRaisesRegex(FinancialConflictError, "evidence_identity_conflict"):
+            reopened.record_reporting_correction(
+                item_id=expected.H_ITEM_ID,
+                report_id="report:retry-correction",
+                evidence_id="evidence:report:retry-correction",
+                expected_revision=original_revision,
+                event_at_ms=before_event_at + 1,
+                supersedes="evidence:report:retry-original",
+            )
+        with self.assertRaisesRegex(FinancialConflictError, "evidence_identity_conflict"):
+            reopened.record_reporting_correction(
+                item_id=expected.H_ITEM_ID,
+                report_id="report:retry-correction-rebound",
+                evidence_id="evidence:report:retry-correction",
+                expected_revision=original_revision,
+                event_at_ms=expected.REPORT_CORRECTION_MS,
+                supersedes="evidence:report:retry-original",
+            )
+        self.assertEqual(reopened.summary()["sequence"], before_event_count)
+        self._assert_verified(reopened)
+
+    def test_reporting_evidence_default_retry_is_identity_stable_after_reopen(self) -> None:
+        store = self._build_base()
+        original_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        first = store.record_reporting_evidence(
+            item_id=expected.H_ITEM_ID,
+            report_id="report:retry-default-original",
+            evidence_id="evidence:report:retry-default-original",
+            expected_revision=original_revision,
+        )
+        self.assertEqual(first["status"], "RECORDED")
+        before_detail = store.obligation_detail(expected.H_ITEM_ID)
+        before_sequence = store.summary()["sequence"]
+        before_row = next(row for row in before_detail["evidence"] if row["evidence_id"] == "evidence:report:retry-default-original")
+        store.close()
+        reopened = self._make_owner(path=store.path)
+        retry = reopened.record_reporting_evidence(
+            item_id=expected.H_ITEM_ID,
+            report_id="report:retry-default-original",
+            evidence_id="evidence:report:retry-default-original",
+            expected_revision=original_revision,
+        )
+        self.assertEqual(retry["status"], "DUPLICATE")
+        after_detail = reopened.obligation_detail(expected.H_ITEM_ID)
+        after_row = next(row for row in after_detail["evidence"] if row["evidence_id"] == "evidence:report:retry-default-original")
+        self.assertEqual(after_row["record_digest"], before_row["record_digest"])
+        self.assertEqual(after_row["event_at_ms"], before_row["event_at_ms"])
+        self.assertEqual(reopened.summary()["sequence"], before_sequence)
+        with self.assertRaisesRegex(FinancialConflictError, "evidence_identity_conflict"):
+            reopened.record_reporting_evidence(
+                item_id=expected.H_ITEM_ID,
+                report_id="report:retry-default-original",
+                evidence_id="evidence:report:retry-default-original",
+                expected_revision=original_revision,
+                event_at_ms=int(before_row["event_at_ms"]) + 1,
+            )
+        self._assert_verified(reopened)
+
+    def test_reporting_correction_chain_survives_restart_and_shadow_restore(self) -> None:
+        store = self._build_base()
+        store.record_reporting_evidence(
+            item_id=expected.H_ITEM_ID,
+            report_id="report:chain-original",
+            evidence_id="evidence:report:chain-original",
+            event_at_ms=expected.P2_EVENT_MS,
+        )
+        first_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        store.record_reporting_correction(
+            item_id=expected.H_ITEM_ID,
+            report_id="report:chain-correction-1",
+            evidence_id="evidence:report:chain-correction-1",
+            expected_revision=first_revision,
+            event_at_ms=expected.REPORT_CORRECTION_MS,
+            supersedes="evidence:report:chain-original",
+        )
+        second_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        store.record_reporting_correction(
+            item_id=expected.H_ITEM_ID,
+            report_id="report:chain-correction-2",
+            evidence_id="evidence:report:chain-correction-2",
+            expected_revision=second_revision,
+            event_at_ms=expected.REPORT_CORRECTION_MS + 1,
+            supersedes="evidence:report:chain-correction-1",
+        )
+        self._assert_verified(store)
+        reopened = self._make_owner(path=store.path)
+        self._assert_verified(reopened)
+        package = reopened.export_continuity()
+        shadow = FinancialOwner.restore_continuity(
+            package_bytes=package,
+            recovered_path=self._path("chain-shadow.sqlite"),
+            trusted_authority=self.authority,
+            clock=_Clock(),
+        )
+        self._assert_verified(shadow, package=package)
 
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:
         self.assertEqual(tuple(case.number for case in expected.ACCEPTANCE_CASES), tuple(range(1, 13)))

@@ -22,27 +22,37 @@ State Control Pack, Blind Ledger financial owner, same-owner Mirror, bounded
 shadow Continuity State, and deferred Switch. The fixed fixture is twenty
 hospitals and $1,000,000 total; H is owed $100,000 and the other nineteen total
 $900,000. Expected cents and branch answers are manually derived constants.
+The current reauthorized source/test/docs checkpoint is a v3 candidate:
+`RR/FINANCIAL/OWNER/v3` and `RR/FINANCIAL/CONTINUITY/v3`; old v2 measurement
+databases/logs remain immutable historical evidence.
 
 ## Current implementation and blockers
 
 The durable financial slice, same-owner Mirror, and bounded Continuity are
-implemented and have prior focused evidence. The retained guarded result was
-`Ran 29 tests in 7.582s` followed by `OK`; one 20-item measurement was
-379.703 ms. That pass is evidence from the earlier candidate and does not close
-the current source-review blockers. Final acceptance and Driver whole-system
-review remain pending.
+implemented in the current working tree. The four initial source blockers are
+addressed: Control Pack policy/role binding, exact period identity, bounded
+population staging, and reporting lineage checks. The persisted event contract
+also now binds event headers, and the independent checker reconstructs
+population lifecycle order. Default report/evidence retries reuse stored
+timestamps before stale-revision checks.
 
-State owns correction and affected verification for these four blockers:
+The accepted guarded affected run was:
 
-1. Control Pack policy fields are not enforced.
-2. Item-only lookup has ambiguous `PROGRAM`/`ALL` period identity.
-3. Population can exceed `expected_count` before validation.
-4. Reporting supersedes accepts nonexistent or cross-item lineage.
+```text
+Ran 45 tests in 10.758s
+OK
+```
 
-Do not call the candidate production-ready, fully accepted, or qualified until
-State supplies raw evidence that each fix and its affected checks pass. Native
-regressions remain separate and financial-phase native runs are zero. Lean is
-not integrated into this Python application.
+This is source-local synthetic evidence, not final acceptance or qualification.
+The guarded v3 measurement series completed with 3 measured samples plus 1
+warmup at each of sizes 5, 10, and 20; all 12 retained databases report owner
+schema v3 and verified restarts. Total-ms medians were 161.885, 208.391, and
+302.164. This is bounded observation only, not an SLA; native metrics remain
+pending and queue wait/age is not applicable. The retained v2 29-test result
+and 20-item observation remain historical only. Final Driver source/whole-system
+review, old-suite replay, native/Lean replay, lock-time evidence, independent
+audit, and production qualification remain pending. Financial-phase native
+runs remain zero. Lean is not integrated into this Python application.
 
 ## Protected boundaries and nonclaims
 
@@ -55,19 +65,22 @@ Corporate egress is disabled by default; canaries are synthetic.
 
 Use the existing guarded wrapper/mutex and physical reserve/cap for every
 future test/build/checker/native batch, one bounded batch at a time. The
-retained native arithmetic floor is not a financial SLA. This documentation
-batch launches no build, test, checker, native, or Lean process.
+retained native arithmetic floor is not a financial SLA. The source/test and
+v3 measurement runs were guarded; native/queue fields in the measurement
+remain pending/not applicable rather than being treated as financial SLAs.
 
 ## Current ownership and handoff
 
 State owns application source, tests, fixtures, and generated evidence. Docs
-owns only the maintained Markdown named by the child `AGENTS.md`. Native/C,
-crypto, Lean, operations, archives, and other work roots remain separate.
+owns only the maintained Markdown named by the child `AGENTS.md`; the current
+parent assignment authorizes the eight named financial source/test/CLI paths
+for this one coherent commit. Native/C, crypto, Lean, operations, archives,
+and other work roots remain separate.
 At every implementation phase record exact Git identity, changed/untracked
 paths, commands, raw trust-critical output, counts, warnings/failures/skips,
-and unknown numerical targets. The next action after this docs batch is the
-State-owned correction and verification of the four blockers above, not a
-prose declaration of acceptance.
+and unknown numerical targets. The next safe action is final
+path/status/link/snapshot verification and the single source/docs commit.
+This is not a prose declaration of production acceptance.
 
 ## Historical records (reference only)
 

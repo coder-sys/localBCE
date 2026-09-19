@@ -23,7 +23,7 @@ from app.right_rail_financial_owner import (
 
 
 MIRROR_SCHEMA: Final[str] = "RR/FINANCIAL/MIRROR/v1"
-CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v1"
+CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v3"
 MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 MAX_LIST_PAGE: Final[int] = 100
 MAX_DETAIL_PAGE: Final[int] = 200
@@ -379,6 +379,29 @@ class FinancialMirror:
             )
         )
 
+    def record_reporting_evidence(
+        self,
+        *,
+        item_id: str,
+        report_id: str,
+        evidence_id: str | None = None,
+        actor_id: str = "synthetic-reporter",
+        actor_role: str = "REPORTING_EDITOR",
+        expected_revision: int | None = None,
+        event_at_ms: int | None = None,
+    ) -> dict[str, Any]:
+        return self._command_result(
+            self.owner.record_reporting_evidence(
+                item_id=item_id,
+                report_id=report_id,
+                evidence_id=evidence_id,
+                actor_id=actor_id,
+                actor_role=actor_role,
+                expected_revision=expected_revision,
+                event_at_ms=event_at_ms,
+            )
+        )
+
     def verify_integrity(self) -> dict[str, Any]:
         raw = self.owner.verify_integrity()
         allowed = (
@@ -453,7 +476,7 @@ class FinancialMirror:
             "period_id": self.owner.config.period_id,
             "currency": self.owner.config.currency,
         }
-        if package.get("schema") != CONTINUITY_SCHEMA or package.get("version") != 1:
+        if package.get("schema") != CONTINUITY_SCHEMA or package.get("version") != 3:
             _fail(FinancialMirrorContinuityError, "continuity_package_schema")
         if package.get("scope") != expected_scope:
             _fail(FinancialMirrorContinuityError, "continuity_scope_mismatch")

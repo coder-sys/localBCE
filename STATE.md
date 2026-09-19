@@ -2,36 +2,71 @@
 
 Updated: 2026-09-19
 
-## Current verified snapshot — documentation-batch input
+## Current verified snapshot — reauthorized v3 source batch
 
-At the start of this documentation batch the integration checkout was
+The documentation/source batch started from the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
 branch `rightrail-financial-workflow-20260913`, HEAD
 `de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
 `4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. Tracked status was clean. The
 only untracked paths were the two driver-supplied generated executables listed
-below; no application behavior is changed by this documentation batch.
+below; they are not touched or staged in this batch.
 
-The source implementation checkpoint is
-`99d28687df0e7d5cf6a46e73db22f42a9902b789`. The retained raw guarded result is
-`Ran 29 tests in 7.582s` followed by `OK`; one 20-item measurement was
-379.703 ms. No numerical financial SLA was supplied, so that measurement is an
-observation rather than a target. Final Driver source and whole-system review
-is pending.
+The current pre-commit source checkpoint is HEAD
+`a0267e08ec400e0e96003d60cfca6b19df61c796`. The persisted candidate contract
+is `RR/FINANCIAL/OWNER/v3` with Continuity
+`RR/FINANCIAL/CONTINUITY/v3`. Event IDs/heads bind before/after revisions and
+commit time; the independent checker reconstructs population lifecycle order;
+and omitted report/evidence timestamps reuse stored identity fields.
 
-The current source-review blockers assigned to State are:
+The accepted guarded source/test result is exactly:
 
-1. Control Pack policy fields are not enforced.
-2. Item-only lookup has ambiguous `PROGRAM`/`ALL` period identity.
-3. Population can exceed `expected_count` before validation.
-4. Reporting supersedes accepts nonexistent or cross-item lineage.
+```text
+Ran 45 tests in 10.758s
+OK
+```
 
-The 29-test pass does not close these blockers. Acceptance and qualification
-remain pending State's fixes and affected raw verification. Current claims are
-synthetic and nonactivating: `proofSuiteId=null`, `production_usable=false`,
+The v3-r4 guard exited `0`; its resource summary was
+`min_free_bytes=5017239552`, `reserve_floor_bytes=2576980378`,
+`peak_working_set_bytes=49455104`, `peak_private_bytes=25141248`,
+`CLEANUP=PASS`, and `MUTEX=RELEASED`. The complete stderr is retained in
+`guarded-command-financial-blockers-v3-r4.stderr.log` (9083 bytes, SHA-256
+`15A2A50E43299FE9FDD2B6A9674D7DFE20BFEBB12BE5CA9D3D894C3F5E5EB123`).
+
+The v3 measurement series completed at
+`work/financial-measurements-v3-r2`: 3 measured samples plus 1 warmup at each
+of sizes 5, 10, and 20, 12 retained SQLite databases, all reporting owner
+schema v3 and independently verified restarts. Total-ms medians were 161.885,
+208.391, and 302.164; this is bounded observation only, not an SLA. Native
+metrics remain pending and queue wait/age is not applicable. An earlier
+pre-launch v3 attempt did stop on
+`RUNNER_FAILURE reason=mutex is already held: Local\BlindLedgerDirectMaskBuild20260907`;
+it created no output and was not used as acceptance evidence.
+
+The measurement guard exited `0` with `min_free_bytes=5020676096`,
+`reserve_floor_bytes=2576980378`, `peak_working_set_bytes=46436352`,
+`peak_private_bytes=25370624`, `CLEANUP=PASS`, and `MUTEX=RELEASED`.
+Its stdout log is 23957 bytes, SHA-256
+`C878E4E2C8B1CD33B40EA6B9F5A832BAB08B5D843C9F72F0A1A16D002DD23F48`;
+stderr is 0 bytes, SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+
+The retained v2 measurement databases/logs under
+`work/financial-measurements-20260919-r1` remain immutable historical v2
+evidence. The earlier v2 result (`Ran 29 tests in 7.582s`, `OK`) and one
+20-item observation of 379.703 ms are not v3 evidence. No numerical financial
+SLA is supplied.
+
+The four initial source blockers are addressed in the current worktree and
+covered by the guarded run; this is source-local synthetic evidence, not final
+acceptance or qualification. Current claims remain synthetic and
+nonactivating: `proofSuiteId=null`, `production_usable=false`,
 `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. There is no real
 PHI, credential, payment movement, live dispatch, deployed Lean authority,
-native rebuild, or archive refresh in this documentation batch.
+native rebuild, or archive refresh in this batch. Final Driver source and
+whole-system review, old-suite/native/Lean replay, performance distribution,
+lock-time evidence, independent audit, and production qualification remain
+pending.
 
 Driver-supplied native inputs are unchanged and remain separate regressions:
 
@@ -43,7 +78,7 @@ Driver-supplied native inputs are unchanged and remain separate regressions:
 ## Historical verified records (reference only)
 
 The records below preserve earlier implementation, cleanup, and test evidence.
-They do not override the current snapshot or close the four open blockers.
+They do not override the current snapshot or close the remaining gates.
 
 ## Historical Profile12 Queue/State stage — corrected, unverified/in progress
 

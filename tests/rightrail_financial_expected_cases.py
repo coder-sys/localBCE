@@ -246,7 +246,7 @@ CONTROL_PACK_V1 = ControlPackExpectation(
     "control-pack:fixture-2026-01:v1", PERIOD_ONE_SCOPE, 1,
     ("fixture-source:approved-schedule:v1",), PERIOD_ONE_START_MS, PERIOD_ONE_END_MS,
     1_767_139_200_000, 1_767_182_400_000, "calculation:per-recipient:v1", "adjustment:offset:v1",
-    ("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR"),
+    ("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR", "RECEIVER"),
     ("program-total=100000000", "H-owed=10000000", "other-total=90000000", "timeliness-separate"),
 )
 CONTROL_PACK_V2 = ControlPackExpectation(
@@ -254,7 +254,7 @@ CONTROL_PACK_V2 = ControlPackExpectation(
     ("fixture-source:approved-schedule:v2", "fixture-source:rule-change:2026-04-01"),
     PERIOD_TWO_START_MS, PERIOD_TWO_END_MS, 1_774_915_200_000, 1_774_958_400_000,
     "calculation:per-recipient:v2", "adjustment:offset:v2",
-    ("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR"),
+    ("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR", "RECEIVER"),
     ("period-02-uses-rule-v2", "period-01-evaluation-preserved", "retrospective-authority-required"),
 )
 CONTROL_PACKS = (CONTROL_PACK_V1, CONTROL_PACK_V2)
@@ -339,7 +339,7 @@ INTERRUPTION_EXPECTATIONS = (
     InterruptionExpectation("RECOVERY", "reopen-reads-last-committed-state", True, True, "none"),
 )
 CONTINUITY = ContinuityExpectation(
-    "RR/FINANCIAL/CONTINUITY/v1", CASE_11.case_id, "SHADOW", False, False,
+    "RR/FINANCIAL/CONTINUITY/v3", CASE_11.case_id, "SHADOW", False, False,
     ("control_packs", "populations", "obligations", "evidence_references", "evaluations", "cases", "determinations", "actions", "outbox_state"),
     ("raw_evidence_bytes", "secrets", "private_proof_material", "external_payment_credentials"), True, True, 0,
 )

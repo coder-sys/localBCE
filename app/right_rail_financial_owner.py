@@ -59,23 +59,58 @@ def _fail(error_type: type[FinancialError], code: str) -> None:
     raise error
 
 
-_SCHEMA_VERSION: Final[int] = 1
-_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v1"
-_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v1"
+_SCHEMA_VERSION: Final[int] = 3
+_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v3"
+_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v3"
 _CURRENCY: Final[str] = "USD"
 _MAX_CENTS: Final[int] = (1 << 63) - 1
 _MAX_ROWS: Final[int] = 10_000
+_MAX_DUPLICATE_INPUTS: Final[int] = 256
 _MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _ROLE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _KIND = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
-_EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v1\x00"
-_HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v1\x00"
-_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v1\x00"
+_WILDCARD_PERIODS: Final[frozenset[str]] = frozenset({"PROGRAM", "ALL"})
+_CONTROL_PACK_ALLOWED_ROLES: Final[frozenset[str]] = frozenset(
+    {"FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR", "RECEIVER"}
+)
+_CONTROL_PACK_REQUIRED_ROLES: Final[frozenset[str]] = frozenset(
+    {"FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER"}
+)
+_CONTROL_PACK_POLICIES: Final[dict[tuple[str, str], tuple[tuple[str, ...], str, str]]] = {
+    (
+        "calculation:per-recipient:v1",
+        "adjustment:offset:v1",
+    ): (
+        (
+            "program-total=100000000",
+            "H-owed=10000000",
+            "other-total=90000000",
+            "timeliness-separate",
+        ),
+        "PER_RECIPIENT",
+        "AUTHORIZED_OFFSET",
+    ),
+    (
+        "calculation:per-recipient:v2",
+        "adjustment:offset:v2",
+    ): (
+        (
+            "period-02-uses-rule-v2",
+            "period-01-evaluation-preserved",
+            "retrospective-authority-required",
+        ),
+        "PER_RECIPIENT",
+        "AUTHORIZED_OFFSET",
+    ),
+}
+_EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
+_HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
+_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v2\x00"
 _EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 _ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 _IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
-_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v1\x00"
+_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v3\x00"
 
 _TABLES: Final[frozenset[str]] = frozenset(
     {
@@ -112,8 +147,8 @@ _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     ),
     "population_imports": (
         "population_id", "pack_id", "cutoff_ms", "inclusion_rules_json", "expected_count",
-        "imported_count", "validated_count", "validation_digest", "status", "created_at_ms",
-        "updated_at_ms",
+        "source_complete", "imported_count", "validated_count", "validation_digest", "status",
+        "created_at_ms", "updated_at_ms",
     ),
     "population_items": (
         "population_id", "item_id", "display_label", "owed_cents", "due_at_ms", "currency",
@@ -353,6 +388,8 @@ class ControlPack:
             (self.adjustment_rule_id, "adjustment_rule_id"),
         ):
             _id(value, label)
+        if self.period_id in _WILDCARD_PERIODS:
+            _fail(FinancialInputError, "period_scope_required")
         if type(self.version) is not int or self.version < 1:
             _fail(FinancialInputError, "pack_version")
         if type(self.source_refs) is not tuple or not self.source_refs:
@@ -399,6 +436,31 @@ class ControlPack:
     @property
     def digest(self) -> bytes:
         return _digest(_EVIDENCE_DOMAIN, self.canonical_bytes)
+
+
+def _control_pack_policy(
+    *,
+    calculation_rule_id: object,
+    adjustment_rule_id: object,
+    authorized_roles: object,
+    expected_tests: object,
+) -> tuple[str, str]:
+    if type(calculation_rule_id) is not str or type(adjustment_rule_id) is not str:
+        _fail(FinancialIntegrityError, "control_pack_policy_unsupported")
+    if type(authorized_roles) not in (tuple, list) or type(expected_tests) not in (tuple, list):
+        _fail(FinancialIntegrityError, "control_pack_policy_unsupported")
+    roles = tuple(authorized_roles)
+    tests = tuple(expected_tests)
+    policy = _CONTROL_PACK_POLICIES.get((calculation_rule_id, adjustment_rule_id))
+    if policy is None or tests != policy[0]:
+        _fail(FinancialIntegrityError, "control_pack_policy_unsupported")
+    if not roles or len(set(roles)) != len(roles):
+        _fail(FinancialIntegrityError, "control_pack_roles_unsupported")
+    for role in roles:
+        _role(role, "control_pack_role")
+    if not set(roles) <= _CONTROL_PACK_ALLOWED_ROLES or not _CONTROL_PACK_REQUIRED_ROLES <= set(roles):
+        _fail(FinancialIntegrityError, "control_pack_roles_unsupported")
+    return policy[1], policy[2]
 
 
 @dataclass(frozen=True, slots=True)
@@ -501,6 +563,8 @@ class FinancialOwnerConfig:
     def __post_init__(self) -> None:
         for value, label in ((self.state_id, "state_id"), (self.deployment_id, "deployment_id"), (self.program_id, "program_id"), (self.period_id, "period_id")):
             _id(value, label)
+        if self.period_id in _WILDCARD_PERIODS:
+            _fail(FinancialInputError, "period_scope_required")
         if self.currency != _CURRENCY:
             _fail(FinancialInputError, "currency")
 
@@ -557,6 +621,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             cutoff_ms INTEGER NOT NULL,
             inclusion_rules_json TEXT NOT NULL,
             expected_count INTEGER NOT NULL CHECK (expected_count>0),
+            source_complete INTEGER NOT NULL CHECK (source_complete IN (0,1)),
             imported_count INTEGER NOT NULL CHECK (imported_count>=0),
             validated_count INTEGER NOT NULL CHECK (validated_count>=0),
             validation_digest BLOB,
@@ -843,7 +908,7 @@ class FinancialOwner:
 
     def _scope_period(self, period_id: str) -> None:
         _id(period_id, "period_id")
-        if self.config.period_id not in {"PROGRAM", "ALL"} and period_id != self.config.period_id:
+        if period_id in _WILDCARD_PERIODS or self.config.period_id in _WILDCARD_PERIODS or period_id != self.config.period_id:
             _fail(FinancialIntegrityError, "period_scope")
 
     def _meta(self, connection: sqlite3.Connection) -> sqlite3.Row:
@@ -867,13 +932,34 @@ class FinancialOwner:
         _kind(aggregate_type, "aggregate_type")
         _id(aggregate_id, "aggregate_id")
         _kind(kind, "event_kind")
+        for value, label in (
+            (before_revision, "event_before_revision"),
+            (after_revision, "event_after_revision"),
+            (committed_at_ms, "event_committed_at"),
+        ):
+            if type(value) is not int or value < 0 or value >= 2**63:
+                _fail(FinancialIntegrityError, label)
         payload_bytes = _canonical(payload)
         payload_digest = _digest(_EVENT_DOMAIN, payload_bytes)
         meta = self._meta(connection)
+        if int(meta["sequence"]) >= _MAX_ROWS:
+            _fail(FinancialIntegrityError, "history_capacity")
         sequence = int(meta["sequence"]) + 1
         previous_head = bytes(meta["history_head"])
-        event_id = _digest(_EVENT_DOMAIN, sequence.to_bytes(8, "big"), aggregate_type.encode("ascii"), aggregate_id.encode("ascii"), kind.encode("ascii"), payload_digest)
-        head = _digest(_HEAD_DOMAIN, previous_head, event_id, payload_digest)
+        header = b"".join(
+            value.to_bytes(8, "big")
+            for value in (before_revision, after_revision, committed_at_ms)
+        )
+        event_id = _digest(
+            _EVENT_DOMAIN,
+            sequence.to_bytes(8, "big"),
+            aggregate_type.encode("ascii"),
+            aggregate_id.encode("ascii"),
+            kind.encode("ascii"),
+            header,
+            payload_digest,
+        )
+        head = _digest(_HEAD_DOMAIN, previous_head, event_id, header, payload_digest)
         connection.execute(
             "INSERT INTO financial_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (sequence, event_id, aggregate_type, aggregate_id, kind, before_revision, after_revision, payload_bytes.decode("ascii"), payload_digest, previous_head, head, committed_at_ms),
@@ -887,10 +973,67 @@ class FinancialOwner:
 
     def _get_obligation_row(self, connection: sqlite3.Connection, item_id: str) -> sqlite3.Row:
         _id(item_id, "item_id")
-        row = connection.execute("SELECT * FROM obligations WHERE item_id=?", (item_id,)).fetchone()
+        row = connection.execute("SELECT * FROM obligations WHERE item_id=? AND period_id=?", (item_id, self.config.period_id)).fetchone()
         if row is None:
             _fail(FinancialIntegrityError, "obligation_missing")
         return row
+
+    def _control_pack_for_obligation(
+        self,
+        connection: sqlite3.Connection,
+        obligation_id: str,
+    ) -> tuple[ControlPack, str, str]:
+        row = connection.execute(
+            """
+            SELECT cp.*
+            FROM obligations o
+            JOIN population_imports pi ON pi.population_id=o.population_id
+            JOIN control_packs cp ON cp.pack_id=pi.pack_id
+            WHERE o.obligation_id=?
+            """,
+            (obligation_id,),
+        ).fetchone()
+        if row is None or str(row["status"]) != "APPROVED":
+            _fail(FinancialIntegrityError, "control_pack_missing")
+        try:
+            source_refs = json.loads(str(row["source_refs_json"]))
+            authorized_roles = json.loads(str(row["authorized_roles_json"]))
+            expected_tests = json.loads(str(row["expected_tests_json"]))
+            if not isinstance(source_refs, dict) or set(source_refs) != {"values"}:
+                _fail(FinancialIntegrityError, "control_pack_binding")
+            if not isinstance(authorized_roles, dict) or set(authorized_roles) != {"values"}:
+                _fail(FinancialIntegrityError, "control_pack_binding")
+            if not isinstance(expected_tests, dict) or set(expected_tests) != {"values"}:
+                _fail(FinancialIntegrityError, "control_pack_binding")
+            pack = ControlPack(
+                pack_id=str(row["pack_id"]),
+                state_id=str(row["state_id"]),
+                deployment_id=str(row["deployment_id"]),
+                program_id=str(row["program_id"]),
+                period_id=str(row["period_id"]),
+                version=int(row["version"]),
+                source_refs=tuple(source_refs["values"]),
+                effective_start_ms=int(row["effective_start_ms"]),
+                effective_end_ms=int(row["effective_end_ms"]),
+                recorded_at_ms=int(row["recorded_at_ms"]),
+                approved_at_ms=int(row["approved_at_ms"]),
+                calculation_rule_id=str(row["calculation_rule_id"]),
+                adjustment_rule_id=str(row["adjustment_rule_id"]),
+                authorized_roles=tuple(authorized_roles["values"]),
+                expected_tests=tuple(expected_tests["values"]),
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            _fail(FinancialIntegrityError, "control_pack_binding")
+        if bytes(row["pack_digest"]) != pack.digest:
+            _fail(FinancialIntegrityError, "control_pack_digest")
+        calculation, adjustment = _control_pack_policy(
+            calculation_rule_id=pack.calculation_rule_id,
+            adjustment_rule_id=pack.adjustment_rule_id,
+            authorized_roles=pack.authorized_roles,
+            expected_tests=pack.expected_tests,
+        )
+        self._scope_pack(pack)
+        return pack, calculation, adjustment
 
     def _insert_evidence(self, connection: sqlite3.Connection, evidence: EvidenceRecord) -> str:
         existing = connection.execute("SELECT record_digest FROM evidence WHERE evidence_id=?", (evidence.evidence_id,)).fetchone()
@@ -931,7 +1074,14 @@ class FinancialOwner:
         old = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (obligation_id,)).fetchone()
         if old is None:
             _fail(FinancialIntegrityError, "obligation_missing")
+        pack, calculation, adjustment = self._control_pack_for_obligation(connection, obligation_id)
+        if int(old["rule_version"]) != pack.version:
+            _fail(FinancialIntegrityError, "control_pack_rule_version")
+        if calculation != "PER_RECIPIENT":
+            _fail(FinancialIntegrityError, "control_pack_calculation")
         cash = _sum_cents(int(row[0]) for row in connection.execute("SELECT amount_cents FROM payments WHERE obligation_id=? AND active=1", (obligation_id,)))
+        if adjustment != "AUTHORIZED_OFFSET":
+            _fail(FinancialIntegrityError, "control_pack_adjustment")
         claimed = _sum_cents(int(row[0]) for row in connection.execute("SELECT amount_cents FROM claimed_adjustments WHERE obligation_id=? AND status IN ('CLAIMED','AUTHORIZED')", (obligation_id,)))
         lawful = _sum_cents(int(row[0]) for row in connection.execute("SELECT amount_cents FROM claimed_adjustments WHERE obligation_id=? AND status='AUTHORIZED'", (obligation_id,)))
         total = _add(cash, lawful)
@@ -1007,6 +1157,12 @@ class FinancialOwner:
         """Publish one approved, versioned rule pack in the owner database."""
         self._assert_actionable()
         self._scope_pack(pack)
+        _control_pack_policy(
+            calculation_rule_id=pack.calculation_rule_id,
+            adjustment_rule_id=pack.adjustment_rule_id,
+            authorized_roles=pack.authorized_roles,
+            expected_tests=pack.expected_tests,
+        )
         with self._write() as connection:
             existing = connection.execute("SELECT pack_digest FROM control_packs WHERE pack_id=?", (pack.pack_id,)).fetchone()
             if existing is not None:
@@ -1037,8 +1193,8 @@ class FinancialOwner:
                 _fail(FinancialConflictError, "population_already_published")
             return existing
         connection.execute(
-            "INSERT INTO population_imports VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (population_id, pack_id, cutoff_ms, encoded_rules, expected_count, 0, 0, None, "STAGED", now_ms, now_ms),
+            "INSERT INTO population_imports VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (population_id, pack_id, cutoff_ms, encoded_rules, expected_count, 0, 0, 0, None, "STAGED", now_ms, now_ms),
         )
         return connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
 
@@ -1047,20 +1203,37 @@ class FinancialOwner:
             return
         with self._write() as connection:
             now_ms = self._now()
-            self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=now_ms)
+            population = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=now_ms)
+            current_count = int(connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0])
+            seen: dict[str, tuple[str, int, int, str]] = {}
+            new_items: list[PopulationItem] = []
             for item in chunk:
                 if item.population_id != population_id:
                     _fail(FinancialInputError, "population_item_id")
-                existing = connection.execute("SELECT display_label,owed_cents,due_at_ms,currency FROM population_items WHERE population_id=? AND item_id=?", (population_id, item.item_id)).fetchone()
                 expected = (item.display_label, item.owed_cents, item.due_at_ms, item.currency)
+                prior = seen.get(item.item_id)
+                if prior is not None:
+                    if prior != expected:
+                        _fail(FinancialConflictError, "population_item_conflict")
+                    continue
+                seen[item.item_id] = expected
+                existing = connection.execute("SELECT display_label,owed_cents,due_at_ms,currency FROM population_items WHERE population_id=? AND item_id=?", (population_id, item.item_id)).fetchone()
                 if existing is not None:
                     if tuple(existing) != expected:
                         _fail(FinancialConflictError, "population_item_conflict")
                     continue
+                new_items.append(item)
+            if new_items and str(population["status"]) != "STAGED":
+                _fail(FinancialConflictError, "population_not_staged")
+            if current_count + len(new_items) > expected_count:
+                _fail(FinancialIntegrityError, "population_count_exceeded")
+            if not new_items:
+                return
+            for item in new_items:
                 connection.execute("INSERT INTO population_items VALUES (?,?,?,?,?,?)", (population_id, item.item_id, item.display_label, item.owed_cents, item.due_at_ms, item.currency))
             count = int(connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0])
             connection.execute("UPDATE population_imports SET imported_count=?,updated_at_ms=? WHERE population_id=?", (count, now_ms, population_id))
-            self._append_event(connection, aggregate_type="POPULATION", aggregate_id=population_id, kind="POPULATION_STAGED", before_revision=count - len(chunk), after_revision=count, payload={"population_id": population_id, "imported_count": count, "chunk_count": len(chunk)}, committed_at_ms=now_ms)
+            self._append_event(connection, aggregate_type="POPULATION", aggregate_id=population_id, kind="POPULATION_STAGED", before_revision=current_count, after_revision=count, payload={"population_id": population_id, "imported_count": count, "chunk_count": len(new_items)}, committed_at_ms=now_ms)
 
     def stage_population(
         self,
@@ -1090,7 +1263,12 @@ class FinancialOwner:
             self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=self._now())
         iterator = iter(items)
         chunk: list[PopulationItem] = []
+        input_limit = min(_MAX_ROWS, expected_count + _MAX_DUPLICATE_INPUTS)
+        consumed = 0
         for item in iterator:
+            consumed += 1
+            if consumed > input_limit:
+                _fail(FinancialIntegrityError, "population_input_limit")
             if type(item) is not PopulationItem:
                 _fail(FinancialInputError, "population_item_type")
             chunk.append(item)
@@ -1099,10 +1277,26 @@ class FinancialOwner:
                 chunk.clear()
         if chunk:
             self._stage_population_chunk(population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, chunk=tuple(chunk))
-        with self._read() as connection:
-            row = connection.execute("SELECT imported_count,status FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
+        with self._write() as connection:
+            row = connection.execute("SELECT expected_count,imported_count,source_complete FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
             assert row is not None
-            return {"status": str(row[1]), "population_id": population_id, "imported_count": int(row[0]), "expected_count": expected_count}
+            if int(row["imported_count"]) == int(row["expected_count"]) and int(row["source_complete"]) == 0:
+                now_ms = self._now()
+                connection.execute("UPDATE population_imports SET source_complete=1,updated_at_ms=? WHERE population_id=?", (now_ms, population_id))
+                self._append_event(
+                    connection,
+                    aggregate_type="POPULATION",
+                    aggregate_id=population_id,
+                    kind="POPULATION_SOURCE_COMPLETED",
+                    before_revision=0,
+                    after_revision=int(row["imported_count"]),
+                    payload={"population_id": population_id, "imported_count": int(row["imported_count"]), "expected_count": int(row["expected_count"])},
+                    committed_at_ms=now_ms,
+                )
+        with self._read() as connection:
+            row = connection.execute("SELECT imported_count,source_complete,status FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
+            assert row is not None
+            return {"status": str(row[2]), "population_id": population_id, "imported_count": int(row[0]), "expected_count": expected_count, "source_complete": bool(row[1])}
 
     def validate_population(self, population_id: str) -> dict[str, Any]:
         self._assert_actionable()
@@ -1111,8 +1305,10 @@ class FinancialOwner:
             row = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
             if row is None:
                 _fail(FinancialIntegrityError, "population_missing")
+            if int(row["source_complete"]) != 1:
+                _fail(FinancialIntegrityError, "population_source_incomplete")
             count = int(connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0])
-            if count != int(row["expected_count"]):
+            if count != int(row["imported_count"]) or count != int(row["expected_count"]):
                 _fail(FinancialIntegrityError, "population_incomplete")
             material = b"".join(_digest(_EVIDENCE_DOMAIN, _canonical({"item_id": str(item[0]), "display_label": str(item[1]), "owed_cents": int(item[2]), "due_at_ms": int(item[3]), "currency": str(item[4])})) for item in connection.execute("SELECT item_id,display_label,owed_cents,due_at_ms,currency FROM population_items WHERE population_id=? ORDER BY item_id", (population_id,)))
             digest = _digest(_EVIDENCE_DOMAIN, material)
@@ -1149,7 +1345,7 @@ class FinancialOwner:
         _id(population_id, "population_id")
         with self._write() as connection:
             import_row = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
-            if import_row is None or str(import_row["status"]) != "VALIDATED":
+            if import_row is None or str(import_row["status"]) != "VALIDATED" or int(import_row["source_complete"]) != 1:
                 _fail(FinancialIntegrityError, "population_not_validated")
             if connection.execute("SELECT 1 FROM obligations WHERE population_id=? LIMIT 1", (population_id,)).fetchone() is not None:
                 _fail(FinancialConflictError, "population_already_published")
@@ -1352,6 +1548,9 @@ class FinancialOwner:
         evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="OFFSET_CLAIM", common_origin_id=claim_id, source_id="synthetic-offset-source", source_version="fixture-v1", local_ref=f"offset:{claim_id}", applicable_at_ms=self._now(), event_at_ms=self._now(), received_at_ms=self._now(), amount_cents=amount_cents)
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
+            pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, str(obligation["obligation_id"]))
+            if owner_role not in pack.authorized_roles:
+                _fail(FinancialAuthorityError, "control_pack_owner_role_not_authorized")
             self._check_revision(obligation, expected_revision)
             existing = connection.execute("SELECT * FROM claimed_adjustments WHERE claim_id=?", (claim_id,)).fetchone()
             if existing is not None:
@@ -1401,8 +1600,11 @@ class FinancialOwner:
                 _fail(FinancialIntegrityError, "obligation_missing")
             return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
 
-    def _authority_action(self, actor_id: str, actor_role: str) -> None:
+    def _authority_action(self, connection: sqlite3.Connection, obligation_id: str, actor_id: str, actor_role: str) -> None:
         self.trusted_authority.require(actor_id, actor_role)
+        pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, obligation_id)
+        if actor_role not in pack.authorized_roles:
+            _fail(FinancialAuthorityError, "control_pack_actor_role_not_authorized")
 
     def authorize_offset(
         self,
@@ -1416,11 +1618,11 @@ class FinancialOwner:
         decision_at_ms: int | None = None,
     ) -> dict[str, Any]:
         self._assert_actionable()
-        self._authority_action(actor_id, actor_role)
         action_ref = action_id or f"action:offset:{claim_id}"
         _id(action_ref, "action_id")
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
+            self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
             existing_action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_ref,)).fetchone()
             if existing_action is not None:
                 return {"status": "DUPLICATE", "action_id": action_ref, **self._projection_for_row(obligation)}
@@ -1464,11 +1666,11 @@ class FinancialOwner:
         decision_at_ms: int | None = None,
     ) -> dict[str, Any]:
         self._assert_actionable()
-        self._authority_action(actor_id, actor_role)
         action_ref = action_id or f"action:correction:{claim_id}"
         _id(action_ref, "action_id")
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
+            self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
             existing_action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_ref,)).fetchone()
             if existing_action is not None:
                 return {"status": "DUPLICATE", "action_id": action_ref, **self._projection_for_row(obligation)}
@@ -1510,20 +1712,21 @@ class FinancialOwner:
     ) -> dict[str, Any]:
         """Record a local acknowledgment; it never creates cash evidence."""
         self._assert_actionable()
-        self._authority_action(actor_id, actor_role)
         _id(action_id, "action_id")
         _id(acknowledgment_ref, "acknowledgment_ref")
         with self._write() as connection:
             action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_id,)).fetchone()
             if action is None:
                 _fail(FinancialIntegrityError, "action_missing")
+            obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (action["obligation_id"],)).fetchone()
+            if obligation is None:
+                _fail(FinancialIntegrityError, "obligation_missing")
+            self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
             outbox = connection.execute("SELECT * FROM action_outbox WHERE action_id=?", (action_id,)).fetchone()
             assert outbox is not None
             if str(action["status"]) == "ACKNOWLEDGED":
                 if str(outbox["acknowledgment_ref"]) == acknowledgment_ref:
-                    row = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (action["obligation_id"],)).fetchone()
-                    assert row is not None
-                    return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(row)}
+                    return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
                 _fail(FinancialConflictError, "acknowledgment_conflict")
             if str(action["status"]) != "READY":
                 _fail(FinancialConflictError, "action_not_acknowledgeable")
@@ -1535,6 +1738,67 @@ class FinancialOwner:
             return {"status": "ACKNOWLEDGED", "action_id": action_id, **self._current_projection(connection, str(action["obligation_id"]))}
 
     acknowledge = acknowledge_action
+
+    def record_reporting_evidence(
+        self,
+        *,
+        item_id: str,
+        report_id: str,
+        evidence_id: str | None = None,
+        actor_id: str = "synthetic-reporter",
+        actor_role: str = "REPORTING_EDITOR",
+        expected_revision: int | None = None,
+        event_at_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Record the report that a later reporting correction may supersede."""
+        self._assert_actionable()
+        _id(report_id, "report_id")
+        evidence_ref = evidence_id or f"evidence:report:{report_id}"
+        _id(evidence_ref, "evidence_id")
+        requested_event_time = None if event_at_ms is None else _time(event_at_ms, "reporting_event")
+        received_at_ms = self._now()
+        evidence_fields = {
+            "evidence_id": evidence_ref,
+            "item_id": item_id,
+            "kind": "REPORT",
+            "common_origin_id": report_id,
+            "source_id": "synthetic-report-source",
+            "source_version": "fixture-v1",
+            "local_ref": f"report:{report_id}",
+        }
+        with self._write() as connection:
+            obligation = self._get_obligation_row(connection, item_id)
+            self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
+            existing = connection.execute("SELECT * FROM evidence WHERE evidence_id=?", (evidence_ref,)).fetchone()
+            if existing is not None:
+                duplicate_event_time = int(existing["event_at_ms"]) if requested_event_time is None else requested_event_time
+                try:
+                    duplicate_candidate = self._new_evidence(
+                        **evidence_fields,
+                        applicable_at_ms=duplicate_event_time,
+                        event_at_ms=duplicate_event_time,
+                        received_at_ms=int(existing["received_at_ms"]),
+                    )
+                except FinancialError:
+                    _fail(FinancialConflictError, "evidence_identity_conflict")
+                if duplicate_candidate.record_digest != bytes(existing["record_digest"]):
+                    _fail(FinancialConflictError, "evidence_identity_conflict")
+                return {"status": "DUPLICATE", "report_id": report_id, **self._projection_for_row(obligation)}
+            self._check_revision(obligation, expected_revision)
+            event_time = received_at_ms if requested_event_time is None else requested_event_time
+            evidence = self._new_evidence(
+                **evidence_fields,
+                applicable_at_ms=event_time,
+                event_at_ms=event_time,
+                received_at_ms=received_at_ms,
+            )
+            status = self._insert_evidence(connection, evidence)
+            assert status == "INSERTED"
+            connection.execute("UPDATE obligations SET reporting_complete=1 WHERE obligation_id=?", (obligation["obligation_id"],))
+            now_ms = self._now()
+            before, after, evaluation = self._recompute_obligation(connection, str(obligation["obligation_id"]), now_ms=now_ms, authority_id=self.trusted_authority.authority_id)
+            self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="REPORTING_EVIDENCE_RECORDED", before_revision=before, after_revision=after, payload={"report_id": report_id, "evidence_id": evidence.evidence_id, "evaluation_id": evaluation["evaluation_id"], "cash_mutation": False}, committed_at_ms=now_ms)
+            return {"status": "RECORDED", "report_id": report_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
 
     def record_reporting_correction(
         self,
@@ -1549,21 +1813,62 @@ class FinancialOwner:
         supersedes: str | None = None,
     ) -> dict[str, Any]:
         self._assert_actionable()
-        self._authority_action(actor_id, actor_role)
         _id(report_id, "report_id")
         evidence_ref = evidence_id or f"evidence:report:{report_id}"
         _id(evidence_ref, "evidence_id")
-        if supersedes is not None:
-            _id(supersedes, "supersedes")
-        event_time = self._now() if event_at_ms is None else event_at_ms
-        _time(event_time, "reporting_event")
-        evidence = self._new_evidence(evidence_id=evidence_ref, item_id=item_id, kind="REPORTING_CORRECTION", common_origin_id=report_id, source_id="synthetic-report-source", source_version="fixture-v1", local_ref=f"report:{report_id}", applicable_at_ms=event_time, event_at_ms=event_time, received_at_ms=self._now(), supersedes=supersedes)
+        if supersedes is None:
+            _fail(FinancialIntegrityError, "report_supersedes_required")
+        _id(supersedes, "supersedes")
+        requested_event_time = None if event_at_ms is None else _time(event_at_ms, "reporting_event")
+        received_at_ms = self._now()
+        evidence_fields = {
+            "evidence_id": evidence_ref,
+            "item_id": item_id,
+            "kind": "REPORT_CORRECTION",
+            "common_origin_id": report_id,
+            "source_id": "synthetic-report-source",
+            "source_version": "fixture-v1",
+            "local_ref": f"report:{report_id}",
+            "supersedes": supersedes,
+        }
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
-            self._check_revision(obligation, expected_revision)
-            status = self._insert_evidence(connection, evidence)
-            if status == "DUPLICATE":
+            self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
+            existing = connection.execute("SELECT * FROM evidence WHERE evidence_id=?", (evidence_ref,)).fetchone()
+            if existing is not None:
+                duplicate_event_time = int(existing["event_at_ms"]) if requested_event_time is None else requested_event_time
+                try:
+                    duplicate_candidate = self._new_evidence(
+                        **evidence_fields,
+                        applicable_at_ms=duplicate_event_time,
+                        event_at_ms=duplicate_event_time,
+                        received_at_ms=int(existing["received_at_ms"]),
+                    )
+                except FinancialError:
+                    _fail(FinancialConflictError, "evidence_identity_conflict")
+                if duplicate_candidate.record_digest != bytes(existing["record_digest"]):
+                    _fail(FinancialConflictError, "evidence_identity_conflict")
                 return {"status": "DUPLICATE", "report_id": report_id, **self._projection_for_row(obligation)}
+            self._check_revision(obligation, expected_revision)
+            event_time = received_at_ms if requested_event_time is None else requested_event_time
+            evidence = self._new_evidence(
+                **evidence_fields,
+                applicable_at_ms=event_time,
+                event_at_ms=event_time,
+                received_at_ms=received_at_ms,
+            )
+            prior = connection.execute("SELECT * FROM evidence WHERE evidence_id=?", (supersedes,)).fetchone()
+            if prior is None:
+                _fail(FinancialIntegrityError, "report_supersedes_missing")
+            if str(prior["item_id"]) != item_id:
+                _fail(FinancialIntegrityError, "report_supersedes_item")
+            if str(prior["kind"]) not in {"REPORT", "REPORT_CORRECTION"}:
+                _fail(FinancialIntegrityError, "report_supersedes_kind")
+            if int(prior["event_at_ms"]) >= event_time:
+                _fail(FinancialIntegrityError, "report_supersedes_chronology")
+            if connection.execute("SELECT 1 FROM evidence WHERE supersedes=? LIMIT 1", (supersedes,)).fetchone() is not None:
+                _fail(FinancialConflictError, "report_supersedes_already_superseded")
+            self._insert_evidence(connection, evidence)
             connection.execute("UPDATE obligations SET reporting_complete=1 WHERE obligation_id=?", (obligation["obligation_id"],))
             now_ms = self._now()
             before, after, evaluation = self._recompute_obligation(connection, str(obligation["obligation_id"]), now_ms=now_ms, authority_id=self.trusted_authority.authority_id)
@@ -1694,7 +1999,7 @@ class FinancialOwner:
         }
         if set(package) != required:
             _fail(FinancialContinuityError, "continuity_package_shape")
-        if package["schema"] != _CONTINUITY_SCHEMA or package["version"] != 1:
+        if package["schema"] != _CONTINUITY_SCHEMA or package["version"] != 3:
             _fail(FinancialContinuityError, "continuity_package_schema")
         scope = package["scope"]
         if type(scope) is not dict or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
@@ -1777,7 +2082,7 @@ class FinancialOwner:
             }
             body: dict[str, Any] = {
                 "schema": _CONTINUITY_SCHEMA,
-                "version": 1,
+                "version": 3,
                 "scope": scope,
                 "authority": {"authority_id": self.trusted_authority.authority_id, "epoch": self.trusted_authority.epoch, "digest": _hex(self.trusted_authority.digest)},
                 "continuity_epoch": int(meta["continuity_epoch"]),
@@ -1856,6 +2161,11 @@ class FinancialOwner:
             )
         except Exception as error:
             if error.__class__.__module__ == "app.right_rail_financial_owner_independent":
+                owner.close()
+                try:
+                    recovered_path.unlink()
+                except OSError:
+                    pass
                 _fail(FinancialContinuityError, "continuity_restore_integrity")
             raise
         return owner

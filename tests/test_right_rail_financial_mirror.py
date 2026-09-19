@@ -186,12 +186,19 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(result["received_cash_cents"], H_CASH_CENTS)
 
     def test_reporting_correction_accepts_explicit_evidence_lineage(self) -> None:
+        original = self.mirror.record_reporting_evidence(
+            item_id=H_ITEM_ID,
+            report_id="report:prior:h",
+            evidence_id="evidence:report:prior:h",
+            event_at_ms=1_774_828_800_000,
+        )
+        self.assertEqual(original["status"], "RECORDED")
         result = self.mirror.record_reporting_correction(
             item_id=H_ITEM_ID,
             report_id="report:correction:h",
             evidence_id="evidence:report:correction:h",
             supersedes="evidence:report:prior:h",
-            expected_revision=0,
+            expected_revision=1,
             event_at_ms=1_774_828_800_100,
         )
         self.assertEqual(result["status"], "RECORDED")
@@ -202,12 +209,126 @@ class FinancialMirrorTests(unittest.TestCase):
         )
         self.assertEqual(evidence["supersedes"], "evidence:report:prior:h")
 
+    def test_reporting_default_timestamp_retries_are_stable_through_mirror(self) -> None:
+        original = self.mirror.record_reporting_evidence(
+            item_id=H_ITEM_ID,
+            report_id="report:default:prior:h",
+            evidence_id="evidence:report:default:prior:h",
+        )
+        self.assertEqual(original["status"], "RECORDED")
+        original_revision = self.mirror.obligation_detail(H_ITEM_ID)["revision"]
+        original_retry = self.mirror.record_reporting_evidence(
+            item_id=H_ITEM_ID,
+            report_id="report:default:prior:h",
+            evidence_id="evidence:report:default:prior:h",
+            expected_revision=0,
+        )
+        self.assertEqual(original_retry["status"], "DUPLICATE")
+        first = self.mirror.record_reporting_correction(
+            item_id=H_ITEM_ID,
+            report_id="report:default:correction:h",
+            evidence_id="evidence:report:default:correction:h",
+            supersedes="evidence:report:default:prior:h",
+            expected_revision=original_revision,
+        )
+        self.assertEqual(first["status"], "RECORDED")
+        before = self.mirror.obligation_detail(H_ITEM_ID, limit=20)
+        before_summary = self.mirror.summary()
+        before_row = next(row for row in before["evidence_references"] if row["evidence_id"] == "evidence:report:default:correction:h")
+        self.clock.value += 1_000_000
+        retry = self.mirror.record_reporting_correction(
+            item_id=H_ITEM_ID,
+            report_id="report:default:correction:h",
+            evidence_id="evidence:report:default:correction:h",
+            supersedes="evidence:report:default:prior:h",
+            expected_revision=original_revision,
+        )
+        self.assertEqual(retry["status"], "DUPLICATE")
+        after = self.mirror.obligation_detail(H_ITEM_ID, limit=20)
+        after_summary = self.mirror.summary()
+        after_row = next(row for row in after["evidence_references"] if row["evidence_id"] == "evidence:report:default:correction:h")
+        self.assertEqual(after_row["record_digest"], before_row["record_digest"])
+        self.assertEqual(after_row["event_at_ms"], before_row["event_at_ms"])
+        self.assertEqual(after_row["received_at_ms"], before_row["received_at_ms"])
+        self.assertEqual(after["revision"], before["revision"])
+        self.assertEqual(len(after["evaluation_references"]), len(before["evaluation_references"]))
+        self.assertEqual(after_summary["sequence"], before_summary["sequence"])
+        with self.assertRaisesRegex(owner.FinancialConflictError, "evidence_identity_conflict"):
+            self.mirror.record_reporting_correction(
+                item_id=H_ITEM_ID,
+                report_id="report:default:correction:h",
+                evidence_id="evidence:report:default:correction:h",
+                supersedes="evidence:report:default:prior:h",
+                expected_revision=original_revision,
+                event_at_ms=int(before_row["event_at_ms"]) + 1,
+            )
+        self.assertEqual(self.mirror.summary()["sequence"], before_summary["sequence"])
+        self.mirror.verify_integrity()
+
+    def test_cli_reporting_correction_default_retry_and_identity_conflicts(self) -> None:
+        from tools import right_rail_financial_cli as cli
+
+        self.mirror.record_reporting_evidence(
+            item_id=H_ITEM_ID,
+            report_id="report:cli:prior:h",
+            evidence_id="evidence:report:cli:prior:h",
+            event_at_ms=1_700_000_000_000,
+        )
+        common = [
+            "--database", str(self.db),
+            "--state-id", self.config.state_id,
+            "--deployment-id", self.config.deployment_id,
+            "--program-id", self.config.program_id,
+            "--period-id", self.config.period_id,
+            "record-reporting-correction",
+            "--item-id", H_ITEM_ID,
+            "--report-id", "report:cli:correction:h",
+            "--evidence-id", "evidence:report:cli:correction:h",
+            "--supersedes", "evidence:report:cli:prior:h",
+            "--expected-revision", "1",
+        ]
+
+        def invoke(args: list[str]) -> tuple[int, dict[str, object], str]:
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = cli.main(args)
+            output = json.loads(stdout.getvalue()) if stdout.getvalue() else {}
+            return status, output, stderr.getvalue()
+
+        status, first, stderr = invoke(common)
+        self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(first["status"], "RECORDED")
+        before = self.mirror.obligation_detail(H_ITEM_ID, limit=20)
+        before_summary = self.mirror.summary()
+        before_row = next(row for row in before["evidence_references"] if row["evidence_id"] == "evidence:report:cli:correction:h")
+
+        status, duplicate, stderr = invoke(common)
+        self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(duplicate["status"], "DUPLICATE")
+        after = self.mirror.obligation_detail(H_ITEM_ID, limit=20)
+        self.assertEqual(next(row for row in after["evidence_references"] if row["evidence_id"] == "evidence:report:cli:correction:h")["record_digest"], before_row["record_digest"])
+        self.assertEqual(self.mirror.summary()["sequence"], before_summary["sequence"])
+
+        status, _changed_time, stderr = invoke(common + ["--event-at-ms", str(int(before_row["event_at_ms"]) + 1)])
+        self.assertEqual(status, 2)
+        self.assertEqual(stderr, "ERROR:evidence_identity_conflict\n")
+        status, _changed_payload, stderr = invoke(
+            [value if value != "report:cli:correction:h" else "report:cli:changed:h" for value in common]
+        )
+        self.assertEqual(status, 2)
+        self.assertEqual(stderr, "ERROR:evidence_identity_conflict\n")
+        self.assertEqual(self.mirror.summary()["sequence"], before_summary["sequence"])
+        self.mirror.verify_integrity()
+
     def test_continuity_export_validate_restore_restart_and_readback(self) -> None:
         self._prepare_action()
         package = self.mirror.export_continuity()
         metadata = self.mirror.validate_continuity_package(package)
-        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v1")
-        self.assertEqual(metadata["version"], 1)
+        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v3")
+        self.assertEqual(metadata["version"], 3)
         self.assertEqual(metadata["scope"]["state_id"], self.config.state_id)
         self.assertIn("financial_meta", metadata["table_counts"])
         self.assertFalse(metadata["dispatch_enabled"])

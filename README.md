@@ -28,30 +28,42 @@ atomicity, exact 100-reference protocol, non-`CLEAR` economic guard, cryptograph
 and Lean/formal research remain separate generations. This financial slice does not change their
 bytes, security parameters, artifacts, operations policy, archives, or production status.
 
-## Documentation-batch input — 2026-09-19
+## Current source/checkpoint — 2026-09-19
 
-At the start of this documentation batch the implementation checkout was branch
+The documentation/source batch started from branch
 `rightrail-financial-workflow-20260913` at HEAD
 `de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
 `4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. Tracked status was clean; the only
 untracked paths were the two generated executables listed in `STATE.md`.
-The request and reference-plan hashes remain recorded in `CURRENT_TASK.md` and
-`STATE.md`.
+The current reauthorized working-tree checkpoint is HEAD
+`a0267e08ec400e0e96003d60cfca6b19df61c796` with source/test/docs changes
+pending one coherent commit. The owner is explicitly versioned as
+`RR/FINANCIAL/OWNER/v3`; Continuity is
+`RR/FINANCIAL/CONTINUITY/v3`. v3 binds event header fields into event IDs and
+heads, reconstructs population lifecycle order independently, and preserves
+stable idempotency for omitted reporting timestamps through owner, Mirror, and
+CLI paths. The initial four source-review blockers are addressed in this
+worktree and the affected guarded suite passed 45 tests.
 
-The source implementation checkpoint is
-`99d28687df0e7d5cf6a46e73db22f42a9902b789`. It contains the durable financial
-owner, independent checker, same-owner Mirror, bounded shadow Continuity,
-fixed-value fixture, and local CLI. The retained raw result was `Ran 29 tests
-in 7.582s` followed by `OK`; one 20-item measurement was 379.703 ms. No
-financial numerical SLA is supplied, so the measurement is provisional.
+The raw accepted source/test result is:
 
-Final Driver source and whole-system review is pending. The current open
-source-review blockers are: unenforced Control Pack policy fields; ambiguous
-`PROGRAM`/`ALL` period identity in item-only lookup; population exceeding
-`expected_count` before validation; and reporting supersedes accepting
-nonexistent or cross-item lineage. State owns the fixes and affected
-verification. The prior test pass does not close them. Native regressions and
-Lean checkpoints remain separate and were not replayed in this phase.
+```text
+Ran 45 tests in 10.758s
+OK
+```
+
+The earlier v2 measurement databases/logs are retained unchanged and remain
+historical v2 evidence. The guarded v3 measurement series completed at
+`work/financial-measurements-v3-r2` with 3 measured samples plus 1 warmup for
+each of sizes 5, 10, and 20 (12 retained SQLite databases). All samples report
+owner schema v3 and independently verified restarts. Total-ms medians were
+161.885, 208.391, and 302.164 for sizes 5, 10, and 20. This is a bounded
+observation, not a financial SLA; native metrics remain pending and queue
+wait/age is not applicable. The prior raw v2 result (`Ran 29 tests in 7.582s`,
+`OK`) and one 20-item observation of 379.703 ms remain historical only.
+Whole-system review, old-suite/native/Lean replay, lock-time evidence,
+independent audit, and production qualification remain open; this candidate
+remains synthetic, nonactivating, nonpayment, and non-PHI.
 
 ## Read in this order
 
@@ -86,10 +98,12 @@ a formula under test to generate an expected financial answer. Record exact
 commands, raw trust-critical output, skipped counts/reasons, and resource
 limits in `STATE.md`.
 
-No build, checker, test, native, or Lean process was launched for this
-documentation batch. The four source-review blockers in `CURRENT_TASK.md` must
-be fixed and their affected checks rerun before the candidate can be described
-as accepted; the retained 29-test pass is not sufficient.
+The accepted source/test run used the existing guarded wrapper with the exact
+absolute `work/run_financial_blocker_checks.py` path. The first relative-path
+attempt failed before tests with a preserved 321-byte stderr; the corrected
+v3-r4 run passed. The measurement had one earlier pre-launch mutex stop and a
+later successful v3-r2 run. The maintained financial boundary still requires
+guarded execution for any future test/build/checker/native command.
 
 ## Retained Blind Ledger verification
 
