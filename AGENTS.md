@@ -59,38 +59,36 @@ claim. The next review action is the bounded Driver/Security review.
 
 The current parent assignment reauthorizes the exact financial application
 source, focused tests, CLI path, the named measurement harness, and the five
-maintained child Markdown files for one coherent commit. The worktree is a v3
+maintained child Markdown files for one coherent commit. The worktree is a v4
 candidate: the owner schema is
-`RR/FINANCIAL/OWNER/v3`, Continuity is
-`RR/FINANCIAL/CONTINUITY/v3`, and event/header domains are versioned so the
-persisted v2 identity contract is not silently reinterpreted. The source
+`RR/FINANCIAL/OWNER/v4`, Continuity is
+`RR/FINANCIAL/CONTINUITY/v4`, and event/header domains are versioned so the
+persisted v2/v3 identity contracts are not silently reinterpreted. The source
 correction includes Control Pack/period/population/lineage enforcement, event
 header binding, population lifecycle reconstruction and persisted imported-count
-binding, stable default-timestamp report retries, CLI coverage, and TEST-only
-continuation after shadow restore.
+binding, stable default-timestamp report retries, CLI coverage, and an
+immutable provenance/mode/owner/history anchor for TEST-only continuation after
+shadow restore.
 
 The final guarded affected financial run passed 46 tests. Its raw stderr is
 retained by the guard as
-`guarded-command-financial-followon-blockers-r10-final.stderr.log` and ends
-with:
+`guarded-command-financial-identity-v4-tests-r2.stderr.log` and ends with:
 
 ```text
-Ran 46 tests in 14.878s
+Ran 46 tests in 14.686s
 OK
 ```
 
 The follow-on measurement series completed under the same guard at
-`work/financial-measurements-v4-r1`: 3 measured samples plus 1 warmup for
+`work/financial-measurements-v5-r1`: 3 measured samples plus 1 warmup for
 each of sizes 5, 10, and 20, 12 owner SQLite databases and 12 TEST restore
-databases. All measured owner and TEST databases independently verified and
-all 9 measured restores left source bytes unchanged. Total-ms medians were
-329.150, 440.241, and 590.361 ms; lock wait-to-acquire/transaction-held
-medians were 20.024/9.507, 15.852/9.710, and 15.148/9.661 ms for sizes 5,
-10, and 20. Each measured sample used one holder statement, one waiter
-attempt, and one successful acquisition. This is bounded observation only,
-not an SLA. Native metrics remain pending and queue wait/age is not
-applicable. The retained v2/v3 measurement databases/logs remain immutable
-historical evidence.
+databases. Actual `_write()` wait/held medians were 2.019/7.188, 1.815/6.052,
+and 1.708/6.597 ms; actual transaction totals were 36, 54, and 90 with zero
+acquisition failures. All 9 measured restores left source bytes unchanged.
+The synthetic contention diagnostic remains separately labeled and is not the
+actual workload metric. This is bounded observation only, not an SLA. Native
+metrics remain pending and queue wait/age is not applicable. The retained
+v2/v3/prior-v4 measurement databases/logs remain immutable historical evidence.
 
 ## Product boundary and claims
 
@@ -138,8 +136,8 @@ OK
 
 One retained v2 20-item measurement was 379.703 ms. The reference plan
 supplies no financial numerical SLA, so this is an observation, not a target or
-guarantee. The current follow-on source run is 46 tests in 14.878s with `OK`.
-The bounded v4 measurement series has 9 measured samples and 3 warmups across
+guarantee. The current follow-on source run is 46 tests in 14.686s with `OK`.
+The bounded v5 measurement series has 9 measured samples and 3 warmups across
 sizes 5, 10, and 20, plus 12 owner and 12 TEST restore databases; it reports
 actual lock wait/held timings but no native or queue SLA. Financial-phase
 native regression runs are zero. Do not inflate these facts into whole-system,

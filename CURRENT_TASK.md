@@ -6,11 +6,12 @@ Updated: 2026-09-19
 
 Work only in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
-branch `rightrail-financial-workflow-20260913`. The verified input identity at
-the start of this documentation batch was HEAD
-`de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
-`4ea7838728ba1322d2a50edb5ede0c3deedc3a97`; tracked status was clean and the
-only untracked paths were the two generated executables recorded in `STATE.md`.
+branch `rightrail-financial-workflow-20260913`. The committed parent identity
+at the start of this follow-on was HEAD
+`f3f426eec114aa91bd4ea06f8d5635234039bf91`, tree
+`0b4a626e0aafbdd86c120b64b0613ec760e769e4`; the only untracked paths remain
+the two generated executables recorded in `STATE.md`. The v4 source/test/
+harness and maintained-document changes are the current coherent batch.
 
 The assignment request SHA-256 is
 `54F95E47140F7EC6C082F5EDD2D007C91BAB45B4F3E809EE7CE5FD3170FA4033`. The
@@ -22,14 +23,12 @@ State Control Pack, Blind Ledger financial owner, same-owner Mirror, bounded
 shadow Continuity State, and deferred Switch. The fixed fixture is twenty
 hospitals and $1,000,000 total; H is owed $100,000 and the other nineteen total
 $900,000. Expected cents and branch answers are manually derived constants.
-The previous source/docs checkpoint is commit
-`1effa625800c778367579416cb15a07555264754` (tree
-`85bd334d002446c598cde41dd61283736c1e006e`). The follow-on source/test/harness
-implementation is committed at `691d3965f37e935889782215415368d83a9b0b25`
-(tree `b50853d20935e28616e87e51c478ee398d4e3f3c`); the current boundary is
-post-commit review. The candidate remains v3 with `RR/FINANCIAL/OWNER/v3` and
-`RR/FINANCIAL/CONTINUITY/v3`; old v2/v3 measurement databases/logs remain
-immutable historical evidence.
+The candidate is now v4 with `RR/FINANCIAL/OWNER/v4` and
+`RR/FINANCIAL/CONTINUITY/v4`. The new immutable `financial_identity` contract
+binds ROOT/CONTINUITY_RESTORE provenance, mode, owner, source package digest,
+genesis, and the history anchor; owner reopen and independent verification
+reject direct TEST-to-LIVE metadata promotion. Old v2/v3 and prior v4
+measurement databases/logs remain immutable historical evidence.
 
 ## Current implementation and blockers
 
@@ -42,29 +41,33 @@ lifecycle order and binds reconstructed imported counts to persisted state,
 and default report/evidence retries reuse stored timestamps before
 stale-revision checks. Continuity keeps default restore in SHADOW and exposes
 an explicitly TEST-only restore for synthetic continuation; TEST has fixed
-identity, cannot become LIVE, and remains dispatch/egress disabled.
+identity, cannot become LIVE even after direct metadata mode/owner mutation,
+and remains dispatch/egress disabled. The identity row is immutable and
+history-anchored across export, restore, round-trip restore, and restart.
 
-The final guarded affected run was:
+The final guarded compile and affected run were:
 
 ```text
-Ran 46 tests in 14.878s
+py -3.14 -B -m py_compile ...  exit=0
+Ran 46 tests in 14.686s
 OK
 ```
 
 This is source-local synthetic evidence, not final acceptance or qualification.
-The guarded v4 measurement series completed with 3 measured samples plus 1
+The guarded v5 measurement series completed with 3 measured samples plus 1
 warmup at each of sizes 5, 10, and 20; it retained 12 owner databases and 12
-TEST restore databases. Total-ms medians were 329.150, 440.241, and 590.361
-ms; lock wait-to-acquire/transaction-held medians were 20.024/9.507,
-15.852/9.710, and 15.148/9.661 ms. Nine measured TEST restores all verified
-with unchanged source bytes; each measured lock probe used one holder statement,
-one waiter attempt, and one successful acquisition. Native metrics remain
-pending and queue wait/age is not applicable. Separate older financial suites
-were not present beyond the three named RightRail financial test modules, so
-none was skipped silently; unrelated repository suites were outside scope.
-Whole-system/native/Lean replay, independent audit, and production
-qualification remain pending. Financial-phase native runs remain zero. Lean
-is not integrated into this Python application.
+TEST restore databases (24 files total). Actual `_write()` wait/held medians
+were 2.019/7.188, 1.815/6.052, and 1.708/6.597 ms; actual transaction
+counts were 36, 54, and 90 with zero acquisition failures. All 9 measured
+TEST restores and restarts verified with unchanged source bytes. The harness
+retains a separate synthetic contention diagnostic, which is not the actual
+workload metric. Native metrics remain pending and queue wait/age is not
+applicable. Separate older financial suites were not present beyond the three
+named RightRail financial test modules; none was silently skipped and
+unrelated repository suites were outside scope. Whole-system/native/Lean
+replay, independent audit, and production qualification remain pending.
+Financial-phase native runs remain zero. Lean is not integrated into this
+Python application.
 
 ## Protected boundaries and nonclaims
 
@@ -77,8 +80,8 @@ Corporate egress is disabled by default; canaries are synthetic.
 
 Use the existing guarded wrapper/mutex and physical reserve/cap for every
 future test/build/checker/native batch, one bounded batch at a time. The
-retained native arithmetic floor is not a financial SLA. The source/test and
-v3 measurement runs were guarded; native/queue fields in the measurement
+retained native arithmetic floor is not a financial SLA. The v4 source/test
+and v5 measurement runs were guarded; native/queue fields in the measurement
 remain pending/not applicable rather than being treated as financial SLAs.
 
 ## Current ownership and handoff

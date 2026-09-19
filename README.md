@@ -30,42 +30,39 @@ bytes, security parameters, artifacts, operations policy, archives, or productio
 
 ## Current source/checkpoint — 2026-09-19
 
-The documentation/source batch started from branch
+The committed parent before this follow-on is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
-`4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. The preceding source/docs
-checkpoint is parent commit
-`1effa625800c778367579416cb15a07555264754`, tree
-`85bd334d002446c598cde41dd61283736c1e006e`. The follow-on source/test/harness
-implementation is committed at
-`691d3965f37e935889782215415368d83a9b0b25`, tree
-`b50853d20935e28616e87e51c478ee398d4e3f3c`; this maintained-document state is
-post-commit. The owner is explicitly versioned as
-`RR/FINANCIAL/OWNER/v3`; Continuity is
-`RR/FINANCIAL/CONTINUITY/v3`. v3 binds event header fields into event IDs and
-heads and reconstructs population lifecycle order independently. The
-follow-on binds reconstructed imported counts to persisted population state,
-adds an explicit non-live TEST restore/continuation mode, and keeps
-dispatch/egress disabled.
+`f3f426eec114aa91bd4ea06f8d5635234039bf91`, tree
+`0b4a626e0aafbdd86c120b64b0613ec760e769e4`. The v4 source/test/harness change
+and this maintained-document update are the current coherent batch. The owner
+is explicitly versioned as `RR/FINANCIAL/OWNER/v4`; Continuity is
+`RR/FINANCIAL/CONTINUITY/v4`. v4 adds an immutable `financial_identity` row
+that binds provenance, mode, owner, continuity anchor, genesis, and source
+package digest; the identity digest is included in genesis and the independent
+checker verifies the same contract. TEST restore/continuation remains
+non-live, dispatch/egress-disabled, and direct `financial_meta` mode-only or
+mode-plus-owner promotion is rejected on owner reopen and independent verify.
 
-The final guarded affected source/test result is:
+The final guarded affected compile and source/test result is:
 
 ```text
-Ran 46 tests in 14.878s
+py -3.14 -B -m py_compile ...  exit=0
+Ran 46 tests in 14.686s
 OK
 ```
 
 The follow-on measurement series completed at
-`work/financial-measurements-v4-r1` with 3 measured samples plus 1 warmup at
-each of sizes 5, 10, and 20 (12 owner databases and 12 TEST restore
-databases). All measured owner and TEST restarts independently verified, and
-all 9 measured restores left source bytes unchanged. Total-ms medians were
-329.150, 440.241, and 590.361 ms. Lock wait-to-acquire/transaction-held
-medians were 20.024/9.507, 15.852/9.710, and 15.148/9.661 ms. Each measured
-sample used one holder statement, one waiter attempt, and one successful
-acquisition. This is a bounded observation, not a financial SLA; native
+`work/financial-measurements-v5-r1` with 3 measured samples plus 1 warmup at
+each of sizes 5, 10, and 20 (24 files: 12 owner databases and 12 TEST restore
+databases). All 9 measured owner/TEST restarts independently verified, all
+actual `_write()` acquisitions succeeded, and all 9 measured restores left
+source bytes unchanged. Actual wait-to-acquire/transaction-held medians were
+2.019/7.188, 1.815/6.052, and 1.708/6.597 ms for sizes 5, 10, and 20; the
+actual transaction counts were 36, 54, and 90 with zero acquisition failures.
+The retained synthetic contention probe is reported separately and is not the
+workload metric. This is a bounded observation, not a financial SLA; native
 metrics remain pending and queue wait/age is not applicable. The prior v2/v3
-measurement databases/logs remain historical evidence. Separate older
+and v4 measurement databases/logs remain historical evidence. Separate older
 financial suites were not present beyond the three named RightRail financial
 test modules, so no additional older financial suite was run; unrelated
 repository suites remain outside this bounded verification. Whole-system,
@@ -107,10 +104,11 @@ limits in `STATE.md`.
 
 The final affected source/test run used the existing guarded wrapper with the
 absolute child `tests` path and Python unittest discovery; its exact result and
-resource evidence are recorded in `STATE.md`. Earlier v3-r4 and v3-r2 logs
-remain retained historical evidence, as does the earlier pre-launch mutex
-stop. The maintained financial boundary still requires guarded execution for
-any future test/build/checker/native command.
+resource evidence are recorded in `STATE.md`. The compile, test correction,
+relative-path launcher failure, and earlier mutex stop remain retained as
+explicit run history; none authorized a guard bypass. The maintained financial
+boundary still requires guarded execution for any future test/build/checker/
+native command.
 
 ## Retained Blind Ledger verification
 

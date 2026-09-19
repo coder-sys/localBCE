@@ -330,6 +330,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 connection.execute("DELETE FROM financial_events WHERE event_sequence=?", (removed_sequence + offset,))
             meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
             assert meta is not None
+            identity = connection.execute("SELECT identity_digest FROM financial_identity WHERE id=1").fetchone()
+            assert identity is not None
             base_committed_at = min(int(row["committed_at_ms"]) for row in rows)
             scope = {
                 "state_id": str(meta["state_id"]),
@@ -342,6 +344,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 independent.GENESIS_DOMAIN,
                 independent._canonical(scope, "test:genesis-scope"),
                 bytes(meta["trusted_authority_digest"]),
+                bytes(identity["identity_digest"]),
             )
             for sequence, row in enumerate(rows, start=1):
                 committed_at = base_committed_at + sequence
@@ -409,6 +412,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
             meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
             assert meta is not None
+            identity = connection.execute("SELECT identity_digest FROM financial_identity WHERE id=1").fetchone()
+            assert identity is not None
             base_committed_at = min(int(row["committed_at_ms"]) for row in rows)
             scope = {
                 "state_id": str(meta["state_id"]),
@@ -421,6 +426,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 independent.GENESIS_DOMAIN,
                 independent._canonical(scope, "test:genesis-scope"),
                 bytes(meta["trusted_authority_digest"]),
+                bytes(identity["identity_digest"]),
             )
             for sequence, row in enumerate(rows, start=1):
                 committed_at = base_committed_at + sequence
@@ -456,7 +462,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
         obligation = next(iter(result["obligations"].values()))
-        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v3")
+        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v4")
         self.assertEqual(result["mode"], "LIVE")
         self.assertEqual(result["totals"], {
             "owed_cents": 10_000_000,

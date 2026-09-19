@@ -37,9 +37,9 @@ def _fail(code: str) -> NoReturn:
     raise error
 
 
-SCHEMA_VERSION = 3
-SCHEMA = "RR/FINANCIAL/OWNER/v3"
-CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v3"
+SCHEMA_VERSION = 4
+SCHEMA = "RR/FINANCIAL/OWNER/v4"
+CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v4"
 CURRENCY = "USD"
 MAX_CENTS = (1 << 63) - 1
 MAX_ROWS = 10_000
@@ -50,11 +50,13 @@ MAX_PACKAGE_NODES = 250_000
 
 EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
 HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
-GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v2\x00"
+GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v4\x00"
 EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
-CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v3\x00"
+CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v4\x00"
+IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
+ZERO_DIGEST = b"\x00" * 64
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _ROLE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
@@ -66,6 +68,18 @@ _HEX128 = re.compile(r"[0-9A-Fa-f]{128}\Z")
 # independently frozen here.  They are intentionally not imported from the
 # owner module.
 _TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = {
+    "financial_identity": (
+        ("id", "INTEGER", 1),
+        ("schema_version", "INTEGER", 0),
+        ("provenance", "TEXT", 0),
+        ("bound_mode", "TEXT", 0),
+        ("bound_owner_id", "TEXT", 0),
+        ("anchor_sequence", "INTEGER", 0),
+        ("anchor_head", "BLOB", 0),
+        ("genesis_head", "BLOB", 0),
+        ("source_package_digest", "BLOB", 0),
+        ("identity_digest", "BLOB", 0),
+    ),
     "financial_meta": (
         ("id", "INTEGER", 1),
         ("schema_version", "INTEGER", 0),
@@ -299,6 +313,8 @@ _TRIGGER_DEFS = {
     "action_payload_immutable": "CREATE TRIGGER action_payload_immutable BEFORE UPDATE OF action_id,obligation_id,determination_id,kind,revision,payload_json,payload_digest,idempotency_key,created_at_ms ON actions BEGIN SELECT RAISE(ABORT,'action_payload_immutable'); END",
     "action_outbox_payload_immutable": "CREATE TRIGGER action_outbox_payload_immutable BEFORE UPDATE OF action_id,payload_digest ON action_outbox BEGIN SELECT RAISE(ABORT,'action_outbox_payload_immutable'); END",
     "evidence_record_immutable": "CREATE TRIGGER evidence_record_immutable BEFORE UPDATE OF evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,content_digest,record_digest,amount_cents,reversal_of,supersedes ON evidence BEGIN SELECT RAISE(ABORT,'evidence_record_immutable'); END",
+    "financial_identity_update_immutable": "CREATE TRIGGER financial_identity_update_immutable BEFORE UPDATE OF schema_version,provenance,bound_mode,bound_owner_id,anchor_sequence,anchor_head,genesis_head,source_package_digest,identity_digest ON financial_identity BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
+    "financial_identity_delete_immutable": "CREATE TRIGGER financial_identity_delete_immutable BEFORE DELETE ON financial_identity BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
 }
 
 _EVENT_KINDS = {
@@ -538,6 +554,75 @@ def _hex_digest(value: object, code: str) -> bytes:
         return bytes.fromhex(value)
     except ValueError:
         _fail(code)
+
+
+def _identity_digest(
+    *,
+    provenance: str,
+    bound_mode: str,
+    bound_owner_id: str,
+    anchor_sequence: int,
+    source_package_digest: bytes,
+) -> bytes:
+    if provenance not in {"ROOT", "CONTINUITY_RESTORE"}:
+        _fail("identity:provenance")
+    if bound_mode not in {"LIVE", "SHADOW", "TEST"}:
+        _fail("identity:mode")
+    _id(bound_owner_id, "identity:owner")
+    _integer(anchor_sequence, "identity:anchor-sequence", maximum=MAX_ROWS)
+    source_digest = _blob64(source_package_digest, "identity:source-package-digest")
+    return _digest(
+        IDENTITY_DOMAIN,
+        _canonical(
+            {
+                "anchor_sequence": anchor_sequence,
+                "bound_mode": bound_mode,
+                "bound_owner_id": bound_owner_id,
+                "provenance": provenance,
+                "source_package_digest": source_digest.hex().upper(),
+            },
+            "identity:digest-input",
+        ),
+    )
+
+
+def _identity_record(value: Mapping[str, object], code_prefix: str = "identity") -> dict[str, object]:
+    if not isinstance(value, Mapping) or set(value) != set(TABLE_COLUMNS["financial_identity"]):
+        _fail(f"{code_prefix}:shape")
+    if value["id"] != 1 or value["schema_version"] != SCHEMA_VERSION:
+        _fail(f"{code_prefix}:schema")
+    provenance = value["provenance"]
+    bound_mode = value["bound_mode"]
+    bound_owner_id = _id(value["bound_owner_id"], f"{code_prefix}:owner")
+    if provenance not in {"ROOT", "CONTINUITY_RESTORE"}:
+        _fail(f"{code_prefix}:provenance")
+    if bound_mode not in {"LIVE", "SHADOW", "TEST"}:
+        _fail(f"{code_prefix}:mode")
+    anchor_sequence = _integer(value["anchor_sequence"], f"{code_prefix}:anchor-sequence", maximum=MAX_ROWS)
+    anchor_head = _blob64(value["anchor_head"], f"{code_prefix}:anchor-head")
+    genesis_head = _blob64(value["genesis_head"], f"{code_prefix}:genesis-head")
+    source_package_digest = _blob64(value["source_package_digest"], f"{code_prefix}:source-package-digest")
+    identity_digest = _blob64(value["identity_digest"], f"{code_prefix}:digest")
+    if identity_digest != _identity_digest(
+        provenance=provenance,
+        bound_mode=bound_mode,
+        bound_owner_id=bound_owner_id,
+        anchor_sequence=anchor_sequence,
+        source_package_digest=source_package_digest,
+    ):
+        _fail(f"{code_prefix}:digest")
+    return {
+        "id": 1,
+        "schema_version": SCHEMA_VERSION,
+        "provenance": provenance,
+        "bound_mode": bound_mode,
+        "bound_owner_id": bound_owner_id,
+        "anchor_sequence": anchor_sequence,
+        "anchor_head": anchor_head,
+        "genesis_head": genesis_head,
+        "source_package_digest": source_package_digest,
+        "identity_digest": identity_digest,
+    }
 
 
 def _normal_sql(value: object) -> str:
@@ -782,13 +867,38 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object]) ->
         _fail("meta:authority-binding")
     if identity["continuity_epoch"] is not None and continuity_epoch != identity["continuity_epoch"]:
         _fail("meta:continuity-epoch")
+    try:
+        if int(connection.execute("SELECT COUNT(*) FROM financial_identity").fetchone()[0]) != 1:
+            _fail("identity:cardinality")
+        identity_row = connection.execute("SELECT * FROM financial_identity WHERE id=1").fetchone()
+    except (sqlite3.Error, TypeError, ValueError):
+        _fail("identity:read")
+    if identity_row is None:
+        _fail("identity:missing")
+    identity_contract = _identity_record(
+        {column: identity_row[column] for column in TABLE_COLUMNS["financial_identity"]}
+    )
+    if identity_contract["bound_mode"] != mode or identity_contract["bound_owner_id"] != owner_id:
+        _fail("identity:meta-binding")
     scope_bytes = _canonical(scope, "meta:scope")
-    genesis = _digest(GENESIS_DOMAIN, scope_bytes, authority_digest)
+    if identity_contract["provenance"] == "ROOT":
+        expected_genesis = _digest(GENESIS_DOMAIN, scope_bytes, authority_digest, identity_contract["identity_digest"])
+        if identity_contract["source_package_digest"] != ZERO_DIGEST or identity_contract["anchor_sequence"] != 0 or identity_contract["anchor_head"] != expected_genesis or identity_contract["genesis_head"] != expected_genesis:
+            _fail("identity:genesis")
+    else:
+        if identity_contract["source_package_digest"] == ZERO_DIGEST or identity_contract["anchor_sequence"] > sequence:
+            _fail("identity:anchor")
+        if identity_contract["anchor_sequence"] == 0 and identity_contract["anchor_head"] != identity_contract["genesis_head"]:
+            _fail("identity:anchor")
+    genesis = identity_contract["genesis_head"]
+    if sequence == 0 and history_head != genesis:
+        _fail("identity:history-head")
     return {
         "row": row,
         "sequence": sequence,
         "history_head": history_head,
         "genesis": genesis,
+        "identity": identity_contract,
         "continuity_epoch": continuity_epoch,
         "mode": mode,
         "owner_id": owner_id,
@@ -853,6 +963,12 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
         previous = head
     if previous != meta["history_head"]:
         _fail("history:meta-head")
+    identity = meta["identity"]
+    assert isinstance(identity, dict)
+    anchor_sequence = int(identity["anchor_sequence"])
+    if anchor_sequence > 0:
+        if anchor_sequence > len(rows) or bytes(rows[anchor_sequence - 1]["head"]) != identity["anchor_head"]:
+            _fail("identity:history-anchor")
     return rows
 
 
@@ -2016,7 +2132,7 @@ def verify_continuity_package(
     }
     if set(value) != required:
         _fail("continuity:keys")
-    if value["schema"] != CONTINUITY_SCHEMA or value["version"] != 3:
+    if value["schema"] != CONTINUITY_SCHEMA or value["version"] != 4:
         _fail("continuity:schema")
     scope = value["scope"]
     if not isinstance(scope, dict) or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
@@ -2084,6 +2200,24 @@ def verify_continuity_package(
         _fail("continuity:meta-history-head")
     if _integer(meta["continuity_epoch"], "continuity:meta-epoch", minimum=1, maximum=MAX_CENTS) != epoch:
         _fail("continuity:meta-epoch")
+    if counts["financial_identity"] != 1:
+        _fail("continuity:identity-cardinality")
+    identity_contract = _identity_record(decoded_rows["financial_identity"][0], "continuity:identity")
+    if identity_contract["bound_mode"] != mode or identity_contract["bound_owner_id"] != meta["owner_id"]:
+        _fail("continuity:identity-binding")
+    if identity_contract["provenance"] == "ROOT":
+        expected_genesis = _digest(GENESIS_DOMAIN, _canonical(scope, "continuity:scope"), authority_digest, identity_contract["identity_digest"])
+        if identity_contract["source_package_digest"] != ZERO_DIGEST or identity_contract["anchor_sequence"] != 0 or identity_contract["anchor_head"] != expected_genesis or identity_contract["genesis_head"] != expected_genesis:
+            _fail("continuity:identity-genesis")
+    else:
+        if identity_contract["source_package_digest"] == ZERO_DIGEST or identity_contract["anchor_sequence"] > sequence:
+            _fail("continuity:identity-anchor")
+        if identity_contract["anchor_sequence"] == 0 and identity_contract["anchor_head"] != identity_contract["genesis_head"]:
+            _fail("continuity:identity-anchor")
+        if identity_contract["anchor_sequence"] > 0:
+            anchor_row = next((row for row in decoded_rows["financial_events"] if row["event_sequence"] == identity_contract["anchor_sequence"]), None)
+            if anchor_row is None or anchor_row["head"] != identity_contract["anchor_head"]:
+                _fail("continuity:identity-history-anchor")
     payload = _package_payload_without_digest(value)
     expected_digest = continuity_package_digest(payload)
     package_digest = value["package_digest"]

@@ -9,6 +9,7 @@ existing guarded wrapper; this process does not invent native or queue measureme
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import math
 from pathlib import Path
@@ -44,6 +45,37 @@ DEFAULT_SAMPLES = 3
 MEASUREMENT_DUE_AT_MS = 4_102_444_800_000  # 2100-01-01T00:00:00Z
 MEASUREMENT_PACK_END_MS = 4_102_531_200_000
 LOCK_PROBE_HOLD_MS = 8
+
+
+class _MeasuredFinancialOwner(FinancialOwner):
+    """Harness-only owner subclass that observes the existing owner write lock."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._actual_lock_records: list[dict[str, float]] = []
+        self._actual_lock_acquisition_failures = 0
+        super().__init__(*args, **kwargs)
+
+    @contextmanager
+    def _write(self):
+        wait_started_ns = time.perf_counter_ns()
+        acquired_ns: int | None = None
+        try:
+            with super()._write() as connection:
+                acquired_ns = time.perf_counter_ns()
+                yield connection
+        except BaseException:
+            if acquired_ns is None:
+                self._actual_lock_acquisition_failures += 1
+            raise
+        finally:
+            if acquired_ns is not None:
+                released_ns = time.perf_counter_ns()
+                self._actual_lock_records.append(
+                    {
+                        "wait_to_acquire_ms": ((acquired_ns - wait_started_ns) / 1_000_000),
+                        "transaction_held_ms": ((released_ns - acquired_ns) / 1_000_000),
+                    }
+                )
 
 
 def _json(value: Any) -> str:
@@ -136,6 +168,23 @@ def _metric_summary(values: Iterable[float]) -> dict[str, float | int]:
         "median_ms": round(statistics.median(ordered), 3),
         "p95_ms": round(ordered[p95_index], 3),
         "max_ms": round(ordered[-1], 3),
+    }
+
+
+def _actual_lock_summary(owners: Iterable[_MeasuredFinancialOwner]) -> dict[str, Any]:
+    records: list[dict[str, float]] = []
+    acquisition_failures = 0
+    for measured_owner in owners:
+        records.extend(measured_owner._actual_lock_records)
+        acquisition_failures += measured_owner._actual_lock_acquisition_failures
+    if not records:
+        raise RuntimeError("actual_lock_measurement_empty")
+    return {
+        "transaction_count": len(records),
+        "successful_acquisitions": len(records),
+        "acquisition_failures": acquisition_failures,
+        "wait_to_acquire_ms": _metric_summary(record["wait_to_acquire_ms"] for record in records),
+        "transaction_held_ms": _metric_summary(record["transaction_held_ms"] for record in records),
     }
 
 
@@ -255,7 +304,7 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
     )
     authority = SyntheticTrustedAuthority()
     total_start = time.perf_counter_ns()
-    owner = FinancialOwner(path=database, config=config, trusted_authority=authority)
+    owner = _MeasuredFinancialOwner(path=database, config=config, trusted_authority=authority)
     pack = _pack(
         state_id=state_id,
         deployment_id=deployment_id,
@@ -314,7 +363,7 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
     source_bytes_before_restore = database.read_bytes()
     test_database = sample_root / "test-continuation.sqlite"
     test_restore_start = time.perf_counter_ns()
-    test_owner = FinancialOwner.restore_test_continuity(
+    test_owner = _MeasuredFinancialOwner.restore_test_continuity(
         package_bytes=package,
         recovered_path=test_database,
         trusted_authority=authority,
@@ -323,7 +372,7 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
     test_restore_ms = _elapsed_ms(test_restore_start)
     test_owner.close()
     test_restart_start = time.perf_counter_ns()
-    reopened_test = FinancialOwner(
+    reopened_test = _MeasuredFinancialOwner(
         path=test_database,
         config=config,
         trusted_authority=authority,
@@ -340,7 +389,7 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
 
     owner.close()
     restart_start = time.perf_counter_ns()
-    reopened = FinancialOwner(path=database, config=config, trusted_authority=authority)
+    reopened = _MeasuredFinancialOwner(path=database, config=config, trusted_authority=authority)
     restart_summary = reopened.summary()
     reopened.verify_integrity()
     restart_ms = _elapsed_ms(restart_start)
@@ -349,6 +398,7 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
     final_storage_bytes = _storage_bytes(database)
     total_ms = _elapsed_ms(total_start)
     table_counts = {str(table): len(rows) for table, rows in package_result["tables"].items()}
+    actual_lock = _actual_lock_summary((owner, test_owner))
     return {
         "schema": SERIES_SCHEMA,
         "size": size,
@@ -372,10 +422,20 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
             "total": total_ms,
         },
         "lock_timing_ms": {
-            "wait_to_acquire": lock_timing["wait_to_acquire_ms"],
-            "transaction_held": lock_timing["transaction_held_ms"],
+            "wait_to_acquire": actual_lock["wait_to_acquire_ms"],
+            "transaction_held": actual_lock["transaction_held_ms"],
         },
         "lock_workload": {
+            "owner_transactions": len(owner._actual_lock_records),
+            "test_continuation_transactions": len(test_owner._actual_lock_records),
+            "transaction_count": actual_lock["transaction_count"],
+            "successful_acquisitions": actual_lock["successful_acquisitions"],
+            "acquisition_failures": actual_lock["acquisition_failures"],
+            "workload": "FinancialOwner._write actual operations",
+        },
+        "synthetic_lock_probe": {
+            "transaction_held_ms": lock_timing["transaction_held_ms"],
+            "wait_to_acquire_ms": lock_timing["wait_to_acquire_ms"],
             "holder_statements": lock_timing["holder_statements"],
             "waiter_attempts": lock_timing["waiter_attempts"],
             "successful_acquisitions": lock_timing["successful_acquisitions"],
@@ -440,15 +500,23 @@ def _aggregate(size: int, samples: list[dict[str, Any]]) -> dict[str, Any]:
         "population_items": size,
         "latency_ms": {field: _metric_summary(sample["latency_ms"][field] for sample in samples) for field in latency_fields},
         "lock_timing_ms": {
-            "wait_to_acquire": _metric_summary(sample["lock_timing_ms"]["wait_to_acquire"] for sample in samples),
-            "transaction_held": _metric_summary(sample["lock_timing_ms"]["transaction_held"] for sample in samples),
+            "wait_to_acquire": _metric_summary(sample["lock_timing_ms"]["wait_to_acquire"]["median_ms"] for sample in samples),
+            "transaction_held": _metric_summary(sample["lock_timing_ms"]["transaction_held"]["median_ms"] for sample in samples),
         },
         "lock_workload": {
             "sample_count": len(samples),
-            "holder_statements": sum(sample["lock_workload"]["holder_statements"] for sample in samples),
-            "waiter_attempts": sum(sample["lock_workload"]["waiter_attempts"] for sample in samples),
+            "owner_transactions": sum(sample["lock_workload"]["owner_transactions"] for sample in samples),
+            "test_continuation_transactions": sum(sample["lock_workload"]["test_continuation_transactions"] for sample in samples),
+            "transaction_count": sum(sample["lock_workload"]["transaction_count"] for sample in samples),
             "successful_acquisitions": sum(sample["lock_workload"]["successful_acquisitions"] for sample in samples),
+            "acquisition_failures": sum(sample["lock_workload"]["acquisition_failures"] for sample in samples),
             "all_source_bytes_unchanged": all(sample["test_restore"]["source_bytes_unchanged"] for sample in samples),
+        },
+        "synthetic_lock_probe": {
+            "sample_count": len(samples),
+            "wait_to_acquire": _metric_summary(sample["synthetic_lock_probe"]["wait_to_acquire_ms"] for sample in samples),
+            "transaction_held": _metric_summary(sample["synthetic_lock_probe"]["transaction_held_ms"] for sample in samples),
+            "successful_acquisitions": sum(sample["synthetic_lock_probe"]["successful_acquisitions"] for sample in samples),
         },
         "test_restore": {
             "mode": "TEST",
@@ -486,7 +554,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("measurement_output_root")
         root.mkdir()
         print(_json({"schema": SERIES_SCHEMA, "type": "limits", "limits": _limits()}))
-        print(_json({"schema": SERIES_SCHEMA, "type": "plan", "sizes": sizes, "warmups_per_size": 1, "samples_per_size": samples_per_size, "native": "PENDING", "queue": "NOT_APPLICABLE", "test_restore_mode": "TEST", "lock_probe": {"hold_target_ms": LOCK_PROBE_HOLD_MS, "waiter_attempts_per_sample": 1, "holder_statements_per_sample": 1}}))
+        print(_json({"schema": SERIES_SCHEMA, "type": "plan", "sizes": sizes, "warmups_per_size": 1, "samples_per_size": samples_per_size, "native": "PENDING", "queue": "NOT_APPLICABLE", "test_restore_mode": "TEST", "actual_lock_workload": "FinancialOwner._write actual operations", "synthetic_lock_probe_diagnostic": {"hold_target_ms": LOCK_PROBE_HOLD_MS, "waiter_attempts_per_sample": 1, "holder_statements_per_sample": 1}}))
         for size in sizes:
             # Warmup is retained but not included in the measured sample distribution.
             warmup = _sample(root, size=size, sample=0)

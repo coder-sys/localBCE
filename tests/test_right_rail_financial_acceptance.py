@@ -7,9 +7,11 @@ module never derives expected balances from owner code or reaches the database t
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import replace
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -30,7 +32,7 @@ from app.right_rail_financial_owner import (
     SyntheticTrustedAuthority,
 )
 from app.right_rail_financial_mirror import FinancialMirror
-from app.right_rail_financial_owner_independent import verify_database, verify_continuity_package
+from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database, verify_continuity_package
 from tests import rightrail_financial_expected_cases as expected
 
 
@@ -660,6 +662,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(test_store)
         test_bytes_after_completion = test_destination.read_bytes()
         test_config = test_store.config
+        roundtrip_package = test_store.export_continuity()
         test_store.close()
         with self.assertRaisesRegex(FinancialIntegrityError, "nonactivating_boundary"):
             FinancialOwner(
@@ -683,6 +686,68 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(reopened_test)
         reopened_test.close()
         self.assertEqual(test_destination.read_bytes(), test_bytes_after_completion)
+
+        roundtrip_destination = self._path("test-roundtrip.sqlite")
+        roundtrip = FinancialOwner.restore_test_continuity(
+            package_bytes=roundtrip_package,
+            recovered_path=roundtrip_destination,
+            trusted_authority=self.authority,
+            clock=_Clock(),
+        )
+        self._assert_verified(roundtrip, package=roundtrip_package)
+        roundtrip.close()
+
+        mode_only = self._path("test-promotion-mode-only.sqlite")
+        mode_only.write_bytes(test_bytes_after_completion)
+        with closing(sqlite3.connect(mode_only, isolation_level=None)) as connection:
+            connection.execute("UPDATE financial_meta SET mode='LIVE' WHERE id=1")
+        with self.assertRaisesRegex(FinancialIntegrityError, "identity"):
+            FinancialOwner(
+                path=mode_only,
+                config=test_config,
+                trusted_authority=self.authority,
+                clock=_Clock(),
+                mode="LIVE",
+                owner_id=owner._TEST_OWNER_ID,
+            )
+        with self.assertRaisesRegex(IndependentFinancialError, "identity"):
+            verify_database(
+                mode_only,
+                expected_config=test_config,
+                expected_authority={
+                    "authority_id": self.authority.authority_id,
+                    "epoch": self.authority.epoch,
+                    "digest": self.authority.digest,
+                },
+                expected_mode="LIVE",
+                expected_owner_id=owner._TEST_OWNER_ID,
+            )
+
+        mode_and_owner = self._path("test-promotion-mode-and-owner.sqlite")
+        mode_and_owner.write_bytes(test_bytes_after_completion)
+        with closing(sqlite3.connect(mode_and_owner, isolation_level=None)) as connection:
+            connection.execute("UPDATE financial_meta SET mode='LIVE',owner_id='financial-owner-v1' WHERE id=1")
+        with self.assertRaisesRegex(FinancialIntegrityError, "identity"):
+            FinancialOwner(
+                path=mode_and_owner,
+                config=test_config,
+                trusted_authority=self.authority,
+                clock=_Clock(),
+                mode="LIVE",
+                owner_id="financial-owner-v1",
+            )
+        with self.assertRaisesRegex(IndependentFinancialError, "identity"):
+            verify_database(
+                mode_and_owner,
+                expected_config=test_config,
+                expected_authority={
+                    "authority_id": self.authority.authority_id,
+                    "epoch": self.authority.epoch,
+                    "digest": self.authority.digest,
+                },
+                expected_mode="LIVE",
+                expected_owner_id="financial-owner-v1",
+            )
         self.assertEqual(store.path.read_bytes(), source_before_restore)
 
     def test_case_12_scope_oversize_and_egress_boundaries(self) -> None:

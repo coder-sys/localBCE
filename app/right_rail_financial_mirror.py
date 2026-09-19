@@ -23,7 +23,7 @@ from app.right_rail_financial_owner import (
 
 
 MIRROR_SCHEMA: Final[str] = "RR/FINANCIAL/MIRROR/v1"
-CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v3"
+CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v4"
 MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 MAX_LIST_PAGE: Final[int] = 100
 MAX_DETAIL_PAGE: Final[int] = 200
@@ -476,7 +476,7 @@ class FinancialMirror:
             "period_id": self.owner.config.period_id,
             "currency": self.owner.config.currency,
         }
-        if package.get("schema") != CONTINUITY_SCHEMA or package.get("version") != 3:
+        if package.get("schema") != CONTINUITY_SCHEMA or package.get("version") != 4:
             _fail(FinancialMirrorContinuityError, "continuity_package_schema")
         if package.get("scope") != expected_scope:
             _fail(FinancialMirrorContinuityError, "continuity_scope_mismatch")

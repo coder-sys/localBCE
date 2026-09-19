@@ -11,48 +11,47 @@ Rejected architectures are recorded separately and are not milestones.
 
 ## Active roadmap — financial workflow 2026-09-19
 
-The source/docs batch started from the integration branch
+The committed parent before this follow-on is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
-`4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. All evidence is synthetic and
-nonactivating. The preceding source/docs checkpoint is commit
-`1effa625800c778367579416cb15a07555264754`, tree
-`85bd334d002446c598cde41dd61283736c1e006e`. The follow-on source/test/harness
-implementation is committed at `691d3965f37e935889782215415368d83a9b0b25`,
-tree `b50853d20935e28616e87e51c478ee398d4e3f3c`; the current boundary is
-post-commit review. The persisted owner/Continuity candidate is v3,
-while retained v2/v3 measurement artifacts remain immutable.
+`f3f426eec114aa91bd4ea06f8d5635234039bf91`, tree
+`0b4a626e0aafbdd86c120b64b0613ec760e769e4`. All evidence is synthetic and
+nonactivating. The persisted owner/Continuity candidate is v4:
+`RR/FINANCIAL/OWNER/v4` and `RR/FINANCIAL/CONTINUITY/v4`. Its immutable
+`financial_identity` row binds restore provenance, mode/owner identity, source
+package digest, genesis, and history anchor; the owner and independent checker
+reject direct TEST-to-LIVE metadata promotion. Retained v2/v3 and prior v4
+measurement artifacts remain immutable historical evidence.
 
 1. **A — Documentation and pins.** The maintained Markdown records the current
-   v3 identity, ownership, guard, TEST/non-live Continuity boundary, measured
-   evidence, historical measurement boundary, and protected paths. The
-   source/docs/harness commit is complete; this is not a production acceptance
-   record.
+   v4 identity, ownership, guard, TEST/non-live Continuity boundary, actual
+   lock-workload evidence, historical measurement boundary, and protected
+   paths. This is not a production acceptance record.
 2. **B — Focused seams and source correction.** The four initial correctness
    blockers are addressed in the owner, independent checker, Mirror/CLI, and
-   acceptance fixtures. Event header integrity, population lifecycle order, and
-   persisted imported-count binding are now explicit invariants.
+   acceptance fixtures. Event header integrity, population lifecycle order,
+   persisted imported-count binding, immutable restore provenance, and
+   history-anchored TEST identity are explicit invariants.
 3. **C — Guarded affected verification.** The final guard ran the focused
    harness compile and affected source suite. The exact source result is
-   `Ran 46 tests in 14.878s` followed by `OK`; the raw stderr log is retained.
+   `Ran 46 tests in 14.686s` followed by `OK`; the raw stderr log is retained.
 4. **D — Same-owner Mirror and Continuity.** Default Continuity restore remains
    SHADOW/read-only. The explicit TEST restore has fixed identity, cannot open
    as LIVE, keeps dispatch/egress disabled, and Case 11 reaches H_P3_REPLACED
    after restart without changing source bytes or redispatching a duplicate
    action identity.
-5. **E — Candidate measurement and review.** The guarded v4 series completed at
-   `work/financial-measurements-v4-r1` with 3 measured samples plus 1 warmup at
+5. **E — Candidate measurement and review.** The guarded v5 series completed at
+   `work/financial-measurements-v5-r1` with 3 measured samples plus 1 warmup at
    each of sizes 5, 10, and 20, 12 owner databases and 12 TEST restore
-   databases. Total-ms medians were 329.150, 440.241, and 590.361 ms;
-   lock wait-to-acquire/transaction-held medians were 20.024/9.507,
-   15.852/9.710, and 15.148/9.661 ms. Each measured probe used one holder,
-   one waiter, and one successful acquisition; all 9 measured TEST restores
-   left source bytes unchanged. This is a bounded observation, not an SLA.
-   Native metrics remain pending and queue wait/age is not applicable. No
-   separate older financial suite exists beyond the three named RightRail
-   financial test modules; unrelated repository suites were not in scope.
-   Whole-system/native/Lean, independent-audit, and production gates remain
-   open. The earlier v2/v3 results and measurements are historical only.
+   databases. Actual `_write()` wait/held medians were 2.019/7.188,
+   1.815/6.052, and 1.708/6.597 ms; actual transaction totals were 36, 54,
+   and 90 with zero acquisition failures. All 9 measured TEST restores left
+   source bytes unchanged. The synthetic contention diagnostic remains
+   separately labeled and receives no actual-workload credit. This is a bounded
+   observation, not an SLA. Native metrics remain pending and queue wait/age
+   is not applicable. No separate older financial suite exists beyond the three
+   named RightRail financial test modules; unrelated repository suites were not
+   in scope. Whole-system/native/Lean, independent-audit, and production gates
+   remain open. Earlier v2/v3/v4 results and measurements are historical only.
 
 The first-state fixture is fixed at twenty hospitals and $1,000,000 total: H is $100,000 and the
 other nineteen total $900,000. Hand-derived expected constants are required. The financial owner

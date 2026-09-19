@@ -2,77 +2,107 @@
 
 Updated: 2026-09-19
 
-## Current verified snapshot — follow-on v3 source/test batch
+## Current verified snapshot — follow-on v4 identity-binding batch
 
-The documentation/source batch started from the integration checkout
+The current coherent batch is in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
-branch `rightrail-financial-workflow-20260913`, HEAD
-`de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
-`4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. Tracked status was clean. The
-only untracked paths were the two driver-supplied generated executables listed
-below; they are not touched or staged in this batch.
+branch `rightrail-financial-workflow-20260913`. Its committed parent before
+the batch is HEAD `f3f426eec114aa91bd4ea06f8d5635234039bf91`, tree
+`0b4a626e0aafbdd86c120b64b0613ec760e769e4`. The batch has eight modified
+source/test/harness paths plus the five maintained Markdown paths; there are no
+other tracked changes. The only untracked paths are the two driver-supplied
+generated executables listed below; they are not touched or staged.
 
-The preceding source/docs checkpoint is parent commit
-`1effa625800c778367579416cb15a07555264754`, tree
-`85bd334d002446c598cde41dd61283736c1e006e`. The follow-on source/test/harness
-checkpoint is commit `691d3965f37e935889782215415368d83a9b0b25`, tree
-`b50853d20935e28616e87e51c478ee398d4e3f3c`; later documentation-only
-corrections do not alter that source checkpoint. The persisted candidate contract
-is `RR/FINANCIAL/OWNER/v3` with Continuity
-`RR/FINANCIAL/CONTINUITY/v3`. Event IDs/heads bind before/after revisions and
-commit time; the independent checker reconstructs population lifecycle order
-and binds reconstructed imported counts to persisted `population_imports` state;
-omitted report/evidence timestamps reuse stored identity fields.
+The persisted candidate contract in this batch is `RR/FINANCIAL/OWNER/v4`
+with Continuity `RR/FINANCIAL/CONTINUITY/v4`. The new immutable
+`financial_identity` row binds ROOT or CONTINUITY_RESTORE provenance, mode,
+owner, anchor sequence/head, genesis head, source package digest, and identity
+digest. The identity digest is included in genesis; owner reopen and the
+independent checker bind `financial_meta` to that immutable record and to the
+history anchor. Direct TEST-to-LIVE metadata promotion is therefore rejected
+on both verification paths. The independent checker still reconstructs
+population lifecycle order and binds reconstructed imported counts to persisted
+`population_imports` state; omitted report/evidence timestamps reuse stored
+identity fields.
 
-The final guarded source/test result is exactly:
+The final guarded compile and source/test results are exactly:
 
 ```text
-Ran 46 tests in 14.878s
+CHILD_EXIT_STATUS label=Command exit=0
+LIVE_PHYSICAL_SUMMARY label=Command samples=2 min_free_bytes=5046898688 reserve_floor_bytes=2576980378 peak_working_set_bytes=34312192 peak_private_bytes=15306752
+CLEANUP=PASS label=Command owned_process_tree=empty
+MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+
+..............................................
+----------------------------------------------------------------------
+Ran 46 tests in 14.686s
+
 OK
+CHILD_EXIT_STATUS label=Command exit=0
+LIVE_PHYSICAL_SUMMARY label=Command samples=23 min_free_bytes=4536680448 reserve_floor_bytes=2576980378 peak_working_set_bytes=48504832 peak_private_bytes=25231360
+CLEANUP=PASS label=Command owned_process_tree=empty
+MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
 ```
 
-The final blocker guard exited `0`; its resource summary was
-`min_free_bytes=4072607744`, `reserve_floor_bytes=2576980378`,
-`peak_working_set_bytes=51580928`, `peak_private_bytes=27623424`,
-`CLEANUP=PASS`, and `MUTEX=RELEASED`. The complete stderr is retained in
-`guarded-command-financial-followon-blockers-r10-final.stderr.log` (151 bytes,
-SHA-256
-`FE4014ADB6EC23EFAAE425078E8C89202273C5EA88296A0D00C69CFB815C0AB1`).
+The final test child stderr is retained in
+`guarded-command-financial-identity-v4-tests-r2.stderr.log` (151 bytes, SHA-256
+`E7E53732963E56690622B955BFCD6D4712F435454A2CC6D58FFB0D03D1CD5527`); its
+stdout is empty. The final compile child stdout and stderr are both empty
+(SHA-256 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`).
+
+One earlier guarded test attempt reached the child but failed two existing
+independent-checker tamper assertions because their rehash helpers still used
+the pre-v4 genesis formula. Raw stderr is retained in
+`guarded-command-financial-identity-v4-tests-r1.stderr.log` (4347 bytes, SHA-256
+`173A664EBD62801492EFCAA2C98F96B86A931B2649BD54D4E87DED0312C1F9C2`); it
+reported `history:predecessor` instead of the expected lifecycle errors. The
+helpers were corrected to use the persisted v4 identity digest, and the
+affected compile/test gates were rerun. No test was skipped.
 
 The follow-on measurement series completed at
-`work/financial-measurements-v4-r1`: 3 measured samples plus 1 warmup at each
-of sizes 5, 10, and 20, 12 owner SQLite databases and 12 TEST restore
-databases. All measured owner and TEST restarts independently verified; all 9
-measured TEST restores left source bytes unchanged. Total-ms medians were
-329.150, 440.241, and 590.361 ms. Lock wait-to-acquire/transaction-held
-medians were 20.024/9.507, 15.852/9.710, and 15.148/9.661 ms for sizes 5,
-10, and 20. Each measured sample used one holder statement, one waiter
-attempt, and one successful acquisition. Native metrics remain pending and
-queue wait/age is not applicable. The measurement plan was 3 retained samples
-plus 1 warmup per size; the output contains 12 owner and 12 TEST databases.
+`work/financial-measurements-v5-r1`: 3 measured samples plus 1 warmup at each
+of sizes 5, 10, and 20. The output contains 24 files: 12 owner SQLite
+databases and 12 TEST-continuation databases; the file-hash-list SHA-256 is
+`41B058C229D0AC2DA86A160BFC33EF41FC225891D5725E19B7A4D2BBA37186F0`.
+Every measured sample reported v4 integrity VERIFIED, TEST restore/restart
+VERIFIED, unchanged source bytes, and zero actual lock-acquisition failures.
 
-The measurement guard exited `0` with `min_free_bytes=3716636672`,
-`reserve_floor_bytes=2576980378`, `peak_working_set_bytes=47734784`,
-`peak_private_bytes=26390528`, `CLEANUP=PASS`, and `MUTEX=RELEASED`.
-Its stdout log is 35051 bytes, SHA-256
-`582E0328856AC75634E71C150AF6200300314400D8E54399A08EF0FC4D9565C3`;
+| size | actual `_write()` transactions | owner tx | TEST tx | wait median ms | held median ms |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 5 | 36 | 33 | 3 | 2.019 | 7.188 |
+| 10 | 54 | 51 | 3 | 1.815 | 6.052 |
+| 20 | 90 | 87 | 3 | 1.708 | 6.597 |
+
+All actual acquisitions succeeded. The retained synthetic contention diagnostic
+is separate: its wait/held medians were 14.048/9.755, 16.045/9.706, and
+13.492/9.626 ms for sizes 5, 10, and 20, respectively; it is not the actual
+workload metric. Actual total-ms medians were 374.124, 388.860, and 579.820 ms.
+Native metrics remain pending and queue wait/age is not applicable.
+
+The measurement guard exited `0` with
+`min_free_bytes=4819296256`, `reserve_floor_bytes=2576980378`,
+`peak_working_set_bytes=45633536`, `peak_private_bytes=22507520`,
+`CLEANUP=PASS`, and `MUTEX=RELEASED`. Its stdout log is 41492 bytes, SHA-256
+`F9E5FD43E40E789961029EF20E47AA2352A9ED9DA406A0723B9672BBCB621FB2`;
 stderr is 0 bytes, SHA-256
 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
 
 The retained v2 measurement databases/logs under
 `work/financial-measurements-20260919-r1` remain immutable historical v2
 evidence. The earlier v2 result (`Ran 29 tests in 7.582s`, `OK`) and one
-20-item observation of 379.703 ms are not v3 evidence. No numerical financial
+20-item observation of 379.703 ms are not current v4 evidence. No numerical financial
 SLA is supplied.
 
 The four initial source blockers and the follow-on P1 checks are covered by the
 guarded run; this is source-local synthetic evidence, not final acceptance or
 qualification. Case 11 verifies SHADOW read-only behavior and a separate
 TEST-only recovered owner through H_P3_REPLACED, including recovered restart,
-duplicate action identity, disabled dispatch/egress, and unchanged source
-bytes. Separate older financial suites were not present beyond the three named
-RightRail financial test modules, so no additional older financial suite was
-run; unrelated repository suites remain outside this bounded verification.
+duplicate action identity, disabled dispatch/egress, unchanged source bytes,
+round-trip TEST restore, and rejection of both direct mode-only and mode-plus-
+owner TEST-to-LIVE metadata promotion. Separate older financial suites were
+not present beyond the three named RightRail financial test modules, so no
+additional older financial suite was run; unrelated repository suites remain
+outside this bounded verification.
 Current claims remain synthetic and nonactivating:
 `proofSuiteId=null`, `production_usable=false`, `activation=false`,
 `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. There is no real PHI, credential,

@@ -59,9 +59,9 @@ def _fail(error_type: type[FinancialError], code: str) -> None:
     raise error
 
 
-_SCHEMA_VERSION: Final[int] = 3
-_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v3"
-_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v3"
+_SCHEMA_VERSION: Final[int] = 4
+_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v4"
+_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v4"
 _CURRENCY: Final[str] = "USD"
 _MAX_CENTS: Final[int] = (1 << 63) - 1
 _MAX_ROWS: Final[int] = 10_000
@@ -109,14 +109,17 @@ _CONTROL_PACK_POLICIES: Final[dict[tuple[str, str], tuple[tuple[str, ...], str, 
 }
 _EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
 _HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
-_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v2\x00"
+_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v4\x00"
 _EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 _ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 _IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
-_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v3\x00"
+_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v4\x00"
+_IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
+_ZERO_DIGEST: Final[bytes] = b"\x00" * 64
 
 _TABLES: Final[frozenset[str]] = frozenset(
     {
+        "financial_identity",
         "financial_meta",
         "control_packs",
         "population_imports",
@@ -136,6 +139,10 @@ _TABLES: Final[frozenset[str]] = frozenset(
 )
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
+    "financial_identity": (
+        "id", "schema_version", "provenance", "bound_mode", "bound_owner_id",
+        "anchor_sequence", "anchor_head", "genesis_head", "source_package_digest", "identity_digest",
+    ),
     "financial_meta": (
         "id", "schema_version", "schema", "state_id", "deployment_id", "program_id",
         "period_id", "currency", "sequence", "history_head", "continuity_epoch",
@@ -281,6 +288,36 @@ def _hex(value: bytes) -> str:
     return value.hex().upper()
 
 
+def _identity_digest(
+    *,
+    provenance: str,
+    bound_mode: str,
+    bound_owner_id: str,
+    anchor_sequence: int,
+    source_package_digest: bytes,
+) -> bytes:
+    if provenance not in {"ROOT", "CONTINUITY_RESTORE"}:
+        _fail(FinancialIntegrityError, "identity_provenance")
+    if bound_mode not in _MODES:
+        _fail(FinancialIntegrityError, "identity_mode")
+    _id(bound_owner_id, "identity_owner_id")
+    if type(anchor_sequence) is not int or not 0 <= anchor_sequence <= _MAX_ROWS:
+        _fail(FinancialIntegrityError, "identity_anchor_sequence")
+    source_package_digest = _blob(source_package_digest, 64, "identity_source_package_digest")
+    return _digest(
+        _IDENTITY_DOMAIN,
+        _canonical(
+            {
+                "anchor_sequence": anchor_sequence,
+                "bound_mode": bound_mode,
+                "bound_owner_id": bound_owner_id,
+                "provenance": provenance,
+                "source_package_digest": _hex(source_package_digest),
+            }
+        ),
+    )
+
+
 def _blob(value: object, size: int, label: str) -> bytes:
     if type(value) is not bytes or len(value) != size:
         _fail(FinancialInputError, label)
@@ -291,6 +328,61 @@ def _time(value: object, label: str) -> int:
     if type(value) is not int or value < 0 or value >= 2**63:
         _fail(FinancialInputError, label)
     return value
+
+
+def _identity_record(
+    value: Mapping[str, Any],
+    *,
+    error_type: type[FinancialError] = FinancialIntegrityError,
+    code_prefix: str = "identity",
+) -> dict[str, Any]:
+    fields = set(_TABLE_COLUMNS["financial_identity"])
+    if not isinstance(value, Mapping) or set(value) != fields:
+        _fail(error_type, f"{code_prefix}:shape")
+    if value["id"] != 1:
+        _fail(error_type, f"{code_prefix}:id")
+    schema_version = value["schema_version"]
+    if type(schema_version) is not int or schema_version != _SCHEMA_VERSION:
+        _fail(error_type, f"{code_prefix}:schema")
+    provenance = value["provenance"]
+    bound_mode = value["bound_mode"]
+    bound_owner_id = value["bound_owner_id"]
+    if provenance not in {"ROOT", "CONTINUITY_RESTORE"}:
+        _fail(error_type, f"{code_prefix}:provenance")
+    if bound_mode not in _MODES:
+        _fail(error_type, f"{code_prefix}:mode")
+    if type(bound_owner_id) is not str or _ID.fullmatch(bound_owner_id) is None:
+        _fail(error_type, f"{code_prefix}:owner")
+    anchor_sequence = value["anchor_sequence"]
+    if type(anchor_sequence) is not int or not 0 <= anchor_sequence <= _MAX_ROWS:
+        _fail(error_type, f"{code_prefix}:anchor-sequence")
+    byte_values: dict[str, bytes] = {}
+    for field in ("anchor_head", "genesis_head", "source_package_digest", "identity_digest"):
+        raw = value[field]
+        if type(raw) is not bytes or len(raw) != 64:
+            _fail(error_type, f"{code_prefix}:{field}")
+        byte_values[field] = bytes(raw)
+    expected_digest = _identity_digest(
+        provenance=provenance,
+        bound_mode=bound_mode,
+        bound_owner_id=bound_owner_id,
+        anchor_sequence=anchor_sequence,
+        source_package_digest=byte_values["source_package_digest"],
+    )
+    if byte_values["identity_digest"] != expected_digest:
+        _fail(error_type, f"{code_prefix}:digest")
+    return {
+        "id": value["id"],
+        "schema_version": schema_version,
+        "provenance": provenance,
+        "bound_mode": bound_mode,
+        "bound_owner_id": bound_owner_id,
+        "anchor_sequence": anchor_sequence,
+        "anchor_head": byte_values["anchor_head"],
+        "genesis_head": byte_values["genesis_head"],
+        "source_package_digest": byte_values["source_package_digest"],
+        "identity_digest": byte_values["identity_digest"],
+    }
 
 
 class FinancialClock(Protocol):
@@ -579,6 +671,18 @@ class FinancialOwnerConfig:
 def _sql_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
+        CREATE TABLE financial_identity (
+            id INTEGER PRIMARY KEY CHECK (id=1),
+            schema_version INTEGER NOT NULL,
+            provenance TEXT NOT NULL CHECK (provenance IN ('ROOT','CONTINUITY_RESTORE')),
+            bound_mode TEXT NOT NULL CHECK (bound_mode IN ('LIVE','SHADOW','TEST')),
+            bound_owner_id TEXT NOT NULL,
+            anchor_sequence INTEGER NOT NULL CHECK (anchor_sequence>=0),
+            anchor_head BLOB NOT NULL CHECK (length(anchor_head)=64),
+            genesis_head BLOB NOT NULL CHECK (length(genesis_head)=64),
+            source_package_digest BLOB NOT NULL CHECK (length(source_package_digest)=64),
+            identity_digest BLOB NOT NULL CHECK (length(identity_digest)=64)
+        );
         CREATE TABLE financial_meta (
             id INTEGER PRIMARY KEY CHECK (id=1),
             schema_version INTEGER NOT NULL,
@@ -812,6 +916,12 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
         CREATE TRIGGER evidence_record_immutable
         BEFORE UPDATE OF evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,content_digest,record_digest,amount_cents,reversal_of,supersedes ON evidence
         BEGIN SELECT RAISE(ABORT,'evidence_record_immutable'); END;
+        CREATE TRIGGER financial_identity_update_immutable
+        BEFORE UPDATE OF schema_version,provenance,bound_mode,bound_owner_id,anchor_sequence,anchor_head,genesis_head,source_package_digest,identity_digest ON financial_identity
+        BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END;
+        CREATE TRIGGER financial_identity_delete_immutable
+        BEFORE DELETE ON financial_identity
+        BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END;
         """
     )
 
@@ -828,6 +938,7 @@ class FinancialOwner:
         clock: FinancialClock | None = None,
         mode: str = "LIVE",
         owner_id: str = "financial-owner-v1",
+        _identity_contract: Mapping[str, Any] | None = None,
     ) -> None:
         if not isinstance(path, Path) or not path.parent.is_dir() or path.is_symlink():
             _fail(FinancialIntegrityError, "owner_path")
@@ -848,16 +959,54 @@ class FinancialOwner:
         existed = path.exists()
         if existed and path.stat().st_size == 0:
             _fail(FinancialIntegrityError, "empty_database")
+        if existed and _identity_contract is not None:
+            _fail(FinancialIntegrityError, "identity_contract_destination")
         if not existed:
+            if _identity_contract is None:
+                identity_digest = _identity_digest(
+                    provenance="ROOT",
+                    bound_mode=mode,
+                    bound_owner_id=self.owner_id,
+                    anchor_sequence=0,
+                    source_package_digest=_ZERO_DIGEST,
+                )
+                genesis = _digest(_GENESIS_DOMAIN, config.canonical_bytes, trusted_authority.digest, identity_digest)
+                identity = {
+                    "id": 1,
+                    "schema_version": _SCHEMA_VERSION,
+                    "provenance": "ROOT",
+                    "bound_mode": mode,
+                    "bound_owner_id": self.owner_id,
+                    "anchor_sequence": 0,
+                    "anchor_head": genesis,
+                    "genesis_head": genesis,
+                    "source_package_digest": _ZERO_DIGEST,
+                    "identity_digest": identity_digest,
+                }
+                initial_sequence = 0
+                initial_history_head = genesis
+            else:
+                identity = _identity_record(_identity_contract, code_prefix="identity_contract")
+                if identity["provenance"] != "CONTINUITY_RESTORE" or identity["bound_mode"] != mode or identity["bound_owner_id"] != self.owner_id:
+                    _fail(FinancialIntegrityError, "identity_contract_binding")
+                if identity["source_package_digest"] == _ZERO_DIGEST:
+                    _fail(FinancialIntegrityError, "identity_contract_source")
+                initial_sequence = int(identity["anchor_sequence"])
+                initial_history_head = bytes(identity["anchor_head"])
             with closing(self._connect()) as connection:
                 _sql_schema(connection)
-                genesis = _digest(_GENESIS_DOMAIN, config.canonical_bytes, trusted_authority.digest)
                 connection.execute(
                     "INSERT INTO financial_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (1, _SCHEMA_VERSION, _SCHEMA, config.state_id, config.deployment_id, config.program_id, config.period_id, config.currency, 0, genesis, 1, 0, 0, trusted_authority.authority_id, trusted_authority.epoch, trusted_authority.digest, mode, self.owner_id),
+                    (1, _SCHEMA_VERSION, _SCHEMA, config.state_id, config.deployment_id, config.program_id, config.period_id, config.currency, initial_sequence, initial_history_head, 1, 0, 0, trusted_authority.authority_id, trusted_authority.epoch, trusted_authority.digest, mode, self.owner_id),
+                )
+                identity_columns = _TABLE_COLUMNS["financial_identity"]
+                connection.execute(
+                    f"INSERT INTO financial_identity ({','.join(identity_columns)}) VALUES ({','.join('?' for _ in identity_columns)})",
+                    tuple(identity[column] for column in identity_columns),
                 )
                 connection.commit()
-        self._verify_open_identity()
+        if _identity_contract is None:
+            self._verify_open_identity()
 
     def _connect(self) -> sqlite3.Connection:
         try:
@@ -887,6 +1036,39 @@ class FinancialOwner:
                     _fail(FinancialIntegrityError, "owner_identity")
                 if (str(row["trusted_authority_id"]), int(row["trusted_authority_epoch"]), bytes(row["trusted_authority_digest"])) != (self.trusted_authority.authority_id, self.trusted_authority.epoch, self.trusted_authority.digest):
                     _fail(FinancialAuthorityError, "trusted_authority_stale")
+                identity_rows = connection.execute("SELECT * FROM financial_identity WHERE id=1").fetchall()
+                if len(identity_rows) != 1:
+                    _fail(FinancialIntegrityError, "identity_cardinality")
+                identity_row = identity_rows[0]
+                identity = _identity_record({column: identity_row[column] for column in _TABLE_COLUMNS["financial_identity"]})
+                if identity["bound_mode"] != str(row["mode"]) or identity["bound_owner_id"] != str(row["owner_id"]):
+                    _fail(FinancialIntegrityError, "identity_binding")
+                if identity["provenance"] == "ROOT":
+                    expected_genesis = _digest(_GENESIS_DOMAIN, self.config.canonical_bytes, self.trusted_authority.digest, identity["identity_digest"])
+                    if identity["source_package_digest"] != _ZERO_DIGEST or identity["anchor_sequence"] != 0 or identity["anchor_head"] != expected_genesis or identity["genesis_head"] != expected_genesis:
+                        _fail(FinancialIntegrityError, "identity_genesis")
+                else:
+                    if identity["source_package_digest"] == _ZERO_DIGEST or identity["anchor_sequence"] > int(row["sequence"]):
+                        _fail(FinancialIntegrityError, "identity_anchor")
+                    if identity["anchor_sequence"] == 0:
+                        if identity["anchor_head"] != identity["genesis_head"]:
+                            _fail(FinancialIntegrityError, "identity_anchor")
+                    else:
+                        anchor = connection.execute(
+                            "SELECT head FROM financial_events WHERE event_sequence=?",
+                            (identity["anchor_sequence"],),
+                        ).fetchone()
+                        if anchor is None or bytes(anchor["head"]) != identity["anchor_head"]:
+                            _fail(FinancialIntegrityError, "identity_history_anchor")
+                if int(row["sequence"]) == 0:
+                    if bytes(row["history_head"]) != identity["genesis_head"]:
+                        _fail(FinancialIntegrityError, "identity_history_head")
+                else:
+                    first_event = connection.execute(
+                        "SELECT previous_head FROM financial_events WHERE event_sequence=1",
+                    ).fetchone()
+                    if first_event is None or bytes(first_event["previous_head"]) != identity["genesis_head"]:
+                        _fail(FinancialIntegrityError, "identity_history_genesis")
         except sqlite3.DatabaseError:
             _fail(FinancialIntegrityError, "schema_read")
 
@@ -2004,7 +2186,7 @@ class FinancialOwner:
         }
         if set(package) != required:
             _fail(FinancialContinuityError, "continuity_package_shape")
-        if package["schema"] != _CONTINUITY_SCHEMA or package["version"] != 3:
+        if package["schema"] != _CONTINUITY_SCHEMA or package["version"] != 4:
             _fail(FinancialContinuityError, "continuity_package_schema")
         scope = package["scope"]
         if type(scope) is not dict or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
@@ -2053,6 +2235,33 @@ class FinancialOwner:
                     _fail(FinancialContinuityError, "continuity_package_row")
                 for value in row.values():
                     cls._import_value(value)
+        identity_rows = tables["financial_identity"]
+        if len(identity_rows) != 1:
+            _fail(FinancialContinuityError, "continuity_identity_cardinality")
+        identity_raw = {column: cls._import_value(identity_rows[0][column]) for column in _TABLE_COLUMNS["financial_identity"]}
+        identity = _identity_record(identity_raw, error_type=FinancialContinuityError, code_prefix="continuity_identity")
+        if identity["id"] != 1:
+            _fail(FinancialContinuityError, "continuity_identity_id")
+        meta_rows = tables["financial_meta"]
+        if len(meta_rows) != 1:
+            _fail(FinancialContinuityError, "continuity_meta_rows")
+        meta_row = {column: cls._import_value(meta_rows[0][column]) for column in _TABLE_COLUMNS["financial_meta"]}
+        if identity["bound_mode"] != package["mode"] or identity["bound_mode"] != meta_row["mode"] or identity["bound_owner_id"] != meta_row["owner_id"]:
+            _fail(FinancialContinuityError, "continuity_identity_binding")
+        if identity["provenance"] == "ROOT":
+            expected_genesis = _digest(_GENESIS_DOMAIN, _canonical(scope), authority_digest, identity["identity_digest"])
+            if identity["source_package_digest"] != _ZERO_DIGEST or identity["anchor_sequence"] != 0 or identity["anchor_head"] != expected_genesis or identity["genesis_head"] != expected_genesis:
+                _fail(FinancialContinuityError, "continuity_identity_genesis")
+        else:
+            if identity["source_package_digest"] == _ZERO_DIGEST or identity["anchor_sequence"] > package["sequence"]:
+                _fail(FinancialContinuityError, "continuity_identity_anchor")
+            if identity["anchor_sequence"] == 0:
+                if identity["anchor_head"] != identity["genesis_head"]:
+                    _fail(FinancialContinuityError, "continuity_identity_anchor")
+            else:
+                anchor_row = next((row for row in tables["financial_events"] if row["event_sequence"] == identity["anchor_sequence"]), None)
+                if anchor_row is None or cls._import_value(anchor_row["head"]) != identity["anchor_head"]:
+                    _fail(FinancialContinuityError, "continuity_identity_history_anchor")
         digest = package["package_digest"]
         body = dict(package)
         del body["package_digest"]
@@ -2087,7 +2296,7 @@ class FinancialOwner:
             }
             body: dict[str, Any] = {
                 "schema": _CONTINUITY_SCHEMA,
-                "version": 3,
+                "version": 4,
                 "scope": scope,
                 "authority": {"authority_id": self.trusted_authority.authority_id, "epoch": self.trusted_authority.epoch, "digest": _hex(self.trusted_authority.digest)},
                 "continuity_epoch": int(meta["continuity_epoch"]),
@@ -2130,7 +2339,41 @@ class FinancialOwner:
         config_map = package["scope"]
         config = FinancialOwnerConfig(state_id=str(config_map["state_id"]), deployment_id=str(config_map["deployment_id"]), program_id=str(config_map["program_id"]), period_id=str(config_map["period_id"]), currency=str(config_map["currency"]))
         restored_owner_id = _SHADOW_OWNER_ID if restore_mode == "SHADOW" else _TEST_OWNER_ID
-        owner = cls(path=recovered_path, config=config, trusted_authority=trusted_authority, clock=clock, mode=restore_mode, owner_id=restored_owner_id)
+        source_identity_rows = package["tables"]["financial_identity"]
+        if len(source_identity_rows) != 1:
+            _fail(FinancialContinuityError, "continuity_identity_rows")
+        source_identity = _identity_record(
+            {column: cls._import_value(source_identity_rows[0][column]) for column in _TABLE_COLUMNS["financial_identity"]},
+            error_type=FinancialContinuityError,
+            code_prefix="continuity_identity",
+        )
+        identity_contract = {
+            "id": 1,
+            "schema_version": _SCHEMA_VERSION,
+            "provenance": "CONTINUITY_RESTORE",
+            "bound_mode": restore_mode,
+            "bound_owner_id": restored_owner_id,
+            "anchor_sequence": int(package["sequence"]),
+            "anchor_head": bytes.fromhex(str(package["history_head"])),
+            "genesis_head": bytes(source_identity["genesis_head"]),
+            "source_package_digest": bytes.fromhex(str(package["package_digest"])),
+            "identity_digest": _identity_digest(
+                provenance="CONTINUITY_RESTORE",
+                bound_mode=restore_mode,
+                bound_owner_id=restored_owner_id,
+                anchor_sequence=int(package["sequence"]),
+                source_package_digest=bytes.fromhex(str(package["package_digest"])),
+            ),
+        }
+        owner = cls(
+            path=recovered_path,
+            config=config,
+            trusted_authority=trusted_authority,
+            clock=clock,
+            mode=restore_mode,
+            owner_id=restored_owner_id,
+            _identity_contract=identity_contract,
+        )
         insertion_order = ["control_packs", "population_imports", "population_items", "obligations", "evidence", "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox", "financial_events", "financial_conflicts", "evaluations"]
         with owner._write() as connection:
             for table in insertion_order:
