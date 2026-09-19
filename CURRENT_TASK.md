@@ -1,64 +1,80 @@
 # RightRail current task
 
-Updated: 2026-09-13
+Updated: 2026-09-19
 
-## Financial workflow A–E — active bounded assignment
+## Financial workflow — current bounded objective
 
 Work only in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
-branch `rightrail-financial-workflow-20260913`. The verified baseline is HEAD
-`be712f56117ee71f2f2477f139a9894a209a2985`, tree
-`11191daf7d1604969649262300efb6a62b25fcff`, parent
-`1306e38901b73790dfb2a973b4ac44daf2ff6869`. Before the documentation pass, tracked status was
-clean and only driver-supplied `build-performance/` was untracked.
+branch `rightrail-financial-workflow-20260913`. The verified input identity at
+the start of this documentation batch was HEAD
+`de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
+`4ea7838728ba1322d2a50edb5ede0c3deedc3a97`; tracked status was clean and the
+only untracked paths were the two generated executables recorded in `STATE.md`.
 
 The assignment request SHA-256 is
-`54F95E47140F7EC6C082F5EDD2D007C91BAB45B4F3E809EE7CE5FD3170FA4033`. The reference PDF is
-24 pages, SHA-256 `6F8D5201DEDDA81644901FA2E574A0CDCF560EFF61878DBB72C48E159EAB730C`.
+`54F95E47140F7EC6C082F5EDD2D007C91BAB45B4F3E809EE7CE5FD3170FA4033`. The
+reference PDF is 24 pages, SHA-256
+`6F8D5201DEDDA81644901FA2E574A0CDCF560EFF61878DBB72C48E159EAB730C`.
 
-### Objective
+The objective remains one coherent, synthetic, nonactivating responsibility:
+State Control Pack, Blind Ledger financial owner, same-owner Mirror, bounded
+shadow Continuity State, and deferred Switch. The fixed fixture is twenty
+hospitals and $1,000,000 total; H is owed $100,000 and the other nineteen total
+$900,000. Expected cents and branch answers are manually derived constants.
 
-Implement one coherent, synthetic, nonactivating financial responsibility with five logical parts:
-State Control Pack, Blind Ledger financial owner, same-owner Mirror, bounded shadow Continuity State,
-and a deferred Switch boundary. The fixed fictional program has twenty hospitals and $1,000,000
-total: H is owed $100,000 and the other nineteen total $900,000. Tests use manually derived expected
-constants, not production-formula-generated answers.
+## Current implementation and blockers
 
-The reviewer-fixed cents are: H `10,000,000`; eighteen other items `4,700,000` each; and one final
-other item `5,400,000`. The other-item total is `90,000,000` cents and the program total is
-`100,000,000` cents. Use stable generic item IDs and fixture-only display labels. Preserve the exact
-branch expectations: no H cash leaves a `10,000,000` shortfall; `9,700,000` cash plus an unapproved
-`300,000` offset leaves a `300,000` shortfall; an authorized offset satisfies the amount without
-changing cash; rejected-offset correction authorization leaves the shortfall until unique correction
-payment `P2` arrives; duplicate/second confirmation does not add cash; conflicting `P2` is visible
-without mutation; reversal returns the shortfall; and a distinct replacement `P3` restores the
-amount. Reporting and timeliness remain separate dimensions.
+The durable financial slice, same-owner Mirror, and bounded Continuity are
+implemented and have prior focused evidence. The retained guarded result was
+`Ran 29 tests in 7.582s` followed by `OK`; one 20-item measurement was
+379.703 ms. That pass is evidence from the earlier candidate and does not close
+the current source-review blockers. Final acceptance and Driver whole-system
+review remain pending.
 
-### Stage sequence and resume point
+State owns correction and affected verification for these four blockers:
 
-- **A — documentation and pins:** completed in the documentation checkpoint.
-- **B — focused source checks/baselines:** completed with the retained exact-schema, atomicity,
-  reconciliation-capacity, independent-checker, and documentation-governance evidence.
-- **C — durable financial slice:** implemented and independently verified in the source checkpoint.
-- **D — Mirror/Continuity:** implemented and independently verified with shadow-only restore,
-  dispatch disabled, and no second live writer.
-- **E — acceptance/performance:** completed for the twelve synthetic cases, bounded privacy/egress
-  checks, and one guarded measurement; unchanged native regressions were intentionally not replayed.
+1. Control Pack policy fields are not enforced.
+2. Item-only lookup has ambiguous `PROGRAM`/`ALL` period identity.
+3. Population can exceed `expected_count` before validation.
+4. Reporting supersedes accepts nonexistent or cross-item lineage.
 
-### Protected boundaries and nonclaims
+Do not call the candidate production-ready, fully accepted, or qualified until
+State supplies raw evidence that each fix and its affected checks pass. Native
+regressions remain separate and financial-phase native runs are zero. Lean is
+not integrated into this Python application.
 
-The user/Driver explicitly delegates this integration checkout's focused composition and Mirror
-changes, but no other checkout or protected boundary. Preserve the direct-clearance V1 seam,
-queue/source ownership and reservation, exact 100-reference protocol, queue/State/outbox atomicity,
-non-`CLEAR` economic guard, crypto/native/C/Lean artifacts, operations policy, archives, and formal
-claims. Do not use real PHI, credentials, payments, external dispatch, archive refresh, broad imports,
-or a success-mock repository. Corporate egress is disabled by default; canaries are synthetic.
+## Protected boundaries and nonclaims
 
-Use the existing guarded wrapper/mutex and physical reserve/cap for every test/build/checker/native
-batch. One bounded batch at a time. The retained native arithmetic floor is not a financial SLA.
-At each phase record exact Git identity, changed/untracked paths, commands/logs, raw trust-critical
-output, counts, latency/rates, peak parent/child memory, restart/storage behavior, failures,
-warnings/skips, and unknown numerical targets.
+Preserve the direct-clearance V1 seam, queue/source ownership and reservation,
+exact 100-reference protocol, queue/State/outbox atomicity, non-`CLEAR`
+economic guard, crypto/native/C/Lean artifacts, operations policy, archives,
+and formal claims. Do not use real PHI, credentials, payments, external
+dispatch, archive refresh, broad imports, or a success-mock repository.
+Corporate egress is disabled by default; canaries are synthetic.
+
+Use the existing guarded wrapper/mutex and physical reserve/cap for every
+future test/build/checker/native batch, one bounded batch at a time. The
+retained native arithmetic floor is not a financial SLA. This documentation
+batch launches no build, test, checker, native, or Lean process.
+
+## Current ownership and handoff
+
+State owns application source, tests, fixtures, and generated evidence. Docs
+owns only the maintained Markdown named by the child `AGENTS.md`. Native/C,
+crypto, Lean, operations, archives, and other work roots remain separate.
+At every implementation phase record exact Git identity, changed/untracked
+paths, commands, raw trust-critical output, counts, warnings/failures/skips,
+and unknown numerical targets. The next action after this docs batch is the
+State-owned correction and verification of the four blockers above, not a
+prose declaration of acceptance.
+
+## Historical records (reference only)
+
+The remaining records in this file preserve earlier grants, implementation
+notes, and raw evidence. They are not current instructions or acceptance
+claims. Use the immutable pre-edit snapshot when exact historical text is
+needed.
 
 ## Historical Profile12 Queue/State implementation — corrected, unverified/in progress
 

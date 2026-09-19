@@ -28,36 +28,44 @@ atomicity, exact 100-reference protocol, non-`CLEAR` economic guard, cryptograph
 and Lean/formal research remain separate generations. This financial slice does not change their
 bytes, security parameters, artifacts, operations policy, archives, or production status.
 
-## Integration baseline — 2026-09-13
+## Documentation-batch input — 2026-09-19
 
-The implementation checkout is branch `rightrail-financial-workflow-20260913` at
-`be712f56117ee71f2f2477f139a9894a209a2985`, tree
-`11191daf7d1604969649262300efb6a62b25fcff`, parent
-`1306e38901b73790dfb2a973b4ac44daf2ff6869`. Before the documentation checkpoint, tracked status
-was clean and only the driver-supplied `build-performance/` evidence directory was untracked.
-The request hash and reference-plan PDF hash are recorded in `CURRENT_TASK.md` and `STATE.md`.
+At the start of this documentation batch the implementation checkout was branch
+`rightrail-financial-workflow-20260913` at HEAD
+`de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
+`4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. Tracked status was clean; the only
+untracked paths were the two generated executables listed in `STATE.md`.
+The request and reference-plan hashes remain recorded in `CURRENT_TASK.md` and
+`STATE.md`.
 
 The source implementation checkpoint is
-`99d28687df0e7d5cf6a46e73db22f42a9902b789`, tree
-`82087b8f740e00c55d85a4717cd45617e96d9bc8`, parent
-`ed6f51426d0b410759d15ff69728fff708690192`. It contains the durable financial owner, independent
-checker, same-owner Mirror, bounded shadow Continuity, fixed-value acceptance fixture, and local
-CLI. The twelve acceptance cases, bounded privacy/egress checks, and one guarded measurement pass;
-unchanged native regressions remain separate and were not replayed. Numerical financial SLAs are
-not supplied by the reference plan, so the measurement reports provisional observations and an
-unknown target honestly.
+`99d28687df0e7d5cf6a46e73db22f42a9902b789`. It contains the durable financial
+owner, independent checker, same-owner Mirror, bounded shadow Continuity,
+fixed-value fixture, and local CLI. The retained raw result was `Ran 29 tests
+in 7.582s` followed by `OK`; one 20-item measurement was 379.703 ms. No
+financial numerical SLA is supplied, so the measurement is provisional.
+
+Final Driver source and whole-system review is pending. The current open
+source-review blockers are: unenforced Control Pack policy fields; ambiguous
+`PROGRAM`/`ALL` period identity in item-only lookup; population exceeding
+`expected_count` before validation; and reporting supersedes accepting
+nonexistent or cross-item lineage. State owns the fixes and affected
+verification. The prior test pass does not close them. Native regressions and
+Lean checkpoints remain separate and were not replayed in this phase.
 
 ## Read in this order
 
-1. [`AGENTS.md`](AGENTS.md) — execution rules and precedence.
-2. [`CURRENT_TASK.md`](CURRENT_TASK.md) — current bounded objective and blockers.
-3. [`STATE.md`](STATE.md) — verified evidence and nonclaims.
-4. [`ARCHITECTURE.md`](ARCHITECTURE.md) — whole-system ownership and product separation.
-5. [`docs/MIRROR_ARCHITECTURE.md`](docs/MIRROR_ARCHITECTURE.md) — read-only source, custody, reconciliation, and recovery.
-6. [`docs/DATABASE_ZK_ARCHITECTURE.md`](docs/DATABASE_ZK_ARCHITECTURE.md) — verifier-to-database transaction boundary.
-7. [`docs/NATIVE_V3_ARCHITECTURE.md`](docs/NATIVE_V3_ARCHITECTURE.md) — private-proof and resource target.
-8. [`docs/LEAN_FORMAL_KERNEL.md`](docs/LEAN_FORMAL_KERNEL.md) — later formal semantic gate.
-9. [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — dependency order.
+1. [`../../AGENTS.md`](../../AGENTS.md) — Driver execution rules and precedence.
+2. [`../../WORKSPACE_MAP.md`](../../WORKSPACE_MAP.md) — current roots and ownership map.
+3. [`AGENTS.md`](AGENTS.md) — financial-child rules.
+4. [`CURRENT_TASK.md`](CURRENT_TASK.md) — current bounded objective and blockers.
+5. [`STATE.md`](STATE.md) — verified evidence and nonclaims.
+6. [`ARCHITECTURE.md`](ARCHITECTURE.md) — whole-system ownership and product separation.
+7. [`docs/MIRROR_ARCHITECTURE.md`](docs/MIRROR_ARCHITECTURE.md) — read-only source, custody, reconciliation, and recovery.
+8. [`docs/DATABASE_ZK_ARCHITECTURE.md`](docs/DATABASE_ZK_ARCHITECTURE.md) — verifier-to-database transaction boundary.
+9. [`docs/NATIVE_V3_ARCHITECTURE.md`](docs/NATIVE_V3_ARCHITECTURE.md) — private-proof and resource target.
+10. [`docs/LEAN_FORMAL_KERNEL.md`](docs/LEAN_FORMAL_KERNEL.md) — later formal semantic gate.
+11. [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — dependency order.
 
 Supporting authorities are [`docs/PYTHON_DEPENDENCY_LOCKING.md`](docs/PYTHON_DEPENDENCY_LOCKING.md),
 [`docs/RARC_PENDING_DECISION.md`](docs/RARC_PENDING_DECISION.md),
@@ -69,13 +77,19 @@ record is the only live place for concise prohibitions against revival.
 
 ## Current financial-workflow verification
 
-Run from this checkout with the existing Python toolchain and the existing guarded wrapper for any
-build, checker, test, or native batch. The current gate sequence is: focused source seam checks and
-reported-defect reproductions; independent financial schema/history checks; all twelve synthetic
-acceptance cases through real persistence; same-owner Mirror and Continuity checks; separate native
-regressions; then a bounded measurement run. Never use a formula under test to generate an expected
-financial answer. Record exact commands, raw trust-critical output, skipped counts/reasons, and
-resource limits in `STATE.md`.
+Future source-phase runs must use the existing Python toolchain and guarded
+wrapper. The sequence is focused source seam checks and reported-defect
+reproductions; independent schema/history checks; all twelve synthetic
+acceptance cases through real persistence; same-owner Mirror and Continuity
+checks; separate native regressions; then a bounded measurement run. Never use
+a formula under test to generate an expected financial answer. Record exact
+commands, raw trust-critical output, skipped counts/reasons, and resource
+limits in `STATE.md`.
+
+No build, checker, test, native, or Lean process was launched for this
+documentation batch. The four source-review blockers in `CURRENT_TASK.md` must
+be fixed and their affected checks rerun before the candidate can be described
+as accepted; the retained 29-test pass is not sufficient.
 
 ## Retained Blind Ledger verification
 

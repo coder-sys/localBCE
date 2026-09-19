@@ -1,6 +1,6 @@
 # RightRail implementation roadmap
 
-Updated: 2026-09-13
+Updated: 2026-09-19
 Owner: dependency order for the synthetic financial workflow and its retained Blind Ledger/Mirror
 boundaries. Native-v3, Lean, and activation remain separate future workstreams; this is not a
 proof-backend selection or activation record.
@@ -9,29 +9,37 @@ This roadmap follows the smallest dependency chain that can produce a reconstruc
 financial responsibility without creating a second ledger or weakening existing trust boundaries.
 Rejected architectures are recorded separately and are not milestones.
 
-## Active roadmap — financial workflow 2026-09-13
+## Active roadmap — financial workflow 2026-09-19
 
-The integration branch is `rightrail-financial-workflow-20260913`, initially
-`be712f56117ee71f2f2477f139a9894a209a2985` / tree
-`11191daf7d1604969649262300efb6a62b25fcff`. All evidence is synthetic and nonactivating.
+At the start of this documentation batch the integration branch was
+`rightrail-financial-workflow-20260913` at HEAD
+`de495141ad2b7c5b910bf6dd6459b7b1120eaea6`, tree
+`4ea7838728ba1322d2a50edb5ede0c3deedc3a97`. All evidence is synthetic and
+nonactivating. The source implementation checkpoint is
+`99d28687df0e7d5cf6a46e73db22f42a9902b789`.
 
-1. **A — Documentation and pins.** Correct the governing Markdown, pin the branch and native
-   inputs, record ownership and the no-change boundaries, and retain prior evidence under historical
-   headings.
-2. **B — Focused seams and baselines.** Reproduce the exact-schema rejection, queue/State/outbox
-   atomicity, reconciliation-capacity behavior, independent checker dependencies, and inherited
-   documentation-governance warning before any smallest authorized correction. Run only relevant
-   baseline tests under isolated storage.
-3. **C — Durable financial owner.** Add versioned Control Pack/population, obligations, typed
-   evidence, exact-cents accounting, evaluations, cases, determinations, corrections, action/outbox
-   identity, stale fences, injected synthetic authority, and an independent history/schema checker.
-4. **D — Same-owner Mirror and Continuity.** Add a bounded local CLI/read model and authorized
-   commands over the same owner. Export and validate/restore a versioned responsibility package into
-   a shadow/test database with dispatch disabled and no second live writer.
-5. **E — Acceptance and bounded measurement.** Run all twelve real persistence cases, native-path
-   regressions separately, bounded privacy/egress/oversize checks, and guarded measurements. Report
-   sample counts, latency/rate distributions, peak parent/child memory, restart/storage behavior,
-   and numerical targets that remain unspecified.
+1. **A — Documentation and pins.** The active Markdown now points to the
+   current identities, ownership, guard, no-change boundaries, and historical
+   snapshots. This documentation batch does not change application behavior.
+2. **B — Focused seams and baselines.** Prior focused evidence exists, but the
+   current source review has four open correctness blockers. State owns the
+   smallest fixes and affected verification.
+3. **C — Durable financial owner.** The owner/checker slice is implemented and
+   has prior synthetic evidence; it is not accepted until the Control Pack,
+   period identity, population-bound, and lineage blockers are closed.
+4. **D — Same-owner Mirror and Continuity.** Mirror and bounded shadow
+   Continuity are implemented with dispatch disabled and no second live writer;
+   final Driver whole-system review remains pending.
+5. **E — Acceptance and bounded measurement.** The prior 29-test result and
+   one 379.703 ms observation are retained, but acceptance is pending the four
+   blockers and affected checks. Native regressions and Lean work remain
+   separate; financial-phase native runs are zero.
+
+Current blockers are: (1) Control Pack policy fields are not enforced; (2)
+item-only lookup has ambiguous `PROGRAM`/`ALL` period identity; (3) population
+can exceed `expected_count` before validation; and (4) reporting supersedes
+accepts nonexistent or cross-item lineage. A passing prior test total does not
+close these findings.
 
 The first-state fixture is fixed at twenty hospitals and $1,000,000 total: H is $100,000 and the
 other nineteen total $900,000. Hand-derived expected constants are required. The financial owner
@@ -40,9 +48,12 @@ completion. It must not change the retained exact-100 protocol, source ownership
 queue/State/outbox atomicity, non-`CLEAR` economic guard, native/C/crypto/Lean artifacts, operations
 policy, or archives.
 
-Every phase ends with exact Git identity, changed/untracked paths, commands and raw trust-critical
-output, failures/warnings/skips, and the next safe action. Missing production targets are recorded as
-unknown; the retained native arithmetic floor is not a financial ingestion SLA.
+Every implementation phase ends with exact Git identity, changed/untracked
+paths, commands and raw trust-critical output, failures/warnings/skips, and
+the next safe action. Missing production targets are recorded as unknown; the
+retained native arithmetic floor is not a financial ingestion SLA. The next
+safe action after this documentation batch is State-owned correction and raw
+verification of the four blockers, not a prose acceptance declaration.
 
 ## Retained Native-v3 release gate
 
