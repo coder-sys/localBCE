@@ -336,3 +336,9 @@ SHA-256 `3A3D9A8F37C1DBB1287B84413B1C1D1453109BFECDACB39915FF65F7C1324EE9` and c
 begun test name before the guard stop. This is a resource failure, not a conformance result.
 The representative cross-language vector is now evidenced, but it remains synthetic/nonactivating and
 does not create runtime, formal, native, payment, or production authority.
+
+The separate proof-only `CodecLaws`/`AxiomCheck` closure remains pending in the Engine worktree. Its
+first new compile stopped at minimum free `2143604736 < 2190433321`, peak private `1225388032`, with
+empty child stdout/stderr, cleanup `PASS`, and mutex `RELEASED`; no retry was launched after host free
+memory fell to `1906061312`. The Engine's dirty proof-only files remain outside this checkout, and no
+theorem or axiom pass is claimed by the KAT or representative conformance evidence above.
