@@ -339,7 +339,7 @@ INTERRUPTION_EXPECTATIONS = (
     InterruptionExpectation("RECOVERY", "reopen-reads-last-committed-state", True, True, "none"),
 )
 CONTINUITY = ContinuityExpectation(
-    "RR/FINANCIAL/CONTINUITY/v4", CASE_11.case_id, "SHADOW", False, False,
+    "RR/FINANCIAL/CONTINUITY/v5", CASE_11.case_id, "SHADOW", False, False,
     ("control_packs", "populations", "obligations", "evidence_references", "evaluations", "cases", "determinations", "actions", "outbox_state"),
     ("raw_evidence_bytes", "secrets", "private_proof_material", "external_payment_credentials"), True, True, 0,
 )

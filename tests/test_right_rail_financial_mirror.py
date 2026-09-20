@@ -28,7 +28,7 @@ from tests.rightrail_financial_expected_cases import (
 
 
 class _Clock:
-    def __init__(self, value: int = 1_800_000_000_000) -> None:
+    def __init__(self, value: int = 1_774_828_801_000) -> None:
         self.value = value
 
     def now_ms(self) -> int:
@@ -122,12 +122,15 @@ class FinancialMirrorTests(unittest.TestCase):
 
     def _prepare_action(self) -> dict[str, object]:
         self._prepare_claim()
+        receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
         return self.mirror.reject_offset_and_authorize_correction(
             item_id=H_ITEM_ID,
             claim_id="claim:offset:h",
             action_id="action:correction:h",
-            expected_revision=2,
+            expected_revision=receipt["revision"],
             decision_at_ms=1_774_922_400_000,
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
         )
 
     def test_queries_are_bounded_and_return_references_without_raw_payloads(self) -> None:
@@ -158,12 +161,15 @@ class FinancialMirrorTests(unittest.TestCase):
 
     def test_commands_delegate_revision_and_authority_fences(self) -> None:
         self._prepare_claim()
+        receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
         with self.assertRaisesRegex(owner.FinancialRevisionError, "obligation_revision_conflict"):
             self.mirror.authorize_offset(
                 item_id=H_ITEM_ID,
                 claim_id="claim:offset:h",
                 action_id="action:stale:h",
                 expected_revision=1,
+                evaluation_id=receipt["evaluation_id"],
+                evaluation_result_digest=receipt["result_digest"],
             )
         with self.assertRaisesRegex(owner.FinancialAuthorityError, "authority_actor_not_authorized"):
             self.mirror.authorize_offset(
@@ -173,6 +179,8 @@ class FinancialMirrorTests(unittest.TestCase):
                 expected_revision=2,
                 actor_id="synthetic-reporter",
                 actor_role="FINANCE_DECISION",
+                evaluation_id=receipt["evaluation_id"],
+                evaluation_result_digest=receipt["result_digest"],
             )
         result = self.mirror.authorize_offset(
             item_id=H_ITEM_ID,
@@ -180,10 +188,64 @@ class FinancialMirrorTests(unittest.TestCase):
             action_id="action:offset:h",
             expected_revision=2,
             decision_at_ms=1_774_864_800_000,
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
         )
         self.assertEqual(result["status"], "AUTHORIZED")
         self.assertEqual(result["lawful_adjustment_cents"], UNAPPROVED_OFFSET_CENTS)
         self.assertEqual(result["received_cash_cents"], H_CASH_CENTS)
+
+    def test_mirror_offset_authorization_retry_keeps_stored_time_and_rejects_conflicts(self) -> None:
+        self._prepare_claim()
+        receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
+        request = {
+            "item_id": H_ITEM_ID,
+            "claim_id": "claim:offset:h",
+            "action_id": "action:retry-offset:h",
+            "expected_revision": receipt["revision"],
+            "decision_at_ms": 1_774_922_400_000,
+            "evaluation_id": receipt["evaluation_id"],
+            "evaluation_result_digest": receipt["result_digest"],
+        }
+        first = self.mirror.authorize_offset(**request)
+        self.assertEqual(first["status"], "AUTHORIZED")
+        after_first = self.mirror.summary()
+
+        duplicate = self.mirror.authorize_offset(**request)
+        self.assertEqual(duplicate["status"], "DUPLICATE")
+        self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
+
+        with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
+            self.mirror.authorize_offset(**{**request, "decision_at_ms": request["decision_at_ms"] + 1})
+        with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
+            self.mirror.authorize_offset(**{**request, "evaluation_result_digest": "0" * 128})
+        self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
+
+    def test_mirror_correction_retry_keeps_stored_time_and_rejects_conflicts(self) -> None:
+        self._prepare_claim()
+        receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
+        request = {
+            "item_id": H_ITEM_ID,
+            "claim_id": "claim:offset:h",
+            "action_id": "action:retry-correction:h",
+            "expected_revision": receipt["revision"],
+            "decision_at_ms": 1_774_922_400_000,
+            "evaluation_id": receipt["evaluation_id"],
+            "evaluation_result_digest": receipt["result_digest"],
+        }
+        first = self.mirror.reject_offset_and_authorize_correction(**request)
+        self.assertEqual(first["status"], "CORRECTION_AUTHORIZED")
+        after_first = self.mirror.summary()
+
+        duplicate = self.mirror.reject_offset_and_authorize_correction(**request)
+        self.assertEqual(duplicate["status"], "DUPLICATE")
+        self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
+
+        with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
+            self.mirror.reject_offset_and_authorize_correction(**{**request, "decision_at_ms": request["decision_at_ms"] + 1})
+        with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
+            self.mirror.reject_offset_and_authorize_correction(**{**request, "claim_id": "claim:changed:h"})
+        self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
 
     def test_reporting_correction_accepts_explicit_evidence_lineage(self) -> None:
         original = self.mirror.record_reporting_evidence(
@@ -323,12 +385,62 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(self.mirror.summary()["sequence"], before_summary["sequence"])
         self.mirror.verify_integrity()
 
+    def test_v5_evaluation_receipt_is_mirror_and_cli_reference(self) -> None:
+        from tools import right_rail_financial_cli as cli
+
+        self._prepare_claim()
+        receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
+        self.assertEqual(receipt["schema"], "RR/FINANCIAL/MIRROR/v1")
+        self.assertEqual(receipt["resource"], "evaluation_receipt")
+        self.assertEqual(receipt["evaluation_result_digest"], receipt["result_digest"])
+        self.assertNotIn("raw_evidence", receipt)
+        self.assertNotIn("payload", receipt)
+        common = [
+            "--database", str(self.db),
+            "--state-id", self.config.state_id,
+            "--deployment-id", self.config.deployment_id,
+            "--program-id", self.config.program_id,
+            "--period-id", self.config.period_id,
+        ]
+
+        def invoke(args: list[str]) -> tuple[int, dict[str, object], str]:
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = cli.main(args)
+            output = json.loads(stdout.getvalue()) if stdout.getvalue() else {}
+            return status, output, stderr.getvalue()
+
+        status, cli_receipt, stderr = invoke(common + ["current-evaluation-receipt", "--item-id", H_ITEM_ID])
+        self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(cli_receipt["evaluation_id"], receipt["evaluation_id"])
+        self.assertEqual(cli_receipt["result_digest"], receipt["result_digest"])
+
+        status, command, stderr = invoke(
+            common
+            + [
+                "reject-offset-and-authorize-correction",
+                "--item-id", H_ITEM_ID,
+                "--claim-id", "claim:offset:h",
+                "--action-id", "action:cli:correction:h",
+                "--expected-revision", str(receipt["revision"]),
+                "--decision-at-ms", "1774922400000",
+                "--evaluation-id", str(receipt["evaluation_id"]),
+                "--evaluation-result-digest", str(receipt["result_digest"]),
+            ]
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(command["status"], "CORRECTION_AUTHORIZED")
+        self.mirror.verify_integrity()
+
     def test_continuity_export_validate_restore_restart_and_readback(self) -> None:
         self._prepare_action()
         package = self.mirror.export_continuity()
         metadata = self.mirror.validate_continuity_package(package)
-        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v4")
-        self.assertEqual(metadata["version"], 4)
+        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v5")
+        self.assertEqual(metadata["version"], 5)
         self.assertEqual(metadata["scope"]["state_id"], self.config.state_id)
         self.assertIn("financial_meta", metadata["table_counts"])
         self.assertFalse(metadata["dispatch_enabled"])

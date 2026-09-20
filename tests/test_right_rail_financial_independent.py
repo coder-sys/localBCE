@@ -121,11 +121,15 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             evidence_id="evidence:offset:H",
             deadline_ms=9_000,
         )
+        receipt = self.store.current_evaluation_receipt("item:H")
         self.store.authorize_offset(
             item_id="item:H",
             claim_id="claim:H",
             action_id="action:offset:claim:H",
-            decision_at_ms=30,
+            decision_at_ms=2_000,
+            expected_revision=receipt["revision"],
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
         )
         self.store.acknowledge_action("action:offset:claim:H", "ack:H")
         self.store.record_reporting_evidence(
@@ -464,7 +468,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
         obligation = next(iter(result["obligations"].values()))
-        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v4")
+        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v5")
         self.assertEqual(result["mode"], "LIVE")
         self.assertEqual(result["totals"], {
             "owed_cents": 10_000_000,
@@ -684,6 +688,51 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 )
 
         self._assert_rejected_without_repair(target, tamper, "evidence:record-digest")
+
+    def test_evaluation_receipt_digest_tamper_fails_closed_without_repair(self) -> None:
+        target = self._copy_database("evaluation-receipt-tamper.sqlite")
+
+        def tamper(path: Path) -> None:
+            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                connection.execute(
+                    "UPDATE evaluations SET receipt_digest=? WHERE evaluation_id=(SELECT current_evaluation_id FROM obligations WHERE item_id=?)",
+                    (b"\x00" * 64, "item:H"),
+                )
+
+        self._assert_rejected_without_repair(target, tamper, "evaluation:receipt-digest")
+
+    def test_evaluation_authority_tamper_fails_closed_without_repair(self) -> None:
+        target = self._copy_database("evaluation-authority-tamper.sqlite")
+
+        def tamper(path: Path) -> None:
+            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                connection.execute(
+                    "UPDATE evaluations SET authority_id=? WHERE evaluation_id=(SELECT current_evaluation_id FROM obligations WHERE item_id=?)",
+                    ("stale-authority-v1", "item:H"),
+                )
+
+        self._assert_rejected_without_repair(target, tamper, "evaluation:authority")
+
+    def test_historical_evaluation_input_tamper_fails_closed_without_repair(self) -> None:
+        target = self._copy_database("evaluation-input-tamper.sqlite")
+
+        def tamper(path: Path) -> None:
+            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                evaluation_id = connection.execute(
+                    "SELECT evaluation_id FROM evaluations WHERE revision=(SELECT MAX(revision) FROM evaluations) LIMIT 1"
+                ).fetchone()[0]
+                raw = connection.execute(
+                    "SELECT input_snapshot_json FROM evaluations WHERE evaluation_id=?",
+                    (evaluation_id,),
+                ).fetchone()[0]
+                snapshot = json.loads(raw)
+                snapshot["obligation"]["owed_cents"] += 1
+                connection.execute(
+                    "UPDATE evaluations SET input_snapshot_json=? WHERE evaluation_id=?",
+                    (json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":")), evaluation_id),
+                )
+
+        self._assert_rejected_without_repair(target, tamper, "evaluation:input-digest")
 
     def test_reporting_supersedes_missing_target_fails_closed_without_repair(self) -> None:
         target = self._copy_database("reporting-lineage-tamper.sqlite")

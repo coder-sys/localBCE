@@ -37,9 +37,9 @@ def _fail(code: str) -> NoReturn:
     raise error
 
 
-SCHEMA_VERSION = 4
-SCHEMA = "RR/FINANCIAL/OWNER/v4"
-CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v4"
+SCHEMA_VERSION = 5
+SCHEMA = "RR/FINANCIAL/OWNER/v5"
+CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v5"
 CURRENCY = "USD"
 MAX_CENTS = (1 << 63) - 1
 MAX_ROWS = 10_000
@@ -50,12 +50,17 @@ MAX_PACKAGE_NODES = 250_000
 
 EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
 HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
-GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v4\x00"
+GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v5\x00"
 EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
-CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v4\x00"
+EVALUATION_RESULT_DOMAIN = b"RR/FINANCIAL/EVALUATION/v5\x00"
+EVALUATION_INPUT_DOMAIN = b"RR/FINANCIAL/EVALUATION-INPUT/v1\x00"
+EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
+EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
+CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v5\x00"
 IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
+EVALUATION_RECEIPT_CONTRACT = "RR/FINANCIAL/EVALUATION-RECEIPT/v1"
 ZERO_DIGEST = b"\x00" * 64
 TEST_OWNER_ID = "continuity-test-owner-v1"
 SHADOW_OWNER_ID = "continuity-shadow-owner-v1"
@@ -234,6 +239,8 @@ _TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("resulting_revision", "INTEGER", 0),
         ("decided_at_ms", "INTEGER", 0),
         ("determination_digest", "BLOB", 0),
+        ("input_evaluation_id", "TEXT", 0),
+        ("input_evaluation_result_digest", "BLOB", 0),
     ),
     "actions": (
         ("action_id", "TEXT", 1),
@@ -302,6 +309,17 @@ _TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("case_status", "TEXT", 0),
         ("delivery_status", "TEXT", 0),
         ("result_digest", "BLOB", 0),
+        ("contract_version", "TEXT", 0),
+        ("scope_json", "TEXT", 0),
+        ("control_pack_id", "TEXT", 0),
+        ("control_pack_version", "INTEGER", 0),
+        ("control_pack_digest", "BLOB", 0),
+        ("authority_epoch", "INTEGER", 0),
+        ("authority_digest", "BLOB", 0),
+        ("evidence_bindings_json", "TEXT", 0),
+        ("input_snapshot_json", "TEXT", 0),
+        ("input_snapshot_digest", "BLOB", 0),
+        ("receipt_digest", "BLOB", 0),
     ),
 }
 
@@ -1349,7 +1367,7 @@ def _verify_population_history(
                     _fail("history:population-validation-order")
                 if published:
                     _fail("history:population-publication-duplicate")
-                if set(payload) != {"population_id", "item_count", "pack_id", "pack_version"}:
+                if set(payload) != {"population_id", "item_count", "pack_id", "pack_version", "evaluation_count", "evaluation_binding_digest"}:
                     _fail("history:population-publication-payload")
                 if payload["population_id"] != population_id:
                     _fail("history:population-publication-population")
@@ -1359,7 +1377,9 @@ def _verify_population_history(
                 pack = packs.get(str(population["pack_id"]))
                 if pack is None or pack_id != str(population["pack_id"]) or pack_version != int(pack["version"]):
                     _fail("history:population-publication-binding")
-                if before != 0 or after != item_count or item_count != expected or item_count != imported or population["status"] != "PUBLISHED":
+                evaluation_count = _integer(payload["evaluation_count"], "history:population-publication-evaluation-count", minimum=1, maximum=MAX_ROWS)
+                _hex_digest(payload["evaluation_binding_digest"], "history:population-publication-evaluation-digest")
+                if before != 0 or after != item_count or item_count != expected or item_count != imported or evaluation_count != item_count or population["status"] != "PUBLISHED":
                     _fail("history:population-publication-binding")
                 published = True
 
@@ -1610,9 +1630,16 @@ def _verify_determinations(
     packs: dict[str, sqlite3.Row],
     claims: dict[str, sqlite3.Row],
     evidence: dict[str, sqlite3.Row],
+    evaluations: dict[str, list[sqlite3.Row]],
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "determinations")
     result: dict[str, sqlite3.Row] = {}
+    evaluations_by_id = {
+        str(evaluation["evaluation_id"]): evaluation
+        for history in evaluations.values()
+        for evaluation in history
+    }
+    consumed_evaluations: set[str] = set()
     actor_roles = meta.get("actors")
     for row in rows:
         determination_id = _id(row["determination_id"], "determination:id")
@@ -1650,30 +1677,58 @@ def _verify_determinations(
         resulting_revision = _integer(row["resulting_revision"], "determination:resulting-revision")
         if resulting_revision != expected_revision + 1:
             _fail("determination:revision")
-        supporting = _evidence_ids_json(row["supporting_evidence_json"], "determination:evidence")
-        if claim_id is None or len(supporting) != 1 or supporting[0] != claims[str(claim_id)]["evidence_id"] or supporting[0] not in evidence:
+        input_evaluation_id = _id(row["input_evaluation_id"], "determination:evaluation-id")
+        if input_evaluation_id in consumed_evaluations:
+            _fail("determination:evaluation-duplicate")
+        consumed_evaluations.add(input_evaluation_id)
+        input_evaluation = evaluations_by_id.get(input_evaluation_id)
+        if input_evaluation is None or input_evaluation["obligation_id"] != obligation_id or int(input_evaluation["revision"]) != expected_revision:
+            _fail("determination:evaluation-binding")
+        input_result_digest = _blob64(row["input_evaluation_result_digest"], "determination:evaluation-digest")
+        if input_result_digest != bytes(input_evaluation["result_digest"]):
+            _fail("determination:evaluation-digest")
+        supporting = _evaluation_bindings_json(row["supporting_evidence_json"], "determination:evidence")
+        if claim_id is None or len(supporting) != len(_evidence_ids_json(input_evaluation["evidence_ids_json"], "determination:evaluation-evidence")) or claim_id not in claims:
             _fail("determination:evidence-binding")
+        supporting_ids = [binding["evidence_id"] for binding in supporting]
+        if str(claims[str(claim_id)]["evidence_id"]) not in supporting_ids:
+            _fail("determination:evidence-binding")
+        for binding in supporting:
+            if binding["evidence_id"] not in evidence or binding["record_digest"] != bytes(evidence[binding["evidence_id"]]["record_digest"]).hex().upper():
+                _fail("determination:evidence-binding")
         claim = claims[str(claim_id)]
         if amount != claim["amount_cents"] or (decision == "OFFSET_AUTHORIZED" and claim["status"] != "AUTHORIZED") or (decision == "OFFSET_REJECTED_CORRECTION_AUTHORIZED" and claim["status"] != "REJECTED"):
             _fail("determination:claim-binding")
         decided = _time(row["decided_at_ms"], "determination:time")
+        if int(input_evaluation["evaluated_at_ms"]) > decided:
+            _fail("determination:evaluation-chronology")
+        kind = "OFFSET_AUTHORIZATION" if decision == "OFFSET_AUTHORIZED" else "CORRECTION_PAYMENT_REQUEST"
+        action_id = determination_id.removeprefix("determination:")
+        if not action_id or determination_id != f"determination:{action_id}":
+            _fail("determination:action-id")
         payload = {
+            "action_id": action_id,
             "determination_id": determination_id,
+            "obligation_id": obligation_id,
+            "kind": kind,
             "claim_id": claim_id,
             "decision": decision,
             "amount_cents": amount,
+            "input_evaluation_id": input_evaluation_id,
+            "input_evaluation_result_digest": input_result_digest.hex().upper(),
             "actor_id": actor_id,
             "actor_role": actor_role,
             "authority_id": authority_id,
             "authority_epoch": authority_epoch,
-            "supporting_evidence_ids": supporting,
+            "authority_digest": authority_digest.hex().upper(),
+            "supporting_evidence": supporting,
             "expected_revision": expected_revision,
             "resulting_revision": resulting_revision,
+            "decided_at_ms": decided,
         }
         expected_digest = _digest(ACTION_DOMAIN, _canonical(payload, "determination:digest-input"))
         if _blob64(row["determination_digest"], "determination:digest") != expected_digest:
             _fail("determination:digest")
-        _ = decided
     return result
 
 
@@ -1729,6 +1784,8 @@ def _verify_actions(
             "amount_cents": claim["amount_cents"],
             "currency": meta["scope"]["currency"],
             "revision": revision,
+            "input_evaluation_id": determination["input_evaluation_id"],
+            "input_evaluation_result_digest": bytes(determination["input_evaluation_result_digest"]).hex().upper(),
             "dispatch": "SYNTHETIC_RECORD_ONLY",
         }
         if payload != expected_payload:
@@ -1825,6 +1882,21 @@ def _verify_conflicts(
     return conflicts
 
 
+def _evaluation_bindings_json(raw: object, code: str) -> list[dict[str, str]]:
+    value = _parse_json(raw, code)
+    if not isinstance(value, dict) or set(value) != {"bindings"} or not isinstance(value["bindings"], list):
+        _fail(f"{code}:shape")
+    result: list[dict[str, str]] = []
+    for binding in value["bindings"]:
+        if not isinstance(binding, dict) or set(binding) != {"evidence_id", "record_digest"}:
+            _fail(f"{code}:binding")
+        result.append({"evidence_id": _id(binding["evidence_id"], f"{code}:id"), "record_digest": _hex_digest(binding["record_digest"], f"{code}:digest").hex().upper()})
+    ids = [binding["evidence_id"] for binding in result]
+    if ids != sorted(ids) or len(set(ids)) != len(ids):
+        _fail(f"{code}:order")
+    return result
+
+
 def _evaluation_result(row: sqlite3.Row, evidence_ids: list[str]) -> dict[str, object]:
     return {
         "evaluation_id": row["evaluation_id"],
@@ -1850,10 +1922,237 @@ def _evaluation_result(row: sqlite3.Row, evidence_ids: list[str]) -> dict[str, o
     }
 
 
+def _evaluation_receipt_body(
+    *,
+    row: sqlite3.Row,
+    evidence_ids: list[str],
+    evidence_bindings: list[dict[str, str]],
+    scope: dict[str, object],
+    control_pack_id: str,
+    control_pack_version: int,
+    control_pack_digest: bytes,
+    authority_epoch: int,
+    authority_digest: bytes,
+    input_snapshot_digest: bytes,
+) -> dict[str, object]:
+    result = _evaluation_result(row, evidence_ids)
+    return {
+        "contract_version": EVALUATION_RECEIPT_CONTRACT,
+        "scope": dict(scope),
+        "evaluation_id": row["evaluation_id"],
+        "obligation_id": row["obligation_id"],
+        "revision": row["revision"],
+        "control_pack": {
+            "pack_id": control_pack_id,
+            "version": control_pack_version,
+            "digest": control_pack_digest.hex().upper(),
+        },
+        "evidence_bindings": evidence_bindings,
+        "input_snapshot_digest": input_snapshot_digest.hex().upper(),
+        "authority": {
+            "authority_id": row["authority_id"],
+            "epoch": authority_epoch,
+            "digest": authority_digest.hex().upper(),
+        },
+        **result,
+        "result_digest": _blob64(row["result_digest"], "evaluation:result-digest").hex().upper(),
+    }
+
+
+def _evaluation_binding_digest(bindings: list[dict[str, str]]) -> bytes:
+    ordered = sorted(
+        (
+            {
+                "evaluation_id": str(binding["evaluation_id"]),
+                "input_snapshot_digest": str(binding["input_snapshot_digest"]),
+                "result_digest": str(binding["result_digest"]),
+                "receipt_digest": str(binding["receipt_digest"]),
+            }
+            for binding in bindings
+        ),
+        key=lambda binding: binding["evaluation_id"],
+    )
+    return _digest(EVALUATION_EVENT_DOMAIN, _canonical({"evaluations": ordered}, "evaluation:event-input"))
+
+
+def _evaluation_input_snapshot(raw: object, code: str) -> dict[str, object]:
+    value = _parse_json(raw, code)
+    required = {"pre_revision", "obligation", "evidence", "payments", "claims", "determinations", "cases", "actions", "conflicts"}
+    if not isinstance(value, dict) or set(value) != required:
+        _fail(f"{code}:shape")
+    pre_revision = _integer(value["pre_revision"], f"{code}:pre-revision", maximum=MAX_ROWS)
+    obligation_raw = value["obligation"]
+    if not isinstance(obligation_raw, dict) or set(obligation_raw) != {"obligation_id", "item_id", "revision", "rule_version", "owed_cents", "due_at_ms", "reporting_complete"}:
+        _fail(f"{code}:obligation")
+    obligation = {
+        "obligation_id": _id(obligation_raw["obligation_id"], f"{code}:obligation-id"),
+        "item_id": _id(obligation_raw["item_id"], f"{code}:item-id"),
+        "revision": _integer(obligation_raw["revision"], f"{code}:revision", maximum=MAX_ROWS),
+        "rule_version": _integer(obligation_raw["rule_version"], f"{code}:rule-version", minimum=1, maximum=MAX_ROWS),
+        "owed_cents": _cents(obligation_raw["owed_cents"], f"{code}:owed", positive=True),
+        "due_at_ms": _time(obligation_raw["due_at_ms"], f"{code}:due"),
+        "reporting_complete": _flag(obligation_raw["reporting_complete"], f"{code}:reporting"),
+    }
+    if obligation["revision"] != pre_revision:
+        _fail(f"{code}:revision")
+
+    def ordered_rows(raw_rows: object, keys: set[str], name: str, identifier: str) -> list[dict[str, object]]:
+        if not isinstance(raw_rows, list):
+            _fail(f"{code}:{name}")
+        rows: list[dict[str, object]] = []
+        previous: str | None = None
+        for raw_row in raw_rows:
+            if not isinstance(raw_row, dict) or set(raw_row) != keys:
+                _fail(f"{code}:{name}")
+            current = _id(raw_row[identifier], f"{code}:{name}-id")
+            if previous is not None and current <= previous:
+                _fail(f"{code}:{name}-order")
+            previous = current
+            rows.append(dict(raw_row))
+        return rows
+
+    evidence: list[dict[str, object]] = []
+    previous_evidence: str | None = None
+    if not isinstance(value["evidence"], list):
+        _fail(f"{code}:evidence")
+    for raw_evidence in value["evidence"]:
+        if not isinstance(raw_evidence, dict) or set(raw_evidence) != {"evidence_id", "record_digest", "event_at_ms", "received_at_ms"}:
+            _fail(f"{code}:evidence")
+        evidence_id = _id(raw_evidence["evidence_id"], f"{code}:evidence-id")
+        if previous_evidence is not None and evidence_id <= previous_evidence:
+            _fail(f"{code}:evidence-order")
+        previous_evidence = evidence_id
+        event_at_ms = _time(raw_evidence["event_at_ms"], f"{code}:evidence-event")
+        received_at_ms = _time(raw_evidence["received_at_ms"], f"{code}:evidence-received")
+        if event_at_ms > received_at_ms:
+            _fail(f"{code}:evidence-chronology")
+        evidence.append({"evidence_id": evidence_id, "record_digest": _hex_digest(raw_evidence["record_digest"], f"{code}:evidence-digest").hex().upper(), "event_at_ms": event_at_ms, "received_at_ms": received_at_ms})
+
+    payments = ordered_rows(value["payments"], {"payment_id", "amount_cents", "event_at_ms", "active"}, "payments", "payment_id")
+    for payment in payments:
+        payment["amount_cents"] = _cents(payment["amount_cents"], f"{code}:payment-amount", positive=True)
+        payment["event_at_ms"] = _time(payment["event_at_ms"], f"{code}:payment-event")
+        payment["active"] = _flag(payment["active"], f"{code}:payment-active")
+    claims = ordered_rows(value["claims"], {"claim_id", "amount_cents", "status"}, "claims", "claim_id")
+    for claim in claims:
+        claim["amount_cents"] = _cents(claim["amount_cents"], f"{code}:claim-amount", positive=True)
+        if claim["status"] not in {"CLAIMED", "AUTHORIZED", "REJECTED"}:
+            _fail(f"{code}:claim-status")
+    determinations = ordered_rows(value["determinations"], {"determination_id", "decision", "amount_cents", "decided_at_ms"}, "determinations", "determination_id")
+    for determination in determinations:
+        if determination["decision"] not in {"OFFSET_AUTHORIZED", "OFFSET_REJECTED_CORRECTION_AUTHORIZED"}:
+            _fail(f"{code}:determination-decision")
+        determination["amount_cents"] = _cents(determination["amount_cents"], f"{code}:determination-amount")
+        determination["decided_at_ms"] = _time(determination["decided_at_ms"], f"{code}:determination-time")
+    cases = ordered_rows(value["cases"], {"case_id", "status"}, "cases", "case_id")
+    for case in cases:
+        if case["status"] not in _CASE_STATUSES:
+            _fail(f"{code}:case-status")
+    actions = ordered_rows(value["actions"], {"action_id", "status", "created_at_ms"}, "actions", "action_id")
+    for action in actions:
+        if action["status"] not in _ACTION_STATUSES:
+            _fail(f"{code}:action-status")
+        action["created_at_ms"] = _time(action["created_at_ms"], f"{code}:action-created")
+    conflicts = value["conflicts"]
+    if not isinstance(conflicts, list):
+        _fail(f"{code}:conflicts")
+    normalized_conflicts: list[str] = []
+    previous_conflict: str | None = None
+    for conflict in conflicts:
+        conflict_id = _id(conflict, f"{code}:conflict-id")
+        if previous_conflict is not None and conflict_id <= previous_conflict:
+            _fail(f"{code}:conflict-order")
+        previous_conflict = conflict_id
+        normalized_conflicts.append(conflict_id)
+    return {
+        "pre_revision": pre_revision,
+        "obligation": obligation,
+        "evidence": evidence,
+        "payments": payments,
+        "claims": claims,
+        "determinations": determinations,
+        "cases": cases,
+        "actions": actions,
+        "conflicts": normalized_conflicts,
+    }
+
+
+def _evaluation_projection_from_input(snapshot: dict[str, object], *, evaluation: sqlite3.Row) -> dict[str, object]:
+    obligation = snapshot["obligation"]
+    assert isinstance(obligation, dict)
+    evidence = snapshot["evidence"]
+    payments = snapshot["payments"]
+    claims = snapshot["claims"]
+    determinations = snapshot["determinations"]
+    cases = snapshot["cases"]
+    actions = snapshot["actions"]
+    conflicts = snapshot["conflicts"]
+    assert isinstance(evidence, list) and isinstance(payments, list) and isinstance(claims, list)
+    assert isinstance(determinations, list) and isinstance(cases, list) and isinstance(actions, list) and isinstance(conflicts, list)
+    cash = _sum_cents((int(row["amount_cents"]) for row in payments if row["active"] == 1), "evaluation-input:cash")
+    claimed = _sum_cents((int(row["amount_cents"]) for row in claims if row["status"] in {"CLAIMED", "AUTHORIZED"}), "evaluation-input:claimed")
+    lawful = _sum_cents((int(row["amount_cents"]) for row in claims if row["status"] == "AUTHORIZED"), "evaluation-input:lawful")
+    total = _add_cents(cash, lawful, "evaluation-input:total")
+    owed = int(obligation["owed_cents"])
+    shortfall = max(owed - total, 0)
+    overage = max(total - owed, 0)
+    entries = [
+        (int(row["decided_at_ms"]), int(row["amount_cents"]))
+        for row in determinations
+        if row["decision"] == "OFFSET_AUTHORIZED"
+    ]
+    entries.extend(
+        (int(row["event_at_ms"]), int(row["amount_cents"]))
+        for row in payments
+        if row["active"] == 1
+    )
+    completion: int | None = None
+    running_total = 0
+    for at_ms, amount in sorted(entries, key=lambda value: (value[0], value[1])):
+        running_total = _add_cents(running_total, amount, "evaluation-input:completion")
+        if running_total >= owed:
+            completion = at_ms
+            break
+    if completion is None and _add_cents(lawful, cash, "evaluation-input:completion-total") >= owed and entries:
+        completion = max(value[0] for value in entries)
+    amount_satisfied = int(total >= owed)
+    cash_satisfied = int(cash >= owed)
+    prior_case = "OPEN" if not cases else str(max(cases, key=lambda row: str(row["case_id"]))["status"])
+    if amount_satisfied and int(obligation["reporting_complete"]):
+        case_status = "RESOLVED"
+    elif amount_satisfied:
+        case_status = "ACTIONED"
+    elif prior_case in {"CORRECTION_REQUIRED", "AUTHORIZED"}:
+        case_status = prior_case
+    else:
+        case_status = "OPEN"
+    delivery = "NONE" if not actions else str(max(actions, key=lambda row: (int(row["created_at_ms"]), str(row["action_id"])))["status"])
+    return {
+        "revision": int(evaluation["revision"]),
+        "rule_version": int(obligation["rule_version"]),
+        "evidence_ids": [str(row["evidence_id"]) for row in evidence],
+        "owed_cents": owed,
+        "claimed_adjustment_cents": claimed,
+        "lawful_adjustment_cents": lawful,
+        "received_cash_cents": cash,
+        "shortfall_cents": shortfall,
+        "overage_cents": overage,
+        "cash_satisfied": cash_satisfied,
+        "amount_satisfied": amount_satisfied,
+        "timely": int(completion is not None and completion <= int(obligation["due_at_ms"])),
+        "reporting_complete": int(obligation["reporting_complete"]),
+        "verification_status": "CONFLICT_VISIBLE" if conflicts else ("SUPPORTED" if evidence else "MISSING_EVIDENCE"),
+        "case_status": case_status,
+        "delivery_status": delivery,
+    }
+
+
 def _verify_evaluations(
     connection: sqlite3.Connection,
     meta: dict[str, object],
     obligations: dict[str, sqlite3.Row],
+    populations: dict[str, sqlite3.Row],
+    packs: dict[str, sqlite3.Row],
     evidence: dict[str, sqlite3.Row],
 ) -> dict[str, list[sqlite3.Row]]:
     rows = _bounded_rows(connection, "evaluations")
@@ -1869,22 +2168,105 @@ def _verify_evaluations(
             _fail("evaluation:id-binding")
         if row["rule_version"] != obligation["rule_version"]:
             _fail("evaluation:rule")
+        population = populations.get(str(obligation["population_id"]))
+        if population is None:
+            _fail("evaluation:population")
+        pack = packs.get(str(population["pack_id"]))
+        if pack is None or row["control_pack_id"] != pack["pack_id"] or row["control_pack_version"] != pack["version"] or _blob64(row["control_pack_digest"], "evaluation:pack-digest") != bytes(pack["pack_digest"]):
+            _fail("evaluation:control-pack")
+        if row["contract_version"] != EVALUATION_RECEIPT_CONTRACT:
+            _fail("evaluation:contract")
+        scope = _parse_json(row["scope_json"], "evaluation:scope")
+        if not isinstance(scope, dict) or scope != meta["scope"]:
+            _fail("evaluation:scope")
         evidence_ids = _evidence_ids_json(row["evidence_ids_json"], "evaluation:evidence")
         for evidence_id in evidence_ids:
             if evidence_id not in evidence or evidence[evidence_id]["item_id"] != obligation["item_id"]:
                 _fail("evaluation:evidence-binding")
-        if row["authority_id"] != meta["authority_id"]:
+        evidence_bindings = _evaluation_bindings_json(row["evidence_bindings_json"], "evaluation:evidence-bindings")
+        if [binding["evidence_id"] for binding in evidence_bindings] != evidence_ids:
+            _fail("evaluation:evidence-bindings")
+        for binding in evidence_bindings:
+            if binding["record_digest"] != bytes(evidence[binding["evidence_id"]]["record_digest"]).hex().upper():
+                _fail("evaluation:evidence-bindings")
+        authority_id = _id(row["authority_id"], "evaluation:authority-id")
+        authority_epoch = _integer(row["authority_epoch"], "evaluation:authority-epoch", minimum=1, maximum=MAX_CENTS)
+        authority_digest = _blob64(row["authority_digest"], "evaluation:authority-digest")
+        if (authority_id, authority_epoch, authority_digest) != (meta["authority_id"], meta["authority_epoch"], meta["authority_digest"]):
             _fail("evaluation:authority")
-        _time(row["evaluated_at_ms"], "evaluation:time")
+        evaluated_at_ms = _time(row["evaluated_at_ms"], "evaluation:time")
+        snapshot = _evaluation_input_snapshot(row["input_snapshot_json"], "evaluation:input")
+        input_snapshot_digest = _blob64(row["input_snapshot_digest"], "evaluation:input-digest")
+        if input_snapshot_digest != _digest(EVALUATION_INPUT_DOMAIN, _canonical(snapshot, "evaluation:input-digest-input")):
+            _fail("evaluation:input-digest")
+        snapshot_obligation = snapshot["obligation"]
+        assert isinstance(snapshot_obligation, dict)
+        expected_pre_revision = revision if revision == 0 else revision - 1
+        if snapshot["pre_revision"] != expected_pre_revision or snapshot_obligation["obligation_id"] != obligation_id or snapshot_obligation["item_id"] != obligation["item_id"] or snapshot_obligation["rule_version"] != obligation["rule_version"] or snapshot_obligation["owed_cents"] != obligation["owed_cents"] or snapshot_obligation["due_at_ms"] != obligation["due_at_ms"]:
+            _fail("evaluation:input-binding")
+        snapshot_evidence = snapshot["evidence"]
+        assert isinstance(snapshot_evidence, list)
+        if [str(item["evidence_id"]) for item in snapshot_evidence] != evidence_ids:
+            _fail("evaluation:input-evidence")
+        for item in snapshot_evidence:
+            evidence_row = evidence.get(str(item["evidence_id"]))
+            if evidence_row is None or evidence_row["item_id"] != obligation["item_id"] or str(item["record_digest"]) != bytes(evidence_row["record_digest"]).hex().upper() or int(item["event_at_ms"]) != int(evidence_row["event_at_ms"]) or int(item["received_at_ms"]) != int(evidence_row["received_at_ms"]):
+                _fail("evaluation:input-evidence")
+            if int(item["received_at_ms"]) > evaluated_at_ms:
+                _fail("evaluation:evidence-chronology")
+        for item in snapshot["payments"]:
+            payment = connection.execute("SELECT obligation_id,amount_cents,event_at_ms FROM payments WHERE payment_id=?", (item["payment_id"],)).fetchone()
+            if payment is None or payment["obligation_id"] != obligation_id or int(payment["amount_cents"]) != int(item["amount_cents"]) or int(payment["event_at_ms"]) != int(item["event_at_ms"]):
+                _fail("evaluation:input-payment")
+        for item in snapshot["claims"]:
+            claim = connection.execute("SELECT obligation_id,amount_cents FROM claimed_adjustments WHERE claim_id=?", (item["claim_id"],)).fetchone()
+            if claim is None or claim["obligation_id"] != obligation_id or int(claim["amount_cents"]) != int(item["amount_cents"]):
+                _fail("evaluation:input-claim")
+        for item in snapshot["determinations"]:
+            determination = connection.execute("SELECT obligation_id,decision,amount_cents,decided_at_ms FROM determinations WHERE determination_id=?", (item["determination_id"],)).fetchone()
+            if determination is None or determination["obligation_id"] != obligation_id or determination["decision"] != item["decision"] or int(determination["amount_cents"]) != int(item["amount_cents"]) or int(determination["decided_at_ms"]) != int(item["decided_at_ms"]):
+                _fail("evaluation:input-determination")
+        for item in snapshot["cases"]:
+            case = connection.execute("SELECT obligation_id FROM cases WHERE case_id=?", (item["case_id"],)).fetchone()
+            if case is None or case["obligation_id"] != obligation_id:
+                _fail("evaluation:input-case")
+        for item in snapshot["actions"]:
+            action = connection.execute("SELECT obligation_id,created_at_ms FROM actions WHERE action_id=?", (item["action_id"],)).fetchone()
+            if action is None or action["obligation_id"] != obligation_id or int(action["created_at_ms"]) != int(item["created_at_ms"]):
+                _fail("evaluation:input-action")
+        for conflict_id in snapshot["conflicts"]:
+            conflict = connection.execute("SELECT obligation_id FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone()
+            if conflict is None or conflict["obligation_id"] != obligation_id:
+                _fail("evaluation:input-conflict")
+        input_projection = _evaluation_projection_from_input(snapshot, evaluation=row)
+        if evidence_ids != input_projection["evidence_ids"]:
+            _fail("evaluation:input-projection:evidence_ids")
+        for key in ("revision", "rule_version", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
+            if row[key] != input_projection[key]:
+                _fail(f"evaluation:input-projection:{key}")
         for key in ("owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents"):
             _cents(row[key], f"evaluation:{key}")
         for key in ("cash_satisfied", "amount_satisfied", "timely", "reporting_complete"):
             _flag(row[key], f"evaluation:{key}")
         if row["verification_status"] not in _EVALUATION_VERIFICATION or row["case_status"] not in _CASE_STATUSES or row["delivery_status"] not in _DELIVERY_STATUSES:
             _fail("evaluation:status")
-        expected_digest = _digest(EVIDENCE_DOMAIN, _canonical(_evaluation_result(row, evidence_ids), "evaluation:digest-input"))
+        expected_digest = _digest(EVALUATION_RESULT_DOMAIN, _canonical(_evaluation_result(row, evidence_ids), "evaluation:digest-input"))
         if _blob64(row["result_digest"], "evaluation:digest") != expected_digest:
             _fail("evaluation:digest")
+        receipt_body = _evaluation_receipt_body(
+            row=row,
+            evidence_ids=evidence_ids,
+            evidence_bindings=evidence_bindings,
+            scope=scope,
+            control_pack_id=str(pack["pack_id"]),
+            control_pack_version=int(pack["version"]),
+            control_pack_digest=bytes(pack["pack_digest"]),
+            authority_epoch=authority_epoch,
+            authority_digest=authority_digest,
+            input_snapshot_digest=input_snapshot_digest,
+        )
+        if _blob64(row["receipt_digest"], "evaluation:receipt-digest") != _digest(EVALUATION_RECEIPT_DOMAIN, _canonical(receipt_body, "evaluation:receipt-input")):
+            _fail("evaluation:receipt-digest")
         by_obligation.setdefault(obligation_id, []).append(row)
     for obligation_id, obligation in obligations.items():
         values = sorted(by_obligation.get(obligation_id, []), key=lambda row: row["revision"])
@@ -1896,6 +2278,70 @@ def _verify_evaluations(
         if initial["owed_cents"] != obligation["owed_cents"] or initial["claimed_adjustment_cents"] != 0 or initial["lawful_adjustment_cents"] != 0 or initial["received_cash_cents"] != 0 or initial["shortfall_cents"] != obligation["owed_cents"] or initial["overage_cents"] != 0 or initial["cash_satisfied"] != 0 or initial["amount_satisfied"] != 0 or initial["timely"] != 0 or initial["reporting_complete"] != 0 or initial["verification_status"] != "MISSING_EVIDENCE" or initial["case_status"] != "OPEN" or initial["delivery_status"] != "NONE":
             _fail("evaluation:initial")
     return by_obligation
+
+
+def _verify_evaluation_history_events(
+    events: list[sqlite3.Row],
+    populations: dict[str, sqlite3.Row],
+    obligations: dict[str, sqlite3.Row],
+    evaluations: dict[str, list[sqlite3.Row]],
+) -> None:
+    evaluations_by_id = {
+        str(row["evaluation_id"]): row
+        for history in evaluations.values()
+        for row in history
+    }
+    seen: set[str] = set()
+    for event in events:
+        payload = _parse_json(event["payload_json"], "history:evaluation-payload")
+        if not isinstance(payload, dict):
+            _fail("history:evaluation-payload")
+        if event["aggregate_type"] == "POPULATION" and event["kind"] == "POPULATION_PUBLISHED":
+            population_id = str(event["aggregate_id"])
+            expected_bindings = [
+                {
+                    "evaluation_id": str(row["evaluation_id"]),
+                    "input_snapshot_digest": _blob64(row["input_snapshot_digest"], "history:evaluation-input-digest").hex().upper(),
+                    "result_digest": _blob64(row["result_digest"], "history:evaluation-result-digest").hex().upper(),
+                    "receipt_digest": _blob64(row["receipt_digest"], "history:evaluation-receipt-digest").hex().upper(),
+                }
+                for obligation_id, history in evaluations.items()
+                if str(obligations[obligation_id]["population_id"]) == population_id
+                for row in history
+                if int(row["revision"]) == 0
+            ]
+            expected_digest = _evaluation_binding_digest(expected_bindings)
+            if _integer(payload["evaluation_count"], "history:population-evaluation-count", minimum=0, maximum=MAX_ROWS) != len(expected_bindings) or _hex_digest(payload["evaluation_binding_digest"], "history:population-evaluation-digest") != expected_digest:
+                _fail("history:evaluation-binding")
+            for binding in expected_bindings:
+                evaluation_id = binding["evaluation_id"]
+                if evaluation_id in seen:
+                    _fail("history:evaluation-duplicate")
+                seen.add(evaluation_id)
+            continue
+        if event["aggregate_type"] != "OBLIGATION" or "evaluation_id" not in payload:
+            continue
+        required = {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
+        if not required <= set(payload):
+            _fail("history:evaluation-binding")
+        evaluation_id = _id(payload["evaluation_id"], "history:evaluation-id")
+        row = evaluations_by_id.get(evaluation_id)
+        if row is None or str(row["obligation_id"]) != str(event["aggregate_id"]):
+            _fail("history:evaluation-binding")
+        if int(row["revision"]) != int(event["after_revision"]):
+            _fail("history:evaluation-binding")
+        expected = {
+            "evaluation_input_digest": _blob64(row["input_snapshot_digest"], "history:evaluation-input-digest").hex().upper(),
+            "evaluation_result_digest": _blob64(row["result_digest"], "history:evaluation-result-digest").hex().upper(),
+            "evaluation_receipt_digest": _blob64(row["receipt_digest"], "history:evaluation-receipt-digest").hex().upper(),
+        }
+        if any(str(payload[key]) != value for key, value in expected.items()):
+            _fail("history:evaluation-binding")
+        if evaluation_id in seen:
+            _fail("history:evaluation-duplicate")
+        seen.add(evaluation_id)
+    if seen != set(evaluations_by_id):
+        _fail("history:evaluation-missing")
 
 
 def _completion_time(
@@ -2196,7 +2642,7 @@ def verify_continuity_package(
     }
     if set(value) != required:
         _fail("continuity:keys")
-    if value["schema"] != CONTINUITY_SCHEMA or value["version"] != 4:
+    if value["schema"] != CONTINUITY_SCHEMA or value["version"] != 5:
         _fail("continuity:schema")
     scope = value["scope"]
     if not isinstance(scope, dict) or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
@@ -2320,10 +2766,11 @@ def _verify_connection(
     payments = _verify_payments(connection, obligations, items, evidence)
     claims = _verify_adjustments(connection, obligations, evidence)
     cases = _verify_cases(connection, obligations)
-    determinations = _verify_determinations(connection, meta, obligations, populations, packs, claims, evidence)
+    evaluations = _verify_evaluations(connection, meta, obligations, populations, packs, evidence)
+    _verify_evaluation_history_events(events, populations, obligations, evaluations)
+    determinations = _verify_determinations(connection, meta, obligations, populations, packs, claims, evidence, evaluations)
     actions = _verify_actions(connection, meta, obligations, claims, determinations)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
-    evaluations = _verify_evaluations(connection, meta, obligations, evidence)
     _verify_event_references(events, packs, populations, obligations)
     projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, cases, determinations, actions, conflicts, evaluations)
     package_result: dict[str, object] | None = None

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -117,6 +118,17 @@ def _storage_bytes(path: Path) -> int:
         if sidecar.is_file():
             total += sidecar.stat().st_size
     return total
+
+
+def _source_hashes() -> dict[str, str]:
+    paths = {
+        "owner": REPOSITORY_ROOT / "app" / "right_rail_financial_owner.py",
+        "independent_checker": REPOSITORY_ROOT / "app" / "right_rail_financial_owner_independent.py",
+    }
+    return {
+        name: hashlib.sha256(path.read_bytes()).hexdigest().upper()
+        for name, path in paths.items()
+    }
 
 
 def _pack(*, state_id: str, deployment_id: str, program_id: str, period_id: str, pack_id: str) -> ControlPack:
@@ -262,9 +274,136 @@ def _lock_probe(database: Path) -> dict[str, Any]:
         holder.close()
 
 
+def _assert_v5_evaluation_receipt(
+    receipt: dict[str, Any],
+    *,
+    item: PopulationItem,
+    config: FinancialOwnerConfig,
+    pack: ControlPack,
+    authority: SyntheticTrustedAuthority,
+) -> None:
+    if not isinstance(receipt, dict):
+        raise RuntimeError("evaluation_receipt_type")
+    required = {
+        "contract_version",
+        "scope",
+        "evaluation_id",
+        "obligation_id",
+        "revision",
+        "control_pack",
+        "evidence_bindings",
+        "authority",
+        "evidence_ids",
+        "evaluated_at_ms",
+        "input_snapshot_digest",
+        "result_digest",
+        "evaluation_result_digest",
+    }
+    if not required <= set(receipt):
+        raise RuntimeError("evaluation_receipt_shape")
+    if receipt["contract_version"] != owner_module._EVALUATION_RECEIPT_CONTRACT:
+        raise RuntimeError("evaluation_receipt_contract")
+    if type(receipt["evaluation_id"]) is not str or type(receipt["obligation_id"]) is not str:
+        raise RuntimeError("evaluation_receipt_identity")
+    if type(receipt["revision"]) is not int or receipt["revision"] < 0:
+        raise RuntimeError("evaluation_receipt_revision")
+    if type(receipt["evaluated_at_ms"]) is not int or receipt["evaluated_at_ms"] < 0:
+        raise RuntimeError("evaluation_receipt_time")
+    expected_scope = {
+        "state_id": config.state_id,
+        "deployment_id": config.deployment_id,
+        "program_id": config.program_id,
+        "period_id": config.period_id,
+        "currency": config.currency,
+    }
+    if receipt["scope"] != expected_scope:
+        raise RuntimeError("evaluation_receipt_scope")
+    control_pack = receipt["control_pack"]
+    if control_pack != {
+        "pack_id": pack.pack_id,
+        "version": pack.version,
+        "digest": pack.digest.hex().upper(),
+    }:
+        raise RuntimeError("evaluation_receipt_control_pack")
+    receipt_authority = receipt["authority"]
+    if receipt_authority != {
+        "authority_id": authority.authority_id,
+        "epoch": authority.epoch,
+        "digest": authority.digest.hex().upper(),
+    }:
+        raise RuntimeError("evaluation_receipt_authority")
+    evidence_ids = receipt["evidence_ids"]
+    bindings = receipt["evidence_bindings"]
+    if not isinstance(evidence_ids, list) or not isinstance(bindings, list):
+        raise RuntimeError("evaluation_receipt_evidence_shape")
+    if evidence_ids != sorted(evidence_ids) or len(set(evidence_ids)) != len(evidence_ids):
+        raise RuntimeError("evaluation_receipt_evidence_order")
+    if [binding.get("evidence_id") for binding in bindings] != evidence_ids:
+        raise RuntimeError("evaluation_receipt_evidence_binding")
+    for binding in bindings:
+        if not isinstance(binding, dict) or set(binding) != {"evidence_id", "record_digest"}:
+            raise RuntimeError("evaluation_receipt_evidence_binding")
+        if type(binding["evidence_id"]) is not str or type(binding["record_digest"]) is not str:
+            raise RuntimeError("evaluation_receipt_evidence_binding")
+    if receipt["evaluation_result_digest"] != receipt["result_digest"]:
+        raise RuntimeError("evaluation_receipt_result_digest")
+    input_snapshot_digest = receipt["input_snapshot_digest"]
+    if (
+        type(input_snapshot_digest) is not str
+        or len(input_snapshot_digest) != 128
+        or any(character not in "0123456789ABCDEFabcdef" for character in input_snapshot_digest)
+    ):
+        raise RuntimeError("evaluation_receipt_input_snapshot_digest")
+    if "raw_evidence" in receipt or "signatures" in receipt:
+        raise RuntimeError("evaluation_receipt_raw_payload")
+    if not item.item_id or receipt["obligation_id"] == "":
+        raise RuntimeError("evaluation_receipt_item")
+
+
+def _evaluate_with_v5_reference(
+    owner: FinancialOwner,
+    *,
+    item: PopulationItem,
+    config: FinancialOwnerConfig,
+    pack: ControlPack,
+    authority: SyntheticTrustedAuthority,
+) -> dict[str, Any]:
+    original = owner.current_evaluation_receipt(item.item_id)
+    _assert_v5_evaluation_receipt(original, item=item, config=config, pack=pack, authority=authority)
+    if owner.current_evaluation_receipt(item.item_id) != original:
+        raise RuntimeError("evaluation_receipt_read_retry_changed")
+    evaluated = owner.evaluate_obligation(item.item_id, expected_revision=int(original["revision"]))
+    returned = evaluated.get("evaluation_receipt")
+    if not isinstance(returned, dict):
+        raise RuntimeError("evaluation_receipt_missing_from_evaluate")
+    _assert_v5_evaluation_receipt(returned, item=item, config=config, pack=pack, authority=authority)
+    if returned["evaluation_id"] != evaluated.get("current_evaluation_id"):
+        raise RuntimeError("evaluation_receipt_projection_binding")
+    if int(returned["revision"]) != int(original["revision"]) + 1:
+        raise RuntimeError("evaluation_receipt_pre_revision")
+    if owner.current_evaluation_receipt(item.item_id) != returned:
+        raise RuntimeError("evaluation_receipt_current_binding")
+    return {
+        "item_id": item.item_id,
+        "original_evaluation_id": original["evaluation_id"],
+        "original_pre_revision": int(original["revision"]),
+        "original_evaluation_result_digest": original["evaluation_result_digest"],
+        "original_input_snapshot_digest": original["input_snapshot_digest"],
+        "returned_evaluation_id": returned["evaluation_id"],
+        "returned_revision": int(returned["revision"]),
+        "returned_evaluation_result_digest": returned["evaluation_result_digest"],
+        "returned_input_snapshot_digest": returned["input_snapshot_digest"],
+        "read_retry_identity_stable": True,
+    }
+
+
 def _limits() -> dict[str, Any]:
     return {
         "source": "app/right_rail_financial_owner.py",
+        "owner_schema": owner_module._SCHEMA,
+        "continuity_schema": owner_module._CONTINUITY_SCHEMA,
+        "evaluation_receipt_contract": owner_module._EVALUATION_RECEIPT_CONTRACT,
+        "source_hashes": _source_hashes(),
         "max_cents": owner_module._MAX_CENTS,
         "max_rows": owner_module._MAX_ROWS,
         "max_continuity_package_bytes": owner_module._MAX_PACKAGE_BYTES,
@@ -349,6 +488,29 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
     if statuses != ["RECORDED"] * size:
         raise RuntimeError("measurement_update_status")
     storage_after_updates = _storage_bytes(database)
+
+    evaluation_start = time.perf_counter_ns()
+    evaluation_references = [
+        _evaluate_with_v5_reference(
+            owner,
+            item=item,
+            config=config,
+            pack=pack,
+            authority=authority,
+        )
+        for item in items
+    ]
+    evaluation_ms = _elapsed_ms(evaluation_start)
+    final_receipts = {
+        item.item_id: owner.current_evaluation_receipt(item.item_id)
+        for item in items
+    }
+    for item in items:
+        _assert_v5_evaluation_receipt(final_receipts[item.item_id], item=item, config=config, pack=pack, authority=authority)
+        reference = next(value for value in evaluation_references if value["item_id"] == item.item_id)
+        if final_receipts[item.item_id]["evaluation_id"] != reference["returned_evaluation_id"]:
+            raise RuntimeError("evaluation_receipt_final_identity")
+
     lock_timing = _lock_probe(database)
 
     continuity_start = time.perf_counter_ns()
@@ -369,6 +531,12 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
         trusted_authority=authority,
     )
     test_owner.verify_integrity()
+    test_restore_receipt_matches = sum(
+        test_owner.current_evaluation_receipt(item.item_id) == final_receipts[item.item_id]
+        for item in items
+    )
+    if test_restore_receipt_matches != size:
+        raise RuntimeError("test_restore_evaluation_reference_changed")
     test_restore_ms = _elapsed_ms(test_restore_start)
     test_owner.close()
     test_restart_start = time.perf_counter_ns()
@@ -381,6 +549,12 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
     )
     test_restart_summary = reopened_test.summary()
     reopened_test.verify_integrity()
+    test_restart_receipt_matches = sum(
+        reopened_test.current_evaluation_receipt(item.item_id) == final_receipts[item.item_id]
+        for item in items
+    )
+    if test_restart_receipt_matches != size:
+        raise RuntimeError("test_restart_evaluation_reference_changed")
     test_restart_ms = _elapsed_ms(test_restart_start)
     reopened_test.close()
     source_bytes_unchanged = database.read_bytes() == source_bytes_before_restore
@@ -392,6 +566,12 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
     reopened = _MeasuredFinancialOwner(path=database, config=config, trusted_authority=authority)
     restart_summary = reopened.summary()
     reopened.verify_integrity()
+    owner_restart_receipt_matches = sum(
+        reopened.current_evaluation_receipt(item.item_id) == final_receipts[item.item_id]
+        for item in items
+    )
+    if owner_restart_receipt_matches != size:
+        raise RuntimeError("owner_restart_evaluation_reference_changed")
     restart_ms = _elapsed_ms(restart_start)
     reopened.close()
 
@@ -414,6 +594,7 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
         "latency_ms": {
             "population_build": build_ms,
             "financial_updates": update_ms,
+            "financial_evaluations": evaluation_ms,
             "continuity_export_validate": continuity_ms,
             "independent_verify": verify_ms,
             "test_restore_verify": test_restore_ms,
@@ -453,11 +634,29 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
             "dispatch_enabled": test_restart_summary["dispatch_enabled"],
             "egress_enabled": test_restart_summary["egress_enabled"],
             "source_bytes_unchanged": source_bytes_unchanged,
+            "evaluation_reference_matches": test_restore_receipt_matches,
+            "restart_evaluation_reference_matches": test_restart_receipt_matches,
             "database": str(test_database),
+        },
+        "evaluation_reference": {
+            "contract_version": owner_module._EVALUATION_RECEIPT_CONTRACT,
+            "owner_schema": owner_module._SCHEMA,
+            "item_count": size,
+            "producer_call_count": len(evaluation_references),
+            "original_pre_revision_min": min(value["original_pre_revision"] for value in evaluation_references),
+            "original_pre_revision_max": max(value["original_pre_revision"] for value in evaluation_references),
+            "returned_revision_min": min(value["returned_revision"] for value in evaluation_references),
+            "returned_revision_max": max(value["returned_revision"] for value in evaluation_references),
+            "read_retry_identity_stable_count": sum(value["read_retry_identity_stable"] for value in evaluation_references),
+            "test_restore_reference_match_count": test_restore_receipt_matches,
+            "test_restart_reference_match_count": test_restart_receipt_matches,
+            "owner_restart_reference_match_count": owner_restart_receipt_matches,
+            "reference_samples": [evaluation_references[0], evaluation_references[-1]],
         },
         "rates_per_second": {
             "population_items": _rate(size, build_ms),
             "financial_updates": _rate(len(statuses), update_ms),
+            "financial_evaluations": _rate(len(evaluation_references), evaluation_ms),
         },
         "storage_bytes": {
             "after_build": storage_after_build,
@@ -486,6 +685,7 @@ def _aggregate(size: int, samples: list[dict[str, Any]]) -> dict[str, Any]:
     latency_fields = (
         "population_build",
         "financial_updates",
+        "financial_evaluations",
         "continuity_export_validate",
         "independent_verify",
         "test_restore_verify",
@@ -495,6 +695,9 @@ def _aggregate(size: int, samples: list[dict[str, Any]]) -> dict[str, Any]:
     )
     return {
         "schema": SERIES_SCHEMA,
+        "owner_schema": owner_module._SCHEMA,
+        "continuity_schema": owner_module._CONTINUITY_SCHEMA,
+        "evaluation_receipt_contract": owner_module._EVALUATION_RECEIPT_CONTRACT,
         "size": size,
         "sample_count": len(samples),
         "population_items": size,
@@ -514,6 +717,26 @@ def _aggregate(size: int, samples: list[dict[str, Any]]) -> dict[str, Any]:
             "successful_acquisitions": sum(sample["lock_workload"]["successful_acquisitions"] for sample in samples),
             "acquisition_failures": sum(sample["lock_workload"]["acquisition_failures"] for sample in samples),
             "all_source_bytes_unchanged": all(sample["test_restore"]["source_bytes_unchanged"] for sample in samples),
+        },
+        "evaluation_reference": {
+            "aggregation": "sum_of_per_sample_counts_and_all_identity_checks",
+            "sample_count": len(samples),
+            "producer_call_count": sum(sample["evaluation_reference"]["producer_call_count"] for sample in samples),
+            "original_pre_revision_min": min(sample["evaluation_reference"]["original_pre_revision_min"] for sample in samples),
+            "original_pre_revision_max": max(sample["evaluation_reference"]["original_pre_revision_max"] for sample in samples),
+            "returned_revision_min": min(sample["evaluation_reference"]["returned_revision_min"] for sample in samples),
+            "returned_revision_max": max(sample["evaluation_reference"]["returned_revision_max"] for sample in samples),
+            "read_retry_identity_stable_count": sum(sample["evaluation_reference"]["read_retry_identity_stable_count"] for sample in samples),
+            "test_restore_reference_match_count": sum(sample["evaluation_reference"]["test_restore_reference_match_count"] for sample in samples),
+            "test_restart_reference_match_count": sum(sample["evaluation_reference"]["test_restart_reference_match_count"] for sample in samples),
+            "owner_restart_reference_match_count": sum(sample["evaluation_reference"]["owner_restart_reference_match_count"] for sample in samples),
+            "all_reference_checks_passed": all(
+                sample["evaluation_reference"]["read_retry_identity_stable_count"] == size
+                and sample["evaluation_reference"]["test_restore_reference_match_count"] == size
+                and sample["evaluation_reference"]["test_restart_reference_match_count"] == size
+                and sample["evaluation_reference"]["owner_restart_reference_match_count"] == size
+                for sample in samples
+            ),
         },
         "synthetic_lock_probe": {
             "sample_count": len(samples),
@@ -557,7 +780,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("measurement_output_root")
         root.mkdir()
         print(_json({"schema": SERIES_SCHEMA, "type": "limits", "limits": _limits()}))
-        print(_json({"schema": SERIES_SCHEMA, "type": "plan", "sizes": sizes, "warmups_per_size": 1, "samples_per_size": samples_per_size, "native": "PENDING", "queue": "NOT_APPLICABLE", "test_restore_mode": "TEST", "actual_lock_workload": "FinancialOwner._write actual operations", "synthetic_lock_probe_diagnostic": {"hold_target_ms": LOCK_PROBE_HOLD_MS, "waiter_attempts_per_sample": 1, "holder_statements_per_sample": 1}}))
+        print(_json({"schema": SERIES_SCHEMA, "type": "plan", "owner_schema": owner_module._SCHEMA, "continuity_schema": owner_module._CONTINUITY_SCHEMA, "evaluation_receipt_contract": owner_module._EVALUATION_RECEIPT_CONTRACT, "source_hashes": _source_hashes(), "sizes": sizes, "warmups_per_size": 1, "samples_per_size": samples_per_size, "native": "PENDING", "queue": "NOT_APPLICABLE", "test_restore_mode": "TEST", "actual_lock_workload": "FinancialOwner._write actual operations", "synthetic_lock_probe_diagnostic": {"hold_target_ms": LOCK_PROBE_HOLD_MS, "waiter_attempts_per_sample": 1, "holder_statements_per_sample": 1}}))
         for size in sizes:
             # Warmup is retained but not included in the measured sample distribution.
             warmup = _sample(root, size=size, sample=0)
@@ -569,7 +792,7 @@ def main(argv: list[str] | None = None) -> int:
                 measured.append(result)
                 print(_json({"schema": SERIES_SCHEMA, "type": "sample", "result": result}))
             print(_json({"schema": SERIES_SCHEMA, "type": "summary", "result": _aggregate(size, measured)}))
-        print(_json({"schema": SERIES_SCHEMA, "type": "complete", "status": "PASS", "sizes": sizes, "samples_per_size": samples_per_size, "output_root": str(root)}))
+        print(_json({"schema": SERIES_SCHEMA, "type": "complete", "status": "PASS", "owner_schema": owner_module._SCHEMA, "continuity_schema": owner_module._CONTINUITY_SCHEMA, "evaluation_receipt_contract": owner_module._EVALUATION_RECEIPT_CONTRACT, "source_hashes": _source_hashes(), "sizes": sizes, "samples_per_size": samples_per_size, "output_root": str(root)}))
         return 0
     except Exception as error:
         print(_json({"schema": SERIES_SCHEMA, "type": "failure", "error": error.__class__.__name__, "code": str(error)}), file=sys.stderr)

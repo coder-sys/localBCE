@@ -41,7 +41,7 @@ from tests import rightrail_financial_expected_cases as expected
 
 class _Clock:
     def __init__(self, initial: int | None = None) -> None:
-        self.value = expected.P3_EVENT_MS + 1_000_000 if initial is None else initial
+        self.value = expected.CASH_EVENT_MS if initial is None else initial
 
     def now_ms(self) -> int:
         self.value += 1
@@ -115,7 +115,8 @@ store = _WriteBoundaryOwner(
     clock=clock,
     fault=fault,
 )
-revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+revision = receipt["revision"]
 print("PHASE=BEFORE_REJECT", flush=True)
 store.reject_offset_and_authorize_correction(
     item_id=expected.H_ITEM_ID,
@@ -123,6 +124,8 @@ store.reject_offset_and_authorize_correction(
     expected_revision=revision,
     action_id=expected.ACTION_CORRECTION_ID,
     decision_at_ms=expected.CORRECTION_AUTH_MS,
+    evaluation_id=receipt["evaluation_id"],
+    evaluation_result_digest=receipt["result_digest"],
 )
 raise SystemExit(99)
 """
@@ -276,8 +279,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         *,
         period_id: str = expected.PERIOD_ONE_ID,
         population_id: str = expected.POPULATION_ONE_ID,
+        clock: _Clock | None = None,
     ) -> FinancialOwner:
-        owner = self._make_owner(period_id=period_id)
+        owner = self._make_owner(period_id=period_id, clock=clock)
         pack_expectation = expected.CONTROL_PACK_V1 if period_id == expected.PERIOD_ONE_ID else expected.CONTROL_PACK_V2
         pack = self._pack(pack_expectation)
         owner.publish_control_pack(pack)
@@ -331,6 +335,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
 
     @staticmethod
+    def _advance_clock(store: FinancialOwner, at_ms: int) -> None:
+        clock = getattr(store, "clock", None)
+        if isinstance(clock, _Clock):
+            clock.value = max(clock.value, at_ms)
+
+    @staticmethod
     def _record_claim(store: FinancialOwner) -> str:
         claim_id = "claim:obligation-item-h:offset-v1"
         evidence = expected.OFFSET_CLAIM_EVIDENCE
@@ -346,24 +356,28 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     @staticmethod
     def _authorize(store: FinancialOwner, claim_id: str) -> dict[str, object]:
-        revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
         return store.authorize_offset(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
-            expected_revision=revision,
+            expected_revision=receipt["revision"],
             action_id=expected.ACTION_OFFSET_ID,
             decision_at_ms=expected.OFFSET_DECISION_MS,
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
         )
 
     @staticmethod
-    def _reject(store: FinancialOwner, claim_id: str) -> dict[str, object]:
-        revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+    def _reject(store: FinancialOwner, claim_id: str, receipt: dict[str, object] | None = None) -> dict[str, object]:
+        receipt = receipt or store.current_evaluation_receipt(expected.H_ITEM_ID)
         return store.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
-            expected_revision=revision,
+            expected_revision=receipt["revision"],
             action_id=expected.ACTION_CORRECTION_ID,
             decision_at_ms=expected.CORRECTION_AUTH_MS,
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
         )
 
     @staticmethod
@@ -373,6 +387,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _record_p2(store: FinancialOwner) -> None:
         evidence = expected.P2_PAYMENT_EVIDENCE
+        RightRailFinancialAcceptanceTests._advance_clock(store, evidence.event_at_ms)
         store.record_payment_evidence(
             item_id=evidence.item_id,
             payment_id="payment:h:p2",
@@ -388,6 +403,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _record_report(store: FinancialOwner) -> None:
         original = expected.REPORT_ORIGINAL_EVIDENCE
+        RightRailFinancialAcceptanceTests._advance_clock(store, original.event_at_ms)
         store.record_reporting_evidence(
             item_id=original.item_id,
             report_id="report:h:v1",
@@ -395,6 +411,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             event_at_ms=original.event_at_ms,
         )
         evidence = expected.REPORT_CORRECTION_EVIDENCE
+        RightRailFinancialAcceptanceTests._advance_clock(store, evidence.event_at_ms)
         store.record_reporting_correction(
             item_id=evidence.item_id,
             report_id="report:h:v2",
@@ -450,6 +467,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(conflict_result["status"], "CONFLICT")
         reversal = expected.P2_REVERSAL_EVIDENCE
+        self._advance_clock(store, reversal.event_at_ms)
         store.reverse_payment(
             item_id=reversal.item_id,
             payment_id="payment:h:p2",
@@ -458,6 +476,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             event_at_ms=reversal.event_at_ms,
         )
         replacement = expected.P3_REPLACEMENT_EVIDENCE
+        self._advance_clock(store, replacement.event_at_ms)
         store.record_payment_evidence(
             item_id=replacement.item_id,
             payment_id="payment:h:p3",
@@ -568,7 +587,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store = self._build_base()
         self._record_cash(store)
         claim_id = self._record_claim(store)
-        before = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        before = receipt["revision"]
         with self.assertRaisesRegex(FinancialAuthorityError, expected.UNAUTHORIZED_REJECTION.expected_error):
             store.reject_offset_and_authorize_correction(
                 item_id=expected.H_ITEM_ID,
@@ -577,6 +597,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 expected_revision=before,
                 action_id="action:unauthorized",
                 decision_at_ms=expected.CORRECTION_AUTH_MS,
+                evaluation_id=receipt["evaluation_id"],
+                evaluation_result_digest=receipt["result_digest"],
             )
         self.assertEqual(store.obligation_detail(expected.H_ITEM_ID)["revision"], before)
         with self.assertRaisesRegex(FinancialRevisionError, expected.STALE_REJECTION.expected_error):
@@ -586,6 +608,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 expected_revision=0,
                 action_id="action:stale",
                 decision_at_ms=expected.CORRECTION_AUTH_MS,
+                evaluation_id=receipt["evaluation_id"],
+                evaluation_result_digest=receipt["result_digest"],
             )
         self._reject(store, claim_id)
         self._assert_snapshot(store, expected.H_REJECTED_CORRECTION)
@@ -649,6 +673,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(result["status"], "CONFLICT")
         self._assert_snapshot(store, expected.H_P2_CONFLICT_VISIBLE)
         reversal = expected.P2_REVERSAL_EVIDENCE
+        self._advance_clock(store, reversal.event_at_ms)
         store.reverse_payment(
             item_id=reversal.item_id,
             payment_id="payment:h:p2",
@@ -658,6 +683,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         self._assert_snapshot(store, expected.H_P2_REVERSED)
         replacement = expected.P3_REPLACEMENT_EVIDENCE
+        self._advance_clock(store, replacement.event_at_ms)
         store.record_payment_evidence(
             item_id=replacement.item_id,
             payment_id="payment:h:p3",
@@ -677,7 +703,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store = self._build_base()
         self._record_cash(store)
         claim_id = self._record_claim(store)
-        expected_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        expected_revision = receipt["revision"]
         barrier = threading.Barrier(2)
         outcomes: list[str] = []
         errors: list[tuple[type[BaseException], str]] = []
@@ -691,6 +718,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     expected_revision=expected_revision,
                     action_id=action_id,
                     decision_at_ms=expected.CORRECTION_AUTH_MS,
+                    evaluation_id=receipt["evaluation_id"],
+                    evaluation_result_digest=receipt["result_digest"],
                 )
                 outcomes.append(str(result["status"]))
             except BaseException as error:  # preserve the exact loser class/message for the gate
@@ -764,12 +793,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         precommit_store = self._build_base()
         self._record_cash(precommit_store)
         precommit_claim = self._record_claim(precommit_store)
+        precommit_receipt = precommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
         precommit_package = precommit_store.export_continuity()
         precommit_summary = precommit_store.summary()
         precommit_counts = self._durable_counts(precommit_store.path)
         precommit_fault = self._make_write_boundary_owner(path=precommit_store.path, fault="precommit", clock=precommit_store.clock)
         with self.assertRaisesRegex(RuntimeError, "synthetic_financial_precommit_interrupt"):
-            self._reject(precommit_fault, precommit_claim)
+            self._reject(precommit_fault, precommit_claim, precommit_receipt)
 
         reopened_precommit = self._make_owner(path=precommit_store.path, clock=precommit_store.clock)
         self.assertEqual(reopened_precommit.summary(), precommit_summary)
@@ -778,13 +808,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_snapshot(reopened_precommit, expected.H_CASH_AND_CLAIM)
         self._assert_verified(reopened_precommit)
 
-        committed_after_retry = self._reject(reopened_precommit, precommit_claim)
+        committed_after_retry = self._reject(reopened_precommit, precommit_claim, precommit_receipt)
         self.assertEqual(committed_after_retry["status"], "CORRECTION_AUTHORIZED")
         self._assert_snapshot(reopened_precommit, expected.H_REJECTED_CORRECTION)
         self._assert_verified(reopened_precommit)
         committed_package = reopened_precommit.export_continuity()
         committed_counts = self._durable_counts(reopened_precommit.path)
-        duplicate_after_retry = self._reject(reopened_precommit, precommit_claim)
+        duplicate_after_retry = self._reject(reopened_precommit, precommit_claim, precommit_receipt)
         self.assertEqual(duplicate_after_retry["status"], "DUPLICATE")
         self.assertEqual(reopened_precommit.export_continuity(), committed_package)
         self.assertEqual(self._durable_counts(reopened_precommit.path), committed_counts)
@@ -796,16 +826,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         postcommit_store = self._build_base()
         self._record_cash(postcommit_store)
         postcommit_claim = self._record_claim(postcommit_store)
+        postcommit_receipt = postcommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
         postcommit_fault = self._make_write_boundary_owner(path=postcommit_store.path, fault="postcommit", clock=postcommit_store.clock)
         with self.assertRaisesRegex(RuntimeError, "synthetic_financial_result_lost_after_commit"):
-            self._reject(postcommit_fault, postcommit_claim)
+            self._reject(postcommit_fault, postcommit_claim, postcommit_receipt)
 
         reopened_postcommit = self._make_owner(path=postcommit_store.path, clock=postcommit_store.clock)
         self._assert_snapshot(reopened_postcommit, expected.H_REJECTED_CORRECTION)
         self._assert_verified(reopened_postcommit)
         postcommit_package = reopened_postcommit.export_continuity()
         postcommit_counts = self._durable_counts(reopened_postcommit.path)
-        duplicate_after_commit = self._reject(reopened_postcommit, postcommit_claim)
+        duplicate_after_commit = self._reject(reopened_postcommit, postcommit_claim, postcommit_receipt)
         self.assertEqual(duplicate_after_commit["status"], "DUPLICATE")
         self.assertEqual(reopened_postcommit.export_continuity(), postcommit_package)
         self.assertEqual(self._durable_counts(reopened_postcommit.path), postcommit_counts)
@@ -817,6 +848,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         process_precommit_store = self._build_base()
         self._record_cash(process_precommit_store)
         process_precommit_claim = self._record_claim(process_precommit_store)
+        process_precommit_receipt = process_precommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
         process_precommit_package = process_precommit_store.export_continuity()
         process_precommit_summary = process_precommit_store.summary()
         process_precommit_counts = self._durable_counts(process_precommit_store.path)
@@ -844,11 +876,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(self._durable_counts(reopened_process_precommit.path), process_precommit_counts)
         self._assert_snapshot(reopened_process_precommit, expected.H_CASH_AND_CLAIM)
         self._assert_verified(reopened_process_precommit)
-        process_precommit_retry = self._reject(reopened_process_precommit, process_precommit_claim)
+        process_precommit_retry = self._reject(reopened_process_precommit, process_precommit_claim, process_precommit_receipt)
         self.assertEqual(process_precommit_retry["status"], "CORRECTION_AUTHORIZED")
         process_precommit_committed_package = reopened_process_precommit.export_continuity()
         process_precommit_committed_counts = self._durable_counts(reopened_process_precommit.path)
-        process_precommit_duplicate = self._reject(reopened_process_precommit, process_precommit_claim)
+        process_precommit_duplicate = self._reject(reopened_process_precommit, process_precommit_claim, process_precommit_receipt)
         self.assertEqual(process_precommit_duplicate["status"], "DUPLICATE")
         self.assertEqual(reopened_process_precommit.export_continuity(), process_precommit_committed_package)
         self.assertEqual(self._durable_counts(reopened_process_precommit.path), process_precommit_committed_counts)
@@ -861,6 +893,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         process_postcommit_store = self._build_base()
         self._record_cash(process_postcommit_store)
         process_postcommit_claim = self._record_claim(process_postcommit_store)
+        process_postcommit_receipt = process_postcommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
         process_postcommit_clock = process_postcommit_store.clock.value + 1_000_000
         process_postcommit = self._run_process_boundary(
             store=process_postcommit_store,
@@ -892,7 +925,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(process_postcommit_counts["actions"], 1)
         self.assertEqual(process_postcommit_counts["action_outbox"], 1)
         process_postcommit_package = reopened_process_postcommit.export_continuity()
-        process_postcommit_duplicate = self._reject(reopened_process_postcommit, process_postcommit_claim)
+        process_postcommit_duplicate = self._reject(reopened_process_postcommit, process_postcommit_claim, process_postcommit_receipt)
         self.assertEqual(process_postcommit_duplicate["status"], "DUPLICATE")
         self.assertEqual(reopened_process_postcommit.export_continuity(), process_postcommit_package)
         self.assertEqual(self._durable_counts(reopened_process_postcommit.path), process_postcommit_counts)
@@ -1283,6 +1316,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def test_reporting_correction_requires_bound_prior_report(self) -> None:
         store = self._build_base()
         before = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        self._advance_clock(store, expected.REPORT_CORRECTION_MS)
         with self.assertRaisesRegex(FinancialIntegrityError, "report_supersedes_missing"):
             store.record_reporting_correction(
                 item_id=expected.H_ITEM_ID,
@@ -1293,6 +1327,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 supersedes="evidence:report:not-present",
             )
         self.assertEqual(store.obligation_detail(expected.H_ITEM_ID)["revision"], before)
+        self._advance_clock(store, expected.P2_EVENT_MS)
         store.record_reporting_evidence(
             item_id=expected.H_ITEM_ID,
             report_id="report:original-bound",
@@ -1319,6 +1354,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 event_at_ms=expected.P2_EVENT_MS,
                 supersedes="evidence:report:original-bound",
             )
+        self._advance_clock(store, expected.REPORT_CORRECTION_MS)
         store.record_payment_evidence(
             item_id=expected.H_ITEM_ID,
             payment_id="payment:report-lineage-incompatible",
@@ -1341,6 +1377,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_reporting_correction_retry_is_identity_stable_and_side_effect_free(self) -> None:
         store = self._build_base()
+        self._advance_clock(store, expected.P2_EVENT_MS)
         store.record_reporting_evidence(
             item_id=expected.H_ITEM_ID,
             report_id="report:retry-original",
@@ -1441,6 +1478,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_reporting_correction_chain_survives_restart_and_shadow_restore(self) -> None:
         store = self._build_base()
+        self._advance_clock(store, expected.P2_EVENT_MS)
         store.record_reporting_evidence(
             item_id=expected.H_ITEM_ID,
             report_id="report:chain-original",
@@ -1448,6 +1486,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             event_at_ms=expected.P2_EVENT_MS,
         )
         first_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        self._advance_clock(store, expected.REPORT_CORRECTION_MS)
         store.record_reporting_correction(
             item_id=expected.H_ITEM_ID,
             report_id="report:chain-correction-1",
@@ -1457,6 +1496,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             supersedes="evidence:report:chain-original",
         )
         second_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        self._advance_clock(store, expected.REPORT_CORRECTION_MS + 1)
         store.record_reporting_correction(
             item_id=expected.H_ITEM_ID,
             report_id="report:chain-correction-2",
@@ -1476,6 +1516,148 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             clock=_Clock(),
         )
         self._assert_verified(shadow, restore_source_package=package)
+
+    def test_v5_evaluation_receipt_is_durable_and_returned_by_evaluate(self) -> None:
+        store = self._build_base()
+        before = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        evaluated = store.evaluate_obligation(expected.H_ITEM_ID, expected_revision=before["revision"])
+        receipt = evaluated["evaluation_receipt"]
+        self.assertEqual(receipt["evaluation_id"], evaluated["current_evaluation_id"])
+        self.assertEqual(receipt["revision"], evaluated["revision"])
+        self.assertEqual(receipt["evaluation_result_digest"], receipt["result_digest"])
+        self.assertEqual(receipt, store.current_evaluation_receipt(expected.H_ITEM_ID))
+        self.assertEqual(receipt["scope"]["period_id"], expected.PERIOD_ONE_ID)
+        self.assertEqual(receipt["evidence_bindings"], [])
+        self.assertNotIn("raw_evidence", receipt)
+        self.assertNotIn("signatures", receipt)
+        store.close()
+        reopened = self._make_owner(path=store.path, clock=store.clock)
+        self.assertEqual(reopened.current_evaluation_receipt(expected.H_ITEM_ID), receipt)
+        self._assert_verified(reopened)
+
+    def test_v5_action_requires_current_evaluation_and_exact_retry_identity(self) -> None:
+        store = self._build_base()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        with self.assertRaisesRegex(FinancialInputError, "evaluation_reference_required"):
+            store.reject_offset_and_authorize_correction(
+                item_id=expected.H_ITEM_ID,
+                claim_id=claim_id,
+                expected_revision=receipt["revision"],
+                action_id="action:missing-evaluation-reference",
+                decision_at_ms=expected.CORRECTION_AUTH_MS,
+            )
+        foreign = store.current_evaluation_receipt("item-01")
+        with self.assertRaisesRegex(FinancialRevisionError, "evaluation_revision_conflict"):
+            store.reject_offset_and_authorize_correction(
+                item_id=expected.H_ITEM_ID,
+                claim_id=claim_id,
+                expected_revision=receipt["revision"],
+                action_id="action:foreign-evaluation-reference",
+                decision_at_ms=expected.CORRECTION_AUTH_MS,
+                evaluation_id=foreign["evaluation_id"],
+                evaluation_result_digest=foreign["result_digest"],
+            )
+        first = store.reject_offset_and_authorize_correction(
+            item_id=expected.H_ITEM_ID,
+            claim_id=claim_id,
+            expected_revision=receipt["revision"],
+            action_id="action:exact-retry-v5",
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
+        )
+        self.assertEqual(first["status"], "CORRECTION_AUTHORIZED")
+        detail = store.obligation_detail(expected.H_ITEM_ID)
+        determination = next(row for row in detail["determinations"] if row["determination_id"] == "determination:action:exact-retry-v5")
+        decision_time = int(determination["decided_at_ms"])
+        before_retry = store.export_continuity()
+        retry = store.reject_offset_and_authorize_correction(
+            item_id=expected.H_ITEM_ID,
+            claim_id=claim_id,
+            expected_revision=receipt["revision"],
+            action_id="action:exact-retry-v5",
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
+        )
+        self.assertEqual(retry["status"], "DUPLICATE")
+        explicit_retry = store.reject_offset_and_authorize_correction(
+            item_id=expected.H_ITEM_ID,
+            claim_id=claim_id,
+            expected_revision=receipt["revision"],
+            action_id="action:exact-retry-v5",
+            decision_at_ms=decision_time,
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
+        )
+        self.assertEqual(explicit_retry["status"], "DUPLICATE")
+        with self.assertRaisesRegex(FinancialConflictError, "determination_request_conflict"):
+            store.reject_offset_and_authorize_correction(
+                item_id=expected.H_ITEM_ID,
+                claim_id=claim_id,
+                expected_revision=receipt["revision"],
+                action_id="action:exact-retry-v5",
+                decision_at_ms=decision_time + 1,
+                evaluation_id=receipt["evaluation_id"],
+                evaluation_result_digest=receipt["result_digest"],
+            )
+        with self.assertRaisesRegex(FinancialConflictError, "determination_request_conflict"):
+            store.reject_offset_and_authorize_correction(
+                item_id="item-01",
+                claim_id=claim_id,
+                action_id="action:exact-retry-v5",
+                evaluation_id=receipt["evaluation_id"],
+                evaluation_result_digest=receipt["result_digest"],
+            )
+        self.assertEqual(store.export_continuity(), before_retry)
+        self._assert_verified(store)
+
+    def test_future_received_evidence_is_rejected_without_clamping(self) -> None:
+        clock = _Clock()
+        store = self._build_base(clock=clock)
+        before = store.path.read_bytes()
+        future_received_at_ms = clock.value + 10_000
+        with self.assertRaisesRegex(FinancialIntegrityError, "evaluation_evidence_chronology"):
+            store.record_support_evidence(
+                item_id=expected.H_ITEM_ID,
+                evidence_id="evidence:future-received",
+                common_origin_id="future-received",
+                applicable_at_ms=clock.value,
+                event_at_ms=clock.value,
+                received_at_ms=future_received_at_ms,
+            )
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
+
+    def test_continuity_restore_rejects_meta_header_mismatch_before_creation(self) -> None:
+        store = self._build_base()
+        package = json.loads(store.export_continuity().decode("ascii"))
+        package["tables"]["financial_meta"][0]["sequence"] += 1
+        body = dict(package)
+        del body["package_digest"]
+        package["package_digest"] = owner._hex(owner._digest(owner._CONTINUITY_DOMAIN, owner._canonical(body)))
+        destination = self._path("meta-mismatch-continuity.sqlite")
+        with self.assertRaisesRegex(FinancialContinuityError, "continuity_meta_binding"):
+            FinancialOwner.restore_continuity(
+                package_bytes=owner._canonical(package),
+                recovered_path=destination,
+                trusted_authority=self.authority,
+                clock=_Clock(),
+            )
+        self.assertFalse(destination.exists())
+        self._assert_verified(store)
+
+    def test_v5_old_continuity_version_is_rejected_without_mutating_source(self) -> None:
+        store = self._build_base()
+        before = store.path.read_bytes()
+        package = json.loads(store.export_continuity().decode("ascii"))
+        package["schema"] = "RR/FINANCIAL/CONTINUITY/v4"
+        package["version"] = 4
+        old_package = owner._canonical(package)
+        with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
+            FinancialOwner.validate_continuity_package(old_package)
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
 
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:
         self.assertEqual(tuple(case.number for case in expected.ACCEPTANCE_CASES), tuple(range(1, 13)))

@@ -1,283 +1,154 @@
 # RightRail architecture
 
-Updated: 2026-09-13
+Updated: 2026-09-20
 
-RightRail's first concrete responsibility in this checkout is one defined financial workflow from
-an approved population through supported completion. The state/provider/payer authority and official
-processor retain their roles. RightRail does not adjudicate a whole claim, move money, replace the
-official payment system, or act as an L2, rollup, blockchain execution system, or Solidity
-application.
+RightRail’s current concrete responsibility is a synthetic, state-local
+financial workflow. The official state/provider/payment authority retains
+control of funds and legal decisions. RightRail records evidence and
+state-owned workflow state; it does not move money, replace an official
+processor, or claim a deployed formal authority.
 
-## Current integration boundary — implemented versus proposed
+## Current integration boundary
 
-The integration branch started at `be712f56117ee71f2f2477f139a9894a209a2985`, tree
-`11191daf7d1604969649262300efb6a62b25fcff`. It remains synthetic, local, and nonactivating. The
-durable financial slice, independently implemented checker, same-owner Mirror surface, and bounded
-Continuity shadow export/restore are implemented at source checkpoint
-`99d28687df0e7d5cf6a46e73db22f42a9902b789`, tree
-`82087b8f740e00c55d85a4717cd45617e96d9bc8`, after the guarded acceptance and measurement gates
-recorded in `CURRENT_TASK.md` and `STATE.md`.
+The working Python implementation is v5:
+`RR/FINANCIAL/OWNER/v5` and `RR/FINANCIAL/CONTINUITY/v5`. The current committed
+parent is `06070168fd180a1173bb6426cbf7cbdbc33bc67a` / tree
+`c52630fd511ebe3b1ca32b2390a289c3a07746a6`; source/test/CLI corrections are
+intentionally uncommitted and State-owned.
 
-The retained source-admission/ownership candidate at `1306e38901b73790dfb2a973b4ac44daf2ff6869`
-and its 100-operation evidence remain a separate bounded generation. Lean source/adapters in other
-checkouts are not linked to this runtime. No formal, PQ, production, payment, or activation claim
-follows from this branch.
+The v5 owner, independent checker, Mirror, CLI, and Continuity are a working
+candidate. v2/v3/v4 stores/packages remain preserved historical inputs and
+reject fail-closed without mutation. Separate native and Lean artifacts are
+not linked into this Python runtime. Lean extraction is the active formal
+direction, but there is no runtime authority switch until executable linkage
+and refinement evidence exist.
 
 ## Five-part responsibility model
 
-1. **State Control Pack** — versioned approved requirements, source references, effective periods,
-   calculation/adjustment rules, authority roles, and independently specified expected results.
-2. **Blind Ledger** — the financial owner for populations, obligations, typed evidence, evaluations,
-   discrepancies, cases, determinations, revisions, corrections, balances, and immutable actions.
-3. **Mirror** — same-owner staff-facing queries and commands: open work, obligation/evidence drill-
-   downs, case/determination views, and authorized commands. It is not a second ledger.
-4. **Continuity State** — a bounded, versioned export/restore of this responsibility's rules,
-   populations, obligations, evidence access, history, open work, decisions, and delivery identity.
-   Restore is shadow/test-only with dispatch disabled and no second live writer.
-5. **Switch** — a later replay/shadow comparison and explicitly authorized transfer boundary. This
-   slice establishes reproducible inputs/results only; live routing and cutover are deferred.
+1. **State Control Pack** — approved scope, source references, effective
+   interval, calculation/adjustment rules, roles, tests, and exceptions.
+2. **Blind Ledger** — the single writer for populations, obligations, typed
+   evidence, evaluations, cases, determinations, corrections, balances, and
+   action/outbox identity.
+3. **Mirror** — same-owner queries and authorized commands. It is not a second
+   ledger and cannot invent cash, authority, or clearance.
+4. **Continuity State** — the required bounded, versioned export/restore of
+   the owner’s records. SHADOW must be query-only; TEST must be isolated/non-
+   live; dispatch and egress must remain disabled; no second live writer may
+   be created.
+5. **Switch** — deferred shadow/replay comparison and explicitly authorized
+   transfer boundary. Live routing and cutover are not implemented here.
 
-The fictional acceptance program has twenty hospitals and $1,000,000 total responsibility: H is
-$100,000 and the other nineteen total $900,000. The expected population is authoritative and cannot
-be narrowed by a submitted evidence or payment file. Missing evidence remains accountable. Exact
-cents, overflow checks, duplicate/common-origin relationships, reversals, supersession, conflicts,
-timeliness, cash, reporting, and action delivery are independent dimensions.
+The fixed synthetic fixture is twenty hospitals and $1,000,000 total: H is
+$100,000 and the other nineteen total $900,000. Expected cents are hand-
+derived, not generated by the evaluator under test.
 
-The fixed cents are H `10,000,000`, eighteen other items `4,700,000` each, and one other item
-`5,400,000`; the other-item total is `90,000,000` and the program total is `100,000,000`. These
-are reviewer-supplied expected values, not values generated by the evaluator under test. Fixture
-branches cover the `9,700,000` cash plus `300,000` claimed-offset shortfall, authorized offset,
-rejected-offset correction, unique correction payment `P2`, duplicate/conflicting confirmation,
-reversal, and distinct replacement `P3` semantics.
-
-## Intended data flow and ownership
+## Ownership and data flow
 
 ```text
-State Control Pack / approved population / rule versions
-                           |
-                           v
-                   Blind Ledger owner
-       evidence --> obligations/evaluations/cases
-       authority -> determinations/corrections/balances
-                           |
-             atomic history + projection + action/outbox
-                           |
-          +----------------+----------------+
-          v                                 v
-   Mirror queries/commands             Continuity export
-          |                                 |
-          +----------- same owner ----------+
-                                            v
-                                  shadow restore / replay
-
-Switch is a later comparison/transfer boundary. Official payment/reporting systems remain external
-authorities; their evidence is ingested as typed records and never implied by an acknowledgment.
+approved Control Pack + population
+                |
+                v
+        one Python financial owner
+ evidence -> evaluations -> determinations/actions/outbox
+                |                         |
+                v                         v
+       current projections             same-owner Mirror
+                |
+                v
+       bounded Continuity export -> SHADOW or TEST restore
 ```
 
-The owner atomically commits a transition, current-state projection, and resulting action/outbox
-work. Evaluations bind an obligation revision, evidence versions, rule version, and trusted
-authority. Stale revisions fail visibly. Action identity and canonical payload are immutable across
-delivery retries; a changed correction receives a new action identity. The existing queue/State/
-outbox transaction is preserved when a transition consumes a verified queue result.
+The owner must atomically commit history, projection, and action/outbox state.
+Mirror reads and commands must use that owner. Continuity is a bounded
+handoff/test surface, not a second writer. Official payment/reporting systems
+remain external authorities; an acknowledgment is not cash receipt.
 
-The implementation uses exact integer cents and bounded row/payload limits. It must not load a whole
-population or history for one query, duplicate raw evidence into every projection, or perform an
-external dispatch inside the owner transaction. The active synthetic authority is injected, and
-missing or unauthorized authority fails closed.
+## Versioned state contracts
 
-## Mirror source boundary and financial surface
+The required evaluation model retains versioned plaintext rows. v5 requires
+`current_evaluation_receipt(item_id)` and the same receipt from
+`evaluate_obligation`. `RR/FINANCIAL/EVALUATION-RECEIPT/v1` binds scope,
+evaluation/obligation/revision, Control Pack id/version/digest, sorted unique
+evidence id/record-digest bindings, trusted authority id/epoch/digest,
+timestamp, result fields, result digest, and receipt digest. It carries
+references/digests only, never raw evidence or signatures.
 
-Mirror is the staff-facing query/action boundary over the financial owner's records. Its first
-surface is a lightweight local CLI/read model with paginated current state, open work, evidence
-references, case/determination history, completion dimensions, and authorized commands. It never
-creates a second obligation ledger or invents a cash result. Raw source bytes remain at the existing
-source boundary; any reused source admission, Ingress, Core, recovery, and sanitization semantics
-retain their existing ownership and are not silently recast as financial authority.
+The required determination transition binds evaluation id, evaluation-result
+digest, and expected revision to the current and historical evaluation,
+receipt, projection, evidence coverage/chronology, Control Pack, and authority.
+It must persist one canonical command identity/digest, evaluation-consumption
+marker, determination, action, and outbox transition. Exact retries must be
+`DUPLICATE`; changed identity or input must be conflict. There is no separate
+verification-attempt, lease, receipt-consumption, or Queue-reservation boundary;
+Queue reservations and claimed-adjustment business state remain separate.
 
-The broader evidence/reconciliation product remains compatible with this slice: it answers what
-entered, which rule/obligation applied, what each boundary did, what came out, what was paid or
-reported, and where expected and actual behavior diverged. The current financial workflow adds a
-typed owner view; it does not turn the provider graph or directory adapter into a payment authority.
+The frozen v5 review found defects in the working path, so the current batch is
+`NOT ACCEPTED` pending the combined correction and affected re-verification.
+`STATE.md` owns the detailed blockers and disposition.
 
-Mirror asks six questions:
+Evidence, official determination, authorized action, dispatch/acknowledgment,
+and cash/reporting completion are distinct facts. Missing, stale, malformed,
+or unauthorized authority fails closed.
 
-1. What entered?
-2. Which rule or obligation applied?
-3. What did each responsibility boundary do?
-4. What came out?
-5. What was paid or reported?
-6. Where did expected and actual behavior diverge?
+## Mirror and continuity boundary
 
-Its evidence ladder has three visibility levels:
+Mirror exposes paginated current state, open work, evidence references,
+determination/action history, and authorized commands through the owner. The
+CLI is a local caller surface, not a financial authority. Raw source bytes and
+external source admission retain their existing owners.
 
-1. State-existing data.
-2. State-controlled boundary observation.
-3. Optional deep vendor telemetry.
+The required Continuity packages are versioned and bounded. SHADOW must open
+read-only. TEST restore must use an isolated destination, fixed
+identity/provenance, restart and independent verification, and disabled
+dispatch/egress. It must reject source overwrite, LIVE promotion, identity
+replacement, and mismatched restore-owner contracts. An abrupt owner exit
+before COMMIT or after COMMIT must preserve atomicity and exact retry
+semantics; the retained CASE10 evidence is owner-local and does not qualify
+other system boundaries.
 
-Mirror states only what the evidence supports and exposes RightRail's own failures. Its eight
-internal capability views are not separate products:
+## Lean and replacement seams
 
-| Internal view | Meaning |
+The owner’s semantic core is being designed for an executable Lean extraction:
+small trusted state, narrow versioned modular interfaces, explicit state
+machines, independent checks, fail-closed authority, deterministic inputs, and
+recovery/idempotency around atomic history-projection-outbox transitions. The
+Python v5 owner remains the sole runtime transaction authority until a pinned
+Lean artifact, refinement/linkage evidence, and independent boundary checks
+exist.
+
+Productionization must replace, rather than silently rewrite, the fixed
+contracts behind authenticated inputs, state custody, qualified persistence,
+support/privacy controls, Lean semantics, and any private-proof backend. It
+requires state approval, independent assurance, operational recovery, and all
+applicable profile gates. The current candidate has none of those production
+claims.
+
+## Product and commercial separation
+
+State owns rules, data, keys, histories, interfaces, tests, and continuity
+export. Vendor compatibility and conformance remain free and replaceable;
+RightRail takes no share of denials, recoveries, penalties, or savings. Provider
+App economics are separate from this owner. Corporate support receives zero
+PHI and no persistent linkable claim fingerprint; synthetic reproduction is
+the default.
+
+The retained exact-100 protocol, Queue/State/outbox atomicity, source
+ownership/reservation, non-`CLEAR` economic guard, and native/C/crypto/Lean
+boundaries are separate protected generations. This workflow does not change
+their bytes, parameters, artifacts, or qualification status.
+
+## Local authority map
+
+| Concern | Authority |
 | --- | --- |
-| Transaction Mirror | Trace available input through processor decision, payment, reporting, correction, and appeal against the State Control Pack or state reference. |
-| Contract Mirror | Continuously test exact vendor obligations, populations, results, responsible party, exceptions, and remediation. |
-| Money Mirror | Reconcile adjudicated claims, cash, encounters, voids, adjustments, capitation, withholds, state-directed payments, invoices, and reporting. |
-| Transition Mirror | Compare incumbent and challenger behavior, unresolved differences, coverage, interface compatibility, export, continuity, and rollback readiness. |
-| Denominator Ledger | Preserve the complete population before later systems narrow it. |
-| Responsibility Graph and corrective-action runtime | Connect obligation to plan/delegate, interface, transaction, failure, corrective action, retest, evidence, and closure. |
-| Provider Trust Graph | Maintain an evidence-backed view of provider identity, license, sanction/exclusion, ownership, affiliation, taxonomy, location, accreditation, credential, enrollment, effective dates, termination, and reverification. |
-| State Value Ledger | Keep one evidence-backed baseline, intervention, calculation, category, and owner for each claimed dollar, counted once. |
-
-North Carolina Provider Enrollment and Credential Continuity is the recommended read-only first
-wedge, not an irreversible state selection. It is scoped to one provider class and scope, uses
-authoritative state-accessible sources and relevant policy/contract tests, and requires
-evidence-backed discrepancies, remediation/retest, parity/adapter/continuity artifacts, and zero
-payment authority. Provider Trust Graph is a narrow first wedge of Mirror, never a rebranding of
-the whole product. It remains distinct from Blind Ledger's operative clearance boundary and from
-the broad `Continuity State`, which is a later state-owned operational handoff package.
-
-## Product and promotion boundary
-
-The first commercial wedge belongs externally to Mirror's Provider Trust Graph. It reports
-evidence-backed findings, source coverage, discrepancies, remediation/retest status, parity cases,
-and transition artifacts. It does not expose a Blind Ledger clearance receipt, create an operative
-`ClearanceDecisionRow`, or authorize an economic mutation.
-
-The current plaintext continuity module deliberately exercises the future five-directive Blind Ledger
-semantics, but it is an internal conformance harness rather than the commercial wedge API. A future
-versioned product boundary must keep these contracts distinct:
-
-```text
-authoritative source + policy/contract material
-        |
-        v
-Mirror observation and Provider Trust Graph finding
-        |
-        +---- remediation, retest, parity, and transition evidence
-        |
-        v
-candidate State Control Pack artifact
-        |
-        v
-deterministic tests + state review/approval
-        |
-        +---- observation-only control
-        |
-        v
-verifier-owned automaticControlSetId
-        |
-        v
-Blind Ledger operative clearance eligibility
-```
-
-Behavioral Twin output enters only as a candidate. Historical incumbent behavior, compatibility
-behavior, ambiguity, or a suspected defect cannot become state policy or automatic enforcement
-without the explicit approval path above.
-
-## Qualification and replacement seams
-
-Blind Ledger and the Mirror/provider-continuity wedge are production-shaped candidates, not
-qualified deployments. Productionization substitutes authenticated inputs, custody, persistence,
-support, Lean, and the private-proof backend behind fixed interfaces; it does not rewrite the
-five directives, result separation, ownership, roots/order, chronology, state transition, or
-fail-closed behavior. The exact gates live with their component owners.
-
-| Current boundary | Future replacement | Contract owner |
-| --- | --- | --- |
-| Mirror source observation, graph, export, and recovery | Authenticated source, state custody, support, and pilot operations | `docs/MIRROR_ARCHITECTURE.md` |
-| Blind Ledger state transaction | Qualified database/custody adapter | `docs/DATABASE_ZK_ARCHITECTURE.md` |
-| Lean semantic target | Pinned executable Lean artifact and narrow native adapter | `docs/LEAN_FORMAL_KERNEL.md` |
-| Native-v3 private-proof boundary | Theorem-qualified PQ backend | `docs/NATIVE_V3_ARCHITECTURE.md` |
-| Later public checkpoint | Governed Ethereum L1 checkpoint adapter | Database boundary owner; not a current dependency |
-
-The term `Continuity State` is reserved for the broad state-owned operational handoff package:
-in-flight claims, authorizations, appeals, provider applications, balances, exceptions,
-configurations, interfaces, and unresolved work. A narrow provider-continuity assessment must not
-claim to implement that larger capability.
-
-## Authority and clearance boundaries
-
-The state-approved control set selects exactly one evidence mode before admission: `DIRECT_STATE_OWNED`
-for lawfully held canonical plaintext, `AUTHORITATIVE_ASSERTION` for a qualified operation-scoped
-source assertion, or `PRIVATE_ZK` for a hidden source-bound predicate. There is no caller-selected
-downgrade or runtime fallback. A signature or proof establishes only its scoped evidence result;
-`policyResult`, `effectiveDirective`, exceptions, chronology, state mutation, and payment remain
-state-owned. The exact private statement, source binding, privacy, PQ, and resource gates are owned by
-`docs/NATIVE_V3_ARCHITECTURE.md`.
-
-The fixed state-local directives are:
-
-| Directive | Meaning | Automatic economic effect |
-| --- | --- | --- |
-| `CLEAR` | Every selected deterministic check passed. | May release the committed amount to the official payment system. |
-| `HOLD` | A fixable deterministic requirement is missing. | No release. |
-| `HUMAN_REVIEW` | Judgment, ambiguity, unavailable authority, or more evidence is required. | No automatic release. |
-| `BLOCK` | A clear state-approved deterministic condition failed. | No release. |
-| `EXCEPTION_APPROVED` | A separately governed current override authorizes a scoped exception. | May release only within its exact scope, amount, and expiry. |
-
-Every admitted attempt advances replay/audit state. Only `CLEAR` or a valid
-`EXCEPTION_APPROVED` may advance economic clearance state. A missing, malformed, stale, or failed
-evidence result produces no directive. An emergency continuity action is a separately signed human
-override recorded by Mirror, never a verifier failure relabelled as `CLEAR`.
-
-The authority chain is:
-
-| Owner | Provides | Cannot provide |
-| --- | --- | --- |
-| State Control Pack | Approved rules, scope, effective interval, tests, and exceptions | Source truth or an answer to an ambiguous policy question |
-| Native verifier / source assertion | Canonical parsing and scoped evidence acceptance | Policy, directive, transition, payment, or activation |
-| Lean target | Deterministic semantic meaning and legal local transition once implemented and linked | Source truth, cryptographic soundness, database durability, or funds movement |
-| Blind Ledger database | Atomic clearance state, concurrency, idempotency, and recovery | Bank settlement or cryptographic truth without its evidence input |
-| Mirror | Evidence-backed observation, reconciliation, responsibility, and RightRail failure records | Facts beyond received evidence or clearance authority |
-| Official payment system | Actual disbursement under state authority | Proof correctness or independent operating truth |
-
-## Operating, deployment, and commercial isolation
-
-- RightRail corporate, ordinary support, monitoring, analytics, AI tools, contractors, crash dumps,
-  and support tickets receive zero PHI and no persistent linkable claim fingerprint. Production
-  diagnostics leave the state environment only through a bounded state-side sanitizer and use a
-  synthetic reproduction where possible.
-- Billing and covered-flow metering are downstream read-only observations. They cannot select a
-  control, change a directive or exception, create a hold, influence remediation, or mutate
-  clearance state. The same economic flow is counted once.
-- The Switch owns compatibility and routing; Blind Ledger owns clearance. A route decision is not a
-  clearance directive, and neither component moves money.
-- Managed-care V1 is observation, contract enforcement, financial reconciliation, and
-  state-authorized adjustment/withhold evidence. Direct gating of MCO-to-provider payments requires
-  a later, separately approved authority and integration profile.
-- Deployment authority advances only through observation, recommendation, flagging, human review,
-  narrow deterministic controls, broader controls, and replacement routing. No caller can promote
-  one rung to another. Excessive false holds, delay, or reliability failure invokes the governed
-  fallback/bypass process and is recorded by Mirror.
-- The state owns its rules, data, keys, histories, interfaces, tests, configurations, and continuity
-  export. RightRail must remain replaceable without a proprietary operational dependency.
-
-## Repository ownership and documentation map
-
-The root authorities are `AGENTS.md` (execution), `CURRENT_TASK.md` (bounded work), `STATE.md`
-(verified evidence), this file (system ownership), and `README.md` (entry route). The independent
-design authority is `docs/DESIGN_IDEOLOGY.md`; the private-proof, database, Lean, Native-v3,
-roadmap, dependency, rejection, and pending-domain-decision owners are linked from `README.md`.
-Mirror's internal source-trust, custody, reconciliation, and recovery owner is
-`docs/MIRROR_ARCHITECTURE.md`; this file retains only the whole-product role and cross-product
-separation.
-
-The following local documents have one component owner and one narrow purpose:
-
-| Component | Local authority | Purpose |
-| --- | --- | --- |
-| Protected batch implementation | `app/batch/` source and focused tests | The code and tests own the retained compatibility format and pepper behavior; no separate legacy Markdown is current |
-| Operations | [`ops/DEPLOYMENT_RUNBOOK.md`](ops/DEPLOYMENT_RUNBOOK.md), [`ops/KEY_CUSTODY_AND_ROTATION.md`](ops/KEY_CUSTODY_AND_ROTATION.md), [`ops/MONITORING_AUDIT_EVENTS.md`](ops/MONITORING_AUDIT_EVENTS.md), [`ops/PRODUCTION_CONFIG_CHECKLIST.md`](ops/PRODUCTION_CONFIG_CHECKLIST.md), [`ops/RISK_REGISTER.md`](ops/RISK_REGISTER.md) | Synthetic deployment, custody, monitoring, configuration, and risk procedures |
-| Rejected architectures | [`docs/REJECTED_ARCHITECTURES.md`](docs/REJECTED_ARCHITECTURES.md) | Concise current prohibitions against restarting retired directions |
-| Pending domain decision | [`docs/RARC_PENDING_DECISION.md`](docs/RARC_PENDING_DECISION.md) and `rarc_mapping.tsv` | Open mapping rows, source material, G8 split rationale, and required sign-off |
-
-The release and documentation gates register every retained Markdown path. Release selection uses
-current-source lanes plus an explicit three-file compatibility closure; no retained prefix is a
-keep map. Markdown under retired experiment or protected-proof lanes is forbidden; current
-prohibitions live only in `docs/REJECTED_ARCHITECTURES.md`.
-
-Rejected directions and their governing reasons are recorded once in
-[`docs/REJECTED_ARCHITECTURES.md`](docs/REJECTED_ARCHITECTURES.md); they are not active owners,
-release inputs, or qualification evidence. Exact technical gates and current qualification status
-remain in their named owner documents, `STATE.md`, and `CURRENT_TASK.md`; this file does not create
-a second readiness record.
+| Execution and protection | `AGENTS.md` and `../../AGENTS.md` |
+| Current objective | `CURRENT_TASK.md` |
+| Verified evidence/nonclaims | `STATE.md` |
+| Product entry point | `README.md` |
+| Design contract | `docs/DESIGN_IDEOLOGY.md` |
+| Dependency order | `docs/IMPLEMENTATION_ROADMAP.md` |
+| Mirror source/custody/recovery | `docs/MIRROR_ARCHITECTURE.md` |
+| Database/verifier boundary | `docs/DATABASE_ZK_ARCHITECTURE.md` |
+| Lean formal boundary | `docs/LEAN_FORMAL_KERNEL.md` |
+| Native-v3 boundary | `docs/NATIVE_V3_ARCHITECTURE.md` |

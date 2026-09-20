@@ -23,7 +23,7 @@ from app.right_rail_financial_owner import (
 
 
 MIRROR_SCHEMA: Final[str] = "RR/FINANCIAL/MIRROR/v1"
-CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v4"
+CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v5"
 MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 MAX_LIST_PAGE: Final[int] = 100
 MAX_DETAIL_PAGE: Final[int] = 200
@@ -46,6 +46,7 @@ _DROP_KEYS: Final[frozenset[str]] = frozenset(
 )
 _JSON_REFERENCE_KEYS: Final[dict[str, str]] = {
     "evidence_ids_json": "evidence_ids",
+    "evidence_bindings_json": "evidence_bindings",
     "supporting_evidence_json": "supporting_evidence_ids",
     "completion_conditions_json": "completion_conditions",
 }
@@ -59,6 +60,8 @@ _ACTION_FIELDS: Final[tuple[str, ...]] = (
     "amount_cents",
     "currency",
     "revision",
+    "input_evaluation_id",
+    "input_evaluation_result_digest",
     "dispatch",
 )
 
@@ -108,6 +111,18 @@ def _safe_json_reference(value: str, output_key: str) -> Any:
     if output_key.endswith("_ids"):
         if type(parsed) is dict and set(parsed) == {"values"} and type(parsed["values"]) is list:
             return [item for item in parsed["values"] if type(item) is str]
+        if type(parsed) is dict and set(parsed) == {"bindings"} and type(parsed["bindings"]) is list:
+            if all(type(item) is dict and set(item) == {"evidence_id", "record_digest"} for item in parsed["bindings"]):
+                return [item["evidence_id"] for item in parsed["bindings"] if type(item["evidence_id"]) is str]
+        return None
+    if output_key == "evidence_bindings":
+        if type(parsed) is dict and set(parsed) == {"bindings"} and type(parsed["bindings"]) is list:
+            return [
+                {"evidence_id": item["evidence_id"], "record_digest": item["record_digest"]}
+                for item in parsed["bindings"]
+                if type(item) is dict and set(item) == {"evidence_id", "record_digest"}
+                and type(item["evidence_id"]) is str and type(item["record_digest"]) is str
+            ]
         return None
     if output_key == "completion_conditions":
         if type(parsed) is dict and set(parsed) == {"amount_satisfied", "reporting_complete", "delivery_acknowledged_or_not_required"}:
@@ -231,6 +246,13 @@ class FinancialMirror:
         result["reference_limit"] = limit
         return result
 
+    def current_evaluation_receipt(self, item_id: str) -> dict[str, Any]:
+        raw = self.owner.current_evaluation_receipt(item_id)
+        result = _safe_record(raw)
+        result["schema"] = MIRROR_SCHEMA
+        result["resource"] = "evaluation_receipt"
+        return result
+
     def history(self, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         limit, offset = _page_bounds(limit, offset, maximum=MAX_DETAIL_PAGE, code="history_page")
         rows = self.owner.history(limit=limit, offset=offset)
@@ -269,6 +291,8 @@ class FinancialMirror:
         expected_revision: int | None = None,
         action_id: str | None = None,
         decision_at_ms: int | None = None,
+        evaluation_id: str | None = None,
+        evaluation_result_digest: str | bytes | None = None,
     ) -> dict[str, Any]:
         return self._command_result(
             self.owner.authorize_offset(
@@ -279,6 +303,8 @@ class FinancialMirror:
                 expected_revision=expected_revision,
                 action_id=action_id,
                 decision_at_ms=decision_at_ms,
+                evaluation_id=evaluation_id,
+                evaluation_result_digest=evaluation_result_digest,
             )
         )
 
@@ -292,6 +318,8 @@ class FinancialMirror:
         expected_revision: int | None = None,
         action_id: str | None = None,
         decision_at_ms: int | None = None,
+        evaluation_id: str | None = None,
+        evaluation_result_digest: str | bytes | None = None,
     ) -> dict[str, Any]:
         return self._command_result(
             self.owner.reject_offset_and_authorize_correction(
@@ -302,6 +330,8 @@ class FinancialMirror:
                 expected_revision=expected_revision,
                 action_id=action_id,
                 decision_at_ms=decision_at_ms,
+                evaluation_id=evaluation_id,
+                evaluation_result_digest=evaluation_result_digest,
             )
         )
 
@@ -476,7 +506,7 @@ class FinancialMirror:
             "period_id": self.owner.config.period_id,
             "currency": self.owner.config.currency,
         }
-        if package.get("schema") != CONTINUITY_SCHEMA or package.get("version") != 4:
+        if package.get("schema") != CONTINUITY_SCHEMA or package.get("version") != 5:
             _fail(FinancialMirrorContinuityError, "continuity_package_schema")
         if package.get("scope") != expected_scope:
             _fail(FinancialMirrorContinuityError, "continuity_scope_mismatch")

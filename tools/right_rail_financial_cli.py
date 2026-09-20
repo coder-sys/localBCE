@@ -48,6 +48,9 @@ def _parser() -> argparse.ArgumentParser:
     detail.add_argument("--item-id", required=True)
     detail.add_argument("--limit", type=int, default=100)
 
+    receipt = subparsers.add_parser("current-evaluation-receipt", aliases=("evaluation-receipt", "evaluation"))
+    receipt.add_argument("--item-id", required=True)
+
     history = subparsers.add_parser("history")
     history.add_argument("--limit", type=int, default=100)
     history.add_argument("--offset", type=int, default=0)
@@ -110,9 +113,11 @@ def _add_offset_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--claim-id", required=True)
     parser.add_argument("--actor-id", default="synthetic-official")
     parser.add_argument("--actor-role", default="FINANCE_DECISION")
-    parser.add_argument("--expected-revision", type=int)
+    parser.add_argument("--expected-revision", type=int, required=True)
     parser.add_argument("--action-id")
     parser.add_argument("--decision-at-ms", type=int)
+    parser.add_argument("--evaluation-id", required=True)
+    parser.add_argument("--evaluation-result-digest", required=True)
 
 
 def _existing_database(path: Path) -> Path:
@@ -168,6 +173,8 @@ def _run(args: argparse.Namespace) -> Any:
         return mirror.list_obligations(status=args.status, limit=args.limit, offset=args.offset)
     if command in {"obligation-detail", "detail"}:
         return mirror.obligation_detail(args.item_id, limit=args.limit)
+    if command in {"current-evaluation-receipt", "evaluation-receipt", "evaluation"}:
+        return mirror.current_evaluation_receipt(args.item_id)
     if command == "history":
         return mirror.history(limit=args.limit, offset=args.offset)
     if command in {"action-payload", "action"}:
@@ -181,6 +188,8 @@ def _run(args: argparse.Namespace) -> Any:
             expected_revision=args.expected_revision,
             action_id=args.action_id,
             decision_at_ms=args.decision_at_ms,
+            evaluation_id=args.evaluation_id,
+            evaluation_result_digest=args.evaluation_result_digest,
         )
     if command in {"reject-offset-and-authorize-correction", "reject-offset"}:
         return mirror.reject_offset_and_authorize_correction(
@@ -191,6 +200,8 @@ def _run(args: argparse.Namespace) -> Any:
             expected_revision=args.expected_revision,
             action_id=args.action_id,
             decision_at_ms=args.decision_at_ms,
+            evaluation_id=args.evaluation_id,
+            evaluation_result_digest=args.evaluation_result_digest,
         )
     if command in {"acknowledge-action", "acknowledge"}:
         return mirror.acknowledge_action(
