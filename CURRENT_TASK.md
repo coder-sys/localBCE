@@ -325,7 +325,7 @@ with SHA-256 `B4937496909BF2477CF352AF17460F010FBEF9E20BD3D0266A6D8A6619A738B4`;
 complete input/output hex. Guard minimum free bytes were `3350384640`, peak private bytes
 `82468864`, self-tests were `7/0`, cleanup was `PASS`, and mutex was `RELEASED`.
 
-The Driver's first post-handoff retry is also retained as a fail-closed resource event in
+State's post-handoff retry is also retained as a fail-closed resource event in
 `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-semantic-adapter-engine-conformance-current-r2.stdout.log`
 and its `.stderr.log` companion: preflight was `2236633088`, guard self-tests were `exit7=7 exit0=0`,
 the Python command launched, and the guard then stopped at minimum free bytes
