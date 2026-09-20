@@ -667,6 +667,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             test_store.dispatch_outbox()
         self._finish_after_acknowledgment(test_store)
         self._assert_snapshot(test_store, expected.H_P3_REPLACED)
+        self._assert_verified(test_store, restore_source_package=package)
         self._assert_verified(test_store)
         test_bytes_after_completion = test_destination.read_bytes()
         test_config = test_store.config
@@ -691,6 +692,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(reopened_test.verify_integrity()["mode"], "TEST")
         self._assert_snapshot(reopened_test, expected.H_P3_REPLACED)
+        self._assert_verified(reopened_test, restore_source_package=package)
+        with self.assertRaisesRegex(IndependentFinancialError, "continuity:restore-source-digest"):
+            self._assert_verified(reopened_test, restore_source_package=roundtrip_package)
         self._assert_verified(reopened_test)
         reopened_test.close()
         self.assertEqual(test_destination.read_bytes(), test_bytes_after_completion)

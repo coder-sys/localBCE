@@ -32,9 +32,10 @@ bytes, security parameters, artifacts, operations policy, archives, or productio
 
 The committed parent before this correction batch is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`86e46ddede61f1e30322a4ee81bc841556bbe77f`, tree
-`b2869a266b25646b58e0530bf8b0d87781138356`. The v4 source/test/harness
-correction and maintained-document update are the current coherent batch. The owner
+`736caaa8ab998f1c0f9a690e5e245c8350ba2158`, tree
+`cae2a419a3c1db9929c5f65d79a7705e33183797`. The follow-on restore-source
+role correction, focused regression assertions, retained-boundary verification,
+and maintained-document update are the current coherent batch. The owner
 is explicitly versioned as `RR/FINANCIAL/OWNER/v4`; Continuity is
 `RR/FINANCIAL/CONTINUITY/v4`. v4 adds an immutable `financial_identity` row
 that binds provenance, mode, owner, continuity anchor, genesis, and source
@@ -54,6 +55,18 @@ py -3.14 -B -m py_compile ...  exit=0
 Ran 47 tests in 14.303s
 OK
 ```
+
+The follow-on guarded checks ran the changed acceptance module (`21 tests`,
+`OK`), the two independent package-role regressions (`2 tests`, `OK`), and
+12 selected synthetic retained-boundary tests covering Queue/Composition,
+Runtime interruption/held-state, and Mirror source admission/retry (`OK`).
+The financial owner’s CASE 10 remains owner-local evidence for interrupted
+population import, incomplete-source rejection, dispatch-disabled behavior,
+stable reopen, and verification. Queue/Composition/Runtime/Mirror boundary
+evidence is separate integration evidence; no native verification-to-commit or
+Lean authority was run or inferred. Native adapter skips, native/Lean replay,
+whole-system acceptance, independent audit, and production qualification remain
+open.
 
 The follow-on measurement series completed at
 `work/financial-measurements-v5-r1` with 3 measured samples plus 1 warmup at

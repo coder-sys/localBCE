@@ -13,8 +13,8 @@ Rejected architectures are recorded separately and are not milestones.
 
 The committed parent before this correction batch is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`86e46ddede61f1e30322a4ee81bc841556bbe77f`, tree
-`b2869a266b25646b58e0530bf8b0d87781138356`. All evidence is synthetic and
+`736caaa8ab998f1c0f9a690e5e245c8350ba2158`, tree
+`cae2a419a3c1db9929c5f65d79a7705e33183797`. All evidence is synthetic and
 nonactivating. The persisted owner/Continuity candidate is v4:
 `RR/FINANCIAL/OWNER/v4` and `RR/FINANCIAL/CONTINUITY/v4`. Its immutable
 `financial_identity` row binds restore provenance, mode/owner identity, source
@@ -34,15 +34,22 @@ measurement artifacts remain immutable historical evidence.
    persisted imported-count binding, immutable restore provenance, and
    history-anchored TEST identity are explicit invariants. Current snapshots
    and restore sources are explicit verifier roles rather than one guessed
-   continuity argument.
+   continuity argument; restore-source verification remains anchored to the
+   persisted source package after continuation rather than the target's newer
+   current sequence/head.
 3. **C — Guarded affected verification.** The final guard ran the focused
-   harness compile and affected source suite. The exact correction result is
-   `Ran 47 tests in 14.303s` followed by `OK`; the raw stderr log is retained.
+   harness compile and affected source suite. The retained prior correction
+   result is `Ran 47 tests in 14.303s` followed by `OK`; the follow-on changed
+   acceptance, independent-role, and retained-boundary gates were `21`, `2`,
+   and `12` tests respectively, all `OK`. Raw child logs are retained by the
+   guard.
 4. **D — Same-owner Mirror and Continuity.** Default Continuity restore remains
    SHADOW/read-only. The explicit TEST restore has fixed identity, cannot open
    as LIVE, keeps dispatch/egress disabled, and Case 11 reaches H_P3_REPLACED
-   after restart without changing source bytes or redispatching a duplicate
-   action identity.
+   after restart, verifies the original restore source at both continuation
+   points, rejects the completed package as a wrong restore source, and does
+   so without changing source bytes or redispatching a duplicate action
+   identity.
 5. **E — Candidate measurement and review.** The guarded v5 series completed at
    `work/financial-measurements-v5-r1` with 3 measured samples plus 1 warmup at
    each of sizes 5, 10, and 20, 12 owner databases and 12 TEST restore
@@ -53,10 +60,11 @@ measurement artifacts remain immutable historical evidence.
    source bytes unchanged. The synthetic contention diagnostic remains
    separately labeled and receives no actual-workload credit. This is a bounded
    observation, not an SLA. Native metrics remain pending and queue wait/age
-   is not applicable. No separate older financial suite exists beyond the three
-   named RightRail financial test modules; unrelated repository suites were not
-   in scope. Whole-system/native/Lean, independent-audit, and production gates
-   remain open. Earlier v2/v3/v4 results and measurements are historical only.
+   is not applicable. The financial owner’s CASE 10 is owner-local evidence;
+   the selected Queue/Composition/Runtime/Mirror tests are separate retained
+   integration evidence. Native verification-to-commit, Lean, whole-system,
+   independent-audit, and production gates remain open. Earlier v2/v3/v4
+   results and measurements are historical only.
 
 The first-state fixture is fixed at twenty hospitals and $1,000,000 total: H is $100,000 and the
 other nineteen total $900,000. Hand-derived expected constants are required. The financial owner

@@ -7,12 +7,12 @@ Updated: 2026-09-19
 The current coherent batch is in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
 branch `rightrail-financial-workflow-20260913`. Its committed parent before
-the correction batch is HEAD `86e46ddede61f1e30322a4ee81bc841556bbe77f`, tree
-`b2869a266b25646b58e0530bf8b0d87781138356`. The correction batch has five
-modified source/test/harness paths plus the five maintained Markdown paths;
-there are no other tracked changes. The only untracked paths are the two
-driver-supplied generated executables listed below; they are not touched or
-staged.
+this follow-on correction is HEAD `736caaa8ab998f1c0f9a690e5e245c8350ba2158`,
+tree `cae2a419a3c1db9929c5f65d79a7705e33183797`. The follow-on batch changes
+the independent checker, acceptance regression assertions, and maintained
+evidence records; there are no other tracked changes. The only untracked paths
+are the two driver-supplied generated executables listed below; they are not
+touched or staged.
 
 The persisted candidate contract in this batch is `RR/FINANCIAL/OWNER/v4`
 with Continuity `RR/FINANCIAL/CONTINUITY/v4`. The new immutable
@@ -165,6 +165,92 @@ Driver-supplied native inputs are unchanged and remain separate regressions:
 | --- | ---: | --- |
 | `build-performance/fixture-candidate/Release/direct_mask_fixture_source_performance.exe` | 275968 | `E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9` |
 | `build-performance/q/Release/dm_pipeline_verifier_cli.exe` | 240640 | `F35F6AF28EC2D269831CFB6BDD1C2414D439FFEC2B26C73CC39495720D9B9E5D` |
+
+## Current follow-on source-role and retained-boundary verification — 2026-09-19
+
+The follow-on source correction removes only the independent checker’s
+target-current `sequence`/`history_head` precondition when a package is named
+as `restore_source_package`. `current_snapshot_package` retains both bindings.
+Restore-source verification still checks the target’s persisted immutable
+source-package digest, restore anchor sequence/head, scope, authority,
+continuity epoch, and genesis. Case 11 now verifies the original source package
+after TEST continuation to `H_P3_REPLACED` and after restart, and rejects the
+completed round-trip package as a wrong restore source with
+`continuity:restore-source-digest`.
+
+The new guarded source-local outputs were:
+
+```text
+py -3.14 -B -m py_compile <absolute independent checker> <absolute acceptance test> -> exit 0
+Ran 21 tests in 8.863s
+OK
+Ran 2 tests in 0.667s
+OK
+Ran 12 tests in 4.955s
+OK
+```
+
+Child stderr log sizes/SHA-256 were `0/E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`
+for the compile, `125/E509B4847D3B7F9DE7C1024D63D58A5C792854006A8D0C603267832BE6D56161`
+for acceptance, `517/D2518DA2D1F1203A74703F4A6F884CD81B6BF4C100898AD07C8AFEC311660615`
+for the independent pair, and `2592/D12031A3D49B02312D4DE21727F65E0FD834BA9D46C1856B03E7978D166955CF`
+for retained integration. All four child stdout logs were zero bytes with the
+empty SHA-256 above. The maintained-document link check reported:
+
+```text
+LINK_COUNT=29
+MISSING_COUNT=0
+```
+
+with guard exit `0`, minimum free bytes `4648337408`, cleanup `PASS`, and the
+shared mutex released.
+
+Guard decisive lines for these runs were:
+
+```text
+CHILD_EXIT_STATUS label=Command exit=0
+LIVE_PHYSICAL_SUMMARY label=Command samples=2 min_free_bytes=4405796864 reserve_floor_bytes=2576980378 peak_working_set_bytes=34476032 peak_private_bytes=15048704
+CLEANUP=PASS label=Command owned_process_tree=empty
+MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+
+CHILD_EXIT_STATUS label=Command exit=0
+LIVE_PHYSICAL_SUMMARY label=Command samples=16 min_free_bytes=4401590272 reserve_floor_bytes=2576980378 peak_working_set_bytes=46141440 peak_private_bytes=23306240 reserve_floor_bytes=2576980378
+CLEANUP=PASS label=Command owned_process_tree=empty
+MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+
+CHILD_EXIT_STATUS label=Command exit=0
+LIVE_PHYSICAL_SUMMARY label=Command samples=10 min_free_bytes=4668559360 reserve_floor_bytes=2576980378 peak_working_set_bytes=86843392 peak_private_bytes=52273152 reserve_floor_bytes=2576980378
+CLEANUP=PASS label=Command owned_process_tree=empty
+MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+
+CHILD_EXIT_STATUS label=Command exit=0
+LIVE_PHYSICAL_SUMMARY label=Command samples=3 min_free_bytes=4617310208 reserve_floor_bytes=2576980378 peak_working_set_bytes=43524096 peak_private_bytes=20725760 reserve_floor_bytes=2576980378
+CLEANUP=PASS label=Command owned_process_tree=empty
+MUTEX=RELEASED name=Local\BlindLedgerDirectMaskBuild20260907
+```
+
+The 12 retained integration tests were seven Composition Queue/State/outbox
+and reconciliation tests, three Runtime verifier-to-State/held/crash-reopen
+tests, and two Mirror source-verifier/independent-graph/exact-retry tests.
+They use isolated synthetic temporary storage. The financial owner’s CASE 10
+proves only interrupted population staging, incomplete-source rejection,
+dispatch-disabled behavior, stable reopen, and owner/checker verification; it
+does not prove these Queue/Composition/Mirror/native boundaries. The retained
+separate Queue evidence remains `Queue 30 passed`, `Runtime 17 passed, 2
+skipped` (the two native source-auth adapter tests deferred by the grant), and
+`Profile12 29 passed`.
+
+Known invocation corrections, preserved as non-product warnings, were: the
+first compile used relative paths and child stderr was
+`[Errno 2] No such file or directory: 'app/right_rail_financial_owner_independent.py'`;
+the first integration selection had 11/12 tests pass but its nested crash
+child inherited the guard cwd and reported `ModuleNotFoundError: No module named
+'app'`; and the first independent selection used the wrong test class and
+reported the unittest loader `AttributeError`. Corrected reruns passed without
+source or protected-path changes. No native binary, Queue/Composition/Mirror
+source, Lean path, measurement artifact, or old suite was rewritten or
+regenerated. Native verification-to-commit, Lean, whole-system, independent
+audit, and production qualification remain blocked or pending.
 
 ## Historical verified records (reference only)
 

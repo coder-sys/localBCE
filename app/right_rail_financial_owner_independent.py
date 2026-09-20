@@ -2356,8 +2356,6 @@ def _verify_connection(
                 "epoch": meta["authority_epoch"],
                 "digest": meta["authority_digest"],
             },
-            expected_sequence=meta["sequence"],
-            expected_history_head=meta["history_head"],
             expected_continuity_epoch=meta["continuity_epoch"],
             _include_rows=True,
         )
