@@ -266,25 +266,71 @@ failed closed twice: r2 had preflight `2573328384`, minimum free `1994338304 < 2
 private `972124160`; the direct-handoff r3 had preflight `2544488448`, minimum free
 `2064375808 < 2190433321`, peak private `971595776`. Both had child self-tests `7/0`, cleanup PASS,
 and mutex RELEASED. Per the no-repeat rule, dependent Evaluation/Theorems/Executable/Cli/link stages
-and the KAT/vector were not run. The real owner -> `BLFIN02` -> fresh Engine executable -> `BLFRES02`
-vector remains pending the qualifying sequential Engine build; no cross-language or runtime-authority
-claim is made.
+and the KAT/vector were not run at that checkpoint. The later fresh-artifact handoff and representative
+cross-language evidence are recorded below; no runtime-authority claim is made.
 
-## Cross-language conformance preparation (2026-09-20)
+## Cross-language conformance and Engine handoff (2026-09-20)
 
-The existing semantic-adapter test file now contains one real-owner conformance test that will invoke
-only a fresh pinned Engine executable through `--evaluate`. It covers an authorized offset, the same
-history restored into SHADOW and TEST, a rejected-and-acknowledged correction, and the final
+The existing semantic-adapter test file contains one real-owner conformance test that invokes only a
+fresh pinned Engine executable through `--evaluate`. It covers an authorized offset, the same history
+restored into SHADOW and TEST, a rejected-and-acknowledged correction, and the final
 duplicate/conflict/reversal/replacement/reporting history. Expected cents and semantic statuses come
-from the independent fixture expectations, not from the adapter output. The helper requires explicit
-`BLIND_FINANCIAL_EXE` and `BLIND_FINANCIAL_EXE_SHA256` values, rejects the known stale executable hash,
-uses bounded binary stdin/stdout/stderr, a 30-second timeout, and kill-and-collect cleanup. It then
-decodes the raw BLFRES02 bytes with the owner-bound adapter and checks the owner database hash is
-unchanged.
+from the independent fixture expectations, not from adapter output. The helper requires explicit
+`BLIND_FINANCIAL_EXE` and `BLIND_FINANCIAL_EXE_SHA256` handoff values, rejects the known stale hash,
+uses bounded binary stdin/stdout/stderr, a 30-second timeout, kill-and-collect cleanup, and a post-run
+artifact rehash. It decodes raw BLFRES02 bytes with the owner-bound adapter and checks the owner
+database hash is unchanged.
 
-That one conformance test is honestly unexecuted because no fresh artifact and pinned hash were handed
-off. It is not skipped and does not count as a green placeholder. The known 5,995,520-byte executable
-remains forbidden. The latest Engine safety check found free memory `1349238784`, below the current
-floor `2190433321` and below the required start `3037858857`; no new financial command was launched.
-Types remains the only qualifying staged result, Specification remains a fail-closed stop, and no
-dependent stage, KAT, or BLFIN02/BLFRES02 vector is accepted.
+The fresh Engine source is commit `907e32de63ab0d8133f2a7aff1441b06a1a884e8`, tree
+`49d758924e298d935c16ffddacdadd945dec5f93`. The accepted artifact is
+`C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\lean-engine-20260913\semantic_kernel\lean\.lake\build\bin\blind_financial.exe`,
+`6001664` bytes, SHA-256
+`398E6D16922D23F71F52074F151553DCE75467723D4C624A8D7B71076FA24D03`. The known stale
+`5995520`-byte artifact with SHA-256
+`DFCA506260A5A5F5C0A8DE42B72D3DFD15000EC6E3DD5B8BBA8C4CDB5F2490F3` remains forbidden.
+
+The guarded KAT run is recorded in:
+
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-kat-20260920-r1-resourcewindow.stdout.log`
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-kat-20260920-r1-resourcewindow.stderr.log`
+
+It reports `KAT_COUNT=30`, every gate `PASS`, `THEOREM_MANIFEST_COUNT=38`, and
+`FINANCIAL_KERNEL_RESULT=PASS`; child/wrapper exit was `0`, self-tests were `exit7=7 exit0=0`,
+minimum free bytes were `3326943232`, cleanup was `PASS`, and the mutex was `RELEASED`. The raw
+stdout is 3697 bytes with SHA-256
+`9FB16AF467CF03F3E6E4F34F0CB5D9AAFD3BF869C3C19BA4132BEE0AD7ED01C3`; stderr is empty with SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+
+The guarded owner-history conformance run is recorded in:
+
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-owner-engine-conformance-20260920-r1-resourcewindow.stdout.log`
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-owner-engine-conformance-20260920-r1-resourcewindow.stderr.log`
+
+Its raw child result is `Ran 1 test in 2.186s` / `OK`; the five histories above were exercised with
+child/wrapper exit `0`, self-tests `7/0`, preflight `3041083392`, minimum free `2920316928`, peak
+private `80666624`, cleanup `PASS`, and mutex `RELEASED`. Stdout is empty with SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`; stderr is 103 bytes with
+SHA-256 `D5E9E7AD3546C946F21693BADAC5A5967658AB6B2751A3EE7F93D367B568A3D2`.
+
+The guarded exact wire vector is recorded in:
+
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-owner-wire-vector-20260920-r1-resourcewindow.stdout.log`
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-owner-wire-vector-20260920-r1-resourcewindow.stderr.log`
+
+For `scenario=authorized_offset`, `BLFIN02_INPUT_LEN=2526` and SHA-256
+`C94A16DA6F2EA33C153F7E0890F95434ABD6F051C6F69FE7D7B1F39985E72344`; the fresh executable returned
+exit `0` with zero stderr and `BLFRES02_OUTPUT_LEN=552`, SHA-256
+`278D98485EBE968C88AC0E85BCCD4F69C5B7FF1A38F0B20681DD7E79C82A7598`. The raw stdout is 6514 bytes
+with SHA-256 `B4937496909BF2477CF352AF17460F010FBEF9E20BD3D0266A6D8A6619A738B4`; it retains the
+complete input/output hex. Guard minimum free bytes were `3350384640`, peak private bytes
+`82468864`, self-tests were `7/0`, cleanup was `PASS`, and mutex was `RELEASED`.
+
+The Driver's first post-handoff retry is also retained as a fail-closed resource event in
+`../pq-wide-seed-native-20260913/build-filter-native/guarded-command-semantic-adapter-engine-conformance-current-r2.stdout.log`
+and its `.stderr.log` companion: minimum free bytes `2171011072 < 2190433321`, the child was not
+run, cleanup was `PASS`, and mutex was `RELEASED`. The stdout log is empty with SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`; stderr is 194 bytes with
+SHA-256 `3A3D9A8F37C1DBB1287B84413B1C1D1453109BFECDACB39915FF65F7C1324EE9` and contains only the
+uncompleted test-start line before the guard stop.
+The representative cross-language vector is now evidenced, but it remains synthetic/nonactivating and
+does not create runtime, formal, native, payment, or production authority.
