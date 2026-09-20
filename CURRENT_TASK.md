@@ -327,10 +327,12 @@ complete input/output hex. Guard minimum free bytes were `3350384640`, peak priv
 
 The Driver's first post-handoff retry is also retained as a fail-closed resource event in
 `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-semantic-adapter-engine-conformance-current-r2.stdout.log`
-and its `.stderr.log` companion: minimum free bytes `2171011072 < 2190433321`, the child was not
-run, cleanup was `PASS`, and mutex was `RELEASED`. The stdout log is empty with SHA-256
+and its `.stderr.log` companion: preflight was `2236633088`, guard self-tests were `exit7=7 exit0=0`,
+the Python command launched, and the guard then stopped at minimum free bytes
+`2171011072 < 2190433321`. Cleanup was `PASS` and the mutex was `RELEASED`; whether the nested Lean
+process was reached is not established. The stdout log is empty with SHA-256
 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`; stderr is 194 bytes with
-SHA-256 `3A3D9A8F37C1DBB1287B84413B1C1D1453109BFECDACB39915FF65F7C1324EE9` and contains only the
-uncompleted test-start line before the guard stop.
+SHA-256 `3A3D9A8F37C1DBB1287B84413B1C1D1453109BFECDACB39915FF65F7C1324EE9` and contains the
+begun test name before the guard stop. This is a resource failure, not a conformance result.
 The representative cross-language vector is now evidenced, but it remains synthetic/nonactivating and
 does not create runtime, formal, native, payment, or production authority.
