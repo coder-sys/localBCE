@@ -12,9 +12,11 @@ from contextlib import closing
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 
@@ -35,6 +37,11 @@ EXPECTED_H_OWED_CENTS = 10_000_000
 EXPECTED_H_CASH_CENTS = 9_700_000
 EXPECTED_OFFSET_CENTS = 300_000
 EXPECTED_HOSPITAL_COUNT = 20
+ENGINE_EXECUTABLE_ENV = "BLIND_FINANCIAL_EXE"
+ENGINE_EXECUTABLE_SHA256_ENV = "BLIND_FINANCIAL_EXE_SHA256"
+STALE_ENGINE_EXECUTABLE_SHA256 = "DFCA506260A5A5F5C0A8DE42B72D3DFD15000EC6E3DD5B8BBA8C4CDB5F2490F3"
+ENGINE_TIMEOUT_SECONDS = 30
+ENGINE_MAX_STDERR_BYTES = 64 * 1024
 
 
 @dataclass
@@ -329,6 +336,125 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
     def _assert_no_source_mutation(self, store: FinancialOwner, before_hash: str) -> None:
         self.assertEqual(self._hash(store.path), before_hash)
 
+    def _fresh_engine_executable(self) -> Path:
+        raw_path = os.environ.get(ENGINE_EXECUTABLE_ENV, "").strip()
+        expected_sha256 = os.environ.get(ENGINE_EXECUTABLE_SHA256_ENV, "").strip().upper()
+        if not raw_path or not expected_sha256:
+            self.fail(
+                "real_engine_conformance_unexecuted: set "
+                f"{ENGINE_EXECUTABLE_ENV} and {ENGINE_EXECUTABLE_SHA256_ENV} "
+                "from the fresh guarded Engine handoff"
+            )
+        if len(expected_sha256) != 64 or any(character not in "0123456789ABCDEF" for character in expected_sha256):
+            self.fail(f"real_engine_artifact_hash_invalid: {expected_sha256!r}")
+        path = Path(raw_path)
+        if not path.is_absolute():
+            self.fail(f"real_engine_artifact_path_not_absolute: {raw_path!r}")
+        try:
+            executable = path.resolve(strict=True)
+        except FileNotFoundError:
+            self.fail(f"real_engine_artifact_missing: {raw_path!r}")
+        if not executable.is_file():
+            self.fail(f"real_engine_artifact_not_file: {executable}")
+        actual_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest().upper()
+        if actual_sha256 == STALE_ENGINE_EXECUTABLE_SHA256:
+            self.fail(f"real_engine_stale_artifact_rejected: {executable}")
+        self.assertEqual(actual_sha256, expected_sha256)
+        return executable
+
+    def _run_fresh_engine(self, input_wire: bytes) -> bytes:
+        self.assertLessEqual(len(input_wire), adapter.MAX_WIRE_BYTES)
+        executable = self._fresh_engine_executable()
+        process = subprocess.Popen(
+            [str(executable), "--evaluate"],
+            cwd=str(executable.parent),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = process.communicate(input=input_wire, timeout=ENGINE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5)
+            self.fail(
+                f"real_engine_timeout stdout={stdout[:256]!r} stderr={stderr[:4096]!r}"
+            )
+        self.assertLessEqual(len(stdout), adapter.MAX_RESULT_BYTES, "real_engine_result_too_large")
+        self.assertLessEqual(len(stderr), ENGINE_MAX_STDERR_BYTES, "real_engine_stderr_too_large")
+        self.assertEqual(
+            process.returncode,
+            0,
+            f"real_engine_exit={process.returncode} stdout={stdout[:256]!r} stderr={stderr[:4096]!r}",
+        )
+        self.assertEqual(stderr, b"", f"real_engine_stderr={stderr[:4096]!r}")
+        expected_sha256 = os.environ[ENGINE_EXECUTABLE_SHA256_ENV].strip().upper()
+        actual_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest().upper()
+        self.assertEqual(actual_sha256, expected_sha256, "real_engine_artifact_changed_during_execution")
+        return stdout
+
+    def _assert_fresh_engine_history_result(
+        self,
+        store: FinancialOwner,
+        expectation: expected.BalanceExpectation,
+        *,
+        completion_at_ms: int | None,
+    ) -> None:
+        before_hash = self._hash(store.path)
+        snapshot = self._snapshot(store)
+        result_wire = self._run_fresh_engine(adapter.encode_blfin02_input(snapshot))
+        result = adapter.decode_blfres02_result(result_wire, expected_snapshot=snapshot)
+        self._assert_no_source_mutation(store, before_hash)
+        data = snapshot.data
+        owner_data = data["owner"]
+        scope = data["scope"]
+        authority = data["authority"]
+        pack = data["control_pack"]
+        pre_evaluation = data["pre_evaluation"]
+        expected_bindings = {
+            "owner_id": owner_data["owner_id"],
+            "mode": owner_data["mode"],
+            "provenance": owner_data["provenance"],
+            "state_id": scope["state_id"],
+            "deployment_id": scope["deployment_id"],
+            "program_id": scope["program_id"],
+            "period_id": scope["period_id"],
+            "population_id": data["population"]["population_id"],
+            "item_id": pre_evaluation["item_id"],
+            "obligation_id": pre_evaluation["obligation_id"],
+            "currency": scope["currency"],
+            "authority_id": authority["authority_id"],
+            "authority_epoch": authority["epoch"],
+            "authority_digest": bytes.fromhex(authority["digest"]),
+            "pack_id": pack["canonical_fields"]["pack_id"],
+            "pack_digest": bytes.fromhex(pack["digest"]),
+            "before_revision": pre_evaluation["revision"],
+            "after_revision": pre_evaluation["revision"] + 1,
+            "evaluated_at_ms": data["evaluation_time_ms"],
+            "rule_version": pack["canonical_fields"]["version"],
+            "evidence_ids": tuple(row["evidence_id"] for row in data["evidence"]),
+            "completion_at_ms": completion_at_ms,
+        }
+        for field_name, expected_value in expected_bindings.items():
+            self.assertEqual(getattr(result, field_name), expected_value, field_name)
+        expected_values = {
+            "owed_cents": expectation.owed_cents,
+            "claimed_adjustment_cents": expectation.claimed_adjustment_cents,
+            "lawful_adjustment_cents": expectation.lawful_adjustment_cents,
+            "received_cash_cents": expectation.received_cash_cents,
+            "shortfall_cents": expectation.shortfall_cents,
+            "overage_cents": expectation.overage_cents,
+            "cash_satisfied": expectation.cash_satisfied,
+            "amount_satisfied": expectation.amount_satisfied,
+            "timely": expectation.timely,
+            "reporting_complete": expectation.reporting_complete,
+            "verification_status": expectation.verification_status,
+            "case_status": expectation.case_status,
+            "delivery_status": expectation.delivery_status,
+        }
+        for field_name, expected_value in expected_values.items():
+            self.assertEqual(getattr(result, field_name), expected_value, f"{expectation.stage}:{field_name}")
+
     def _copy_store(self, store: FinancialOwner, name: str) -> Path:
         target = self._path(name)
         shutil.copy2(store.path, target)
@@ -605,6 +731,61 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(data["obligation"]["reporting_complete"], True)
         self.assertEqual(data["actions"][0]["status"], "ACKNOWLEDGED")
         self._assert_no_source_mutation(store, before_hash)
+
+    def test_real_owner_histories_conform_to_fresh_engine(self) -> None:
+        authorized = self._build_base()
+        self._record_cash(authorized)
+        authorized_claim = self._record_claim(authorized)
+        self._record_h_support(authorized)
+        self._authorize(authorized, authorized_claim)
+        self._assert_fresh_engine_history_result(
+            authorized,
+            expected.H_AUTHORIZED_OFFSET,
+            completion_at_ms=expected.OFFSET_DECISION_MS,
+        )
+
+        package = authorized.export_continuity()
+        shadow = FinancialOwner.restore_continuity(
+            package_bytes=package,
+            recovered_path=self._path("engine-shadow.sqlite"),
+            trusted_authority=self.authority,
+            clock=_Clock(),
+            restore_mode="SHADOW",
+        )
+        test_owner = FinancialOwner.restore_continuity(
+            package_bytes=package,
+            recovered_path=self._path("engine-test.sqlite"),
+            trusted_authority=self.authority,
+            clock=_Clock(),
+            restore_mode="TEST",
+        )
+        self._assert_fresh_engine_history_result(
+            shadow,
+            expected.H_AUTHORIZED_OFFSET,
+            completion_at_ms=expected.OFFSET_DECISION_MS,
+        )
+        self._assert_fresh_engine_history_result(
+            test_owner,
+            expected.H_AUTHORIZED_OFFSET,
+            completion_at_ms=expected.OFFSET_DECISION_MS,
+        )
+
+        acknowledged = self._build_base()
+        self._prepare_acknowledged(acknowledged)
+        self._assert_fresh_engine_history_result(
+            acknowledged,
+            expected.H_ACKNOWLEDGED,
+            completion_at_ms=None,
+        )
+
+        final = self._build_base()
+        self._prepare_final(final)
+        self._record_duplicate_conflict_reversal_replacement(final)
+        self._assert_fresh_engine_history_result(
+            final,
+            expected.H_P3_REPLACED,
+            completion_at_ms=expected.P3_EVENT_MS,
+        )
 
     def test_historical_context_reopen_and_shadow_test_restore(self) -> None:
         store = self._build_base()

@@ -269,3 +269,22 @@ and mutex RELEASED. Per the no-repeat rule, dependent Evaluation/Theorems/Execut
 and the KAT/vector were not run. The real owner -> `BLFIN02` -> fresh Engine executable -> `BLFRES02`
 vector remains pending the qualifying sequential Engine build; no cross-language or runtime-authority
 claim is made.
+
+## Cross-language conformance preparation (2026-09-20)
+
+The existing semantic-adapter test file now contains one real-owner conformance test that will invoke
+only a fresh pinned Engine executable through `--evaluate`. It covers an authorized offset, the same
+history restored into SHADOW and TEST, a rejected-and-acknowledged correction, and the final
+duplicate/conflict/reversal/replacement/reporting history. Expected cents and semantic statuses come
+from the independent fixture expectations, not from the adapter output. The helper requires explicit
+`BLIND_FINANCIAL_EXE` and `BLIND_FINANCIAL_EXE_SHA256` values, rejects the known stale executable hash,
+uses bounded binary stdin/stdout/stderr, a 30-second timeout, and kill-and-collect cleanup. It then
+decodes the raw BLFRES02 bytes with the owner-bound adapter and checks the owner database hash is
+unchanged.
+
+That one conformance test is honestly unexecuted because no fresh artifact and pinned hash were handed
+off. It is not skipped and does not count as a green placeholder. The known 5,995,520-byte executable
+remains forbidden. The latest Engine safety check found free memory `1349238784`, below the current
+floor `2190433321` and below the required start `3037858857`; no new financial command was launched.
+Types remains the only qualifying staged result, Specification remains a fail-closed stop, and no
+dependent stage, KAT, or BLFIN02/BLFRES02 vector is accepted.
