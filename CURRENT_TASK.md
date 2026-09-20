@@ -174,3 +174,38 @@ Claims remain proofSuiteId=null, production_usable=false, activation=false,
 NOT_QUALIFIED/INACTIVE/UNSELECTED, synthetic, nonpayment, and non-PHI. The
 Python owner is not a deployed formal authority, official processor, payment
 system, or independent audit.
+
+## Executable-Lean cutover-path candidate (2026-09-20)
+
+The scoped candidate adds `app/right_rail_financial_semantic_adapter.py` and
+`tests/test_right_rail_financial_semantic_adapter.py`. The producer consumes
+only the sole owner's already-open transaction connection and an explicit
+current or historical `TrustedAuthorityContext`; it performs bounded reads,
+recomputes owner/checker digests and projections, authenticates authority,
+pack, evidence, evaluation, determination, action, conflict, case, payment,
+reversal, reporting, and continuity facts, and returns an immutable canonical
+snapshot. It has no database open, write, revision advance, receipt/lease/
+reservation table, native proof, activation, or runtime authority switch.
+
+The handed-off binary seam is the exact Engine `BLFIN02`/`BLFRES02` contract:
+raw ASCII magic, u16 big-endian string/list framing, u64 big-endian naturals,
+raw 64-byte digests, explicit mode/provenance/pack/payment/claim/
+determination/case/action/result tags, stored-order lists, canonical result
+re-encoding, strict snapshot binding, and no result digest or trailing bytes.
+The adapter remains owner-side; Lean field/version ownership stays with Engine.
+
+Final guarded evidence for this candidate:
+
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-semantic-adapter-codec-focused-r10.stdout.log`
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-semantic-adapter-codec-focused-r10.stderr.log`
+- child output: `Ran 6 tests in 3.649s` / `OK`
+- guard: child exit `0`, `exit7=7`, `exit0=0`, minimum free bytes
+  `2757058560`, effective floor `2576980378`, `CLEANUP=PASS`,
+  `MUTEX=RELEASED`
+
+The prior r8 attempt stopped before child execution at
+`2515009536 < 2576980378`; r9 then exposed and corrected one independent
+fixture arithmetic error (`10000000 - 9700000 = 300000` shortfall). Those
+failures remain raw evidence and were not relabeled. The final candidate is
+still not a runtime authority switch, formal refinement proof, native proof,
+production qualification, payment system, or activation claim.
