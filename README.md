@@ -30,12 +30,12 @@ bytes, security parameters, artifacts, operations policy, archives, or productio
 
 ## Current source/checkpoint — 2026-09-19
 
-The committed parent before this correction batch is branch
+The committed parent before this CASE10 transaction-boundary correction is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`736caaa8ab998f1c0f9a690e5e245c8350ba2158`, tree
-`cae2a419a3c1db9929c5f65d79a7705e33183797`. The follow-on restore-source
-role correction, focused regression assertions, retained-boundary verification,
-and maintained-document update are the current coherent batch. The owner
+`9159634b1f526c07e4e22654c3caf467da4cc546`, tree
+`dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc`. The committed restore-source
+role correction remains the parent boundary. This phase adds owner-local
+CASE10 transaction-boundary assertions and their maintained evidence. The owner
 is explicitly versioned as `RR/FINANCIAL/OWNER/v4`; Continuity is
 `RR/FINANCIAL/CONTINUITY/v4`. v4 adds an immutable `financial_identity` row
 that binds provenance, mode, owner, continuity anchor, genesis, and source
@@ -56,17 +56,36 @@ Ran 47 tests in 14.303s
 OK
 ```
 
-The follow-on guarded checks ran the changed acceptance module (`21 tests`,
-`OK`), the two independent package-role regressions (`2 tests`, `OK`), and
-12 selected synthetic retained-boundary tests covering Queue/Composition,
-Runtime interruption/held-state, and Mirror source admission/retry (`OK`).
-The financial owner’s CASE 10 remains owner-local evidence for interrupted
-population import, incomplete-source rejection, dispatch-disabled behavior,
-stable reopen, and verification. Queue/Composition/Runtime/Mirror boundary
-evidence is separate integration evidence; no native verification-to-commit or
-Lean authority was run or inferred. Native adapter skips, native/Lean replay,
+The parent follow-on guarded checks ran the changed acceptance module (`21
+tests`, `OK`), the two independent package-role regressions (`2 tests`, `OK`),
+and 12 selected synthetic retained-boundary tests covering Queue/Composition,
+Runtime interruption/held-state, and Mirror source admission/retry (`OK`). The
+current guarded CASE10 boundary check compiles the owner/acceptance paths with
+`COMPILE_OK`, then passes the focused boundary test (`Ran 1 test in 1.144s`,
+`OK`) and the full acceptance module (`Ran 21 tests in 8.480s`, `OK`). The
+owner-local test uses isolated synthetic SQLite stores and test-local
+instrumentation around the real `FinancialOwner._write()` context: an exception
+after the full mutation body rolls back before COMMIT, while an exception after
+the parent context commits models a lost result. Reopen through the real owner
+and independent checker, one same-identity retry, and an unchanged duplicate
+retry verify all-or-nothing history/meta/obligation/evidence/determination/
+action/outbox state. Queue/Composition/Runtime/Mirror boundary evidence is
+separate integration evidence; no native verification-to-commit or Lean
+authority was run or inferred. Native adapter skips, native/Lean replay,
 whole-system acceptance, independent audit, and production qualification remain
 open.
+
+The remaining financial integration decision is explicit: the owner currently
+has synchronous current-evidence evaluation and atomic mutation, not a separate
+verification-attempt, lease, receipt-consumption, or reservation boundary.
+`obligations.current_evaluation_id` and the existing `evaluations` table are
+the available owner-local seam; `claimed_adjustments.status='CLAIMED'` is a
+business adjustment state, not a verifier reservation. A later plaintext
+bridge would bind a determination to that selected evaluation with the
+obligation/revision, control-pack, evidence, authority, and result-digest
+identities, but its producer/consumer API, retry/consumption, invalidation,
+recovery, and reservation owner remain unspecified and unimplemented. Queue
+reservations remain separate retained evidence.
 
 The follow-on measurement series completed at
 `work/financial-measurements-v5-r1` with 3 measured samples plus 1 warmup at

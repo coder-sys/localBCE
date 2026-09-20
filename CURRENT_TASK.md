@@ -7,12 +7,13 @@ Updated: 2026-09-19
 Work only in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
 branch `rightrail-financial-workflow-20260913`. The committed parent identity
-before this follow-on correction is HEAD
-`736caaa8ab998f1c0f9a690e5e245c8350ba2158`, tree
-`cae2a419a3c1db9929c5f65d79a7705e33183797`; the only untracked paths remain
-the two generated executables recorded in `STATE.md`. The restore-source role
-correction, focused regression assertions, retained-boundary verification, and
-maintained-document changes are the current coherent batch.
+before this CASE10 transaction-boundary correction is HEAD
+`9159634b1f526c07e4e22654c3caf467da4cc546`, tree
+`dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc`; the only untracked path remains
+the preserved `build-performance/` directory containing the two generated
+executables recorded in `STATE.md`. The restore-source role correction is the
+parent boundary; this phase adds owner-local transaction-boundary assertions
+and maintained evidence.
 
 The assignment request SHA-256 is
 `54F95E47140F7EC6C082F5EDD2D007C91BAB45B4F3E809EE7CE5FD3170FA4033`. The
@@ -58,25 +59,44 @@ Ran 47 tests in 14.303s
 OK
 ```
 
-The follow-on gates were also guarded: the two changed financial modules
+The parent follow-on gates were guarded: the two changed financial modules
 compiled with absolute paths; the acceptance module ran `21 tests` with `OK`;
 the two independent package-role tests ran with `OK`; and the selected
 retained Queue/Composition/Runtime/Mirror boundary set ran `12 tests` with
-`OK`. The exact wrapper summaries and raw child outputs are retained in
-`STATE.md`. The retained Queue/State evidence remains `Queue 30 passed`,
+`OK`. The current CASE10 boundary compile emitted `COMPILE_OK`, the focused
+boundary test ran `1 test in 1.144s` with `OK`, and the full acceptance module
+ran `21 tests in 8.480s` with `OK`. The exact wrapper summaries and raw child
+outputs are retained in `STATE.md`. The retained Queue/State evidence remains `Queue 30 passed`,
 `Runtime 17 passed, 2 skipped` (the two native adapter/source-appliance tests
 explicitly deferred by the grant), and `Profile12 29 passed`; those broad
 modules were not replayed.
 
-Financial CASE 10 demonstrates only owner-local interrupted population
-staging, incomplete-source rejection, dispatch-disabled behavior, stable
-reopen, and independent verification. The separate 12-test integration set
+Financial CASE 10 now demonstrates owner-local interrupted population staging,
+incomplete-source rejection, dispatch-disabled behavior, and two real owner
+write boundaries using isolated synthetic SQLite stores: a failure after the
+mutation body rolls back before COMMIT, and a failure after COMMIT leaves the
+committed result for restart recovery. Reopen through the real owner and
+independent checker, retry of the same action identity, and duplicate retry
+preserve all-or-nothing history/meta/obligation/evidence/determination/action/
+outbox state. The boundary fault is test-local instrumentation; no production
+fault-hook framework was added. The separate 12-test integration set
 demonstrates the retained Queue/Composition transaction, reservation,
 handoff, crash/recovery, outbox/reconciliation, Runtime verifier-to-State,
 and Mirror source-verifier/independent-graph/retry boundaries. No native
 verification-to-commit or Lean authority is established here; native/Lean,
 whole-system, independent-audit, and production gates remain blocked or
 pending.
+
+The remaining financial integration decision is not implemented: this owner
+has synchronous current-evidence evaluation and atomic mutation, not a separate
+verification-attempt/lease/receipt-consumption/reservation boundary. The
+smallest later plaintext bridge would bind a determination to the existing
+`obligations.current_evaluation_id` evaluation with obligation/revision,
+control-pack, evidence, authority, and result-digest identities. Its actual
+producer/consumer API, retry/consumption behavior, invalidation, atomic
+recovery, and reservation owner must be specified from source before any
+implementation; Queue reservations remain separate evidence, and no native
+hospital-payment predicate is implied.
 
 This is source-local synthetic evidence, not final acceptance or qualification.
 The guarded v5 measurement series completed with 3 measured samples plus 1

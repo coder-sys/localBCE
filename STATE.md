@@ -2,17 +2,18 @@
 
 Updated: 2026-09-19
 
-## Current verified snapshot — follow-on v4 identity-binding correction batch
+## Current verified snapshot — CASE10 transaction-boundary correction
 
 The current coherent batch is in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
 branch `rightrail-financial-workflow-20260913`. Its committed parent before
-this follow-on correction is HEAD `736caaa8ab998f1c0f9a690e5e245c8350ba2158`,
-tree `cae2a419a3c1db9929c5f65d79a7705e33183797`. The follow-on batch changes
-the independent checker, acceptance regression assertions, and maintained
-evidence records; there are no other tracked changes. The only untracked paths
-are the two driver-supplied generated executables listed below; they are not
-touched or staged.
+this CASE10 transaction-boundary correction is HEAD
+`9159634b1f526c07e4e22654c3caf467da4cc546`, tree
+`dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc`. This phase changes only the
+acceptance test and maintained evidence records; production source and
+protected paths are unchanged. The only untracked path is the preserved
+`build-performance/` directory containing the two driver-supplied generated
+executables listed below; it is not touched or staged.
 
 The persisted candidate contract in this batch is `RR/FINANCIAL/OWNER/v4`
 with Continuity `RR/FINANCIAL/CONTINUITY/v4`. The new immutable
@@ -233,12 +234,13 @@ The 12 retained integration tests were seven Composition Queue/State/outbox
 and reconciliation tests, three Runtime verifier-to-State/held/crash-reopen
 tests, and two Mirror source-verifier/independent-graph/exact-retry tests.
 They use isolated synthetic temporary storage. The financial owner’s CASE 10
-proves only interrupted population staging, incomplete-source rejection,
-dispatch-disabled behavior, stable reopen, and owner/checker verification; it
-does not prove these Queue/Composition/Mirror/native boundaries. The retained
-separate Queue evidence remains `Queue 30 passed`, `Runtime 17 passed, 2
-skipped` (the two native source-auth adapter tests deferred by the grant), and
-`Profile12 29 passed`.
+also covers the owner write rollback boundary before COMMIT and the
+committed-result-lost boundary after COMMIT, with restart, independent
+verification, same-identity retry, and unchanged duplicate effects. It remains
+owner-local evidence and does not prove these Queue/Composition/Mirror/native
+boundaries. The retained separate Queue evidence remains `Queue 30 passed`,
+`Runtime 17 passed, 2 skipped` (the two native source-auth adapter tests
+deferred by the grant), and `Profile12 29 passed`.
 
 Known invocation corrections, preserved as non-product warnings, were: the
 first compile used relative paths and child stderr was
@@ -251,6 +253,117 @@ source or protected-path changes. No native binary, Queue/Composition/Mirror
 source, Lean path, measurement artifact, or old suite was rewritten or
 regenerated. Native verification-to-commit, Lean, whole-system, independent
 audit, and production qualification remain blocked or pending.
+
+## Current CASE10 transaction-boundary evidence — 2026-09-19
+
+This phase is on parent `9159634b1f526c07e4e22654c3caf467da4cc546` /
+`dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc` and changes only
+`tests/test_right_rail_financial_acceptance.py` plus these maintained records.
+The production owner, independent checker, Mirror, Continuity source, native,
+C, crypto, Lean, and protected Queue/Composition paths were not changed.
+
+The CASE10 test uses two isolated synthetic temporary SQLite stores and a
+test-local `_WriteBoundaryOwner` subclass. Its `_write()` wrapper delegates to
+the real `FinancialOwner._write()` transaction. The `precommit` fault is raised
+after `reject_offset_and_authorize_correction()` has completed all determination,
+claim, case, action/outbox, projection, and history writes but before the real
+context can execute `COMMIT`; the `postcommit` fault is raised only after that
+parent context has returned from `COMMIT`. No production fault-hook framework
+was added.
+
+The guarded child commands and decisive child output were:
+
+```text
+py -3.14 -c "py_compile.compile(<absolute owner>, doraise=True); py_compile.compile(<absolute acceptance>, doraise=True); print('COMPILE_OK')"
+COMPILE_OK
+
+test_case_10_interrupted_import_restart_and_disabled_dispatch (tests.test_right_rail_financial_acceptance.RightRailFinancialAcceptanceTests.test_case_10_interrupted_import_restart_and_disabled_dispatch) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 1.144s
+
+OK
+
+.....................
+----------------------------------------------------------------------
+Ran 21 tests in 8.480s
+
+OK
+```
+
+The compile child exited `0`; its stdout is 12 bytes with SHA-256
+`785EDD0728AA8F04FC6DF55B2CCC6F944EA9DBB589552EA79493BEC6378F1D0B`, and
+stderr is 0 bytes with the empty SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`. The
+focused test child stderr is 313 bytes with SHA-256
+`FDF8425A139EBED83E7A1CECEB0BA9E45D9214F099690887348C257A0E82C2C7`; its
+stdout is 0 bytes with the empty SHA. The full acceptance child stderr is 125
+bytes with SHA-256
+`7B0C1044662D66E310FE690C7F5072FDFD791EA151541CDC2AF7AFD23765E5F3`; its
+stdout is 0 bytes with the empty SHA. All three guards reported child exit
+checks `exit7=7 exit0=0`, main child exit `0`, `CLEANUP=PASS`, and
+`MUTEX=RELEASED`; minimum free bytes were respectively `4649291776`,
+`4626317312`, and `4640153600`, above the unchanged reserve floor
+`2576980378`.
+
+The pre-COMMIT interruption reopened through a real `FinancialOwner` and the
+independent checker with exact continuity-package equality, unchanged summary,
+unchanged durable counts for `financial_meta`, `financial_events`,
+`obligations`, `evidence`, `claimed_adjustments`, `cases`, `determinations`,
+`actions`, `action_outbox`, and `evaluations`, and the pre-action balance. The
+same action identity then returned `CORRECTION_AUTHORIZED`; a second retry
+returned `DUPLICATE`, with the package/counts unchanged and exactly one
+determination and one action. The post-COMMIT result-lost boundary reopened to
+the expected correction projection and independent verification; its same
+identity retry returned `DUPLICATE`, with package/counts unchanged and exactly
+one determination and one action. Dispatch remained disabled. No item was
+skipped in the successful CASE10 or full acceptance gates.
+
+Retained failed attempts were not relabeled as passes. Two nested guard
+invocations stopped before child launch (`Mode` was bound twice, then `B` was
+not a guard parameter); one tool-call construction produced no process; the
+direct `--module` attempt reached the guard but the Python child exited `2`
+with raw stderr `Unknown option: --module` (stderr SHA-256
+`2A9DB239AADDFE00D220C98E53297734D3391F3C359D180765556562550798DF`); and
+the first two substantive focused test attempts exited `1` with
+`IndependentFinancialError: claim:chronology` because the test-only fault
+owners reset the synthetic clock across reopen. Their raw stderr SHA-256 values
+are `5DB52AA363048EEEB3A0E383B040CEFF700C47C78F639372F8A1967F418C0595` and
+`0401CAC93026D9D13A6E708DFDF581ADC437BEB81BD19D45CBC5F2BE26C67EAA`.
+The test was corrected to preserve the fixture clock; no production code was
+changed. Two guarded read-only diagnostics then showed `PACKAGE_EQUAL True`
+and `VERIFY_OK` before the final focused pass.
+
+### Remaining financial verification-handoff decision — not implemented
+
+The financial owner at source `9159634` has synchronous current-evidence
+evaluation and atomic mutation, not a separate verification-handoff receipt.
+`record_*evidence` and `record_offset_claim` create typed durable evidence;
+`_recompute_obligation()` (`app/right_rail_financial_owner.py:1270-1344`)
+and `evaluate_obligation()` (`:2077-2085`) select and persist an evaluation.
+`authorize_offset()` and
+`reject_offset_and_authorize_correction()` (`:1806-1898`) bind actor/role and
+expected revision, then recompute inside the real `_write()` transaction;
+`_check_revision()` (`:1582-1584`) provides stale-command fencing. The
+existing `obligations.current_evaluation_id` (`:776`) points to the existing
+`evaluations` table (`:893`), while `claimed_adjustments.status='CLAIMED'`
+(`:809`) is a business adjustment state, not a verifier reservation. There is
+no financial-owner verification-attempt, lease, receipt-consumption, or
+reservation table. The CASE10 test, its independent checker call, and retained
+Queue reservation evidence must not be read as those absent boundaries.
+
+The smallest proposed plaintext bridge for later review is owner-local:
+explicitly bind a determination to the existing evaluation selected by
+`obligations.current_evaluation_id`, carrying the obligation and pre-revision,
+control-pack identity/version, evidence identities and digests, authority
+identity/epoch/digest, and evaluation result digest. Before implementation,
+the producer/consumer API, exact retry and consumption behavior, invalidation
+on changed evidence/revision/authority, atomic recovery behavior, and the
+owner of any reservation must be specified from actual source contracts. A
+successful exact action retry must remain idempotent and must not be broken by
+a simplistic consume-once rejection. No new receipt/schema/reservation bridge
+is authorized in this batch, and no native hospital-payment predicate may be
+manufactured; existing Queue reservations remain separate retained evidence.
 
 ## Historical verified records (reference only)
 

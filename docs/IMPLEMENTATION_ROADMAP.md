@@ -11,10 +11,10 @@ Rejected architectures are recorded separately and are not milestones.
 
 ## Active roadmap — financial workflow 2026-09-19
 
-The committed parent before this correction batch is branch
+The committed parent before this CASE10 transaction-boundary correction is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`736caaa8ab998f1c0f9a690e5e245c8350ba2158`, tree
-`cae2a419a3c1db9929c5f65d79a7705e33183797`. All evidence is synthetic and
+`9159634b1f526c07e4e22654c3caf467da4cc546`, tree
+`dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc`. All evidence is synthetic and
 nonactivating. The persisted owner/Continuity candidate is v4:
 `RR/FINANCIAL/OWNER/v4` and `RR/FINANCIAL/CONTINUITY/v4`. Its immutable
 `financial_identity` row binds restore provenance, mode/owner identity, source
@@ -60,11 +60,23 @@ measurement artifacts remain immutable historical evidence.
    source bytes unchanged. The synthetic contention diagnostic remains
    separately labeled and receives no actual-workload credit. This is a bounded
    observation, not an SLA. Native metrics remain pending and queue wait/age
-   is not applicable. The financial owner’s CASE 10 is owner-local evidence;
-   the selected Queue/Composition/Runtime/Mirror tests are separate retained
+   is not applicable. The financial owner’s CASE10 now also covers the real
+   owner write rollback boundary before COMMIT and the committed-result-lost
+   boundary after COMMIT, with restart, independent verification, same-identity
+   retry, and unchanged duplicate effects over isolated synthetic SQLite
+   stores. Its fault injection is test-local and adds no production hook. The
+   selected Queue/Composition/Runtime/Mirror tests are separate retained
    integration evidence. Native verification-to-commit, Lean, whole-system,
    independent-audit, and production gates remain open. Earlier v2/v3/v4
    results and measurements are historical only.
+   The financial owner still has no separate verification-attempt, lease,
+   receipt-consumption, or reservation boundary. The next financial design
+   decision is an owner-local plaintext binding from a determination to
+   `obligations.current_evaluation_id` and its existing `evaluations` row,
+   including revision, Control Pack, evidence, authority, and result-digest
+   identities; API, retry/consumption, invalidation, recovery, and reservation
+   ownership must be specified before implementation. Queue reservations stay
+   separate and no native hospital-payment predicate is implied.
 
 The first-state fixture is fixed at twenty hospitals and $1,000,000 total: H is $100,000 and the
 other nineteen total $900,000. Hand-derived expected constants are required. The financial owner

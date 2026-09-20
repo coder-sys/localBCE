@@ -7,7 +7,7 @@ module never derives expected balances from owner code or reaches the database t
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -45,6 +45,39 @@ class _Clock:
         return self.value
 
 
+class _WriteBoundaryOwner(FinancialOwner):
+    """Test-local interruption at the real owner transaction boundaries."""
+
+    def __init__(
+        self,
+        *,
+        path: Path,
+        config: FinancialOwnerConfig,
+        trusted_authority: SyntheticTrustedAuthority,
+        clock: _Clock,
+        fault: str,
+    ) -> None:
+        self._fault = fault
+        super().__init__(
+            path=path,
+            config=config,
+            trusted_authority=trusted_authority,
+            clock=clock,
+        )
+
+    @contextmanager
+    def _write(self) -> Iterator[sqlite3.Connection]:
+        fault = self._fault
+        with super()._write() as connection:
+            yield connection
+            if fault == "precommit":
+                self._fault = "consumed"
+                raise RuntimeError("synthetic_financial_precommit_interrupt")
+        if fault == "postcommit":
+            self._fault = "consumed"
+            raise RuntimeError("synthetic_financial_result_lost_after_commit")
+
+
 class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="right-rail-financial-acceptance-")
@@ -61,6 +94,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         *,
         period_id: str = expected.PERIOD_ONE_ID,
         path: Path | None = None,
+        clock: _Clock | None = None,
     ) -> FinancialOwner:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
@@ -73,8 +107,51 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             path=path or self._path(),
             config=config,
             trusted_authority=self.authority,
-            clock=_Clock(),
+            clock=clock or _Clock(),
         )
+
+    def _make_write_boundary_owner(
+        self,
+        *,
+        fault: str,
+        period_id: str = expected.PERIOD_ONE_ID,
+        path: Path,
+        clock: _Clock | None = None,
+    ) -> _WriteBoundaryOwner:
+        config = FinancialOwnerConfig(
+            state_id=expected.STATE_ID,
+            deployment_id=expected.DEPLOYMENT_ID,
+            program_id=expected.PROGRAM_ID,
+            period_id=period_id,
+            currency=expected.CURRENCY,
+        )
+        return _WriteBoundaryOwner(
+            path=path,
+            config=config,
+            trusted_authority=self.authority,
+            clock=clock or _Clock(),
+            fault=fault,
+        )
+
+    @staticmethod
+    def _durable_counts(path: Path) -> dict[str, int]:
+        tables = (
+            "financial_meta",
+            "financial_events",
+            "obligations",
+            "evidence",
+            "claimed_adjustments",
+            "cases",
+            "determinations",
+            "actions",
+            "action_outbox",
+            "evaluations",
+        )
+        with closing(sqlite3.connect(str(path))) as connection:
+            return {
+                table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                for table in tables
+            }
 
     @staticmethod
     def _pack(value: expected.ControlPackExpectation) -> ControlPack:
@@ -599,6 +676,59 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened = self._make_owner(path=store.path)
         self.assertEqual(reopened.summary(), before)
         self._assert_verified(reopened)
+
+        precommit_store = self._build_base()
+        self._record_cash(precommit_store)
+        precommit_claim = self._record_claim(precommit_store)
+        precommit_package = precommit_store.export_continuity()
+        precommit_summary = precommit_store.summary()
+        precommit_counts = self._durable_counts(precommit_store.path)
+        precommit_fault = self._make_write_boundary_owner(path=precommit_store.path, fault="precommit", clock=precommit_store.clock)
+        with self.assertRaisesRegex(RuntimeError, "synthetic_financial_precommit_interrupt"):
+            self._reject(precommit_fault, precommit_claim)
+
+        reopened_precommit = self._make_owner(path=precommit_store.path, clock=precommit_store.clock)
+        self.assertEqual(reopened_precommit.summary(), precommit_summary)
+        self.assertEqual(reopened_precommit.export_continuity(), precommit_package)
+        self.assertEqual(self._durable_counts(reopened_precommit.path), precommit_counts)
+        self._assert_snapshot(reopened_precommit, expected.H_CASH_AND_CLAIM)
+        self._assert_verified(reopened_precommit)
+
+        committed_after_retry = self._reject(reopened_precommit, precommit_claim)
+        self.assertEqual(committed_after_retry["status"], "CORRECTION_AUTHORIZED")
+        self._assert_snapshot(reopened_precommit, expected.H_REJECTED_CORRECTION)
+        self._assert_verified(reopened_precommit)
+        committed_package = reopened_precommit.export_continuity()
+        committed_counts = self._durable_counts(reopened_precommit.path)
+        duplicate_after_retry = self._reject(reopened_precommit, precommit_claim)
+        self.assertEqual(duplicate_after_retry["status"], "DUPLICATE")
+        self.assertEqual(reopened_precommit.export_continuity(), committed_package)
+        self.assertEqual(self._durable_counts(reopened_precommit.path), committed_counts)
+        detail_after_duplicate = reopened_precommit.obligation_detail(expected.H_ITEM_ID)
+        self.assertEqual(len(detail_after_duplicate["determinations"]), 1)
+        self.assertEqual(len(detail_after_duplicate["actions"]), 1)
+        self._assert_verified(reopened_precommit)
+
+        postcommit_store = self._build_base()
+        self._record_cash(postcommit_store)
+        postcommit_claim = self._record_claim(postcommit_store)
+        postcommit_fault = self._make_write_boundary_owner(path=postcommit_store.path, fault="postcommit", clock=postcommit_store.clock)
+        with self.assertRaisesRegex(RuntimeError, "synthetic_financial_result_lost_after_commit"):
+            self._reject(postcommit_fault, postcommit_claim)
+
+        reopened_postcommit = self._make_owner(path=postcommit_store.path, clock=postcommit_store.clock)
+        self._assert_snapshot(reopened_postcommit, expected.H_REJECTED_CORRECTION)
+        self._assert_verified(reopened_postcommit)
+        postcommit_package = reopened_postcommit.export_continuity()
+        postcommit_counts = self._durable_counts(reopened_postcommit.path)
+        duplicate_after_commit = self._reject(reopened_postcommit, postcommit_claim)
+        self.assertEqual(duplicate_after_commit["status"], "DUPLICATE")
+        self.assertEqual(reopened_postcommit.export_continuity(), postcommit_package)
+        self.assertEqual(self._durable_counts(reopened_postcommit.path), postcommit_counts)
+        postcommit_detail = reopened_postcommit.obligation_detail(expected.H_ITEM_ID)
+        self.assertEqual(len(postcommit_detail["determinations"]), 1)
+        self.assertEqual(len(postcommit_detail["actions"]), 1)
+        self._assert_verified(reopened_postcommit)
 
     def test_case_11_shadow_export_restore_and_test_owner_continuation(self) -> None:
         self.assertEqual(expected.CASE_11.number, 11)
