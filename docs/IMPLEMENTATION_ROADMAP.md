@@ -11,14 +11,15 @@ activation, or production-readiness record.
    the sole transaction authority. Preserve typed evidence versus official
    determination/action/acknowledgment/cash, exact retries, atomic
    history-projection-outbox, SHADOW/TEST Continuity, disabled dispatch/egress,
-   and the fixed synthetic 20-hospital fixture. The current working batch is
-   `NOT ACCEPTED` pending State's correction and affected re-verification.
-2. **Apply the correction and re-verify.** The frozen security review is
-   complete. Apply State's combined correction packet and run the affected
-   re-verification; see `STATE.md` for the detailed blockers. Reconcile final
-   measurement and Driver review separately. The focused caller packet passed
-   12 tests in 2.571s with no warnings/skips; this is retained evidence, not
-   acceptance or qualification.
+   and the fixed synthetic 20-hospital fixture. The bounded Python v5 slice is
+   accepted for the current delivery; this does not qualify the wider Driver
+   or production boundaries.
+2. **Reconcile and retain the correction evidence.** The combined correction,
+   affected re-verification, and final bounded measurement are complete. Keep
+   the private Continuity attempt ownership, independent receipt construction,
+   determination side-effect checks, CLI retry/conflict checks, and the
+   tag-only v2/v3/v4 rejection matrix aligned with `STATE.md`. Historical
+   schemas are not regenerated or treated as compatible.
 3. **Design the broader Lean direction.** Implement everything reasonably
    implementable in Lean with executable semantics and useful modularity; the
    Engine extraction is the first financial step. Define the smallest semantic
@@ -37,27 +38,24 @@ activation, or production-readiness record.
    gates for any selected profile. No real PHI, payment, live dispatch, or
    activation is implied before those gates close.
 
-The next safe action is to apply State's combined correction packet, run the
-affected re-verification, and complete the bounded Driver review of the
-current source/evidence—not another duplicated receipt narrative or source
-refactor.
+The next safe action is the bounded Driver review of the current source and
+raw evidence, followed by the separate native, formal, operational, and
+production gates—not another duplicated receipt narrative or source refactor.
 
 ## Current evidence boundary
 
-The final Mirror/CLI caller packet reported:
+The final affected guarded run reported:
 
 ```text
-Ran 12 tests in 2.571s
+Ran 63 tests in 26.573s
 OK
 ```
 
-No warnings or skips were reported. Retained preceding gates were acceptance
-`24 tests in 12.759s`, independent `18 tests in 5.086s`, and expanded Mirror
-`10 tests in 2.050s`, all `OK`. The v5 measurement series has 3 measured
-samples plus 1 warmup at sizes 5, 10, and 20; its aggregate lock timings are
-bounded observations, not an SLA. Native metrics and queue wait/age remain
-pending/not applicable. Failed attempts and corrected reruns remain raw
-evidence in their existing locations.
+No warnings or skips were reported. The final v5 measurement has 3 measured
+samples plus 1 warmup at sizes 5, 10, and 20, all reference and source-byte
+checks true, and is a bounded observation rather than an SLA. Native metrics
+remain pending and Queue wait/age are not applicable. Failed attempts and
+corrected reruns remain raw evidence in their existing locations.
 
 ## Native-v3 release gate
 

@@ -16,12 +16,11 @@ acknowledgment, and cash/reporting completion are separate facts.
 
 ## Current working boundary
 
-At this documentation release the branch is
-`rightrail-financial-workflow-20260913` with committed parent
-`06070168fd180a1173bb6426cbf7cbdbc33bc67a` / tree
-`c52630fd511ebe3b1ca32b2390a289c3a07746a6`. The v5 source/test/CLI/
-measurement-harness work is
-intentionally uncommitted and State-owned; this cleanup does not change it.
+The branch is `rightrail-financial-workflow-20260913`. The corrected v5
+owner/checker/Mirror/CLI/Continuity implementation, affected tests, and
+maintained docs are the current State-owned delivery; Git HEAD, tree, and
+status are authoritative after integration. Preserve the two untracked
+driver-supplied executables under `build-performance/`.
 
 The working contracts are `RR/FINANCIAL/OWNER/v5` and
 `RR/FINANCIAL/CONTINUITY/v5`. v2/v3/v4 stores and packages remain preserved
@@ -45,9 +44,9 @@ it carries references/digests only. The required determination contract binds
 explicit evaluation identity/digest and expected revision to current and
 historical state before one atomic determination/action/outbox transition.
 Exact retries must be `DUPLICATE`; changed identity or input must be conflict.
-The frozen v5 review is complete; the current batch is `NOT ACCEPTED` pending
-State's combined correction and affected re-verification. Detailed blockers are
-in `STATE.md`.
+The bounded Python v5 slice is accepted for this delivery after correction and
+affected re-verification; whole-system and production qualification remain
+open. Detailed evidence and nonclaims are in `STATE.md`.
 
 ## Entry points
 
@@ -68,34 +67,42 @@ contract is [`docs/DESIGN_IDEOLOGY.md`](docs/DESIGN_IDEOLOGY.md).
 
 ## Verified evidence
 
-The final Mirror/CLI caller packet ran through the existing guard:
+The final guarded affected run compiled the relevant Python paths and ran the
+acceptance, independent-checker, and Mirror suites:
 
 ```text
-Ran 12 tests in 2.571s
+Ran 63 tests in 26.573s
 OK
 ```
 
-It reported no warnings or skips. Guard evidence included
-`PHYSICAL_PREFLIGHT free_bytes=3499163648 reserve_bytes=3221225472
-reserve_floor_bytes=2576980378`, child exits `7/0`, minimum free bytes
-`3381149696`, peak private bytes `81027072`, `CLEANUP=PASS`, and
-`MUTEX=RELEASED`. The final Mirror test identity is
-`35D56C3C16A8506D7F6F6BB48C8647F21BB282FABC43E608EACCBFBDF407521B`.
+It reported no warnings or skips. The guard also verified process-boundary
+return codes `73` and `74`, child exit `0`, minimum free bytes
+`3797897216`, peak private bytes `29360128`, `CLEANUP=PASS`, and
+`MUTEX=RELEASED`. The owner SHA-256 is
+`68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9`; the
+independent checker is
+`FE1CCDCA057FE36391FF9A9BCD9B4CD73ADAC9A934D3DB88D040E5F6BB1D5A55`.
 
-Retained preceding gates were acceptance `24 tests in 12.759s`, independent
-`18 tests in 5.086s`, and expanded Mirror `10 tests in 2.050s`, all `OK`.
-Earlier failed attempts and their corrections remain raw evidence; they are
-not relabeled as passes.
+The final bounded measurement is `work/financial-measurements-v5-final-r4`:
+one warmup plus three measured samples at sizes 5, 10, and 20, with 12 owner
+and 12 TEST databases. It reports `type=complete`, `status=PASS`, all
+reference checks true, all source bytes unchanged, and zero acquisition
+failures. Total medians are `504.762`, `793.516`, and `1261.848` ms for
+sizes 5, 10, and 20. This is a bounded observation, not an SLA. Earlier
+failed attempts and their corrections remain raw evidence; they are not
+relabeled as passes.
 
 ## Limitations and claims
 
 - The candidate is synthetic, local, nonactivating, nonpayment, and non-PHI:
   `proofSuiteId=null`, `production_usable=false`, and `activation=false`.
-- Security review is complete. Its combined correction and affected
-  re-verification, plus final measurement, are pending. Native metrics, native
-  verification-to-commit, Lean replay/linkage, whole-system qualification,
-  independent audit, real data/PHI, live dispatch, payment movement, and
-  production qualification remain open.
+- The combined correction and affected re-verification are complete for this
+  bounded Python slice. Native metrics, native verification-to-commit, Lean
+  executable replay/linkage, Queue/Composition integration, whole-system
+  qualification, independent audit, real data/PHI, live dispatch, payment
+  movement, and production qualification remain open.
+- The v2/v3/v4 coverage is a tag-only fail-closed rejection matrix over
+  disposable current bytes; it is not historical-schema compatibility evidence.
 - There is no separate verification-attempt, lease, receipt-consumption, or
   Queue-reservation boundary in the financial owner. Claimed-adjustment state
   and Queue reservations remain separate.

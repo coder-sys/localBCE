@@ -6,132 +6,130 @@ Updated: 2026-09-20
 
 This checkout is the canonical synthetic financial application:
 
-`C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`
+C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913
 
-Branch: `rightrail-financial-workflow-20260913`.
+Branch: rightrail-financial-workflow-20260913.
 
-Committed parent at the current handoff:
-`06070168fd180a1173bb6426cbf7cbdbc33bc67a`, tree
-`c52630fd511ebe3b1ca32b2390a289c3a07746a6`.
+The current delivery integrates the corrected v5 Python owner/checker,
+same-owner Mirror and CLI coverage, Continuity restore ownership, affected
+acceptance tests, and the seven maintained child Markdown files. Git HEAD,
+tree, and status are authoritative after integration. The two untracked
+build-performance executables are preserved evidence and must not be touched.
 
-The active implementation is working v5 Python owner/checker/Mirror/CLI/
-Continuity code with its measurement harness. Source/test/harness work is
-intentionally uncommitted and State-owned.
-The two untracked `build-performance/` executables are preserved evidence and
-must not be touched.
+The bounded responsibility remains State Control Pack, Blind Ledger owner,
+same-owner Mirror, bounded Continuity State, and deferred Switch. The workflow
+is synthetic, state-local, nonactivating, nonpayment, and non-PHI.
 
-The maintained task is to keep this entry point aligned with actual source and
-evidence while preserving the five-part responsibility: State Control Pack,
-Blind Ledger, same-owner Mirror, bounded Continuity State, and deferred Switch.
-This documentation cleanup does not authorize source, test, fixture, build,
-native, C, crypto, Lean, Queue, Composition, operations, archive, or evidence
-changes.
+## Required v5 contract and disposition
 
-## Required v5 contract and review status
+Owner and Continuity identities are RR/FINANCIAL/OWNER/v5 and
+RR/FINANCIAL/CONTINUITY/v5. v2/v3/v4 inputs reject fail-closed without
+mutation. The v5 evaluation receipt contract
+RR/FINANCIAL/EVALUATION-RECEIPT/v1 binds scope, identity/revision, Control
+Pack, sorted unique evidence record-digest bindings, authority/time, result
+fields, result digest, and receipt digest. Determinations bind explicit
+evaluation identity/digest and expected revision before one atomic
+determination/action/outbox transition. Exact retries are DUPLICATE; changed
+identity or input is a conflict.
 
-Owner and Continuity identities are `RR/FINANCIAL/OWNER/v5` and
-`RR/FINANCIAL/CONTINUITY/v5`. v2/v3/v4 stores/packages remain preserved and
-reject fail-closed without mutation.
+The bounded Python v5 slice is ACCEPTED for this delivery. This is not
+whole-system qualification: native verification-to-commit, executable Lean
+linkage/refinement, Queue/Composition integration, authenticated sources,
+custody, independent audit, real PHI, live dispatch, payment movement, and
+production activation remain separate gates.
 
-The required owner boundary keeps the owner as sole writer for obligations,
-evaluations, determinations, corrections, balances, and action/outbox identity.
-The required v5 contract includes `current_evaluation_receipt(item_id)` and
-the same receipt from `evaluate_obligation`. The receipt is
-`RR/FINANCIAL/EVALUATION-RECEIPT/v1`; it binds scope, evaluation/obligation/
-revision, Control Pack identity/digest, sorted evidence id/record-digest
-bindings, trusted authority, timestamp, result fields, result digest, and
-receipt digest. It contains references/digests only.
+## Final guarded verification
 
-The required determination contract binds evaluation identity/digest and
-expected revision to current and historical evaluation, receipt, projection,
-evidence coverage/chronology, Control Pack, and authority before one atomic
-determination/action/outbox transition. Exact same retries must be
-`DUPLICATE`; changed identity or input must be conflict. State applied the
-combined correction and completed affected re-verification; the corrected
-bounded Python slice is verified as recorded in `STATE.md`. There is no
-separate verification-attempt, lease, receipt-consumption, or Queue-reservation
-boundary.
+The required guarded command compiled the relevant owner, checker, Mirror,
+fixture, CLI, and measurement-harness paths, then ran the acceptance,
+independent-checker, and Mirror suites. The exact raw logs are:
 
-The required Continuity boundary is query-only SHADOW or isolated TEST/non-live;
-dispatch and egress must remain disabled, and restore must create no second
-live writer. Abrupt owner exits before COMMIT and after COMMIT are covered by
-retained CASE10 evidence with restart, independent verification, same-identity
-retry, and unchanged duplicate effects.
+- ../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-correction2-focused-r8.stdout.log
+- ../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-correction2-focused-r8.stderr.log
 
-## Corrected final evidence
+Decisive child output:
 
-The final guarded affected source/test run compiled the corrected owner,
-independent checker, Mirror, fixtures, CLI, and measurement harness, then ran
-the three affected suites:
-
-```text
-Ran 58 tests in 22.223s
+PROCESS_BOUNDARY precommit returncode=73 stdout='PHASE=BEFORE_REJECT\nPHASE=PRECOMMIT_AFTER_MUTATION\n' stderr=''
+PROCESS_BOUNDARY postcommit returncode=74 stdout='PHASE=BEFORE_REJECT\nPHASE=POSTCOMMIT_AFTER_COMMIT\n' stderr=''
+Ran 63 tests in 26.573s
 OK
-```
 
-The guard reported child exit `0`, minimum free bytes `3095826432`, peak
-private bytes `54579200`, `CLEANUP=PASS`, and `MUTEX=RELEASED`. The corrected
-owner and independent-checker hashes are recorded in `STATE.md`. The final
-Engine measurement child receipt is `status=PASS` with all reference checks and
-source-byte checks true across sizes 5, 10, and 20; this remains bounded local
-evidence, not an SLA or production qualification.
+The guard reported child exit 0, minimum free bytes 3797897216, reserve
+3221225472, effective floor 2576980378, peak private bytes 29360128,
+CLEANUP=PASS, and MUTEX=RELEASED. The final owner SHA-256 is
+68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9; the
+independent checker SHA-256 remains
+FE1CCDCA057FE36391FF9A9BCD9B4CD73ADAC9A934D3DB88D040E5F6BB1D5A55.
 
-## Retained focused evidence (pre-correction, not acceptance)
+Coverage includes an independently reconstructed populated evaluation receipt
+through owner query/evaluate, reopen, Mirror, CLI, and SHADOW restore; bad,
+stale, pre-evaluation, unchanged-rejection, and same-reference determination
+cases; real CLI success, exact retry, and changed-binding conflict; private
+atomic restore attempt publication with foreign destination/sidecar
+preservation and owned-failure cleanup; and v2/v3/v4 tag-only store/package
+rejection without destination creation. The v2/v3/v4 cases are explicitly
+schema/version-tag rejection checks, not proof of compatibility with authentic
+historical schemas.
 
-The final Mirror/CLI caller packet ran through the existing guard:
+## Final bounded measurement
 
-```text
-Ran 12 tests in 2.571s
-OK
-```
+The final guarded measurement raw logs are:
 
-No warnings or skips were reported. Guard decisive values were preflight free
-bytes `3499163648`, reserve `3221225472`, reserve floor `2576980378`, minimum
-free `3381149696`, peak private bytes `81027072`, child exits `7/0`,
-`CLEANUP=PASS`, and `MUTEX=RELEASED`. Final Mirror test SHA-256:
-`35D56C3C16A8506D7F6F6BB48C8647F21BB282FABC43E608EACCBFBDF407521B`.
+- ../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-final-r4.stdout.log
+- ../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-final-r4.stderr.log
 
-Retained preceding focused gates were acceptance `24 tests in 12.759s`,
-independent `18 tests in 5.086s`, and expanded Mirror `10 tests in 2.050s`,
-all `OK`. Earlier failed attempts, warnings, and corrected reruns remain in
-raw guard evidence and Git history; they are not silently converted into
-current acceptance.
+The child receipt is type=complete, status=PASS, schema
+RR/FINANCIAL/MEASUREMENT-SERIES/v1, at
+work/financial-measurements-v5-final-r4. It records sizes 5, 10, and 20,
+one warmup plus three measured samples per size, 12 owner databases and 12
+TEST restore databases, owner
+68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9, checker
+FE1CCDCA057FE36391FF9A9BCD9B4CD73ADAC9A934D3DB88D040E5F6BB1D5A55, all
+reference checks true, all source bytes unchanged, and zero acquisition
+failures.
 
-The v5 measurement series has three measured samples plus one warmup at each
-of sizes 5, 10, and 20, with 12 owner databases and 12 TEST restore databases.
-The aggregate is the median of three per-sample medians; actual write
-wait/held medians are 2.019/7.188, 1.815/6.052, and 1.708/6.597 ms, with
-transaction totals 36, 54, and 90 and zero acquisition failures. All nine
-measured restores left source bytes unchanged. This is a bounded observation,
-not an SLA; native metrics and queue wait/age are not applicable.
+Measured aggregate medians are total/wait/held milliseconds:
 
-## Active next gates
+| size | total | wait | held | transactions |
+| ---: | ---: | ---: | ---: | ---: |
+| 5 | 504.762 | 1.390 | 6.236 | 51 |
+| 10 | 793.516 | 1.460 | 7.373 | 84 |
+| 20 | 1261.848 | 1.469 | 7.291 | 150 |
 
-1. Keep the corrected bounded slice aligned with its raw evidence while
-   reconciling future Driver-wide, native, and formal gates. Do not infer
-   production qualification or activation from this local result.
-2. Continue the Lean extraction design for Engine with narrow versioned
-   interfaces, a small trusted core, independent checks, and explicit state
-   semantics. No runtime authority switch occurs until a pinned executable
-   Lean artifact and refinement/linkage evidence exist.
-3. Keep native verification-to-commit, native metrics, independent audit,
-   custody, authenticated sources, real PHI, live dispatch, and payment
-   movement as separate future gates.
+The outer final measurement guard had child exit 0, 18 samples, minimum free
+bytes 3767709696, peak private bytes 24268800, CLEANUP=PASS, and
+MUTEX=RELEASED. The wrapper stdout SHA-256 is
+2F5C1062F00C7A3FA5A3BA1F802EAEB62C1C90441851BEA18F0BA02F7CB81B0A; stderr
+was empty with SHA-256
+E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855.
+This is a bounded local observation, not an SLA or production qualification;
+native metrics are pending and Queue wait/age are not applicable to this
+owner slice.
+
+## Retained failures and next gates
+
+Earlier raw failures remain evidence: the first correction run had two test
+errors (hard-coded evaluation revision and a CLI argument replacement);
+another run stopped at 2521305088 < 2576980378 for the required memory floor;
+the next run exposed the independent detail-row item_id assumption; two later
+runs exposed missing io and redirect_stdout test imports. The final r8 rerun
+passed. These failures were corrected in scope and were not silently
+relabeled. Earlier pre-correction review failures remain in their original raw
+logs and Git history.
+
+Next work is Driver-wide review and the separate native, formal, operational,
+and production gates. The active Lean direction may design/extract semantics,
+but no runtime authority switch is allowed until a pinned executable Lean
+artifact and refinement/linkage evidence exist.
 
 ## Protected boundary and claims
 
-The fixed fixture is twenty hospitals and $1,000,000 total: H is $100,000 and
-the other nineteen total $900,000. Expected values are hand-derived. Preserve
-Queue schema 13/Profile 12, Composition schema 4, the exact 100-reference
-protocol, source ownership/reservation, Queue/State/outbox atomicity, the
-non-`CLEAR` economic guard, and all native/C/crypto/Lean artifacts.
+Preserve the fixed twenty-hospital/$1,000,000 fixture, hand-derived cents,
+Queue schema 13/Profile 12, Composition schema 4, exact 100-reference
+protocol, source ownership/reservation, Queue/State/outbox atomicity,
+non-CLEAR guard, and native/C/crypto/Lean boundaries.
 
-Current claims are synthetic, local, nonactivating, nonpayment, and non-PHI:
-`proofSuiteId=null`, `production_usable=false`, `activation=false`,
-`NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`. The Python v5 owner is not a deployed
-formal authority, official processor, payment system, or independent audit.
-
-State owns source, tests, fixtures, and generated evidence. Docs owns the
-released Markdown only. Leave all changes from this documentation cleanup
-unstaged for State integration. The complete pre-edit task/evidence narrative
-remains recoverable from Git history and the immutable raw evidence paths.
+Claims remain proofSuiteId=null, production_usable=false, activation=false,
+NOT_QUALIFIED/INACTIVE/UNSELECTED, synthetic, nonpayment, and non-PHI. The
+Python owner is not a deployed formal authority, official processor, payment
+system, or independent audit.

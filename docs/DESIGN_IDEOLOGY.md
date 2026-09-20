@@ -58,7 +58,10 @@ contract, not optional operational decoration.
 Continuity restore is bounded and isolated. SHADOW is read-only; TEST is
 non-live; dispatch and egress stay disabled; source bytes and owner identity
 remain protected. A restored package is not allowed to promote itself into a
-live writer or replace an existing identity.
+live writer or replace an existing identity. The current v5 restore uses a
+private attempt directory and atomic no-replace publication, so cleanup can
+remove only an owned attempt or an owned published identity; foreign
+destinations and sidecars remain intact, and cleanup failures are visible.
 
 ## Determinism and adversarial simplicity
 
@@ -68,6 +71,12 @@ omission, duplication, replay, stale revision, wrong scope, cross-owner,
 cross-period, and wrong-mode cases fail visibly. Prefer the simplest
 falsifiable design; compare alternatives against mutation, replay, recovery,
 resource, and whole-system evidence before adding machinery.
+
+The accepted bounded Python v5 evidence follows the same rule: populated
+evaluation receipts are independently reconstructed, determination failures
+are checked for unchanged durable bytes, exact CLI retries are distinguished
+from changed bindings, and the v2/v3/v4 matrix is labeled tag-only rejection
+rather than historical-schema compatibility.
 
 ## Active Lean direction
 

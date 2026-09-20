@@ -7,8 +7,10 @@ module never derives expected balances from owner code or reaches the database t
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -46,6 +48,89 @@ class _Clock:
     def now_ms(self) -> int:
         self.value += 1
         return self.value
+
+
+def _independent_canonical(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+
+
+def _independent_digest(domain: bytes, *parts: bytes) -> bytes:
+    digest = hashlib.sha3_512(domain)
+    for part in parts:
+        digest.update(len(part).to_bytes(8, "big"))
+        digest.update(part)
+    return digest.digest()
+
+
+def _independent_hex(value: bytes) -> str:
+    return value.hex().upper()
+
+
+def _independent_evidence_digest(row: dict[str, object]) -> str:
+    evidence_domain = b"RR/FINANCIAL/EVIDENCE/v1\x00"
+    content_digest = _independent_digest(
+        evidence_domain,
+        _independent_canonical(
+            {
+                "source_id": row["source_id"],
+                "source_version": row["source_version"],
+                "local_ref": row["local_ref"],
+                "common_origin_id": row["common_origin_id"],
+                "kind": row["kind"],
+            }
+        ),
+    )
+    return _independent_hex(
+        _independent_digest(
+            evidence_domain,
+            _independent_canonical(
+                {
+                    "evidence_id": row["evidence_id"],
+                    "item_id": row["item_id"],
+                    "kind": row["kind"],
+                    "common_origin_id": row["common_origin_id"],
+                    "source_id": row["source_id"],
+                    "source_version": row["source_version"],
+                    "local_ref": row["local_ref"],
+                    "applicable_at_ms": row["applicable_at_ms"],
+                    "event_at_ms": row["event_at_ms"],
+                    "received_at_ms": row["received_at_ms"],
+                    "content_digest": _independent_hex(content_digest),
+                    "amount_cents": row["amount_cents"],
+                    "reversal_of": row["reversal_of"],
+                    "supersedes": row["supersedes"],
+                }
+            ),
+        )
+    )
+
+
+def _independent_pack_digest(pack: expected.ControlPackExpectation) -> str:
+    scope = pack.scope
+    return _independent_hex(
+        _independent_digest(
+            b"RR/FINANCIAL/EVIDENCE/v1\x00",
+            _independent_canonical(
+                {
+                    "pack_id": pack.pack_id,
+                    "state_id": scope.state_id,
+                    "deployment_id": scope.deployment_id,
+                    "program_id": scope.program_id,
+                    "period_id": scope.period_id,
+                    "version": pack.version,
+                    "source_refs": list(pack.source_refs),
+                    "effective_start_ms": pack.effective_start_ms,
+                    "effective_end_ms": pack.effective_end_ms,
+                    "recorded_at_ms": pack.recorded_at_ms,
+                    "approved_at_ms": pack.approved_at_ms,
+                    "calculation_rule_id": pack.calculation_rule_id,
+                    "adjustment_rule_id": pack.adjustment_rule_id,
+                    "authorized_roles": list(pack.authorized_roles),
+                    "expected_tests": list(pack.expected_tests),
+                }
+            ),
+        )
+    )
 
 
 class _WriteBoundaryOwner(FinancialOwner):
@@ -1215,6 +1300,40 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         self.assertFalse(destination.exists())
         self.assertTrue(store.path.exists())
+        self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
+
+    def test_continuity_restore_destination_race_preserves_foreign_database_and_sidecars(self) -> None:
+        store = self._build_base()
+        package = store.export_continuity()
+        destination = self._path("raced-continuity.sqlite")
+        sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"))
+        foreign_database = b"foreign-destination-bytes"
+        foreign_wal = b"foreign-wal-bytes"
+        foreign_shm = b"foreign-shm-bytes"
+        original_link = owner.os.link
+
+        def create_foreign_destination(source: str | os.PathLike[str], target: str | os.PathLike[str], *args: object, **kwargs: object) -> None:
+            destination.write_bytes(foreign_database)
+            sidecars[0].write_bytes(foreign_wal)
+            sidecars[1].write_bytes(foreign_shm)
+            original_link(source, target, *args, **kwargs)
+
+        owner.os.link = create_foreign_destination
+        try:
+            with self.assertRaisesRegex(FinancialContinuityError, "continuity_destination"):
+                FinancialOwner.restore_continuity(
+                    package_bytes=package,
+                    recovered_path=destination,
+                    trusted_authority=self.authority,
+                    clock=_Clock(),
+                )
+        finally:
+            owner.os.link = original_link
+        self.assertEqual(destination.read_bytes(), foreign_database)
+        self.assertEqual(sidecars[0].read_bytes(), foreign_wal)
+        self.assertEqual(sidecars[1].read_bytes(), foreign_shm)
+        self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
+        self._assert_verified(store)
 
     def test_control_pack_policy_and_wildcard_periods_fail_closed(self) -> None:
         with self.assertRaisesRegex(FinancialInputError, "period_scope_required"):
@@ -1535,6 +1654,181 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(reopened.current_evaluation_receipt(expected.H_ITEM_ID), receipt)
         self._assert_verified(reopened)
 
+    def test_v5_populated_evaluation_receipt_is_independent_and_boundary_stable(self) -> None:
+        from tools import right_rail_financial_cli as cli
+
+        clock = _Clock()
+        store = self._build_base(clock=clock)
+        clock.value = expected.CASH_EVENT_MS - 1
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        before_evaluate = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        evaluated = store.evaluate_obligation(expected.H_ITEM_ID, expected_revision=int(before_evaluate["revision"]))
+        receipt = evaluated["evaluation_receipt"]
+        detail = store.obligation_detail(expected.H_ITEM_ID)
+        evidence_rows = {
+            str(row["evidence_id"]): {"item_id": expected.H_ITEM_ID, **row}
+            for row in detail["evidence"]
+        }
+        cash_row = evidence_rows[expected.H_CASH_EVIDENCE.evidence_id]
+        claim_row = evidence_rows[expected.OFFSET_CLAIM_EVIDENCE.evidence_id]
+        self.assertEqual(
+            {key: cash_row[key] for key in ("item_id", "kind", "common_origin_id", "source_id", "source_version", "local_ref", "applicable_at_ms", "event_at_ms", "received_at_ms", "amount_cents", "reversal_of", "supersedes")},
+            {
+                "item_id": expected.H_ITEM_ID,
+                "kind": "PAYMENT_CONFIRMATION",
+                "common_origin_id": "origin:cash:h:v1",
+                "source_id": "fixture-payment-file",
+                "source_version": "cash-v1",
+                "local_ref": "ref:cash:h:v1",
+                "applicable_at_ms": expected.CASH_EVENT_MS,
+                "event_at_ms": expected.CASH_EVENT_MS,
+                "received_at_ms": expected.CASH_EVENT_MS,
+                "amount_cents": expected.H_CASH_CENTS,
+                "reversal_of": None,
+                "supersedes": None,
+            },
+        )
+        self.assertEqual(
+            {key: claim_row[key] for key in ("item_id", "kind", "common_origin_id", "source_id", "source_version", "local_ref", "applicable_at_ms", "event_at_ms", "received_at_ms", "amount_cents", "reversal_of", "supersedes")},
+            {
+                "item_id": expected.H_ITEM_ID,
+                "kind": "OFFSET_CLAIM",
+                "common_origin_id": claim_id,
+                "source_id": "synthetic-offset-source",
+                "source_version": "fixture-v1",
+                "local_ref": f"offset:{claim_id}",
+                "applicable_at_ms": expected.CASH_EVENT_MS + 2,
+                "event_at_ms": expected.CASH_EVENT_MS + 3,
+                "received_at_ms": expected.CASH_EVENT_MS + 4,
+                "amount_cents": expected.UNAPPROVED_OFFSET_CENTS,
+                "reversal_of": None,
+                "supersedes": None,
+            },
+        )
+        evidence_bindings = [
+            {"evidence_id": evidence_id, "record_digest": _independent_evidence_digest(evidence_rows[evidence_id])}
+            for evidence_id in sorted(evidence_rows)
+        ]
+        self.assertEqual(receipt["evidence_bindings"], evidence_bindings)
+        scope = {
+            "state_id": expected.STATE_ID,
+            "deployment_id": expected.DEPLOYMENT_ID,
+            "program_id": expected.PROGRAM_ID,
+            "period_id": expected.PERIOD_ONE_ID,
+            "currency": expected.CURRENCY,
+        }
+        input_snapshot = {
+            "pre_revision": int(before_evaluate["revision"]),
+            "obligation": {
+                "obligation_id": expected.H_OBLIGATION_ID,
+                "item_id": expected.H_ITEM_ID,
+                "revision": int(before_evaluate["revision"]),
+                "rule_version": 1,
+                "owed_cents": expected.H_OWED_CENTS,
+                "due_at_ms": expected.H_DUE_AT_MS,
+                "reporting_complete": 0,
+            },
+            "evidence": [
+                {
+                    "evidence_id": binding["evidence_id"],
+                    "record_digest": binding["record_digest"],
+                    "event_at_ms": evidence_rows[binding["evidence_id"]]["event_at_ms"],
+                    "received_at_ms": evidence_rows[binding["evidence_id"]]["received_at_ms"],
+                }
+                for binding in evidence_bindings
+            ],
+            "payments": [{"payment_id": "payment:h:cash", "amount_cents": expected.H_CASH_CENTS, "event_at_ms": expected.CASH_EVENT_MS, "active": 1}],
+            "claims": [{"claim_id": claim_id, "amount_cents": expected.UNAPPROVED_OFFSET_CENTS, "status": "CLAIMED"}],
+            "determinations": [],
+            "cases": [{"case_id": f"case:{expected.H_OBLIGATION_ID}", "status": "OPEN"}],
+            "actions": [],
+            "conflicts": [],
+        }
+        evaluation_row = next(row for row in detail["evaluations"] if row["evaluation_id"] == receipt["evaluation_id"])
+        self.assertEqual(json.loads(str(evaluation_row["input_snapshot_json"])), input_snapshot)
+        input_snapshot_digest = _independent_hex(
+            _independent_digest(b"RR/FINANCIAL/EVALUATION-INPUT/v1\x00", _independent_canonical(input_snapshot))
+        )
+        self.assertEqual(receipt["input_snapshot_digest"], input_snapshot_digest)
+        result_fields = {
+            "evaluation_id": f"evaluation:{expected.H_OBLIGATION_ID}:r{int(before_evaluate['revision']) + 1}",
+            "obligation_id": expected.H_OBLIGATION_ID,
+            "revision": int(before_evaluate["revision"]) + 1,
+            "rule_version": 1,
+            "evidence_ids": [binding["evidence_id"] for binding in evidence_bindings],
+            "authority_id": self.authority.authority_id,
+            "evaluated_at_ms": clock.value,
+            "owed_cents": expected.H_OWED_CENTS,
+            "claimed_adjustment_cents": expected.UNAPPROVED_OFFSET_CENTS,
+            "lawful_adjustment_cents": 0,
+            "received_cash_cents": expected.H_CASH_CENTS,
+            "shortfall_cents": expected.UNAPPROVED_OFFSET_CENTS,
+            "overage_cents": 0,
+            "cash_satisfied": 0,
+            "amount_satisfied": 0,
+            "timely": 0,
+            "reporting_complete": 0,
+            "verification_status": "SUPPORTED",
+            "case_status": "OPEN",
+            "delivery_status": "NONE",
+        }
+        result_digest = _independent_hex(
+            _independent_digest(b"RR/FINANCIAL/EVALUATION/v5\x00", _independent_canonical(result_fields))
+        )
+        receipt_body = {
+            "contract_version": "RR/FINANCIAL/EVALUATION-RECEIPT/v1",
+            "scope": scope,
+            "evaluation_id": result_fields["evaluation_id"],
+            "obligation_id": result_fields["obligation_id"],
+            "revision": result_fields["revision"],
+            "control_pack": {"pack_id": expected.CONTROL_PACK_V1.pack_id, "version": 1, "digest": _independent_pack_digest(expected.CONTROL_PACK_V1)},
+            "evidence_bindings": evidence_bindings,
+            "input_snapshot_digest": input_snapshot_digest,
+            "authority": {"authority_id": self.authority.authority_id, "epoch": self.authority.epoch, "digest": _independent_hex(self.authority.digest)},
+            **result_fields,
+            "result_digest": result_digest,
+        }
+        expected_receipt = {
+            **receipt_body,
+            "receipt_digest": _independent_hex(
+                _independent_digest(b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00", _independent_canonical(receipt_body))
+            ),
+            "evaluation_result_digest": result_digest,
+        }
+        self.assertEqual(receipt, expected_receipt)
+        self.assertEqual(store.current_evaluation_receipt(expected.H_ITEM_ID), receipt)
+        package = store.export_continuity()
+        store.close()
+        reopened = self._make_owner(path=store.path, clock=clock)
+        self.assertEqual(reopened.current_evaluation_receipt(expected.H_ITEM_ID), receipt)
+        mirror_receipt = FinancialMirror(reopened).current_evaluation_receipt(expected.H_ITEM_ID)
+        self.assertEqual({key: value for key, value in mirror_receipt.items() if key not in {"schema", "resource"}}, receipt)
+        common = [
+            "--database", str(reopened.path),
+            "--state-id", expected.STATE_ID,
+            "--deployment-id", expected.DEPLOYMENT_ID,
+            "--program-id", expected.PROGRAM_ID,
+            "--period-id", expected.PERIOD_ONE_ID,
+            "current-evaluation-receipt", "--item-id", expected.H_ITEM_ID,
+        ]
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            self.assertEqual(cli.main(common), 0)
+        self.assertEqual(stderr.getvalue(), "")
+        cli_receipt = json.loads(stdout.getvalue())
+        self.assertEqual({key: value for key, value in cli_receipt.items() if key not in {"schema", "resource"}}, receipt)
+        shadow = FinancialOwner.restore_continuity(
+            package_bytes=package,
+            recovered_path=self._path("populated-receipt-shadow.sqlite"),
+            trusted_authority=self.authority,
+            clock=_Clock(),
+        )
+        self.assertEqual(shadow.current_evaluation_receipt(expected.H_ITEM_ID), receipt)
+        self._assert_verified(reopened)
+        self._assert_verified(shadow, restore_source_package=package)
+
     def test_v5_action_requires_current_evaluation_and_exact_retry_identity(self) -> None:
         store = self._build_base()
         self._record_cash(store)
@@ -1612,6 +1906,87 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.export_continuity(), before_retry)
         self._assert_verified(store)
 
+    def test_v5_determination_bad_stale_and_consumed_references_are_side_effect_free(self) -> None:
+        store = self._build_base()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+
+        def request(*, action_id: str, evaluation_id: str | None, evaluation_result_digest: str | None, expected_revision: int | None) -> dict[str, object]:
+            return store.authorize_offset(
+                item_id=expected.H_ITEM_ID,
+                claim_id=claim_id,
+                expected_revision=expected_revision,
+                action_id=action_id,
+                evaluation_id=evaluation_id,
+                evaluation_result_digest=evaluation_result_digest,
+            )
+
+        before_malformed = store.export_continuity()
+        with self.assertRaisesRegex(FinancialInputError, "evaluation_result_digest"):
+            request(
+                action_id="action:malformed-evaluation-reference",
+                evaluation_id=str(receipt["evaluation_id"]),
+                evaluation_result_digest="not-a-digest",
+                expected_revision=int(receipt["revision"]),
+            )
+        self.assertEqual(store.export_continuity(), before_malformed)
+
+        before_bad_digest = store.export_continuity()
+        with self.assertRaisesRegex(FinancialRevisionError, "evaluation_reference_conflict"):
+            request(
+                action_id="action:bad-evaluation-digest",
+                evaluation_id=str(receipt["evaluation_id"]),
+                evaluation_result_digest="0" * 128,
+                expected_revision=int(receipt["revision"]),
+            )
+        self.assertEqual(store.export_continuity(), before_bad_digest)
+
+        before_missing_reference = store.export_continuity()
+        with self.assertRaisesRegex(FinancialInputError, "evaluation_reference_required"):
+            request(
+                action_id="action:decision-before-evaluation-reference",
+                evaluation_id=None,
+                evaluation_result_digest=None,
+                expected_revision=int(receipt["revision"]),
+            )
+        self.assertEqual(store.export_continuity(), before_missing_reference)
+
+        store.record_support_evidence(
+            item_id=expected.H_ITEM_ID,
+            evidence_id="evidence:stale-reference-support",
+            common_origin_id="origin:stale-reference-support",
+            expected_revision=int(receipt["revision"]),
+        )
+        before_stale = store.export_continuity()
+        with self.assertRaisesRegex(FinancialRevisionError, "obligation_revision_conflict"):
+            request(
+                action_id="action:stale-evaluation-reference",
+                evaluation_id=str(receipt["evaluation_id"]),
+                evaluation_result_digest=str(receipt["result_digest"]),
+                expected_revision=int(receipt["revision"]),
+            )
+        self.assertEqual(store.export_continuity(), before_stale)
+
+        current = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        first = request(
+            action_id="action:consumed-reference-one",
+            evaluation_id=str(current["evaluation_id"]),
+            evaluation_result_digest=str(current["result_digest"]),
+            expected_revision=int(current["revision"]),
+        )
+        self.assertEqual(first["status"], "AUTHORIZED")
+        after_first = store.export_continuity()
+        with self.assertRaisesRegex(FinancialRevisionError, "evaluation_revision_conflict"):
+            request(
+                action_id="action:consumed-reference-two",
+                evaluation_id=str(current["evaluation_id"]),
+                evaluation_result_digest=str(current["result_digest"]),
+                expected_revision=int(store.current_evaluation_receipt(expected.H_ITEM_ID)["revision"]),
+            )
+        self.assertEqual(store.export_continuity(), after_first)
+        self._assert_verified(store)
+
     def test_future_received_evidence_is_rejected_without_clamping(self) -> None:
         clock = _Clock()
         store = self._build_base(clock=clock)
@@ -1657,6 +2032,51 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
             FinancialOwner.validate_continuity_package(old_package)
         self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
+
+    def test_v2_v3_v4_tagged_store_and_package_inputs_reject_without_creation(self) -> None:
+        store = self._build_base()
+        source_before = store.path.read_bytes()
+        for version in (2, 3, 4):
+            target = self._path(f"tag-only-owner-v{version}.sqlite")
+            target.write_bytes(source_before)
+            with closing(sqlite3.connect(target, isolation_level=None)) as connection:
+                connection.execute(
+                    "UPDATE financial_meta SET schema_version=?,schema=? WHERE id=1",
+                    (version, f"RR/FINANCIAL/OWNER/v{version}"),
+                )
+            target_before = target.read_bytes()
+            with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
+                FinancialOwner(
+                    path=target,
+                    config=store.config,
+                    trusted_authority=self.authority,
+                    clock=_Clock(),
+                )
+            self.assertEqual(target.read_bytes(), target_before)
+
+            package = json.loads(store.export_continuity().decode("ascii"))
+            package["schema"] = f"RR/FINANCIAL/CONTINUITY/v{version}"
+            package["version"] = version
+            body = dict(package)
+            del body["package_digest"]
+            package["package_digest"] = _independent_hex(
+                _independent_digest(b"RR/FINANCIAL/CONTINUITY/v5\x00", _independent_canonical(body))
+            )
+            old_package = _independent_canonical(package)
+            with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
+                FinancialOwner.validate_continuity_package(old_package)
+            destination = self._path(f"tag-only-restore-v{version}.sqlite")
+            with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
+                FinancialOwner.restore_continuity(
+                    package_bytes=old_package,
+                    recovered_path=destination,
+                    trusted_authority=self.authority,
+                    clock=_Clock(),
+                )
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
+        self.assertEqual(store.path.read_bytes(), source_before)
         self._assert_verified(store)
 
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:

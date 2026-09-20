@@ -435,6 +435,54 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(command["status"], "CORRECTION_AUTHORIZED")
         self.mirror.verify_integrity()
 
+    def test_cli_authorize_offset_success_retry_and_binding_conflict(self) -> None:
+        from tools import right_rail_financial_cli as cli
+
+        self._prepare_claim()
+        receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
+        common = [
+            "--database", str(self.db),
+            "--state-id", self.config.state_id,
+            "--deployment-id", self.config.deployment_id,
+            "--program-id", self.config.program_id,
+            "--period-id", self.config.period_id,
+            "authorize-offset",
+            "--item-id", H_ITEM_ID,
+            "--claim-id", "claim:offset:h",
+            "--action-id", "action:cli:offset:h",
+            "--expected-revision", str(receipt["revision"]),
+            "--decision-at-ms", "1774864800000",
+            "--evaluation-id", str(receipt["evaluation_id"]),
+            "--evaluation-result-digest", str(receipt["result_digest"]),
+        ]
+
+        def invoke(args: list[str]) -> tuple[int, dict[str, object], str]:
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = cli.main(args)
+            return status, json.loads(stdout.getvalue()) if stdout.getvalue() else {}, stderr.getvalue()
+
+        status, first, stderr = invoke(common)
+        self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(first["status"], "AUTHORIZED")
+        after_first = self.mirror.summary()
+
+        status, duplicate, stderr = invoke(common)
+        self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(duplicate["status"], "DUPLICATE")
+        self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
+
+        changed = list(common)
+        changed[changed.index("--decision-at-ms") + 1] = "1774864800001"
+        status, _changed, stderr = invoke(changed)
+        self.assertEqual(status, 2)
+        self.assertEqual(stderr, "ERROR:determination_request_conflict\n")
+        self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
+        self.mirror.verify_integrity()
+
     def test_continuity_export_validate_restore_restart_and_readback(self) -> None:
         self._prepare_action()
         package = self.mirror.export_continuity()

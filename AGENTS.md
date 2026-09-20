@@ -20,23 +20,20 @@ own their technical boundaries.
 
 ## Current working boundary
 
-The checkout is branch `rightrail-financial-workflow-20260913`, with committed
-parent `06070168fd180a1173bb6426cbf7cbdbc33bc67a` / tree
-`c52630fd511ebe3b1ca32b2390a289c3a07746a6`. State owns the intentionally dirty
-v5 source/test/CLI/measurement-harness work. The changed tracked paths are:
+The checkout is branch `rightrail-financial-workflow-20260913`. Git HEAD,
+tree, and status are authoritative for the current State integration; the
+previous handoff parent was `06070168fd180a1173bb6426cbf7cbdbc33bc67a` /
+tree `c52630fd511ebe3b1ca32b2390a289c3a07746a6`. The corrected v5 owner,
+checker, Mirror, CLI, Continuity tests, and this maintained documentation
+reconciliation are the explicit delivery. The current source/test edits are:
 
 - `app/right_rail_financial_owner.py`
-- `app/right_rail_financial_owner_independent.py`
-- `app/right_rail_financial_mirror.py`
-- `tests/rightrail_financial_expected_cases.py`
 - `tests/test_right_rail_financial_acceptance.py`
-- `tests/test_right_rail_financial_independent.py`
 - `tests/test_right_rail_financial_mirror.py`
-- `tools/right_rail_financial_cli.py`
-- `work/right_rail_financial_measurement_series.py`
 
-Preserve the two untracked driver-supplied executables under `build-performance/`;
-never stage, rewrite, regenerate, or delete them.
+The seven maintained child Markdown files are the documentation portion of the
+same delivery. Preserve the two untracked driver-supplied executables under
+`build-performance/`; never stage, rewrite, regenerate, or delete them.
 
 The working Python owner, independent checker, Mirror, CLI, and Continuity
 contract is v5: `RR/FINANCIAL/OWNER/v5` and
@@ -89,12 +86,13 @@ The required v5 determination contract binds explicit evaluation identity/
 digest and expected revision to the current and historical evaluation, receipt,
 projection, evidence coverage/chronology, Control Pack, and authority before
 one atomic determination/action/outbox transition. Exact retries must be
-`DUPLICATE`; changed identity or input must be conflict. The frozen v5 review
-is complete and the current batch is `NOT ACCEPTED`: State's combined
-correction packet and affected re-verification are pending. See `STATE.md` for
-the detailed blockers. There is no separate verification-attempt, lease,
-receipt-consumption, or Queue-reservation boundary; claimed-adjustment business
-state and Queue reservations remain separate.
+`DUPLICATE`; changed identity or input must be conflict. The bounded Python v5
+slice is accepted for this delivery after the combined correction and affected
+re-verification. This does not qualify the wider Driver, native, Lean, or
+production boundaries; see `STATE.md` for the evidence and remaining gates.
+There is no separate verification-attempt, lease, receipt-consumption, or
+Queue-reservation boundary; claimed-adjustment business state and Queue
+reservations remain separate.
 
 ## Ownership and protected paths
 
@@ -117,15 +115,14 @@ Use the existing guarded wrapper for any authorized execution:
 
 Wrapper SHA-256:
 `A9D3496E3789F16182D3F6946860BC7454F86AEC407FB9BFFE352D1F4FED7FE1`.
-Preserve its cap, reserve, mutex, and backups. This documentation cleanup
-launches no build, compiler, test, checker, native, or Lean process.
-
-This batch may edit only the seven released Markdown files: this `AGENTS.md`,
-`README.md`, `STATE.md`, `CURRENT_TASK.md`, `ARCHITECTURE.md`,
-`docs/IMPLEMENTATION_ROADMAP.md`, and `docs/DESIGN_IDEOLOGY.md`. Do not edit
-source, tests, fixtures, generated executables, logs, proof artifacts, native/
-C/crypto/Lean/Queue/Composition paths, operations policy, archives, secrets,
-or another work root. Do not stage or commit this batch; State integrates it.
+Preserve its cap, reserve, mutex, and backups. Documentation-only batches
+launch no build, compiler, test, checker, native, or Lean process. The current
+explicit State integration additionally names the three source/test paths
+above; otherwise the seven maintained Markdown files are the only documentation
+scope. Do not edit fixtures, generated executables, raw logs, proof artifacts,
+native/C/crypto/Lean/Queue/Composition paths, operations policy, archives,
+secrets, or another work root. Integrate only explicitly scoped paths in a
+known-path commit and preserve the protected executables.
 
 Before mutation, verify containment, ownership, expected identities, and Git
 state. Never use reset, clean, destructive checkout, broad deletion, or

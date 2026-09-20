@@ -12,9 +12,11 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
+import tempfile
 import time
 from typing import Any, Final, Iterable, Iterator, Mapping, Protocol
 
@@ -3064,7 +3066,9 @@ class FinancialOwner:
         restore_mode: str = "SHADOW",
     ) -> "FinancialOwner":
         """Restore into a new SHADOW or explicitly approved TEST owner."""
-        if not isinstance(recovered_path, Path) or recovered_path.exists() or recovered_path.is_symlink() or not recovered_path.parent.is_dir():
+        sidecar_paths = (Path(f"{recovered_path}-wal"), Path(f"{recovered_path}-shm")) if isinstance(recovered_path, Path) else ()
+        occupied = lambda path: path.exists() or path.is_symlink()
+        if not isinstance(recovered_path, Path) or any(occupied(path) for path in (recovered_path, *sidecar_paths)) or not recovered_path.parent.is_dir():
             _fail(FinancialContinuityError, "continuity_destination")
         if restore_mode not in {"SHADOW", "TEST"}:
             _fail(FinancialContinuityError, "continuity_restore_mode")
@@ -3104,14 +3108,52 @@ class FinancialOwner:
             ),
         }
         owner: FinancialOwner | None = None
-        created_paths = (
-            recovered_path,
-            Path(f"{recovered_path}-wal"),
-            Path(f"{recovered_path}-shm"),
-        )
+        attempt_directory: Path | None = None
+        attempt_path: Path | None = None
+        published = False
+        published_identity: tuple[int, int] | None = None
+        cleanup_failures: list[str] = []
+
+        def cleanup_path(path: Path) -> None:
+            try:
+                if occupied(path):
+                    path.unlink()
+            except OSError as cleanup_error:
+                cleanup_failures.append(f"{path}:{cleanup_error.__class__.__name__}")
+
+        def cleanup_attempt() -> None:
+            if attempt_path is not None:
+                cleanup_path(attempt_path)
+                cleanup_path(Path(f"{attempt_path}-wal"))
+                cleanup_path(Path(f"{attempt_path}-shm"))
+            if attempt_directory is not None:
+                try:
+                    attempt_directory.rmdir()
+                except FileNotFoundError:
+                    pass
+                except OSError as cleanup_error:
+                    cleanup_failures.append(f"{attempt_directory}:{cleanup_error.__class__.__name__}")
+
+        def cleanup_published_destination() -> None:
+            if not published or published_identity is None:
+                return
+            try:
+                current = recovered_path.stat()
+                if (int(current.st_dev), int(current.st_ino)) == published_identity:
+                    recovered_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                cleanup_failures.append(f"{recovered_path}:{cleanup_error.__class__.__name__}")
+
         try:
+            try:
+                attempt_directory = Path(tempfile.mkdtemp(prefix=f".{recovered_path.name}.restore-", dir=str(recovered_path.parent)))
+            except OSError:
+                _fail(FinancialContinuityError, "continuity_destination")
+            attempt_path = attempt_directory / "owner.sqlite"
             owner = cls(
-                path=recovered_path,
+                path=attempt_path,
                 config=config,
                 trusted_authority=trusted_authority,
                 clock=clock,
@@ -3155,15 +3197,32 @@ class FinancialOwner:
                 expected_continuity_epoch=int(package["continuity_epoch"]),
                 restore_source_package=package_bytes,
             )
+            owner.close()
+            if any(occupied(path) for path in sidecar_paths):
+                _fail(FinancialContinuityError, "continuity_destination")
+            try:
+                os.link(attempt_path, recovered_path)
+            except FileExistsError:
+                _fail(FinancialContinuityError, "continuity_destination")
+            except OSError:
+                _fail(FinancialContinuityError, "continuity_destination_claim")
+            published = True
+            published_stat = recovered_path.stat()
+            published_identity = (int(published_stat.st_dev), int(published_stat.st_ino))
+            if any(occupied(path) for path in sidecar_paths):
+                _fail(FinancialContinuityError, "continuity_destination")
+            cleanup_attempt()
+            if cleanup_failures:
+                cleanup_published_destination()
+                _fail(FinancialContinuityError, "continuity_restore_cleanup")
+            owner.path = recovered_path
         except Exception as error:
             if owner is not None:
                 owner.close()
-            for created_path in created_paths:
-                try:
-                    if created_path.is_file() or created_path.is_symlink():
-                        created_path.unlink()
-                except OSError:
-                    pass
+            cleanup_published_destination()
+            cleanup_attempt()
+            if cleanup_failures:
+                _fail(FinancialContinuityError, "continuity_restore_cleanup")
             if error.__class__.__module__ == "app.right_rail_financial_owner_independent":
                 _fail(FinancialContinuityError, "continuity_restore_integrity")
             raise

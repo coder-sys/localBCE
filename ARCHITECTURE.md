@@ -11,17 +11,18 @@ processor, or claim a deployed formal authority.
 ## Current integration boundary
 
 The working Python implementation is v5:
-`RR/FINANCIAL/OWNER/v5` and `RR/FINANCIAL/CONTINUITY/v5`. The current committed
-parent is `06070168fd180a1173bb6426cbf7cbdbc33bc67a` / tree
-`c52630fd511ebe3b1ca32b2390a289c3a07746a6`; source/test/CLI corrections are
-intentionally uncommitted and State-owned.
+`RR/FINANCIAL/OWNER/v5` and `RR/FINANCIAL/CONTINUITY/v5`. The corrected owner,
+checker, Mirror, CLI, Continuity tests, and maintained docs are the current
+State-owned delivery; Git HEAD, tree, and status are authoritative after
+integration.
 
-The v5 owner, independent checker, Mirror, CLI, and Continuity are a working
-candidate. v2/v3/v4 stores/packages remain preserved historical inputs and
-reject fail-closed without mutation. Separate native and Lean artifacts are
-not linked into this Python runtime. Lean extraction is the active formal
-direction, but there is no runtime authority switch until executable linkage
-and refinement evidence exist.
+The v5 owner, independent checker, Mirror, CLI, and Continuity form an
+accepted bounded Python slice for this delivery. v2/v3/v4 inputs reject
+fail-closed without mutation; the tested matrix changes only schema/version
+tags on disposable current bytes and is not authentic old-schema compatibility
+evidence. Separate native and Lean artifacts are not linked into this Python
+runtime. Lean extraction is the active formal direction, but there is no
+runtime authority switch until executable linkage and refinement evidence exist.
 
 ## Five-part responsibility model
 
@@ -83,9 +84,10 @@ marker, determination, action, and outbox transition. Exact retries must be
 verification-attempt, lease, receipt-consumption, or Queue-reservation boundary;
 Queue reservations and claimed-adjustment business state remain separate.
 
-The frozen v5 review found defects in the working path, so the current batch is
-`NOT ACCEPTED` pending the combined correction and affected re-verification.
-`STATE.md` owns the detailed blockers and disposition.
+The bounded v5 Python contract is accepted after the combined correction and
+affected re-verification. `STATE.md` owns the exact receipts, raw failures, and
+remaining Driver-wide gates; this acceptance does not qualify native, Lean,
+Queue/Composition, or production boundaries.
 
 Evidence, official determination, authorized action, dispatch/acknowledgment,
 and cash/reporting completion are distinct facts. Missing, stale, malformed,
@@ -101,7 +103,10 @@ external source admission retain their existing owners.
 The required Continuity packages are versioned and bounded. SHADOW must open
 read-only. TEST restore must use an isolated destination, fixed
 identity/provenance, restart and independent verification, and disabled
-dispatch/egress. It must reject source overwrite, LIVE promotion, identity
+dispatch/egress. Restore constructs in a private attempt directory and uses an
+atomic no-replace publication, preserving a destination and its -wal/-shm
+sidecars if another attempt wins the destination race; cleanup failures are
+reported. It must reject source overwrite, LIVE promotion, identity
 replacement, and mismatched restore-owner contracts. An abrupt owner exit
 before COMMIT or after COMMIT must preserve atomicity and exact retry
 semantics; the retained CASE10 evidence is owner-local and does not qualify
