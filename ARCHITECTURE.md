@@ -16,9 +16,9 @@ checker, Mirror, CLI, Continuity tests, and maintained docs are the current
 State-owned delivery; Git HEAD, tree, and status are authoritative after
 integration.
 
-The v5 owner, independent checker, Mirror, CLI, and Continuity form a locally
-verified bounded Python slice for the current correction packet; Driver
-disposition remains NOT ACCEPTED pending review. v2/v3/v4 inputs reject
+The v5 owner, independent checker, Mirror, CLI, and Continuity form the
+owner-local synthetic v5 slice whose narrow Driver disposition is recorded in
+`STATE.md`. v2/v3/v4 inputs reject
 fail-closed without mutation; the tested matrix changes only schema/version
 tags on disposable current bytes and is not authentic old-schema compatibility
 evidence. Separate native and Lean artifacts are not linked into this Python
@@ -86,10 +86,10 @@ verification-attempt, lease, receipt-consumption, or Queue-reservation boundary;
 Queue reservations and claimed-adjustment business state remain separate.
 
 The bounded v5 Python contract is locally re-verified after the combined
-correction and focused residual checks. Driver disposition remains NOT
-ACCEPTED. `STATE.md` owns the exact receipts, raw failures, and remaining
-Driver-wide gates; this local verification does not qualify native, Lean,
-Queue/Composition, or production boundaries.
+correction and focused residual checks. `STATE.md` owns the narrow Driver
+disposition, exact receipts, raw failures, and remaining Driver-wide gates;
+this owner-local scope does not qualify native, Lean, Queue/Composition,
+reservation, or production boundaries.
 
 Evidence, official determination, authorized action, dispatch/acknowledgment,
 and cash/reporting completion are distinct facts. Missing, stale, malformed,
@@ -118,13 +118,13 @@ other system boundaries.
 
 ## Lean and replacement seams
 
-The owner’s semantic core is being designed for an executable Lean extraction:
-small trusted state, narrow versioned modular interfaces, explicit state
-machines, independent checks, fail-closed authority, deterministic inputs, and
-recovery/idempotency around atomic history-projection-outbox transitions. The
-Python v5 owner remains the sole runtime transaction authority until a pinned
-Lean artifact, refinement/linkage evidence, and independent boundary checks
-exist.
+Engine is implementing and correcting the owner’s semantic core as executable
+Lean modules plus a concrete adapter contract: small trusted state, narrow
+versioned modular interfaces, explicit state machines, independent checks,
+fail-closed authority, deterministic inputs, and recovery/idempotency around
+atomic history-projection-outbox transitions. The Python v5 owner remains the
+sole runtime transaction authority until a pinned Lean artifact,
+refinement/linkage evidence, and independent boundary checks exist.
 
 Productionization must replace, rather than silently rewrite, the fixed
 contracts behind authenticated inputs, state custody, qualified persistence,

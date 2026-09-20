@@ -11,20 +11,20 @@ activation, or production-readiness record.
    the sole transaction authority. Preserve typed evidence versus official
    determination/action/acknowledgment/cash, exact retries, atomic
    history-projection-outbox, SHADOW/TEST Continuity, disabled dispatch/egress,
-   and the fixed synthetic 20-hospital fixture. The bounded Python v5 slice is
-   locally re-verified for the current correction packet; Driver disposition
-   remains NOT ACCEPTED pending review. This does not qualify the wider Driver
-   or production boundaries.
+   and the fixed synthetic 20-hospital fixture. `STATE.md` records the narrow
+   Driver acceptance for this owner-local synthetic v5 scope. This does not
+   qualify the wider Driver, original A-E, native, reservation, or production
+   boundaries.
 2. **Reconcile and retain the correction evidence.** The combined correction
-   and focused local re-verification are complete; Driver review remains
-   pending. Keep
+   and focused local re-verification are complete; broader Driver review and
+   boundary qualification remain pending. Keep
    the private Continuity attempt ownership, independent receipt construction,
    determination side-effect checks, CLI retry/conflict checks, and the
    tag-only v2/v3/v4 rejection matrix aligned with `STATE.md`. Historical
    schemas are not regenerated or treated as compatible.
-3. **Design the broader Lean direction.** Implement everything reasonably
-   implementable in Lean with executable semantics and useful modularity; the
-   Engine extraction is the first financial step. Define the smallest semantic
+3. **Implement and correct the executable Lean direction.** Engine is
+   implementing and correcting everything reasonably implementable in Lean
+   with executable semantics and useful modularity. Define the smallest semantic
    state, narrow versioned interfaces, explicit state machines, independent
    checks, fail-closed authority, deterministic inputs, and recovery/idempotent
    transitions. No runtime authority switch is allowed until a pinned
@@ -40,8 +40,8 @@ activation, or production-readiness record.
    gates for any selected profile. No real PHI, payment, live dispatch, or
    activation is implied before those gates close.
 
-The next safe action is the bounded Driver review of the current source and
-raw evidence, followed by the separate native, formal, operational, and
+The next safe action is broader Driver review of the current source and raw
+evidence, followed by the separate native, formal, operational, and
 production gates—not another duplicated receipt narrative or source refactor.
 
 ## Current evidence boundary
@@ -56,7 +56,10 @@ OK
 No warnings or skips were reported. The retained r4 measurement has 3 measured
 samples plus 1 warmup at sizes 5, 10, and 20, all reference and source-byte
 checks true, and is a bounded observation rather than an SLA. Native metrics
-remain pending and Queue wait/age are not applicable. The residual focused
+remain pending and Queue wait/age are not applicable. The retained r4
+measurement is source-bound to the pre-residual owner and its cwd invocation
+deviation is recorded in `STATE.md`; no corrected-source rerun is claimed. The
+residual focused
 guarded packet separately reported `Ran 5 tests in 4.254s` and `OK`; its exact
 logs and current source hashes are in `STATE.md`. The retained measurement is
 bound to the pre-residual owner source and was not rerun. Failed attempts and

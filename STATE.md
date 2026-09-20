@@ -21,13 +21,19 @@ transaction writer for obligations, evaluations, cases, determinations,
 corrections, balances, and action/outbox identity. SHADOW is query-only; TEST
 restore is isolated/non-live; dispatch and egress remain disabled.
 
-## Review disposition — NOT DRIVER-ACCEPTED; local verification complete
+## Review disposition — ACCEPTED NARROWLY; owner-local synthetic v5
 
-The prior broad review packet is retained evidence. The residual ownership and
-chronology corrections are implemented and locally re-verified; Driver
-disposition remains NOT ACCEPTED pending review of the current source and raw
-evidence. The prior guarded affected run compiled the relevant Python paths and
-ran all three affected suites:
+The Driver reviewed the actual two-file correction and raw affected evidence.
+The bounded synthetic Python v5 owner-local correctness scope is ACCEPTED
+NARROWLY at commit `43406b4f1dcc5c944350ba690d512e1cc45f9393`, tree
+`deaca25fc735ba407e801383f8e0b5c687894037`. The prior broad review packet is
+retained evidence and the residual ownership and chronology corrections are
+locally re-verified. This narrow disposition does not close the full original
+A-E, native, reservation, executable Lean/adapter, or production qualification
+gates.
+
+The prior guarded affected run compiled the relevant Python paths and ran all
+three affected suites:
 
 PROCESS_BOUNDARY precommit returncode=73 stdout='PHASE=BEFORE_REJECT\nPHASE=PRECOMMIT_AFTER_MUTATION\n' stderr=''
 PROCESS_BOUNDARY postcommit returncode=74 stdout='PHASE=BEFORE_REJECT\nPHASE=POSTCOMMIT_AFTER_COMMIT\n' stderr=''
@@ -131,19 +137,25 @@ Measured aggregate medians:
 
 The outer guard completed with child exit 0, 18 samples, minimum free bytes
 3767709696, peak private bytes 24268800, CLEANUP=PASS, and MUTEX=RELEASED.
-Wrapper stdout SHA-256:
+The retained child JSON stdout file SHA-256 is:
 2F5C1062F00C7A3FA5A3BA1F802EAEB62C1C90441851BEA18F0BA02F7CB81B0A.
-Wrapper stderr was empty, SHA-256
+The wrapper stderr was empty, SHA-256
 E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855.
 The measurement is a bounded local observation, not an SLA; native metrics
 remain pending and Queue wait/age are not applicable to this owner slice. It is
 source-bound to owner
 `68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9` before the
-residual correction, not the current owner, and was not rerun.
+residual correction, not the current owner, and was not rerun. The r4
+invocation used absolute script/output paths and script-derived
+`REPOSITORY_ROOT`/`sys.path`, but did not change the child cwd from the guard
+default; this invocation deviation is retained as historical evidence.
 
 ## Retained failures, warnings, and skips
 
-The residual r1 launch was rejected before child execution. Its raw stderr was:
+The residual r1 attempt launched guarded `cmd.exe` and completed both guard
+self-tests (`child-exit-7=7`, `child-exit-0=0`), then the main command and
+wrapper exited 1 before Python tests. Its raw stderr (SHA-256
+`B243E3431CF3FD2DA74278615CAA676AD4F4F806E23B19FCD398E83A7B02390D`) was:
 
 ```text
 The filename, directory name, or volume label syntax is incorrect.
@@ -163,12 +175,14 @@ inputs remain in their existing raw locations and Git history.
 
 ## Open gates and nonclaims
 
-This locally verified bounded slice is not Driver-accepted and does not close
-native verification-to-commit,
+Driver narrowly accepts the owner-local synthetic v5 slice recorded above; this
+does not close the full original A-E, native verification-to-commit,
 native metrics, executable Lean linkage/refinement, Queue/Composition
-integration, independent audit, authenticated sources, custody, real PHI,
-live dispatch, payment movement, or production qualification. The active Lean
-direction does not switch runtime authority away from the Python owner.
+integration, reservation, independent audit, authenticated sources, custody,
+real PHI, live dispatch, payment movement, or production qualification. Engine
+is implementing and correcting executable Lean modules and the concrete
+adapter contract, but runtime authority does not switch away from the Python
+owner.
 
 Current claims remain:
 

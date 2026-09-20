@@ -32,9 +32,8 @@ evaluation identity/digest and expected revision before one atomic
 determination/action/outbox transition. Exact retries are DUPLICATE; changed
 identity or input is a conflict.
 
-The bounded Python v5 slice is implemented and locally re-verified for the
-current correction packet. Driver disposition remains NOT ACCEPTED pending
-review of the source and raw evidence. This is not whole-system qualification:
+`STATE.md` records the narrow Driver acceptance for this owner-local synthetic
+v5 correctness slice. That acceptance is not whole-system qualification:
 native verification-to-commit, executable Lean linkage/refinement,
 Queue/Composition integration, authenticated sources, custody, independent
 audit, real PHI, live dispatch, payment movement, and production activation
@@ -122,9 +121,9 @@ Measured aggregate medians are total/wait/held milliseconds:
 | 10 | 793.516 | 1.460 | 7.373 | 84 |
 | 20 | 1261.848 | 1.469 | 7.291 | 150 |
 
-The outer final measurement guard had child exit 0, 18 samples, minimum free
+The outer r4 measurement guard had child exit 0, 18 samples, minimum free
 bytes 3767709696, peak private bytes 24268800, CLEANUP=PASS, and
-MUTEX=RELEASED. The wrapper stdout SHA-256 is
+MUTEX=RELEASED. The retained child JSON stdout file SHA-256 is
 2F5C1062F00C7A3FA5A3BA1F802EAEB62C1C90441851BEA18F0BA02F7CB81B0A; stderr
 was empty with SHA-256
 E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855.
@@ -132,12 +131,18 @@ This is a bounded local observation, not an SLA or production qualification;
 native metrics are pending and Queue wait/age are not applicable to this
 owner slice. It is source-bound to the pre-residual owner hash
 `68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9`, not the
-current owner, and was not rerun for this focused correction packet.
+current owner, and was not rerun for this focused correction packet. The r4
+invocation used absolute script/output paths and script-derived
+`REPOSITORY_ROOT`/`sys.path`, but left the child cwd at the guard default; this
+invocation deviation is retained as historical evidence.
 
 ## Retained failures and next gates
 
-Earlier raw failures remain evidence: the first residual focused launch was
-rejected before child execution; its stderr was exactly:
+Earlier raw failures remain evidence: the first residual focused launch did
+start guarded `cmd.exe` and complete both guard self-tests
+(`child-exit-7=7`, `child-exit-0=0`), then the main command and wrapper exited 1
+before Python tests. Its raw stderr (SHA-256
+`B243E3431CF3FD2DA74278615CAA676AD4F4F806E23B19FCD398E83A7B02390D`) was:
 
 ```text
 The filename, directory name, or volume label syntax is incorrect.
@@ -152,11 +157,11 @@ passed. These failures were corrected in scope and were not silently
 relabeled. Earlier pre-correction review failures remain in their original raw
 logs and Git history.
 
-Driver disposition remains NOT ACCEPTED pending review. Next work is
-Driver-wide review and the separate native, formal, operational,
-and production gates. The active Lean direction may design/extract semantics,
-but no runtime authority switch is allowed until a pinned executable Lean
-artifact and refinement/linkage evidence exist.
+`STATE.md` is the acceptance authority for the narrow Driver disposition. Next
+work is the separate native, formal, operational, and production gates. Engine
+is implementing and correcting executable Lean modules and the concrete
+adapter contract, but no runtime authority switch is allowed until a pinned
+executable Lean artifact and refinement/linkage evidence exist.
 
 ## Protected boundary and claims
 

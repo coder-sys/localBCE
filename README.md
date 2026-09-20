@@ -25,8 +25,9 @@ driver-supplied executables under `build-performance/`.
 The working contracts are `RR/FINANCIAL/OWNER/v5` and
 `RR/FINANCIAL/CONTINUITY/v5`. v2/v3/v4 stores and packages remain preserved
 historical inputs and reject fail-closed without mutation. The current Python
-owner is the transaction authority. Lean extraction/design is the active
-formal pivot, but no executable Lean linkage or runtime authority switch exists.
+owner is the transaction authority. Engine is implementing and correcting
+executable Lean modules and the concrete adapter contract, but no executable
+Lean linkage or runtime authority switch exists.
 
 ## Fixed synthetic responsibility
 
@@ -44,9 +45,8 @@ it carries references/digests only. The required determination contract binds
 explicit evaluation identity/digest and expected revision to current and
 historical state before one atomic determination/action/outbox transition.
 Exact retries must be `DUPLICATE`; changed identity or input must be conflict.
-The bounded Python v5 slice is implemented and locally re-verified after the
-residual correction packet; Driver disposition remains NOT ACCEPTED pending
-review. Whole-system and production qualification remain open. Detailed
+`STATE.md` records the narrow Driver disposition for this owner-local synthetic
+v5 scope. Whole-system and production qualification remain open; detailed
 evidence and nonclaims are in `STATE.md`.
 
 ## Entry points
@@ -112,15 +112,15 @@ sizes 5, 10, and 20. This is a bounded observation, not an SLA. It is
 source-bound to the pre-residual owner hash
 `68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9`, not the
 current owner, and was not rerun. Earlier failed attempts and their corrections
-remain raw evidence; they are not relabeled as passes.
+remain raw evidence; they are not relabeled as passes. The r4 invocation
+deviation is retained in `STATE.md`; no corrected-source rerun is claimed.
 
 ## Limitations and claims
 
 - The candidate is synthetic, local, nonactivating, nonpayment, and non-PHI:
   `proofSuiteId=null`, `production_usable=false`, and `activation=false`.
-- The residual correction and focused local re-verification are complete for
-  this bounded Python slice; Driver acceptance remains pending. Native
-  metrics, native verification-to-commit, Lean executable replay/linkage,
+- `STATE.md` records narrow Driver acceptance for this owner-local synthetic
+  v5 slice. Native metrics, native verification-to-commit, Lean executable replay/linkage,
   Queue/Composition integration, whole-system
   qualification, independent audit, real data/PHI, live dispatch, payment
   movement, and production qualification remain open.

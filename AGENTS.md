@@ -39,8 +39,9 @@ The working Python owner, independent checker, Mirror, CLI, and Continuity
 contract is v5: `RR/FINANCIAL/OWNER/v5` and
 `RR/FINANCIAL/CONTINUITY/v5`. v2/v3/v4 stores and packages remain preserved
 historical inputs and reject fail-closed without mutation. The current Python
-owner remains the sole transaction authority; the active Lean pivot is a
-design/extraction workstream, not a runtime authority switch.
+owner remains the sole transaction authority; Engine is implementing and
+correcting executable Lean modules and the concrete adapter contract, without
+creating a runtime authority switch.
 
 ## Product boundary and invariants
 
@@ -86,11 +87,11 @@ The required v5 determination contract binds explicit evaluation identity/
 digest and expected revision to the current and historical evaluation, receipt,
 projection, evidence coverage/chronology, Control Pack, and authority before
 one atomic determination/action/outbox transition. Exact retries must be
-`DUPLICATE`; changed identity or input must be conflict. The bounded Python v5
-slice is implemented and locally re-verified for the current correction
-packet; Driver disposition remains NOT ACCEPTED pending review of the source
-and raw evidence. This does not qualify the wider Driver, native, Lean, or
-production boundaries; see `STATE.md` for the evidence and remaining gates.
+`DUPLICATE`; changed identity or input must be conflict. `STATE.md` is the
+acceptance authority for the narrow owner-local synthetic v5 disposition. That
+scope does not qualify the wider Driver, original A-E, native, reservation,
+Lean, or production boundaries; see `STATE.md` for the evidence and remaining
+gates.
 There is no separate verification-attempt, lease, receipt-consumption, or
 Queue-reservation boundary; claimed-adjustment business state and Queue
 reservations remain separate.

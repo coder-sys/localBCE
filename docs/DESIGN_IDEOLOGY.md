@@ -77,13 +77,15 @@ populated evaluation receipts are independently reconstructed, determination
 failures are checked for unchanged durable bytes including current-receipt
 chronology, exact CLI retries are distinguished from changed bindings, and the
 v2/v3/v4 matrix is labeled tag-only rejection rather than historical-schema
-compatibility. Driver disposition remains NOT ACCEPTED pending review.
+compatibility. `STATE.md` is the concise authority for the narrow Driver
+disposition; the owner-local acceptance does not qualify the wider original
+A-E, native, reservation, Lean, or production boundaries.
 
 ## Active Lean direction
 
-The broader formal direction is to implement everything reasonably implementable
-in Lean, with executable semantics and useful modularity. The first financial
-step is an Engine extraction of the semantic core:
+Engine is implementing and correcting everything reasonably implementable in
+Lean, with executable semantics and useful modularity. The first financial
+implementation is the Engine semantic core:
 
 - a small trusted state and explicit deterministic state machines;
 - narrow, versioned modular interfaces between evidence, policy, owner, and
@@ -122,7 +124,8 @@ sources, custody, persistence/recovery, privacy/support, independent
 assurance, formal linkage where applicable, and all profile-specific gates.
 
 Implement in dependency order: stabilize the owner contract; independently
-verify schema, history, retries, and recovery; finish the Lean semantic design;
-link and qualify the formal boundary; then qualify custody, source, operations,
+verify schema, history, retries, and recovery; complete and verify the Lean
+semantic implementation and concrete adapter contract; link and qualify the
+formal boundary; then qualify custody, source, operations,
 shadow use, and any activation. Do not let a later commercial or routing need
 silently expand the current financial authority.
