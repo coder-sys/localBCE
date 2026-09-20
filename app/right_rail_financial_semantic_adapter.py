@@ -15,13 +15,14 @@ strings/lists, explicit enum tags, and no trailing bytes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import re
 import sqlite3
 from typing import Any, Final, Mapping
 
 from app import right_rail_financial_owner as owner
+from app import right_rail_financial_owner_independent as independent
 
 
 class SemanticAdapterError(owner.FinancialError):
@@ -49,6 +50,7 @@ SEMANTIC_INPUT_VERSION: Final[int] = 1
 MAX_FACT_ROWS: Final[int] = 256
 MAX_SNAPSHOT_BYTES: Final[int] = 4 * 1024 * 1024
 MAX_RESULT_BYTES: Final[int] = 1 * 1024 * 1024
+MAX_JSON_COLUMN_BYTES: Final[int] = independent.MAX_JSON_BYTES
 _SNAPSHOT_DOMAIN: Final[bytes] = b"RR/FINANCIAL/SEMANTIC-INPUT/v1\x00"
 _HEX_DIGEST = re.compile(r"[0-9A-F]{128}\Z")
 _SCHEMA_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9./:_-]{0,127}\Z")
@@ -172,11 +174,23 @@ def _parse_json_column(value: object, label: str, *, expected_type: type[Any] | 
     if type(value) is not str:
         _fail(SemanticAdapterIntegrityError, label)
     try:
-        parsed = json.loads(value)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError:
         _fail(SemanticAdapterIntegrityError, label)
-    _validate_json_tree(parsed)
-    if _canonical(parsed) != value.encode("ascii"):
+    if not encoded or len(encoded) > MAX_JSON_COLUMN_BYTES:
+        _fail(SemanticAdapterIntegrityError, label)
+    try:
+        parsed = json.loads(encoded.decode("ascii"))
+    except (RecursionError, UnicodeDecodeError, json.JSONDecodeError):
+        _fail(SemanticAdapterIntegrityError, label)
+    try:
+        _validate_json_tree(parsed)
+        canonical = _canonical(parsed)
+    except SemanticAdapterError:
+        raise
+    except (RecursionError, TypeError, ValueError, OverflowError):
+        _fail(SemanticAdapterIntegrityError, label)
+    if canonical != encoded:
         _fail(SemanticAdapterIntegrityError, label)
     if expected_type is not None and type(parsed) is not expected_type:
         _fail(SemanticAdapterIntegrityError, label)
@@ -286,7 +300,24 @@ class TrustedAuthorityContext:
         ]
 
 
-@dataclass(frozen=True, slots=True)
+    @property
+    def authority(self) -> owner.SyntheticTrustedAuthority:
+        """Return a freshly reconstructed authority for the checker seam."""
+
+        try:
+            return owner.SyntheticTrustedAuthority(
+                authority_id=self.authority_id,
+                epoch=self.epoch,
+                actors=self.actors,
+            )
+        except owner.FinancialError:
+            _fail(SemanticAdapterAuthorityError, "authority_context_reconstruction")
+
+
+_SNAPSHOT_VALIDATION_TOKEN: Final[object] = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class LockedSemanticSnapshot:
     """Immutable canonical owner-side snapshot handed to the Engine."""
 
@@ -295,8 +326,26 @@ class LockedSemanticSnapshot:
     obligation_id: str
     pre_evaluation_revision: int
     evaluation_time_ms: int
+    _validation_token: object = field(default=None, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        canonical_bytes: bytes,
+        snapshot_digest: bytes,
+        obligation_id: str,
+        pre_evaluation_revision: int,
+        evaluation_time_ms: int,
+        *,
+        _validation_token: object | None = None,
+    ) -> None:
+        if _validation_token is not _SNAPSHOT_VALIDATION_TOKEN:
+            _fail(SemanticAdapterAuthorityError, "snapshot_unverified")
+        object.__setattr__(self, "canonical_bytes", canonical_bytes)
+        object.__setattr__(self, "snapshot_digest", snapshot_digest)
+        object.__setattr__(self, "obligation_id", obligation_id)
+        object.__setattr__(self, "pre_evaluation_revision", pre_evaluation_revision)
+        object.__setattr__(self, "evaluation_time_ms", evaluation_time_ms)
+        object.__setattr__(self, "_validation_token", _SNAPSHOT_VALIDATION_TOKEN)
         if type(self.canonical_bytes) is not bytes or not self.canonical_bytes:
             _fail(SemanticAdapterCodecError, "snapshot_bytes")
         if len(self.canonical_bytes) > MAX_SNAPSHOT_BYTES:
@@ -318,13 +367,21 @@ class LockedSemanticSnapshot:
         return json.loads(self.canonical_bytes.decode("ascii"))
 
 
+def _require_validated_snapshot(snapshot: object, label: str = "snapshot_type") -> LockedSemanticSnapshot:
+    if type(snapshot) is not LockedSemanticSnapshot:
+        _fail(SemanticAdapterInputError, label)
+    if snapshot._validation_token is not _SNAPSHOT_VALIDATION_TOKEN:
+        _fail(SemanticAdapterAuthorityError, "snapshot_unverified")
+    return snapshot
+
+
 def _decode_canonical_object(payload: bytes, *, max_bytes: int, error_type: type[SemanticAdapterError], prefix: str) -> dict[str, Any]:
     if type(payload) is not bytes or not payload or len(payload) > max_bytes:
         _fail(error_type, f"{prefix}_size")
     try:
         text = payload.decode("ascii")
         value = json.loads(text)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (RecursionError, UnicodeDecodeError, json.JSONDecodeError):
         _fail(error_type, f"{prefix}_json")
     if type(value) is not dict:
         _fail(error_type, f"{prefix}_shape")
@@ -334,7 +391,7 @@ def _decode_canonical_object(payload: bytes, *, max_bytes: int, error_type: type
             _fail(error_type, f"{prefix}_canonical")
     except SemanticAdapterError:
         raise
-    except (UnicodeEncodeError, TypeError, ValueError, OverflowError):
+    except (RecursionError, UnicodeEncodeError, TypeError, ValueError, OverflowError):
         _fail(error_type, f"{prefix}_canonical")
     return value
 
@@ -390,19 +447,44 @@ def _decode_snapshot_body(payload: bytes) -> tuple[dict[str, Any], bytes, str, i
     return body, snapshot_digest, obligation_id, pre["revision"], evaluation_time
 
 
-def decode_locked_snapshot(payload: bytes) -> LockedSemanticSnapshot:
-    """Decode and authenticate canonical owner-side snapshot bytes."""
+def decode_locked_snapshot(
+    payload: bytes,
+    *,
+    connection: sqlite3.Connection,
+    obligation_id: str,
+    authority_context: TrustedAuthorityContext,
+    evaluation_time_ms: int,
+    expected_config: object,
+    expected_scope: object,
+    expected_mode: str,
+    expected_owner_id: str,
+    expected_continuity_epoch: int | None = None,
+    max_fact_rows: int = MAX_FACT_ROWS,
+) -> LockedSemanticSnapshot:
+    """Rebuild a snapshot from the owner transaction before accepting bytes."""
 
-    _body, digest, obligation_id, revision, evaluation_time = _decode_snapshot_body(payload)
-    return LockedSemanticSnapshot(payload, digest, obligation_id, revision, evaluation_time)
+    _decode_snapshot_body(payload)
+    rebuilt = build_locked_semantic_snapshot(
+        connection,
+        obligation_id=obligation_id,
+        authority_context=authority_context,
+        evaluation_time_ms=evaluation_time_ms,
+        expected_config=expected_config,
+        expected_scope=expected_scope,
+        expected_mode=expected_mode,
+        expected_owner_id=expected_owner_id,
+        expected_continuity_epoch=expected_continuity_epoch,
+        max_fact_rows=max_fact_rows,
+    )
+    if rebuilt.canonical_bytes != payload:
+        _fail(SemanticAdapterCodecError, "snapshot_owner_binding")
+    return rebuilt
 
 
 def encode_locked_snapshot(snapshot: LockedSemanticSnapshot) -> bytes:
     """Return the already-authenticated immutable canonical snapshot bytes."""
 
-    if type(snapshot) is not LockedSemanticSnapshot:
-        _fail(SemanticAdapterInputError, "snapshot_type")
-    return bytes(snapshot.canonical_bytes)
+    return bytes(_require_validated_snapshot(snapshot).canonical_bytes)
 
 
 BLFIN02_MAGIC: Final[bytes] = b"BLFIN02"
@@ -895,8 +977,7 @@ def _write_actions(writer: _WireWriter, actions: object, *, currency: object) ->
 def encode_blfin02_input(snapshot: LockedSemanticSnapshot) -> bytes:
     """Encode one authenticated owner snapshot using the Engine BLFIN02 wire contract."""
 
-    if type(snapshot) is not LockedSemanticSnapshot:
-        _fail(SemanticAdapterInputError, "snapshot_type")
+    snapshot = _require_validated_snapshot(snapshot)
     data = snapshot.data
     try:
         scope = _wire_mapping(data["scope"], "scope", {"state_id", "deployment_id", "program_id", "period_id", "currency"})
@@ -1111,8 +1192,7 @@ def decode_blfres02_result(
 ) -> DecodedLeanResult:
     """Decode, canonically re-encode, and bind one Engine BLFRES02 result."""
 
-    if type(expected_snapshot) is not LockedSemanticSnapshot:
-        _fail(SemanticAdapterInputError, "result_snapshot_type")
+    expected_snapshot = _require_validated_snapshot(expected_snapshot, "result_snapshot_type")
     reader = _WireReader(payload, max_bytes=MAX_RESULT_BYTES)
     if reader.take(len(BLFRES02_MAGIC), "result_magic") != BLFRES02_MAGIC:
         _fail(SemanticAdapterCodecError, "result_magic")
@@ -1178,97 +1258,57 @@ def encode_blfres02_result(result: DecodedLeanResult) -> bytes:
 
 encode_lean_input = encode_blfin02_input
 decode_engine_result = decode_blfres02_result
-def _validate_database_shape(connection: sqlite3.Connection) -> None:
-    tables = {
-        str(row[0])
-        for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        )
-    }
-    if tables != owner._TABLES:
-        _fail(SemanticAdapterIntegrityError, "schema_tables")
-    for table in sorted(owner._TABLES):
-        columns = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
-        if columns != owner._TABLE_COLUMNS[table]:
-            _fail(SemanticAdapterIntegrityError, f"schema_columns_{table}")
 
 
-def _validate_identity(
+def _verify_owner_connection(
     connection: sqlite3.Connection,
-    meta: sqlite3.Row,
-    scope: Mapping[str, str],
-    authority_digest: bytes,
-) -> dict[str, Any]:
+    *,
+    expected_config: object,
+    expected_scope: object,
+    authority_context: TrustedAuthorityContext,
+    expected_mode: str,
+    expected_owner_id: str,
+    expected_continuity_epoch: int | None,
+) -> dict[str, object]:
+    """Use the existing independent verifier as the database trust boundary."""
+
+    try:
+        return independent.verify_database_connection(
+            connection,
+            expected_config=expected_config,
+            expected_scope=expected_scope,
+            expected_authority=authority_context.authority,
+            expected_mode=expected_mode,
+            expected_owner_id=expected_owner_id,
+            expected_continuity_epoch=expected_continuity_epoch,
+        )
+    except independent.IndependentFinancialError as error:
+        code = str(error)
+        if code in {
+            "meta:authority-binding",
+            "meta:mode-binding",
+            "meta:owner-binding",
+            "identity:meta-binding",
+        }:
+            _fail(SemanticAdapterAuthorityError, f"owner_verifier:{code}")
+        _fail(SemanticAdapterIntegrityError, f"owner_verifier:{code}")
+
+
+def _read_verified_identity(connection: sqlite3.Connection) -> dict[str, Any]:
+    """Materialize identity fields after the independent checker has passed."""
+
     rows = connection.execute("SELECT * FROM financial_identity WHERE id=1").fetchall()
     if len(rows) != 1:
         _fail(SemanticAdapterIntegrityError, "identity_cardinality")
     row = rows[0]
     identity = _row_map(row, owner._TABLE_COLUMNS["financial_identity"])
-    if identity["schema_version"] != owner._SCHEMA_VERSION:
-        _fail(SemanticAdapterIntegrityError, "identity_schema")
-    if identity["provenance"] not in {"ROOT", "CONTINUITY_RESTORE"}:
-        _fail(SemanticAdapterIntegrityError, "identity_provenance")
-    if identity["bound_mode"] != meta["mode"] or identity["bound_owner_id"] != meta["owner_id"]:
-        _fail(SemanticAdapterIntegrityError, "identity_binding")
-    if type(identity["bound_owner_id"]) is not str or owner._ID.fullmatch(identity["bound_owner_id"]) is None:
-        _fail(SemanticAdapterIntegrityError, "identity_owner")
-    if identity["provenance"] == "CONTINUITY_RESTORE":
-        if identity["bound_mode"] == "LIVE":
-            _fail(SemanticAdapterIntegrityError, "identity_restore_live")
-        expected_owner = owner._SHADOW_OWNER_ID if identity["bound_mode"] == "SHADOW" else owner._TEST_OWNER_ID
-        if identity["bound_owner_id"] != expected_owner:
-            _fail(SemanticAdapterIntegrityError, "identity_restore_owner")
-    if type(identity["anchor_sequence"]) is not int or not 0 <= identity["anchor_sequence"] <= owner._MAX_ROWS:
-        _fail(SemanticAdapterIntegrityError, "identity_anchor_sequence")
     anchor_head = _blob(identity["anchor_head"], "identity_anchor_head")
     genesis_head = _blob(identity["genesis_head"], "identity_genesis_head")
     source_digest = _blob(identity["source_package_digest"], "identity_source_digest")
     identity_digest = _blob(identity["identity_digest"], "identity_digest")
-    expected_identity = owner._identity_digest(
-        provenance=identity["provenance"],
-        bound_mode=identity["bound_mode"],
-        bound_owner_id=identity["bound_owner_id"],
-        anchor_sequence=identity["anchor_sequence"],
-        source_package_digest=source_digest,
-    )
-    if identity_digest != expected_identity:
-        _fail(SemanticAdapterIntegrityError, "identity_digest")
-    sequence = meta["sequence"]
-    if type(sequence) is not int or not 0 <= sequence <= owner._MAX_ROWS:
-        _fail(SemanticAdapterIntegrityError, "meta_sequence")
-    if identity["provenance"] == "ROOT":
-        expected_genesis = owner._digest(
-            owner._GENESIS_DOMAIN,
-            _canonical(scope),
-            authority_digest,
-            identity_digest,
-        )
-        if source_digest != owner._ZERO_DIGEST or identity["anchor_sequence"] != 0 or anchor_head != expected_genesis or genesis_head != expected_genesis:
-            _fail(SemanticAdapterIntegrityError, "identity_genesis")
-    else:
-        if source_digest == owner._ZERO_DIGEST or identity["anchor_sequence"] > sequence:
-            _fail(SemanticAdapterIntegrityError, "identity_anchor")
-        if identity["anchor_sequence"] == 0:
-            if anchor_head != genesis_head:
-                _fail(SemanticAdapterIntegrityError, "identity_anchor")
-        else:
-            anchor = connection.execute(
-                "SELECT head FROM financial_events WHERE event_sequence=?",
-                (identity["anchor_sequence"],),
-            ).fetchone()
-            if anchor is None or _blob(anchor["head"], "identity_anchor_event") != anchor_head:
-                _fail(SemanticAdapterIntegrityError, "identity_history_anchor")
-    history_head = _blob(meta["history_head"], "meta_history_head")
-    if sequence == 0:
-        if history_head != genesis_head:
-            _fail(SemanticAdapterIntegrityError, "identity_history_head")
-    else:
-        first_event = connection.execute("SELECT previous_head FROM financial_events WHERE event_sequence=1").fetchone()
-        if first_event is None or _blob(first_event["previous_head"], "identity_history_genesis") != genesis_head:
-            _fail(SemanticAdapterIntegrityError, "identity_history_genesis")
     return {
         "id": 1,
-        "schema_version": owner._SCHEMA_VERSION,
+        "schema_version": int(identity["schema_version"]),
         "provenance": str(identity["provenance"]),
         "bound_mode": str(identity["bound_mode"]),
         "bound_owner_id": str(identity["bound_owner_id"]),
@@ -1280,34 +1320,25 @@ def _validate_identity(
     }
 
 
-def _validate_meta(connection: sqlite3.Connection, authority_context: TrustedAuthorityContext) -> tuple[dict[str, str], sqlite3.Row, dict[str, Any]]:
-    rows = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchall()
-    if len(rows) != 1:
-        _fail(SemanticAdapterIntegrityError, "meta_cardinality")
-    meta = rows[0]
-    if meta["schema_version"] != owner._SCHEMA_VERSION or meta["schema"] != owner._SCHEMA:
-        _fail(SemanticAdapterIntegrityError, "meta_schema")
+def _read_verified_meta(
+    connection: sqlite3.Connection,
+    verification: Mapping[str, object],
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Read only material needed for the snapshot after independent verification."""
+
+    raw_scope = verification.get("scope")
+    if not isinstance(raw_scope, Mapping):
+        _fail(SemanticAdapterIntegrityError, "owner_verifier:scope-shape")
     scope = {
-        "state_id": _id(meta["state_id"], "scope_state"),
-        "deployment_id": _id(meta["deployment_id"], "scope_deployment"),
-        "program_id": _id(meta["program_id"], "scope_program"),
-        "period_id": _id(meta["period_id"], "scope_period"),
-        "currency": str(meta["currency"]),
+        "state_id": _id(raw_scope.get("state_id"), "scope_state"),
+        "deployment_id": _id(raw_scope.get("deployment_id"), "scope_deployment"),
+        "program_id": _id(raw_scope.get("program_id"), "scope_program"),
+        "period_id": _id(raw_scope.get("period_id"), "scope_period"),
+        "currency": str(raw_scope.get("currency")),
     }
-    if scope["currency"] != owner._CURRENCY:
-        _fail(SemanticAdapterIntegrityError, "scope_currency")
-    mode = meta["mode"]
-    if mode not in owner._MODES or meta["dispatch_enabled"] != 0 or meta["egress_enabled"] != 0:
-        _fail(SemanticAdapterIntegrityError, "nonactivating_boundary")
-    owner_id = _id(meta["owner_id"], "meta_owner")
-    authority_id = _id(meta["trusted_authority_id"], "meta_authority_id")
-    if type(meta["trusted_authority_epoch"]) is not int or meta["trusted_authority_epoch"] < 1:
-        _fail(SemanticAdapterIntegrityError, "meta_authority_epoch")
-    meta_authority_digest = _blob(meta["trusted_authority_digest"], "meta_authority_digest")
-    if authority_context.source == "CURRENT" and (authority_id, int(meta["trusted_authority_epoch"]), meta_authority_digest) != (authority_context.authority_id, authority_context.epoch, authority_context.digest):
-        _fail(SemanticAdapterAuthorityError, "current_authority_mismatch")
-    identity = _validate_identity(connection, meta, scope, meta_authority_digest)
-    return scope, meta, {"owner_id": owner_id, "mode": str(mode), **identity}
+    owner_id = _id(verification.get("owner_id"), "meta_owner")
+    mode = str(verification.get("mode"))
+    return scope, {"owner_id": owner_id, "mode": mode, **_read_verified_identity(connection)}
 
 
 def _load_population_and_pack(
@@ -2180,7 +2211,8 @@ def _validate_projection(
         _fail(SemanticAdapterIntegrityError, "obligation_case")
     if cases[-1]["status"] != str(obligation["case_status"]):
         _fail(SemanticAdapterIntegrityError, "obligation_case_status")
-    delivery = "NONE" if not actions else actions[sorted(actions)[-1]]["status"]
+    latest_action = max(actions.values(), key=lambda action: (action["created_at_ms"], action["action_id"])) if actions else None
+    delivery = "NONE" if latest_action is None else latest_action["status"]
     if str(obligation["delivery_status"]) != delivery:
         _fail(SemanticAdapterIntegrityError, "obligation_delivery")
 
@@ -2197,6 +2229,7 @@ def _make_snapshot(body: dict[str, Any]) -> LockedSemanticSnapshot:
         str(body["pre_evaluation"]["obligation_id"]),
         int(body["pre_evaluation"]["revision"]),
         int(body["evaluation_time_ms"]),
+        _validation_token=_SNAPSHOT_VALIDATION_TOKEN,
     )
 
 
@@ -2206,6 +2239,11 @@ def build_locked_semantic_snapshot(
     obligation_id: str,
     authority_context: TrustedAuthorityContext,
     evaluation_time_ms: int,
+    expected_config: object,
+    expected_scope: object,
+    expected_mode: str,
+    expected_owner_id: str,
+    expected_continuity_epoch: int | None = None,
     max_fact_rows: int = MAX_FACT_ROWS,
 ) -> LockedSemanticSnapshot:
     """Produce a bounded authenticated snapshot from one owner transaction.
@@ -2219,11 +2257,22 @@ def build_locked_semantic_snapshot(
     if type(authority_context) is not TrustedAuthorityContext:
         _fail(SemanticAdapterInputError, "authority_context_type")
     _time(evaluation_time_ms, "evaluation_time")
+    _id(expected_owner_id, "expected_owner_id")
+    if expected_mode not in owner._MODES:
+        _fail(SemanticAdapterInputError, "expected_mode")
     if type(max_fact_rows) is not int or not 1 <= max_fact_rows <= MAX_FACT_ROWS:
         _fail(SemanticAdapterInputError, "fact_row_bound")
     try:
-        _validate_database_shape(connection)
-        scope, meta, identity = _validate_meta(connection, authority_context)
+        verification = _verify_owner_connection(
+            connection,
+            expected_config=expected_config,
+            expected_scope=expected_scope,
+            authority_context=authority_context,
+            expected_mode=expected_mode,
+            expected_owner_id=expected_owner_id,
+            expected_continuity_epoch=expected_continuity_epoch,
+        )
+        scope, identity = _read_verified_meta(connection, verification)
         obligation_row, obligation_body = _load_obligation(
             connection,
             obligation_id=obligation_id,

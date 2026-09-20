@@ -209,3 +209,63 @@ fixture arithmetic error (`10000000 - 9700000 = 300000` shortfall). Those
 failures remain raw evidence and were not relabeled. The final candidate is
 still not a runtime authority switch, formal refinement proof, native proof,
 production qualification, payment system, or activation claim.
+
+## Semantic adapter correction and Engine handoff (2026-09-20)
+
+The correction pass keeps the owner as the sole writer and changes only the two scoped source/test
+files. Snapshot construction now calls the existing `verify_database_connection` on the same active
+owner transaction with explicit expected config, scope, authority, mode, owner identity, and optional
+continuity epoch. The adapter no longer treats its former partial meta/identity checks as the database
+trust boundary. Public snapshot construction requires an internal validation token, while public decode
+rebuilds the snapshot from the supplied owner connection and compares exact canonical bytes; a checksum
+is never treated as authorization. JSON columns are bounded before parse and fail closed on depth or
+recursion. Delivery projection uses the owner's latest `(created_at_ms, action_id)` rule, and historical
+authority is checked against verified store metadata even when the context is labelled `HISTORICAL`.
+
+The final focused Python run was performed before the standing memory-policy update under the then-current
+guard and actual repository cwd. Its raw logs are:
+
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-semantic-adapter-correction-final-r8.stdout.log`
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-semantic-adapter-correction-final-r8.stderr.log`
+
+The complete child result was `Ran 8 tests in 5.162s` / `OK`; child and wrapper exit were `0`, guard
+self-tests were `exit7=7 exit0=0`, minimum free bytes were `2835030016`, cleanup was `PASS`, and the
+mutex was `RELEASED`. The stderr log SHA-256 is
+`454BEE092C892F832E339A82EBDF46B8C7E4DEF9F2E80707046ABE9C122A7AE8`. Earlier guarded stops and
+expectation-only failures remain raw evidence; none was relabelled as a pass.
+
+The current shared guard policy is now SHA-256
+`55A9655FFD4F4CB4EA779D1E6FE67507CC875D7BAD0AC52DB128E964B5581E3D`, with 32% total nominal-reserve
+tolerance, effective floor `2190433321`, unchanged 2,000,000,000-byte process cap, and unchanged mutex.
+The policy smoke receipt is `../pq-wide-seed-native-20260913/build-filter-native/standing-memory-policy-20260920.outer.log`
+with SHA-256 `19B094717DEC935A9BB3D7E492929BC605C2336DD1870FEAF2A6DEC394CDEE50`; it is guard
+validation only, not workload evidence. Prior logs retain their actual 20% policy.
+
+The same focused suite was rerun after that policy update under the current guard and actual repository
+cwd. Its raw logs are:
+
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-semantic-adapter-correction-current-r1.stdout.log`
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-semantic-adapter-correction-current-r1.stderr.log`
+
+The complete child result was `Ran 8 tests in 5.219s` / `OK`; child and wrapper exit were `0`, guard
+self-tests were `exit7=7 exit0=0`, minimum free bytes were `2757775360`, peak private bytes were
+`21536768`, cleanup was `PASS`, and the mutex was `RELEASED`. The stdout log is empty with SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`; the stderr log SHA-256 is
+`89C0AD949189823D42651A5061FFD63DD2C8AAB3CE7291BACE459A52881DF02F`. This is Python owner-side
+correction evidence only; it does not qualify the Lean seam or change runtime authority.
+
+The Engine source checkpoint is commit `907e32de63ab0d8133f2a7aff1441b06a1a884e8`, tree
+`49d758924e298d935c16ffddacdadd945dec5f93`. A fresh full `lake build blind_financial` under the
+current guard stopped fail-closed at minimum free `2122395648 < 2190433321` (preflight `2796630016`,
+sample 20, peak private `1933692928`, process count `7`); cleanup and mutex release passed. The existing
+`blind_financial.exe` (5,995,520 bytes, SHA-256
+`DFCA506260A5A5F5C0A8DE42B72D3DFD15000EC6E3DD5B8BBA8C4CDB5F2490F3`) is stale-or-partial and is not
+accepted. The staged Types target did pass once under the current guard with child self-tests `7/0`,
+minimum free `2868494336`, child/wrapper exit `0`, and cleanup/mutex release PASS. Specification then
+failed closed twice: r2 had preflight `2573328384`, minimum free `1994338304 < 2190433321`, peak
+private `972124160`; the direct-handoff r3 had preflight `2544488448`, minimum free
+`2064375808 < 2190433321`, peak private `971595776`. Both had child self-tests `7/0`, cleanup PASS,
+and mutex RELEASED. Per the no-repeat rule, dependent Evaluation/Theorems/Executable/Cli/link stages
+and the KAT/vector were not run. The real owner -> `BLFIN02` -> fresh Engine executable -> `BLFRES02`
+vector remains pending the qualifying sequential Engine build; no cross-language or runtime-authority
+claim is made.

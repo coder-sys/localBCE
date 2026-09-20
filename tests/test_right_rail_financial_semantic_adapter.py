@@ -286,6 +286,38 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
                     obligation_id=expected.H_OBLIGATION_ID,
                     authority_context=authority_context,
                     evaluation_time_ms=evaluation_time_ms,
+                    expected_config=store.config,
+                    expected_scope=store.config,
+                    expected_mode=store.mode,
+                    expected_owner_id=store.owner_id,
+                )
+            finally:
+                connection.rollback()
+
+    @staticmethod
+    def _decode_snapshot(
+        store: FinancialOwner,
+        payload: bytes,
+        *,
+        context: adapter.TrustedAuthorityContext | None = None,
+        evaluation_time_ms: int | None = None,
+    ) -> adapter.LockedSemanticSnapshot:
+        authority_context = context or adapter.TrustedAuthorityContext.from_authority(store.trusted_authority)
+        if evaluation_time_ms is None:
+            evaluation_time_ms = 2**63 - 2
+        with closing(store._connect()) as connection:
+            connection.execute("BEGIN")
+            try:
+                return adapter.decode_locked_snapshot(
+                    payload,
+                    connection=connection,
+                    obligation_id=expected.H_OBLIGATION_ID,
+                    authority_context=authority_context,
+                    evaluation_time_ms=evaluation_time_ms,
+                    expected_config=store.config,
+                    expected_scope=store.config,
+                    expected_mode=store.mode,
+                    expected_owner_id=store.owner_id,
                 )
             finally:
                 connection.rollback()
@@ -337,7 +369,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(data["action_outbox"], [])
         self.assertEqual(data["current_evaluation"]["receipt"]["revision"], data["obligation"]["revision"])
         self.assertEqual(
-            adapter.decode_locked_snapshot(adapter.encode_locked_snapshot(snapshot)).data,
+            self._decode_snapshot(store, adapter.encode_locked_snapshot(snapshot)).data,
             data,
         )
         self._assert_no_source_mutation(store, before_hash)
@@ -345,6 +377,33 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         # The fixed fixture remains an independently stated arithmetic fact.
         self.assertEqual(sum(item.owed_cents for item in expected.PROGRAM_ITEMS), EXPECTED_PROGRAM_TOTAL_CENTS)
         self.assertEqual(len(expected.PROGRAM_ITEMS), EXPECTED_HOSPITAL_COUNT)
+
+    def test_snapshot_boundary_rebuilds_against_owner_and_rejects_self_rehashed_tamper(self) -> None:
+        store = self._build_base()
+        self._record_cash(store)
+        self._record_claim(store)
+        snapshot = self._snapshot(store)
+        source_hash = self._hash(store.path)
+
+        with self.assertRaisesRegex(adapter.SemanticAdapterAuthorityError, "snapshot_unverified"):
+            adapter.LockedSemanticSnapshot(
+                snapshot.canonical_bytes,
+                snapshot.snapshot_digest,
+                snapshot.obligation_id,
+                snapshot.pre_evaluation_revision,
+                snapshot.evaluation_time_ms,
+            )
+
+        tampered_body = json.loads(snapshot.canonical_bytes.decode("ascii"))
+        tampered_body["obligation"]["owed_cents"] += 1
+        unsigned = dict(tampered_body)
+        del unsigned["snapshot_digest"]
+        tampered_digest = owner._digest(adapter._SNAPSHOT_DOMAIN, adapter._canonical(unsigned))
+        tampered_body["snapshot_digest"] = tampered_digest.hex().upper()
+        tampered_payload = adapter._canonical(tampered_body)
+        with self.assertRaisesRegex(adapter.SemanticAdapterCodecError, "snapshot_owner_binding"):
+            self._decode_snapshot(store, tampered_payload)
+        self._assert_no_source_mutation(store, source_hash)
 
     def test_authorized_rejected_and_acknowledged_histories_are_explicit(self) -> None:
         authorized = self._build_base()
@@ -379,6 +438,58 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(acknowledged_data["action_outbox"][0]["status"], "ACKNOWLEDGED")
         self.assertEqual(acknowledged_data["obligation"]["received_cash_cents"], EXPECTED_H_CASH_CENTS)
         self.assertNotIn("evidence:correction-h:cash", {row["evidence_id"] for row in acknowledged_data["evidence"]})
+
+    def test_delivery_projection_uses_latest_action_creation_time_not_action_id(self) -> None:
+        store = self._build_base()
+        self._record_cash(store)
+        first_claim = self._record_claim(store)
+        self._record_h_support(store)
+        first_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        store.reject_offset_and_authorize_correction(
+            item_id=expected.H_ITEM_ID,
+            claim_id=first_claim,
+            expected_revision=first_receipt["revision"],
+            action_id="action:z-old",
+            decision_at_ms=expected.CORRECTION_AUTH_MS,
+            evaluation_id=first_receipt["evaluation_id"],
+            evaluation_result_digest=first_receipt["result_digest"],
+        )
+        store.acknowledge_action("action:z-old", "ack:z-old")
+
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS + 10)
+        second_claim = "claim:obligation-item-h:new-v1"
+        store.record_offset_claim(
+            item_id=expected.H_ITEM_ID,
+            claim_id=second_claim,
+            amount_cents=EXPECTED_OFFSET_CENTS,
+            evidence_id="evidence:offset-h:new",
+            owner_role="CASE_OWNER",
+            deadline_ms=expected.H_DUE_AT_MS,
+        )
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS + 20)
+        second_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        store.authorize_offset(
+            item_id=expected.H_ITEM_ID,
+            claim_id=second_claim,
+            expected_revision=second_receipt["revision"],
+            action_id="action:a-new",
+            decision_at_ms=expected.CORRECTION_AUTH_MS + 20,
+            evaluation_id=second_receipt["evaluation_id"],
+            evaluation_result_digest=second_receipt["result_digest"],
+        )
+
+        before_hash = self._hash(store.path)
+        data = self._snapshot(store).data
+        actions = {row["action_id"]: row for row in data["actions"]}
+        self.assertLess("action:a-new", "action:z-old")
+        self.assertLess(actions["action:z-old"]["created_at_ms"], actions["action:a-new"]["created_at_ms"])
+        self.assertEqual(actions["action:z-old"]["status"], "ACKNOWLEDGED")
+        self.assertEqual(actions["action:a-new"]["status"], "READY")
+        self.assertEqual(data["obligation"]["delivery_status"], "READY")
+        outbox = {row["action_id"]: row for row in data["action_outbox"]}
+        self.assertEqual((outbox["action:z-old"]["status"], outbox["action:z-old"]["attempt"]), ("ACKNOWLEDGED", 1))
+        self.assertEqual((outbox["action:a-new"]["status"], outbox["action:a-new"]["attempt"]), ("READY", 0))
+        self._assert_no_source_mutation(store, before_hash)
 
     def _record_duplicate_conflict_reversal_replacement(self, store: FinancialOwner) -> None:
         payment = expected.P2_PAYMENT_EVIDENCE
@@ -539,8 +650,14 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self._authorize(store, claim_id)
         source_hash = self._hash(store.path)
 
-        with self.assertRaisesRegex(adapter.SemanticAdapterAuthorityError, "current_authority_mismatch"):
-            self._snapshot(store, context=adapter.TrustedAuthorityContext.from_authority(SyntheticTrustedAuthority(epoch=2)))
+        with self.assertRaisesRegex(adapter.SemanticAdapterAuthorityError, "owner_verifier:meta:authority-binding"):
+            self._snapshot(
+                store,
+                context=adapter.TrustedAuthorityContext.from_authority(
+                    SyntheticTrustedAuthority(epoch=2),
+                    source="HISTORICAL",
+                ),
+            )
         self._assert_no_source_mutation(store, source_hash)
 
         with closing(store._connect()) as connection:
@@ -551,6 +668,10 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
                     obligation_id=expected.H_OBLIGATION_ID,
                     authority_context=adapter.TrustedAuthorityContext.from_authority(self.authority),
                     evaluation_time_ms=expected.CASH_EVENT_MS,
+                    expected_config=store.config,
+                    expected_scope=store.config,
+                    expected_mode=store.mode,
+                    expected_owner_id=store.owner_id,
                 )
             connection.rollback()
         self._assert_no_source_mutation(store, source_hash)
@@ -559,21 +680,21 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         with closing(sqlite3.connect(str(tampered_evidence))) as connection:
             connection.execute("DELETE FROM evidence WHERE evidence_id=?", (expected.H_CASH_EVIDENCE.evidence_id,))
             connection.commit()
-        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "payment_evidence_binding"):
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:payment:evidence"):
             self._snapshot_on_path(tampered_evidence)
 
         tampered_role = self._copy_store(store, "tampered-role.sqlite")
         with closing(sqlite3.connect(str(tampered_role))) as connection:
             connection.execute("UPDATE determinations SET actor_role='REPORTING_EDITOR' WHERE determination_id=?", (f"determination:{expected.ACTION_OFFSET_ID}",))
             connection.commit()
-        with self.assertRaisesRegex(adapter.SemanticAdapterAuthorityError, "determination_actor_role"):
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:determination:digest"):
             self._snapshot_on_path(tampered_role)
 
         tampered_status = self._copy_store(store, "tampered-status.sqlite")
         with closing(sqlite3.connect(str(tampered_status))) as connection:
             connection.execute("DELETE FROM determinations WHERE determination_id=?", (f"determination:{expected.ACTION_OFFSET_ID}",))
             connection.commit()
-        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "claim_without_determination"):
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:evaluation:input-determination"):
             self._snapshot_on_path(tampered_status)
 
         overflow = self._copy_store(store, "tampered-overflow.sqlite")
@@ -609,11 +730,16 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
                 ("payment:overflow", expected.H_OBLIGATION_ID, expected.H_ITEM_ID, giant.evidence_id, overflow_origin, owner._MAX_CENTS, expected.CASH_EVENT_MS, 1, None),
             )
             connection.commit()
-        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "cents_overflow"):
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:projection:cash:overflow"):
             self._snapshot_on_path(overflow)
 
         with self.assertRaisesRegex(adapter.SemanticAdapterCodecError, "snapshot_json"):
-            adapter.decode_locked_snapshot(b"not-json")
+            self._decode_snapshot(store, b"not-json")
+        deeply_nested = "0"
+        for _ in range(40):
+            deeply_nested = f"[{deeply_nested}]"
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "json_depth"):
+            adapter._parse_json_column(deeply_nested, "deep_json")
         self._assert_no_source_mutation(store, source_hash)
 
     def test_blfin02_input_and_blfres02_result_are_frozen_and_bound(self) -> None:
