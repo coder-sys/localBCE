@@ -30,12 +30,12 @@ bytes, security parameters, artifacts, operations policy, archives, or productio
 
 ## Current source/checkpoint — 2026-09-19
 
-The committed parent before this CASE10 transaction-boundary correction is branch
+The committed parent before this CASE10 abrupt-process-boundary extension is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`9159634b1f526c07e4e22654c3caf467da4cc546`, tree
-`dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc`. The committed restore-source
-role correction remains the parent boundary. This phase adds owner-local
-CASE10 transaction-boundary assertions and their maintained evidence. The owner
+`fb40e7ee7c31091e62aa74a32a30e9fb511741ca`, tree
+`1c16d35c51f9a32925db1b3c3b5fb18e0febb425`. The committed handled-boundary
+evidence remains the parent boundary. This phase adds abrupt-process CASE10
+assertions and their maintained evidence. The owner
 is explicitly versioned as `RR/FINANCIAL/OWNER/v4`; Continuity is
 `RR/FINANCIAL/CONTINUITY/v4`. v4 adds an immutable `financial_identity` row
 that binds provenance, mode, owner, continuity anchor, genesis, and source
@@ -60,20 +60,18 @@ The parent follow-on guarded checks ran the changed acceptance module (`21
 tests`, `OK`), the two independent package-role regressions (`2 tests`, `OK`),
 and 12 selected synthetic retained-boundary tests covering Queue/Composition,
 Runtime interruption/held-state, and Mirror source admission/retry (`OK`). The
-current guarded CASE10 boundary check compiles the owner/acceptance paths with
-`COMPILE_OK`, then passes the focused boundary test (`Ran 1 test in 1.144s`,
-`OK`) and the full acceptance module (`Ran 21 tests in 8.480s`, `OK`). The
-owner-local test uses isolated synthetic SQLite stores and test-local
-instrumentation around the real `FinancialOwner._write()` context: an exception
-after the full mutation body rolls back before COMMIT, while an exception after
-the parent context commits models a lost result. Reopen through the real owner
-and independent checker, one same-identity retry, and an unchanged duplicate
-retry verify all-or-nothing history/meta/obligation/evidence/determination/
-action/outbox state. Queue/Composition/Runtime/Mirror boundary evidence is
-separate integration evidence; no native verification-to-commit or Lean
-authority was run or inferred. Native adapter skips, native/Lean replay,
-whole-system acceptance, independent audit, and production qualification remain
-open.
+previously committed handled-boundary test used isolated synthetic SQLite
+stores and test-local instrumentation around the real `FinancialOwner._write()`
+context. The current process-boundary extension ran only the changed CASE10
+method (`Ran 1 test in 2.955s`, `OK`): an owned child exited `73` after the
+mutation body before COMMIT, and another exited `74` after the real COMMIT
+before returning the action result. Exact phase markers, fresh-owner reopen,
+independent verification, same-identity retry, duplicate retry, and package/
+action/outbox checks passed. No compile-only or unchanged full-suite replay was
+run. Queue/Composition/Runtime/Mirror boundary evidence is separate
+integration evidence; no native verification-to-commit or Lean authority was
+run or inferred. Native adapter skips, native/Lean replay, whole-system
+acceptance, independent audit, and production qualification remain open.
 
 The remaining financial integration decision is explicit: the owner currently
 has synchronous current-evidence evaluation and atomic mutation, not a separate

@@ -10,8 +10,11 @@ from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -37,8 +40,8 @@ from tests import rightrail_financial_expected_cases as expected
 
 
 class _Clock:
-    def __init__(self) -> None:
-        self.value = expected.P3_EVENT_MS + 1_000_000
+    def __init__(self, initial: int | None = None) -> None:
+        self.value = expected.P3_EVENT_MS + 1_000_000 if initial is None else initial
 
     def now_ms(self) -> int:
         self.value += 1
@@ -73,9 +76,56 @@ class _WriteBoundaryOwner(FinancialOwner):
             if fault == "precommit":
                 self._fault = "consumed"
                 raise RuntimeError("synthetic_financial_precommit_interrupt")
+            if fault == "process_precommit":
+                self._fault = "consumed"
+                print("PHASE=PRECOMMIT_AFTER_MUTATION", flush=True)
+                os._exit(73)
         if fault == "postcommit":
             self._fault = "consumed"
             raise RuntimeError("synthetic_financial_result_lost_after_commit")
+        if fault == "process_postcommit":
+            self._fault = "consumed"
+            print("PHASE=POSTCOMMIT_AFTER_COMMIT", flush=True)
+            os._exit(74)
+
+
+_PROCESS_BOUNDARY_CHILD = """
+import sys
+from pathlib import Path
+
+from app.right_rail_financial_owner import FinancialOwnerConfig, SyntheticTrustedAuthority
+from tests import rightrail_financial_expected_cases as expected
+from tests.test_right_rail_financial_acceptance import _Clock, _WriteBoundaryOwner
+
+path = Path(sys.argv[1])
+claim_id = sys.argv[2]
+fault = sys.argv[3]
+clock = _Clock(int(sys.argv[4]))
+config = FinancialOwnerConfig(
+    state_id=expected.STATE_ID,
+    deployment_id=expected.DEPLOYMENT_ID,
+    program_id=expected.PROGRAM_ID,
+    period_id=expected.PERIOD_ONE_ID,
+    currency=expected.CURRENCY,
+)
+store = _WriteBoundaryOwner(
+    path=path,
+    config=config,
+    trusted_authority=SyntheticTrustedAuthority(),
+    clock=clock,
+    fault=fault,
+)
+revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+print("PHASE=BEFORE_REJECT", flush=True)
+store.reject_offset_and_authorize_correction(
+    item_id=expected.H_ITEM_ID,
+    claim_id=claim_id,
+    expected_revision=revision,
+    action_id=expected.ACTION_CORRECTION_ID,
+    decision_at_ms=expected.CORRECTION_AUTH_MS,
+)
+raise SystemExit(99)
+"""
 
 
 class RightRailFinancialAcceptanceTests(unittest.TestCase):
@@ -152,6 +202,40 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                 for table in tables
             }
+
+    def _run_process_boundary(
+        self,
+        *,
+        store: FinancialOwner,
+        claim_id: str,
+        fault: str,
+        clock_value: int,
+    ) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _PROCESS_BOUNDARY_CHILD,
+                str(store.path),
+                claim_id,
+                fault,
+                str(clock_value),
+            ],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5)
+            self.fail(f"process_boundary_timeout stdout={stdout!r} stderr={stderr!r}")
+        return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     @staticmethod
     def _pack(value: expected.ControlPackExpectation) -> ControlPack:
@@ -729,6 +813,90 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(postcommit_detail["determinations"]), 1)
         self.assertEqual(len(postcommit_detail["actions"]), 1)
         self._assert_verified(reopened_postcommit)
+
+        process_precommit_store = self._build_base()
+        self._record_cash(process_precommit_store)
+        process_precommit_claim = self._record_claim(process_precommit_store)
+        process_precommit_package = process_precommit_store.export_continuity()
+        process_precommit_summary = process_precommit_store.summary()
+        process_precommit_counts = self._durable_counts(process_precommit_store.path)
+        process_precommit_clock = process_precommit_store.clock.value + 1_000_000
+        process_precommit = self._run_process_boundary(
+            store=process_precommit_store,
+            claim_id=process_precommit_claim,
+            fault="process_precommit",
+            clock_value=process_precommit_clock,
+        )
+        self.assertEqual(process_precommit.returncode, 73)
+        self.assertEqual(process_precommit.stdout, "PHASE=BEFORE_REJECT\nPHASE=PRECOMMIT_AFTER_MUTATION\n")
+        self.assertEqual(process_precommit.stderr, "")
+        print(
+            f"PROCESS_BOUNDARY precommit returncode={process_precommit.returncode} "
+            f"stdout={process_precommit.stdout!r} stderr={process_precommit.stderr!r}"
+        )
+
+        reopened_process_precommit = self._make_owner(
+            path=process_precommit_store.path,
+            clock=_Clock(process_precommit_clock + 1),
+        )
+        self.assertEqual(reopened_process_precommit.summary(), process_precommit_summary)
+        self.assertEqual(reopened_process_precommit.export_continuity(), process_precommit_package)
+        self.assertEqual(self._durable_counts(reopened_process_precommit.path), process_precommit_counts)
+        self._assert_snapshot(reopened_process_precommit, expected.H_CASH_AND_CLAIM)
+        self._assert_verified(reopened_process_precommit)
+        process_precommit_retry = self._reject(reopened_process_precommit, process_precommit_claim)
+        self.assertEqual(process_precommit_retry["status"], "CORRECTION_AUTHORIZED")
+        process_precommit_committed_package = reopened_process_precommit.export_continuity()
+        process_precommit_committed_counts = self._durable_counts(reopened_process_precommit.path)
+        process_precommit_duplicate = self._reject(reopened_process_precommit, process_precommit_claim)
+        self.assertEqual(process_precommit_duplicate["status"], "DUPLICATE")
+        self.assertEqual(reopened_process_precommit.export_continuity(), process_precommit_committed_package)
+        self.assertEqual(self._durable_counts(reopened_process_precommit.path), process_precommit_committed_counts)
+        process_precommit_detail = reopened_process_precommit.obligation_detail(expected.H_ITEM_ID)
+        self.assertEqual(len(process_precommit_detail["determinations"]), 1)
+        self.assertEqual(len(process_precommit_detail["actions"]), 1)
+        self.assertEqual(process_precommit_committed_counts["action_outbox"], 1)
+        self._assert_verified(reopened_process_precommit)
+
+        process_postcommit_store = self._build_base()
+        self._record_cash(process_postcommit_store)
+        process_postcommit_claim = self._record_claim(process_postcommit_store)
+        process_postcommit_clock = process_postcommit_store.clock.value + 1_000_000
+        process_postcommit = self._run_process_boundary(
+            store=process_postcommit_store,
+            claim_id=process_postcommit_claim,
+            fault="process_postcommit",
+            clock_value=process_postcommit_clock,
+        )
+        self.assertEqual(process_postcommit.returncode, 74)
+        self.assertEqual(process_postcommit.stdout, "PHASE=BEFORE_REJECT\nPHASE=POSTCOMMIT_AFTER_COMMIT\n")
+        self.assertEqual(process_postcommit.stderr, "")
+        print(
+            f"PROCESS_BOUNDARY postcommit returncode={process_postcommit.returncode} "
+            f"stdout={process_postcommit.stdout!r} stderr={process_postcommit.stderr!r}"
+        )
+
+        reopened_process_postcommit = self._make_owner(
+            path=process_postcommit_store.path,
+            clock=_Clock(process_postcommit_clock + 1),
+        )
+        self._assert_snapshot(reopened_process_postcommit, expected.H_REJECTED_CORRECTION)
+        self._assert_verified(reopened_process_postcommit)
+        process_postcommit_detail = reopened_process_postcommit.obligation_detail(expected.H_ITEM_ID)
+        self.assertEqual(len(process_postcommit_detail["determinations"]), 1)
+        self.assertEqual(len(process_postcommit_detail["actions"]), 1)
+        self.assertEqual(process_postcommit_detail["actions"][0]["action_id"], expected.ACTION_CORRECTION_ID)
+        self.assertEqual(process_postcommit_detail["actions"][0]["kind"], "CORRECTION_PAYMENT_REQUEST")
+        process_postcommit_counts = self._durable_counts(reopened_process_postcommit.path)
+        self.assertEqual(process_postcommit_counts["determinations"], 1)
+        self.assertEqual(process_postcommit_counts["actions"], 1)
+        self.assertEqual(process_postcommit_counts["action_outbox"], 1)
+        process_postcommit_package = reopened_process_postcommit.export_continuity()
+        process_postcommit_duplicate = self._reject(reopened_process_postcommit, process_postcommit_claim)
+        self.assertEqual(process_postcommit_duplicate["status"], "DUPLICATE")
+        self.assertEqual(reopened_process_postcommit.export_continuity(), process_postcommit_package)
+        self.assertEqual(self._durable_counts(reopened_process_postcommit.path), process_postcommit_counts)
+        self._assert_verified(reopened_process_postcommit)
 
     def test_case_11_shadow_export_restore_and_test_owner_continuation(self) -> None:
         self.assertEqual(expected.CASE_11.number, 11)

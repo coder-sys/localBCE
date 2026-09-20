@@ -2,14 +2,14 @@
 
 Updated: 2026-09-19
 
-## Current verified snapshot — CASE10 transaction-boundary correction
+## Current verified snapshot — CASE10 abrupt-process-boundary extension
 
 The current coherent batch is in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
 branch `rightrail-financial-workflow-20260913`. Its committed parent before
-this CASE10 transaction-boundary correction is HEAD
-`9159634b1f526c07e4e22654c3caf467da4cc546`, tree
-`dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc`. This phase changes only the
+this CASE10 abrupt-process-boundary extension is HEAD
+`fb40e7ee7c31091e62aa74a32a30e9fb511741ca`, tree
+`1c16d35c51f9a32925db1b3c3b5fb18e0febb425`. This phase changes only the
 acceptance test and maintained evidence records; production source and
 protected paths are unchanged. The only untracked path is the preserved
 `build-performance/` directory containing the two driver-supplied generated
@@ -254,7 +254,7 @@ source, Lean path, measurement artifact, or old suite was rewritten or
 regenerated. Native verification-to-commit, Lean, whole-system, independent
 audit, and production qualification remain blocked or pending.
 
-## Current CASE10 transaction-boundary evidence — 2026-09-19
+## Retained handled-exception CASE10 evidence — 2026-09-19
 
 This phase is on parent `9159634b1f526c07e4e22654c3caf467da4cc546` /
 `dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc` and changes only
@@ -333,6 +333,60 @@ are `5DB52AA363048EEEB3A0E383B040CEFF700C47C78F639372F8A1967F418C0595` and
 The test was corrected to preserve the fixture clock; no production code was
 changed. Two guarded read-only diagnostics then showed `PACKAGE_EQUAL True`
 and `VERIFY_OK` before the final focused pass.
+
+## Current CASE10 abrupt-process evidence — 2026-09-19
+
+This extension is on parent `fb40e7ee7c31091e62aa74a32a30e9fb511741ca` /
+`1c16d35c51f9a32925db1b3c3b5fb18e0febb425` and changes only the acceptance
+test plus maintained evidence. It preserves the handled-exception tests from
+the parent. No production owner, independent checker, Mirror, Continuity,
+native, C, crypto, Lean, Queue, or Composition source changed.
+
+The test-local `_WriteBoundaryOwner` now also supports two abrupt owned-child
+faults. A child exits `73` from inside the write context after the owner method
+has completed its mutation body but before the parent `_write()` can COMMIT;
+the child exits `74` after the parent context has returned from the real COMMIT
+but before the action result returns. The child uses `os._exit`, so the
+pre-COMMIT path does not execute explicit Python rollback/finally cleanup. The
+parent uses bounded `Popen.communicate(timeout=10)` and exact-child kill only
+on timeout; neither child timed out.
+
+The only newly changed CASE10 method was run through the unchanged guard. Its
+complete child output was:
+
+```text
+PROCESS_BOUNDARY precommit returncode=73 stdout='PHASE=BEFORE_REJECT\nPHASE=PRECOMMIT_AFTER_MUTATION\n' stderr=''
+PROCESS_BOUNDARY postcommit returncode=74 stdout='PHASE=BEFORE_REJECT\nPHASE=POSTCOMMIT_AFTER_COMMIT\n' stderr=''
+
+test_case_10_interrupted_import_restart_and_disabled_dispatch (tests.test_right_rail_financial_acceptance.RightRailFinancialAcceptanceTests.test_case_10_interrupted_import_restart_and_disabled_dispatch) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 2.955s
+
+OK
+```
+
+The guarded child exited `0`; stdout is 230 bytes with SHA-256
+`DE792E063EA22A4B1E6AA7172E789871AB9B96A9BF70E4466C26F1B73E6A3429`, and
+stderr is 313 bytes with SHA-256
+`44B2ECA88D3878FB9142A3828F688587DE47A7F1BDB95DA240DD0038090C3689`.
+The guard reported child exit checks `exit7=7 exit0=0`, main child exit `0`,
+`CLEANUP=PASS`, `MUTEX=RELEASED`, minimum free bytes `4316639232`, reserve
+floor `2576980378`, peak working set `61210624`, peak private bytes `31576064`,
+and a transient process-tree maximum of four processes before returning to
+zero. No test was skipped and no timeout/early-child failure passed.
+
+The pre-COMMIT child reopened to exact prior continuity-package bytes, summary,
+and durable counts; independent verification passed. The same action identity
+then committed once and retried as `DUPLICATE` without changing package/counts,
+with one determination, one action, and one action-outbox row. The
+post-COMMIT child reopened to the expected correction projection and
+independent verification; it contained exactly one determination, one
+`CORRECTION_PAYMENT_REQUEST` action with the expected action identity, and one
+outbox row. Its same-identity retry was `DUPLICATE` and left the package/counts
+unchanged. Dispatch remained disabled. The prior handled-exception CASE10 and
+full acceptance evidence were not replayed; no compile-only gate or unchanged
+suite was run for this test-only extension.
 
 ### Remaining financial verification-handoff decision — not implemented
 

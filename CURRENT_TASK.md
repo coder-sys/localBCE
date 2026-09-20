@@ -7,9 +7,9 @@ Updated: 2026-09-19
 Work only in the integration checkout
 `C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\rightrail-financial-workflow-20260913`,
 branch `rightrail-financial-workflow-20260913`. The committed parent identity
-before this CASE10 transaction-boundary correction is HEAD
-`9159634b1f526c07e4e22654c3caf467da4cc546`, tree
-`dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc`; the only untracked path remains
+before this CASE10 abrupt-process-boundary extension is HEAD
+`fb40e7ee7c31091e62aa74a32a30e9fb511741ca`, tree
+`1c16d35c51f9a32925db1b3c3b5fb18e0febb425`; the only untracked path remains
 the preserved `build-performance/` directory containing the two generated
 executables recorded in `STATE.md`. The restore-source role correction is the
 parent boundary; this phase adds owner-local transaction-boundary assertions
@@ -63,23 +63,27 @@ The parent follow-on gates were guarded: the two changed financial modules
 compiled with absolute paths; the acceptance module ran `21 tests` with `OK`;
 the two independent package-role tests ran with `OK`; and the selected
 retained Queue/Composition/Runtime/Mirror boundary set ran `12 tests` with
-`OK`. The current CASE10 boundary compile emitted `COMPILE_OK`, the focused
-boundary test ran `1 test in 1.144s` with `OK`, and the full acceptance module
-ran `21 tests in 8.480s` with `OK`. The exact wrapper summaries and raw child
-outputs are retained in `STATE.md`. The retained Queue/State evidence remains `Queue 30 passed`,
+`OK`. The retained handled-boundary CASE10 test ran `1 test in 1.144s` with
+`OK`; the current abrupt-process extension ran only the changed CASE10 method
+(`1 test in 2.955s`, `OK`). Its two owned children returned the asserted phase
+exits `73` (pre-COMMIT) and `74` (post-COMMIT), and fresh-owner/checker reopen
+and retry checks passed. No compile-only or unchanged full-suite replay was
+run. The exact wrapper summaries and raw child outputs are retained in
+`STATE.md`. The retained Queue/State evidence remains `Queue 30 passed`,
 `Runtime 17 passed, 2 skipped` (the two native adapter/source-appliance tests
 explicitly deferred by the grant), and `Profile12 29 passed`; those broad
 modules were not replayed.
 
 Financial CASE 10 now demonstrates owner-local interrupted population staging,
 incomplete-source rejection, dispatch-disabled behavior, and two real owner
-write boundaries using isolated synthetic SQLite stores: a failure after the
-mutation body rolls back before COMMIT, and a failure after COMMIT leaves the
-committed result for restart recovery. Reopen through the real owner and
-independent checker, retry of the same action identity, and duplicate retry
-preserve all-or-nothing history/meta/obligation/evidence/determination/action/
-outbox state. The boundary fault is test-local instrumentation; no production
-fault-hook framework was added. The separate 12-test integration set
+write boundaries using isolated synthetic SQLite stores: handled exceptions
+and abrupt child termination after the mutation body roll back before COMMIT,
+while handled and abrupt result loss after COMMIT leave the committed result
+for restart recovery. Reopen through the real owner and independent checker,
+retry of the same action identity, and duplicate retry preserve all-or-nothing
+history/meta/obligation/evidence/determination/action/outbox state. The
+boundary fault is test-local instrumentation; no production fault-hook
+framework was added. The separate 12-test integration set
 demonstrates the retained Queue/Composition transaction, reservation,
 handoff, crash/recovery, outbox/reconciliation, Runtime verifier-to-State,
 and Mirror source-verifier/independent-graph/retry boundaries. No native

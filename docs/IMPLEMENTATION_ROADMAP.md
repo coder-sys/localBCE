@@ -11,10 +11,10 @@ Rejected architectures are recorded separately and are not milestones.
 
 ## Active roadmap — financial workflow 2026-09-19
 
-The committed parent before this CASE10 transaction-boundary correction is branch
+The committed parent before this CASE10 abrupt-process-boundary extension is branch
 `rightrail-financial-workflow-20260913` at HEAD
-`9159634b1f526c07e4e22654c3caf467da4cc546`, tree
-`dbc4508dee82a5e419fe8dbcf3e548a5c452fbfc`. All evidence is synthetic and
+`fb40e7ee7c31091e62aa74a32a30e9fb511741ca`, tree
+`1c16d35c51f9a32925db1b3c3b5fb18e0febb425`. All evidence is synthetic and
 nonactivating. The persisted owner/Continuity candidate is v4:
 `RR/FINANCIAL/OWNER/v4` and `RR/FINANCIAL/CONTINUITY/v4`. Its immutable
 `financial_identity` row binds restore provenance, mode/owner identity, source
@@ -60,11 +60,12 @@ measurement artifacts remain immutable historical evidence.
    source bytes unchanged. The synthetic contention diagnostic remains
    separately labeled and receives no actual-workload credit. This is a bounded
    observation, not an SLA. Native metrics remain pending and queue wait/age
-   is not applicable. The financial owner’s CASE10 now also covers the real
-   owner write rollback boundary before COMMIT and the committed-result-lost
-   boundary after COMMIT, with restart, independent verification, same-identity
-   retry, and unchanged duplicate effects over isolated synthetic SQLite
-   stores. Its fault injection is test-local and adds no production hook. The
+   is not applicable. The financial owner’s CASE10 now also covers abrupt
+   owned-child exit at the real owner write rollback boundary before COMMIT and
+   at the committed-result-lost boundary after COMMIT, with restart, independent
+   verification, same-identity retry, and unchanged duplicate effects over
+   isolated synthetic SQLite stores. Its fault injection is test-local and adds
+   no production hook. The
    selected Queue/Composition/Runtime/Mirror tests are separate retained
    integration evidence. Native verification-to-commit, Lean, whole-system,
    independent-audit, and production gates remain open. Earlier v2/v3/v4
