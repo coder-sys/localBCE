@@ -1335,6 +1335,40 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
         self._assert_verified(store)
 
+    def test_continuity_restore_post_link_replacement_preserves_foreign_database_and_sidecars(self) -> None:
+        store = self._build_base()
+        package = store.export_continuity()
+        destination = self._path("post-link-raced-continuity.sqlite")
+        sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"))
+        foreign_database = b"foreign-post-link-destination-bytes"
+        foreign_wal = b"foreign-post-link-wal-bytes"
+        foreign_shm = b"foreign-post-link-shm-bytes"
+        original_link = owner.os.link
+
+        def replace_after_link(source: str | os.PathLike[str], target: str | os.PathLike[str], *args: object, **kwargs: object) -> None:
+            original_link(source, target, *args, **kwargs)
+            Path(target).unlink()
+            destination.write_bytes(foreign_database)
+            sidecars[0].write_bytes(foreign_wal)
+            sidecars[1].write_bytes(foreign_shm)
+
+        owner.os.link = replace_after_link
+        try:
+            with self.assertRaisesRegex(FinancialContinuityError, "continuity_destination"):
+                FinancialOwner.restore_continuity(
+                    package_bytes=package,
+                    recovered_path=destination,
+                    trusted_authority=self.authority,
+                    clock=_Clock(),
+                )
+        finally:
+            owner.os.link = original_link
+        self.assertEqual(destination.read_bytes(), foreign_database)
+        self.assertEqual(sidecars[0].read_bytes(), foreign_wal)
+        self.assertEqual(sidecars[1].read_bytes(), foreign_shm)
+        self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
+        self._assert_verified(store)
+
     def test_control_pack_policy_and_wildcard_periods_fail_closed(self) -> None:
         with self.assertRaisesRegex(FinancialInputError, "period_scope_required"):
             FinancialOwnerConfig(
@@ -1912,12 +1946,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         claim_id = self._record_claim(store)
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
 
-        def request(*, action_id: str, evaluation_id: str | None, evaluation_result_digest: str | None, expected_revision: int | None) -> dict[str, object]:
+        def request(*, action_id: str, evaluation_id: str | None, evaluation_result_digest: str | None, expected_revision: int | None, decision_at_ms: int | None = None) -> dict[str, object]:
             return store.authorize_offset(
                 item_id=expected.H_ITEM_ID,
                 claim_id=claim_id,
                 expected_revision=expected_revision,
                 action_id=action_id,
+                decision_at_ms=decision_at_ms,
                 evaluation_id=evaluation_id,
                 evaluation_result_digest=evaluation_result_digest,
             )
@@ -1951,6 +1986,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 expected_revision=int(receipt["revision"]),
             )
         self.assertEqual(store.export_continuity(), before_missing_reference)
+
+        before_chronology = store.export_continuity()
+        with self.assertRaisesRegex(FinancialIntegrityError, "evaluation_chronology"):
+            request(
+                action_id="action:decision-before-evaluation-chronology",
+                evaluation_id=str(receipt["evaluation_id"]),
+                evaluation_result_digest=str(receipt["result_digest"]),
+                expected_revision=int(receipt["revision"]),
+                decision_at_ms=int(receipt["evaluated_at_ms"]) - 1,
+            )
+        self.assertEqual(store.export_continuity(), before_chronology)
 
         store.record_support_evidence(
             item_id=expected.H_ITEM_ID,

@@ -3111,6 +3111,7 @@ class FinancialOwner:
         attempt_directory: Path | None = None
         attempt_path: Path | None = None
         published = False
+        attempt_identity: tuple[int, int] | None = None
         published_identity: tuple[int, int] | None = None
         cleanup_failures: list[str] = []
 
@@ -3198,6 +3199,8 @@ class FinancialOwner:
                 restore_source_package=package_bytes,
             )
             owner.close()
+            attempt_stat = attempt_path.stat()
+            attempt_identity = (int(attempt_stat.st_dev), int(attempt_stat.st_ino))
             if any(occupied(path) for path in sidecar_paths):
                 _fail(FinancialContinuityError, "continuity_destination")
             try:
@@ -3207,8 +3210,13 @@ class FinancialOwner:
             except OSError:
                 _fail(FinancialContinuityError, "continuity_destination_claim")
             published = True
-            published_stat = recovered_path.stat()
-            published_identity = (int(published_stat.st_dev), int(published_stat.st_ino))
+            published_identity = attempt_identity
+            try:
+                published_stat = recovered_path.stat()
+            except OSError:
+                _fail(FinancialContinuityError, "continuity_destination_claim")
+            if (int(published_stat.st_dev), int(published_stat.st_ino)) != attempt_identity:
+                _fail(FinancialContinuityError, "continuity_destination")
             if any(occupied(path) for path in sidecar_paths):
                 _fail(FinancialContinuityError, "continuity_destination")
             cleanup_attempt()

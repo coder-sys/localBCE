@@ -12,10 +12,12 @@ activation, or production-readiness record.
    determination/action/acknowledgment/cash, exact retries, atomic
    history-projection-outbox, SHADOW/TEST Continuity, disabled dispatch/egress,
    and the fixed synthetic 20-hospital fixture. The bounded Python v5 slice is
-   accepted for the current delivery; this does not qualify the wider Driver
+   locally re-verified for the current correction packet; Driver disposition
+   remains NOT ACCEPTED pending review. This does not qualify the wider Driver
    or production boundaries.
-2. **Reconcile and retain the correction evidence.** The combined correction,
-   affected re-verification, and final bounded measurement are complete. Keep
+2. **Reconcile and retain the correction evidence.** The combined correction
+   and focused local re-verification are complete; Driver review remains
+   pending. Keep
    the private Continuity attempt ownership, independent receipt construction,
    determination side-effect checks, CLI retry/conflict checks, and the
    tag-only v2/v3/v4 rejection matrix aligned with `STATE.md`. Historical
@@ -44,17 +46,20 @@ production gates—not another duplicated receipt narrative or source refactor.
 
 ## Current evidence boundary
 
-The final affected guarded run reported:
+The prior broad affected guarded run reported:
 
 ```text
 Ran 63 tests in 26.573s
 OK
 ```
 
-No warnings or skips were reported. The final v5 measurement has 3 measured
+No warnings or skips were reported. The retained r4 measurement has 3 measured
 samples plus 1 warmup at sizes 5, 10, and 20, all reference and source-byte
 checks true, and is a bounded observation rather than an SLA. Native metrics
-remain pending and Queue wait/age are not applicable. Failed attempts and
+remain pending and Queue wait/age are not applicable. The residual focused
+guarded packet separately reported `Ran 5 tests in 4.254s` and `OK`; its exact
+logs and current source hashes are in `STATE.md`. The retained measurement is
+bound to the pre-residual owner source and was not rerun. Failed attempts and
 corrected reruns remain raw evidence in their existing locations.
 
 ## Native-v3 release gate

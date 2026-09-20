@@ -16,8 +16,9 @@ checker, Mirror, CLI, Continuity tests, and maintained docs are the current
 State-owned delivery; Git HEAD, tree, and status are authoritative after
 integration.
 
-The v5 owner, independent checker, Mirror, CLI, and Continuity form an
-accepted bounded Python slice for this delivery. v2/v3/v4 inputs reject
+The v5 owner, independent checker, Mirror, CLI, and Continuity form a locally
+verified bounded Python slice for the current correction packet; Driver
+disposition remains NOT ACCEPTED pending review. v2/v3/v4 inputs reject
 fail-closed without mutation; the tested matrix changes only schema/version
 tags on disposable current bytes and is not authentic old-schema compatibility
 evidence. Separate native and Lean artifacts are not linked into this Python
@@ -84,9 +85,10 @@ marker, determination, action, and outbox transition. Exact retries must be
 verification-attempt, lease, receipt-consumption, or Queue-reservation boundary;
 Queue reservations and claimed-adjustment business state remain separate.
 
-The bounded v5 Python contract is accepted after the combined correction and
-affected re-verification. `STATE.md` owns the exact receipts, raw failures, and
-remaining Driver-wide gates; this acceptance does not qualify native, Lean,
+The bounded v5 Python contract is locally re-verified after the combined
+correction and focused residual checks. Driver disposition remains NOT
+ACCEPTED. `STATE.md` owns the exact receipts, raw failures, and remaining
+Driver-wide gates; this local verification does not qualify native, Lean,
 Queue/Composition, or production boundaries.
 
 Evidence, official determination, authorized action, dispatch/acknowledgment,
@@ -104,10 +106,12 @@ The required Continuity packages are versioned and bounded. SHADOW must open
 read-only. TEST restore must use an isolated destination, fixed
 identity/provenance, restart and independent verification, and disabled
 dispatch/egress. Restore constructs in a private attempt directory and uses an
-atomic no-replace publication, preserving a destination and its -wal/-shm
-sidecars if another attempt wins the destination race; cleanup failures are
-reported. It must reject source overwrite, LIVE promotion, identity
-replacement, and mismatched restore-owner contracts. An abrupt owner exit
+atomic no-replace publication, capturing the private attempt identity before
+publication and verifying the published destination still has that identity,
+preserving a destination and its -wal/-shm sidecars if another attempt wins
+the destination race; cleanup failures are reported. It must reject source
+overwrite, LIVE promotion, identity replacement, and mismatched restore-owner
+contracts. An abrupt owner exit
 before COMMIT or after COMMIT must preserve atomicity and exact retry
 semantics; the retained CASE10 evidence is owner-local and does not qualify
 other system boundaries.

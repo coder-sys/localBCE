@@ -72,11 +72,12 @@ cross-period, and wrong-mode cases fail visibly. Prefer the simplest
 falsifiable design; compare alternatives against mutation, replay, recovery,
 resource, and whole-system evidence before adding machinery.
 
-The accepted bounded Python v5 evidence follows the same rule: populated
-evaluation receipts are independently reconstructed, determination failures
-are checked for unchanged durable bytes, exact CLI retries are distinguished
-from changed bindings, and the v2/v3/v4 matrix is labeled tag-only rejection
-rather than historical-schema compatibility.
+The locally re-verified bounded Python v5 evidence follows the same rule:
+populated evaluation receipts are independently reconstructed, determination
+failures are checked for unchanged durable bytes including current-receipt
+chronology, exact CLI retries are distinguished from changed bindings, and the
+v2/v3/v4 matrix is labeled tag-only rejection rather than historical-schema
+compatibility. Driver disposition remains NOT ACCEPTED pending review.
 
 ## Active Lean direction
 

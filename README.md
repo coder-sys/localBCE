@@ -44,9 +44,10 @@ it carries references/digests only. The required determination contract binds
 explicit evaluation identity/digest and expected revision to current and
 historical state before one atomic determination/action/outbox transition.
 Exact retries must be `DUPLICATE`; changed identity or input must be conflict.
-The bounded Python v5 slice is accepted for this delivery after correction and
-affected re-verification; whole-system and production qualification remain
-open. Detailed evidence and nonclaims are in `STATE.md`.
+The bounded Python v5 slice is implemented and locally re-verified after the
+residual correction packet; Driver disposition remains NOT ACCEPTED pending
+review. Whole-system and production qualification remain open. Detailed
+evidence and nonclaims are in `STATE.md`.
 
 ## Entry points
 
@@ -67,8 +68,8 @@ contract is [`docs/DESIGN_IDEOLOGY.md`](docs/DESIGN_IDEOLOGY.md).
 
 ## Verified evidence
 
-The final guarded affected run compiled the relevant Python paths and ran the
-acceptance, independent-checker, and Mirror suites:
+The prior broad guarded affected run compiled the relevant Python paths and ran
+the acceptance, independent-checker, and Mirror suites:
 
 ```text
 Ran 63 tests in 26.573s
@@ -83,22 +84,44 @@ return codes `73` and `74`, child exit `0`, minimum free bytes
 independent checker is
 `FE1CCDCA057FE36391FF9A9BCD9B4CD73ADAC9A934D3DB88D040E5F6BB1D5A55`.
 
-The final bounded measurement is `work/financial-measurements-v5-final-r4`:
+The residual correction packet then ran under the unchanged guard from the
+absolute project cwd. Its raw logs are:
+
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-residual-focused-r2.stdout.log`
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-residual-focused-r2.stderr.log`
+
+It reported:
+
+```text
+Ran 5 tests in 4.254s
+OK
+```
+
+The guard reported `exit7=7 exit0=0`, child exit `0`, minimum free bytes
+`3106156544`, peak private bytes `30777344`, `CLEANUP=PASS`, and
+`MUTEX=RELEASED`. Current owner and acceptance-test SHA-256 values are
+`45D2F3F0468642BE471CF365A7C6AF63B98836430AEEA796FD6A461CECE19846` and
+`B9312E8DE63D80861C88924E800CFE0771BB1EA7D0EE72DF2BC56E802CF6017B`.
+
+The retained bounded measurement is `work/financial-measurements-v5-final-r4`:
 one warmup plus three measured samples at sizes 5, 10, and 20, with 12 owner
 and 12 TEST databases. It reports `type=complete`, `status=PASS`, all
 reference checks true, all source bytes unchanged, and zero acquisition
 failures. Total medians are `504.762`, `793.516`, and `1261.848` ms for
-sizes 5, 10, and 20. This is a bounded observation, not an SLA. Earlier
-failed attempts and their corrections remain raw evidence; they are not
-relabeled as passes.
+sizes 5, 10, and 20. This is a bounded observation, not an SLA. It is
+source-bound to the pre-residual owner hash
+`68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9`, not the
+current owner, and was not rerun. Earlier failed attempts and their corrections
+remain raw evidence; they are not relabeled as passes.
 
 ## Limitations and claims
 
 - The candidate is synthetic, local, nonactivating, nonpayment, and non-PHI:
   `proofSuiteId=null`, `production_usable=false`, and `activation=false`.
-- The combined correction and affected re-verification are complete for this
-  bounded Python slice. Native metrics, native verification-to-commit, Lean
-  executable replay/linkage, Queue/Composition integration, whole-system
+- The residual correction and focused local re-verification are complete for
+  this bounded Python slice; Driver acceptance remains pending. Native
+  metrics, native verification-to-commit, Lean executable replay/linkage,
+  Queue/Composition integration, whole-system
   qualification, independent audit, real data/PHI, live dispatch, payment
   movement, and production qualification remain open.
 - The v2/v3/v4 coverage is a tag-only fail-closed rejection matrix over

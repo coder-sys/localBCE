@@ -87,8 +87,9 @@ digest and expected revision to the current and historical evaluation, receipt,
 projection, evidence coverage/chronology, Control Pack, and authority before
 one atomic determination/action/outbox transition. Exact retries must be
 `DUPLICATE`; changed identity or input must be conflict. The bounded Python v5
-slice is accepted for this delivery after the combined correction and affected
-re-verification. This does not qualify the wider Driver, native, Lean, or
+slice is implemented and locally re-verified for the current correction
+packet; Driver disposition remains NOT ACCEPTED pending review of the source
+and raw evidence. This does not qualify the wider Driver, native, Lean, or
 production boundaries; see `STATE.md` for the evidence and remaining gates.
 There is no separate verification-attempt, lease, receipt-consumption, or
 Queue-reservation boundary; claimed-adjustment business state and Queue

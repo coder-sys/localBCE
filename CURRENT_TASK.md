@@ -20,7 +20,7 @@ The bounded responsibility remains State Control Pack, Blind Ledger owner,
 same-owner Mirror, bounded Continuity State, and deferred Switch. The workflow
 is synthetic, state-local, nonactivating, nonpayment, and non-PHI.
 
-## Required v5 contract and disposition
+## Required v5 contract and local disposition
 
 Owner and Continuity identities are RR/FINANCIAL/OWNER/v5 and
 RR/FINANCIAL/CONTINUITY/v5. v2/v3/v4 inputs reject fail-closed without
@@ -32,13 +32,15 @@ evaluation identity/digest and expected revision before one atomic
 determination/action/outbox transition. Exact retries are DUPLICATE; changed
 identity or input is a conflict.
 
-The bounded Python v5 slice is ACCEPTED for this delivery. This is not
-whole-system qualification: native verification-to-commit, executable Lean
-linkage/refinement, Queue/Composition integration, authenticated sources,
-custody, independent audit, real PHI, live dispatch, payment movement, and
-production activation remain separate gates.
+The bounded Python v5 slice is implemented and locally re-verified for the
+current correction packet. Driver disposition remains NOT ACCEPTED pending
+review of the source and raw evidence. This is not whole-system qualification:
+native verification-to-commit, executable Lean linkage/refinement,
+Queue/Composition integration, authenticated sources, custody, independent
+audit, real PHI, live dispatch, payment movement, and production activation
+remain separate gates.
 
-## Final guarded verification
+## Prior broad verification
 
 The required guarded command compiled the relevant owner, checker, Mirror,
 fixture, CLI, and measurement-harness paths, then ran the acceptance,
@@ -61,6 +63,30 @@ CLEANUP=PASS, and MUTEX=RELEASED. The final owner SHA-256 is
 independent checker SHA-256 remains
 FE1CCDCA057FE36391FF9A9BCD9B4CD73ADAC9A934D3DB88D040E5F6BB1D5A55.
 
+The residual correction packet was then run under the unchanged guard from the
+absolute project cwd. Its raw logs are:
+
+- ../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-residual-focused-r2.stdout.log
+- ../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-residual-focused-r2.stderr.log
+
+Decisive child output:
+
+```text
+Ran 5 tests in 4.254s
+OK
+```
+
+The packet covered normal CASE11 restore, integrity-failure cleanup, the
+existing pre-link destination race, the post-link replacement race, and a
+current-receipt `evaluation_chronology` rejection with unchanged continuity.
+The guard reported `exit7=7 exit0=0`, child exit `0`, minimum free bytes
+`3106156544`, reserve `3221225472`, effective floor `2576980378`, peak
+private bytes `30777344`, `CLEANUP=PASS`, and `MUTEX=RELEASED`. Current source
+identities are owner
+`45D2F3F0468642BE471CF365A7C6AF63B98836430AEEA796FD6A461CECE19846` and
+acceptance test
+`B9312E8DE63D80861C88924E800CFE0771BB1EA7D0EE72DF2BC56E802CF6017B`.
+
 Coverage includes an independently reconstructed populated evaluation receipt
 through owner query/evaluate, reopen, Mirror, CLI, and SHADOW restore; bad,
 stale, pre-evaluation, unchanged-rejection, and same-reference determination
@@ -71,7 +97,7 @@ rejection without destination creation. The v2/v3/v4 cases are explicitly
 schema/version-tag rejection checks, not proof of compatibility with authentic
 historical schemas.
 
-## Final bounded measurement
+## Retained bounded measurement (pre-residual correction)
 
 The final guarded measurement raw logs are:
 
@@ -104,11 +130,20 @@ was empty with SHA-256
 E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855.
 This is a bounded local observation, not an SLA or production qualification;
 native metrics are pending and Queue wait/age are not applicable to this
-owner slice.
+owner slice. It is source-bound to the pre-residual owner hash
+`68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9`, not the
+current owner, and was not rerun for this focused correction packet.
 
 ## Retained failures and next gates
 
-Earlier raw failures remain evidence: the first correction run had two test
+Earlier raw failures remain evidence: the first residual focused launch was
+rejected before child execution; its stderr was exactly:
+
+```text
+The filename, directory name, or volume label syntax is incorrect.
+```
+
+The corrected residual r2 launch passed. Earlier correction runs had two test
 errors (hard-coded evaluation revision and a CLI argument replacement);
 another run stopped at 2521305088 < 2576980378 for the required memory floor;
 the next run exposed the independent detail-row item_id assumption; two later
@@ -117,7 +152,8 @@ passed. These failures were corrected in scope and were not silently
 relabeled. Earlier pre-correction review failures remain in their original raw
 logs and Git history.
 
-Next work is Driver-wide review and the separate native, formal, operational,
+Driver disposition remains NOT ACCEPTED pending review. Next work is
+Driver-wide review and the separate native, formal, operational,
 and production gates. The active Lean direction may design/extract semantics,
 but no runtime authority switch is allowed until a pinned executable Lean
 artifact and refinement/linkage evidence exist.

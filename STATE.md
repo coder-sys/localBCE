@@ -21,11 +21,13 @@ transaction writer for obligations, evaluations, cases, determinations,
 corrections, balances, and action/outbox identity. SHADOW is query-only; TEST
 restore is isolated/non-live; dispatch and egress remain disabled.
 
-## Review disposition — ACCEPTED bounded Python v5 slice
+## Review disposition — NOT DRIVER-ACCEPTED; local verification complete
 
-The frozen review corrections are implemented and re-verified. The final
-guarded affected run compiled the relevant Python paths and ran all three
-affected suites:
+The prior broad review packet is retained evidence. The residual ownership and
+chronology corrections are implemented and locally re-verified; Driver
+disposition remains NOT ACCEPTED pending review of the current source and raw
+evidence. The prior guarded affected run compiled the relevant Python paths and
+ran all three affected suites:
 
 PROCESS_BOUNDARY precommit returncode=73 stdout='PHASE=BEFORE_REJECT\nPHASE=PRECOMMIT_AFTER_MUTATION\n' stderr=''
 PROCESS_BOUNDARY postcommit returncode=74 stdout='PHASE=BEFORE_REJECT\nPHASE=POSTCOMMIT_AFTER_COMMIT\n' stderr=''
@@ -39,13 +41,36 @@ CLEANUP=PASS; MUTEX=RELEASED. Raw files:
 - work/pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-correction2-focused-r8.stdout.log
 - work/pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-correction2-focused-r8.stderr.log
 
-Source identities for the final slice are:
+The residual focused packet used the unchanged guard and the absolute project
+cwd. Its raw logs are:
+
+- work/pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-residual-focused-r2.stdout.log
+- work/pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-v5-residual-focused-r2.stderr.log
+
+Its complete child result was:
+
+```text
+Ran 5 tests in 4.254s
+OK
+```
+
+The guard also reported `exit7=7 exit0=0`, child exit `0`, minimum free bytes
+`3106156544`, reserve `3221225472`, effective floor `2576980378`, peak private
+bytes `30777344`, `CLEANUP=PASS`, and `MUTEX=RELEASED`.
+
+Source identities for the prior broad packet are:
 
 - owner: 68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9
 - independent checker: FE1CCDCA057FE36391FF9A9BCD9B4CD73ADAC9A934D3DB88D040E5F6BB1D5A55
 - acceptance test: FD456CF52EB783513AC3143690659A9888F0E9810E2B3996E7C7F939874A935B
 - Mirror test: 3099F0846BABF9953A9A34E65E760EBE223FD5D38DAC3B1CEE0C35C355258C75
 - measurement harness: A50C73BD4231385900B378327492FF1DFC5F2A16CE8125752D3C76DB7EE13437
+
+Current post-correction source identities are:
+
+- owner: 45D2F3F0468642BE471CF365A7C6AF63B98836430AEEA796FD6A461CECE19846
+- acceptance test: B9312E8DE63D80861C88924E800CFE0771BB1EA7D0EE72DF2BC56E802CF6017B
+- Mirror test: 3099F0846BABF9953A9A34E65E760EBE223FD5D38DAC3B1CEE0C35C355258C75
 
 The acceptance additions independently reconstruct the complete populated
 evaluation receipt: scope, obligation/evaluation/revision, Control Pack,
@@ -55,9 +80,9 @@ owner query/evaluate, restart, Mirror, CLI, and SHADOW restore without using
 the owner digest or evaluator to construct the expected value.
 
 Determination coverage includes malformed and bad digest references,
-decision-before-evaluation, stale references after a real evidence/revision
-change, unchanged rejected requests, and the same consumed reference under a
-different action. The final consumed-reference negative case reaches the
+missing-reference and current-receipt chronology rejection, stale references
+after a real evidence/revision change, unchanged rejected requests, and the
+same consumed reference under a different action. The final consumed-reference negative case reaches the
 revision conflict before any mutation; a separate lower-level consumption
 branch is not fabricated because current revision invariants make it
 unreachable. Real CLI coverage proves authorize-offset success, exact retry as
@@ -65,8 +90,10 @@ DUPLICATE, and changed-binding conflict. Existing tamper-copy tests retain
 invalid authority/pack/evidence/projection coverage.
 
 Continuity restore now constructs and verifies in a private attempt directory,
-publishes with an atomic no-replace link, checks destination sidecars, and
-cleans only demonstrably owned attempt/published identities. Destination races,
+captures the private attempt identity before publication, publishes with an
+atomic no-replace link, verifies the published destination still has that
+identity, checks destination sidecars, and cleans only demonstrably owned
+attempt/published identities. Pre-link and post-link destination races,
 foreign -wal/-shm sidecars, genuine owned-failure cleanup, and normal
 SHADOW/TEST restore are covered. Cleanup failures are surfaced as
 continuity_restore_cleanup; they are not silently ignored.
@@ -76,7 +103,7 @@ tags, and verifies fail-closed store/package rejection, unchanged source bytes,
 and no destination. No authentic old-schema compatibility claim is made; these
 are tag-only rejection checks.
 
-## Final bounded measurement
+## Retained bounded measurement (pre-residual correction)
 
 Raw measurement logs:
 
@@ -109,11 +136,20 @@ Wrapper stdout SHA-256:
 Wrapper stderr was empty, SHA-256
 E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855.
 The measurement is a bounded local observation, not an SLA; native metrics
-remain pending and Queue wait/age are not applicable to this owner slice.
+remain pending and Queue wait/age are not applicable to this owner slice. It is
+source-bound to owner
+`68D1AF3DE2B5072FDD7A6D05DD297E2B5A95687E1453E80CCBFB49A2ADF694D9` before the
+residual correction, not the current owner, and was not rerun.
 
 ## Retained failures, warnings, and skips
 
-The final r8 run had no warnings or skips. Earlier correction attempts remain
+The residual r1 launch was rejected before child execution. Its raw stderr was:
+
+```text
+The filename, directory name, or volume label syntax is incorrect.
+```
+
+The corrected residual r2 run had no test warnings or skips. Earlier correction attempts remain
 raw evidence: the first 63-test attempt had two errors (hard-coded
 evaluation revision and an incorrectly indexed CLI argument); one guarded
 attempt stopped at 2521305088 < 2576980378 for the memory floor; the next
@@ -127,7 +163,8 @@ inputs remain in their existing raw locations and Git history.
 
 ## Open gates and nonclaims
 
-This accepted bounded slice does not close native verification-to-commit,
+This locally verified bounded slice is not Driver-accepted and does not close
+native verification-to-commit,
 native metrics, executable Lean linkage/refinement, Queue/Composition
 integration, independent audit, authenticated sources, custody, real PHI,
 live dispatch, payment movement, or production qualification. The active Lean
