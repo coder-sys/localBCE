@@ -342,3 +342,93 @@ first new compile stopped at minimum free `2143604736 < 2190433321`, peak privat
 empty child stdout/stderr, cleanup `PASS`, and mutex `RELEASED`; no retry was launched after host free
 memory fell to `1906061312`. The Engine's dirty proof-only files remain outside this checkout, and no
 theorem or axiom pass is claimed by the KAT or representative conformance evidence above.
+
+## Contained Engine application port (2026-09-20)
+
+The new read-only application port is `app/right_rail_financial_engine.py` with focused coverage in
+`tests/test_right_rail_financial_engine.py`. It accepts an immutable explicit release configuration,
+preflights the configured executable size/SHA-256 without environment reload, rebuilds the validated
+snapshot from the caller's already-active owner connection, encodes BLFIN02, calls only the existing
+`run_contained_verifier_stream` lane, and strictly validates/decodes BLFRES02 against that same
+snapshot. It does not open, close, commit, roll back, write, advance a revision, create a result
+ledger, or switch runtime authority. Failure errors contain stable codes only; child output and
+evidence are not included.
+
+The stream primitive change is limited to an optional keyword-only per-call memory cap. Its default
+remains exactly `4,500,000,000` bytes for existing callers; the financial release enforces and passes
+exactly `2,000,000,000` bytes and a finite timeout no greater than `30.0` seconds. The financial bounds remain distinct: canonical snapshot JSON is
+`4 * 1024 * 1024` bytes, BLFIN02 input is `8 * 1024 * 1024` bytes, and binary BLFRES02 output is
+`1 * 1024 * 1024` bytes. The fixed accepted synthetic artifact is
+`C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\lean-engine-20260913\semantic_kernel\lean\.lake\build\bin\blind_financial.exe`,
+`6001664` bytes, SHA-256
+`398E6D16922D23F71F52074F151553DCE75467723D4C624A8D7B71076FA24D03`; this remains a
+representative synthetic/nonactivating artifact, not production or formal authority.
+
+Final guarded focused evidence is in:
+
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-engine-port-20260920-r8.stdout.log`
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-engine-port-20260920-r8.stderr.log`
+
+Raw child result: `Ran 7 tests in 1.368s` / `OK`; the five new application-port tests and two
+stream-cap tests all passed. The real accepted-Engine test independently checked input length `2526`,
+input SHA-256 `C94A16DA6F2EA33C153F7E0890F95434ABD6F051C6F69FE7D7B1F39985E72344`, output length
+`552`, output SHA-256 `278D98485EBE968C88AC0E85BCCD4F69C5B7FF1A38F0B20681DD7E79C82A7598`,
+hand-derived cents/status values, unchanged owner database hash, and an active caller transaction.
+The wrapper reported child exit `0`, guard self-tests `exit7=7 exit0=0`, preflight free bytes
+`3886694400`, minimum free bytes `3820642304`, peak private bytes `28651520`,
+`CLEANUP=PASS`, and `MUTEX=RELEASED`. The stdout log is empty, `0` bytes, SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`; stderr is `1632` bytes,
+SHA-256 `C6E74E35AC00A539556BED24C68F034CDF11082D2D9DFFE1FAFABF48B943F597`.
+
+Earlier diagnostic attempts remain preserved and uncounted as final acceptance: r3 had an outer guard
+exit `0` but empty child logs from an argument-flattening invocation; r4 discovered 16 tests because
+the old semantic-adapter class was imported (8 old tests passed and its environment-dependent real
+conformance test failed), with total `1` failure and `5` errors; r5 ran 7 tests with `6` failures and
+`2` errors; r6 and r7 were successful intermediate child runs. The accepted r8 run was not replayed
+for this correction. Changed-file hashes after r9c are: `app/right_rail_financial_engine.py`
+`3E750452B18ACAD652C67C5071B3389F46431DD1F19706797C13B1CFF6100796`,
+`tests/test_right_rail_financial_engine.py`
+`2E30D2BBF3730513A2A008368620F55C9D7A04D4A14D01506430900248D7BDC4`,
+`app/minimal_clearance_verifier_process.py`
+`7039009D43298B34BFD4C1F1B6B5CDF8EC7BF41DD101033295FBA3E44B069523`, and
+`tests/test_minimal_clearance_verifier_process.py`
+`EAAF96E49A531ED13744CAAFAD007ABF391B95B930E1A80038BF55400DD968AC`. The frozen semantic adapter
+hash remains `23F6D1FBE59542F9F0B778D0D20236325CC3618017363F86C33BE38A0FC6618F`.
+
+## Bounded post-r8 correction (2026-09-20)
+
+The application release boundary is now finite `0 < timeout_seconds <= 30.0`; `30.0` is accepted and
+values above it fail before launch. `FinancialEngineRelease` is an explicit trusted owner/operator
+configuration. It is never reconstructed from the database, request, result, or environment; only
+the recorded `6001664`-byte artifact and SHA-256 pin above have accepted execution evidence. Other
+self-consistent pins are not automatically release-qualified. The caller retains its transaction,
+read snapshot, locks, and pending writes across verification/invocation; serialization, commit,
+rollback, and retry decisions remain with the sole owner.
+
+The affected regression keeps a disposable TEMP marker and owner-controlled savepoint on the same
+connection through both an accepted fake contained result and a containment failure. It captures the
+connection passed to snapshot reconstruction, proves the pending marker survives each return, and
+only then rolls back/releases each savepoint from the caller side. This remains a read-only,
+non-authoritative comparison port with `proofSuiteId=null`, `production_usable=false`, and no
+production callsite, schema change, or runtime authority switch.
+
+The accepted r8 invocation's factual limits remain unchanged: its child inserted the repository in
+`sys.path` but did not set an absolute inner child cwd, so the guard-default cwd deviation remains;
+its child/self-test/guard observations were child exit `0`, self-tests `7/0`, minimum free bytes
+`3820642304`, peak private bytes `28651520`, cleanup `PASS`, and mutex `RELEASED`. The command text
+contained `exit $LASTEXITCODE`, but only `r.output` was printed, so returned outer-exit metadata was
+not independently displayed. No r8 rerun is used for this correction.
+
+The affected guarded correction run is recorded in:
+
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-engine-port-20260920-r9c-affected.stdout.log`
+- `../pq-wide-seed-native-20260913/build-filter-native/guarded-command-financial-engine-port-20260920-r9c-affected.stderr.log`
+
+The child began by changing into the absolute repository checkout, then ran only the timeout-boundary
+and pending-savepoint tests: `Ran 2 tests in 0.462s` / `OK`. The wrapper reported child exit `0`,
+self-tests `exit7=7 exit0=0`, preflight free bytes `3790729216`, minimum free bytes `3738796032`,
+peak private bytes `23916544`, `CLEANUP=PASS`, and `MUTEX=RELEASED`. Stdout is empty, `0` bytes,
+SHA-256 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`; stderr is `497`
+bytes, SHA-256 `601C3CF241FB78EFE39C27171334D20D302D6971F810C83E5B553E46F42498B1`. The first
+affected attempt was blocked before preflight by the held mutex; the next retry reached the guard but
+failed before Python with the raw Windows filename-syntax error. Neither was counted as test evidence.

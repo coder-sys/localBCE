@@ -1689,6 +1689,7 @@ def run_contained_verifier_stream(
     *,
     workspace: Path,
     timeout_seconds: float,
+    job_memory_cap_bytes: int = ADMISSION_CAP_BYTES,
     expected_executable_size_bytes: int | None = None,
     expected_executable_sha256: bytes | None = None,
     stdout_cap_bytes: int = MAX_STDOUT_BYTES,
@@ -1701,6 +1702,11 @@ def run_contained_verifier_stream(
 
     if type(frame) not in (bytes, bytearray) or not 0 < len(frame) <= STREAM_MAX_FRAME_BYTES:
         raise VerifierProcessError("verifier_stream_frame_cap")
+    if (
+        type(job_memory_cap_bytes) is not int
+        or not 0 < job_memory_cap_bytes <= ADMISSION_CAP_BYTES
+    ):
+        raise VerifierProcessError("verifier_stream_memory_cap")
     _validate_executable_pin(
         expected_executable_size_bytes,
         expected_executable_sha256,
@@ -1770,7 +1776,7 @@ def run_contained_verifier_stream(
                     arguments,
                     workspace=workspace,
                     timeout_seconds=timeout_seconds,
-                    job_memory_cap_bytes=ADMISSION_CAP_BYTES,
+                    job_memory_cap_bytes=job_memory_cap_bytes,
                     _stdin_descriptor=read_owner.descriptor,
                     expected_executable_size_bytes=expected_executable_size_bytes,
                     expected_executable_sha256=expected_executable_sha256,

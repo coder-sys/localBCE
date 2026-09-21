@@ -585,7 +585,53 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             self.assertGreaterEqual(captured["_stdin_descriptor"], 0)
             self.assertEqual(captured["expected_executable_size_bytes"], len(payload))
             self.assertEqual(captured["expected_executable_sha256"], hashlib.sha256(payload).digest())
+            self.assertEqual(captured["job_memory_cap_bytes"], process.ADMISSION_CAP_BYTES)
             self.assertEqual(tuple(workspace.iterdir()), ())
+
+    def test_stream_forwards_explicit_memory_cap_and_rejects_out_of_range_caps(self):
+        captured: dict[str, object] = {}
+        executable = Path(sys.executable)
+        payload = executable.read_bytes()
+        contained = self._contained_result()
+
+        def runner(*args: object, **kwargs: object) -> process.ContainedVerifierResult:
+            captured.update(kwargs)
+            return contained
+
+        with tempfile.TemporaryDirectory() as root_name:
+            workspace = Path(root_name)
+            with patch.object(process, "run_contained_verifier", side_effect=runner):
+                result = process.run_contained_verifier_stream(
+                    executable,
+                    (),
+                    b"frame",
+                    workspace=workspace,
+                    timeout_seconds=1.0,
+                    job_memory_cap_bytes=2_000_000_000,
+                    expected_executable_size_bytes=len(payload),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                )
+            self.assertIs(result, contained)
+            self.assertEqual(captured["job_memory_cap_bytes"], 2_000_000_000)
+
+            for invalid in (True, 0, -1, process.ADMISSION_CAP_BYTES + 1):
+                with self.subTest(invalid=invalid):
+                    with patch.object(
+                        process,
+                        "run_contained_verifier",
+                        side_effect=AssertionError("invalid stream cap reached runner"),
+                    ):
+                        with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_memory_cap"):
+                            process.run_contained_verifier_stream(
+                                executable,
+                                (),
+                                b"frame",
+                                workspace=workspace,
+                                timeout_seconds=1.0,
+                                job_memory_cap_bytes=invalid,
+                                expected_executable_size_bytes=len(payload),
+                                expected_executable_sha256=hashlib.sha256(payload).digest(),
+                            )
 
     def test_stream_writer_start_failure_releases_known_open_descriptors(self):
         real_pipe = os.pipe
