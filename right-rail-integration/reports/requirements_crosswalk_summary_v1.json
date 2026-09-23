@@ -1,0 +1,3643 @@
+{
+  "authority_counts": {
+    "architecture_candidate": 2917,
+    "documentary_evidence": 2641,
+    "historical_instruction": 2096,
+    "status_evidence": 906,
+    "workspace_guide": 1029
+  },
+  "automatic_adoption": false,
+  "canonical_document_count": 442,
+  "catalog_sha256": "47301f1ed78d3366de3b947c9d8450c04a0e7359f87ac33a9be2b7728a162d2e",
+  "checkpoint_sha256": "d1db552ce723223b149dbdacd5f20487635f18ed82609a433543a82151ba7879",
+  "crosswalk_disposition_counts": {
+    "adapt_candidate": 3,
+    "adopt_safety_boundary": 163,
+    "reference_only": 2096,
+    "review_candidate": 7327
+  },
+  "crosswalk_flag_counts": {
+    "archived_instruction_not_authority": 2096,
+    "reinforces_no_direct_payment_authority": 6,
+    "reinforces_nonactivation": 186,
+    "reinforces_proof_non_dispositive": 22,
+    "reinforces_sensitive_data_boundary": 14,
+    "requires_current_proof_profile_review": 189,
+    "requires_postgresql_adaptation": 14
+  },
+  "document_extraction_status": [
+    {
+      "bytes": 2339,
+      "candidate_count": 2,
+      "path": "README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": null
+    },
+    {
+      "bytes": 509,
+      "candidate_count": 0,
+      "path": "long/f02993.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": null
+    },
+    {
+      "bytes": 3797,
+      "candidate_count": 5,
+      "path": "original/START_HERE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": null
+    },
+    {
+      "bytes": 224607,
+      "candidate_count": 110,
+      "extracted_text_sha256": "1d7756d817d31b7369d0d97ad8b60e100f5da57088a2d79bdd443efa020106c9",
+      "page_count": 24,
+      "path": "original/reference/RightRail_Architecture_and_Operating_Plan.pdf",
+      "status": "scanned",
+      "suffix": ".pdf",
+      "workspace_id": null
+    },
+    {
+      "bytes": 28965,
+      "candidate_count": 51,
+      "path": "original/reference/implementation-request.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": null
+    },
+    {
+      "bytes": 246949,
+      "candidate_count": 739,
+      "path": "root/AGENTS.reference.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": null
+    },
+    {
+      "bytes": 14950,
+      "candidate_count": 1,
+      "path": "root/work/extractor_bridge_section.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": null
+    },
+    {
+      "bytes": 45010,
+      "candidate_count": 1,
+      "path": "root/work/extractor_semantics_section.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": null
+    },
+    {
+      "bytes": 22126,
+      "candidate_count": 3,
+      "path": "root/work/extractor_source_section.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": null
+    },
+    {
+      "bytes": 824080,
+      "candidate_count": 0,
+      "path": "root/work/unruh-2017-398.pdf",
+      "status": "documentary_text_twin",
+      "suffix": ".pdf",
+      "workspace_id": null
+    },
+    {
+      "bytes": 195545,
+      "candidate_count": 166,
+      "path": "root/work/unruh-2017-398.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": null
+    },
+    {
+      "bytes": 1095,
+      "candidate_count": 1,
+      "path": "w/r001/native_etw_capability_report.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r001"
+    },
+    {
+      "bytes": 3086,
+      "candidate_count": 9,
+      "path": "w/r002/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r002"
+    },
+    {
+      "bytes": 8433,
+      "candidate_count": 25,
+      "path": "w/r002/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r002"
+    },
+    {
+      "bytes": 10387,
+      "candidate_count": 30,
+      "path": "w/r002/docs/IMPLEMENTATION_ROADMAP.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r002"
+    },
+    {
+      "bytes": 10327,
+      "candidate_count": 41,
+      "path": "w/r002/docs/LEAN_FORMAL_KERNEL.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r002"
+    },
+    {
+      "bytes": 9415,
+      "candidate_count": 33,
+      "path": "w/r002/docs/MIRROR_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r002"
+    },
+    {
+      "bytes": 38854,
+      "candidate_count": 136,
+      "path": "w/r002/docs/NATIVE_V3_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r002"
+    },
+    {
+      "bytes": 57858,
+      "candidate_count": 128,
+      "path": "w/r003/AGENTS.reference.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r003"
+    },
+    {
+      "bytes": 76015,
+      "candidate_count": 120,
+      "path": "w/r003/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r003"
+    },
+    {
+      "bytes": 6868,
+      "candidate_count": 19,
+      "path": "w/r003/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r003"
+    },
+    {
+      "bytes": 74361,
+      "candidate_count": 116,
+      "path": "w/r003/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r003"
+    },
+    {
+      "bytes": 15743,
+      "candidate_count": 67,
+      "path": "w/r003/docs/DATABASE_ZK_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r003"
+    },
+    {
+      "bytes": 9253,
+      "candidate_count": 27,
+      "path": "w/r003/docs/IMPLEMENTATION_ROADMAP.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r003"
+    },
+    {
+      "bytes": 41108,
+      "candidate_count": 146,
+      "path": "w/r003/docs/NATIVE_V3_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r003"
+    },
+    {
+      "bytes": 5001,
+      "candidate_count": 11,
+      "path": "w/r004/CHANGELOG.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r004"
+    },
+    {
+      "bytes": 594,
+      "candidate_count": 0,
+      "path": "w/r004/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r004"
+    },
+    {
+      "bytes": 13626,
+      "candidate_count": 15,
+      "path": "w/r004/formal/lean/ARITHMETIC_EVIDENCE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r004"
+    },
+    {
+      "bytes": 1902,
+      "candidate_count": 7,
+      "path": "w/r004/formal/lean/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r004"
+    },
+    {
+      "bytes": 12112,
+      "candidate_count": 23,
+      "path": "w/r004/tools/direct_mask_contract/CONTRACT.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r004"
+    },
+    {
+      "bytes": 101344,
+      "candidate_count": 207,
+      "path": "w/r004/tools/direct_mask_contract/CONTRACT_V2.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r004"
+    },
+    {
+      "bytes": 9982,
+      "candidate_count": 10,
+      "path": "w/r004/tools/direct_mask_contract/LOCAL_CERTIFICATE_PROOF.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r004"
+    },
+    {
+      "bytes": 14262,
+      "candidate_count": 21,
+      "path": "w/r004/tools/direct_mask_contract/PRIVACY_REDUCTION_PROOF.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r004"
+    },
+    {
+      "bytes": 1499,
+      "candidate_count": 0,
+      "path": "w/r004/tools/source_commitment/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r004"
+    },
+    {
+      "bytes": 15575,
+      "candidate_count": 50,
+      "path": "w/r006/AGENTS.reference.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 14889,
+      "candidate_count": 36,
+      "path": "w/r006/ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 27087,
+      "candidate_count": 77,
+      "path": "w/r006/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 5960,
+      "candidate_count": 13,
+      "path": "w/r006/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 36770,
+      "candidate_count": 81,
+      "path": "w/r006/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 19606,
+      "candidate_count": 78,
+      "path": "w/r006/docs/DATABASE_ZK_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 10419,
+      "candidate_count": 29,
+      "path": "w/r006/docs/IMPLEMENTATION_ROADMAP.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 10446,
+      "candidate_count": 41,
+      "path": "w/r006/docs/LEAN_FORMAL_KERNEL.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 14410,
+      "candidate_count": 52,
+      "path": "w/r006/docs/MIRROR_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 39846,
+      "candidate_count": 138,
+      "path": "w/r006/docs/NATIVE_V3_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 4557,
+      "candidate_count": 13,
+      "path": "w/r006/docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 5218,
+      "candidate_count": 13,
+      "path": "w/r006/docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 3650,
+      "candidate_count": 7,
+      "path": "w/r006/docs/PYTHON_DEPENDENCY_LOCKING.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 30595,
+      "candidate_count": 11,
+      "path": "w/r006/experiments/longfellow_v09_native_v3/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r006"
+    },
+    {
+      "bytes": 13506,
+      "candidate_count": 4,
+      "path": "w/r007/build/direct_mask_circuit-vs/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 3979,
+      "candidate_count": 2,
+      "path": "w/r007/build/direct_mask_circuit/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 13857,
+      "candidate_count": 6,
+      "path": "w/r007/build/direct_mask_native-vs/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 193084,
+      "candidate_count": 0,
+      "path": "w/r007/build/direct_mask_native_obj_disasm.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 193100,
+      "candidate_count": 0,
+      "path": "w/r007/build/direct_mask_native_obj_disasm_harden5.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 1530,
+      "candidate_count": 1,
+      "path": "w/r007/tools/direct_mask_circuit/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 3744,
+      "candidate_count": 7,
+      "path": "w/r007/tools/direct_mask_native/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 1402,
+      "candidate_count": 0,
+      "path": "w/r007/vendor/faest-ref/CHANGELOG.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 2327,
+      "candidate_count": 1,
+      "path": "w/r007/vendor/faest-ref/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 1127,
+      "candidate_count": 0,
+      "path": "w/r007/vendor/faest-ref/meson_options.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r007"
+    },
+    {
+      "bytes": 13909,
+      "candidate_count": 25,
+      "path": "w/r008/PQClosure/PRIMITIVE_DECISION.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r008"
+    },
+    {
+      "bytes": 118308,
+      "candidate_count": 259,
+      "path": "w/r008/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r008"
+    },
+    {
+      "bytes": 91824,
+      "candidate_count": 200,
+      "path": "w/r009/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r009"
+    },
+    {
+      "bytes": 819533,
+      "candidate_count": 0,
+      "path": "w/r012/dfms-2022-270.pdf",
+      "status": "documentary_evidence_only",
+      "suffix": ".pdf",
+      "workspace_id": "r012"
+    },
+    {
+      "bytes": 13813,
+      "candidate_count": 6,
+      "path": "w/r013/build/kernel-vs/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r013"
+    },
+    {
+      "bytes": 83,
+      "candidate_count": 0,
+      "path": "w/r013/build/kernel-vs/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r013"
+    },
+    {
+      "bytes": 1571,
+      "candidate_count": 1,
+      "path": "w/r013/tools/direct_mask_circuit/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r013"
+    },
+    {
+      "bytes": 1731,
+      "candidate_count": 4,
+      "path": "w/r013/tools/direct_mask_circuit/tag_module_build/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r013"
+    },
+    {
+      "bytes": 2520,
+      "candidate_count": 5,
+      "path": "w/r013/tools/direct_mask_kernel/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r013"
+    },
+    {
+      "bytes": 4147,
+      "candidate_count": 6,
+      "path": "w/r014/tools/direct_mask_adversarial/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r014"
+    },
+    {
+      "bytes": 4755,
+      "candidate_count": 7,
+      "path": "w/r014/tools/direct_mask_adversarial/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r014"
+    },
+    {
+      "bytes": 14219,
+      "candidate_count": 7,
+      "path": "w/r014/tools/direct_mask_adversarial/native-build/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r014"
+    },
+    {
+      "bytes": 4195,
+      "candidate_count": 5,
+      "path": "w/r015/tools/direct_mask_authenticated_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r015"
+    },
+    {
+      "bytes": 2123,
+      "candidate_count": 5,
+      "path": "w/r015/tools/direct_mask_kernel/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r015"
+    },
+    {
+      "bytes": 8385,
+      "candidate_count": 7,
+      "path": "w/r015/tools/direct_mask_source_auth/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r015"
+    },
+    {
+      "bytes": 1739,
+      "candidate_count": 7,
+      "path": "w/r015/tools/direct_mask_source_auth/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r015"
+    },
+    {
+      "bytes": 7421,
+      "candidate_count": 9,
+      "path": "w/r015/tools/direct_mask_wire/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r015"
+    },
+    {
+      "bytes": 4427,
+      "candidate_count": 11,
+      "path": "w/r015/tools/direct_mask_wire/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r015"
+    },
+    {
+      "bytes": 16699,
+      "candidate_count": 7,
+      "path": "w/r016/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r016"
+    },
+    {
+      "bytes": 203,
+      "candidate_count": 0,
+      "path": "w/r016/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r016"
+    },
+    {
+      "bytes": 24937,
+      "candidate_count": 81,
+      "path": "w/r017/AGENTS.reference.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r017"
+    },
+    {
+      "bytes": 16386,
+      "candidate_count": 40,
+      "path": "w/r017/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r017"
+    },
+    {
+      "bytes": 23174,
+      "candidate_count": 45,
+      "path": "w/r017/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r017"
+    },
+    {
+      "bytes": 8018,
+      "candidate_count": 4,
+      "path": "w/r017/build-complete-path/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r017"
+    },
+    {
+      "bytes": 54,
+      "candidate_count": 0,
+      "path": "w/r017/build-complete-path/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r017"
+    },
+    {
+      "bytes": 15982,
+      "candidate_count": 67,
+      "path": "w/r017/docs/DATABASE_ZK_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r017"
+    },
+    {
+      "bytes": 10528,
+      "candidate_count": 41,
+      "path": "w/r017/docs/LEAN_FORMAL_KERNEL.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r017"
+    },
+    {
+      "bytes": 42149,
+      "candidate_count": 147,
+      "path": "w/r017/docs/NATIVE_V3_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r017"
+    },
+    {
+      "bytes": 11904,
+      "candidate_count": 23,
+      "path": "w/r018/tools/direct_mask_contract/CONTRACT.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r018"
+    },
+    {
+      "bytes": 9868,
+      "candidate_count": 10,
+      "path": "w/r018/tools/direct_mask_contract/LOCAL_CERTIFICATE_PROOF.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r018"
+    },
+    {
+      "bytes": 14120,
+      "candidate_count": 21,
+      "path": "w/r018/tools/direct_mask_contract/PRIVACY_REDUCTION_PROOF.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r018"
+    },
+    {
+      "bytes": 93513,
+      "candidate_count": 196,
+      "path": "w/r019/tools/direct_mask_contract/CONTRACT_V2.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r019"
+    },
+    {
+      "bytes": 4952,
+      "candidate_count": 17,
+      "path": "w/r020/AGENTS.reference.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 2845,
+      "candidate_count": 10,
+      "path": "w/r020/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 64801,
+      "candidate_count": 65,
+      "path": "w/r020/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 18870,
+      "candidate_count": 8,
+      "path": "w/r020/build-filter-native/acceleration-correction/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 44,
+      "candidate_count": 0,
+      "path": "w/r020/build-filter-native/acceleration-correction/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14580,
+      "candidate_count": 7,
+      "path": "w/r020/build-filter-native/acceleration-correction/kernel-forced-r4/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14271,
+      "candidate_count": 4,
+      "path": "w/r020/build-filter-native/acceleration-correction/kernel-normal-r2/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14265,
+      "candidate_count": 4,
+      "path": "w/r020/build-filter-native/acceleration-correction/kernel-normal-r3/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14581,
+      "candidate_count": 7,
+      "path": "w/r020/build-filter-native/acceleration-correction/kernel-normal-r4/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14145,
+      "candidate_count": 4,
+      "path": "w/r020/build-filter-native/acceleration-correction/kernel-normal/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 18247,
+      "candidate_count": 7,
+      "path": "w/r020/build-filter-native/acceleration-correction/pipeline-r4/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14640,
+      "candidate_count": 4,
+      "path": "w/r020/build-filter-native/acceleration-correction/pipeline-tlog-r4/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14740,
+      "candidate_count": 4,
+      "path": "w/r020/build-filter-native/acceleration-correction/pipeline-tlog-r4b/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14617,
+      "candidate_count": 4,
+      "path": "w/r020/build-filter-native/acceleration-correction/pipeline-tlog-r4c/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14365,
+      "candidate_count": 6,
+      "path": "w/r020/build-filter-native/acceleration-correction/vole-r4/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 18599,
+      "candidate_count": 8,
+      "path": "w/r020/build-filter-native/fixture-correction/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 44,
+      "candidate_count": 0,
+      "path": "w/r020/build-filter-native/fixture-correction/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 18619,
+      "candidate_count": 8,
+      "path": "w/r020/build-filter-native/fixture/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 394,
+      "candidate_count": 0,
+      "path": "w/r020/build-filter-native/fixture/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 18002,
+      "candidate_count": 7,
+      "path": "w/r020/build-filter-native/p/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 4859,
+      "candidate_count": 2,
+      "path": "w/r020/build-filter-native/pipeline-ninja/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 18051,
+      "candidate_count": 7,
+      "path": "w/r020/build-filter-native/pipeline/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 18205,
+      "candidate_count": 7,
+      "path": "w/r020/build-filter-native/q/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 17920,
+      "candidate_count": 7,
+      "path": "w/r020/build-filter-native/r-tlog/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 397,
+      "candidate_count": 0,
+      "path": "w/r020/build-filter-native/r-tlog/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 17983,
+      "candidate_count": 7,
+      "path": "w/r020/build-filter-native/r/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 509,
+      "candidate_count": 0,
+      "path": "w/r020/build-filter-native/r/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 18013,
+      "candidate_count": 7,
+      "path": "w/r020/build-filter-native/tr4/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 393,
+      "candidate_count": 0,
+      "path": "w/r020/build-filter-native/tr4/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14228,
+      "candidate_count": 4,
+      "path": "w/r020/build-filter-native/v/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 14232,
+      "candidate_count": 6,
+      "path": "w/r020/build-filter-native/v2/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 4254,
+      "candidate_count": 5,
+      "path": "w/r020/tools/direct_mask_authenticated_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 1427,
+      "candidate_count": 5,
+      "path": "w/r020/tools/direct_mask_authenticated_proof/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 5182,
+      "candidate_count": 6,
+      "path": "w/r020/tools/direct_mask_fixture/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 3567,
+      "candidate_count": 7,
+      "path": "w/r020/tools/direct_mask_kernel/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 6715,
+      "candidate_count": 4,
+      "path": "w/r020/tools/direct_mask_pipeline/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 2319,
+      "candidate_count": 7,
+      "path": "w/r020/tools/direct_mask_pipeline/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 11882,
+      "candidate_count": 7,
+      "path": "w/r020/tools/direct_mask_source_auth/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 4835,
+      "candidate_count": 4,
+      "path": "w/r020/tools/direct_mask_source_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 2203,
+      "candidate_count": 3,
+      "path": "w/r020/tools/direct_mask_source_proof/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 1334,
+      "candidate_count": 0,
+      "path": "w/r020/tools/direct_mask_vole/CANDIDATE_PROVENANCE.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 3367,
+      "candidate_count": 4,
+      "path": "w/r020/tools/direct_mask_vole/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 4422,
+      "candidate_count": 11,
+      "path": "w/r020/tools/direct_mask_wire/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r020"
+    },
+    {
+      "bytes": 16120,
+      "candidate_count": 8,
+      "path": "w/r021/build-fixture/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r021"
+    },
+    {
+      "bytes": 92,
+      "candidate_count": 0,
+      "path": "w/r021/build-fixture/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r021"
+    },
+    {
+      "bytes": 4293,
+      "candidate_count": 5,
+      "path": "w/r021/tools/direct_mask_authenticated_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r021"
+    },
+    {
+      "bytes": 8428,
+      "candidate_count": 5,
+      "path": "w/r021/tools/direct_mask_fixture/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r021"
+    },
+    {
+      "bytes": 6661,
+      "candidate_count": 3,
+      "path": "w/r021/tools/direct_mask_pipeline/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r021"
+    },
+    {
+      "bytes": 2321,
+      "candidate_count": 7,
+      "path": "w/r021/tools/direct_mask_pipeline/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r021"
+    },
+    {
+      "bytes": 4882,
+      "candidate_count": 4,
+      "path": "w/r021/tools/direct_mask_source_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r021"
+    },
+    {
+      "bytes": 23095,
+      "candidate_count": 80,
+      "path": "w/r022/AGENTS.reference.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r022"
+    },
+    {
+      "bytes": 15405,
+      "candidate_count": 39,
+      "path": "w/r022/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r022"
+    },
+    {
+      "bytes": 22382,
+      "candidate_count": 46,
+      "path": "w/r022/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r022"
+    },
+    {
+      "bytes": 8032,
+      "candidate_count": 4,
+      "path": "w/r022/build-source-boundary/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r022"
+    },
+    {
+      "bytes": 55,
+      "candidate_count": 0,
+      "path": "w/r022/build-source-boundary/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r022"
+    },
+    {
+      "bytes": 477,
+      "candidate_count": 1,
+      "path": "w/r022/tools/direct_mask_complete_path/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r022"
+    },
+    {
+      "bytes": 86510,
+      "candidate_count": 122,
+      "path": "w/r023/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 7643,
+      "candidate_count": 19,
+      "path": "w/r023/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 102206,
+      "candidate_count": 121,
+      "path": "w/r023/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 13562,
+      "candidate_count": 4,
+      "path": "w/r023/build-performance/bf256_probe-build/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 13650,
+      "candidate_count": 4,
+      "path": "w/r023/build-performance/circuit-candidate/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 8090,
+      "candidate_count": 4,
+      "path": "w/r023/build-performance/complete-path-baseline/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 54,
+      "candidate_count": 0,
+      "path": "w/r023/build-performance/complete-path-baseline/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 8094,
+      "candidate_count": 4,
+      "path": "w/r023/build-performance/complete-path-candidate/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 105,
+      "candidate_count": 0,
+      "path": "w/r023/build-performance/complete-path-candidate/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 16609,
+      "candidate_count": 8,
+      "path": "w/r023/build-performance/fixture-candidate/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 44,
+      "candidate_count": 0,
+      "path": "w/r023/build-performance/fixture-candidate/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 14227,
+      "candidate_count": 7,
+      "path": "w/r023/build-performance/kernel-candidate/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 46,
+      "candidate_count": 0,
+      "path": "w/r023/build-performance/kernel-candidate/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 14135,
+      "candidate_count": 7,
+      "path": "w/r023/build-performance/kernel-portable/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 46,
+      "candidate_count": 0,
+      "path": "w/r023/build-performance/kernel-portable/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 18080,
+      "candidate_count": 7,
+      "path": "w/r023/build-performance/p/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 18199,
+      "candidate_count": 7,
+      "path": "w/r023/build-performance/pipeline-candidate/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 398,
+      "candidate_count": 0,
+      "path": "w/r023/build-performance/q-stale-drive-preserved-20260912/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 17972,
+      "candidate_count": 7,
+      "path": "w/r023/build-performance/q/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 13938,
+      "candidate_count": 5,
+      "path": "w/r023/build-performance/vcc-20260912/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 13591,
+      "candidate_count": 4,
+      "path": "w/r023/build-performance/vole-cache-candidate-20260912/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 14123,
+      "candidate_count": 5,
+      "path": "w/r023/build-performance/vole-candidate/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 4278,
+      "candidate_count": 5,
+      "path": "w/r023/tools/direct_mask_authenticated_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 2146,
+      "candidate_count": 2,
+      "path": "w/r023/tools/direct_mask_circuit/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 14628,
+      "candidate_count": 7,
+      "path": "w/r023/tools/direct_mask_fixture/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 2544,
+      "candidate_count": 8,
+      "path": "w/r023/tools/direct_mask_fixture/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 3573,
+      "candidate_count": 7,
+      "path": "w/r023/tools/direct_mask_kernel/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 6646,
+      "candidate_count": 3,
+      "path": "w/r023/tools/direct_mask_pipeline/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 10344,
+      "candidate_count": 9,
+      "path": "w/r023/tools/direct_mask_source_auth/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 4867,
+      "candidate_count": 4,
+      "path": "w/r023/tools/direct_mask_source_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 3253,
+      "candidate_count": 3,
+      "path": "w/r023/tools/direct_mask_vole/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 7854,
+      "candidate_count": 10,
+      "path": "w/r023/tools/direct_mask_wire/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r023"
+    },
+    {
+      "bytes": 17787,
+      "candidate_count": 7,
+      "path": "w/r024/build-pipeline/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r024"
+    },
+    {
+      "bytes": 6538,
+      "candidate_count": 3,
+      "path": "w/r024/tools/direct_mask_pipeline/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r024"
+    },
+    {
+      "bytes": 8204,
+      "candidate_count": 7,
+      "path": "w/r025/tools/direct_mask_source_auth/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 366,
+      "candidate_count": 1,
+      "path": "w/r025/vendor/faest-ref/catch2/.conan/test_package/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 740,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/.github/ISSUE_TEMPLATE/bug_report.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 322,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/.github/ISSUE_TEMPLATE/feature_request.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 1094,
+      "candidate_count": 2,
+      "path": "w/r025/vendor/faest-ref/catch2/.github/pull_request_template.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 7185,
+      "candidate_count": 6,
+      "path": "w/r025/vendor/faest-ref/catch2/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 3261,
+      "candidate_count": 1,
+      "path": "w/r025/vendor/faest-ref/catch2/CODE_OF_CONDUCT.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 1361,
+      "candidate_count": 2,
+      "path": "w/r025/vendor/faest-ref/catch2/LICENSE.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 4264,
+      "candidate_count": 1,
+      "path": "w/r025/vendor/faest-ref/catch2/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 705,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/SECURITY.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 1747,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/Readme.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 7016,
+      "candidate_count": 5,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/assertions.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 11577,
+      "candidate_count": 8,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/benchmarks.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 5367,
+      "candidate_count": 1,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/ci-and-misc.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 14959,
+      "candidate_count": 14,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/cmake-integration.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 27963,
+      "candidate_count": 16,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/command-line.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 593,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/commercial-users.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 6780,
+      "candidate_count": 8,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/comparing-floating-point-numbers.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 13766,
+      "candidate_count": 17,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/configuration.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 13807,
+      "candidate_count": 13,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/contributing.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 1818,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/deprecations.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 1538,
+      "candidate_count": 1,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/event-listeners.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 4078,
+      "candidate_count": 7,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/faq.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 9495,
+      "candidate_count": 3,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/generators.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 6485,
+      "candidate_count": 9,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/limitations.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 2779,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/list-of-examples.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 5113,
+      "candidate_count": 5,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/logging.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 16503,
+      "candidate_count": 9,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/matchers.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 4368,
+      "candidate_count": 4,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/migrate-v2-to-v3.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 7103,
+      "candidate_count": 15,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/opensource-users.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 4347,
+      "candidate_count": 3,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/other-macros.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 4269,
+      "candidate_count": 2,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/own-main.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 81321,
+      "candidate_count": 54,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/release-notes.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 2888,
+      "candidate_count": 3,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/release-process.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 6059,
+      "candidate_count": 4,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/reporter-events.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 8628,
+      "candidate_count": 3,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/reporters.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 3946,
+      "candidate_count": 4,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/skipping-passing-failing.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 15960,
+      "candidate_count": 13,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/test-cases-and-sections.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 5830,
+      "candidate_count": 2,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/test-fixtures.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 4915,
+      "candidate_count": 2,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/tostring.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 8457,
+      "candidate_count": 4,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/tutorial.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 4263,
+      "candidate_count": 2,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/usage-tips.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 3051,
+      "candidate_count": 1,
+      "path": "w/r025/vendor/faest-ref/catch2/docs/why-catch.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 1622,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/examples/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 773,
+      "candidate_count": 1,
+      "path": "w/r025/vendor/faest-ref/catch2/fuzzing/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 84,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/meson_options.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 21097,
+      "candidate_count": 1,
+      "path": "w/r025/vendor/faest-ref/catch2/src/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 26592,
+      "candidate_count": 11,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 20693,
+      "candidate_count": 9,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/ExtraTests/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 634,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/ExtraTests/ToDo.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 9339,
+      "candidate_count": 6,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/automake.std.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 25715,
+      "candidate_count": 15,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/automake.sw.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 25475,
+      "candidate_count": 15,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/automake.sw.multi.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 225649,
+      "candidate_count": 17,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/compact.sw.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 225409,
+      "candidate_count": 17,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/compact.sw.multi.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 57849,
+      "candidate_count": 6,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/console.std.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 625383,
+      "candidate_count": 67,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/console.sw.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 625143,
+      "candidate_count": 67,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/console.sw.multi.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 34016,
+      "candidate_count": 1,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/console.swa4.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 240,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/default.sw.multi.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 150798,
+      "candidate_count": 40,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/junit.sw.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 150777,
+      "candidate_count": 40,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/junit.sw.multi.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 120789,
+      "candidate_count": 40,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/sonarqube.sw.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 120768,
+      "candidate_count": 40,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/sonarqube.sw.multi.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 253988,
+      "candidate_count": 58,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/tap.sw.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 253748,
+      "candidate_count": 58,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/tap.sw.multi.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 126665,
+      "candidate_count": 34,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/teamcity.sw.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 126644,
+      "candidate_count": 34,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/teamcity.sw.multi.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 881889,
+      "candidate_count": 62,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/xml.sw.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 881868,
+      "candidate_count": 62,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/SelfTest/Baselines/xml.sw.multi.approved.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 311,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/tests/TestScripts/DiscoverTests/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 427,
+      "candidate_count": 0,
+      "path": "w/r025/vendor/faest-ref/catch2/tools/misc/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r025"
+    },
+    {
+      "bytes": 14300,
+      "candidate_count": 7,
+      "path": "w/r026/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r026"
+    },
+    {
+      "bytes": 16383,
+      "candidate_count": 7,
+      "path": "w/r027/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r027"
+    },
+    {
+      "bytes": 103,
+      "candidate_count": 0,
+      "path": "w/r027/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r027"
+    },
+    {
+      "bytes": 4774,
+      "candidate_count": 4,
+      "path": "w/r028/tools/direct_mask_source_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r028"
+    },
+    {
+      "bytes": 17207,
+      "candidate_count": 7,
+      "path": "w/r029/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r029"
+    },
+    {
+      "bytes": 101,
+      "candidate_count": 0,
+      "path": "w/r029/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r029"
+    },
+    {
+      "bytes": 18998,
+      "candidate_count": 63,
+      "path": "w/r030/AGENTS.reference.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r030"
+    },
+    {
+      "bytes": 11816,
+      "candidate_count": 30,
+      "path": "w/r030/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r030"
+    },
+    {
+      "bytes": 19513,
+      "candidate_count": 38,
+      "path": "w/r030/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r030"
+    },
+    {
+      "bytes": 14504,
+      "candidate_count": 5,
+      "path": "w/r031/build/accepted_direct_mask_kernel/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r031"
+    },
+    {
+      "bytes": 14384,
+      "candidate_count": 4,
+      "path": "w/r031/build/direct_mask_vole/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r031"
+    },
+    {
+      "bytes": 2687,
+      "candidate_count": 2,
+      "path": "w/r031/tools/direct_mask_vole/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r031"
+    },
+    {
+      "bytes": 14054,
+      "candidate_count": 6,
+      "path": "w/r032/build-wire/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r032"
+    },
+    {
+      "bytes": 114,
+      "candidate_count": 0,
+      "path": "w/r032/build-wire/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r032"
+    },
+    {
+      "bytes": 6899,
+      "candidate_count": 9,
+      "path": "w/r032/tools/direct_mask_wire/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r032"
+    },
+    {
+      "bytes": 8663,
+      "candidate_count": 24,
+      "path": "w/r032/tools/direct_mask_wire/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r032"
+    },
+    {
+      "bytes": 689,
+      "candidate_count": 0,
+      "path": "w/r033/tools/direct_mask_circuit/range_module_build/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r033"
+    },
+    {
+      "bytes": 19892,
+      "candidate_count": 38,
+      "path": "w/r037/PQParallel/PRIMITIVE_ENTROPY_DECISION.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r037"
+    },
+    {
+      "bytes": 1051286,
+      "candidate_count": 0,
+      "path": "w/r038/katsumata-2021-927.pdf",
+      "status": "documentary_evidence_only",
+      "suffix": ".pdf",
+      "workspace_id": "r038"
+    },
+    {
+      "bytes": 2167,
+      "candidate_count": 1,
+      "path": "w/r038/straight-line-LNP-scripts/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r038"
+    },
+    {
+      "bytes": 13661,
+      "candidate_count": 25,
+      "path": "w/r040/PQClosure/PRIMITIVE_DECISION.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r040"
+    },
+    {
+      "bytes": 19501,
+      "candidate_count": 38,
+      "path": "w/r041/PQParallel/PRIMITIVE_ENTROPY_DECISION.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r041"
+    },
+    {
+      "bytes": 101843,
+      "candidate_count": 209,
+      "path": "w/r042/tools/direct_mask_contract/CONTRACT_V2.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r042"
+    },
+    {
+      "bytes": 14738,
+      "candidate_count": 22,
+      "path": "w/r042/tools/direct_mask_contract/PRIVACY_REDUCTION_PROOF.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r042"
+    },
+    {
+      "bytes": 13662,
+      "candidate_count": 25,
+      "path": "w/r043/PQClosure/PRIMITIVE_DECISION.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r043"
+    },
+    {
+      "bytes": 92718,
+      "candidate_count": 202,
+      "path": "w/r043/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r043"
+    },
+    {
+      "bytes": 505,
+      "candidate_count": 0,
+      "path": "w/r049/tools/shake_source_control/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r049"
+    },
+    {
+      "bytes": 15573,
+      "candidate_count": 38,
+      "path": "w/r051/ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r051"
+    },
+    {
+      "bytes": 76725,
+      "candidate_count": 122,
+      "path": "w/r051/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r051"
+    },
+    {
+      "bytes": 7859,
+      "candidate_count": 21,
+      "path": "w/r051/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r051"
+    },
+    {
+      "bytes": 75172,
+      "candidate_count": 120,
+      "path": "w/r051/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r051"
+    },
+    {
+      "bytes": 7956,
+      "candidate_count": 4,
+      "path": "w/r051/build-performance/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r051"
+    },
+    {
+      "bytes": 54,
+      "candidate_count": 0,
+      "path": "w/r051/build-performance/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r051"
+    },
+    {
+      "bytes": 15828,
+      "candidate_count": 67,
+      "path": "w/r051/docs/DATABASE_ZK_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r051"
+    },
+    {
+      "bytes": 41230,
+      "candidate_count": 146,
+      "path": "w/r051/docs/NATIVE_V3_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r051"
+    },
+    {
+      "bytes": 13685,
+      "candidate_count": 4,
+      "path": "w/r052/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r052"
+    },
+    {
+      "bytes": 90,
+      "candidate_count": 0,
+      "path": "w/r052/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r052"
+    },
+    {
+      "bytes": 13568,
+      "candidate_count": 4,
+      "path": "w/r053/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r053"
+    },
+    {
+      "bytes": 13672,
+      "candidate_count": 4,
+      "path": "w/r054/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r054"
+    },
+    {
+      "bytes": 90,
+      "candidate_count": 0,
+      "path": "w/r054/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r054"
+    },
+    {
+      "bytes": 13708,
+      "candidate_count": 4,
+      "path": "w/r055/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r055"
+    },
+    {
+      "bytes": 90,
+      "candidate_count": 0,
+      "path": "w/r055/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r055"
+    },
+    {
+      "bytes": 4125,
+      "candidate_count": 1,
+      "path": "w/r057/tools/source_commitment/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r057"
+    },
+    {
+      "bytes": 4864,
+      "candidate_count": 2,
+      "path": "w/r057/tools/source_request_lifecycle/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r057"
+    },
+    {
+      "bytes": 2554,
+      "candidate_count": 8,
+      "path": "w/r057/tools/source_request_lifecycle/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r057"
+    },
+    {
+      "bytes": 16056,
+      "candidate_count": 4,
+      "path": "w/r058/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r058"
+    },
+    {
+      "bytes": 107,
+      "candidate_count": 0,
+      "path": "w/r058/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r058"
+    },
+    {
+      "bytes": 16007,
+      "candidate_count": 4,
+      "path": "w/r059/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r059"
+    },
+    {
+      "bytes": 104,
+      "candidate_count": 0,
+      "path": "w/r059/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r059"
+    },
+    {
+      "bytes": 16043,
+      "candidate_count": 4,
+      "path": "w/r060/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r060"
+    },
+    {
+      "bytes": 104,
+      "candidate_count": 0,
+      "path": "w/r060/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r060"
+    },
+    {
+      "bytes": 14452,
+      "candidate_count": 3,
+      "path": "w/r061/build/source_commitment/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r061"
+    },
+    {
+      "bytes": 90,
+      "candidate_count": 0,
+      "path": "w/r061/build/source_commitment/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r061"
+    },
+    {
+      "bytes": 2729,
+      "candidate_count": 1,
+      "path": "w/r061/tools/source_commitment/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r061"
+    },
+    {
+      "bytes": 2697,
+      "candidate_count": 3,
+      "path": "w/r063/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1187,
+      "candidate_count": 2,
+      "path": "w/r063/UPSTREAM_PIN.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 14419,
+      "candidate_count": 3,
+      "path": "w/r063/build-candidate/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 72,
+      "candidate_count": 0,
+      "path": "w/r063/build-candidate/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 3725,
+      "candidate_count": 1,
+      "path": "w/r063/vendor/faest-avx/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 592,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/faest-avx/cross-files/aarch64-linux-android35.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 404,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/faest-avx/cross-files/aarch64-linux-gnu.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1205,
+      "candidate_count": 2,
+      "path": "w/r063/vendor/faest-ref/SECURITY.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 61163,
+      "candidate_count": 29,
+      "path": "w/r063/vendor/libtalos_voleith/CHANGELOG.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 21300,
+      "candidate_count": 20,
+      "path": "w/r063/vendor/libtalos_voleith/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 38712,
+      "candidate_count": 23,
+      "path": "w/r063/vendor/libtalos_voleith/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 60026,
+      "candidate_count": 52,
+      "path": "w/r063/vendor/libtalos_voleith/docs/CIRCUIT_DESIGN.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 90693,
+      "candidate_count": 77,
+      "path": "w/r063/vendor/libtalos_voleith/docs/DESIGN.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 95856,
+      "candidate_count": 160,
+      "path": "w/r063/vendor/libtalos_voleith/docs/ERASURE_CODES_DESIGN.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 47346,
+      "candidate_count": 44,
+      "path": "w/r063/vendor/libtalos_voleith/docs/RING_SIGNATURES_DESIGN.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 16701,
+      "candidate_count": 6,
+      "path": "w/r063/vendor/libtalos_voleith/docs/dudect-runs/aarch64-darwin-m1-2026-05-26.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 19869,
+      "candidate_count": 3,
+      "path": "w/r063/vendor/libtalos_voleith/docs/dudect-runs/x86_64-2026-05-26.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 4518,
+      "candidate_count": 1,
+      "path": "w/r063/vendor/libtalos_voleith/docs/dudect-runs/x86_64-debian13-clang-2026-05-26.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 10475,
+      "candidate_count": 3,
+      "path": "w/r063/vendor/libtalos_voleith/docs/dudect-runs/x86_64-gracemont-2026-07-09.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 81800,
+      "candidate_count": 130,
+      "path": "w/r063/vendor/libtalos_voleith/docs/specs/SHIPSHAPE_SPEC.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 2679,
+      "candidate_count": 1,
+      "path": "w/r063/vendor/libtalos_voleith/examples/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 2171,
+      "candidate_count": 3,
+      "path": "w/r063/vendor/libtalos_voleith/fuzz/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 6467,
+      "candidate_count": 9,
+      "path": "w/r063/vendor/libtalos_voleith/fuzz/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 30,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/fuzz/corpus/bristol/inv.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 34,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/fuzz/corpus/bristol/xor.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 15851,
+      "candidate_count": 7,
+      "path": "w/r063/vendor/libtalos_voleith/tests/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 2378686,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/KAT_MCT/LongMsgKAT_256.txt",
+      "status": "too_large",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 2411518,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/KAT_MCT/LongMsgKAT_512.txt",
+      "status": "too_large",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 8452,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/KAT_MCT/MonteCarlo_256.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 14852,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/KAT_MCT/MonteCarlo_512.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 715276,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/KAT_MCT/ShortMsgKAT_256.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 846348,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/KAT_MCT/ShortMsgKAT_512.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1629,
+      "candidate_count": 1,
+      "path": "w/r063/vendor/libtalos_voleith/tests/data/bristol/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 943548,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/data/bristol/aes_128.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1317612,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/data/bristol/aes_256.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 695201,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/data/bristol/mult2_64.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 3575,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/data/bristol/neg64.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1508,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith/tests/data/shipshape/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 4867,
+      "candidate_count": 3,
+      "path": "w/r063/vendor/libtalos_voleith/tools/bench_fs_hash/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 2564,
+      "candidate_count": 5,
+      "path": "w/r063/vendor/libtalos_voleith/tools/dudect/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1721,
+      "candidate_count": 1,
+      "path": "w/r063/vendor/libtalos_voleith/tools/faest-ref-diagnostics/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 6041,
+      "candidate_count": 7,
+      "path": "w/r063/vendor/libtalos_voleith/tools/gen_alpha16/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 3942,
+      "candidate_count": 8,
+      "path": "w/r063/vendor/libtalos_voleith/tools/gen_rlnc_kat/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 5097,
+      "candidate_count": 8,
+      "path": "w/r063/vendor/libtalos_voleith/tools/gen_rs_kat/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1299,
+      "candidate_count": 2,
+      "path": "w/r063/vendor/libtalos_voleith/tools/shipshape_registry_freeze/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 55097,
+      "candidate_count": 25,
+      "path": "w/r063/vendor/libtalos_voleith_v19/CHANGELOG.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 15754,
+      "candidate_count": 11,
+      "path": "w/r063/vendor/libtalos_voleith_v19/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 35673,
+      "candidate_count": 19,
+      "path": "w/r063/vendor/libtalos_voleith_v19/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 15111,
+      "candidate_count": 5,
+      "path": "w/r063/vendor/libtalos_voleith_v19/build-candidate/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 52888,
+      "candidate_count": 48,
+      "path": "w/r063/vendor/libtalos_voleith_v19/docs/CIRCUIT_DESIGN.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 82260,
+      "candidate_count": 72,
+      "path": "w/r063/vendor/libtalos_voleith_v19/docs/DESIGN.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 32067,
+      "candidate_count": 27,
+      "path": "w/r063/vendor/libtalos_voleith_v19/docs/RING_SIGNATURES_DESIGN.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 11106,
+      "candidate_count": 2,
+      "path": "w/r063/vendor/libtalos_voleith_v19/docs/dudect-runs/aarch64-darwin-m1-2026-05-26.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 14594,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith_v19/docs/dudect-runs/x86_64-2026-05-26.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 3740,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith_v19/docs/dudect-runs/x86_64-debian13-clang-2026-05-26.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 5315,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith_v19/docs/dudect-runs/x86_64-gracemont-2026-07-09.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 79523,
+      "candidate_count": 125,
+      "path": "w/r063/vendor/libtalos_voleith_v19/docs/specs/SHIPSHAPE_SPEC.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 2600,
+      "candidate_count": 1,
+      "path": "w/r063/vendor/libtalos_voleith_v19/examples/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 11868,
+      "candidate_count": 2,
+      "path": "w/r063/vendor/libtalos_voleith_v19/tests/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1177,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith_v19/third_party/faest-ref/CHANGELOG.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 584,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith_v19/third_party/faest-ref/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1103,
+      "candidate_count": 0,
+      "path": "w/r063/vendor/libtalos_voleith_v19/third_party/faest-ref/meson_options.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 4452,
+      "candidate_count": 2,
+      "path": "w/r063/vendor/libtalos_voleith_v19/tools/bench_fs_hash/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 1880,
+      "candidate_count": 3,
+      "path": "w/r063/vendor/libtalos_voleith_v19/tools/dudect/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r063"
+    },
+    {
+      "bytes": 10799,
+      "candidate_count": 31,
+      "path": "w/r064/AGENTS.reference.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 11141,
+      "candidate_count": 12,
+      "path": "w/r064/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 94773,
+      "candidate_count": 82,
+      "path": "w/r064/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 18504,
+      "candidate_count": 8,
+      "path": "w/r064/build-filter-native/acceleration-correction/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 44,
+      "candidate_count": 0,
+      "path": "w/r064/build-filter-native/acceleration-correction/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 17731,
+      "candidate_count": 7,
+      "path": "w/r064/build-filter-native/pipeline-v3/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 392,
+      "candidate_count": 0,
+      "path": "w/r064/build-filter-native/pipeline-v3/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 13983,
+      "candidate_count": 6,
+      "path": "w/r064/build-filter-native/vole/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 14244,
+      "candidate_count": 6,
+      "path": "w/r064/build-filter-native/wire-v3-command/CMakeCache.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 114,
+      "candidate_count": 0,
+      "path": "w/r064/build-filter-native/wire-v3-command/Testing/Temporary/CTestCostData.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 4263,
+      "candidate_count": 5,
+      "path": "w/r064/tools/direct_mask_authenticated_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 1431,
+      "candidate_count": 5,
+      "path": "w/r064/tools/direct_mask_authenticated_proof/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 5301,
+      "candidate_count": 6,
+      "path": "w/r064/tools/direct_mask_fixture/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 2543,
+      "candidate_count": 8,
+      "path": "w/r064/tools/direct_mask_fixture/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 3615,
+      "candidate_count": 7,
+      "path": "w/r064/tools/direct_mask_kernel/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 6727,
+      "candidate_count": 4,
+      "path": "w/r064/tools/direct_mask_pipeline/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 2303,
+      "candidate_count": 7,
+      "path": "w/r064/tools/direct_mask_pipeline/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 12032,
+      "candidate_count": 9,
+      "path": "w/r064/tools/direct_mask_source_auth/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 4844,
+      "candidate_count": 4,
+      "path": "w/r064/tools/direct_mask_source_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 2201,
+      "candidate_count": 3,
+      "path": "w/r064/tools/direct_mask_source_proof/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 1364,
+      "candidate_count": 0,
+      "path": "w/r064/tools/direct_mask_vole/CANDIDATE_PROVENANCE.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 3457,
+      "candidate_count": 4,
+      "path": "w/r064/tools/direct_mask_vole/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 4451,
+      "candidate_count": 11,
+      "path": "w/r064/tools/direct_mask_wire/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r064"
+    },
+    {
+      "bytes": 61334,
+      "candidate_count": 134,
+      "path": "w/r067/AGENTS.reference.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 18320,
+      "candidate_count": 41,
+      "path": "w/r067/ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 81111,
+      "candidate_count": 129,
+      "path": "w/r067/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 9777,
+      "candidate_count": 25,
+      "path": "w/r067/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 77721,
+      "candidate_count": 123,
+      "path": "w/r067/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 17038,
+      "candidate_count": 73,
+      "path": "w/r067/docs/DATABASE_ZK_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 14894,
+      "candidate_count": 46,
+      "path": "w/r067/docs/DESIGN_IDEOLOGY.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 12107,
+      "candidate_count": 33,
+      "path": "w/r067/docs/IMPLEMENTATION_ROADMAP.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 10444,
+      "candidate_count": 41,
+      "path": "w/r067/docs/LEAN_FORMAL_KERNEL.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 10622,
+      "candidate_count": 35,
+      "path": "w/r067/docs/MIRROR_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 42259,
+      "candidate_count": 151,
+      "path": "w/r067/docs/NATIVE_V3_ARCHITECTURE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 3624,
+      "candidate_count": 7,
+      "path": "w/r067/docs/PYTHON_DEPENDENCY_LOCKING.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 1582,
+      "candidate_count": 3,
+      "path": "w/r067/docs/RARC_PENDING_DECISION.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 1261,
+      "candidate_count": 2,
+      "path": "w/r067/docs/REJECTED_ARCHITECTURES.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 26456,
+      "candidate_count": 10,
+      "path": "w/r067/experiments/longfellow_v09_native_v3/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 2206,
+      "candidate_count": 9,
+      "path": "w/r067/ops/DEPLOYMENT_RUNBOOK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 1827,
+      "candidate_count": 9,
+      "path": "w/r067/ops/KEY_CUSTODY_AND_ROTATION.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 1526,
+      "candidate_count": 7,
+      "path": "w/r067/ops/MONITORING_AUDIT_EVENTS.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 1555,
+      "candidate_count": 4,
+      "path": "w/r067/ops/PRODUCTION_CONFIG_CHECKLIST.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 1372,
+      "candidate_count": 2,
+      "path": "w/r067/ops/RISK_REGISTER.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 208,
+      "candidate_count": 2,
+      "path": "w/r067/requirements-dev.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 207,
+      "candidate_count": 2,
+      "path": "w/r067/requirements.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 4186,
+      "candidate_count": 5,
+      "path": "w/r067/tools/direct_mask_authenticated_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 1403,
+      "candidate_count": 5,
+      "path": "w/r067/tools/direct_mask_authenticated_proof/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 2114,
+      "candidate_count": 2,
+      "path": "w/r067/tools/direct_mask_circuit/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 1685,
+      "candidate_count": 4,
+      "path": "w/r067/tools/direct_mask_circuit/tag_module_build/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 856,
+      "candidate_count": 1,
+      "path": "w/r067/tools/direct_mask_complete_path/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 14471,
+      "candidate_count": 7,
+      "path": "w/r067/tools/direct_mask_fixture/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 2496,
+      "candidate_count": 8,
+      "path": "w/r067/tools/direct_mask_fixture/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 3548,
+      "candidate_count": 7,
+      "path": "w/r067/tools/direct_mask_kernel/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 6529,
+      "candidate_count": 3,
+      "path": "w/r067/tools/direct_mask_pipeline/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 2280,
+      "candidate_count": 7,
+      "path": "w/r067/tools/direct_mask_pipeline/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 10189,
+      "candidate_count": 9,
+      "path": "w/r067/tools/direct_mask_source_auth/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 1705,
+      "candidate_count": 7,
+      "path": "w/r067/tools/direct_mask_source_auth/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 4765,
+      "candidate_count": 4,
+      "path": "w/r067/tools/direct_mask_source_proof/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 2168,
+      "candidate_count": 3,
+      "path": "w/r067/tools/direct_mask_source_proof/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 3195,
+      "candidate_count": 3,
+      "path": "w/r067/tools/direct_mask_vole/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 7706,
+      "candidate_count": 10,
+      "path": "w/r067/tools/direct_mask_wire/CMakeLists.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 4336,
+      "candidate_count": 11,
+      "path": "w/r067/tools/direct_mask_wire/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r067"
+    },
+    {
+      "bytes": 6942,
+      "candidate_count": 11,
+      "path": "w/r068/CONTRACT.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r068"
+    },
+    {
+      "bytes": 2444,
+      "candidate_count": 8,
+      "path": "w/r068/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r068"
+    },
+    {
+      "bytes": 6977,
+      "candidate_count": 11,
+      "path": "w/r068/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r068"
+    },
+    {
+      "bytes": 2284,
+      "candidate_count": 1,
+      "path": "w/r068/final-deterministic-tests.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r068"
+    },
+    {
+      "bytes": 621,
+      "candidate_count": 1,
+      "path": "w/r068/live-probe/packet.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r068"
+    },
+    {
+      "bytes": 74,
+      "candidate_count": 1,
+      "path": "w/r068/live-probe/repo/README.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r068"
+    },
+    {
+      "bytes": 673,
+      "candidate_count": 2,
+      "path": "w/r068/live-probe/state/artifacts/luna-live-probe/implement/prompt.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r068"
+    },
+    {
+      "bytes": 4061,
+      "candidate_count": 4,
+      "path": "w/r068/live-probe/state/artifacts/luna-live-probe/implement/stderr.txt",
+      "status": "scanned",
+      "suffix": ".txt",
+      "workspace_id": "r068"
+    },
+    {
+      "bytes": 4667,
+      "candidate_count": 12,
+      "path": "w/r069/CURRENT_TASK.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r069"
+    },
+    {
+      "bytes": 10050,
+      "candidate_count": 28,
+      "path": "w/r069/STATE.md",
+      "status": "scanned",
+      "suffix": ".md",
+      "workspace_id": "r069"
+    }
+  ],
+  "document_status_counts": {
+    "documentary_evidence_only": 2,
+    "documentary_text_twin": 1,
+    "scanned": 437,
+    "too_large": 2
+  },
+  "domain_counts": {
+    "build_and_release": 816,
+    "general": 5411,
+    "governance_and_operations": 603,
+    "privacy_and_phi": 232,
+    "proof_and_crypto": 1107,
+    "rules_and_policy": 319,
+    "settlement_and_payment": 293,
+    "source_and_evidence": 1542,
+    "state_and_database": 957
+  },
+  "execution_allowed": false,
+  "human_reviewed_count": 0,
+  "requirement_candidate_count": 9589,
+  "requirements_sha256": "2b939941df496df73b0922f2cb76b5a222e80e0b62d4f0f7c05078a73ee2e2dd",
+  "runtime_eligible_count": 0,
+  "schema_version": "localbce-rightrail-requirements-crosswalk-summary-v1",
+  "source_bundle": "RightRail-Agent-20260919",
+  "workspace_candidate_counts": {
+    "r001": 1,
+    "r002": 274,
+    "r003": 623,
+    "r004": 294,
+    "r006": 639,
+    "r007": 21,
+    "r008": 284,
+    "r009": 200,
+    "r013": 16,
+    "r014": 20,
+    "r015": 44,
+    "r016": 7,
+    "r017": 425,
+    "r018": 54,
+    "r019": 196,
+    "r020": 284,
+    "r021": 32,
+    "r022": 170,
+    "r023": 393,
+    "r024": 10,
+    "r025": 953,
+    "r026": 7,
+    "r027": 7,
+    "r028": 4,
+    "r029": 7,
+    "r030": 131,
+    "r031": 11,
+    "r032": 39,
+    "r037": 38,
+    "r038": 1,
+    "r040": 25,
+    "r041": 38,
+    "r042": 231,
+    "r043": 227,
+    "r051": 518,
+    "r052": 4,
+    "r053": 4,
+    "r054": 4,
+    "r055": 4,
+    "r057": 11,
+    "r058": 4,
+    "r059": 4,
+    "r060": 4,
+    "r061": 4,
+    "r063": 956,
+    "r064": 225,
+    "r067": 984,
+    "r068": 39,
+    "r069": 40
+  }
+}

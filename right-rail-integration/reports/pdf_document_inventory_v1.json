@@ -1,0 +1,1118 @@
+{
+  "checkpoint_sha256": "85008330238c6df48618c7f6ba5e69db1b53f54f3ab2151b7a622f2dc5b13b5b",
+  "document_count": 4,
+  "documents": [
+    {
+      "bytes": 224607,
+      "content_role": "operating_plan_review_candidate",
+      "execution_allowed": false,
+      "extracted_text_chars": 59414,
+      "human_review_status": "not_reviewed",
+      "metadata": {
+        "author": "RightRail",
+        "creator": "Writer",
+        "producer": "LibreOffice 25.2.3.2 (X86_64) / LibreOffice Community",
+        "title": "RightRail | State Control, Explained"
+      },
+      "page_count": 24,
+      "pages": [
+        {
+          "page_number": 1,
+          "text_chars": 1812,
+          "text_layer_present": true,
+          "text_sha256": "0efaf85c1b9cedb1a353d3c51c357151116863e3bb5efb92f4fe82d54364aaaa"
+        },
+        {
+          "page_number": 2,
+          "text_chars": 2492,
+          "text_layer_present": true,
+          "text_sha256": "0424638d8bce66ab56e563efd47f2c110a07cd13f1fd6fcb3de5e1907974868f"
+        },
+        {
+          "page_number": 3,
+          "text_chars": 2669,
+          "text_layer_present": true,
+          "text_sha256": "226d3a5b428d8cb1439ebd4b3bf9c208af6cc642b62a4d6cdd0166112f9aa1d2"
+        },
+        {
+          "page_number": 4,
+          "text_chars": 2539,
+          "text_layer_present": true,
+          "text_sha256": "1c7e018744b0f9e586fbbf35e2aeb99920c36604b8dc98640a819df2fb3717db"
+        },
+        {
+          "page_number": 5,
+          "text_chars": 2444,
+          "text_layer_present": true,
+          "text_sha256": "9585758ffcbc26268eff801cb70c041a95a57df4b356e3ceac4bf801f310575d"
+        },
+        {
+          "page_number": 6,
+          "text_chars": 2489,
+          "text_layer_present": true,
+          "text_sha256": "525180244e8ccce7826d95b74b83f35b922751630ec2fa2fcb4625cf0dfd7090"
+        },
+        {
+          "page_number": 7,
+          "text_chars": 2689,
+          "text_layer_present": true,
+          "text_sha256": "1283fc228579e830422fda36d692f0c6daa14ad92320bf7341323684b8a521f5"
+        },
+        {
+          "page_number": 8,
+          "text_chars": 2538,
+          "text_layer_present": true,
+          "text_sha256": "9e521b4fa7dd153fd75791920438b5f1af525c18f88fc9fb76dc5fe9d0e4c80f"
+        },
+        {
+          "page_number": 9,
+          "text_chars": 2637,
+          "text_layer_present": true,
+          "text_sha256": "b8ecd6cb4d59fa605dae3baf83dd0cdebd725a63745f093bac4a3d774992b968"
+        },
+        {
+          "page_number": 10,
+          "text_chars": 2864,
+          "text_layer_present": true,
+          "text_sha256": "37436fec43aab9135cc88e853de6f83a0b1f0ea9e7f505d527f3f8ef58849d1d"
+        },
+        {
+          "page_number": 11,
+          "text_chars": 2466,
+          "text_layer_present": true,
+          "text_sha256": "6b2590fbd681f8544fe177e950b810cc7087c84f9b5b8dc4f2bbf83da74b5e05"
+        },
+        {
+          "page_number": 12,
+          "text_chars": 2704,
+          "text_layer_present": true,
+          "text_sha256": "6a4b3d734d1105652bdd08259e672c33c38b3ec3e0696309720c9888a6721df3"
+        },
+        {
+          "page_number": 13,
+          "text_chars": 2651,
+          "text_layer_present": true,
+          "text_sha256": "183551f7ab57bf6f434baefe8c97eb3777fd2a225b13e064e42071bba44f1e2e"
+        },
+        {
+          "page_number": 14,
+          "text_chars": 2522,
+          "text_layer_present": true,
+          "text_sha256": "4c3ac4462585d39eadd22b2d763ac1853143054be9e2a2800e68f53a1a352566"
+        },
+        {
+          "page_number": 15,
+          "text_chars": 2418,
+          "text_layer_present": true,
+          "text_sha256": "88b94e2948dde754068c145fbe040a813deb2f8d361623e07f7f2a8ecc90b72c"
+        },
+        {
+          "page_number": 16,
+          "text_chars": 2719,
+          "text_layer_present": true,
+          "text_sha256": "0aae87bd53bb381ebd78d5800ba9a1e4176b2c9f875d80776c6de11f713d86bd"
+        },
+        {
+          "page_number": 17,
+          "text_chars": 2425,
+          "text_layer_present": true,
+          "text_sha256": "331ba912f5919d2795394adeebb35de933c0cf0f3458e4c0ac8b4f203a0610cc"
+        },
+        {
+          "page_number": 18,
+          "text_chars": 2508,
+          "text_layer_present": true,
+          "text_sha256": "7d1f538532e06f46f4b31792f2deca6b193e2e9f43ef47436cc465a07453f883"
+        },
+        {
+          "page_number": 19,
+          "text_chars": 2026,
+          "text_layer_present": true,
+          "text_sha256": "a161234c5e7d93f64689af8dee445aa3507176e16f30537cc127a76b82468a69"
+        },
+        {
+          "page_number": 20,
+          "text_chars": 2443,
+          "text_layer_present": true,
+          "text_sha256": "7310e3377b3104f9e36d67bfb99e15c1a752ba5ef4fd377c6b5e9c9ecd6bf1ba"
+        },
+        {
+          "page_number": 21,
+          "text_chars": 2431,
+          "text_layer_present": true,
+          "text_sha256": "04347475a5e8cc836de8dddf7568d80b7f13d3db58425484fcee12a888a0e147"
+        },
+        {
+          "page_number": 22,
+          "text_chars": 2570,
+          "text_layer_present": true,
+          "text_sha256": "cd7d2b33b6f61c1ac10c377fb8a5adbc86c9f91e9b16822c262c7a6e577c4670"
+        },
+        {
+          "page_number": 23,
+          "text_chars": 2903,
+          "text_layer_present": true,
+          "text_sha256": "b84ad0c2812fc90f3c1a3a09e0ed8c934ef7107de834ea5f9f1e719ed5d773d9"
+        },
+        {
+          "page_number": 24,
+          "text_chars": 1455,
+          "text_layer_present": true,
+          "text_sha256": "ee4fadc3b38a7d85d6afc73407a62529c56aede84527adb1592828b07d923f46"
+        }
+      ],
+      "path": "original/reference/RightRail_Architecture_and_Operating_Plan.pdf",
+      "runtime_eligible": false,
+      "source_sha256": "6f8d5201dedda81644901fa2e574a0cdcf560eff61878dbb72c48e159eab730c",
+      "status": "extracted_for_static_review",
+      "text_twin": null,
+      "workspace_id": null
+    },
+    {
+      "bytes": 824080,
+      "content_role": "cryptographic_research_reference",
+      "execution_allowed": false,
+      "extracted_text_chars": 180694,
+      "human_review_status": "not_reviewed",
+      "metadata": {
+        "author": "",
+        "creator": "LaTeX with hyperref package",
+        "producer": "pdfTeX-1.40.18",
+        "title": ""
+      },
+      "page_count": 63,
+      "pages": [
+        {
+          "page_number": 1,
+          "text_chars": 2351,
+          "text_layer_present": true,
+          "text_sha256": "dd049b817284a1987c10773aaec405d9b59a78ef35c0a0e75640a3bae824c95e"
+        },
+        {
+          "page_number": 2,
+          "text_chars": 3864,
+          "text_layer_present": true,
+          "text_sha256": "7a6f9366a744ea25195e98799b14e74b16e3c90904c0dd1dda32a17fba526cc1"
+        },
+        {
+          "page_number": 3,
+          "text_chars": 4391,
+          "text_layer_present": true,
+          "text_sha256": "3d142507291966ea762482bc40826de1ec2b3d5564728489d8a4f2de57954c11"
+        },
+        {
+          "page_number": 4,
+          "text_chars": 4528,
+          "text_layer_present": true,
+          "text_sha256": "ae2cc4228bc8bcf0f110c7d8edede52a7900610e7f75ecd407d6ed11818fb0e0"
+        },
+        {
+          "page_number": 5,
+          "text_chars": 3686,
+          "text_layer_present": true,
+          "text_sha256": "58733f40e09e34208af03130687547f74904bf1f9b35afa9af13d2625bd174cd"
+        },
+        {
+          "page_number": 6,
+          "text_chars": 3918,
+          "text_layer_present": true,
+          "text_sha256": "e3f500737576b7677f8db580690f668898345f5b84eb189391a667263747d916"
+        },
+        {
+          "page_number": 7,
+          "text_chars": 3481,
+          "text_layer_present": true,
+          "text_sha256": "de875fffb154b497504f6639a7ba1fb4412f8f7edd32a3b2180713933a2edd42"
+        },
+        {
+          "page_number": 8,
+          "text_chars": 3047,
+          "text_layer_present": true,
+          "text_sha256": "49b926962e438332201ffe12649c5e5c5c527235c6f15dd83d62e61665b31dad"
+        },
+        {
+          "page_number": 9,
+          "text_chars": 2497,
+          "text_layer_present": true,
+          "text_sha256": "9da6b311a9e82a42e181fec3a7154ad4953c1cc6831fa7407cc0c115faf94484"
+        },
+        {
+          "page_number": 10,
+          "text_chars": 3268,
+          "text_layer_present": true,
+          "text_sha256": "faee42c21b89e96da3356ce217fb71f30db68258911d20ec1ad0ad82ef798fe9"
+        },
+        {
+          "page_number": 11,
+          "text_chars": 3345,
+          "text_layer_present": true,
+          "text_sha256": "690ed4eae92b63c87ee5543ce53a1bfbbc4d665a73901a69039bc395f97090ab"
+        },
+        {
+          "page_number": 12,
+          "text_chars": 3546,
+          "text_layer_present": true,
+          "text_sha256": "40f86c3de625c48676ef9c393b404836c9a3b7b583c69f641fbd7073a1723791"
+        },
+        {
+          "page_number": 13,
+          "text_chars": 2394,
+          "text_layer_present": true,
+          "text_sha256": "f3a6857bf4b772c2198e881ed2a9c58ff8033555062d9c0ef6c5c7e5f482c9c3"
+        },
+        {
+          "page_number": 14,
+          "text_chars": 2760,
+          "text_layer_present": true,
+          "text_sha256": "dfd7e2387b0fdc36b2d55c901d31ba26ddac16de6f6c48cfd9faed39f90bb4d8"
+        },
+        {
+          "page_number": 15,
+          "text_chars": 3163,
+          "text_layer_present": true,
+          "text_sha256": "d7dce4ac94dd7f9daa93205dae0c3593b1aa35afd0a9669a46912c6543cfea71"
+        },
+        {
+          "page_number": 16,
+          "text_chars": 2731,
+          "text_layer_present": true,
+          "text_sha256": "df2b8671259bd75509525cb5f678417ca35473ed9e4d040c9492b3e3b4ad9665"
+        },
+        {
+          "page_number": 17,
+          "text_chars": 3588,
+          "text_layer_present": true,
+          "text_sha256": "61c3f14b94e812b012c74e062aabdd8356bf130bbf21972ae6817d62f1163f31"
+        },
+        {
+          "page_number": 18,
+          "text_chars": 4250,
+          "text_layer_present": true,
+          "text_sha256": "f90012f439de309f44bfb0c31bf1ee20905ccccb4587b540ea8eaeb805f491ca"
+        },
+        {
+          "page_number": 19,
+          "text_chars": 3630,
+          "text_layer_present": true,
+          "text_sha256": "9681e640df11e51a6dac231ee58ab4ad9bc9f98617b62d63112a951801eb847c"
+        },
+        {
+          "page_number": 20,
+          "text_chars": 2744,
+          "text_layer_present": true,
+          "text_sha256": "251984dd3fca068a0876e77edf6ad22b02552e27191fa35c299b7a98213651b3"
+        },
+        {
+          "page_number": 21,
+          "text_chars": 2216,
+          "text_layer_present": true,
+          "text_sha256": "2c453a0e585d77c5b2169f853e89313a29a843e56593e0d72875e77f9251f07d"
+        },
+        {
+          "page_number": 22,
+          "text_chars": 2572,
+          "text_layer_present": true,
+          "text_sha256": "f86b281a88fdebe4c744ac4a3ec2e2e185a6689197efedc36f0fb6c22bb793f9"
+        },
+        {
+          "page_number": 23,
+          "text_chars": 3004,
+          "text_layer_present": true,
+          "text_sha256": "831d108c4f35d933c4dc3eee8760d547d619b316049ec759d560b3fc327e6914"
+        },
+        {
+          "page_number": 24,
+          "text_chars": 2415,
+          "text_layer_present": true,
+          "text_sha256": "a95824c223866fa9e6ccc007f8cc4af45084dfd5d4e6c5d15db1e43a85225bf2"
+        },
+        {
+          "page_number": 25,
+          "text_chars": 2501,
+          "text_layer_present": true,
+          "text_sha256": "5fcf3de9131bdd0f70041fa8e79a020373dc35a74b9b0934d9a5908aff5f261a"
+        },
+        {
+          "page_number": 26,
+          "text_chars": 2268,
+          "text_layer_present": true,
+          "text_sha256": "5e18d422624ec4f4d658204501a1929eb8ef9cbe59bcae712c0a60de9a3f26a0"
+        },
+        {
+          "page_number": 27,
+          "text_chars": 3296,
+          "text_layer_present": true,
+          "text_sha256": "c570301fdbd632ba32e961a7c15ceb457035b990f13672d1c3ae6543e91c4908"
+        },
+        {
+          "page_number": 28,
+          "text_chars": 2901,
+          "text_layer_present": true,
+          "text_sha256": "756d1304b1b99152f3449ff7d661435fb5043fd094fa00cf003bce2dab83128a"
+        },
+        {
+          "page_number": 29,
+          "text_chars": 2769,
+          "text_layer_present": true,
+          "text_sha256": "5f29c2d9269cb58b561c7139bc51aa9283ced4cc2e120cc9bfd9b839d4b87c9c"
+        },
+        {
+          "page_number": 30,
+          "text_chars": 3215,
+          "text_layer_present": true,
+          "text_sha256": "82ebd2bbc85dd3831415b74e58bd8e465a0e6de0f4bb8f8d4d01d95459ab10cd"
+        },
+        {
+          "page_number": 31,
+          "text_chars": 2838,
+          "text_layer_present": true,
+          "text_sha256": "71f3a5e91abaff8609fb7771f542def89606c5b4b014e6095b7fcbfb640e055d"
+        },
+        {
+          "page_number": 32,
+          "text_chars": 2797,
+          "text_layer_present": true,
+          "text_sha256": "a85c3e01cde827a6578986cc576effc98ad425520042123da9856a29ca708368"
+        },
+        {
+          "page_number": 33,
+          "text_chars": 2786,
+          "text_layer_present": true,
+          "text_sha256": "7381ae58ca00486f82528a8425846f72c8555291ff05e6579e4eb8c9d26a8342"
+        },
+        {
+          "page_number": 34,
+          "text_chars": 2874,
+          "text_layer_present": true,
+          "text_sha256": "98bccdef87694c692f71d28d723ec9889b631977772a9543696682cf422a9b82"
+        },
+        {
+          "page_number": 35,
+          "text_chars": 2973,
+          "text_layer_present": true,
+          "text_sha256": "913925b03e45b9d955db7b42aa7707ca01da7be213652e554d50c89a88e076f6"
+        },
+        {
+          "page_number": 36,
+          "text_chars": 3333,
+          "text_layer_present": true,
+          "text_sha256": "ef00c08e89a928eb8fbf2b68e20f1506a24bb19d22f6155d59a71d5f18d71372"
+        },
+        {
+          "page_number": 37,
+          "text_chars": 2352,
+          "text_layer_present": true,
+          "text_sha256": "cb19c2dfe5017c311c6bcf604b60f0ea63ded43c45f9f617fdeda5d94ad6fe46"
+        },
+        {
+          "page_number": 38,
+          "text_chars": 3732,
+          "text_layer_present": true,
+          "text_sha256": "e164806a757ad339e8c1e9251855450e197f539e6a3890524c95b847d4958526"
+        },
+        {
+          "page_number": 39,
+          "text_chars": 3358,
+          "text_layer_present": true,
+          "text_sha256": "43817db4a16d4033843138a3e175e28da9fd68fa085abce22888fad9a74ec91c"
+        },
+        {
+          "page_number": 40,
+          "text_chars": 2895,
+          "text_layer_present": true,
+          "text_sha256": "a0815b499ccc93a706bf36540f6311c771439e69e747c61957410435e3538c09"
+        },
+        {
+          "page_number": 41,
+          "text_chars": 3204,
+          "text_layer_present": true,
+          "text_sha256": "36f96262643098d8dbb2d2ebb73925c2a4d0b16d2a91c587fa827b063c28e046"
+        },
+        {
+          "page_number": 42,
+          "text_chars": 2470,
+          "text_layer_present": true,
+          "text_sha256": "faa84385e53dff17588da1498f5c2e2f0e950830fb5cbfc23a556edc07f69544"
+        },
+        {
+          "page_number": 43,
+          "text_chars": 2118,
+          "text_layer_present": true,
+          "text_sha256": "0be1a1837ba4f35ff3b411f7078e9a65f2c3f973794e7c629e1b41ed70a42933"
+        },
+        {
+          "page_number": 44,
+          "text_chars": 2607,
+          "text_layer_present": true,
+          "text_sha256": "dbf694214b0960e6596a692ae27ac1f22367a1800450988f2b3a6e765f7589f0"
+        },
+        {
+          "page_number": 45,
+          "text_chars": 2245,
+          "text_layer_present": true,
+          "text_sha256": "ca71aee3c8ab0db4af1594b97812b7316934d4775c019fda5f57225d3d85e0f1"
+        },
+        {
+          "page_number": 46,
+          "text_chars": 2188,
+          "text_layer_present": true,
+          "text_sha256": "90e22ec1f3d95e9bb5027b2a83b64b25d34128ec586d6c1e80bd83e923324b3e"
+        },
+        {
+          "page_number": 47,
+          "text_chars": 2759,
+          "text_layer_present": true,
+          "text_sha256": "9f1325e386afda5a165b65a6bdf298b79ade9ef62046790f866e243ea27cb294"
+        },
+        {
+          "page_number": 48,
+          "text_chars": 3558,
+          "text_layer_present": true,
+          "text_sha256": "ecd334b31e8b0e610d8576a0a973b6e3b0e3c7727591415db5947c8aa7652ebb"
+        },
+        {
+          "page_number": 49,
+          "text_chars": 2891,
+          "text_layer_present": true,
+          "text_sha256": "982faa46afff981f7a7500c42400481e1d90cf5bc7f96106f0f3c6182c307561"
+        },
+        {
+          "page_number": 50,
+          "text_chars": 2948,
+          "text_layer_present": true,
+          "text_sha256": "a864040ed71414c9e485c4ca575659f92832787949fc2852d9c57932d1aab7e2"
+        },
+        {
+          "page_number": 51,
+          "text_chars": 2711,
+          "text_layer_present": true,
+          "text_sha256": "ff11279b25721b9926463840f2b9b7c8ec585f469b9cbcce2804908884cc8dd7"
+        },
+        {
+          "page_number": 52,
+          "text_chars": 3201,
+          "text_layer_present": true,
+          "text_sha256": "00b01b3e443db625a67476d84cc1d43243a4c50e0e4fef4730a12e96891351c6"
+        },
+        {
+          "page_number": 53,
+          "text_chars": 2366,
+          "text_layer_present": true,
+          "text_sha256": "3cbbcb6f2b175a0a4db8289ca63d5f4e2a26baa369fedc8a39fcab4cd9ff04e8"
+        },
+        {
+          "page_number": 54,
+          "text_chars": 2224,
+          "text_layer_present": true,
+          "text_sha256": "6cef60a4188542440c90d9df72f0cf6bf9389e288f09570057e1b04603a365a2"
+        },
+        {
+          "page_number": 55,
+          "text_chars": 3529,
+          "text_layer_present": true,
+          "text_sha256": "976f170c3458c75c8853acad3c46b6728d25c574e7579cf535d6025e78383591"
+        },
+        {
+          "page_number": 56,
+          "text_chars": 3165,
+          "text_layer_present": true,
+          "text_sha256": "f242f5a09feecac56c317018045640cd2798f79fd2525de79e9fd06f6b390f9a"
+        },
+        {
+          "page_number": 57,
+          "text_chars": 1750,
+          "text_layer_present": true,
+          "text_sha256": "8875cd96eba08211e25a62d834819beb4a9bd3e1fb9d5dccb0ec730583e160cf"
+        },
+        {
+          "page_number": 58,
+          "text_chars": 576,
+          "text_layer_present": true,
+          "text_sha256": "e2055186d4f7ad07770c3ad582cd7ca84a2a1c678060a6dee6c9c729e549c179"
+        },
+        {
+          "page_number": 59,
+          "text_chars": 2057,
+          "text_layer_present": true,
+          "text_sha256": "627736c4893cd191187b0fd0c052ed95dcf6292e7e1af91b7c91f2baa400e0b6"
+        },
+        {
+          "page_number": 60,
+          "text_chars": 2009,
+          "text_layer_present": true,
+          "text_sha256": "87a8727df9a06e9e660cfad8b985c1178d8f1987a10597f8c375885e4bd8d6d3"
+        },
+        {
+          "page_number": 61,
+          "text_chars": 2591,
+          "text_layer_present": true,
+          "text_sha256": "14ef0d9ead839d47bf1dc7ba2dcb940570e5248f0c2171d3f981f72aea8aa109"
+        },
+        {
+          "page_number": 62,
+          "text_chars": 2727,
+          "text_layer_present": true,
+          "text_sha256": "f12f203c44c391adf3e0df46d6fbcbf0db1fc1bd0ab66b8b7337c16154592d3c"
+        },
+        {
+          "page_number": 63,
+          "text_chars": 523,
+          "text_layer_present": true,
+          "text_sha256": "0d8acd80935d7b6de260d891a77da2bfd3ca1fbf11511234eefd430ab54e6cef"
+        }
+      ],
+      "path": "root/work/unruh-2017-398.pdf",
+      "runtime_eligible": false,
+      "source_sha256": "06ae5ac5779b23a13ab43aa583f0ad563982e50a693b0ad5c0126e750c2a0ace",
+      "status": "extracted_for_static_review",
+      "text_twin": "root/work/unruh-2017-398.txt",
+      "workspace_id": null
+    },
+    {
+      "bytes": 819533,
+      "content_role": "cryptographic_research_reference",
+      "execution_allowed": false,
+      "extracted_text_chars": 99480,
+      "human_review_status": "not_reviewed",
+      "metadata": {
+        "author": "",
+        "creator": "LaTeX with hyperref",
+        "producer": "pdfTeX-1.40.20",
+        "title": ""
+      },
+      "page_count": 28,
+      "pages": [
+        {
+          "page_number": 1,
+          "text_chars": 4171,
+          "text_layer_present": true,
+          "text_sha256": "2050ee873a534d582f65bb5edb048a2f63250f9e6060759057c5f091ee2ec0c5"
+        },
+        {
+          "page_number": 2,
+          "text_chars": 5042,
+          "text_layer_present": true,
+          "text_sha256": "97d1f4201b4b7b2103e7d93f436e740a0bfb92dadad95820e57957a55ed2a63f"
+        },
+        {
+          "page_number": 3,
+          "text_chars": 4711,
+          "text_layer_present": true,
+          "text_sha256": "15026e6c0ec8aaebd7ac20807da37963fff2ac100a1e95f6f2211b7cd89fb1dc"
+        },
+        {
+          "page_number": 4,
+          "text_chars": 4413,
+          "text_layer_present": true,
+          "text_sha256": "914ab4d96c165089068f1b7ed14bcf7f323a77aa7fc7ce76cf6db732eb57dcda"
+        },
+        {
+          "page_number": 5,
+          "text_chars": 4362,
+          "text_layer_present": true,
+          "text_sha256": "f1af296141cc7b2d939ec68a8158b76eac1a8bb82ef351e8417f5bd33a71ebcb"
+        },
+        {
+          "page_number": 6,
+          "text_chars": 3623,
+          "text_layer_present": true,
+          "text_sha256": "933454a9b5b4619890a756e79795fe9d7fbb33687e655cede8bd579a924e66e0"
+        },
+        {
+          "page_number": 7,
+          "text_chars": 3422,
+          "text_layer_present": true,
+          "text_sha256": "2848cbd515a38ee88447007929817be81c7cc9888eb10b59a01aa494f43bc7a1"
+        },
+        {
+          "page_number": 8,
+          "text_chars": 3056,
+          "text_layer_present": true,
+          "text_sha256": "71d2b0f2e3567393510d591a194d00c16a7ec068d7997f4b668e9feeda4e2b3f"
+        },
+        {
+          "page_number": 9,
+          "text_chars": 2652,
+          "text_layer_present": true,
+          "text_sha256": "bad8a7e3645ad7976febe81bd6ab36a26e91e249caf9043ae1c052e44335a4dd"
+        },
+        {
+          "page_number": 10,
+          "text_chars": 3919,
+          "text_layer_present": true,
+          "text_sha256": "6d03a55f51f45cf1d49599558ab3986e393c442f513b4976a22795d049f0cf4c"
+        },
+        {
+          "page_number": 11,
+          "text_chars": 2656,
+          "text_layer_present": true,
+          "text_sha256": "7d7adfc76ef524db1a82d05c92f79f32b4e4f75404c5738331ceaf60de033266"
+        },
+        {
+          "page_number": 12,
+          "text_chars": 3824,
+          "text_layer_present": true,
+          "text_sha256": "8e72d61a8a8aedb8fbcb0d0d5ceeaa37481ef569e5040cf9123bfd89e1f1a153"
+        },
+        {
+          "page_number": 13,
+          "text_chars": 4324,
+          "text_layer_present": true,
+          "text_sha256": "90f9118c32effa319a0374c29745f1abf69beba313e03d106b3bb2fa7475502b"
+        },
+        {
+          "page_number": 14,
+          "text_chars": 4198,
+          "text_layer_present": true,
+          "text_sha256": "e40e76433f2ac30d76f3044c8c749ff8f42eeb9b9624f288acf5223efc15ebbb"
+        },
+        {
+          "page_number": 15,
+          "text_chars": 2866,
+          "text_layer_present": true,
+          "text_sha256": "8a0d4c7f5dc40cab0fdf97ac3d83ea821152c4a73324e3678b4ef7aee38f8ddc"
+        },
+        {
+          "page_number": 16,
+          "text_chars": 2396,
+          "text_layer_present": true,
+          "text_sha256": "62567330e1ad00a8c13310a22fdb90f22882a662ced10664040e646bd04780bf"
+        },
+        {
+          "page_number": 17,
+          "text_chars": 3185,
+          "text_layer_present": true,
+          "text_sha256": "bae2d3bdc7b8d4440f9c54abe764a89f55134c870d6e9557314c8141252245e8"
+        },
+        {
+          "page_number": 18,
+          "text_chars": 4379,
+          "text_layer_present": true,
+          "text_sha256": "080fca639e05957ae2cad8c9cbc29ec960ed9e54eb3faa6984cf932cde598527"
+        },
+        {
+          "page_number": 19,
+          "text_chars": 4071,
+          "text_layer_present": true,
+          "text_sha256": "a974ed058b9fbf3f115aa02ec59ee1a67e9f966af8c1bcb02a2b0e94667cf78f"
+        },
+        {
+          "page_number": 20,
+          "text_chars": 2055,
+          "text_layer_present": true,
+          "text_sha256": "081ac4c0fd5914a65ee8dab2ee4fab2c3990cd6f030ed67d8700ddd13e11626a"
+        },
+        {
+          "page_number": 21,
+          "text_chars": 3232,
+          "text_layer_present": true,
+          "text_sha256": "497c67a53ce11ee30ed4279fac776d7b0555944a8d36b115a58024de4a054e5a"
+        },
+        {
+          "page_number": 22,
+          "text_chars": 2200,
+          "text_layer_present": true,
+          "text_sha256": "01b963edce02aa6d0e0d2e8160f3725ef9a26ab0a9a74882942e741122ea1883"
+        },
+        {
+          "page_number": 23,
+          "text_chars": 2363,
+          "text_layer_present": true,
+          "text_sha256": "5ac7f4963ab685730ec5afcd35c1705bbd145b68b6a37e06ee3587e781986828"
+        },
+        {
+          "page_number": 24,
+          "text_chars": 2856,
+          "text_layer_present": true,
+          "text_sha256": "1073f261017c3bb6f271cb2d0b8a8664f5843fa28e57f78f2ac2cd4511669412"
+        },
+        {
+          "page_number": 25,
+          "text_chars": 4331,
+          "text_layer_present": true,
+          "text_sha256": "9cf58a2f21bed763b360164f3fe4d7bde4c74eccca543cd3f7087eeca20c5b19"
+        },
+        {
+          "page_number": 26,
+          "text_chars": 3889,
+          "text_layer_present": true,
+          "text_sha256": "f18e0daf776eca889d19b91090f02d2a11ea7a1d73feda69884e5949b6c2be61"
+        },
+        {
+          "page_number": 27,
+          "text_chars": 4870,
+          "text_layer_present": true,
+          "text_sha256": "a60d1de44720e4d102b9ba9654944e0d867559964e20ccbe039691f80af6eb2f"
+        },
+        {
+          "page_number": 28,
+          "text_chars": 2414,
+          "text_layer_present": true,
+          "text_sha256": "f45c35c1969a5bfe8af44d7f98c459fc49aa82ba3263d988c69cafe85e7d535b"
+        }
+      ],
+      "path": "w/r012/dfms-2022-270.pdf",
+      "runtime_eligible": false,
+      "source_sha256": "4906da4071ecc5a7d10e68a075dd4180d9df2c6e5b63eed45846284ca23fff1a",
+      "status": "extracted_for_static_review",
+      "text_twin": null,
+      "workspace_id": "r012"
+    },
+    {
+      "bytes": 1051286,
+      "content_role": "cryptographic_research_reference",
+      "execution_allowed": false,
+      "extracted_text_chars": 186998,
+      "human_review_status": "not_reviewed",
+      "metadata": {
+        "author": "",
+        "creator": "LaTeX with hyperref",
+        "producer": "pdfTeX-1.40.19",
+        "title": ""
+      },
+      "page_count": 54,
+      "pages": [
+        {
+          "page_number": 1,
+          "text_chars": 1711,
+          "text_layer_present": true,
+          "text_sha256": "448435953fb3b6b569304525a8512de26a5c56b46cd044bc2e6f1b8dd564c44c"
+        },
+        {
+          "page_number": 2,
+          "text_chars": 3250,
+          "text_layer_present": true,
+          "text_sha256": "a55b7c1b7d60009693c08ea3ecb3327ac209f39d0647547d25f0f028fd44633e"
+        },
+        {
+          "page_number": 3,
+          "text_chars": 4585,
+          "text_layer_present": true,
+          "text_sha256": "4e441495c6ba11c2f7bbc2ccb77552e418dc73b4094b5c8612ed96220041888f"
+        },
+        {
+          "page_number": 4,
+          "text_chars": 4479,
+          "text_layer_present": true,
+          "text_sha256": "20ba5ed60cb8df1626a7e4b13ed59d9753fd735193745fc23a98cd9e05b91537"
+        },
+        {
+          "page_number": 5,
+          "text_chars": 4409,
+          "text_layer_present": true,
+          "text_sha256": "15ddfe2c86bad5dfe34b9cdcfc8e870ac5e28d1416833f7e84b30350b38b9d15"
+        },
+        {
+          "page_number": 6,
+          "text_chars": 5052,
+          "text_layer_present": true,
+          "text_sha256": "551fc539eb292367c122862b2e1ea5421bf6481527845d00dcea5bef3e7a0df2"
+        },
+        {
+          "page_number": 7,
+          "text_chars": 5124,
+          "text_layer_present": true,
+          "text_sha256": "d689e9923bcb794e678bcac60d62b11bab58af2d884c48210148a57869ce44a6"
+        },
+        {
+          "page_number": 8,
+          "text_chars": 4552,
+          "text_layer_present": true,
+          "text_sha256": "731ad776de8d7f67cc8fc26d554d9640a2f23de5a7edd7fd1c5a1bd060f7b00f"
+        },
+        {
+          "page_number": 9,
+          "text_chars": 4706,
+          "text_layer_present": true,
+          "text_sha256": "e8782730066b9ca1d8c4ad75cbb85ba23c2740760c7bcad48c24de9e57e7a47f"
+        },
+        {
+          "page_number": 10,
+          "text_chars": 2971,
+          "text_layer_present": true,
+          "text_sha256": "edd06aadfc7597b8e8c6ef4fba2150cd2a8685bbb025da32e3448c787b8a917b"
+        },
+        {
+          "page_number": 11,
+          "text_chars": 2934,
+          "text_layer_present": true,
+          "text_sha256": "a6b507954a2a9fe2927130e14b6d3135a66be0a602eb1e2fcde006f33d6663b3"
+        },
+        {
+          "page_number": 12,
+          "text_chars": 3728,
+          "text_layer_present": true,
+          "text_sha256": "46d2a53b220d3806ed7d8e7b923116e4f345b2729fdea74b22a8b2bd06298b15"
+        },
+        {
+          "page_number": 13,
+          "text_chars": 3176,
+          "text_layer_present": true,
+          "text_sha256": "fabfa658c9e823ee50d41bcb6e6272b01a6f6e6c35ace8fdd760b2f82e734056"
+        },
+        {
+          "page_number": 14,
+          "text_chars": 3051,
+          "text_layer_present": true,
+          "text_sha256": "6f43623907ac026edf023433bd657d9cbf992d46b9496a0d898712243bcb4ab6"
+        },
+        {
+          "page_number": 15,
+          "text_chars": 2864,
+          "text_layer_present": true,
+          "text_sha256": "b5aebf2461b55f09e037d1712befd748a9e3f693778e46f19e4eda61c0cd7b37"
+        },
+        {
+          "page_number": 16,
+          "text_chars": 3355,
+          "text_layer_present": true,
+          "text_sha256": "a743d0d10f74120e0b9459a916305265d9c874da498300c9c9d77d826307f001"
+        },
+        {
+          "page_number": 17,
+          "text_chars": 3732,
+          "text_layer_present": true,
+          "text_sha256": "4e96ca5b8184faee97caf1ccc6e455afb0028d9f8e74f2b840399d900d535f0e"
+        },
+        {
+          "page_number": 18,
+          "text_chars": 3403,
+          "text_layer_present": true,
+          "text_sha256": "7eb5e5f7139ce90730da58e69002bb6f451371adcf850ca095128f8425683875"
+        },
+        {
+          "page_number": 19,
+          "text_chars": 3738,
+          "text_layer_present": true,
+          "text_sha256": "9e5622abbe12e2522e9790514a2ddb74903e2802073155e60a49c4decb891bfb"
+        },
+        {
+          "page_number": 20,
+          "text_chars": 3089,
+          "text_layer_present": true,
+          "text_sha256": "da793291ec18a6077d16e577ef52de37475ffeb2ee213859a773ab5aaaf9b5bd"
+        },
+        {
+          "page_number": 21,
+          "text_chars": 3350,
+          "text_layer_present": true,
+          "text_sha256": "b8e6970c6164f15cd590519c5713faa23bef4ba7a8355c31f51e0478a5282ad7"
+        },
+        {
+          "page_number": 22,
+          "text_chars": 2858,
+          "text_layer_present": true,
+          "text_sha256": "a847d2fb1ccdb43a95f7ec370b3795be871c750a09b52a6b55d997c94df319df"
+        },
+        {
+          "page_number": 23,
+          "text_chars": 2980,
+          "text_layer_present": true,
+          "text_sha256": "9cb3d349d55f472d3cc1b08a0d97427f31ce010725abb027183f1b8173c2d374"
+        },
+        {
+          "page_number": 24,
+          "text_chars": 2843,
+          "text_layer_present": true,
+          "text_sha256": "c83983bcb91d269a464f13f2260de07bda7f839ae26f9b45df687f82627a130d"
+        },
+        {
+          "page_number": 25,
+          "text_chars": 2584,
+          "text_layer_present": true,
+          "text_sha256": "6a3a9c874cb5d8c012d86d0fa7b19c03a950c3fc6402606ee3ae06def8d48c92"
+        },
+        {
+          "page_number": 26,
+          "text_chars": 3388,
+          "text_layer_present": true,
+          "text_sha256": "99d2e063acb4cdc28bb6478573d7e8588705cb54421f917175b6cc3ba6c4e040"
+        },
+        {
+          "page_number": 27,
+          "text_chars": 4080,
+          "text_layer_present": true,
+          "text_sha256": "73e625f0d2928b4cf2fb79ae8963dcf63446cce5b4d78a8adc43785e7ec8d3af"
+        },
+        {
+          "page_number": 28,
+          "text_chars": 2614,
+          "text_layer_present": true,
+          "text_sha256": "0fd0eb3a2e4e00815bd66e60f0317bcde18bf218ef37526b25f4a6d903f35522"
+        },
+        {
+          "page_number": 29,
+          "text_chars": 2988,
+          "text_layer_present": true,
+          "text_sha256": "66aef1c0b391f73c933323a391c99784e8d9e41c5e3f70760e3186dbb6347f91"
+        },
+        {
+          "page_number": 30,
+          "text_chars": 4545,
+          "text_layer_present": true,
+          "text_sha256": "5d34853ea8dd44f801fb7c053bf216a6381f18aa81fe0842734356161c559240"
+        },
+        {
+          "page_number": 31,
+          "text_chars": 2838,
+          "text_layer_present": true,
+          "text_sha256": "fa3fbf887e20ab9dae2aa92b7306cbe3cd5677490f5fe5f61c0d3c9123ecef5c"
+        },
+        {
+          "page_number": 32,
+          "text_chars": 2528,
+          "text_layer_present": true,
+          "text_sha256": "8dbe5c20e39af4762bb20276ecd0ef9b48973c22e5bdd26b172fd383f3f202a3"
+        },
+        {
+          "page_number": 33,
+          "text_chars": 3813,
+          "text_layer_present": true,
+          "text_sha256": "c93dc8c876a55d741fb50912fe07a3aa7eb9b41bac839da92216d9416175c21a"
+        },
+        {
+          "page_number": 34,
+          "text_chars": 4026,
+          "text_layer_present": true,
+          "text_sha256": "0afd9122d287621fdd0f92a8734bfde407bd55d37b111ebc0d91ef781ad85a57"
+        },
+        {
+          "page_number": 35,
+          "text_chars": 2747,
+          "text_layer_present": true,
+          "text_sha256": "eec75a1dbdec574e9ba2b3c224d0732641402d4ba1fa248e7649f7e75a3b1920"
+        },
+        {
+          "page_number": 36,
+          "text_chars": 4455,
+          "text_layer_present": true,
+          "text_sha256": "82f1face77a577ff0eec5546f58c3437f07acc590a5f41187d86dfe5e00c7b94"
+        },
+        {
+          "page_number": 37,
+          "text_chars": 4173,
+          "text_layer_present": true,
+          "text_sha256": "2fdfa3ecaa792d8fc1f5248b23b6ca632c5085e0e575f6dc393fdd49057a70de"
+        },
+        {
+          "page_number": 38,
+          "text_chars": 3938,
+          "text_layer_present": true,
+          "text_sha256": "4675c1a8be5b2c083857d4f04f6ccf3239a0f828cfbe6312495b9f6019d2d1d0"
+        },
+        {
+          "page_number": 39,
+          "text_chars": 4786,
+          "text_layer_present": true,
+          "text_sha256": "582951e6a7a652390f11554877b52f2ff615e73f7567c95e1573e2cb035419e2"
+        },
+        {
+          "page_number": 40,
+          "text_chars": 3497,
+          "text_layer_present": true,
+          "text_sha256": "dc262b3f4d43aa986df1add28e337cd1a3d7386dce6ee834709b5fd2e156475b"
+        },
+        {
+          "page_number": 41,
+          "text_chars": 3542,
+          "text_layer_present": true,
+          "text_sha256": "6a862d31a86803673737395059bf1f116aecb6f14b3acc6c4de077fd5ec8aeb1"
+        },
+        {
+          "page_number": 42,
+          "text_chars": 3899,
+          "text_layer_present": true,
+          "text_sha256": "5d22c12538afb9cfff80a4dd51cd7f033513aa8bcfc829399c8d85418625a693"
+        },
+        {
+          "page_number": 43,
+          "text_chars": 3594,
+          "text_layer_present": true,
+          "text_sha256": "c387b9300698f3e02a3bac3fb4bc031871c53997380e8c26411f375842271553"
+        },
+        {
+          "page_number": 44,
+          "text_chars": 3403,
+          "text_layer_present": true,
+          "text_sha256": "0ae3ab52c5fe5a50efcfed49aa2f0727b411ae8abf397d7e21293ae142ef1579"
+        },
+        {
+          "page_number": 45,
+          "text_chars": 3568,
+          "text_layer_present": true,
+          "text_sha256": "d7b5df606c08227238d69d2b4c44537d9e46d40306497bd8274eb5f08e15b977"
+        },
+        {
+          "page_number": 46,
+          "text_chars": 3147,
+          "text_layer_present": true,
+          "text_sha256": "dd7d4ea89bc0f17968ed3602254d1a0578a52d5b223271065af83fcb07aaf03b"
+        },
+        {
+          "page_number": 47,
+          "text_chars": 3039,
+          "text_layer_present": true,
+          "text_sha256": "e0624d88d712962d61445741c410ab161ab1983ae613bb580b533d6973202773"
+        },
+        {
+          "page_number": 48,
+          "text_chars": 2345,
+          "text_layer_present": true,
+          "text_sha256": "16ff5f3d9a1d2b835f78b44126d9f1d200915b9ff4877e1fe93b3e09fb1c0337"
+        },
+        {
+          "page_number": 49,
+          "text_chars": 2328,
+          "text_layer_present": true,
+          "text_sha256": "008201c24a7f5b7825285ae352691043bd050736d6298e13fa92e841fad03337"
+        },
+        {
+          "page_number": 50,
+          "text_chars": 4184,
+          "text_layer_present": true,
+          "text_sha256": "2c695ee29420bf5d2e3ab51bda147d6d9927d1d3235b7c525166ed6085ad6c1d"
+        },
+        {
+          "page_number": 51,
+          "text_chars": 2093,
+          "text_layer_present": true,
+          "text_sha256": "f43f899f1410bfa9c54dda073fb61498a7d0096d62ae4101da2ec97574fa7cd6"
+        },
+        {
+          "page_number": 52,
+          "text_chars": 2729,
+          "text_layer_present": true,
+          "text_sha256": "42517fb1365e48ebd4fa5b57e4c4bf1a8dc3400a83a585f51f2aeb3ce9a1fe11"
+        },
+        {
+          "page_number": 53,
+          "text_chars": 3394,
+          "text_layer_present": true,
+          "text_sha256": "25148988b8aeadd8a9e80f976f2f49435bbcec86247234791924c3e4f6a5593c"
+        },
+        {
+          "page_number": 54,
+          "text_chars": 2793,
+          "text_layer_present": true,
+          "text_sha256": "bc2efdf16cff42f921e58105c06f47cc0405878cc1e7d5d37c6bfacc8585fd33"
+        }
+      ],
+      "path": "w/r038/katsumata-2021-927.pdf",
+      "runtime_eligible": false,
+      "source_sha256": "364674f1b97926270208d2c4085f2b8227ba0349fcac68a3e226c34d9d93adb0",
+      "status": "extracted_for_static_review",
+      "text_twin": null,
+      "workspace_id": "r038"
+    }
+  ],
+  "execution_allowed": false,
+  "extractor": {
+    "name": "pypdf",
+    "version": "6.14.2"
+  },
+  "page_count": 169,
+  "runtime_eligible_count": 0,
+  "schema_version": "localbce-rightrail-pdf-inventory-v1",
+  "source_bundle": "RightRail-Agent-20260919",
+  "text_layer_complete_count": 4
+}

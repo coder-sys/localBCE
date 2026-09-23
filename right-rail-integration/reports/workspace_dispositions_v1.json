@@ -1,0 +1,1045 @@
+{
+  "catalog_sha256": "47301f1ed78d3366de3b947c9d8450c04a0e7359f87ac33a9be2b7728a162d2e",
+  "schema_version": "localbce-rightrail-workspace-dispositions-v1",
+  "workspace_count": 73,
+  "workspaces": [
+    {
+      "active_runtime": false,
+      "bytes": 121535,
+      "dispositions": {
+        "audit_evidence": 8,
+        "generated_reproducible": 9
+      },
+      "entry_count": 17,
+      "focus": "evidence_baseline",
+      "original_workspace": "workspace/work/evidence-luna-etw-portability-20260904",
+      "reproduction_status": "not_started",
+      "workspace_id": "r001"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4584523,
+      "dispositions": {
+        "duplicate_superseded": 195,
+        "formal_reference": 48,
+        "unsafe_binary": 1
+      },
+      "entry_count": 244,
+      "focus": "formal_semantics",
+      "original_workspace": "workspace/work/lean-engine-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r002"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 5367591,
+      "dispositions": {
+        "duplicate_superseded": 255,
+        "formal_reference": 27
+      },
+      "entry_count": 282,
+      "focus": "formal_semantics",
+      "original_workspace": "workspace/work/lean-queue-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r003"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1785647,
+      "dispositions": {
+        "formal_reference": 130
+      },
+      "entry_count": 130,
+      "focus": "formal_semantics",
+      "original_workspace": "workspace/work/lean-security-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r004"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 5642315,
+      "dispositions": {
+        "duplicate_superseded": 287,
+        "formal_reference": 11
+      },
+      "entry_count": 298,
+      "focus": "formal_semantics",
+      "original_workspace": "workspace/work/lean-state-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r005"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4650564,
+      "dispositions": {
+        "audit_evidence": 14,
+        "duplicate_superseded": 125,
+        "experimental_build": 75
+      },
+      "entry_count": 214,
+      "focus": "source_corrections",
+      "original_workspace": "workspace/work/mirror-directory-corrections-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r006"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 6388991,
+      "dispositions": {
+        "audit_evidence": 5,
+        "duplicate_superseded": 107,
+        "experimental_build": 128,
+        "generated_reproducible": 52,
+        "unsafe_binary": 7
+      },
+      "entry_count": 299,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-aes-circuit-export-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r007"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 589623,
+      "dispositions": {
+        "audit_evidence": 2,
+        "experimental_build": 25
+      },
+      "entry_count": 27,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-analytic-reductions-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r008"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 776376,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 14,
+        "experimental_build": 7
+      },
+      "entry_count": 22,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-c-opened-u32-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r009"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 770523,
+      "dispositions": {
+        "duplicate_superseded": 21,
+        "experimental_build": 1
+      },
+      "entry_count": 22,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-c-opened-u64-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r010"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 782360,
+      "dispositions": {
+        "duplicate_superseded": 21,
+        "experimental_build": 1
+      },
+      "entry_count": 22,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-c-opened-u8-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r011"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 2405928,
+      "dispositions": {
+        "audit_evidence": 1,
+        "experimental_build": 5
+      },
+      "entry_count": 6,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-dfms-reduction-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r012"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1882274,
+      "dispositions": {
+        "audit_evidence": 3,
+        "duplicate_superseded": 107,
+        "experimental_build": 9,
+        "generated_reproducible": 22,
+        "unsafe_binary": 4
+      },
+      "entry_count": 145,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-circuit-kernel-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r013"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 5320868,
+      "dispositions": {
+        "audit_evidence": 3,
+        "duplicate_superseded": 248,
+        "experimental_build": 19,
+        "unsafe_binary": 4
+      },
+      "entry_count": 274,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-adversarial-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r014"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1337237,
+      "dispositions": {
+        "audit_evidence": 6,
+        "duplicate_superseded": 115,
+        "experimental_build": 19
+      },
+      "entry_count": 140,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-authenticated-proof-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r015"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1705343,
+      "dispositions": {
+        "audit_evidence": 2,
+        "experimental_build": 25,
+        "generated_reproducible": 2,
+        "unsafe_binary": 7
+      },
+      "entry_count": 36,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-authenticated-proof-build-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r016"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4375622,
+      "dispositions": {
+        "audit_evidence": 8,
+        "duplicate_superseded": 179,
+        "experimental_build": 23,
+        "generated_reproducible": 7
+      },
+      "entry_count": 217,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-complete-path-20260912",
+      "reproduction_status": "not_started",
+      "workspace_id": "r017"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1123449,
+      "dispositions": {
+        "audit_evidence": 3,
+        "duplicate_superseded": 101,
+        "experimental_build": 5
+      },
+      "entry_count": 109,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-contract-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r018"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1596617,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 109,
+        "experimental_build": 3
+      },
+      "entry_count": 113,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-filter-contract-20260912",
+      "reproduction_status": "not_started",
+      "workspace_id": "r019"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 74937835,
+      "dispositions": {
+        "audit_evidence": 43,
+        "duplicate_superseded": 271,
+        "experimental_build": 469,
+        "generated_reproducible": 120,
+        "unsafe_binary": 87
+      },
+      "entry_count": 990,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-filter-native-20260912",
+      "reproduction_status": "not_started",
+      "workspace_id": "r020"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 2946823,
+      "dispositions": {
+        "audit_evidence": 7,
+        "duplicate_superseded": 174,
+        "experimental_build": 26,
+        "generated_reproducible": 19,
+        "unsafe_binary": 5
+      },
+      "entry_count": 231,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-fixture-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r021"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4191753,
+      "dispositions": {
+        "audit_evidence": 6,
+        "duplicate_superseded": 182,
+        "experimental_build": 19,
+        "generated_reproducible": 5
+      },
+      "entry_count": 212,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-native-adapter-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r022"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 147527371,
+      "dispositions": {
+        "audit_evidence": 32,
+        "duplicate_superseded": 293,
+        "experimental_build": 171,
+        "generated_reproducible": 79,
+        "unsafe_binary": 36
+      },
+      "entry_count": 611,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-performance-20260912",
+      "reproduction_status": "not_started",
+      "workspace_id": "r023"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 2561990,
+      "dispositions": {
+        "audit_evidence": 2,
+        "duplicate_superseded": 161,
+        "experimental_build": 31,
+        "generated_reproducible": 3
+      },
+      "entry_count": 197,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-pipeline-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r024"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 12772253,
+      "dispositions": {
+        "audit_evidence": 72,
+        "duplicate_superseded": 278,
+        "experimental_build": 458,
+        "generated_reproducible": 3
+      },
+      "entry_count": 811,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-source-auth-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r025"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 14300,
+      "dispositions": {
+        "audit_evidence": 1
+      },
+      "entry_count": 1,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-source-auth-build-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r026"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1390422,
+      "dispositions": {
+        "audit_evidence": 2,
+        "experimental_build": 16,
+        "generated_reproducible": 2,
+        "unsafe_binary": 5
+      },
+      "entry_count": 25,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-source-auth-build-20260908-r2",
+      "reproduction_status": "not_started",
+      "workspace_id": "r027"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1407466,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 145
+      },
+      "entry_count": 146,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-source-proof-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r028"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 2195999,
+      "dispositions": {
+        "audit_evidence": 2,
+        "duplicate_superseded": 7,
+        "experimental_build": 34,
+        "generated_reproducible": 7,
+        "unsafe_binary": 8
+      },
+      "entry_count": 58,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-source-proof-build-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r029"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4069117,
+      "dispositions": {
+        "audit_evidence": 3,
+        "duplicate_superseded": 181,
+        "experimental_build": 1
+      },
+      "entry_count": 185,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-state-profile12-20260908",
+      "reproduction_status": "not_started",
+      "workspace_id": "r030"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 14179218,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 791,
+        "generated_reproducible": 7,
+        "unsafe_binary": 6
+      },
+      "entry_count": 805,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-vole-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r031"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 3837032,
+      "dispositions": {
+        "audit_evidence": 4,
+        "duplicate_superseded": 185,
+        "experimental_build": 17,
+        "generated_reproducible": 24,
+        "unsafe_binary": 8
+      },
+      "entry_count": 238,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-mask-wire-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r032"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1017141,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 107,
+        "experimental_build": 1
+      },
+      "entry_count": 109,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-range-module-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r033"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1005791,
+      "dispositions": {
+        "duplicate_superseded": 108,
+        "experimental_build": 1
+      },
+      "entry_count": 109,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-direct-tag-module-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r034"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 32096860,
+      "dispositions": {
+        "duplicate_superseded": 37,
+        "experimental_build": 137,
+        "generated_reproducible": 60
+      },
+      "entry_count": 234,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-extractor-closure-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r035"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 848776,
+      "dispositions": {
+        "duplicate_superseded": 19,
+        "experimental_build": 6
+      },
+      "entry_count": 25,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-finite-bijection-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r036"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 840484,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 20,
+        "experimental_build": 7
+      },
+      "entry_count": 28,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-kkw-feasibility-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r037"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 2254540,
+      "dispositions": {
+        "audit_evidence": 2,
+        "experimental_build": 11
+      },
+      "entry_count": 13,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-lattice-feasibility-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r038"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1026374,
+      "dispositions": {
+        "duplicate_superseded": 20,
+        "experimental_build": 8,
+        "generated_reproducible": 16
+      },
+      "entry_count": 44,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-native-challenge-decoder-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r039"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 520257,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 16,
+        "experimental_build": 3
+      },
+      "entry_count": 20,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-primitive-closure-20260905",
+      "reproduction_status": "not_started",
+      "workspace_id": "r040"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 819059,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 20,
+        "experimental_build": 6
+      },
+      "entry_count": 27,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-primitive-entropy-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r041"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 1647643,
+      "dispositions": {
+        "audit_evidence": 2,
+        "duplicate_superseded": 108,
+        "experimental_build": 3
+      },
+      "entry_count": 113,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-privacy-certificate-correction-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r042"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 3509038,
+      "dispositions": {
+        "audit_evidence": 2,
+        "duplicate_superseded": 20,
+        "experimental_build": 71,
+        "generated_reproducible": 2
+      },
+      "entry_count": 95,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-privacy-closure-20260905",
+      "reproduction_status": "not_started",
+      "workspace_id": "r043"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 967992,
+      "dispositions": {
+        "duplicate_superseded": 23,
+        "experimental_build": 3,
+        "generated_reproducible": 6
+      },
+      "entry_count": 32,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-privacy-review-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r044"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 773959,
+      "dispositions": {
+        "duplicate_superseded": 21,
+        "experimental_build": 1
+      },
+      "entry_count": 22,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-quantum-composition-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r045"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 2767096,
+      "dispositions": {
+        "duplicate_superseded": 88,
+        "experimental_build": 30
+      },
+      "entry_count": 118,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-rust-correspondence-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r046"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 885512,
+      "dispositions": {
+        "duplicate_superseded": 90,
+        "experimental_build": 5
+      },
+      "entry_count": 95,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-sba1-relation-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r047"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 946258,
+      "dispositions": {
+        "duplicate_superseded": 94,
+        "experimental_build": 2
+      },
+      "entry_count": 96,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-sba1-throughput-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r048"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 987410,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 101,
+        "experimental_build": 3
+      },
+      "entry_count": 105,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-shake-control-export-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r049"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 540448,
+      "dispositions": {
+        "duplicate_superseded": 17,
+        "experimental_build": 2
+      },
+      "entry_count": 19,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-soundness-closure-20260905",
+      "reproduction_status": "not_started",
+      "workspace_id": "r050"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 5963358,
+      "dispositions": {
+        "audit_evidence": 8,
+        "duplicate_superseded": 266,
+        "experimental_build": 11,
+        "generated_reproducible": 7
+      },
+      "entry_count": 292,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-admission-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r051"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 459047,
+      "dispositions": {
+        "audit_evidence": 2,
+        "experimental_build": 9,
+        "generated_reproducible": 5,
+        "unsafe_binary": 3
+      },
+      "entry_count": 19,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-commitment-79f-fixture-build-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r052"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 603932,
+      "dispositions": {
+        "audit_evidence": 1,
+        "experimental_build": 6,
+        "generated_reproducible": 3,
+        "unsafe_binary": 2
+      },
+      "entry_count": 12,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-commitment-base-build-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r053"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 573911,
+      "dispositions": {
+        "audit_evidence": 2,
+        "duplicate_superseded": 4,
+        "experimental_build": 9,
+        "generated_reproducible": 5,
+        "unsafe_binary": 3
+      },
+      "entry_count": 23,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-commitment-integration-build-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r054"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 893359,
+      "dispositions": {
+        "audit_evidence": 2,
+        "duplicate_superseded": 3,
+        "experimental_build": 11,
+        "generated_reproducible": 7,
+        "unsafe_binary": 5
+      },
+      "entry_count": 28,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-commitment-transitive-primitive-build-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r055"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 11846724,
+      "dispositions": {
+        "duplicate_superseded": 82,
+        "experimental_build": 144,
+        "generated_reproducible": 67
+      },
+      "entry_count": 293,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-evaluator-completeness-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r056"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 12553959,
+      "dispositions": {
+        "audit_evidence": 3,
+        "duplicate_superseded": 774,
+        "experimental_build": 8
+      },
+      "entry_count": 785,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-request-lifecycle-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r057"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 933143,
+      "dispositions": {
+        "audit_evidence": 2,
+        "duplicate_superseded": 14,
+        "experimental_build": 15,
+        "generated_reproducible": 24,
+        "unsafe_binary": 4
+      },
+      "entry_count": 59,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-request-lifecycle-build-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r058"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 997994,
+      "dispositions": {
+        "audit_evidence": 2,
+        "duplicate_superseded": 2,
+        "experimental_build": 15,
+        "generated_reproducible": 3,
+        "unsafe_binary": 4
+      },
+      "entry_count": 26,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-request-lifecycle-integration-build-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r059"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 993995,
+      "dispositions": {
+        "audit_evidence": 2,
+        "duplicate_superseded": 1,
+        "experimental_build": 16,
+        "generated_reproducible": 4,
+        "unsafe_binary": 5
+      },
+      "entry_count": 28,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-source-request-lifecycle-transitive-primitive-build-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r060"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4718650,
+      "dispositions": {
+        "audit_evidence": 1,
+        "duplicate_superseded": 242,
+        "experimental_build": 6,
+        "generated_reproducible": 8,
+        "unsafe_binary": 3
+      },
+      "entry_count": 260,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-statistical-source-commitment-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r061"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 959514,
+      "dispositions": {
+        "duplicate_superseded": 22,
+        "experimental_build": 13
+      },
+      "entry_count": 35,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-typed-boundary-sidecar-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r062"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 41080906,
+      "dispositions": {
+        "audit_evidence": 64,
+        "duplicate_superseded": 696,
+        "experimental_build": 732,
+        "generated_reproducible": 19,
+        "unsafe_binary": 2
+      },
+      "entry_count": 1513,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-vole-screen-20260907",
+      "reproduction_status": "not_started",
+      "workspace_id": "r063"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 21263946,
+      "dispositions": {
+        "audit_evidence": 23,
+        "duplicate_superseded": 228,
+        "experimental_build": 142,
+        "generated_reproducible": 59,
+        "unsafe_binary": 34
+      },
+      "entry_count": 486,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-wide-seed-native-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r064"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 828331,
+      "dispositions": {
+        "duplicate_superseded": 21,
+        "experimental_build": 1
+      },
+      "entry_count": 22,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-wire-closure-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r065"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 985306,
+      "dispositions": {
+        "duplicate_superseded": 22,
+        "experimental_build": 2,
+        "generated_reproducible": 2
+      },
+      "entry_count": 26,
+      "focus": "post_quantum_research",
+      "original_workspace": "workspace/work/pq-wire-native-boundary-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r066"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 5933829,
+      "dispositions": {
+        "audit_evidence": 39,
+        "experimental_build": 230,
+        "unsafe_binary": 2
+      },
+      "entry_count": 271,
+      "focus": "financial_and_operational_workflow",
+      "original_workspace": "workspace/work/rightrail-financial-workflow-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r067"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 141482,
+      "dispositions": {
+        "audit_evidence": 8,
+        "duplicate_superseded": 3,
+        "experimental_build": 20
+      },
+      "entry_count": 31,
+      "focus": "reproduction_runner",
+      "original_workspace": "workspace/work/runner",
+      "reproduction_status": "not_started",
+      "workspace_id": "r068"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4441599,
+      "dispositions": {
+        "duplicate_superseded": 229,
+        "formal_reference": 9
+      },
+      "entry_count": 238,
+      "focus": "formal_semantics",
+      "original_workspace": "workspace/work/semantic-bundle-codec-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r069"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4706686,
+      "dispositions": {
+        "duplicate_superseded": 240,
+        "formal_reference": 140,
+        "generated_reproducible": 29
+      },
+      "entry_count": 409,
+      "focus": "formal_semantics",
+      "original_workspace": "workspace/work/semantic-codec-proof-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r070"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4418570,
+      "dispositions": {
+        "duplicate_superseded": 236,
+        "formal_reference": 1
+      },
+      "entry_count": 237,
+      "focus": "formal_semantics",
+      "original_workspace": "workspace/work/semantic-receipt-codec-20260906",
+      "reproduction_status": "not_started",
+      "workspace_id": "r071"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 377,
+      "dispositions": {
+        "duplicate_superseded": 1,
+        "formal_reference": 1,
+        "generated_reproducible": 1
+      },
+      "entry_count": 3,
+      "focus": "formal_semantics",
+      "original_workspace": "workspace/work/semantic_kernel",
+      "reproduction_status": "not_started",
+      "workspace_id": "r072"
+    },
+    {
+      "active_runtime": false,
+      "bytes": 4222541,
+      "dispositions": {
+        "formal_reference": 24
+      },
+      "entry_count": 24,
+      "focus": "formal_semantics",
+      "original_workspace": "task-workspaces/lean-state-20260913",
+      "reproduction_status": "not_started",
+      "workspace_id": "r073"
+    }
+  ]
+}

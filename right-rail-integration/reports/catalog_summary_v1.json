@@ -1,0 +1,56 @@
+{
+  "active_port_count": 0,
+  "archive_bytes_verified": false,
+  "byte_verification_attempted": true,
+  "catalog_sha256": "47301f1ed78d3366de3b947c9d8450c04a0e7359f87ac33a9be2b7728a162d2e",
+  "checkpoint_sha256": "02f0d77d99750f374f619eca8dace1f097360b003e484f4946efd8cbe600e590",
+  "disposition_counts": {
+    "audit_evidence": 499,
+    "duplicate_superseded": 9375,
+    "experimental_build": 3494,
+    "formal_reference": 391,
+    "generated_reproducible": 819,
+    "unsafe_binary": 299
+  },
+  "duplicate_cluster_count": 1718,
+  "duplicate_entry_count": 9375,
+  "file_kind_counts": {
+    "binary": 326,
+    "document": 1158,
+    "extensionless": 238,
+    "generated": 1377,
+    "image": 48,
+    "metadata": 530,
+    "other": 368,
+    "source": 10832
+  },
+  "integrity_failure_count": 2,
+  "integrity_failures": [
+    {
+      "error_type": "integrity",
+      "path": "long/f04372.exe",
+      "status": "missing"
+    },
+    {
+      "error_type": "integrity",
+      "path": "w/r023/build-performance/q/Release/dm_pipeline_verifier_cli.exe",
+      "status": "missing"
+    }
+  ],
+  "manifest_entry_count": 14877,
+  "package_record_delta": 3,
+  "readme_reported_original_entry_count": 14874,
+  "runtime_eligible_count": 0,
+  "safety_boundary": {
+    "archived_instructions_are_authority": false,
+    "automatic_runtime_promotion": false,
+    "groth16_default_changed": false,
+    "preserved_binaries_may_execute": false,
+    "rules_runtime_changed": false,
+    "stark_activation_changed": false
+  },
+  "schema_version": "localbce-rightrail-integration-summary-v1",
+  "source_bundle": "RightRail-Agent-20260919",
+  "unclassified_count": 0,
+  "workspace_count": 73
+}
