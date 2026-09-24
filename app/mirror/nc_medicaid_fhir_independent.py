@@ -559,26 +559,4 @@ class NcMedicaidFhirVerifier:
         return to_verified_source_coverage(verify_bytes(adapter_bytes, profile=self.profile), profile=self.profile)
 
 
-SUPPORT_SCHEMA = "mirror-ncmedicaid-fhir-support-v2"
-SUPPORT_KEYS = {"schema", "profile_id", "profile_version", "source_contract_digest", "observation_time", "fetched_at", "source_status", "failure_code", "freshness", "page_count", "resource_count", "server_total_known", "server_marker_known", "zero_phi_boundary", "support_safe", "synthetic_only", "no_external_transmission_performed"}
-
-
-def build_support_evidence(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE) -> bytes:
-    result = verify_bytes(raw, profile=profile)
-    return _canonical({"schema": SUPPORT_SCHEMA, "profile_id": profile.source_profile_id, "profile_version": profile.version, "source_contract_digest": profile.profile_digest, "observation_time": result["observation_time"], "fetched_at": result["fetched_at"], "source_status": result["source_status"], "failure_code": result["failure_code"], "freshness": result["freshness"], "page_count": result["page_count"], "resource_count": result["resource_count"], "server_total_known": result["server_total"] is not None, "server_marker_known": result["server_last_updated"] is not None, "zero_phi_boundary": True, "support_safe": True, "synthetic_only": True, "no_external_transmission_performed": True})
-
-
-def verify_support_evidence(raw: bytes) -> dict[str, object]:
-    value = _parse(raw, NC_MEDICAID_PROFILE)
-    if set(value) != SUPPORT_KEYS or value["schema"] != SUPPORT_SCHEMA or value["profile_id"] != NC_MEDICAID_PROFILE.source_profile_id or value["profile_version"] != NC_MEDICAID_PROFILE.version or value["source_contract_digest"] != NC_MEDICAID_PROFILE.profile_digest:
-        raise IndependentNcMedicaidFhirError("support:profile")
-    if value["source_status"] not in SOURCE_STATUSES or value["failure_code"] is not None and value["failure_code"] not in FAILURE_CODES:
-        raise IndependentNcMedicaidFhirError("support:status")
-    if value["freshness"] not in {"FRESH", "UNKNOWN", "STALE"} or value["zero_phi_boundary"] is not True or value["support_safe"] is not True or value["synthetic_only"] is not True or value["no_external_transmission_performed"] is not True:
-        raise IndependentNcMedicaidFhirError("support:boundary")
-    _int(value["page_count"], "support:pages", minimum=1, maximum=NC_MEDICAID_PROFILE.transport_caps["max_pages"]); _int(value["resource_count"], "support:resources", maximum=NC_MEDICAID_PROFILE.transport_caps["max_resources"])
-    _int(value["observation_time"], "support:observation"); _int(value["fetched_at"], "support:fetched", minimum=value["observation_time"])
-    return {"accepted": True, "support_bytes": len(raw), "source_status": value["source_status"], "failure_code": value["failure_code"]}
-
-
-__all__ = ["ENVELOPE_SCHEMA", "ENVELOPE_SCHEMA_VERSION", "IndependentNcMedicaidFhirError", "NcMedicaidFhirVerifier", "build_support_evidence", "to_verified_source_coverage", "verify_bytes", "verify_support_evidence", "_canonical", "_digest", "_raw_digest"]
+__all__ = ["ENVELOPE_SCHEMA", "ENVELOPE_SCHEMA_VERSION", "IndependentNcMedicaidFhirError", "NcMedicaidFhirVerifier", "to_verified_source_coverage", "verify_bytes", "_canonical", "_digest", "_raw_digest"]

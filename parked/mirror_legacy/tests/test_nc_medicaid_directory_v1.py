@@ -6,9 +6,9 @@ from dataclasses import dataclass
 import json
 import unittest
 
-from app.mirror import nc_medicaid_directory_v1 as directory
-from app.mirror import nc_medicaid_directory_v1_independent as independent
-from app.mirror.nc_medicaid_directory_profile_v1 import (
+from parked.mirror_legacy.app import nc_medicaid_directory_v1 as directory
+from parked.mirror_legacy.app import nc_medicaid_directory_v1_independent as independent
+from parked.mirror_legacy.app.nc_medicaid_directory_profile_v1 import (
     BASE_URL,
     DirectoryOperationContext,
     NC_MEDICAID_DIRECTORY_PROFILE_V1,

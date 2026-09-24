@@ -17,7 +17,7 @@ from typing import Mapping
 from urllib.parse import parse_qsl, urlsplit
 
 from app.mirror.error_boundary import raise_redacted
-from app.mirror.nc_medicaid_directory_profile_v1 import (
+from parked.mirror_legacy.app.nc_medicaid_directory_profile_v1 import (
     ALLOWED_MEDIA_TYPE,
     CONTINUATION_PARAMETER_NAMES,
     DirectoryOperationContext,

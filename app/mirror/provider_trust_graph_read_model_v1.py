@@ -629,10 +629,8 @@ def _add_cli_selection_arguments(parser: argparse.ArgumentParser, *, prefix: str
     parser.add_argument(f"--{prefix}operation-ref", required=True)
 
 
-def _cli_selection(args: argparse.Namespace, *, prefix: str = "") -> ProviderTrustGraphReadSelectionV1:
-    artifact_path = getattr(args, f"{prefix}artifact")
-    request_path = getattr(args, f"{prefix}request")
-    operation_ref = getattr(args, f"{prefix}operation_ref")
+def load_selection(artifact_path: str, request_path: str, operation_ref: str) -> ProviderTrustGraphReadSelectionV1:
+    """Read one bounded local artifact/request pair into the NC Medicaid graph selection."""
     try:
         artifact = graph_producer._read_bounded(artifact_path, graph_independent.MAX_ARTIFACT_BYTES)
         request = graph_producer._read_bounded(request_path, evidence_export.MAX_REQUEST_BYTES)
@@ -645,6 +643,14 @@ def _cli_selection(args: argparse.Namespace, *, prefix: str = "") -> ProviderTru
         expected_profile_version=nc_profile.NC_MEDICAID_GRAPH_PROFILE.version,
         export_request_raw=request,
         expected_operation_ref=operation_ref,
+    )
+
+
+def _cli_selection(args: argparse.Namespace, *, prefix: str = "") -> ProviderTrustGraphReadSelectionV1:
+    return load_selection(
+        getattr(args, f"{prefix}artifact"),
+        getattr(args, f"{prefix}request"),
+        getattr(args, f"{prefix}operation_ref"),
     )
 
 
@@ -709,6 +715,7 @@ __all__ = [
     "build_read_model_page_v1",
     "build_read_model_detail_v1",
     "compare_read_models_v1",
+    "load_selection",
     "main",
 ]
 

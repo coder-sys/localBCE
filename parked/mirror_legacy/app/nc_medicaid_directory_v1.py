@@ -17,7 +17,7 @@ from typing import Callable, Mapping, Protocol
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from app.mirror.error_boundary import raise_redacted
-from app.mirror.nc_medicaid_directory_profile_v1 import (
+from parked.mirror_legacy.app.nc_medicaid_directory_profile_v1 import (
     ALLOWED_MEDIA_TYPE,
     CONTINUATION_PARAMETER_NAMES,
     FORBIDDEN_QUERY_PARAMETERS,
@@ -25,7 +25,7 @@ from app.mirror.nc_medicaid_directory_profile_v1 import (
     DirectoryOperationContext,
     NcMedicaidDirectoryProfileV1,
 )
-from app.mirror import nc_medicaid_directory_v1_independent as independent
+from parked.mirror_legacy.app import nc_medicaid_directory_v1_independent as independent
 
 
 CAPTURE_SCHEMA = "mirror-ncmedicaid-provider-directory-capture-v1"

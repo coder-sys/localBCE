@@ -11,10 +11,7 @@ import socket
 import sys
 from types import MappingProxyType
 
-from app.mirror import nc_medicaid_fhir_profile as nc_profile
-from app.mirror import provider_evidence_export_v1 as evidence_export
 from app.mirror import provider_trust_graph as graph_producer
-from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import provider_trust_graph_read_model_v1 as read_model
 
 
@@ -48,24 +45,9 @@ def _load_selection(
     operation_ref: str,
 ) -> read_model.ProviderTrustGraphReadSelectionV1:
     try:
-        graph_artifact = graph_producer._read_bounded(
-            artifact_path,
-            graph_independent.MAX_ARTIFACT_BYTES,
-        )
-        export_request_raw = graph_producer._read_bounded(
-            request_path,
-            evidence_export.MAX_REQUEST_BYTES,
-        )
-    except Exception:
+        return read_model.load_selection(artifact_path, request_path, operation_ref)
+    except read_model.ProviderTrustGraphReadModelV1Error:
         raise _LocalViewError("view:local-input") from None
-    return read_model.ProviderTrustGraphReadSelectionV1(
-        graph_artifact=graph_artifact,
-        profile_registry=nc_profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY,
-        expected_profile_id=nc_profile.NC_MEDICAID_GRAPH_PROFILE.profile_id,
-        expected_profile_version=nc_profile.NC_MEDICAID_GRAPH_PROFILE.version,
-        export_request_raw=export_request_raw,
-        expected_operation_ref=operation_ref,
-    )
 
 
 def _base_view(selection: read_model.ProviderTrustGraphReadSelectionV1, *, now: int) -> dict[str, object]:
