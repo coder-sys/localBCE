@@ -1,0 +1,66 @@
+{
+  "schema": "rightrail-guard-suites/v1",
+  "suites": {
+    "selftest": {
+      "class": "light",
+      "cwd": ".",
+      "program": "cmd.exe",
+      "args": ["/c", "exit", "0"],
+      "env": {},
+      "start_floor_bytes": 2190433321,
+      "timeout_seconds": 60,
+      "failure_patterns": []
+    },
+    "financial-correction": {
+      "class": "light",
+      "cwd": ".",
+      "program": "C:\\Users\\neers\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
+      "args": [
+        "-m", "unittest", "-v",
+        "tests.test_right_rail_financial_engine.RightRailFinancialEngineTests.test_correction_transition_release_is_immutable_and_pins_artifact_and_vectors",
+        "tests.test_right_rail_financial_engine.RightRailFinancialEngineTests.test_correction_transition_gate_rejects_missing_and_wrong_release_type",
+        "tests.test_right_rail_financial_engine.RightRailFinancialEngineTests.test_correction_transition_digest_accepts_owner_bytes_and_checked_hex",
+        "tests.test_right_rail_financial_acceptance.RightRailFinancialAcceptanceTests.test_case_04_reject_and_authorize_correction",
+        "tests.test_right_rail_financial_acceptance.RightRailFinancialAcceptanceTests.test_case_05_ack_without_cash_and_immutable_action_retry",
+        "tests.test_right_rail_financial_acceptance.RightRailFinancialAcceptanceTests.test_case_08_revision_race_one_winner_one_stale_loser",
+        "tests.test_right_rail_financial_acceptance.RightRailFinancialAcceptanceTests.test_case_10_interrupted_import_restart_and_disabled_dispatch",
+        "tests.test_right_rail_financial_acceptance.RightRailFinancialAcceptanceTests.test_v5_action_requires_current_evaluation_and_exact_retry_identity",
+        "tests.test_right_rail_financial_semantic_adapter.RightRailFinancialSemanticAdapterTests.test_correction_refuses_missing_or_bypassed_transition_without_mutation"
+      ],
+      "env": { "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "." },
+      "start_floor_bytes": 2400000000,
+      "timeout_seconds": 900,
+      "failure_patterns": []
+    },
+    "service-kit-scenario": {
+      "class": "light",
+      "cwd": ".",
+      "program": "C:\\Users\\neers\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
+      "args": [
+        "-m", "unittest", "-v",
+        "tests.test_right_rail_financial_staff_server.RightRailFinancialStaffWorkspaceTests.test_service_kit_correction_lost_response_retry_and_shadow_restore"
+      ],
+      "env": { "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "." },
+      "start_floor_bytes": 2400000000,
+      "timeout_seconds": 900,
+      "failure_patterns": [],
+      "note": "placeholder: scenario test name from tools/right_rail_financial_service_kit.py SERVICE_SCENARIO; start floor not yet measured for this suite"
+    },
+    "lean-engine-build": {
+      "class": "heavy",
+      "cwd": "lean\\engine",
+      "program": "C:\\Users\\neers\\.elan\\bin\\lake.exe",
+      "args": ["build", "blind_financial_correction"],
+      "env": {},
+      "start_floor_bytes": 4190433321,
+      "timeout_seconds": 3600,
+      "failure_patterns": [
+        "(?m)^error:",
+        "(?m)^\\S+\\.lean:\\d+:\\d+: error",
+        "(?m)^\u2716",
+        "(?i)build failed",
+        "declaration uses 'sorry'"
+      ]
+    }
+  }
+}
