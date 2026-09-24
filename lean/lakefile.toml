@@ -1,19 +1,14 @@
 name = "RightRail"
 version = "0.1.0"
-defaultTargets = ["BlindLedger", "blind_semantic_kernel", "StateKernel", "blind_state_semantic_kernel"]
+defaultTargets = ["BlindLedger", "blind_semantic_kernel"]
 
-# One Lake workspace (Constitution IX.1).  `BlindLedger` is the Engine library:
-# the financial correction transition, the Semantic kernel, and the shared
-# `BlindLedger.Sha3` module.  `StateKernel` holds the State kernel's divergent
-# ExactKernel/Theorems/SemanticExecutable variants; it imports the shared Sha3.
-# The two variants must never be imported into one environment: both declare
-# `BlindLedger.Semantic.*` with different definitions and theorem statements.
+# One Lake workspace (Constitution IX.1).  `BlindLedger` holds the financial
+# correction transition, the Semantic kernel and the shared `BlindLedger.Sha3`.
+# Parked, not built: the State kernel (`parked/state_clearance/lean`) and the
+# unbuilt Kernel-series/System modules (`parked/lean_unbuilt`).
 
 [[lean_lib]]
 name = "BlindLedger"
-
-[[lean_lib]]
-name = "StateKernel"
 
 [[lean_exe]]
 name = "blind_semantic_kernel"
@@ -33,9 +28,4 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 [[lean_exe]]
 name = "blind_financial_axioms"
 root = "BlindLedger.Financial.AxiomCheck"
-moreLinkArgs = ["-Wl,--no-insert-timestamp"]
-
-[[lean_exe]]
-name = "blind_state_semantic_kernel"
-root = "StateKernel.SemanticExecutable"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
