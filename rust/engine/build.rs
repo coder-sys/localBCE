@@ -16,7 +16,11 @@ const WINDOWS_NTDLL_IMPORT: &str =
 
 /* These are deliberately hard pins, not values learned from the current
 checkout.  They are filled only after the complete linked source/toolchain
-receipt has been reviewed and read back. */
+receipt has been reviewed and read back.  They predate the 2026-09-24 merge
+into the one `lean/` workspace (package `RightRail`): the source binding
+already did not match the pre-merge `lean/engine` bytes, and the package rename
+changes the native boundary, object and receipt bindings too.  The build fails
+closed here until a reviewed guarded build re-pins them. */
 const PINNED_LEAN_SOURCE_BINDING_SHA256: &str =
     "eae07e9685e736a962df125e96ec8d8a32338b2a89aa4dffd1b945bee0fb484b";
 const PINNED_LEAN_OBJECTS_BINDING_SHA256: &str =
@@ -379,13 +383,13 @@ fn main() {
     println!("cargo:rerun-if-changed=Cargo.lock");
     println!("cargo:rerun-if-changed=.cargo/config.toml");
     for file in LEAN_SOURCE_FILES {
-        println!("cargo:rerun-if-changed=../../lean/engine/{file}");
+        println!("cargo:rerun-if-changed=../../lean/{file}");
     }
 
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| fail("CARGO_MANIFEST_DIR is missing")),
     );
-    let lean_root = manifest_dir.join("..").join("..").join("lean").join("engine");
+    let lean_root = manifest_dir.join("..").join("..").join("lean");
     let target = env::var("TARGET").unwrap_or_else(|_| fail("TARGET is missing"));
     if target != RUST_TARGET {
         fail(format!("unexpected Rust target: {target}"));
@@ -456,7 +460,7 @@ fn main() {
     });
     if !semantic_c_text.contains("blind_ledger_run_bytes")
         || !semantic_c_text
-            .contains("initialize_blind__ledger__semantic__kernel_BlindLedger_SemanticExecutable")
+            .contains("initialize_RightRail_BlindLedger_SemanticExecutable")
         || semantic_c_text.contains("\nint main(")
     {
         fail("linked semantic module is missing the explicit export or contains an OS main");

@@ -26,7 +26,10 @@ const LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.33.1\n";
 const MAX_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
 
 // These are the reviewed source/artifact readback identities.  A zero/empty
-// value is deliberately not a wildcard.
+// value is deliberately not a wildcard.  Both pins predate the 2026-09-24
+// merge into the one `lean/` workspace (source binding already did not match
+// the pre-merge `lean/state` bytes); they fail closed until a reviewed guarded
+// build of `blind_state_semantic_kernel` re-pins them.
 const EXPECTED_ARTIFACT_SHA256: &str =
     "dc5f51ae2c913c434187e7b916c58c394789757e9a384f669cb9dd6913b66cc7";
 const EXPECTED_SOURCE_BINDING_SHA256: &str =
@@ -53,10 +56,10 @@ const EXPECTED_PHASE0_BINDING: &str =
     "b55b99adcb9085039947a09e718169fe4b882c49f8a1bb7b8fc221ed518555203ed51565280ba0f25228a9f3f735b205a0abe6620c68c2e8963d4e8635aa8808";
 
 const SOURCE_FILES: &[&str] = &[
-    "BlindLedger/ExactKernel.lean",
+    "StateKernel/ExactKernel.lean",
     "BlindLedger/Sha3.lean",
-    "BlindLedger/SemanticExecutable.lean",
-    "BlindLedger/Theorems.lean",
+    "StateKernel/SemanticExecutable.lean",
+    "StateKernel/Theorems.lean",
     "lakefile.toml",
     "lean-toolchain",
     "lake-manifest.json",
@@ -111,14 +114,14 @@ fn sha3_512_domain(domain: &str, parts: &[&[u8]]) -> String {
 }
 
 fn lean_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..\\..\\lean\\state")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..\\..\\lean")
 }
 
 fn expected_kernel_path(root: &Path) -> PathBuf {
     let filename = if cfg!(windows) {
-        "blind_semantic_kernel.exe"
+        "blind_state_semantic_kernel.exe"
     } else {
-        "blind_semantic_kernel"
+        "blind_state_semantic_kernel"
     };
     root.join(".lake").join("build").join("bin").join(filename)
 }

@@ -48,7 +48,7 @@
     },
     "lean-engine-build": {
       "class": "heavy",
-      "cwd": "lean\\engine",
+      "cwd": "lean",
       "program": "C:\\Users\\neers\\.elan\\bin\\lake.exe",
       "args": ["build", "blind_financial_correction"],
       "env": {},

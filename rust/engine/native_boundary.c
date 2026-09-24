@@ -26,7 +26,7 @@ enum {
 };
 
 extern void lean_initialize_runtime_module(void);
-extern lean_object *initialize_blind__ledger__semantic__kernel_BlindLedger_SemanticExecutable(
+extern lean_object *initialize_RightRail_BlindLedger_SemanticExecutable(
     uint8_t builtin);
 extern lean_object *blind_ledger_run_bytes(lean_object *data);
 
@@ -45,7 +45,7 @@ int blind_ledger_native_initialize(void) {
 
   lean_initialize_runtime_module();
   lean_object *result =
-      initialize_blind__ledger__semantic__kernel_BlindLedger_SemanticExecutable(1);
+      initialize_RightRail_BlindLedger_SemanticExecutable(1);
   if (result == NULL || !lean_io_result_is_ok(result)) {
     if (result != NULL) {
       lean_dec_ref(result);

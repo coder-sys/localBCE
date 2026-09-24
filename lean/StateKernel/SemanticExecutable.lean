@@ -1,4 +1,4 @@
-import BlindLedger.Theorems
+import StateKernel.Theorems
 
 namespace BlindLedger.Semantic
 
