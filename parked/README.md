@@ -14,6 +14,13 @@ sibling paths (`tools\direct_mask_vole`, `tools\direct_mask_pipeline`), so they 
 closed until the track is unparked; `Command` mode is unaffected.
 `parked/mirror_legacy/` holds the NC Medicaid directory v1 adapter (and its independent
 checker and test), moved out of `app/mirror/`.
+`parked/state_clearance/` holds the State BLSDRQ01 direct clearance route
+(`direct_state_owned_clearance_v1`, `semantic_kernel_binding`,
+`transactional_database_boundary`, `governance_authority_v2`), the whole former
+`experiments/` tree it imports (native_v3 continuity/trust-boundary/phase0 and the
+longfellow evidence and patches) and their tests. Nothing in the financial product imports
+them; the route never had a production pin. It still imports `app/batch/poseidon.py` and
+`app/minimal_clearance_*`, which stay in `app/`.
 The private-ZK track is parked under Constitution IX.4: the plan marks the private zero-knowledge mode
 as conditional, so it stays off the critical path until a customer need selects it.
 The default `pytest` run excludes this directory; run it explicitly with `pytest parked`.

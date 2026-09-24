@@ -13,15 +13,15 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.direct_state_owned_clearance_v1 as direct_clearance_module
-import app.transactional_database_boundary as database_boundary_module
-from app.direct_state_owned_clearance_v1 import (
+import parked.state_clearance.app.direct_state_owned_clearance_v1 as direct_clearance_module
+import parked.state_clearance.app.transactional_database_boundary as database_boundary_module
+from parked.state_clearance.app.direct_state_owned_clearance_v1 import (
     DIRECT_INITIAL_CLEARANCE_ROOT,
     DIRECT_INITIAL_PAYMENT_ROOT,
     DirectStateOwnedAtomicClearanceV1,
     DirectStateOwnedClearanceError,
 )
-from app.semantic_kernel_binding import (
+from parked.state_clearance.app.semantic_kernel_binding import (
     DIRECTIVE_NAMES,
     POLICY_NAMES,
     PinnedSemanticKernelBinding,
@@ -42,12 +42,12 @@ from app.semantic_kernel_binding import (
     parse_state_kernel_request,
     semantic_result_from_details,
 )
-from app.transactional_database_boundary import (
+from parked.state_clearance.app.transactional_database_boundary import (
     AntiRollbackAnchorSnapshot,
     InMemoryAntiRollbackReference,
     ProductionBoundaryError,
 )
-from experiments.native_v3_phase0.native_v3_fixture import (
+from parked.state_clearance.experiments.native_v3_phase0.native_v3_fixture import (
     DIRECTIVE_BLOCK,
     DIRECTIVE_CLEAR,
     DIRECTIVE_EXCEPTION_APPROVED,
@@ -55,7 +55,7 @@ from experiments.native_v3_phase0.native_v3_fixture import (
     DIRECTIVE_HUMAN_REVIEW,
     NO_EXCEPTION_SENTINEL,
 )
-from experiments.native_v3_plaintext_continuity.continuity import (
+from parked.state_clearance.experiments.native_v3_plaintext_continuity.continuity import (
     ACCESS_READ,
     ACCESS_WRITE,
     DEMO_CASES,
@@ -65,7 +65,7 @@ from experiments.native_v3_plaintext_continuity.continuity import (
     bundle_bytes,
     make_completeness,
 )
-from experiments.native_v3_plaintext_continuity.independent import (
+from parked.state_clearance.experiments.native_v3_plaintext_continuity.independent import (
     CONTROL_SET_ID,
     EVALUATOR_ID,
     IndependentParseError,
@@ -74,7 +74,7 @@ from experiments.native_v3_plaintext_continuity.independent import (
     parse_bundle,
     parse_bundle_details,
 )
-from experiments.native_v3_trust_boundary.profile import build_profile_bindings
+from parked.state_clearance.experiments.native_v3_trust_boundary.profile import build_profile_bindings
 
 
 def _digest(domain: bytes, *parts: bytes) -> bytes:

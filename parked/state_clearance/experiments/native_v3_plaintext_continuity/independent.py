@@ -14,7 +14,7 @@ import json
 import sys
 from typing import Any
 
-from experiments.native_v3_trust_boundary.profile import build_profile_bindings
+from parked.state_clearance.experiments.native_v3_trust_boundary.profile import build_profile_bindings
 
 
 class IndependentParseError(ValueError):

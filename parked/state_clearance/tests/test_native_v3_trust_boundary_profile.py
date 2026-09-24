@@ -9,14 +9,14 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from experiments.native_v3_phase0.native_v3_fixture import (
+from parked.state_clearance.experiments.native_v3_phase0.native_v3_fixture import (
     ACCESS_READ,
     ACCESS_WRITE,
     AccessEvent,
     build_fixture,
 )
 
-from experiments.native_v3_trust_boundary.profile import (
+from parked.state_clearance.experiments.native_v3_trust_boundary.profile import (
     ProfileError,
     _validate_compiled_parameter_report,
     build_profile_bindings,
@@ -55,7 +55,7 @@ class TrustBoundaryProfileTests(unittest.TestCase):
         self.assertEqual(bindings["chronology"]["sequence_after"], bindings["chronology"]["sequence_before"] + 1)
 
     def test_compiled_parameter_report_rejects_exactly_seven_categories(self) -> None:
-        report_path = Path(
+        report_path = Path(__file__).resolve().parents[1] / (
             "experiments/longfellow_v09_native_v3/evidence/"
             "implementation_parameter_attestation.json"
         )
@@ -157,14 +157,14 @@ class TrustBoundaryProfileTests(unittest.TestCase):
             validate_security_ledger(bad)
 
         with patch(
-            "experiments.native_v3_trust_boundary.profile.UPSTREAM_MANIFEST_SHA256",
+            "parked.state_clearance.experiments.native_v3_trust_boundary.profile.UPSTREAM_MANIFEST_SHA256",
             "0" * 64,
         ):
             with self.assertRaisesRegex(ProfileError, "ledger:provenance-source-mismatch"):
                 build_security_ledger()
 
         with patch(
-            "experiments.native_v3_trust_boundary.profile.UPSTREAM_MANIFEST_RELATIVE_PATH",
+            "parked.state_clearance.experiments.native_v3_trust_boundary.profile.UPSTREAM_MANIFEST_RELATIVE_PATH",
             "experiments/longfellow_v09_native_v3/missing-manifest.json",
         ):
             with self.assertRaisesRegex(ProfileError, "ledger:provenance-source-unavailable"):

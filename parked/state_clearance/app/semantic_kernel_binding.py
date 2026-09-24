@@ -24,7 +24,7 @@ from app.minimal_clearance_verifier_process import (
     VerifierProcessError,
     run_contained_verifier_stream,
 )
-from experiments.native_v3_plaintext_continuity.independent import (
+from parked.state_clearance.experiments.native_v3_plaintext_continuity.independent import (
     MAX_BUNDLE_BYTES,
     IndependentBundleDetails,
     REASON_CONTROL_INTERVAL,

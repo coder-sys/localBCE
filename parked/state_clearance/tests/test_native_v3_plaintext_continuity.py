@@ -10,7 +10,7 @@ import subprocess
 import sys
 import unittest
 
-from experiments.native_v3_phase0.native_v3_fixture import (
+from parked.state_clearance.experiments.native_v3_phase0.native_v3_fixture import (
     DIRECTIVE_BLOCK,
     DIRECTIVE_CLEAR,
     DIRECTIVE_EXCEPTION_APPROVED,
@@ -21,8 +21,8 @@ from experiments.native_v3_phase0.native_v3_fixture import (
     POLICY_RESULT_FAIL,
     TRUSTED_AUTHORIZER_ID,
 )
-from experiments.native_v3_trust_boundary.profile import build_profile_bindings
-from experiments.native_v3_plaintext_continuity.continuity import (
+from parked.state_clearance.experiments.native_v3_trust_boundary.profile import build_profile_bindings
+from parked.state_clearance.experiments.native_v3_plaintext_continuity.continuity import (
     ACCESS_READ,
     ACCESS_WRITE,
     DEMO_CASES,
@@ -51,7 +51,7 @@ from experiments.native_v3_plaintext_continuity.continuity import (
     source_state_address,
     audit_state_address,
 )
-from experiments.native_v3_plaintext_continuity.independent import (
+from parked.state_clearance.experiments.native_v3_plaintext_continuity.independent import (
     IndependentParseError,
     parse_bundle,
 )
@@ -785,9 +785,9 @@ class PlaintextContinuityTests(unittest.TestCase):
             )
 
     def test_cli_kat_and_telemetry_are_nonactivating(self) -> None:
-        root = Path(__file__).resolve().parents[1]
+        root = Path(__file__).resolve().parents[3]  # repository root, for -m
         result = subprocess.run(
-            [sys.executable, "-B", "-m", "experiments.native_v3_plaintext_continuity.continuity", "kat"],
+            [sys.executable, "-B", "-m", "parked.state_clearance.experiments.native_v3_plaintext_continuity.continuity", "kat"],
             cwd=root,
             check=False,
             capture_output=True,
@@ -799,7 +799,7 @@ class PlaintextContinuityTests(unittest.TestCase):
         self.assertFalse(payload["proof_session_accepted"])
         self.assertIsNone(payload["proof_suite_id"])
         telemetry = __import__(
-            "experiments.native_v3_plaintext_continuity.continuity",
+            "parked.state_clearance.experiments.native_v3_plaintext_continuity.continuity",
             fromlist=["measure_direct_slice"],
         ).measure_direct_slice()
         self.assertEqual(telemetry["cases"], len(DEMO_CASES))
@@ -807,11 +807,11 @@ class PlaintextContinuityTests(unittest.TestCase):
         self.assertFalse(telemetry["complete_proof_resource_gate_measured"])
 
     def test_independent_verifier_cross_process(self) -> None:
-        root = Path(__file__).resolve().parents[1]
+        root = Path(__file__).resolve().parents[3]  # repository root, for -m
         _, facts, completeness, _, _, receipt = self.apply_case("valid-continuity")
         raw = bundle_bytes(receipt, facts, completeness)
         valid = subprocess.run(
-            [sys.executable, "-B", "-m", "experiments.native_v3_plaintext_continuity.independent", "verify"],
+            [sys.executable, "-B", "-m", "parked.state_clearance.experiments.native_v3_plaintext_continuity.independent", "verify"],
             cwd=root,
             input=raw,
             capture_output=True,
@@ -822,7 +822,7 @@ class PlaintextContinuityTests(unittest.TestCase):
         self.assertEqual(payload["status"], "NATIVE_V3_PLAINTEXT_CONTINUITY_INDEPENDENT_PARSE_PASS")
         self.assertEqual(payload["receipt_id"], receipt.receipt_id.hex())
         invalid = subprocess.run(
-            [sys.executable, "-B", "-m", "experiments.native_v3_plaintext_continuity.independent", "verify"],
+            [sys.executable, "-B", "-m", "parked.state_clearance.experiments.native_v3_plaintext_continuity.independent", "verify"],
             cwd=root,
             input=raw[:-1],
             capture_output=True,

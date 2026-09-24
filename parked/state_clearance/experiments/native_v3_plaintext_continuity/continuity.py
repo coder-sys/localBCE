@@ -21,7 +21,7 @@ import time
 import tracemalloc
 from typing import Any, Mapping, Sequence
 
-from experiments.native_v3_phase0.native_v3_fixture import (
+from parked.state_clearance.experiments.native_v3_phase0.native_v3_fixture import (
     DIRECTIVE_BLOCK,
     DIRECTIVE_CLEAR,
     DIRECTIVE_EXCEPTION_APPROVED,
@@ -40,7 +40,7 @@ from experiments.native_v3_phase0.native_v3_fixture import (
     POLICY_RESULT_PASS,
     TRUSTED_AUTHORIZER_ID,
 )
-from experiments.native_v3_trust_boundary.profile import build_profile_bindings
+from parked.state_clearance.experiments.native_v3_trust_boundary.profile import build_profile_bindings
 
 
 class ContinuityError(ValueError):
