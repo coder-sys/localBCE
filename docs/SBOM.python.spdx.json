@@ -27,7 +27,7 @@
     },
     {
       "SPDXID": "SPDXRef-Package-Python-colorama",
-      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact colorama-0.4.6-py2.py3-none-any.whl; Linux artifact colorama-0.4.6-py2.py3-none-any.whl.",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact colorama-0.4.6-py2.py3-none-any.whl; Linux artifact colorama-0.4.6-py2.py3-none-any.whl.",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://pypi.org/project/colorama/0.4.6/",
       "externalRefs": [
@@ -45,7 +45,7 @@
     },
     {
       "SPDXID": "SPDXRef-Package-Python-iniconfig",
-      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact iniconfig-2.3.0-py3-none-any.whl; Linux artifact iniconfig-2.3.0-py3-none-any.whl.",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact iniconfig-2.3.0-py3-none-any.whl; Linux artifact iniconfig-2.3.0-py3-none-any.whl.",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://pypi.org/project/iniconfig/2.3.0/",
       "externalRefs": [
@@ -63,7 +63,7 @@
     },
     {
       "SPDXID": "SPDXRef-Package-Python-packaging",
-      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact packaging-26.2-py3-none-any.whl; Linux artifact packaging-26.2-py3-none-any.whl.",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact packaging-26.2-py3-none-any.whl; Linux artifact packaging-26.2-py3-none-any.whl.",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://pypi.org/project/packaging/26.2/",
       "externalRefs": [
@@ -81,7 +81,7 @@
     },
     {
       "SPDXID": "SPDXRef-Package-Python-pluggy",
-      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pluggy-1.6.0-py3-none-any.whl; Linux artifact pluggy-1.6.0-py3-none-any.whl.",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact pluggy-1.6.0-py3-none-any.whl; Linux artifact pluggy-1.6.0-py3-none-any.whl.",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://pypi.org/project/pluggy/1.6.0/",
       "externalRefs": [
@@ -99,7 +99,7 @@
     },
     {
       "SPDXID": "SPDXRef-Package-Python-pygments",
-      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pygments-2.20.0-py3-none-any.whl; Linux artifact pygments-2.20.0-py3-none-any.whl.",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact pygments-2.20.0-py3-none-any.whl; Linux artifact pygments-2.20.0-py3-none-any.whl.",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://pypi.org/project/pygments/2.20.0/",
       "externalRefs": [
@@ -117,7 +117,7 @@
     },
     {
       "SPDXID": "SPDXRef-Package-Python-pytest",
-      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pytest-9.0.3-py3-none-any.whl; Linux artifact pytest-9.0.3-py3-none-any.whl.",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact pytest-9.0.3-py3-none-any.whl; Linux artifact pytest-9.0.3-py3-none-any.whl.",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://pypi.org/project/pytest/9.0.3/",
       "externalRefs": [

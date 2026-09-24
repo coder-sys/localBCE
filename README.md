@@ -37,7 +37,7 @@ $3,000 short. Expected cents are derived by hand, never by the code under test.
 | `lean/engine/` | Lean financial semantics, including the correction transition |
 | `lean/state/` | Lean kernel for the direct-state-owned clearance route |
 | `artifacts/engine-correction-e911/` | The pinned correction executable and its `PROVENANCE.md` |
-| `tools/` | CLI, offline service kit, Continuity v7 receiver, privacy scanner, dependency installer |
+| `tools/` | CLI, offline service kit, Continuity v7 receiver, privacy scanner |
 | `tests/` | Product tests (`pytest` default run) |
 | `provider_app/` | Provider App pre-submission checker (separate product) |
 | `native/guard/` | Guarded runner for every heavy build or test |
