@@ -1,8 +1,11 @@
 # Direct-mask native tools (parked track)
 
 These C directories belong to the parked private zero-knowledge evidence track
-(`PRIVATE_ZK`; see `parked/README.md`). They stay here because the guard builds
-from this path. None of them is on the financial critical path, and none may
+(`PRIVATE_ZK`; see `parked/README.md`). `direct_mask_fixture` stays at
+`native/tools/direct_mask_fixture/` because the protected guard requires that
+directory to exist; its CMake finds the siblings via `../`, so building it needs
+the siblings restored beside it. Default CMake paths such as `../../vendor` were
+written for the original checkout layout and need overrides. None of them is on the financial critical path, and none may
 authorize a clearance, state transition, payment or activation.
 
 | Directory | What it owns |

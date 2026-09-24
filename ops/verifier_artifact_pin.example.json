@@ -1,9 +1,0 @@
-{
-  "schema_version": "blind_ledger_verifier_artifact_pin_v2",
-  "selection_state": "UNSELECTED",
-  "proofSuiteId": null,
-  "artifactSha3_512": null,
-  "verifierExecutableSha3_512": null,
-  "production_usable": false,
-  "activation": false
-}

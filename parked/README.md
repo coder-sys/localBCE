@@ -5,9 +5,13 @@ clearance queue, composition and runtime, direct-mask contract and complete path
 `lean/queue`, `lean/security`, `rust/queue`, the Profile 11 source host) and its tests.
 Its architecture documents are in `parked/private_zk/docs/` (`NATIVE_V3_ARCHITECTURE.md`,
 `DATABASE_ZK_ARCHITECTURE.md`); they are frozen as written and may cite retired files.
-The C sources in `native/tools/direct_mask_*` belong to the same track but stay in
-`native/` because the guard (`native/guard/run_guarded_v4.ps1`) builds from there;
-`native/tools/README.md` describes them.
+The direct-mask C sources are in `parked/private_zk/native/tools/` (described by its
+`README.md`), except `native/tools/direct_mask_fixture/`: the protected guard
+(`native/guard/run_guarded_v4.ps1`, line 56) refuses every mode, including the live
+`Command` mode, if that directory is missing, so it stays. The guard's
+`Configure`/`Build`/`CTest` lanes build this parked fixture and now point at moved
+sibling paths (`tools\direct_mask_vole`, `tools\direct_mask_pipeline`), so they fail
+closed until the track is unparked; `Command` mode is unaffected.
 `parked/mirror_legacy/` holds the NC Medicaid directory v1 adapter (and its independent
 checker and test), moved out of `app/mirror/`.
 The private-ZK track is parked under Constitution IX.4: the plan marks the private zero-knowledge mode
