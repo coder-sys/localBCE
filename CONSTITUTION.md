@@ -79,6 +79,11 @@ silent default.
    synthetic, non-PHI, nonpayment, `proofSuiteId=null`,
    `production_usable=false`, `activation=false`.
 3. Failures, skips and warnings are reported, never relabeled.
+4. RightRail is in a planned pre-state build phase (no state engagement for
+   at least a year). Building and proving the complete product on synthetic
+   data is the plan, not a gap. Do not list the absence of a state, official
+   receiver, real data or live payments as a blocker, caveat or limit of
+   progress; keep the standing claims in VI.2 in the status file and move on.
 
 ## Article VII — The state can always leave
 
@@ -231,3 +236,5 @@ never an amendment.
 - 2026-09-24 — Article XI added at the founder's direction: the values and
   ideology in `docs/DESIGN_IDEOLOGY.md` (original 2026-08-14 and revised
   2026-09-23) are incorporated as binding engineering principles.
+- 2026-09-24 — Article VI.4 added at the founder's direction: the pre-state
+  build phase is the plan; missing state/receiver/real data is not a blocker.

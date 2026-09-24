@@ -57,7 +57,7 @@ PROTECTED_PATHS = frozenset({
     "tools/ops_authority.py",
     "tests/rightrail_financial_expected_cases.py",
     "app/minimal_clearance_resource_limits.py",
-    "tools/direct_mask_contract/calculator_v2.py",
+    "parked/private_zk/tools/direct_mask_contract/calculator_v2.py",
 })
 REQUIRED_FINANCIAL_CHECKS = frozenset({
     "lean_transition_execution",

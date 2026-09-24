@@ -1,7 +1,0 @@
-<!-- Controlled negative template: the gate must reject this direct producer archive. -->
-<Project>
-  <PropertyGroup>
-    <ProjectName>controlled_forbidden_direct_dependency_fixture</ProjectName>
-    <DirectForbiddenDependency>dm_source_proof_build\Release\dm_source_proof.lib</DirectForbiddenDependency>
-  </PropertyGroup>
-</Project>

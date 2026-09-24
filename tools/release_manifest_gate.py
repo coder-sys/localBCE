@@ -198,15 +198,15 @@ EXCLUDED_SUFFIXES = frozenset(
 # but are not publishable release inputs. Keep this boundary explicit and finite.
 RELEASE_SOURCE_ONLY_PATHS = frozenset(
     {
-        "tests/test_direct_mask_complete_path.py",
-        "tests/test_direct_mask_source_boundary.py",
-        "profile11_complete_path.py",
-        "profile11_complete_path_manifest.json",
-        "profile11_source_boundary.py",
-        "tools/direct_mask_complete_path/CMakeLists.txt",
-        "tools/direct_mask_complete_path/__init__.py",
-        "tools/direct_mask_complete_path/complete_path.py",
-        "tools/direct_mask_complete_path/source_boundary.py",
+        "parked/private_zk/tests/test_direct_mask_complete_path.py",
+        "parked/private_zk/tests/test_direct_mask_source_boundary.py",
+        "parked/private_zk/profile11_complete_path.py",
+        "parked/private_zk/profile11_complete_path_manifest.json",
+        "parked/private_zk/profile11_source_boundary.py",
+        "parked/private_zk/tools/direct_mask_complete_path/CMakeLists.txt",
+        "parked/private_zk/tools/direct_mask_complete_path/__init__.py",
+        "parked/private_zk/tools/direct_mask_complete_path/complete_path.py",
+        "parked/private_zk/tools/direct_mask_complete_path/source_boundary.py",
     }
 )
 
@@ -218,11 +218,11 @@ RELEASE_EXCLUSION_REASONS: dict[str, str] = {
     "docs/security-freeze/BL-PQ512-v1/hardening.json": "retained generated security evidence with private-path metadata",
     "experiments/longfellow_v09_native_v3/evidence/longfellow_v09_native_v3_debloat_evidence.json": "retained generated measurement evidence with private build-path metadata",
     "experiments/longfellow_v09_native_v3/evidence/longfellow_v09_native_v3_failure.json": "retained generated failure evidence with private build-path metadata",
-    "experiments/profile11_source_host/Cargo.lock": "source-only external Profile 11 host harness",
-    "experiments/profile11_source_host/Cargo.toml": "source-only external Profile 11 host harness with private dependency path",
-    "experiments/profile11_source_host/src/main.rs": "source-only external Profile 11 host harness",
+    "parked/private_zk/experiments/profile11_source_host/Cargo.lock": "source-only external Profile 11 host harness",
+    "parked/private_zk/experiments/profile11_source_host/Cargo.toml": "source-only external Profile 11 host harness with private dependency path",
+    "parked/private_zk/experiments/profile11_source_host/src/main.rs": "source-only external Profile 11 host harness",
     "tests/test_build_release_archive.py": "source-only privacy fixture or scanner tool",
-    "tests/test_minimal_clearance_source_auth_verifier_adapter.py": "source-only external Profile 11 artifact/path fixture",
+    "parked/private_zk/tests/test_minimal_clearance_source_auth_verifier_adapter.py": "source-only external Profile 11 artifact/path fixture",
     "tests/test_minimal_clearance_verifier_process.py": "source-only synthetic Windows namespace fixture",
     "tests/test_mirror_external_governance_approval.py": "source-only synthetic privacy-canary fixture",
     "tests/test_mirror_external_privacy_support_approval.py": "source-only synthetic privacy-canary fixture",
@@ -230,8 +230,8 @@ RELEASE_EXCLUSION_REASONS: dict[str, str] = {
     "tests/test_mirror_v2_consolidation.py": "source-only synthetic privacy/path-canary fixture",
     "tests/test_nc_medicaid_fhir_source.py": "source-only synthetic privacy/path-canary fixture",
     "tests/test_privacy_artifact_scan.py": "source-only privacy fixture or scanner tool",
-    "tests/test_profile11_complete_path.py": "source-only Profile 11 external-workspace fixture",
-    "tests/test_profile11_source_boundary.py": "source-only Profile 11 external-workspace fixture",
+    "parked/private_zk/tests/test_profile11_complete_path.py": "source-only Profile 11 external-workspace fixture",
+    "parked/private_zk/tests/test_profile11_source_boundary.py": "source-only Profile 11 external-workspace fixture",
     "tests/test_qualification_gate.py": "source-only synthetic private-path error fixture",
     "tools/privacy_artifact_scan.py": "source-only privacy fixture or scanner tool",
 }

@@ -20,12 +20,10 @@ payment systems keep moving the money. It is five parts on one small foundation
 (Control Pack, Blind Ledger, Mirror, Continuity State, Switch): Lean decides each
 consequential step and the Python owner commits it.
 
-## Honest boundary (applies to everything below)
+## Standing claims
 
-Synthetic prototype on one laptop: fictional data, no PHI, no real payments, no official
-receiver, dispatch disabled. `proofSuiteId=null`, `production_usable=false`,
-`activation=false`. A passing local test is not production qualification, and no
-independent audit or trusted runner exists yet.
+Pre-state build phase (the plan; CONSTITUTION VI.4): synthetic data,
+`proofSuiteId=null`, `production_usable=false`, `activation=false`.
 
 ## What actually runs today and was verified
 
@@ -87,9 +85,6 @@ in `docs/history/` that holds the raw record.
    memory. Until this build happens, the service kit cannot be assembled and Queue's
    source-bound mode stays closed.
 2. **One heavy run at a time.** All builds and tests share one guarded lane.
-3. **Intentionally absent:** no official receiver, no PHI, no payment movement, no live
-   dispatch. These are design boundaries, not bugs; changing them needs a real state
-   agreement and separate authority.
 
 ## Parked
 
@@ -112,3 +107,7 @@ bundles under `work/_retired-research-20260924`.
    corrections, repeat messages, crash recovery and restore, all visible in Mirror.
 5. **Second, nonfinancial workflow via the Provider Trust Graph**: run its 12 written
    tests, then expose it read-only through an authenticated staff route.
+
+## Change log
+
+- 2026-09-24 — Private-ZK / Profile 11-12 track moved to `parked/private_zk/` (96 files); default `pytest` run excludes it (`pytest parked` runs it). Dead `tools/direct_mask_*` duplicates removed (newer copies live in `native/tools/`). New constitution tests: `tests/test_right_rail_financial_constitution_invariants.py` (written, not yet run).

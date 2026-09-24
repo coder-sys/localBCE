@@ -91,22 +91,22 @@ MARKDOWN_REGISTRY = {
     "docs/REJECTED_ARCHITECTURES.md": _registration(
         "README.md", "rejected-architectures", "current prohibitions against retired directions"
     ),
-    "tools/direct_mask_authenticated_proof/README.md": _registration(
+    "native/tools/direct_mask_authenticated_proof/README.md": _registration(
         "README.md", "direct-mask-authenticated-proof-readme", "retained direct-mask authenticated-proof tool boundary"
     ),
-    "tools/direct_mask_fixture/README.md": _registration(
+    "native/tools/direct_mask_fixture/README.md": _registration(
         "README.md", "direct-mask-fixture-readme", "retained direct-mask synthetic fixture boundary"
     ),
-    "tools/direct_mask_pipeline/README.md": _registration(
+    "native/tools/direct_mask_pipeline/README.md": _registration(
         "README.md", "direct-mask-pipeline-readme", "retained direct-mask pipeline tool boundary"
     ),
-    "tools/direct_mask_source_auth/README.md": _registration(
+    "native/tools/direct_mask_source_auth/README.md": _registration(
         "README.md", "direct-mask-source-auth-readme", "retained direct-mask source-auth tool boundary"
     ),
-    "tools/direct_mask_source_proof/README.md": _registration(
+    "native/tools/direct_mask_source_proof/README.md": _registration(
         "README.md", "direct-mask-source-proof-readme", "retained direct-mask source-proof tool boundary"
     ),
-    "tools/direct_mask_wire/README.md": _registration(
+    "native/tools/direct_mask_wire/README.md": _registration(
         "README.md", "direct-mask-wire-readme", "retained direct-mask wire tool boundary"
     ),
 }
@@ -120,14 +120,14 @@ DOCUMENTED_COMMAND_FILE_REFERENCES = {
         {
             "experiments/native_v3_phase0/native_v3_fixture.py",
             "experiments/native_v3_phase0_rust/Cargo.toml",
-            "profile11_complete_path.py",
+            "parked/private_zk/profile11_complete_path.py",
             "tests/test_active_core_contract.py",
             "tests/test_documentation_governance.py",
             "tests/test_minimal_clearance_verifier_process.py",
             "tests/test_native_v3_plaintext_continuity.py",
             "tests/test_native_v3_trust_boundary_profile.py",
-            "tests/test_profile11_complete_path.py",
-            "tests/test_profile11_source_boundary.py",
+            "parked/private_zk/tests/test_profile11_complete_path.py",
+            "parked/private_zk/tests/test_profile11_source_boundary.py",
             "tests/test_semantic_assurance_gate.py",
             "tests/test_qualification_gate.py",
             "tests/test_security_freeze_spec.py",
