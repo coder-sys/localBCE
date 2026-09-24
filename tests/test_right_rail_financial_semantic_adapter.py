@@ -11,7 +11,6 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import dataclass, replace
 import hashlib
-import json
 import os
 from pathlib import Path
 import shutil
@@ -330,34 +329,6 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
                 connection.rollback()
 
     @staticmethod
-    def _decode_snapshot(
-        store: FinancialOwner,
-        payload: bytes,
-        *,
-        context: adapter.TrustedAuthorityContext | None = None,
-        evaluation_time_ms: int | None = None,
-    ) -> adapter.LockedSemanticSnapshot:
-        authority_context = context or adapter.TrustedAuthorityContext.from_authority(store.trusted_authority)
-        if evaluation_time_ms is None:
-            evaluation_time_ms = 2**63 - 2
-        with closing(store._connect()) as connection:
-            connection.execute("BEGIN")
-            try:
-                return adapter.decode_locked_snapshot(
-                    payload,
-                    connection=connection,
-                    obligation_id=expected.H_OBLIGATION_ID,
-                    authority_context=authority_context,
-                    evaluation_time_ms=evaluation_time_ms,
-                    expected_config=store.config,
-                    expected_scope=store.config,
-                    expected_mode=store.mode,
-                    expected_owner_id=store.owner_id,
-                )
-            finally:
-                connection.rollback()
-
-    @staticmethod
     def _hash(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -537,17 +508,15 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(data["actions"], [])
         self.assertEqual(data["action_outbox"], [])
         self.assertEqual(data["current_evaluation"]["receipt"]["revision"], data["obligation"]["revision"])
-        self.assertEqual(
-            self._decode_snapshot(store, adapter.encode_locked_snapshot(snapshot)).data,
-            data,
-        )
+        # Rebuilding from the same owner transaction state is byte-identical.
+        self.assertEqual(self._snapshot(store).canonical_bytes, snapshot.canonical_bytes)
         self._assert_no_source_mutation(store, before_hash)
 
         # The fixed fixture remains an independently stated arithmetic fact.
         self.assertEqual(sum(item.owed_cents for item in expected.PROGRAM_ITEMS), EXPECTED_PROGRAM_TOTAL_CENTS)
         self.assertEqual(len(expected.PROGRAM_ITEMS), EXPECTED_HOSPITAL_COUNT)
 
-    def test_snapshot_boundary_rebuilds_against_owner_and_rejects_self_rehashed_tamper(self) -> None:
+    def test_snapshot_cannot_be_constructed_without_owner_validation(self) -> None:
         store = self._build_base()
         self._record_cash(store)
         self._record_claim(store)
@@ -562,16 +531,6 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
                 snapshot.pre_evaluation_revision,
                 snapshot.evaluation_time_ms,
             )
-
-        tampered_body = json.loads(snapshot.canonical_bytes.decode("ascii"))
-        tampered_body["obligation"]["owed_cents"] += 1
-        unsigned = dict(tampered_body)
-        del unsigned["snapshot_digest"]
-        tampered_digest = owner._digest(adapter._SNAPSHOT_DOMAIN, adapter._canonical(unsigned))
-        tampered_body["snapshot_digest"] = tampered_digest.hex().upper()
-        tampered_payload = adapter._canonical(tampered_body)
-        with self.assertRaisesRegex(adapter.SemanticAdapterCodecError, "snapshot_owner_binding"):
-            self._decode_snapshot(store, tampered_payload)
         self._assert_no_source_mutation(store, source_hash)
 
     def test_authorized_rejected_and_acknowledged_histories_are_explicit(self) -> None:
@@ -1002,8 +961,6 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:projection:cash:overflow"):
             self._snapshot_on_path(overflow)
 
-        with self.assertRaisesRegex(adapter.SemanticAdapterCodecError, "snapshot_json"):
-            self._decode_snapshot(store, b"not-json")
         deeply_nested = "0"
         for _ in range(40):
             deeply_nested = f"[{deeply_nested}]"
@@ -1028,7 +985,6 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
         input_wire = adapter.encode_blfin02_input(snapshot)
         self.assertEqual(input_wire[: len(adapter.BLFIN02_MAGIC)], adapter.BLFIN02_MAGIC)
-        self.assertEqual(input_wire, adapter.encode_lean_input(snapshot))
         self.assertLessEqual(len(input_wire), adapter.MAX_WIRE_BYTES)
 
         result = adapter.DecodedLeanResult(

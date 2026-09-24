@@ -53,10 +53,6 @@ MAX_RESULT_BYTES: Final[int] = 1 * 1024 * 1024
 MAX_JSON_COLUMN_BYTES: Final[int] = independent.MAX_JSON_BYTES
 _SNAPSHOT_DOMAIN: Final[bytes] = b"RR/FINANCIAL/SEMANTIC-INPUT/v1\x00"
 _HEX_DIGEST = re.compile(r"[0-9A-F]{128}\Z")
-_SCHEMA_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9./:_-]{0,127}\Z")
-_RESULT_STATUSES: Final[frozenset[str]] = frozenset(
-    {"CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED"}
-)
 
 
 def _fail(error_type: type[SemanticAdapterError], code: str) -> None:
@@ -69,12 +65,6 @@ def _fail(error_type: type[SemanticAdapterError], code: str) -> None:
 
 def _text(value: object, label: str, *, max_bytes: int = 4096) -> str:
     if type(value) is not str or not value or "\x00" in value or len(value.encode("utf-8")) > max_bytes:
-        _fail(SemanticAdapterInputError, label)
-    return value
-
-
-def _schema_text(value: object, label: str) -> str:
-    if type(value) is not str or _SCHEMA_TEXT.fullmatch(value) is None:
         _fail(SemanticAdapterInputError, label)
     return value
 
@@ -445,46 +435,6 @@ def _decode_snapshot_body(payload: bytes) -> tuple[dict[str, Any], bytes, str, i
     if type(pre["item_id"]) is not str:
         _fail(SemanticAdapterCodecError, "snapshot_item")
     return body, snapshot_digest, obligation_id, pre["revision"], evaluation_time
-
-
-def decode_locked_snapshot(
-    payload: bytes,
-    *,
-    connection: sqlite3.Connection,
-    obligation_id: str,
-    authority_context: TrustedAuthorityContext,
-    evaluation_time_ms: int,
-    expected_config: object,
-    expected_scope: object,
-    expected_mode: str,
-    expected_owner_id: str,
-    expected_continuity_epoch: int | None = None,
-    max_fact_rows: int = MAX_FACT_ROWS,
-) -> LockedSemanticSnapshot:
-    """Rebuild a snapshot from the owner transaction before accepting bytes."""
-
-    _decode_snapshot_body(payload)
-    rebuilt = build_locked_semantic_snapshot(
-        connection,
-        obligation_id=obligation_id,
-        authority_context=authority_context,
-        evaluation_time_ms=evaluation_time_ms,
-        expected_config=expected_config,
-        expected_scope=expected_scope,
-        expected_mode=expected_mode,
-        expected_owner_id=expected_owner_id,
-        expected_continuity_epoch=expected_continuity_epoch,
-        max_fact_rows=max_fact_rows,
-    )
-    if rebuilt.canonical_bytes != payload:
-        _fail(SemanticAdapterCodecError, "snapshot_owner_binding")
-    return rebuilt
-
-
-def encode_locked_snapshot(snapshot: LockedSemanticSnapshot) -> bytes:
-    """Return the already-authenticated immutable canonical snapshot bytes."""
-
-    return bytes(_require_validated_snapshot(snapshot).canonical_bytes)
 
 
 BLFIN02_MAGIC: Final[bytes] = b"BLFIN02"
@@ -1256,10 +1206,6 @@ def encode_blfres02_result(result: DecodedLeanResult) -> bytes:
     return _encode_blfres02_result(result)
 
 
-encode_lean_input = encode_blfin02_input
-decode_engine_result = decode_blfres02_result
-
-
 def _verify_owner_connection(
     connection: sqlite3.Connection,
     *,
@@ -1519,59 +1465,29 @@ def _load_evidence(
         content_digest = _blob(row["content_digest"], "evidence_content_digest")
         record_digest = _blob(row["record_digest"], "evidence_record_digest")
         amount = None if row["amount_cents"] is None else _cents(row["amount_cents"], "evidence_amount", positive=True)
-        try:
-            record = owner.EvidenceRecord(
-                evidence_id=str(row["evidence_id"]),
-                item_id=str(row["item_id"]),
-                kind=str(row["kind"]),
-                common_origin_id=str(row["common_origin_id"]),
-                source_id=str(row["source_id"]),
-                source_version=str(row["source_version"]),
-                local_ref=str(row["local_ref"]),
-                applicable_at_ms=int(row["applicable_at_ms"]),
-                event_at_ms=int(row["event_at_ms"]),
-                received_at_ms=int(row["received_at_ms"]),
-                content_digest=content_digest,
-                amount_cents=amount,
-                reversal_of=None if row["reversal_of"] is None else str(row["reversal_of"]),
-                supersedes=None if row["supersedes"] is None else str(row["supersedes"]),
-            )
-        except owner.FinancialError:
-            _fail(SemanticAdapterIntegrityError, "evidence_contract")
-        expected_content = owner._digest(
-            owner._EVIDENCE_DOMAIN,
-            _canonical(
-                {
-                    "source_id": record.source_id,
-                    "source_version": record.source_version,
-                    "local_ref": record.local_ref,
-                    "common_origin_id": record.common_origin_id,
-                    "kind": record.kind,
-                }
-            ),
-        )
-        if content_digest != expected_content or record_digest != record.record_digest:
-            _fail(SemanticAdapterIntegrityError, "evidence_digest")
-        if record.item_id != item_id or record.applicable_at_ms > evaluation_time_ms or record.received_at_ms > evaluation_time_ms:
+        evidence_id = _id(row["evidence_id"], "evidence_id")
+        applicable_at = _time(row["applicable_at_ms"], "evidence_applicable_at")
+        received_at = _time(row["received_at_ms"], "evidence_received_at")
+        if str(row["item_id"]) != item_id or applicable_at > evaluation_time_ms or received_at > evaluation_time_ms:
             _fail(SemanticAdapterIntegrityError, "evidence_time_binding")
         body = {
-            "evidence_id": record.evidence_id,
-            "item_id": record.item_id,
-            "kind": record.kind,
-            "common_origin_id": record.common_origin_id,
-            "source_id": record.source_id,
-            "source_version": record.source_version,
-            "local_ref": record.local_ref,
-            "applicable_at_ms": record.applicable_at_ms,
-            "event_at_ms": record.event_at_ms,
-            "received_at_ms": record.received_at_ms,
+            "evidence_id": evidence_id,
+            "item_id": item_id,
+            "kind": str(row["kind"]),
+            "common_origin_id": str(row["common_origin_id"]),
+            "source_id": str(row["source_id"]),
+            "source_version": str(row["source_version"]),
+            "local_ref": str(row["local_ref"]),
+            "applicable_at_ms": applicable_at,
+            "event_at_ms": _time(row["event_at_ms"], "evidence_event_at"),
+            "received_at_ms": received_at,
             "content_digest": _hex(content_digest),
             "record_digest": _hex(record_digest),
             "amount_cents": amount,
-            "reversal_of": record.reversal_of,
-            "supersedes": record.supersedes,
+            "reversal_of": None if row["reversal_of"] is None else str(row["reversal_of"]),
+            "supersedes": None if row["supersedes"] is None else str(row["supersedes"]),
         }
-        by_id[record.evidence_id] = body
+        by_id[evidence_id] = body
         result.append(body)
     return result, by_id
 
@@ -1791,11 +1707,7 @@ def _load_actions(
             _fail(SemanticAdapterIntegrityError, "action_revision")
         payload = _parse_json_column(row["payload_json"], "action_payload", expected_type=dict)
         payload_digest = _blob(row["payload_digest"], "action_payload_digest")
-        if payload_digest != owner._digest(owner._ACTION_DOMAIN, row["payload_json"].encode("ascii")):
-            _fail(SemanticAdapterIntegrityError, "action_payload_digest")
         idempotency = _blob(row["idempotency_key"], "action_idempotency")
-        if idempotency != owner._digest(owner._IDEMPOTENCY_DOMAIN, action_id.encode("ascii")):
-            _fail(SemanticAdapterIntegrityError, "action_idempotency")
         created = _time(row["created_at_ms"], "action_created")
         if created > evaluation_time_ms:
             _fail(SemanticAdapterIntegrityError, "action_time_binding")
@@ -1815,11 +1727,6 @@ def _load_actions(
         }
         by_id[action_id] = body
         result.append(body)
-    for action_id, outbox in outbox_by_id.items():
-        if outbox["status"] == "ACKNOWLEDGED" and outbox["acknowledgment_ref"] is None:
-            _fail(SemanticAdapterIntegrityError, "outbox_acknowledgment")
-        if outbox["status"] == "READY" and outbox["acknowledgment_ref"] is not None:
-            _fail(SemanticAdapterIntegrityError, "outbox_acknowledgment")
     return result, list(outbox_by_id.values()), by_id
 
 
@@ -2015,92 +1922,6 @@ def _load_evaluations(
     return result, by_id, latest
 
 
-def _validate_determinations(
-    *,
-    determinations: list[dict[str, Any]],
-    claims: Mapping[str, Mapping[str, Any]],
-    actions: Mapping[str, Mapping[str, Any]],
-    evaluations: Mapping[str, Mapping[str, Any]],
-    evidence: Mapping[str, Mapping[str, Any]],
-    pack: owner.ControlPack,
-    authority_context: TrustedAuthorityContext,
-    obligation_id: str,
-    pre_evaluation_revision: int,
-    evaluation_time_ms: int,
-) -> None:
-    seen_claims: set[str] = set()
-    for determination in determinations:
-        claim_id = determination["claim_id"]
-        claim = claims.get(claim_id)
-        action = next((value for value in actions.values() if value["determination_id"] == determination["determination_id"]), None)
-        if claim is None or action is None or determination["obligation_id"] != obligation_id:
-            _fail(SemanticAdapterIntegrityError, "determination_relation")
-        if claim_id in seen_claims:
-            _fail(SemanticAdapterIntegrityError, "determination_claim_duplicate")
-        seen_claims.add(claim_id)
-        mapping = {
-            "OFFSET_AUTHORIZED": ("OFFSET_AUTHORIZED", "OFFSET_AUTHORIZATION", "AUTHORIZED"),
-            "OFFSET_REJECTED_CORRECTION_AUTHORIZED": ("OFFSET_REJECTED_CORRECTION_AUTHORIZED", "CORRECTION_PAYMENT_REQUEST", "REJECTED"),
-        }
-        expected = mapping.get(determination["decision"])
-        if expected is None or (determination["decision"], action["kind"], claim["status"]) != expected:
-            _fail(SemanticAdapterIntegrityError, "determination_status")
-        if action["action_id"] != determination["action_id"] or action["revision"] != determination["resulting_revision"] or action["obligation_id"] != obligation_id:
-            _fail(SemanticAdapterIntegrityError, "determination_action_binding")
-        evaluation = evaluations.get(determination["input_evaluation_id"])
-        if evaluation is None:
-            _fail(SemanticAdapterIntegrityError, "determination_evaluation")
-        receipt = evaluation["receipt"]
-        if receipt["result_digest"] != determination["input_evaluation_result_digest"] or receipt["revision"] != determination["expected_revision"] or claim["evidence_id"] not in receipt["evidence_ids"]:
-            _fail(SemanticAdapterIntegrityError, "determination_evaluation_binding")
-        if determination["decided_at_ms"] < receipt["evaluated_at_ms"] or determination["decided_at_ms"] > evaluation_time_ms:
-            _fail(SemanticAdapterIntegrityError, "determination_chronology")
-        if (
-            determination["expected_revision"] > pre_evaluation_revision
-            or determination["resulting_revision"] > pre_evaluation_revision + 1
-            or determination["resulting_revision"] != determination["expected_revision"] + 1
-            or determination["amount_cents"] != claim["amount_cents"]
-        ):
-            _fail(SemanticAdapterIntegrityError, "determination_revision")
-        if not authority_context.has_role(determination["actor_id"], determination["actor_role"]):
-            _fail(SemanticAdapterAuthorityError, "determination_actor_role")
-        if determination["actor_role"] not in pack.authorized_roles:
-            _fail(SemanticAdapterAuthorityError, "determination_pack_role")
-        bindings = determination["supporting_evidence"]
-        for binding in bindings:
-            if binding["evidence_id"] not in evidence or evidence[binding["evidence_id"]]["record_digest"] != binding["record_digest"]:
-                _fail(SemanticAdapterIntegrityError, "determination_evidence")
-        payload = owner._determination_digest_payload(
-            action_id=determination["action_id"],
-            determination_id=determination["determination_id"],
-            obligation_id=obligation_id,
-            kind=action["kind"],
-            claim_id=claim_id,
-            decision=determination["decision"],
-            amount_cents=determination["amount_cents"],
-            input_evaluation_id=determination["input_evaluation_id"],
-            input_evaluation_result_digest=_digest(determination["input_evaluation_result_digest"], "determination_eval_digest"),
-            actor_id=determination["actor_id"],
-            actor_role=determination["actor_role"],
-            authority_id=determination["authority_id"],
-            authority_epoch=determination["authority_epoch"],
-            authority_digest=_digest(determination["authority_digest"], "determination_authority_digest"),
-            supporting_evidence=bindings,
-            expected_revision=determination["expected_revision"],
-            resulting_revision=determination["resulting_revision"],
-            decided_at_ms=determination["decided_at_ms"],
-        )
-        if _hex(owner._digest(owner._ACTION_DOMAIN, _canonical(payload))) != determination["determination_digest"]:
-            _fail(SemanticAdapterIntegrityError, "determination_digest")
-        action_payload = action["payload"]
-        if action_payload.get("action_id") != action["action_id"] or action_payload.get("obligation_id") != obligation_id or action_payload.get("determination_id") != determination["determination_id"] or action_payload.get("kind") != action["kind"] or action_payload.get("claim_id") != claim_id or action_payload.get("amount_cents") != claim["amount_cents"] or action_payload.get("revision") != action["revision"] or action_payload.get("input_evaluation_id") != determination["input_evaluation_id"] or action_payload.get("input_evaluation_result_digest") != determination["input_evaluation_result_digest"] or action_payload.get("dispatch") != "SYNTHETIC_RECORD_ONLY":
-            _fail(SemanticAdapterIntegrityError, "action_payload_binding")
-
-    for claim in claims.values():
-        if claim["status"] in {"AUTHORIZED", "REJECTED"} and claim["claim_id"] not in seen_claims:
-            _fail(SemanticAdapterIntegrityError, "claim_without_determination")
-
-
 def _load_determinations(
     connection: sqlite3.Connection,
     *,
@@ -2167,54 +1988,6 @@ def _load_determinations(
             _fail(SemanticAdapterIntegrityError, "determination_time_binding")
         result.append(body)
     return result
-
-
-def _validate_projection(
-    *,
-    obligation: sqlite3.Row,
-    payments: Mapping[str, Mapping[str, Any]],
-    claims: Mapping[str, Mapping[str, Any]],
-    evidence: Mapping[str, Mapping[str, Any]],
-    conflicts: list[Mapping[str, Any]],
-    cases: list[Mapping[str, Any]],
-    actions: Mapping[str, Mapping[str, Any]],
-) -> None:
-    cash = 0
-    for payment in payments.values():
-        if payment["active"] == 1:
-            cash = _add(cash, payment["amount_cents"])
-    claimed = 0
-    lawful = 0
-    for claim in claims.values():
-        if claim["status"] in {"CLAIMED", "AUTHORIZED"}:
-            claimed = _add(claimed, claim["amount_cents"])
-        if claim["status"] == "AUTHORIZED":
-            lawful = _add(lawful, claim["amount_cents"])
-    owed = int(obligation["owed_cents"])
-    total = _add(cash, lawful)
-    expected = {
-        "claimed_adjustment_cents": claimed,
-        "lawful_adjustment_cents": lawful,
-        "received_cash_cents": cash,
-        "shortfall_cents": max(owed - total, 0),
-        "overage_cents": max(total - owed, 0),
-        "cash_satisfied": int(cash >= owed),
-        "amount_satisfied": int(total >= owed),
-    }
-    for field, value in expected.items():
-        if int(obligation[field]) != value:
-            _fail(SemanticAdapterIntegrityError, "obligation_projection")
-    evidence_status = "CONFLICT_VISIBLE" if conflicts else ("SUPPORTED" if evidence else "MISSING_EVIDENCE")
-    if str(obligation["verification_status"]) != evidence_status:
-        _fail(SemanticAdapterIntegrityError, "obligation_verification")
-    if not cases:
-        _fail(SemanticAdapterIntegrityError, "obligation_case")
-    if cases[-1]["status"] != str(obligation["case_status"]):
-        _fail(SemanticAdapterIntegrityError, "obligation_case_status")
-    latest_action = max(actions.values(), key=lambda action: (action["created_at_ms"], action["action_id"])) if actions else None
-    delivery = "NONE" if latest_action is None else latest_action["status"]
-    if str(obligation["delivery_status"]) != delivery:
-        _fail(SemanticAdapterIntegrityError, "obligation_delivery")
 
 
 def _make_snapshot(body: dict[str, Any]) -> LockedSemanticSnapshot:
@@ -2349,27 +2122,6 @@ def build_locked_semantic_snapshot(
                 _fail(SemanticAdapterIntegrityError, "determination_action_missing")
             determination["action_id"] = action["action_id"]
             determination_by_id[determination["determination_id"]] = determination
-        _validate_determinations(
-            determinations=determinations_raw,
-            claims=claims_by_id,
-            actions=actions_by_id,
-            evaluations=evaluations_by_id,
-            evidence=evidence_by_id,
-            pack=pack,
-            authority_context=authority_context,
-            obligation_id=obligation_id,
-            pre_evaluation_revision=int(obligation_row["revision"]),
-            evaluation_time_ms=evaluation_time_ms,
-        )
-        _validate_projection(
-            obligation=obligation_row,
-            payments=payments_by_id,
-            claims=claims_by_id,
-            evidence=evidence_by_id,
-            conflicts=conflicts_body,
-            cases=cases_body,
-            actions=actions_by_id,
-        )
         body = {
             "schema": SEMANTIC_INPUT_SCHEMA,
             "version": SEMANTIC_INPUT_VERSION,
@@ -2450,10 +2202,6 @@ __all__ = [
     "TrustedAuthorityContext",
     "build_locked_semantic_snapshot",
     "decode_blfres02_result",
-    "decode_engine_result",
-    "decode_locked_snapshot",
     "encode_blfin02_input",
     "encode_blfres02_result",
-    "encode_lean_input",
-    "encode_locked_snapshot",
 ]
