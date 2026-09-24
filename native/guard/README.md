@@ -40,8 +40,8 @@ Exit codes: 0 PASS, 1 FAIL, 2 GUARD_STOP, 3 HARNESS_ERROR or INVALID.
 
 Suites: `selftest`, `financial-correction` (the nine State correction tests),
 `service-kit-scenario` (placeholder, floor not measured) and
-`lean-engine-build` (heavy; `lake build blind_financial_correction`, with Lean
-error and `sorry` patterns).
+`lean-engine-build` (heavy; `lake build blind_financial_correction` in the one
+Lake workspace `lean/`, with Lean error and `sorry` patterns).
 
 To add a suite, edit `suites.json`. That changes `suite_sha256` in every later
 result line.

@@ -23,11 +23,13 @@ The compiled `Reuse.lean` (10,902 bytes, SHA-256
 `1391120ECCF022FA50B17C9BFBA9BEB15A21F658205C730228CAB17A2E2AF274`) also no
 longer matches the current source.
 
-The current source in `lean/engine/` (`Transition.lean`, 40,732 bytes, SHA-256
+The current source
+(`lean/BlindLedger/Financial/CorrectionTransition/Transition.lean`, moved
+byte-identical from `lean/engine/` on 2026-09-24; 40,732 bytes, SHA-256
 `E982BA7871E45138BD6AAF72434E4F43D17105D42F60413FEB3B57816AD3F01D`) has NOT
 been compiled.
 
-**This binary must never be described as built from the current `lean/engine`
+**This binary must never be described as built from the current `lean/`
 source.** A fresh guarded Engine build is required to replace it.
 
 ## Vectors

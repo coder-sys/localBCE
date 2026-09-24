@@ -63,16 +63,18 @@ digest-bound roster.
   explicit immutable `FinancialCorrectionTransitionRelease`; without one, the
   command fails closed. There is no Python fallback decision.
 - **Pinned executable:** `artifacts/engine-correction-e911/`. It was built from
-  an older `lean/engine` source; see its `PROVENANCE.md`. The current
-  `lean/engine` source must be rebuilt through the guard to replace it.
+  an older Engine source; see its `PROVENANCE.md`. The current `lean/`
+  source must be rebuilt through the guard to replace it.
 - **Evaluation comparison:** `BLFIN02`/`BLFRES02` in
   `app/right_rail_financial_engine.py` with
   `app/right_rail_financial_semantic_adapter.py` is a read-only comparison of
   the owner's evaluation against Lean. It never writes.
-- **Lean sources:** `lean/engine/` (financial types, codec, evaluation,
-  correction transition, decision package, theorems; executables
-  `blind_financial`, `blind_financial_correction`, `blind_financial_axioms`)
-  and `lean/state/` (the direct-state-owned clearance kernel).
+- **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
+  `BlindLedger`: financial types, codec, evaluation, correction transition,
+  decision package, theorems, semantic kernel; executables `blind_financial`,
+  `blind_financial_correction`, `blind_financial_axioms`,
+  `blind_semantic_kernel`). `tools/semantic_assurance_gate.py` checks the
+  correction transition's pinned theorem statements, proofs and axioms.
 
 ## Mirror, Continuity and Switch
 
@@ -104,14 +106,14 @@ cutover.
 packager: it assembles, verifies, extracts, runs the end-to-end scenario and
 serves the workspace from a digest-bound offline archive.
 
-## Direct-state-owned clearance route
+## Direct-state-owned clearance route (parked)
 
-`app/direct_state_owned_clearance_v1.py` evaluates one canonical `BLSDRQ01`
-request through the `lean/state` kernel (`app/semantic_kernel_binding.py`) and
-commits through `app/transactional_database_boundary.py`. Only `CLEAR` or a valid
-`EXCEPTION_APPROVED` may advance economic state; `HOLD`, `HUMAN_REVIEW` and
-`BLOCK` cannot. `tools/semantic_assurance_gate.py` builds and checks the
-separately pinned semantic kernel.
+Parked in `parked/state_clearance/`: `app/direct_state_owned_clearance_v1.py`
+evaluates one canonical `BLSDRQ01` request through the State kernel (`lean/`
+StateKernel library, `rust/` process adapter; `app/semantic_kernel_binding.py`)
+and commits through `app/transactional_database_boundary.py`. Only `CLEAR` or a
+valid `EXCEPTION_APPROVED` may advance economic state; `HOLD`, `HUMAN_REVIEW`
+and `BLOCK` cannot.
 
 ## Mirror Provider Trust Graph
 

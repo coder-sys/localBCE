@@ -751,7 +751,7 @@ function Invoke-ParentProducer {
     }
 
     $engineFull = [System.IO.Path]::GetFullPath($EngineRoot)
-    $sourceRoot = Join-Path $engineFull 'semantic_kernel\lean'
+    $sourceRoot = Join-Path $engineFull 'lean'
     $scriptFull = [System.IO.Path]::GetFullPath($PSCommandPath)
     $expectedScript = [System.IO.Path]::GetFullPath((Join-Path $engineFull 'tools\build_financial_correction_release.ps1'))
     if (-not $scriptFull.Equals($expectedScript, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'producer must run from the authorized Engine tools path' }
@@ -798,7 +798,7 @@ function Invoke-ParentProducer {
     $provenanceOutput = Join-Path $outputFull 'provenance'
     $stageRoot = Join-Path $outputParent ('.engine-build-stage-' + [Guid]::NewGuid().ToString('N'))
     if ([System.IO.Directory]::Exists($stageRoot) -or [System.IO.File]::Exists($stageRoot)) { throw 'refusing a pre-existing isolated build stage' }
-    $stageLeanRoot = Join-Path $stageRoot 'semantic_kernel\lean'
+    $stageLeanRoot = Join-Path $stageRoot 'lean'
     [System.IO.Directory]::CreateDirectory($vectorsOutput) | Out-Null
     [System.IO.Directory]::CreateDirectory($logsOutput) | Out-Null
     [System.IO.Directory]::CreateDirectory($provenanceOutput) | Out-Null

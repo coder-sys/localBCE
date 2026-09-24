@@ -17,7 +17,7 @@ Working rules (details in the constitution):
 - Lean decides; Python adapters commit. No duplicate policy, no silent fallback.
 - The pinned engine binary in `artifacts/engine-correction-e911/` was built
   from an older source; see its `PROVENANCE.md`. Never describe it as built
-  from the current `lean/engine` source.
+  from the current `lean/` source.
 - Parked work (private zero-knowledge / Profile 11-12 native track) is not on
   the critical path.
 - Update `STATUS.md` in a few lines per change. Raw logs stay in log files.
