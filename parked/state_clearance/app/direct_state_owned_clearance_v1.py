@@ -7,7 +7,7 @@ import hashlib
 from pathlib import Path
 from typing import Callable
 
-from app.batch.poseidon import FIELD_MODULUS
+from parked.state_clearance.app.batch.poseidon import FIELD_MODULUS
 from parked.state_clearance.app.governance_authority_v2 import GovernanceAuthorityV2
 from parked.state_clearance.app.semantic_kernel_binding import (
     SemanticKernelBindingError,
