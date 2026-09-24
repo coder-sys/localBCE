@@ -455,9 +455,18 @@ def _read_regular_file_identity(
     kernel32: object,
     pinned: _PinnedExecutableHandle,
     expected_executable_size_bytes: int,
-    expected_executable_sha256: bytes,
+    expected_executable_sha256: bytes | None,
     label: str,
 ) -> tuple[int, bytes]:
+    """Check a pinned handle is a regular disk file of the pinned size.
+
+    With ``expected_executable_sha256`` it also hashes the content through
+    that handle.  ``None`` is used only for the reopen of an already hashed
+    file: the first handle denies write and delete sharing and stays open
+    until the child image is verified, and the caller requires the same
+    volume serial and 128-bit file ID, so rehashing would re-read identical
+    bytes.
+    """
     information = _ByHandleFileInformation()
     if not kernel32.GetFileInformationByHandle(
         pinned._handle, ctypes.byref(information)
@@ -473,6 +482,8 @@ def _read_regular_file_identity(
     actual_size = (int(information.nFileSizeHigh) << 32) | int(information.nFileSizeLow)
     if actual_size != expected_executable_size_bytes:
         raise VerifierProcessError(f"{label}_size")
+    if expected_executable_sha256 is None:
+        return _file_id_info(kernel32=kernel32, handle=pinned._handle, label=label)
 
     digest = hashlib.sha256()
     buffer = ctypes.create_string_buffer(_EXECUTABLE_HASH_CHUNK_BYTES)
@@ -785,7 +796,7 @@ def _open_pinned_executable(
             kernel32=kernel32,
             pinned=reopened,
             expected_executable_size_bytes=expected_executable_size_bytes,
-            expected_executable_sha256=expected_executable_sha256,
+            expected_executable_sha256=None,
             label="verifier_executable_reopen",
         )
         if reopened_id != original_id:
