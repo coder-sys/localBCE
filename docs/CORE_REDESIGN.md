@@ -1,4 +1,6 @@
-# Financial core redesign (proposed 2026-09-24, awaiting founder approval)
+# Financial core redesign (approved by the founder 2026-09-24)
+
+Approval (2026-09-24): founder approved the v8 rebuild and retiring v5/v6 stores, conditional on every step complying with CONSTITUTION.md. Any step that would weaken a safety property or protected answer needs a separate founder decision.
 
 Source: first-principles review of the financial core (owner, checker, successor,
 Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited inline.
