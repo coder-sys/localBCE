@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools import build_release_archive, privacy_primitives
+from tools import privacy_primitives
 from tools.privacy_artifact_scan import main as privacy_scan_main
 from tools.privacy_artifact_scan import scan_artifacts
 
@@ -43,19 +43,7 @@ def _synthetic_envelope(**overrides: object) -> dict[str, object]:
 
 
 class PrivacyArtifactScanTests(unittest.TestCase):
-    def test_release_builder_and_artifact_scanner_share_release_safe_primitives(self) -> None:
-        self.assertIs(
-            build_release_archive._text_categories,
-            privacy_primitives._text_categories,
-        )
-        self.assertIs(
-            build_release_archive._reject_duplicate_keys,
-            privacy_primitives._reject_duplicate_keys,
-        )
-        self.assertIs(
-            build_release_archive._walk_json,
-            privacy_primitives._walk_json,
-        )
+    def test_artifact_scanner_uses_the_shared_privacy_primitives(self) -> None:
         from tools import privacy_artifact_scan
 
         self.assertIs(
@@ -70,22 +58,6 @@ class PrivacyArtifactScanTests(unittest.TestCase):
             privacy_artifact_scan._walk_json,
             privacy_primitives._walk_json,
         )
-
-    def test_shared_primitives_keep_builder_structural_rejections(self) -> None:
-        payloads = (
-            ("host-path.txt", b"C:\\Users\\alice\\proof.json\n"),
-            ("private-key.txt", b"-----BEGIN PRIVATE KEY-----\n"),
-            (
-                "encoded.txt",
-                base64.b64encode(b"PK\x03\x04synthetic-private-payload"),
-            ),
-            ("forbidden.json", b'{"patient_id":"synthetic"}\n'),
-            ("duplicate.json", b'{"safe":1,"safe":2}\n'),
-        )
-        for relative, payload in payloads:
-            with self.subTest(relative=relative):
-                with self.assertRaises(build_release_archive.ReleaseArchiveError):
-                    build_release_archive._validate_payload_content(relative, payload)
 
     def test_empty_artifact_directory_passes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

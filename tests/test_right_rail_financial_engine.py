@@ -22,8 +22,15 @@ EXPECTED_H_OWED_CENTS = semantic_tests.EXPECTED_H_OWED_CENTS
 EXPECTED_OFFSET_CENTS = semantic_tests.EXPECTED_OFFSET_CENTS
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+# The digest-pinned snapshot evaluator (blind_financial.exe, not the E911 correction
+# program). Repo-relative by default; RIGHTRAIL_ACCEPTED_ENGINE_PATH may point
+# elsewhere, but the size and SHA-256 pins below still decide acceptance.
 ACCEPTED_ENGINE_PATH = Path(
-    r"C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\lean-engine-20260913\semantic_kernel\lean\.lake\build\bin\blind_financial.exe"
+    os.environ.get(
+        "RIGHTRAIL_ACCEPTED_ENGINE_PATH",
+        str(REPO_ROOT / "artifacts" / "engine-snapshot-398e" / "blind_financial.exe"),
+    )
 )
 ACCEPTED_ENGINE_SIZE_BYTES = 6_001_664
 ACCEPTED_ENGINE_SHA256 = bytes.fromhex(
