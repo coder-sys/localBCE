@@ -1,0 +1,60 @@
+# Financial core redesign (proposed 2026-09-24, awaiting founder approval)
+
+Source: first-principles review of the financial core (owner, checker, successor,
+Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited inline.
+
+## Verdict
+
+The core is roughly 2.5x larger than the invariants need. Root cause: state lives in
+~20 editable tables with history as a side log, so every consumer (checker, successor,
+continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:
+one command log + one append-only, hash-chained history of complete facts + projections
+rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lines
+(8,000-11,000); owner ~3,000.
+
+## Gaps found (under-enforcement, not just size)
+
+- No command table: each handler invents its own retry/conflict rule (III.3).
+- `expected_revision` optional on 10 handlers; 5 handlers default the actor to a
+  synthetic identity (III.3, I.2, XI.13).
+- `financial_events` has no append-only trigger; foreign keys enabled but none declared (III.4).
+- Python alone computes every evaluation; Lean's BLFIN02 evaluator runs only in tests (V.1/V.2).
+- Every staff read runs the full checker over the whole database (IX.3).
+- Two canonical encodings (SHA3/ASCII and SHA-256/UTF-8 staff snapshot).
+- The successor verifies and views but cannot continue the work (VII.2).
+- v5/v6 store versions cannot hold obligations and no such store exists (speculative).
+
+## Target sizes
+
+| Component | Today | Target |
+|---|---|---|
+| Owner package | ~7,100-7,400 | ~3,000 |
+| Independent checker | 4,942 | ~1,800 (replay + compare; stays code-independent) |
+| Continuity successor | 2,330 | ~300-800 (replay + TEST writer that can continue) |
+| Mirror | 1,674 | ~500 |
+| Switch | 1,408 | ~500 (reuses replay) |
+| Engine + semantic adapter | 3,799 | ~1,300 |
+| Process runner | 1,844 | ~800 (uncertain) |
+| Staff server + CLI | 1,712 | ~1,100 |
+
+## Migration (each step leaves a working system; one guarded run per step)
+
+0. Baseline: run the financial suites through the guard; capture golden outputs
+   (events, heads, decision packages, v7 package bytes) for the 12 cases.
+1. Retire v5/v6 stores (XI.2 record; founder approval — they appear in contracts).
+2. Close gaps: `commands` table, required revision and actor, append-only triggers, FKs.
+3. Replace per-handler retry logic with the command log (goldens byte-identical).
+4. Stop re-validating own writes; one typed decoder per record; version staff snapshot id.
+5. Remove Python re-derivation of Lean (replacement: read-set binding + pre-COMMIT
+   per-obligation checker).
+6. Complete-fact events + `apply` reducer: new OWNER/CONTINUITY v8 contract with explicit
+   v7->v8 conversion; old and new owners run side by side until projections match.
+7. Checker becomes replay + compare with an incremental mode; all 25 tamper tests still detect.
+8. Continuity v8, restore by replay, successor that can continue.
+9. Switch and Mirror reuse the replay.
+10. After a guarded Lean rebuild: BLFIN02 becomes the live evaluator; more transitions move to Lean.
+
+Protected throughout (V.4): `tests/rightrail_financial_expected_cases.py`, Lean KAT/vector
+files, `artifacts/engine-correction-e911/vectors/`, the E911 pin, wire formats and digest
+domains, theorem statements, `tests/test_right_rail_financial_constitution_invariants.py`,
+and the v7 contract while v7 is accepted.
