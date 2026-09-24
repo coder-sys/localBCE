@@ -132,43 +132,20 @@ def _expect_keys(value: object, keys: set[str], label: str) -> dict[str, object]
     return value
 
 
-@dataclass(frozen=True, slots=True)
-class SnapshotFacts:
-    """Identity and exact cohort facts derived from verified v7 SHADOW bytes."""
+class _SnapshotRecords:
+    """Wire records shared by verified snapshot facts and decoded replay input."""
 
-    snapshot_sha256: str
-    package_digest: str
-    owner_id: str
-    owner_schema: str
-    schema_version: int
-    continuity_epoch: int
-    sequence: int
-    history_head: str
-    authority_id: str
-    authority_epoch: int
-    authority_digest: str
-    state_id: str
-    deployment_id: str
-    program_id: str
-    period_id: str
-    currency: str
-    population_id: str
-    manifest_id: str
-    manifest_version: int
-    manifest_digest: str
-    member_ids: tuple[str, ...]
-    member_digest: str
-    control_pack_id: str
-    control_pack_version: int
-    control_pack_digest: str
-    control_pack_start_ms: int
-    control_pack_end_ms: int
-    calculation_rule_id: str
-    adjustment_rule_id: str
-    source_id: str
-    source_version: str
-    source_digest: str
-    source_watermark_ms: int
+    __slots__ = ()
+
+    def owner_record(self) -> dict[str, object]:
+        return {
+            "owner_id": self.owner_id,
+            "schema": self.owner_schema,
+            "schema_version": self.schema_version,
+            "continuity_epoch": self.continuity_epoch,
+            "sequence": self.sequence,
+            "history_head": self.history_head,
+        }
 
     def scope_record(self) -> dict[str, object]:
         return {
@@ -215,6 +192,55 @@ class SnapshotFacts:
             "watermark_ms": self.source_watermark_ms,
         }
 
+    def binding_records(self) -> dict[str, object]:
+        return {
+            "owner": self.owner_record(),
+            "authority": self.authority_record(),
+            "scope": self.scope_record(),
+            "control_pack": self.control_pack_record(),
+            "population": self.population_record(),
+            "source": self.source_record(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotFacts(_SnapshotRecords):
+    """Identity and exact cohort facts derived from verified v7 SHADOW bytes."""
+
+    snapshot_sha256: str
+    package_digest: str
+    owner_id: str
+    owner_schema: str
+    schema_version: int
+    continuity_epoch: int
+    sequence: int
+    history_head: str
+    authority_id: str
+    authority_epoch: int
+    authority_digest: str
+    state_id: str
+    deployment_id: str
+    program_id: str
+    period_id: str
+    currency: str
+    population_id: str
+    manifest_id: str
+    manifest_version: int
+    manifest_digest: str
+    member_ids: tuple[str, ...]
+    member_digest: str
+    control_pack_id: str
+    control_pack_version: int
+    control_pack_digest: str
+    control_pack_start_ms: int
+    control_pack_end_ms: int
+    calculation_rule_id: str
+    adjustment_rule_id: str
+    source_id: str
+    source_version: str
+    source_digest: str
+    source_watermark_ms: int
+
     def cohort_binding_bytes(
         self,
         *,
@@ -238,19 +264,7 @@ class SnapshotFacts:
             "permissions_ref": _text(permissions_ref, "permissions-ref"),
             "pending_boundary_ref": _text(pending_boundary_ref, "pending-boundary-ref"),
             "snapshot_sha256": self.snapshot_sha256,
-            "owner": {
-                "owner_id": self.owner_id,
-                "schema": self.owner_schema,
-                "schema_version": self.schema_version,
-                "continuity_epoch": self.continuity_epoch,
-                "sequence": self.sequence,
-                "history_head": self.history_head,
-            },
-            "authority": self.authority_record(),
-            "scope": self.scope_record(),
-            "population": self.population_record(),
-            "control_pack": self.control_pack_record(),
-            "source": self.source_record(),
+            **self.binding_records(),
         }
         return _canonical_json(payload, maximum=MAX_PACKAGE_BYTES)
 
@@ -475,7 +489,7 @@ class CandidateSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class DecodedReplayInput:
+class DecodedReplayInput(_SnapshotRecords):
     """Immutable, validated view of RR/SWITCH/REPLAY-INPUT/v1 bytes."""
 
     canonical_bytes: bytes
@@ -522,51 +536,6 @@ class DecodedReplayInput:
     candidate_tool_version: str
     candidate_release_sha256: str
 
-    def scope_record(self) -> dict[str, object]:
-        return {
-            "state_id": self.state_id,
-            "deployment_id": self.deployment_id,
-            "program_id": self.program_id,
-            "period_id": self.period_id,
-            "currency": self.currency,
-        }
-
-    def authority_record(self) -> dict[str, object]:
-        return {
-            "authority_id": self.authority_id,
-            "epoch": self.authority_epoch,
-            "digest": self.authority_digest,
-        }
-
-    def control_pack_record(self) -> dict[str, object]:
-        return {
-            "pack_id": self.control_pack_id,
-            "version": self.control_pack_version,
-            "digest": self.control_pack_digest,
-            "effective_start_ms": self.control_pack_start_ms,
-            "effective_end_ms": self.control_pack_end_ms,
-            "calculation_rule_id": self.calculation_rule_id,
-            "adjustment_rule_id": self.adjustment_rule_id,
-        }
-
-    def population_record(self) -> dict[str, object]:
-        return {
-            "population_id": self.population_id,
-            "manifest_id": self.manifest_id,
-            "manifest_version": self.manifest_version,
-            "manifest_digest": self.manifest_digest,
-            "member_digest": self.member_digest,
-            "member_ids": list(self.member_ids),
-        }
-
-    def source_record(self) -> dict[str, object]:
-        return {
-            "source_id": self.source_id,
-            "version": self.source_version,
-            "digest": self.source_digest,
-            "watermark_ms": self.source_watermark_ms,
-        }
-
     def output_binding(
         self,
         *,
@@ -586,19 +555,7 @@ class DecodedReplayInput:
                 "tool_version": tool_version,
                 "artifact_sha256": artifact_sha256,
             },
-            "owner": {
-                "owner_id": self.owner_id,
-                "schema": self.owner_schema,
-                "schema_version": self.schema_version,
-                "continuity_epoch": self.continuity_epoch,
-                "sequence": self.sequence,
-                "history_head": self.history_head,
-            },
-            "authority": self.authority_record(),
-            "scope": self.scope_record(),
-            "control_pack": self.control_pack_record(),
-            "population": self.population_record(),
-            "source": self.source_record(),
+            **self.binding_records(),
         }
 
     def reference_output_binding(self) -> dict[str, object]:
@@ -654,15 +611,7 @@ def decode_replay_input(
         trusted_authority=trusted_authority,
         expected_scope=expected_scope,
     )
-    expected_identity = {
-        "owner_id": facts.owner_id,
-        "schema": facts.owner_schema,
-        "schema_version": facts.schema_version,
-        "continuity_epoch": facts.continuity_epoch,
-        "sequence": facts.sequence,
-        "history_head": facts.history_head,
-    }
-    if owner != expected_identity or authority != facts.authority_record() or scope != facts.scope_record() or pack != facts.control_pack_record() or population != facts.population_record() or source != facts.source_record():
+    if {"owner": owner, "authority": authority, "scope": scope, "control_pack": pack, "population": population, "source": source} != facts.binding_records():
         _fail("switch:replay-binding")
     if snapshot.get("package_digest") != facts.package_digest:
         _fail("switch:replay-package-digest")
@@ -884,19 +833,7 @@ def _build_replay_input(
     payload = {
         "contract": REPLAY_INPUT_CONTRACT,
         "cohort": approval_record,
-        "owner": {
-            "owner_id": facts.owner_id,
-            "schema": facts.owner_schema,
-            "schema_version": facts.schema_version,
-            "continuity_epoch": facts.continuity_epoch,
-            "sequence": facts.sequence,
-            "history_head": facts.history_head,
-        },
-        "authority": facts.authority_record(),
-        "scope": facts.scope_record(),
-        "control_pack": facts.control_pack_record(),
-        "population": facts.population_record(),
-        "source": facts.source_record(),
+        **facts.binding_records(),
         "reference": {
             **reference_record,
             "expected_differences": expected_policies,
@@ -952,19 +889,7 @@ def _result_binding(
         "contract": RESULT_CONTRACT,
         "input_sha256": input_sha256,
         "producer": dict(producer),
-        "owner": {
-            "owner_id": facts.owner_id,
-            "schema": facts.owner_schema,
-            "schema_version": facts.schema_version,
-            "continuity_epoch": facts.continuity_epoch,
-            "sequence": facts.sequence,
-            "history_head": facts.history_head,
-        },
-        "authority": facts.authority_record(),
-        "scope": facts.scope_record(),
-        "control_pack": facts.control_pack_record(),
-        "population": facts.population_record(),
-        "source": facts.source_record(),
+        **facts.binding_records(),
     }
 
 

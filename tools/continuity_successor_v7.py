@@ -376,10 +376,6 @@ def _inner_json(raw: Any, code: str) -> Any:
     return value
 
 
-def _digest_hex(raw: Any, code: str) -> str:
-    return _blob64(raw, code).hex().upper()
-
-
 def _verify_identity(
     row: Mapping[str, Any],
     *,

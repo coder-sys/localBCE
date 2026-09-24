@@ -155,254 +155,95 @@ _HEX128 = re.compile(r"[0-9A-Fa-f]{128}\Z")
 # The names, order, declared SQLite types, and primary-key positions are
 # independently frozen here.  They are intentionally not imported from the
 # owner module.
-_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = {
+def _parse_table_specs(specs: dict[str, str]) -> dict[str, tuple[tuple[str, str, int], ...]]:
+    """Expand ``"T name@pk ..."`` column specs (I=INTEGER, T=TEXT, B=BLOB)."""
+
+    types = {"I": "INTEGER", "T": "TEXT", "B": "BLOB"}
+    result: dict[str, tuple[tuple[str, str, int], ...]] = {}
+    for table, text in specs.items():
+        tokens = text.split()
+        columns = []
+        for index in range(0, len(tokens), 2):
+            name, _, pk = tokens[index + 1].partition("@")
+            columns.append((name, types[tokens[index]], int(pk or 0)))
+        result[table] = tuple(columns)
+    return result
+
+
+_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = _parse_table_specs({
     "financial_identity": (
-        ("id", "INTEGER", 1),
-        ("schema_version", "INTEGER", 0),
-        ("provenance", "TEXT", 0),
-        ("bound_mode", "TEXT", 0),
-        ("bound_owner_id", "TEXT", 0),
-        ("anchor_sequence", "INTEGER", 0),
-        ("anchor_head", "BLOB", 0),
-        ("genesis_head", "BLOB", 0),
-        ("source_package_digest", "BLOB", 0),
-        ("identity_digest", "BLOB", 0),
+        "I id@1 I schema_version T provenance T bound_mode T bound_owner_id I anchor_sequence "
+        "B anchor_head B genesis_head B source_package_digest B identity_digest"
     ),
     "financial_meta": (
-        ("id", "INTEGER", 1),
-        ("schema_version", "INTEGER", 0),
-        ("schema", "TEXT", 0),
-        ("state_id", "TEXT", 0),
-        ("deployment_id", "TEXT", 0),
-        ("program_id", "TEXT", 0),
-        ("period_id", "TEXT", 0),
-        ("currency", "TEXT", 0),
-        ("sequence", "INTEGER", 0),
-        ("history_head", "BLOB", 0),
-        ("continuity_epoch", "INTEGER", 0),
-        ("dispatch_enabled", "INTEGER", 0),
-        ("egress_enabled", "INTEGER", 0),
-        ("trusted_authority_id", "TEXT", 0),
-        ("trusted_authority_epoch", "INTEGER", 0),
-        ("trusted_authority_digest", "BLOB", 0),
-        ("mode", "TEXT", 0),
-        ("owner_id", "TEXT", 0),
+        "I id@1 I schema_version T schema T state_id T deployment_id T program_id T period_id T currency "
+        "I sequence B history_head I continuity_epoch I dispatch_enabled I egress_enabled "
+        "T trusted_authority_id I trusted_authority_epoch B trusted_authority_digest T mode T owner_id"
     ),
     "control_packs": (
-        ("pack_id", "TEXT", 1),
-        ("state_id", "TEXT", 0),
-        ("deployment_id", "TEXT", 0),
-        ("program_id", "TEXT", 0),
-        ("period_id", "TEXT", 0),
-        ("version", "INTEGER", 0),
-        ("source_refs_json", "TEXT", 0),
-        ("effective_start_ms", "INTEGER", 0),
-        ("effective_end_ms", "INTEGER", 0),
-        ("recorded_at_ms", "INTEGER", 0),
-        ("approved_at_ms", "INTEGER", 0),
-        ("calculation_rule_id", "TEXT", 0),
-        ("adjustment_rule_id", "TEXT", 0),
-        ("authorized_roles_json", "TEXT", 0),
-        ("expected_tests_json", "TEXT", 0),
-        ("pack_digest", "BLOB", 0),
-        ("status", "TEXT", 0),
+        "T pack_id@1 T state_id T deployment_id T program_id T period_id I version T source_refs_json "
+        "I effective_start_ms I effective_end_ms I recorded_at_ms I approved_at_ms T calculation_rule_id "
+        "T adjustment_rule_id T authorized_roles_json T expected_tests_json B pack_digest T status"
     ),
     "population_imports": (
-        ("population_id", "TEXT", 1),
-        ("pack_id", "TEXT", 0),
-        ("cutoff_ms", "INTEGER", 0),
-        ("inclusion_rules_json", "TEXT", 0),
-        ("expected_count", "INTEGER", 0),
-        ("source_complete", "INTEGER", 0),
-        ("imported_count", "INTEGER", 0),
-        ("validated_count", "INTEGER", 0),
-        ("validation_digest", "BLOB", 0),
-        ("status", "TEXT", 0),
-        ("created_at_ms", "INTEGER", 0),
-        ("updated_at_ms", "INTEGER", 0),
+        "T population_id@1 T pack_id I cutoff_ms T inclusion_rules_json I expected_count "
+        "I source_complete I imported_count I validated_count B validation_digest T status "
+        "I created_at_ms I updated_at_ms"
     ),
-    "population_items": (
-        ("population_id", "TEXT", 1),
-        ("item_id", "TEXT", 2),
-        ("display_label", "TEXT", 0),
-        ("owed_cents", "INTEGER", 0),
-        ("due_at_ms", "INTEGER", 0),
-        ("currency", "TEXT", 0),
-    ),
+    "population_items": "T population_id@1 T item_id@2 T display_label I owed_cents I due_at_ms T currency",
     "obligations": (
-        ("obligation_id", "TEXT", 1),
-        ("population_id", "TEXT", 0),
-        ("item_id", "TEXT", 0),
-        ("period_id", "TEXT", 0),
-        ("currency", "TEXT", 0),
-        ("owed_cents", "INTEGER", 0),
-        ("due_at_ms", "INTEGER", 0),
-        ("rule_version", "INTEGER", 0),
-        ("revision", "INTEGER", 0),
-        ("claimed_adjustment_cents", "INTEGER", 0),
-        ("lawful_adjustment_cents", "INTEGER", 0),
-        ("received_cash_cents", "INTEGER", 0),
-        ("shortfall_cents", "INTEGER", 0),
-        ("overage_cents", "INTEGER", 0),
-        ("cash_satisfied", "INTEGER", 0),
-        ("amount_satisfied", "INTEGER", 0),
-        ("timely", "INTEGER", 0),
-        ("reporting_complete", "INTEGER", 0),
-        ("verification_status", "TEXT", 0),
-        ("case_status", "TEXT", 0),
-        ("delivery_status", "TEXT", 0),
-        ("current_evaluation_id", "TEXT", 0),
-        ("updated_at_ms", "INTEGER", 0),
+        "T obligation_id@1 T population_id T item_id T period_id T currency I owed_cents I due_at_ms "
+        "I rule_version I revision I claimed_adjustment_cents I lawful_adjustment_cents "
+        "I received_cash_cents I shortfall_cents I overage_cents I cash_satisfied I amount_satisfied "
+        "I timely I reporting_complete T verification_status T case_status T delivery_status "
+        "T current_evaluation_id I updated_at_ms"
     ),
     "evidence": (
-        ("evidence_id", "TEXT", 1),
-        ("item_id", "TEXT", 0),
-        ("kind", "TEXT", 0),
-        ("common_origin_id", "TEXT", 0),
-        ("source_id", "TEXT", 0),
-        ("source_version", "TEXT", 0),
-        ("local_ref", "TEXT", 0),
-        ("applicable_at_ms", "INTEGER", 0),
-        ("event_at_ms", "INTEGER", 0),
-        ("received_at_ms", "INTEGER", 0),
-        ("content_digest", "BLOB", 0),
-        ("record_digest", "BLOB", 0),
-        ("amount_cents", "INTEGER", 0),
-        ("reversal_of", "TEXT", 0),
-        ("supersedes", "TEXT", 0),
+        "T evidence_id@1 T item_id T kind T common_origin_id T source_id T source_version T local_ref "
+        "I applicable_at_ms I event_at_ms I received_at_ms B content_digest B record_digest "
+        "I amount_cents T reversal_of T supersedes"
     ),
     "payments": (
-        ("payment_id", "TEXT", 1),
-        ("obligation_id", "TEXT", 0),
-        ("item_id", "TEXT", 0),
-        ("evidence_id", "TEXT", 0),
-        ("common_origin_id", "TEXT", 0),
-        ("amount_cents", "INTEGER", 0),
-        ("event_at_ms", "INTEGER", 0),
-        ("active", "INTEGER", 0),
-        ("reversed_by_evidence_id", "TEXT", 0),
+        "T payment_id@1 T obligation_id T item_id T evidence_id T common_origin_id I amount_cents "
+        "I event_at_ms I active T reversed_by_evidence_id"
     ),
     "claimed_adjustments": (
-        ("claim_id", "TEXT", 1),
-        ("obligation_id", "TEXT", 0),
-        ("evidence_id", "TEXT", 0),
-        ("amount_cents", "INTEGER", 0),
-        ("owner_role", "TEXT", 0),
-        ("deadline_ms", "INTEGER", 0),
-        ("status", "TEXT", 0),
-        ("created_at_ms", "INTEGER", 0),
-        ("updated_at_ms", "INTEGER", 0),
+        "T claim_id@1 T obligation_id T evidence_id I amount_cents T owner_role I deadline_ms T status "
+        "I created_at_ms I updated_at_ms"
     ),
     "cases": (
-        ("case_id", "TEXT", 1),
-        ("obligation_id", "TEXT", 0),
-        ("reason", "TEXT", 0),
-        ("contractual_accountability", "TEXT", 0),
-        ("next_action_owner", "TEXT", 0),
-        ("due_at_ms", "INTEGER", 0),
-        ("completion_conditions_json", "TEXT", 0),
-        ("status", "TEXT", 0),
-        ("updated_at_ms", "INTEGER", 0),
+        "T case_id@1 T obligation_id T reason T contractual_accountability T next_action_owner "
+        "I due_at_ms T completion_conditions_json T status I updated_at_ms"
     ),
     "determinations": (
-        ("determination_id", "TEXT", 1),
-        ("obligation_id", "TEXT", 0),
-        ("claim_id", "TEXT", 0),
-        ("actor_id", "TEXT", 0),
-        ("actor_role", "TEXT", 0),
-        ("authority_id", "TEXT", 0),
-        ("authority_epoch", "INTEGER", 0),
-        ("authority_digest", "BLOB", 0),
-        ("decision", "TEXT", 0),
-        ("amount_cents", "INTEGER", 0),
-        ("supporting_evidence_json", "TEXT", 0),
-        ("expected_revision", "INTEGER", 0),
-        ("resulting_revision", "INTEGER", 0),
-        ("decided_at_ms", "INTEGER", 0),
-        ("determination_digest", "BLOB", 0),
-        ("input_evaluation_id", "TEXT", 0),
-        ("input_evaluation_result_digest", "BLOB", 0),
+        "T determination_id@1 T obligation_id T claim_id T actor_id T actor_role T authority_id "
+        "I authority_epoch B authority_digest T decision I amount_cents T supporting_evidence_json "
+        "I expected_revision I resulting_revision I decided_at_ms B determination_digest "
+        "T input_evaluation_id B input_evaluation_result_digest"
     ),
     "actions": (
-        ("action_id", "TEXT", 1),
-        ("obligation_id", "TEXT", 0),
-        ("determination_id", "TEXT", 0),
-        ("kind", "TEXT", 0),
-        ("status", "TEXT", 0),
-        ("revision", "INTEGER", 0),
-        ("payload_json", "TEXT", 0),
-        ("payload_digest", "BLOB", 0),
-        ("idempotency_key", "BLOB", 0),
-        ("created_at_ms", "INTEGER", 0),
+        "T action_id@1 T obligation_id T determination_id T kind T status I revision T payload_json "
+        "B payload_digest B idempotency_key I created_at_ms"
     ),
-    "action_outbox": (
-        ("action_id", "TEXT", 1),
-        ("status", "TEXT", 0),
-        ("attempt", "INTEGER", 0),
-        ("payload_digest", "BLOB", 0),
-        ("acknowledgment_ref", "TEXT", 0),
-        ("updated_at_ms", "INTEGER", 0),
-    ),
+    "action_outbox": "T action_id@1 T status I attempt B payload_digest T acknowledgment_ref I updated_at_ms",
     "financial_events": (
-        ("event_sequence", "INTEGER", 1),
-        ("event_id", "BLOB", 0),
-        ("aggregate_type", "TEXT", 0),
-        ("aggregate_id", "TEXT", 0),
-        ("kind", "TEXT", 0),
-        ("before_revision", "INTEGER", 0),
-        ("after_revision", "INTEGER", 0),
-        ("payload_json", "TEXT", 0),
-        ("payload_digest", "BLOB", 0),
-        ("previous_head", "BLOB", 0),
-        ("head", "BLOB", 0),
-        ("committed_at_ms", "INTEGER", 0),
+        "I event_sequence@1 B event_id T aggregate_type T aggregate_id T kind I before_revision "
+        "I after_revision T payload_json B payload_digest B previous_head B head I committed_at_ms"
     ),
     "financial_conflicts": (
-        ("conflict_id", "TEXT", 1),
-        ("obligation_id", "TEXT", 0),
-        ("common_origin_id", "TEXT", 0),
-        ("existing_payment_id", "TEXT", 0),
-        ("candidate_evidence_id", "TEXT", 0),
-        ("existing_amount_cents", "INTEGER", 0),
-        ("candidate_amount_cents", "INTEGER", 0),
-        ("reason", "TEXT", 0),
-        ("visible_at_ms", "INTEGER", 0),
+        "T conflict_id@1 T obligation_id T common_origin_id T existing_payment_id T candidate_evidence_id "
+        "I existing_amount_cents I candidate_amount_cents T reason I visible_at_ms"
     ),
     "evaluations": (
-        ("evaluation_id", "TEXT", 1),
-        ("obligation_id", "TEXT", 0),
-        ("revision", "INTEGER", 0),
-        ("rule_version", "INTEGER", 0),
-        ("evidence_ids_json", "TEXT", 0),
-        ("authority_id", "TEXT", 0),
-        ("evaluated_at_ms", "INTEGER", 0),
-        ("owed_cents", "INTEGER", 0),
-        ("claimed_adjustment_cents", "INTEGER", 0),
-        ("lawful_adjustment_cents", "INTEGER", 0),
-        ("received_cash_cents", "INTEGER", 0),
-        ("shortfall_cents", "INTEGER", 0),
-        ("overage_cents", "INTEGER", 0),
-        ("cash_satisfied", "INTEGER", 0),
-        ("amount_satisfied", "INTEGER", 0),
-        ("timely", "INTEGER", 0),
-        ("reporting_complete", "INTEGER", 0),
-        ("verification_status", "TEXT", 0),
-        ("case_status", "TEXT", 0),
-        ("delivery_status", "TEXT", 0),
-        ("result_digest", "BLOB", 0),
-        ("contract_version", "TEXT", 0),
-        ("scope_json", "TEXT", 0),
-        ("control_pack_id", "TEXT", 0),
-        ("control_pack_version", "INTEGER", 0),
-        ("control_pack_digest", "BLOB", 0),
-        ("authority_epoch", "INTEGER", 0),
-        ("authority_digest", "BLOB", 0),
-        ("evidence_bindings_json", "TEXT", 0),
-        ("input_snapshot_json", "TEXT", 0),
-        ("input_snapshot_digest", "BLOB", 0),
-        ("receipt_digest", "BLOB", 0),
+        "T evaluation_id@1 T obligation_id I revision I rule_version T evidence_ids_json T authority_id "
+        "I evaluated_at_ms I owed_cents I claimed_adjustment_cents I lawful_adjustment_cents "
+        "I received_cash_cents I shortfall_cents I overage_cents I cash_satisfied I amount_satisfied "
+        "I timely I reporting_complete T verification_status T case_status T delivery_status "
+        "B result_digest T contract_version T scope_json T control_pack_id I control_pack_version "
+        "B control_pack_digest I authority_epoch B authority_digest T evidence_bindings_json "
+        "T input_snapshot_json B input_snapshot_digest B receipt_digest"
     ),
-}
+})
 
 TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     table: tuple(column[0] for column in definition)
@@ -410,87 +251,29 @@ TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 TABLES = frozenset(_TABLE_DEFS)
 
-_PROGRAM_FUNDING_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = {
+_PROGRAM_FUNDING_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = _parse_table_specs({
     "program_funding_receipts": (
-        ("receipt_id", "TEXT", 1),
-        ("state_id", "TEXT", 0),
-        ("deployment_id", "TEXT", 0),
-        ("program_id", "TEXT", 0),
-        ("period_id", "TEXT", 0),
-        ("currency", "TEXT", 0),
-        ("source_record_ref", "TEXT", 0),
-        ("amount_cents", "INTEGER", 0),
-        ("confirmation_class", "TEXT", 0),
-        ("evidence_status", "TEXT", 0),
-        ("event_at_ms", "INTEGER", 0),
-        ("recorded_at_ms", "INTEGER", 0),
-        ("supersedes_receipt_id", "TEXT", 0),
-        ("receipt_digest", "BLOB", 0),
+        "T receipt_id@1 T state_id T deployment_id T program_id T period_id T currency "
+        "T source_record_ref I amount_cents T confirmation_class T evidence_status I event_at_ms "
+        "I recorded_at_ms T supersedes_receipt_id B receipt_digest"
     ),
-    "program_funding_projection": (
-        ("source_record_ref", "TEXT", 1),
-        ("receipt_id", "TEXT", 0),
-        ("amount_cents", "INTEGER", 0),
-        ("event_at_ms", "INTEGER", 0),
-        ("revision", "INTEGER", 0),
-        ("receipt_digest", "BLOB", 0),
-    ),
-}
-_POPULATION_MANIFEST_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = {
+    "program_funding_projection": "T source_record_ref@1 T receipt_id I amount_cents I event_at_ms I revision B receipt_digest",
+})
+_POPULATION_MANIFEST_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = _parse_table_specs({
     "population_manifests": (
-        ("manifest_id", "TEXT", 1),
-        ("contract", "TEXT", 0),
-        ("manifest_version", "INTEGER", 0),
-        ("state_id", "TEXT", 0),
-        ("deployment_id", "TEXT", 0),
-        ("program_id", "TEXT", 0),
-        ("period_id", "TEXT", 0),
-        ("currency", "TEXT", 0),
-        ("pack_id", "TEXT", 0),
-        ("cutoff_ms", "INTEGER", 0),
-        ("inclusion_rules_json", "TEXT", 0),
-        ("source_owner_id", "TEXT", 0),
-        ("authority_id", "TEXT", 0),
-        ("authority_epoch", "INTEGER", 0),
-        ("authority_digest", "BLOB", 0),
-        ("approved_by", "TEXT", 0),
-        ("approval_ref", "TEXT", 0),
-        ("source_id", "TEXT", 0),
-        ("source_version", "TEXT", 0),
-        ("source_digest", "BLOB", 0),
-        ("member_count", "INTEGER", 0),
-        ("member_digest", "BLOB", 0),
-        ("supersedes_manifest_id", "TEXT", 0),
-        ("supersedes_digest", "BLOB", 0),
-        ("manifest_digest", "BLOB", 0),
-        ("registered_at_ms", "INTEGER", 0),
+        "T manifest_id@1 T contract I manifest_version T state_id T deployment_id T program_id "
+        "T period_id T currency T pack_id I cutoff_ms T inclusion_rules_json T source_owner_id "
+        "T authority_id I authority_epoch B authority_digest T approved_by T approval_ref T source_id "
+        "T source_version B source_digest I member_count B member_digest T supersedes_manifest_id "
+        "B supersedes_digest B manifest_digest I registered_at_ms"
     ),
-    "population_manifest_members": (
-        ("manifest_id", "TEXT", 1),
-        ("position", "INTEGER", 2),
-        ("member_id", "TEXT", 0),
-    ),
+    "population_manifest_members": "T manifest_id@1 I position@2 T member_id",
     "population_manifest_heads": (
-        ("state_id", "TEXT", 1),
-        ("deployment_id", "TEXT", 2),
-        ("program_id", "TEXT", 3),
-        ("period_id", "TEXT", 4),
-        ("currency", "TEXT", 0),
-        ("pack_id", "TEXT", 5),
-        ("cutoff_ms", "INTEGER", 6),
-        ("source_owner_id", "TEXT", 7),
-        ("manifest_id", "TEXT", 0),
-        ("manifest_version", "INTEGER", 0),
-        ("manifest_digest", "BLOB", 0),
-        ("updated_at_ms", "INTEGER", 0),
+        "T state_id@1 T deployment_id@2 T program_id@3 T period_id@4 T currency T pack_id@5 I cutoff_ms@6 "
+        "T source_owner_id@7 T manifest_id I manifest_version B manifest_digest I updated_at_ms"
     ),
-    "population_manifest_bindings": (
-        ("population_id", "TEXT", 1),
-        ("manifest_id", "TEXT", 0),
-        ("manifest_version", "INTEGER", 0),
-        ("manifest_digest", "BLOB", 0),
-    ),
-}
+    "population_manifest_bindings": "T population_id@1 T manifest_id I manifest_version B manifest_digest",
+})
 _TABLE_DEFS_BY_VERSION = {
     5: _TABLE_DEFS,
     6: {**_TABLE_DEFS, **_PROGRAM_FUNDING_TABLE_DEFS},
@@ -4299,6 +4082,25 @@ def _verify_connection(
     return result
 
 
+def _verify_mapped(
+    connection: sqlite3.Connection,
+    identity: dict[str, object],
+    current_snapshot_package: bytes | None,
+    restore_source_package: bytes | None,
+) -> dict[str, object]:
+    try:
+        return _verify_connection(
+            connection,
+            identity=identity,
+            current_snapshot_package=current_snapshot_package,
+            restore_source_package=restore_source_package,
+        )
+    except IndependentFinancialError:
+        raise
+    except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
+        _fail("database:malformed")
+
+
 def verify_database(
     path: str | Path,
     *,
@@ -4329,17 +4131,7 @@ def verify_database(
     )
     connection = _open_readonly(path)
     try:
-        try:
-            return _verify_connection(
-                connection,
-                identity=identity,
-                current_snapshot_package=current_snapshot_package,
-                restore_source_package=restore_source_package,
-            )
-        except IndependentFinancialError:
-            raise
-        except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
-            _fail("database:malformed")
+        return _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)
     finally:
         connection.close()
 
@@ -4370,17 +4162,7 @@ def verify_database_connection(
         expected_owner_id=expected_owner_id,
         expected_continuity_epoch=expected_continuity_epoch,
     )
-    try:
-        return _verify_connection(
-            connection,
-            identity=identity,
-            current_snapshot_package=current_snapshot_package,
-            restore_source_package=restore_source_package,
-        )
-    except IndependentFinancialError:
-        raise
-    except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
-        _fail("database:malformed")
+    return _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)
 
 
 def verify_decision_package(

@@ -303,6 +303,22 @@ def _cleanup_new_destination(path: Path) -> None:
             continue
 
 
+def _staff_source_facts(support_count: int) -> dict[str, Any]:
+    """Source and freshness facts a staff view states as UNKNOWN (no source is connected)."""
+
+    return {
+        "source_assessment": {
+            "status": "UNKNOWN",
+            "reason": "The manifest digest is a synthetic caller assertion. No source bytes, State authority, external confirmation, or freshness watermark is connected.",
+            "h_support_status": "MISSING" if support_count == 0 else "RECORDED_UNVERIFIED",
+        },
+        "freshness": {
+            "status": "UNKNOWN",
+            "reason": "No source-specific watermark or approved maximum-age rule is present.",
+        },
+    }
+
+
 def _allowlisted_action_fields(payload: object) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         return {}
@@ -670,15 +686,7 @@ class FinancialMirror:
                     "timeline_truncated": timeline_truncated,
                 },
                 "gate_checks": gates,
-                "source_assessment": {
-                    "status": "UNKNOWN",
-                    "reason": "The manifest digest is a synthetic caller assertion. No source bytes, State authority, external confirmation, or freshness watermark is connected.",
-                    "h_support_status": "MISSING" if support_counts[item_id] == 0 else "RECORDED_UNVERIFIED",
-                },
-                "freshness": {
-                    "status": "UNKNOWN",
-                    "reason": "No source-specific watermark or approved maximum-age rule is present.",
-                },
+                **_staff_source_facts(support_counts[item_id]),
                 "integrity": integrity,
                 "continuity": continuity_value,
                 "nonactivation": {
@@ -720,15 +728,7 @@ class FinancialMirror:
                 "timeline": timeline,
                 "timeline_total_count": timeline_total,
                 "timeline_truncated": timeline_truncated,
-                "source_assessment": {
-                    "status": "UNKNOWN",
-                    "reason": "The manifest digest is a synthetic caller assertion. No source bytes, State authority, external confirmation, or freshness watermark is connected.",
-                    "h_support_status": "MISSING" if support_counts[item_id] == 0 else "RECORDED_UNVERIFIED",
-                },
-                "freshness": {
-                    "status": "UNKNOWN",
-                    "reason": "No source-specific watermark or approved maximum-age rule is present.",
-                },
+                **_staff_source_facts(support_counts[item_id]),
                 "integrity": self._staff_integrity_projection(public_verification),
             }
             page_identity = dict(raw["query"])
