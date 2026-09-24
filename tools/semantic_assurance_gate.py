@@ -1,14 +1,19 @@
-"""Build and check the separately pinned Blind Ledger semantic kernel.
+"""Build and check the live financial correction transition proofs.
 
 The candidate is a clean, read-only checkout of the rightrail-main trunk at the
 pinned commit; its one Lake workspace is `candidate.lean_root` (`lean/`).  This
 gate binds that checkout to the reviewed commit/tree, extracts that commit's
-Lake workspace into fresh build roots, checks the actual theorem declarations
-and proof bodies with the pinned Lean toolchain, checks the axiom closure,
-checks the independent Lean checker,
-and fingerprints the freshly built native diagnostic artifact before and after
+Lake workspace into fresh build roots, checks the pinned theorem statements of
+the financial correction transition (`candidate.namespace`) and their proof
+bodies with the pinned Lean toolchain, checks the axiom closure, checks the
+independent Lean checker, and fingerprints the freshly built native diagnostic
+artifact (`blind_financial --correction-transition-kat`) before and after
 execution.  The native diagnostic output is conformance evidence only; it is
 never used as proof evidence.
+
+Manifest v2 (2026-09-24, Constitution XI.2) retargeted this gate from the
+retired Kernel-series clearance kernel, whose theorem source no longer exists,
+to the Lean that actually runs.  It inherits none of the old gate's assurance.
 
 This gate does not establish refinement to Rust, database durability,
 cryptographic soundness, source truth, deployment, payment movement, or
@@ -41,7 +46,7 @@ COMMAND_TIMEOUT_SECONDS = 180.0
 CHECK_TIMEOUT_SECONDS = 90.0
 NATIVE_TIMEOUT_SECONDS = 15.0
 
-REQUIRED_MANIFEST_SHA256 = "7fff2a70ab58f9f7cc928ba4b69f9ef6e093822d35dae33ca06bf2670616273b"
+REQUIRED_MANIFEST_SHA256 = "079f36a5e8eeb65ea3c8e7412233b79abb122212d4e4964679883c75198d971f"
 
 THEOREM_DECLARATION_RE = re.compile(
     r"(?ms)^theorem\s+(?P<name>[A-Za-z0-9_']+)\s+(?P<header>.*?)\s*:=\s*by\b"
@@ -51,84 +56,7 @@ AXIOM_LINE_RE = re.compile(
 )
 HEX_256_RE = re.compile(r"[0-9a-f]{64}\Z")
 HEX_160_RE = re.compile(r"[0-9a-f]{40}\Z")
-
-KAT_EXPECTED: Mapping[str, Mapping[str, str]] = {
-    "valid-continuity": {
-        "policy": "PASS",
-        "directive": "CLEAR",
-        "reason": "VALID_CONTINUITY",
-        "exception": "NONE",
-        "economic_advance": "true",
-        "economic_mutation": "true",
-        "wire_bytes": "71",
-    },
-    "expired-credential": {
-        "policy": "FAIL",
-        "directive": "BLOCK",
-        "reason": "EXPIRED_OR_TERMINATED",
-        "exception": "NONE",
-        "economic_advance": "false",
-        "economic_mutation": "false",
-        "wire_bytes": "71",
-    },
-    "terminated-credential": {
-        "policy": "FAIL",
-        "directive": "BLOCK",
-        "reason": "EXPIRED_OR_TERMINATED",
-        "exception": "NONE",
-        "economic_advance": "false",
-        "economic_mutation": "false",
-        "wire_bytes": "71",
-    },
-    "missing-incomplete-feed": {
-        "policy": "AMBIGUOUS",
-        "directive": "HUMAN_REVIEW",
-        "reason": "INCOMPLETE_OR_AMBIGUOUS",
-        "exception": "NONE",
-        "economic_advance": "false",
-        "economic_mutation": "false",
-        "wire_bytes": "59",
-    },
-    "authoritative-absence": {
-        "policy": "MISSING_EVIDENCE",
-        "directive": "HOLD",
-        "reason": "AUTHORITATIVE_ABSENCE",
-        "exception": "NONE",
-        "economic_advance": "false",
-        "economic_mutation": "false",
-        "wire_bytes": "60",
-    },
-    "conflicting-facts": {
-        "policy": "AMBIGUOUS",
-        "directive": "HUMAN_REVIEW",
-        "reason": "INCOMPLETE_OR_AMBIGUOUS",
-        "exception": "NONE",
-        "economic_advance": "false",
-        "economic_mutation": "false",
-        "wire_bytes": "83",
-    },
-    "stale-rule-interval": {
-        "policy": "AMBIGUOUS",
-        "directive": "HUMAN_REVIEW",
-        "reason": "STALE_RULE_INTERVAL",
-        "exception": "NONE",
-        "economic_advance": "false",
-        "economic_mutation": "false",
-        "wire_bytes": "59",
-    },
-    "governed-exception": {
-        "policy": "FAIL",
-        "directive": "EXCEPTION_APPROVED",
-        "reason": "EXPIRED_OR_TERMINATED",
-        "exception": "40",
-        "economic_advance": "true",
-        "economic_mutation": "true",
-        "wire_bytes": "82",
-    },
-}
-
-EXPECTED_KAT_NAMES = tuple(KAT_EXPECTED)
-
+LEAN_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
 
 class AssuranceError(RuntimeError):
     """A fail-closed semantic assurance setup or verification error."""
@@ -253,9 +181,9 @@ def _load_manifest() -> Manifest:
         },
         "manifest",
     )
-    if value["schema"] != "blind_ledger_semantic_assurance_manifest_v1":
+    if value["schema"] != "blind_ledger_semantic_assurance_manifest_v2":
         raise AssuranceError(f"unsupported manifest schema: {value['schema']!r}")
-    if value["manifest_version"] != 1:
+    if value["manifest_version"] != 2:
         raise AssuranceError(f"unsupported manifest version: {value['manifest_version']!r}")
 
     candidate = value["candidate"]
@@ -267,6 +195,7 @@ def _load_manifest() -> Manifest:
             "required_head",
             "required_tree",
             "lean_root",
+            "namespace",
             "module",
             "theorem_source",
             "declaration_sources",
@@ -277,6 +206,9 @@ def _load_manifest() -> Manifest:
     _git_hex(candidate["required_head"], "candidate.required_head")
     _git_hex(candidate["required_tree"], "candidate.required_tree")
     _relative_path(candidate["lean_root"], "candidate.lean_root")
+    namespace = _string(candidate["namespace"], "candidate.namespace")
+    if LEAN_NAME_RE.fullmatch(namespace) is None:
+        raise AssuranceError(f"candidate.namespace is not a Lean name: {namespace!r}")
     _string(candidate["module"], "candidate.module")
     theorem_source = _relative_path(candidate["theorem_source"], "candidate.theorem_source")
     source_files_value = candidate["source_files"]
@@ -419,44 +351,22 @@ def _load_manifest() -> Manifest:
         raise AssuranceError("native_protocol must be an object")
     _exact_keys(
         native,
-        {
-            "header",
-            "kat_count",
-            "negative_names",
-            "theorem_declaration_count",
-            "gate_ids",
-            "final_line",
-        },
+        {"arguments", "header", "count_key", "gate_tag", "gate_names", "final_line"},
         "native_protocol",
     )
-    header = native["header"]
-    if type(header) is not list or not header or any(
-        type(item) is not str or not item for item in header
-    ):
-        raise AssuranceError("native protocol header must be a non-empty list of strings")
-    kat_count = _positive_int(native["kat_count"], "native_protocol.kat_count")
-    if kat_count != len(KAT_EXPECTED):
-        raise AssuranceError(
-            f"native protocol KAT count must be {len(KAT_EXPECTED)}: got={kat_count}"
-        )
-    if _positive_int(
-        native["theorem_declaration_count"], "native_protocol.theorem_declaration_count"
-    ) != len(declarations):
-        raise AssuranceError("native protocol theorem declaration count changed")
-    negative_names = native["negative_names"]
-    if (
-        type(negative_names) is not list
-        or not negative_names
-        or any(type(item) is not str or not item for item in negative_names)
-        or len(set(negative_names)) != len(negative_names)
-    ):
-        raise AssuranceError(
-            "native negative names must be a non-empty list of unique strings"
-        )
-    gate_ids = native["gate_ids"]
-    if type(gate_ids) is not list or tuple(gate_ids) != tuple(property_ids):
-        raise AssuranceError("native gate ids must match manifest property order")
-    _string(native["final_line"], "native_protocol.final_line")
+    for key in ("arguments", "header", "gate_names"):
+        items = native[key]
+        if type(items) is not list or not items or any(
+            type(item) is not str or not item for item in items
+        ):
+            raise AssuranceError(f"native_protocol.{key} must be a non-empty list of strings")
+    if any(" " in item for item in native["gate_names"]):
+        raise AssuranceError("native_protocol.gate_names must not contain spaces")
+    if len(set(native["gate_names"])) != len(native["gate_names"]):
+        raise AssuranceError("native_protocol.gate_names must be unique")
+    for key in ("count_key", "gate_tag", "final_line"):
+        if " " in _string(native[key], f"native_protocol.{key}"):
+            raise AssuranceError(f"native_protocol.{key} must not contain spaces")
 
     return Manifest(
         candidate=candidate,
@@ -773,146 +683,40 @@ def _parse_fields(line: str, prefix: str) -> dict[str, str]:
     return fields
 
 
-def _check_wire(fields: Mapping[str, str], line: str) -> None:
-    try:
-        declared = int(fields["wire_bytes"])
-        wire = [int(item) for item in fields["wire"].split(",")]
-    except (KeyError, ValueError) as exc:
-        raise AssuranceError(f"malformed wire evidence in {line!r}") from exc
-    if declared != len(wire) or declared <= 0:
-        raise AssuranceError(f"wire length mismatch in {line!r}")
-    if any(byte < 0 or byte > 255 for byte in wire) or wire[:4] != [66, 76, 75, 49]:
-        raise AssuranceError(f"wire bytes are not the reviewed bounded format in {line!r}")
-
-
-def _check_native_output(raw: bytes, native: Mapping[str, Any], declarations: Sequence[str]) -> dict[str, int]:
-    text = _decode(raw, "native kernel", encoding="ascii")
+def _check_native_output(raw: bytes, native: Mapping[str, Any]) -> dict[str, int]:
+    text = _decode(raw, "native diagnostic", encoding="ascii")
     if not raw.endswith(b"\n"):
-        raise AssuranceError("native kernel output has no final line ending")
+        raise AssuranceError("native diagnostic output has no final line ending")
     lines = text.splitlines()
-    negative_names = tuple(native["negative_names"])
-    expected_line_count = (
-        len(native["header"])
-        + len(KAT_EXPECTED)
-        + len(negative_names)
-        + 1
-        + len(declarations)
-        + len(native["gate_ids"])
-        + 3
-    )
+    header = tuple(native["header"])
+    gate_names = tuple(native["gate_names"])
+    expected_line_count = len(header) + 1 + len(gate_names) + 1
     if len(lines) != expected_line_count:
         raise AssuranceError(
             f"native output line count mismatch: expected={expected_line_count} got={len(lines)}"
         )
-    if tuple(lines[: len(native["header"])]) != tuple(native["header"]):
-        raise AssuranceError(f"native protocol header mismatch: {lines[:len(native['header'])]!r}")
-    index = len(native["header"])
-    seen_kats: list[str] = []
-    for _ in KAT_EXPECTED:
-        fields = _parse_fields(lines[index], "KAT")
-        line = lines[index]
-        index += 1
-        name = fields.get("name")
-        if name not in KAT_EXPECTED or name in seen_kats:
-            raise AssuranceError(f"unexpected or duplicate KAT {name!r}")
-        seen_kats.append(name)
-        expected = KAT_EXPECTED[name]
-        expected_fields = {
-            "name",
-            "decoded",
-            "evaluate",
-            "policy",
-            "directive",
-            "reason",
-            "exception",
-            "operative",
-            "economic_advance",
-            "transition",
-            "join",
-            "proof_session_accepted",
-            "economic_mutation",
-            "wire_bytes",
-            "wire",
-        }
-        if set(fields) != expected_fields:
-            raise AssuranceError(f"KAT {name!r} fields changed: {sorted(fields)!r}")
-        for key, expected_value in expected.items():
-            if fields.get(key) != expected_value:
-                raise AssuranceError(
-                    f"KAT {name!r} field {key!r} changed: expected={expected_value!r} got={fields.get(key)!r}"
-                )
-        for key, expected_value in {
-            "decoded": "PASS",
-            "evaluate": "PASS",
-            "operative": "true",
-            "transition": "PASS",
-            "join": "PASS",
-            "proof_session_accepted": "false",
-        }.items():
-            if fields.get(key) != expected_value:
-                raise AssuranceError(f"KAT {name!r} field {key!r} is not {expected_value!r}")
-        _check_wire(fields, line)
-    if tuple(seen_kats) != EXPECTED_KAT_NAMES:
-        raise AssuranceError(f"KAT order changed: {seen_kats!r}")
-
-    seen_negatives: list[str] = []
-    for _ in negative_names:
-        fields = _parse_fields(lines[index], "NEGATIVE")
-        index += 1
-        if set(fields) != {"name", "result"}:
-            raise AssuranceError(f"negative fields changed: {lines[index - 1]!r}")
-        name = fields.get("name")
-        if name not in negative_names or name in seen_negatives:
-            raise AssuranceError(f"unexpected or duplicate negative {name!r}")
-        if fields.get("result") != "REJECTED":
-            raise AssuranceError(f"negative {name!r} was accepted: {lines[index - 1]!r}")
-        seen_negatives.append(name)
-    if tuple(seen_negatives) != negative_names:
-        raise AssuranceError(f"negative order changed: {seen_negatives!r}")
-
-    expected_manifest_line = f"THEOREM_MANIFEST_COUNT={len(declarations)}"
-    if lines[index] != expected_manifest_line:
-        raise AssuranceError(f"theorem manifest count changed: {lines[index]!r}")
+    if tuple(lines[: len(header)]) != header:
+        raise AssuranceError(f"native protocol header mismatch: {lines[:len(header)]!r}")
+    index = len(header)
+    expected_count_line = f"{native['count_key']}={len(gate_names)}"
+    if lines[index] != expected_count_line:
+        raise AssuranceError(f"native KAT count changed: {lines[index]!r}")
     index += 1
-    seen_theorems: list[str] = []
-    for _ in declarations:
-        fields = _parse_fields(lines[index], "THEOREM")
-        index += 1
-        if set(fields) != {"name", "result"} or fields.get("result") != "PROVED":
-            raise AssuranceError(f"native theorem diagnostic changed: {lines[index - 1]!r}")
-        name = fields.get("name")
-        if name not in declarations or name in seen_theorems:
-            raise AssuranceError(f"unexpected or duplicate native theorem: {name!r}")
-        seen_theorems.append(name)
-    if tuple(seen_theorems) != tuple(declarations):
-        raise AssuranceError(f"native theorem diagnostic order changed: {seen_theorems!r}")
-
     seen_gates: list[str] = []
-    for _ in native["gate_ids"]:
-        fields = _parse_fields(lines[index], "GATE")
+    for _ in gate_names:
+        fields = _parse_fields(lines[index], str(native["gate_tag"]))
         index += 1
         if set(fields) != {"name", "result"} or fields.get("result") != "PASS":
-            raise AssuranceError(f"native gate diagnostic failed: {lines[index - 1]!r}")
+            raise AssuranceError(f"native KAT gate failed: {lines[index - 1]!r}")
         name = fields.get("name")
-        if name not in native["gate_ids"] or name in seen_gates:
-            raise AssuranceError(f"unexpected or duplicate native gate: {name!r}")
+        if name not in gate_names or name in seen_gates:
+            raise AssuranceError(f"unexpected or duplicate native KAT gate: {name!r}")
         seen_gates.append(name)
-    if tuple(seen_gates) != tuple(native["gate_ids"]):
-        raise AssuranceError(f"native gate diagnostic order changed: {seen_gates!r}")
-    if lines[index] != f"GATE_COUNT={len(native['gate_ids'])}":
-        raise AssuranceError(f"native gate count changed: {lines[index]!r}")
-    index += 1
-    if lines[index] != "CLOSURE_CHECK=LOCAL_KERNEL_SOURCE_SCAN_REQUIRED":
-        raise AssuranceError(f"native closure marker changed: {lines[index]!r}")
-    index += 1
+    if tuple(seen_gates) != gate_names:
+        raise AssuranceError(f"native KAT gate order changed: {seen_gates!r}")
     if lines[index] != native["final_line"]:
         raise AssuranceError(f"native final result changed: {lines[index]!r}")
-    return {
-        "kat_count": len(seen_kats),
-        "negative_count": len(seen_negatives),
-        "theorem_diagnostic_count": len(seen_theorems),
-        "gate_diagnostic_count": len(seen_gates),
-    }
+    return {"kat_gate_count": len(seen_gates)}
 
 
 def _file_identity(path: Path, label: str) -> FileIdentity:
@@ -956,7 +760,9 @@ def _require_toolchain_identity_unchanged(
             )
 
 
-def _parse_axiom_output(raw: bytes, declarations: Sequence[str], allowed: frozenset[str]) -> tuple[dict[str, Any], ...]:
+def _parse_axiom_output(
+    raw: bytes, declarations: Sequence[str], allowed: frozenset[str], namespace: str
+) -> tuple[dict[str, Any], ...]:
     text = _decode(raw, "axiom closure")
     lines = [line for line in text.splitlines() if line.strip()]
     if len(lines) != len(declarations):
@@ -966,7 +772,7 @@ def _parse_axiom_output(raw: bytes, declarations: Sequence[str], allowed: frozen
     records: list[dict[str, Any]] = []
     for expected_name, line in zip(declarations, lines, strict=True):
         match = AXIOM_LINE_RE.fullmatch(line)
-        if match is None or match.group("name") != f"BlindLedger.Kernel.{expected_name}":
+        if match is None or match.group("name") != f"{namespace}.{expected_name}":
             raise AssuranceError(f"axiom closure declaration order changed: {line!r}")
         axioms = tuple(
             sorted(item.strip() for item in (match.group("axioms") or "").split(",") if item.strip())
@@ -979,11 +785,11 @@ def _parse_axiom_output(raw: bytes, declarations: Sequence[str], allowed: frozen
     return tuple(records)
 
 
-def _check_declaration_output(raw: bytes, declarations: Sequence[str]) -> str:
+def _check_declaration_output(raw: bytes, declarations: Sequence[str], namespace: str) -> str:
     text = _decode(raw, "declaration check")
     cursor = 0
     for name in declarations:
-        marker = f"BlindLedger.Kernel.{name}"
+        marker = f"{namespace}.{name}"
         position = text.find(marker, cursor)
         if position < 0:
             raise AssuranceError(f"declaration check did not expose {marker}")
@@ -1008,6 +814,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             f"got={head}/{tree}"
         )
     lean_root = str(manifest.candidate["lean_root"])
+    namespace = str(manifest.candidate["namespace"])
     lean_dir = candidate_root / Path(*lean_root.split("/"))
     source_files = tuple(manifest.candidate["source_files"])
     source_hash_before, file_identities = _source_identity(
@@ -1111,7 +918,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             }
 
         declaration_query = "import " + str(manifest.candidate["module"]) + "\n" + "\n".join(
-            f"#check BlindLedger.Kernel.{name}" for name in declarations
+            f"#check {namespace}.{name}" for name in declarations
         ) + "\n"
         declaration_check = _run(
             [str(tool_paths["lean"]), "--trust=0", "--stdin"],
@@ -1121,10 +928,12 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             input_bytes=declaration_query.encode("ascii"),
         )
         _require_success("declaration check", declaration_check)
-        declaration_output = _check_declaration_output(declaration_check.stdout, declarations)
+        declaration_output = _check_declaration_output(
+            declaration_check.stdout, declarations, namespace
+        )
 
         axiom_query = "import " + str(manifest.candidate["module"]) + "\n" + "\n".join(
-            f"#print axioms BlindLedger.Kernel.{name}" for name in declarations
+            f"#print axioms {namespace}.{name}" for name in declarations
         ) + "\n"
         axiom_check = _run(
             [str(tool_paths["lean"]), "--trust=0", "--stdin"],
@@ -1134,7 +943,9 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             input_bytes=axiom_query.encode("ascii"),
         )
         _require_success("axiom closure check", axiom_check)
-        axiom_records = _parse_axiom_output(axiom_check.stdout, declarations, manifest.allowed_axioms)
+        axiom_records = _parse_axiom_output(
+            axiom_check.stdout, declarations, manifest.allowed_axioms, namespace
+        )
 
         independent_check = _run(
             [str(tool_paths["leanchecker"]), str(manifest.candidate["module"])],
@@ -1145,7 +956,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
         _require_success("independent Lean checker", independent_check)
 
         native = _run(
-            [str(artifact.resolve())],
+            [str(artifact.resolve()), *manifest.native["arguments"]],
             cwd=build_root,
             timeout=NATIVE_TIMEOUT_SECONDS,
             env=check_environment,
@@ -1153,7 +964,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
         _require_success("native semantic diagnostic", native)
         if native.stderr:
             raise AssuranceError(f"native semantic diagnostic wrote stderr: {native.stderr!r}")
-        native_counts = _check_native_output(native.stdout, manifest.native, declarations)
+        native_counts = _check_native_output(native.stdout, manifest.native)
         artifact_identity_after = _file_identity(artifact, "native artifact after execution")
         _require_identity_unchanged(
             "native artifact", artifact_identity_before, artifact_identity_after
@@ -1192,9 +1003,9 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
         print("NATIVE_OUTPUT_END")
 
         return {
-            "schema": "blind_ledger_semantic_assurance_receipt_v1",
+            "schema": "blind_ledger_semantic_assurance_receipt_v2",
             "status": "PASS",
-            "claim": "PURE_SEMANTIC_KERNEL_ARTIFACT_NONACTIVATING",
+            "claim": "FINANCIAL_CORRECTION_TRANSITION_PROOFS_NONACTIVATING",
             "manifest": {
                 "path": str(MANIFEST_PATH),
                 "sha256": hashlib.sha256(MANIFEST_PATH.read_bytes()).hexdigest(),

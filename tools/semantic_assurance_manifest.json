@@ -1,38 +1,54 @@
 {
-  "schema": "blind_ledger_semantic_assurance_manifest_v1",
-  "manifest_version": 1,
+  "schema": "blind_ledger_semantic_assurance_manifest_v2",
+  "manifest_version": 2,
   "candidate": {
-    "required_head": "ae9ea2865fa1b64049295e86f8a58ac201a3c2ee",
-    "required_tree": "daab73b1e4e2775748766cf042a7d1d24bcf066e",
+    "required_head": "56ef4e1f1c96dd2367b1992e1519c0d1b8c4b335",
+    "required_tree": "ffa805469d1f72da18e3637439a403d00657e98d",
     "lean_root": "lean",
-    "module": "BlindLedger.Theorems",
-    "theorem_source": "BlindLedger/Theorems.lean",
+    "namespace": "BlindLedger.Financial.CorrectionTransition",
+    "module": "BlindLedger.Financial.CorrectionTransition.Theorems",
+    "theorem_source": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
     "declaration_sources": {
-      "evaluation_deterministic": "BlindLedger/Theorems.lean",
-      "proof_acceptance_ne_clear": "BlindLedger/Theorems.lean",
-      "observe_only_no_operative_clearance": "BlindLedger/Theorems.lean",
-      "absence_requires_authoritative_completeness": "BlindLedger/Theorems.lean",
-      "policy_effective_separation": "BlindLedger/Theorems.lean",
-      "exception_requires_exact_authorization": "BlindLedger/Theorems.lean",
-      "nonclear_no_economic_mutation": "BlindLedger/Theorems.lean",
-      "wrong_control_set_rejects": "BlindLedger/Theorems.lean",
-      "chronology_strict": "BlindLedger/Theorems.lean",
-      "replay_preserves_state": "BlindLedger/Theorems.lean",
-      "decision_access_join_unique": "BlindLedger/Theorems.lean",
-      "decode_encode_roundtrip": "BlindLedger/Theorems.lean",
-      "canonical_encoding_injective": "BlindLedger/Theorems.lean",
-      "checkpoint_chain_append_only": "BlindLedger/Kernel/Checkpoint.lean"
+      "canonicalActionPayload_dispatch_is_synthetic_record_only": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "applyCorrectionTransition_mutation_links": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "applyCorrectionTransition_nonaccepted_has_no_mutation": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "rejectedCorrectionTransition_has_no_mutation": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "duplicateCorrectionTransition_has_no_mutation": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "executionDenial_none_implies_valid_axes": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "assessAcceptedCorrectionReuse_allowed_implies_valid_axes": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "assessCorrectionReuse_allowed_implies_valid_axes": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "assessCorrectionReuse_calculation_independent_of_approval_and_execution_observations": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "assessCorrectionReuse_local_permission_matches_denial": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "assessCorrectionReuse_never_permits_external_dispatch": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "evaluate_after_case_status_update_fixedPoint": "BlindLedger/Financial/CorrectionTransition/Transition.lean"
     },
     "source_files": [
-      "BlindLedger.lean",
-      "BlindLedger/Codec.lean",
-      "BlindLedger/ControlSet.lean",
-      "BlindLedger/Evaluation.lean",
-      "BlindLedger/Executable.lean",
-      "BlindLedger/Kernel/Checkpoint.lean",
-      "BlindLedger/StateTransition.lean",
-      "BlindLedger/Theorems.lean",
-      "BlindLedger/Types.lean",
+      "BlindLedger/Financial/Cli.lean",
+      "BlindLedger/Financial/Codec.lean",
+      "BlindLedger/Financial/CorrectionTransition.lean",
+      "BlindLedger/Financial/CorrectionTransition/Codec.lean",
+      "BlindLedger/Financial/CorrectionTransition/KAT.lean",
+      "BlindLedger/Financial/CorrectionTransition/Reuse.lean",
+      "BlindLedger/Financial/CorrectionTransition/ReuseCodec.lean",
+      "BlindLedger/Financial/CorrectionTransition/Runtime.lean",
+      "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "BlindLedger/Financial/CorrectionTransition/Transition.lean",
+      "BlindLedger/Financial/CorrectionTransition/Types.lean",
+      "BlindLedger/Financial/DecisionPackage.lean",
+      "BlindLedger/Financial/DecisionPackage/Codec.lean",
+      "BlindLedger/Financial/DecisionPackage/KAT.lean",
+      "BlindLedger/Financial/DecisionPackage/Projection.lean",
+      "BlindLedger/Financial/DecisionPackage/Types.lean",
+      "BlindLedger/Financial/Evaluation.lean",
+      "BlindLedger/Financial/Executable.lean",
+      "BlindLedger/Financial/Specification.lean",
+      "BlindLedger/Financial/Theorems.lean",
+      "BlindLedger/Financial/Theorems/Correspondence.lean",
+      "BlindLedger/Financial/Theorems/Manifest.lean",
+      "BlindLedger/Financial/Theorems/Vectors.lean",
+      "BlindLedger/Financial/Types.lean",
+      "BlindLedger/Sha3.lean",
       "lake-manifest.json",
       "lakefile.toml",
       "lean-toolchain"
@@ -59,146 +75,142 @@
     }
   },
   "build": {
-    "target": "blind_clearance_kernel",
-    "root_module": "BlindLedger.Executable",
+    "target": "blind_financial",
+    "root_module": "BlindLedger.Financial.Cli",
     "artifact": {
-      "relative_path": ".lake/build/bin/blind_clearance_kernel.exe",
+      "relative_path": ".lake/build/bin/blind_financial.exe",
       "minimum_bytes": 1,
       "identity": "sha256-and-byte-length-of-fresh-build-output"
     }
   },
   "properties": [
     {
-      "id": "evaluation_deterministic",
-      "statement": "{input : ClearanceInput} {left right : SemanticResult} (hleft : evaluate input = some left) (hright : evaluate input = some right) : left = right",
+      "id": "canonicalActionPayload_dispatch_is_synthetic_record_only",
+      "statement": "(request : CorrectionTransitionRequest) (determinationId : String) (resultingRevision amountCents : Nat) : (canonicalActionPayload request determinationId resultingRevision amountCents).dispatchMode = .SYNTHETIC_RECORD_ONLY",
       "declarations": [
         {
-          "name": "evaluation_deterministic",
-          "source_statement": "{input : ClearanceInput} {left right : SemanticResult} (hleft : evaluate input = some left) (hright : evaluate input = some right) : left = right"
+          "name": "canonicalActionPayload_dispatch_is_synthetic_record_only",
+          "source_statement": "(request : CorrectionTransitionRequest) (determinationId : String) (resultingRevision amountCents : Nat) : (canonicalActionPayload request determinationId resultingRevision amountCents).dispatchMode = .SYNTHETIC_RECORD_ONLY"
         }
       ]
     },
     {
-      "id": "proof_acceptance_ne_clear",
-      "statement": "proofSessionOnly true = none",
+      "id": "applyCorrectionTransition_mutation_links",
+      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : (applyCorrectionTransition request).status = .ACCEPTED ∧ (applyCorrectionTransition request).actionId = some request.command.actionId ∧ (applyCorrectionTransition request).determinationId = some (\"determination:\" ++ request.command.actionId) ∧ (applyCorrectionTransition request).explanation.transition = some .OFFSET_REJECTED_CORRECTION_AUTHORIZED ∧ (applyCorrectionTransition request).explanation.resultingRevision = some mutation.resultingResult.afterRevision ∧ request.currentInput.beforeRevision + 1 = request.command.expectedRevision ∧ CorrectionMutationLinkFacts request mutation",
       "declarations": [
         {
-          "name": "proof_acceptance_ne_clear",
-          "source_statement": "proofSessionOnly true = none"
+          "name": "applyCorrectionTransition_mutation_links",
+          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : (applyCorrectionTransition request).status = .ACCEPTED ∧ (applyCorrectionTransition request).actionId = some request.command.actionId ∧ (applyCorrectionTransition request).determinationId = some (\"determination:\" ++ request.command.actionId) ∧ (applyCorrectionTransition request).explanation.transition = some .OFFSET_REJECTED_CORRECTION_AUTHORIZED ∧ (applyCorrectionTransition request).explanation.resultingRevision = some mutation.resultingResult.afterRevision ∧ request.currentInput.beforeRevision + 1 = request.command.expectedRevision ∧ CorrectionMutationLinkFacts request mutation"
         }
       ]
     },
     {
-      "id": "observe_only_no_operative_clearance",
-      "statement": "(input : ClearanceInput) (hobserve : input.authority = .observeOnly) : makeDecision input = none",
+      "id": "applyCorrectionTransition_nonaccepted_has_no_mutation",
+      "statement": "(request : CorrectionTransitionRequest) (hStatus : (applyCorrectionTransition request).status ≠ .ACCEPTED) : (applyCorrectionTransition request).mutation = none",
       "declarations": [
         {
-          "name": "observe_only_no_operative_clearance",
-          "source_statement": "(input : ClearanceInput) (hobserve : input.authority = .observeOnly) : makeDecision input = none"
+          "name": "applyCorrectionTransition_nonaccepted_has_no_mutation",
+          "source_statement": "(request : CorrectionTransitionRequest) (hStatus : (applyCorrectionTransition request).status ≠ .ACCEPTED) : (applyCorrectionTransition request).mutation = none"
         }
       ]
     },
     {
-      "id": "absence_requires_authoritative_completeness",
-      "statement": "(input : ClearanceInput) (habsence : authoritativeAbsence input = true) : input.completeness.complete = true",
+      "id": "rejectedCorrectionTransition_has_no_mutation",
+      "statement": "(request : CorrectionTransitionRequest) (hStatus : (applyCorrectionTransition request).status = .REJECTED) : (applyCorrectionTransition request).mutation = none",
       "declarations": [
         {
-          "name": "absence_requires_authoritative_completeness",
-          "source_statement": "(input : ClearanceInput) (habsence : authoritativeAbsence input = true) : input.completeness.complete = true"
+          "name": "rejectedCorrectionTransition_has_no_mutation",
+          "source_statement": "(request : CorrectionTransitionRequest) (hStatus : (applyCorrectionTransition request).status = .REJECTED) : (applyCorrectionTransition request).mutation = none"
         }
       ]
     },
     {
-      "id": "policy_effective_separation",
-      "statement": "(result : SemanticResult) (hconsistent : policyDirectiveConsistent result.policyResult result.effectiveDirective = true) (hexception : result.effectiveDirective = .EXCEPTION_APPROVED) : result.policyResult = .fail",
+      "id": "duplicateCorrectionTransition_has_no_mutation",
+      "statement": "(request : CorrectionTransitionRequest) (hStatus : (applyCorrectionTransition request).status = .DUPLICATE) : (applyCorrectionTransition request).mutation = none",
       "declarations": [
         {
-          "name": "policy_effective_separation",
-          "source_statement": "(result : SemanticResult) (hconsistent : policyDirectiveConsistent result.policyResult result.effectiveDirective = true) (hexception : result.effectiveDirective = .EXCEPTION_APPROVED) : result.policyResult = .fail"
+          "name": "duplicateCorrectionTransition_has_no_mutation",
+          "source_statement": "(request : CorrectionTransitionRequest) (hStatus : (applyCorrectionTransition request).status = .DUPLICATE) : (applyCorrectionTransition request).mutation = none"
         }
       ]
     },
     {
-      "id": "exception_requires_exact_authorization",
-      "statement": "(input : ClearanceInput) (base : SemanticResult) (authorization : ExceptionAuthorization) (hexact : exactException input base authorization = true) : authorization.signerId = trustedAuthorizerId ∧ authorization.subjectId = input.request.subjectId ∧ authorization.ruleId = expectedRuleId ∧ authorization.reasonId = expectedReasonId ∧ authorization.amountScope = expectedAmountScope ∧ authorization.policyResult = .fail ∧ authorization.effectiveAt ≤ input.request.ruleEffectiveTime ∧ input.request.decisionTime < authorization.expiresAt",
+      "id": "executionDenial_none_implies_valid_axes",
+      "statement": "(request : CorrectionReuseRequest) (mutation : CorrectionMutation) (calculationValidity : CorrectionCalculationValidity) (humanApprovalValidity : CorrectionApprovalValidity) (hDenial : executionDenial request mutation calculationValidity humanApprovalValidity = none) : calculationValidity = .VALID ∧ humanApprovalValidity = .VALID",
       "declarations": [
         {
-          "name": "exception_requires_exact_authorization",
-          "source_statement": "(input : ClearanceInput) (base : SemanticResult) (authorization : ExceptionAuthorization) (hexact : exactException input base authorization = true) : authorization.signerId = trustedAuthorizerId ∧ authorization.subjectId = input.request.subjectId ∧ authorization.ruleId = expectedRuleId ∧ authorization.reasonId = expectedReasonId ∧ authorization.amountScope = expectedAmountScope ∧ authorization.policyResult = .fail ∧ authorization.effectiveAt ≤ input.request.ruleEffectiveTime ∧ input.request.decisionTime < authorization.expiresAt"
+          "name": "executionDenial_none_implies_valid_axes",
+          "source_statement": "(request : CorrectionReuseRequest) (mutation : CorrectionMutation) (calculationValidity : CorrectionCalculationValidity) (humanApprovalValidity : CorrectionApprovalValidity) (hDenial : executionDenial request mutation calculationValidity humanApprovalValidity = none) : calculationValidity = .VALID ∧ humanApprovalValidity = .VALID"
         }
       ]
     },
     {
-      "id": "nonclear_no_economic_mutation",
-      "statement": "{before after : LedgerState} {attemptId decisionId : Id} {directive : EffectiveDirective} (hadvance : advanceState before attemptId decisionId directive = some after) (hnotClear : directive ≠ .CLEAR) (hnotException : directive ≠ .EXCEPTION_APPROVED) : economicView after = economicView before",
+      "id": "assessAcceptedCorrectionReuse_allowed_implies_valid_axes",
+      "statement": "(request : CorrectionReuseRequest) (mutation : CorrectionMutation) (hAllowed : (assessAcceptedCorrectionReuse request mutation).localExecutionPermission = .ALLOWED) : (assessAcceptedCorrectionReuse request mutation).calculationValidity = .VALID ∧ (assessAcceptedCorrectionReuse request mutation).humanApprovalValidity = .VALID",
       "declarations": [
         {
-          "name": "nonclear_no_economic_mutation",
-          "source_statement": "{before after : LedgerState} {attemptId decisionId : Id} {directive : EffectiveDirective} (hadvance : advanceState before attemptId decisionId directive = some after) (hnotClear : directive ≠ .CLEAR) (hnotException : directive ≠ .EXCEPTION_APPROVED) : economicView after = economicView before"
+          "name": "assessAcceptedCorrectionReuse_allowed_implies_valid_axes",
+          "source_statement": "(request : CorrectionReuseRequest) (mutation : CorrectionMutation) (hAllowed : (assessAcceptedCorrectionReuse request mutation).localExecutionPermission = .ALLOWED) : (assessAcceptedCorrectionReuse request mutation).calculationValidity = .VALID ∧ (assessAcceptedCorrectionReuse request mutation).humanApprovalValidity = .VALID"
         }
       ]
     },
     {
-      "id": "wrong_control_set_rejects",
-      "statement": "(input : ClearanceInput) (hmismatch : input.controlSet ≠ fixedControlSet) : evaluate input = none",
+      "id": "assessCorrectionReuse_allowed_implies_valid_axes",
+      "statement": "(request : CorrectionReuseRequest) (hAllowed : (assessCorrectionReuse request).localExecutionPermission = .ALLOWED) : (assessCorrectionReuse request).calculationValidity = .VALID ∧ (assessCorrectionReuse request).humanApprovalValidity = .VALID",
       "declarations": [
         {
-          "name": "wrong_control_set_rejects",
-          "source_statement": "(input : ClearanceInput) (hmismatch : input.controlSet ≠ fixedControlSet) : evaluate input = none"
+          "name": "assessCorrectionReuse_allowed_implies_valid_axes",
+          "source_statement": "(request : CorrectionReuseRequest) (hAllowed : (assessCorrectionReuse request).localExecutionPermission = .ALLOWED) : (assessCorrectionReuse request).calculationValidity = .VALID ∧ (assessCorrectionReuse request).humanApprovalValidity = .VALID"
         }
       ]
     },
     {
-      "id": "chronology_strict",
-      "statement": "(request : Request) (hwell : requestWellFormed request = true) : request.chronology.Strict",
+      "id": "assessCorrectionReuse_calculation_independent_of_approval_and_execution_observations",
+      "statement": "(request : CorrectionReuseRequest) (determination : Option OffsetDetermination) (determinationDigest : Option Bytes) (outbox : Option CorrectionOutboxDelta) (ownerNowMs : Nat) : (assessCorrectionReuse { request with currentDetermination := determination currentDeterminationDigest := determinationDigest currentOutbox := outbox currentOwnerNowMs := ownerNowMs }).calculationValidity = (assessCorrectionReuse request).calculationValidity",
       "declarations": [
         {
-          "name": "chronology_strict",
-          "source_statement": "(request : Request) (hwell : requestWellFormed request = true) : request.chronology.Strict"
+          "name": "assessCorrectionReuse_calculation_independent_of_approval_and_execution_observations",
+          "source_statement": "(request : CorrectionReuseRequest) (determination : Option OffsetDetermination) (determinationDigest : Option Bytes) (outbox : Option CorrectionOutboxDelta) (ownerNowMs : Nat) : (assessCorrectionReuse { request with currentDetermination := determination currentDeterminationDigest := determinationDigest currentOutbox := outbox currentOwnerNowMs := ownerNowMs }).calculationValidity = (assessCorrectionReuse request).calculationValidity"
         }
       ]
     },
     {
-      "id": "replay_preserves_state",
-      "statement": "(state : LedgerState) (decision : Decision) (hreplay : state.lastAttempt = some decision.attemptId) : applyTransition state decision = none",
+      "id": "assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations",
+      "statement": "(request : CorrectionReuseRequest) (currentInput : FinancialInput) (currentReceipt : EvaluationReceipt) (outbox : Option CorrectionOutboxDelta) (ownerNowMs : Nat) : (assessCorrectionReuse { request with currentInput := currentInput currentReceipt := currentReceipt currentOutbox := outbox currentOwnerNowMs := ownerNowMs }).humanApprovalValidity = (assessCorrectionReuse request).humanApprovalValidity",
       "declarations": [
         {
-          "name": "replay_preserves_state",
-          "source_statement": "(state : LedgerState) (decision : Decision) (hreplay : state.lastAttempt = some decision.attemptId) : applyTransition state decision = none"
+          "name": "assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations",
+          "source_statement": "(request : CorrectionReuseRequest) (currentInput : FinancialInput) (currentReceipt : EvaluationReceipt) (outbox : Option CorrectionOutboxDelta) (ownerNowMs : Nat) : (assessCorrectionReuse { request with currentInput := currentInput currentReceipt := currentReceipt currentOutbox := outbox currentOwnerNowMs := ownerNowMs }).humanApprovalValidity = (assessCorrectionReuse request).humanApprovalValidity"
         }
       ]
     },
     {
-      "id": "decision_access_join_unique",
-      "statement": "{left right : DecisionAccessJoin} (hleft : joinValid left = true) (hright : joinValid right = true) (hdecision : left.decision = right.decision) : left = right",
+      "id": "assessCorrectionReuse_local_permission_matches_denial",
+      "statement": "(request : CorrectionReuseRequest) : (assessCorrectionReuse request).localExecutionPermission = executionPermissionOfDenial (assessCorrectionReuse request).executionDenial",
       "declarations": [
         {
-          "name": "decision_access_join_unique",
-          "source_statement": "{left right : DecisionAccessJoin} (hleft : joinValid left = true) (hright : joinValid right = true) (hdecision : left.decision = right.decision) : left = right"
+          "name": "assessCorrectionReuse_local_permission_matches_denial",
+          "source_statement": "(request : CorrectionReuseRequest) : (assessCorrectionReuse request).localExecutionPermission = executionPermissionOfDenial (assessCorrectionReuse request).executionDenial"
         }
       ]
     },
     {
-      "id": "decode_encode_roundtrip_and_canonical_encoding_injective",
-      "statement": "decode_encode_roundtrip ∧ canonical_encoding_injective",
+      "id": "assessCorrectionReuse_never_permits_external_dispatch",
+      "statement": "(request : CorrectionReuseRequest) : (assessCorrectionReuse request).externalDispatchPermitted = false",
       "declarations": [
         {
-          "name": "decode_encode_roundtrip",
-          "source_statement": "∀ case : KnownCase, decode (rawEncode (KnownCase.input case)) = some (KnownCase.input case)"
-        },
-        {
-          "name": "canonical_encoding_injective",
-          "source_statement": "∀ left right : KnownCase, rawEncode (KnownCase.input left) = rawEncode (KnownCase.input right) → KnownCase.input left = KnownCase.input right"
+          "name": "assessCorrectionReuse_never_permits_external_dispatch",
+          "source_statement": "(request : CorrectionReuseRequest) : (assessCorrectionReuse request).externalDispatchPermitted = false"
         }
       ]
     },
     {
-      "id": "checkpoint_chain_append_only",
-      "statement": "{chain result : List Checkpoint} {checkpoint : Checkpoint} (h : appendCheckpoint chain checkpoint = some result) : result = chain ++ [checkpoint] ∧ checkpoint.operative = false",
+      "id": "evaluate_after_case_status_update_fixedPoint",
+      "statement": "(input : FinancialInput) (result : FinancialResult) (updatedAt : Nat) (hEval : evaluate input = some result) (hUpdatedWellFormed : financialInputWellFormed { input with cases := updateAllCaseStatus input.cases result.caseStatus updatedAt } = true) : evaluate { input with cases := updateAllCaseStatus input.cases result.caseStatus updatedAt } = some result",
       "declarations": [
         {
-          "name": "checkpoint_chain_append_only",
-          "source_statement": "{chain result : List Checkpoint} {checkpoint : Checkpoint} (h : appendCheckpoint chain checkpoint = some result) : result = chain ++ [checkpoint] ∧ checkpoint.operative = false"
+          "name": "evaluate_after_case_status_update_fixedPoint",
+          "source_statement": "(input : FinancialInput) (result : FinancialResult) (updatedAt : Nat) (hEval : evaluate input = some result) (hUpdatedWellFormed : financialInputWellFormed { input with cases := updateAllCaseStatus input.cases result.caseStatus updatedAt } = true) : evaluate { input with cases := updateAllCaseStatus input.cases result.caseStatus updatedAt } = some result"
         }
       ]
     }
@@ -214,39 +226,50 @@
     "unsafe"
   ],
   "native_protocol": {
+    "arguments": [
+      "--correction-transition-kat"
+    ],
     "header": [
-      "BL-CLEARANCE-KERNEL/1",
-      "schema=bounded-u16/id-byte/fact-slots-2/absence-slots-2",
-      "mode=DIRECT_STATE_OWNED authority=verifier-owned proof_suite_id=NONE",
-      "claim=PURE_SYNTHETIC_NONACTIVATING",
-      "KAT_COUNT=8"
+      "BLFCMD01/BLFCRES1",
+      "contract=RR/FINANCIAL/CORRECTION-TRANSITION/v1",
+      "claim=PURE_SYNTHETIC_NONACTIVATING"
     ],
-    "kat_count": 8,
-    "negative_names": [
-      "observe-only",
-      "wrong-control-set",
-      "bad-chronology",
-      "bad-exception",
-      "proof-acceptance-only",
-      "replay-same-attempt",
-      "trailing-wire"
+    "count_key": "CORRECTION_TRANSITION_KAT_COUNT",
+    "gate_tag": "CORRECTION_TRANSITION_GATE",
+    "gate_names": [
+      "accepted_transition_effects_and_cash_separation",
+      "owner_domain_digest_vectors",
+      "current_owner_evaluation_receipt_binding",
+      "exact_retry_after_ack_is_noop",
+      "changed_retry_identity_rejected",
+      "stale_revision_rejected",
+      "stale_evaluation_digest_rejected",
+      "unauthorized_actor_role_rejected",
+      "missing_claim_rejected",
+      "non_claimed_claim_rejected",
+      "consumed_evaluation_query_collision_rejected",
+      "evaluation_chronology_rejected",
+      "shadow_mode_rejected",
+      "determination_identity_collision_rejected",
+      "incomplete_bounded_query_rejected",
+      "stale_bounded_query_version_rejected",
+      "missing_input_snapshot_digest_rejected",
+      "reuse_valid_baseline",
+      "reuse_ignores_unrelated_watermark_advance",
+      "reuse_claim_change_invalidates_calculation",
+      "reuse_evidence_binding_change_invalidates_calculation",
+      "reuse_control_pack_change_invalidates_calculation",
+      "reuse_relevant_query_insertion_invalidates_calculation",
+      "reuse_approval_query_staleness_is_separate",
+      "reuse_human_approval_staleness_is_separate",
+      "reuse_acknowledgment_denies_local_execution",
+      "reuse_cancellation_denies_local_execution",
+      "reuse_stale_authority_denies_local_execution",
+      "reuse_protocol_roundtrip",
+      "request_codec_roundtrip",
+      "result_codec_roundtrip",
+      "strict_trailing_byte_rejection"
     ],
-    "theorem_declaration_count": 14,
-    "gate_ids": [
-      "evaluation_deterministic",
-      "proof_acceptance_ne_clear",
-      "observe_only_no_operative_clearance",
-      "absence_requires_authoritative_completeness",
-      "policy_effective_separation",
-      "exception_requires_exact_authorization",
-      "nonclear_no_economic_mutation",
-      "wrong_control_set_rejects",
-      "chronology_strict",
-      "replay_preserves_state",
-      "decision_access_join_unique",
-      "decode_encode_roundtrip_and_canonical_encoding_injective",
-      "checkpoint_chain_append_only"
-    ],
-    "final_line": "KERNEL_RESULT=PASS"
+    "final_line": "FINANCIAL_CORRECTION_TRANSITION_RESULT=PASS"
   }
 }

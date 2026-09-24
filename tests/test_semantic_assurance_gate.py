@@ -170,12 +170,15 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
     def _lean_dir(self, root: Path) -> Path:
         return root / Path(*self.manifest.candidate["lean_root"].split("/"))
 
-    @staticmethod
-    def _native_invocation(command) -> bool:
+    def _native_invocation(self, command) -> bool:
         return (
-            len(command) == 1
-            and Path(str(command[0])).name.lower() == "blind_clearance_kernel.exe"
+            len(command) >= 1
+            and Path(str(command[0])).name.lower() == "blind_financial.exe"
+            and list(command[1:]) == list(self.manifest.native["arguments"])
         )
+
+    def _namespace(self) -> str:
+        return str(self.manifest.candidate["namespace"])
 
     def _theorem_expectations(self) -> tuple[gate.DeclarationExpectation, ...]:
         theorem_source = self.manifest.candidate["theorem_source"]
@@ -224,7 +227,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
         declarations = tuple(expectation.name for expectation in self.manifest.declarations)
         lines = []
         for index, name in enumerate(declarations):
-            qualified = f"BlindLedger.Kernel.{name}"
+            qualified = f"{self._namespace()}.{name}"
             if index == 0:
                 lines.append(
                     f"'{qualified}' depends on axioms: [propext, BlindLedger.injected_custom_axiom]"
@@ -236,6 +239,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 ("\n".join(lines) + "\n").encode("ascii"),
                 declarations,
                 self.manifest.allowed_axioms,
+                self._namespace(),
             )
 
     def test_changed_candidate_source_identity_reaches_identity_check(self) -> None:
@@ -355,13 +359,17 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             )
 
     def test_real_changed_theorem_reaches_containing_statement_gate(self) -> None:
-        expectation = self._theorem_expectations()[1]
+        (expectation,) = [
+            item
+            for item in self._theorem_expectations()
+            if item.name == "assessCorrectionReuse_never_permits_external_dispatch"
+        ]
 
         def mutate(root: Path) -> None:
             source_path = self._lean_dir(root) / self.manifest.candidate["theorem_source"]
             source = source_path.read_text(encoding="utf-8")
-            old = "theorem proof_acceptance_ne_clear :\n    proofSessionOnly true = none"
-            new = "theorem proof_acceptance_ne_clear :\n    proofSessionOnly false = none"
+            old = "(assessCorrectionReuse request).externalDispatchPermitted = false := by"
+            new = "(assessCorrectionReuse request).externalDispatchPermitted = true := by"
             self.assertEqual(1, source.count(old))
             source_path.write_text(source.replace(old, new, 1), encoding="utf-8")
             self._commit_fixture(root, "change required theorem statement for verifier test")
@@ -382,24 +390,27 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
         def mutate(root: Path) -> None:
             injected = self._lean_dir(root) / "BlindLedger" / "Injected.lean"
             injected.write_text(
-                "namespace BlindLedger.Kernel\n\n"
+                f"namespace {self._namespace()}\n\n"
                 "axiom injected_custom_axiom : True\n\n"
-                "end BlindLedger.Kernel\n",
+                f"end {self._namespace()}\n",
                 encoding="utf-8",
             )
             source_path = self._lean_dir(root) / self.manifest.candidate["theorem_source"]
             source = source_path.read_text(encoding="utf-8")
-            self.assertEqual(1, source.count("import BlindLedger.Codec\n"))
-            self.assertEqual(1, source.count("exact Option.some.inj"))
+            first_import = "import BlindLedger.Financial.CorrectionTransition.Reuse\n"
+            proof = "      .SYNTHETIC_RECORD_ONLY := by\n  rfl\n"
+            self.assertEqual(1, source.count(first_import))
+            self.assertEqual(1, source.count(proof))
             source = source.replace(
-                "import BlindLedger.Codec\n",
-                "import BlindLedger.Codec\nimport BlindLedger.Injected\n",
+                first_import,
+                first_import + "import BlindLedger.Injected\n",
                 1,
             )
             source = source.replace(
-                "  exact Option.some.inj (hleft.symm.trans hright)",
+                proof,
+                "      .SYNTHETIC_RECORD_ONLY := by\n"
                 "  have _h : True := injected_custom_axiom\n"
-                "  exact Option.some.inj (hleft.symm.trans hright)",
+                "  rfl\n",
                 1,
             )
             source_path.write_text(source, encoding="utf-8")
@@ -425,12 +436,13 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             ) as parser_spy:
                 with self.assertRaisesRegex(
                     gate.AssuranceError,
-                    "unapproved axiom dependency for evaluation_deterministic",
+                    "unapproved axiom dependency for "
+                    "canonicalActionPayload_dispatch_is_synthetic_record_only",
                 ) as raised:
                     gate._verify_candidate(candidate, test_manifest)
             self.assertIsNotNone(parser_spy.call_args)
             axiom_output = parser_spy.call_args.args[0].decode("utf-8")
-            self.assertIn("BlindLedger.Kernel.injected_custom_axiom", axiom_output)
+            self.assertIn(f"{self._namespace()}.injected_custom_axiom", axiom_output)
             print(
                 "INTEGRATION_NEGATIVE "
                 f"stage=axiom_closure mutation=transitive_custom_axiom head={head} tree={tree} "
@@ -445,7 +457,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             del root
 
         with self._fresh_candidate(mutate) as (candidate, head, tree):
-            source_path = self._lean_dir(candidate) / "BlindLedger" / "Types.lean"
+            source_path = self._lean_dir(candidate) / "BlindLedger" / "Sha3.lean"
             original_run = gate._run
             evidence: dict[str, str] = {}
 
