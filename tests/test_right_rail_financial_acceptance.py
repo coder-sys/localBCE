@@ -1195,11 +1195,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         result = verify_database(
             store.path,
             expected_config=store.config,
-            expected_authority={
-                "authority_id": self.authority.authority_id,
-                "epoch": self.authority.epoch,
-                "digest": self.authority.digest,
-            },
+            expected_authority=self.authority,
             expected_mode=store.mode,
             expected_owner_id=store.owner_id,
             current_snapshot_package=current_snapshot_package,
@@ -1218,11 +1214,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             expected.H_ITEM_ID,
             package,
             expected_config=store.config,
-            expected_authority={
-                "authority_id": self.authority.authority_id,
-                "epoch": self.authority.epoch,
-                "digest": self.authority.digest,
-            },
+            expected_authority=self.authority,
             expected_mode=store.mode,
             expected_owner_id=store.owner_id,
         )
@@ -1872,11 +1864,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             verify_database(
                 mode_only,
                 expected_config=test_config,
-                expected_authority={
-                    "authority_id": self.authority.authority_id,
-                    "epoch": self.authority.epoch,
-                    "digest": self.authority.digest,
-                },
+                expected_authority=self.authority,
                 expected_mode="LIVE",
                 expected_owner_id=owner._TEST_OWNER_ID,
             )
@@ -1917,11 +1905,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             verify_database(
                 mode_and_owner,
                 expected_config=test_config,
-                expected_authority={
-                    "authority_id": self.authority.authority_id,
-                    "epoch": self.authority.epoch,
-                    "digest": self.authority.digest,
-                },
+                expected_authority=self.authority,
                 expected_mode="LIVE",
                 expected_owner_id="financial-owner-v1",
             )
@@ -2535,11 +2519,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             verify_database(
                 tampered,
                 expected_config=config,
-                expected_authority={
-                    "authority_id": self.authority.authority_id,
-                    "epoch": self.authority.epoch,
-                    "digest": self.authority.digest,
-                },
+                expected_authority=self.authority,
             )
         self._assert_verified(store)
 
@@ -4177,11 +4157,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 expected.H_ITEM_ID,
                 omitted,
                 expected_config=store.config,
-                expected_authority={
-                    "authority_id": self.authority.authority_id,
-                    "epoch": self.authority.epoch,
-                    "digest": self.authority.digest,
-                },
+                expected_authority=self.authority,
                 expected_mode=store.mode,
                 expected_owner_id=store.owner_id,
             )
@@ -4219,11 +4195,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             expected.H_ITEM_ID,
             restored_package,
             expected_config=restored.owner.config,
-            expected_authority={
-                "authority_id": self.authority.authority_id,
-                "epoch": self.authority.epoch,
-                "digest": self.authority.digest,
-            },
+            expected_authority=self.authority,
             expected_mode="TEST",
             expected_owner_id=owner._TEST_OWNER_ID,
         )

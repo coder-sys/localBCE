@@ -1013,16 +1013,13 @@ def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
             _fail(f"schema:private-index:{name}")
 
 
-def _field(value: object, name: str, *aliases: str) -> object:
-    names = (name, *aliases)
+def _field(value: object, name: str) -> object:
     if isinstance(value, Mapping):
-        for candidate in names:
-            if candidate in value:
-                return value[candidate]
+        if name in value:
+            return value[name]
         _fail(f"identity:missing-{name}")
-    for candidate in names:
-        if hasattr(value, candidate):
-            return getattr(value, candidate)
+    if hasattr(value, name):
+        return getattr(value, name)
     _fail(f"identity:missing-{name}")
 
 
@@ -1062,6 +1059,24 @@ def _actor_roles(value: object) -> dict[str, frozenset[str]] | None:
     return result
 
 
+def _roster_authority_digest(authority_id: str, authority_epoch: int, value: object) -> bytes:
+    """Recompute the synthetic authority digest from a supplied, already-parsed roster."""
+
+    actors = value.get("actors") if isinstance(value, Mapping) else getattr(value, "actors", None)
+    if type(actors) not in (tuple, list) or not actors:
+        _fail("identity:actors")
+    authority = {
+        "authority_id": authority_id,
+        "epoch": authority_epoch,
+        "actors": [
+            {"actor_id": _field(actor, "actor_id"), "roles": list(_field(actor, "roles"))}
+            for actor in actors
+        ],
+        "synthetic_only": True,
+    }
+    return _digest(EVIDENCE_DOMAIN, _canonical(authority, "identity:authority-roster"))
+
+
 def _identity(
     *,
     expected_config: object | None,
@@ -1070,6 +1085,7 @@ def _identity(
     expected_mode: str | None,
     expected_owner_id: str | None,
     expected_continuity_epoch: int | None,
+    require_authority_roster: bool,
 ) -> dict[str, object]:
     scope_source = expected_scope if expected_scope is not None else expected_config
     if scope_source is None:
@@ -1092,6 +1108,12 @@ def _identity(
         elif hasattr(expected_config, "authority_id"):
             authority_source = expected_config
     if authority_source is None:
+        # Database verification always needs caller-supplied trusted authority
+        # material. Only the continuity-package check still accepts the fixed
+        # synthetic default, because app/right_rail_financial_switch.py calls it
+        # with no trusted authority to supply.
+        if require_authority_roster:
+            _fail("identity:authority-required")
         authority_id = "synthetic-authority-v1"
         authority_epoch = 1
         authority_digest = _default_authority_digest()
@@ -1102,17 +1124,14 @@ def _identity(
         }
     else:
         authority_id = _id(_field(authority_source, "authority_id"), "identity:authority-id")
-        authority_epoch = _integer(_field(authority_source, "authority_epoch", "epoch"), "identity:authority-epoch", minimum=1, maximum=MAX_CENTS)
-        raw_digest = None
-        if isinstance(authority_source, Mapping):
-            raw_digest = authority_source.get("authority_digest", authority_source.get("digest"))
-        else:
-            raw_digest = getattr(authority_source, "authority_digest", getattr(authority_source, "digest", None))
-        if raw_digest is None and authority_id == "synthetic-authority-v1" and authority_epoch == 1:
-            authority_digest = _default_authority_digest()
-        else:
-            authority_digest = _hex_digest(raw_digest, "identity:authority-digest")
+        authority_epoch = _integer(_field(authority_source, "epoch"), "identity:authority-epoch", minimum=1, maximum=MAX_CENTS)
+        authority_digest = _hex_digest(_field(authority_source, "digest"), "identity:authority-digest")
         actors = _actor_roles(authority_source)
+        if actors is None:
+            if require_authority_roster:
+                _fail("identity:authority-roster-required")
+        elif _roster_authority_digest(authority_id, authority_epoch, authority_source) != authority_digest:
+            _fail("identity:authority-roster-digest")
     mode = expected_mode
     if mode is None and expected_config is not None and hasattr(expected_config, "mode"):
         mode = getattr(expected_config, "mode")
@@ -2937,6 +2956,8 @@ def _verify_determinations(
     claims: dict[str, sqlite3.Row],
     evidence: dict[str, sqlite3.Row],
     evaluations: dict[str, list[sqlite3.Row]],
+    *,
+    actors: Mapping[str, frozenset[str]] | None,
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "determinations")
     result: dict[str, sqlite3.Row] = {}
@@ -2946,7 +2967,8 @@ def _verify_determinations(
         for evaluation in history
     }
     consumed_evaluations: set[str] = set()
-    actor_roles = meta.get("actors")
+    if not isinstance(actors, Mapping):
+        _fail("determination:actor-roster")
     for row in rows:
         determination_id = _id(row["determination_id"], "determination:id")
         if determination_id in result:
@@ -2962,7 +2984,7 @@ def _verify_determinations(
                 _fail("determination:claim")
         actor_id = _id(row["actor_id"], "determination:actor")
         actor_role = _role(row["actor_role"], "determination:role")
-        if isinstance(actor_roles, dict) and actor_id in actor_roles and actor_role not in actor_roles[actor_id]:
+        if actor_role not in actors.get(actor_id, frozenset()):
             _fail("determination:actor-role")
         obligation = obligations[obligation_id]
         population = populations[str(obligation["population_id"])]
@@ -3960,6 +3982,7 @@ def verify_continuity_package(
         expected_mode=None,
         expected_owner_id=None,
         expected_continuity_epoch=expected_continuity_epoch,
+        require_authority_roster=False,
     )
     try:
         raw_text = raw.decode("ascii")
@@ -4179,7 +4202,17 @@ def _verify_connection(
     cases = _verify_cases(connection, obligations)
     evaluations = _verify_evaluations(connection, meta, obligations, populations, packs, evidence)
     _verify_evaluation_history_events(events, populations, obligations, evaluations)
-    determinations = _verify_determinations(connection, meta, obligations, populations, packs, claims, evidence, evaluations)
+    determinations = _verify_determinations(
+        connection,
+        meta,
+        obligations,
+        populations,
+        packs,
+        claims,
+        evidence,
+        evaluations,
+        actors=identity["actors"],
+    )
     actions = _verify_actions(connection, meta, obligations, claims, determinations)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
     funding: dict[str, object] | None = None
@@ -4302,6 +4335,7 @@ def verify_database(
         expected_mode=expected_mode,
         expected_owner_id=expected_owner_id,
         expected_continuity_epoch=expected_continuity_epoch,
+        require_authority_roster=True,
     )
     connection = _open_readonly(path)
     try:
@@ -4345,6 +4379,7 @@ def verify_database_connection(
         expected_mode=expected_mode,
         expected_owner_id=expected_owner_id,
         expected_continuity_epoch=expected_continuity_epoch,
+        require_authority_roster=True,
     )
     try:
         return _verify_connection(

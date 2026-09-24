@@ -600,6 +600,16 @@ class SyntheticTrustedAuthority:
         _fail(FinancialAuthorityError, "authority_actor_not_authorized")
 
 
+def _checker_authority(authority: SyntheticTrustedAuthority) -> dict[str, Any]:
+    """Trusted authority binding for the independent checker, including its digest-bound roster."""
+    return {
+        "authority_id": authority.authority_id,
+        "epoch": authority.epoch,
+        "digest": _hex(authority.digest),
+        "actors": [{"actor_id": actor.actor_id, "roles": list(actor.roles)} for actor in authority.actors],
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ControlPack:
     pack_id: str
@@ -1614,7 +1624,63 @@ class FinancialOwner:
         mode: str = "LIVE",
         owner_id: str = "financial-owner-v1",
         correction_transition_release: object | None = None,
-        _identity_contract: Mapping[str, Any] | None = None,
+    ) -> None:
+        self._initialize(
+            path=path,
+            config=config,
+            trusted_authority=trusted_authority,
+            clock=clock,
+            mode=mode,
+            owner_id=owner_id,
+            correction_transition_release=correction_transition_release,
+            identity_contract=None,
+        )
+        self._verify_open_identity()
+
+    @classmethod
+    def _open_restore_destination(
+        cls,
+        *,
+        path: Path,
+        config: FinancialOwnerConfig,
+        trusted_authority: SyntheticTrustedAuthority,
+        clock: FinancialClock | None,
+        mode: str,
+        owner_id: str,
+        identity_contract: Mapping[str, Any],
+    ) -> "FinancialOwner":
+        """Create a fresh restore target; only ``restore_continuity`` may call this.
+
+        The imported rows do not exist yet, so identity verification is deferred
+        to ``restore_continuity``, which verifies the open identity and runs the
+        independent checker before the destination is published.
+        """
+        if not isinstance(identity_contract, Mapping):
+            _fail(FinancialIntegrityError, "identity_contract_required")
+        owner = cls.__new__(cls)
+        owner._initialize(
+            path=path,
+            config=config,
+            trusted_authority=trusted_authority,
+            clock=clock,
+            mode=mode,
+            owner_id=owner_id,
+            correction_transition_release=None,
+            identity_contract=identity_contract,
+        )
+        return owner
+
+    def _initialize(
+        self,
+        *,
+        path: Path,
+        config: FinancialOwnerConfig,
+        trusted_authority: SyntheticTrustedAuthority | None,
+        clock: FinancialClock | None,
+        mode: str,
+        owner_id: str,
+        correction_transition_release: object | None,
+        identity_contract: Mapping[str, Any] | None,
     ) -> None:
         if not isinstance(path, Path) or not path.parent.is_dir() or path.is_symlink():
             _fail(FinancialIntegrityError, "owner_path")
@@ -1645,10 +1711,10 @@ class FinancialOwner:
         existed = path.exists()
         if existed and path.stat().st_size == 0:
             _fail(FinancialIntegrityError, "empty_database")
-        if existed and _identity_contract is not None:
+        if existed and identity_contract is not None:
             _fail(FinancialIntegrityError, "identity_contract_destination")
         if not existed:
-            if _identity_contract is None:
+            if identity_contract is None:
                 identity_digest = _identity_digest(
                     provenance="ROOT",
                     bound_mode=mode,
@@ -1673,7 +1739,7 @@ class FinancialOwner:
                 initial_history_head = genesis
             else:
                 identity = _identity_record(
-                    _identity_contract,
+                    identity_contract,
                     schema_version=self.schema_version,
                     code_prefix="identity_contract",
                 )
@@ -1696,8 +1762,6 @@ class FinancialOwner:
                     tuple(identity[column] for column in identity_columns),
                 )
                 connection.commit()
-        if _identity_contract is None:
-            self._verify_open_identity()
 
     def _connect(self, *, admission_triggers: bool = False) -> sqlite3.Connection:
         try:
@@ -2970,7 +3034,8 @@ class FinancialOwner:
             if binding is None or str(binding["manifest_id"]) != manifest_id or bytes(binding["manifest_digest"]) != manifest.digest:
                 _fail(FinancialConflictError, "population_manifest_binding_conflict")
             row = connection.execute("SELECT expected_count,imported_count,source_complete FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
-            assert row is not None
+            if row is None:
+                _fail(FinancialIntegrityError, "population_import_missing")
             stored_members = tuple(
                 str(member[0])
                 for member in connection.execute(
@@ -3008,7 +3073,8 @@ class FinancialOwner:
                 )
         with self._read() as connection:
             row = connection.execute("SELECT imported_count,source_complete,status FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
-            assert row is not None
+            if row is None:
+                _fail(FinancialIntegrityError, "population_import_missing")
             return {"status": str(row[2]), "population_id": population_id, "imported_count": int(row[0]), "expected_count": expected_count, "source_complete": bool(row[1])}
 
     def validate_population(self, population_id: str) -> dict[str, Any]:
@@ -3431,7 +3497,8 @@ class FinancialOwner:
             if connection.execute("SELECT 1 FROM obligations WHERE population_id=? LIMIT 1", (population_id,)).fetchone() is not None:
                 _fail(FinancialConflictError, "population_already_published")
             pack = connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (import_row["pack_id"],)).fetchone()
-            assert pack is not None
+            if pack is None:
+                _fail(FinancialIntegrityError, "control_pack_missing")
             now_ms = self._now()
             items = connection.execute("SELECT item_id,display_label,owed_cents,due_at_ms,currency FROM population_items WHERE population_id=? ORDER BY item_id", (population_id,)).fetchall()
             stored_members = tuple(str(item[0]) for item in items)
@@ -3737,7 +3804,8 @@ class FinancialOwner:
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
             if existing is not None or existing_id is not None:
                 candidate_existing = existing if existing is not None else existing_id
-                assert candidate_existing is not None
+                if candidate_existing is None:
+                    _fail(FinancialIntegrityError, "payment_identity_missing")
                 if int(candidate_existing["amount_cents"]) == amount_cents and str(candidate_existing["common_origin_id"]) == common_origin_id:
                     now_ms = self._now()
                     if evidence_status == "INSERTED":
@@ -5193,7 +5261,8 @@ class FinancialOwner:
                 _fail(FinancialIntegrityError, "obligation_missing")
             self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
             outbox = connection.execute("SELECT * FROM action_outbox WHERE action_id=?", (action_id,)).fetchone()
-            assert outbox is not None
+            if outbox is None:
+                _fail(FinancialIntegrityError, "action_outbox_missing")
             if str(action["status"]) == "ACKNOWLEDGED":
                 if str(outbox["acknowledgment_ref"]) == acknowledgment_ref:
                     return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
@@ -5264,7 +5333,8 @@ class FinancialOwner:
                 received_at_ms=received_at_ms,
             )
             status = self._insert_evidence(connection, evidence)
-            assert status == "INSERTED"
+            if status != "INSERTED":
+                _fail(FinancialIntegrityError, "reporting_evidence_insert")
             connection.execute("UPDATE obligations SET reporting_complete=1 WHERE obligation_id=?", (obligation["obligation_id"],))
             now_ms = self._now()
             before, after, evaluation = self._recompute_obligation(connection, str(obligation["obligation_id"]), now_ms=now_ms, authority_id=self.trusted_authority.authority_id)
@@ -6498,7 +6568,8 @@ class FinancialOwner:
             "SELECT * FROM program_funding_receipts WHERE receipt_id=?",
             (receipt.receipt_id,),
         ).fetchone()
-        assert persisted is not None
+        if persisted is None:
+            _fail(FinancialIntegrityError, "program_funding_receipt_missing")
         return "RECORDED", self._funding_row_value(persisted)
 
     def record_program_funding_receipt(self, receipt: ProgramFundingReceipt) -> dict[str, Any]:
@@ -6856,11 +6927,7 @@ class FinancialOwner:
                     "currency": self.config.currency,
                     "schema_version": self.schema_version,
                 },
-                expected_authority={
-                    "authority_id": self.trusted_authority.authority_id,
-                    "epoch": self.trusted_authority.epoch,
-                    "digest": _hex(self.trusted_authority.digest),
-                },
+                expected_authority=_checker_authority(self.trusted_authority),
                 expected_mode=self.mode,
                 expected_owner_id=self.owner_id,
             )
@@ -7155,7 +7222,8 @@ class FinancialOwner:
         package = cls.validate_continuity_package(package_bytes)
         if package["version"] != _MANIFEST_SCHEMA_VERSION:
             tables = package["tables"]
-            assert isinstance(tables, dict)
+            if not isinstance(tables, dict):
+                _fail(FinancialContinuityError, "continuity_package_tables")
             population_events = [
                 row
                 for row in tables["financial_events"]
@@ -7249,14 +7317,14 @@ class FinancialOwner:
             except OSError:
                 _fail(FinancialContinuityError, "continuity_destination")
             attempt_path = attempt_directory / "owner.sqlite"
-            owner = cls(
+            owner = cls._open_restore_destination(
                 path=attempt_path,
                 config=config,
                 trusted_authority=trusted_authority,
                 clock=clock,
                 mode=restore_mode,
                 owner_id=restored_owner_id,
-                _identity_contract=identity_contract,
+                identity_contract=identity_contract,
             )
             insertion_order = ["control_packs", "population_imports", "population_items", "obligations", "evidence", "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox", "financial_events", "financial_conflicts", "evaluations"]
             if config.schema_version in _FUNDING_SCHEMA_VERSIONS:
@@ -7297,7 +7365,7 @@ class FinancialOwner:
             verify_database(
                 owner.path,
                 expected_config=config,
-                expected_authority={"authority_id": trusted_authority.authority_id, "epoch": trusted_authority.epoch, "digest": _hex(trusted_authority.digest)},
+                expected_authority=_checker_authority(trusted_authority),
                 expected_mode=restore_mode,
                 expected_owner_id=restored_owner_id,
                 expected_continuity_epoch=int(package["continuity_epoch"]),
@@ -7339,7 +7407,8 @@ class FinancialOwner:
             if error.__class__.__module__ == "app.right_rail_financial_owner_independent":
                 _fail(FinancialContinuityError, "continuity_restore_integrity")
             raise
-        assert owner is not None
+        if owner is None:
+            _fail(FinancialContinuityError, "continuity_restore_owner")
         return owner
 
     @classmethod
@@ -7370,7 +7439,7 @@ class FinancialOwner:
         return verify_database(
             self.path,
             expected_config={"state_id": self.config.state_id, "deployment_id": self.config.deployment_id, "program_id": self.config.program_id, "period_id": self.config.period_id, "currency": self.config.currency, "schema_version": self.schema_version},
-            expected_authority={"authority_id": self.trusted_authority.authority_id, "epoch": self.trusted_authority.epoch, "digest": _hex(self.trusted_authority.digest)},
+            expected_authority=_checker_authority(self.trusted_authority),
             expected_mode=self.mode,
             expected_owner_id=self.owner_id,
         )

@@ -55,6 +55,10 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             "authority_id": self.authority.authority_id,
             "epoch": self.authority.epoch,
             "digest": self.authority.digest,
+            "actors": [
+                {"actor_id": actor.actor_id, "roles": list(actor.roles)}
+                for actor in self.authority.actors
+            ],
         }
 
     def _register_manifest(
@@ -584,6 +588,54 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         )
         self.assertNotIn("app.right_rail_financial_owner", imports)
         self.assertNotIn("right_rail_financial_owner", imports)
+
+    def test_determination_actor_without_roster_role_fails_closed_without_repair(self) -> None:
+        for label, actor_id in (
+            ("role-missing", "synthetic-reporter"),
+            ("unknown-actor", "synthetic-unknown-actor"),
+        ):
+            with self.subTest(label=label):
+                target = self._copy_database(f"determination-actor-{label}.sqlite")
+
+                def tamper(path: Path, replacement: str = actor_id) -> None:
+                    with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                        changed = connection.execute(
+                            "UPDATE determinations SET actor_id=? WHERE actor_role='FINANCE_DECISION'",
+                            (replacement,),
+                        ).rowcount
+                        self.assertEqual(changed, 1)
+
+                self._assert_rejected_without_repair(target, tamper, "determination:actor-role")
+
+    def test_database_verification_requires_digest_bound_authority_roster(self) -> None:
+        without_roster = {key: value for key, value in self.authority_binding.items() if key != "actors"}
+        widened_roster = dict(self.authority_binding)
+        widened_roster["actors"] = [
+            {"actor_id": actor["actor_id"], "roles": [*actor["roles"], "FINANCE_DECISION"]}
+            if "FINANCE_DECISION" not in actor["roles"]
+            else actor
+            for actor in self.authority_binding["actors"]
+        ]
+        aliased_epoch = {
+            ("authority_epoch" if key == "epoch" else key): value
+            for key, value in self.authority_binding.items()
+        }
+        for label, authority, code in (
+            ("absent", None, "identity:authority-required"),
+            ("roster-missing", without_roster, "identity:authority-roster-required"),
+            ("roster-not-bound", widened_roster, "identity:authority-roster-digest"),
+            ("epoch-alias", aliased_epoch, "identity:missing-epoch"),
+        ):
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(independent.IndependentFinancialError, code):
+                    independent.verify_database(
+                        self.db,
+                        expected_scope=self.scope,
+                        expected_authority=authority,
+                        expected_mode="LIVE",
+                        expected_owner_id="financial-owner-v1",
+                    )
+        self.assertEqual(self._verify()["mode"], "LIVE")
 
     def test_event_payload_tamper_fails_closed_without_repair(self) -> None:
         target = self._copy_database("event-payload-tamper.sqlite")

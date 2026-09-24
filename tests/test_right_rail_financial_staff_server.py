@@ -381,6 +381,40 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertIsNone(restored["workspace"]["nonactivation"]["proof_suite_id"])
         self.assertEqual(restored["workspace"]["h"]["obligation"]["shortfall_cents"], 0)
 
+    def test_gate_state_unchanged_is_measured_before_and_after_the_attempt(self) -> None:
+        workflow = self._workflow()
+        self.addCleanup(workflow.close)
+        reviewed = self._review_body(workflow)
+        position = workflow._owner_position()
+        self.assertTrue(workflow.attempt_wrong_role(reviewed)["gate"]["state_unchanged"])
+        self.assertEqual(workflow._owner_position(), position)
+        with patch.object(
+            workflow,
+            "_owner_position",
+            side_effect=[(position[0], position[1]), (position[0] + 1, b"\x00" * 64)],
+        ) as position_spy:
+            moved = workflow.attempt_stale_revision(reviewed)
+        self.assertEqual(position_spy.call_count, 2)
+        self.assertEqual(moved["gate"]["code"], "obligation_revision_conflict")
+        self.assertFalse(moved["gate"]["state_unchanged"])
+
+    def test_ack_cash_effect_is_measured_before_and_after_the_command(self) -> None:
+        workflow = self._workflow(with_correction_release=True)
+        self.addCleanup(workflow.close)
+        workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
+        reviewed = self._revision_body(workflow)
+        with patch.object(
+            workflow,
+            "_h_received_cash_cents",
+            side_effect=[H_CASH_CENTS, H_CASH_CENTS + 1],
+        ) as cash_spy:
+            acknowledgment = workflow.acknowledge_correction_action(reviewed)
+        self.assertEqual(cash_spy.call_count, 2)
+        self.assertEqual(acknowledgment["cash_before_cents"], H_CASH_CENTS)
+        self.assertEqual(acknowledgment["cash_after_cents"], H_CASH_CENTS + 1)
+        self.assertEqual(acknowledgment["cash_effect_cents"], 1)
+        self.assertEqual(workflow._h_received_cash_cents(), H_CASH_CENTS)
+
     def test_same_workspace_reopens_verified_owner_and_durable_followup(self) -> None:
         workspace = Path(self.temp_dir.name)
         release = _correction_transition_test_release(
@@ -405,8 +439,10 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         )
         self.addCleanup(resumed.close)
         self.assertEqual(resumed.mirror.owner.path, owner_path)
-        self.assertEqual(resumed.mirror.owner.verify_integrity()["status"], "VERIFIED")
-        self.assertEqual(int(resumed.mirror.owner.verify_integrity()["sequence"]), sequence)
+        resumed_integrity = resumed.mirror.owner.verify_integrity()
+        self.assertEqual(resumed_integrity["mode"], "TEST")
+        self.assertEqual(resumed_integrity["owner_id"], resumed.mirror.owner.owner_id)
+        self.assertEqual(int(resumed_integrity["sequence"]), sequence)
         self.assertEqual(resumed.correction_followup()["status"], "AVAILABLE")
         self.assertEqual(
             resumed.decision_view()["decision_package"]["current_action"]["status"],

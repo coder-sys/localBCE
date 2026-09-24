@@ -51,17 +51,6 @@ H_ITEM_ID = "item-h"
 H_CLAIM_ID = "claim:obligation-item-h:offset-v1"
 H_ACTION_ID = "action:obligation-item-h:correction-v1"
 H_OBLIGATION_ID = "obligation:item-h:period-01"
-CASH_CORRECTION_COMMAND = {
-    "item_id": H_ITEM_ID,
-    "payment_id": "payment:h:p2",
-    "common_origin_id": "origin:payment:h:p2",
-    "amount_cents": CORRECTION_CENTS,
-    "evidence_id": "evidence:payment-h:p2",
-    "event_at_ms": CORRECTION_EVENT_MS,
-    "source_id": "fixture-payment-file",
-    "source_version": "payment-v2",
-    "local_ref": "ref:payment:h:p2",
-}
 MAX_RESTORE_DESTINATIONS = 1000
 MAX_STAFF_COMMAND_BYTES = 8192
 HTTP_REQUEST_TIMEOUT_SECONDS = 60.0
@@ -84,6 +73,18 @@ CASH_EVENT_MS = 1_774_828_800_000
 DECISION_AT_MS = 1_774_922_400_000
 CORRECTION_EVENT_MS = 1_775_001_600_000
 REPORT_EVENT_MS = 1_775_001_600_000
+
+CASH_CORRECTION_COMMAND = {
+    "item_id": H_ITEM_ID,
+    "payment_id": "payment:h:p2",
+    "common_origin_id": "origin:payment:h:p2",
+    "amount_cents": CORRECTION_CENTS,
+    "evidence_id": "evidence:payment-h:p2",
+    "event_at_ms": CORRECTION_EVENT_MS,
+    "source_id": "fixture-payment-file",
+    "source_version": "payment-v2",
+    "local_ref": "ref:payment:h:p2",
+}
 
 ITEM_IDS = (H_ITEM_ID,) + tuple(f"item-{index:02d}" for index in range(1, 20))
 ITEM_AMOUNTS = {
@@ -196,6 +197,7 @@ class StaffWorkflow:
                 trusted_authority=self._authority,
                 clock=self._clock,
                 mode="TEST",
+                owner_id="continuity-test-owner-v1",
                 correction_transition_release=correction_transition_release,
             )
         )
@@ -256,8 +258,27 @@ class StaffWorkflow:
             obligation_amounts[item_id] = owed_cents
         control_pack = package.get("control_pack")
         expected_pack = self._fixture_control_pack()
+        # ``verify_integrity`` raises on any checker failure; on success its
+        # result carries the checked identity fields, not a status label.
+        history_head = integrity.get("history_head")
         if (
-            integrity.get("status") != "VERIFIED"
+            integrity.get("mode") != "TEST"
+            or integrity.get("owner_id") != owner.owner_id
+            or integrity.get("schema_version") != 7
+            or integrity.get("scope") != {
+                "state_id": STATE_ID,
+                "deployment_id": DEPLOYMENT_ID,
+                "program_id": PROGRAM_ID,
+                "period_id": PERIOD_ID,
+                "currency": "USD",
+            }
+            or integrity.get("authority") != {
+                "authority_id": self._authority.authority_id,
+                "epoch": self._authority.epoch,
+                "digest": self._authority.digest.hex().upper(),
+            }
+            or type(history_head) is not str
+            or not _HEX_DIGEST.fullmatch(history_head)
             or owner.mode != "TEST"
             or summary.get("mode") != "TEST"
             or summary.get("dispatch_enabled") is not False
@@ -447,8 +468,29 @@ class StaffWorkflow:
                 "evaluation_result_digest": body["evaluation_result_digest"],
             }
         )
-        assert evaluation_id is not None and result_digest is not None
+        if evaluation_id is None or result_digest is None:
+            raise ValueError("review_binding")
         return revision, evaluation_id, result_digest
+
+    def _owner_position(self) -> tuple[int, object]:
+        """Measure the Owner's committed history position (sequence and head)."""
+        owner = self._mirror.owner
+        sequence = owner.summary().get("sequence")
+        if type(sequence) is not int or sequence < 0:
+            raise RuntimeError("owner_position_unavailable")
+        if sequence == 0:
+            return sequence, None
+        latest = owner.history(limit=1, offset=sequence - 1)
+        if len(latest) != 1 or latest[0].get("event_sequence") != sequence or latest[0].get("head") is None:
+            raise RuntimeError("owner_position_unavailable")
+        return sequence, latest[0]["head"]
+
+    def _h_received_cash_cents(self) -> int:
+        """Measure H's recorded cash from the Owner projection."""
+        value = self._mirror.obligation_detail(H_ITEM_ID, limit=1).get("received_cash_cents")
+        if type(value) is not int:
+            raise RuntimeError("owner_cash_unavailable")
+        return value
 
     def _gate_attempt(self, body: object, *, stale: bool) -> dict[str, Any]:
         payload = self._require_object(
@@ -468,6 +510,7 @@ class StaffWorkflow:
             expected_revision = revision
             expected_code = "authority_actor_not_authorized"
             label = "Wrong role"
+        position_before = self._owner_position()
         try:
             self._mirror.reject_offset_and_authorize_correction(
                 item_id=H_ITEM_ID,
@@ -491,7 +534,7 @@ class StaffWorkflow:
             "name": label,
             "status": "REJECTED",
             "code": code,
-            "state_unchanged": True,
+            "state_unchanged": self._owner_position() == position_before,
         }
         self._gate_checks = [row for row in self._gate_checks if row["name"] != label]
         self._gate_checks.append(result)
@@ -532,6 +575,7 @@ class StaffWorkflow:
         payload = self._require_object(body, {"revision"})
         revision, _evaluation_id, _result_digest = self._review_values(payload, with_receipt=False)
         with self._lock:
+            cash_before = self._h_received_cash_cents()
             result = self._mirror.acknowledge_action(
                 H_ACTION_ID,
                 "ack:correction:h:v1",
@@ -539,8 +583,7 @@ class StaffWorkflow:
                 actor_role="RECEIVER",
                 expected_revision=revision,
             )
-            cash_before = int(result["received_cash_cents"])
-            cash_after = int(result["received_cash_cents"])
+            cash_after = self._h_received_cash_cents()
             return {
                 "command": result,
                 "cash_before_cents": cash_before,
@@ -669,7 +712,8 @@ class StaffWorkflow:
             {"revision", "evaluation_id", "evaluation_result_digest", "read_binding"},
         )
         revision, evaluation_id, result_digest = self._review_dependencies(payload)
-        assert evaluation_id is not None and result_digest is not None
+        if evaluation_id is None or result_digest is None:
+            raise ValueError("review_binding")
         with self._lock:
             if payload["read_binding"] != self._staff_command_binding(self.decision_view()):
                 raise FinancialRevisionError("obligation_revision_conflict")
