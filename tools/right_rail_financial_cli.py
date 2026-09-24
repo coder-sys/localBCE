@@ -4,6 +4,8 @@ Owner commands open one existing database and delegate reads, commands,
 Continuity validation, and restore work to ``FinancialMirror``. Switch
 commands accept a verified SHADOW package and result records without opening
 an Owner database. The CLI has no network, payment, or direct-SQLite path.
+Every command takes its trusted authority (including the actor roster) from an
+explicit ``--authority-file``; there is no built-in default authority.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from app.right_rail_financial_switch import (
     run_shadow_replay,
 )
 from app.right_rail_financial_owner import (
+    AuthorityActor,
     FinancialError,
     FinancialOwner,
     FinancialOwnerConfig,
@@ -55,6 +58,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--program-id")
     parser.add_argument("--period-id")
     parser.add_argument("--currency", default="USD")
+    parser.add_argument(
+        "--authority-file",
+        type=Path,
+        help="trusted authority JSON: authority_id, epoch, digest and actors roster (required)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("summary")
@@ -164,21 +172,65 @@ def _existing_database(path: Path) -> Path:
     return path
 
 
-def _owner(args: argparse.Namespace) -> FinancialOwner:
-    database = _existing_database(args.database)
+def _scope(args: argparse.Namespace) -> dict[str, str]:
     if any(
         type(value) is not str or not value
         for value in (args.state_id, args.deployment_id, args.program_id, args.period_id)
     ):
         raise FinancialMirrorError("financial_scope_missing")
-    config = FinancialOwnerConfig(
-        state_id=args.state_id,
-        deployment_id=args.deployment_id,
-        program_id=args.program_id,
-        period_id=args.period_id,
-        currency=args.currency,
+    return {
+        "state_id": args.state_id,
+        "deployment_id": args.deployment_id,
+        "program_id": args.program_id,
+        "period_id": args.period_id,
+        "currency": args.currency,
+    }
+
+
+def authority_file_record(authority: SyntheticTrustedAuthority) -> dict[str, object]:
+    """The ``--authority-file`` JSON record for one trusted authority."""
+
+    return {
+        "authority_id": authority.authority_id,
+        "epoch": authority.epoch,
+        "digest": authority.digest.hex().upper(),
+        "actors": [{"actor_id": actor.actor_id, "roles": list(actor.roles)} for actor in authority.actors],
+    }
+
+
+def _trusted_authority(args: argparse.Namespace) -> SyntheticTrustedAuthority:
+    """Load the caller-supplied trusted authority; fail closed when it is absent."""
+
+    if args.authority_file is None:
+        raise FinancialMirrorError("trusted_authority_missing")
+    value = _switch_keys(
+        _read_switch_json(args.authority_file, "trusted_authority"),
+        {"authority_id", "epoch", "digest", "actors"},
+        "trusted_authority",
     )
-    return FinancialOwner(path=database, config=config, trusted_authority=SyntheticTrustedAuthority())
+    actors = value["actors"]
+    if type(actors) is not list or not actors:
+        raise FinancialMirrorError("trusted_authority_actors")
+    roster: list[AuthorityActor] = []
+    for actor in actors:
+        actor = _switch_keys(actor, {"actor_id", "roles"}, "trusted_authority_actor")
+        if type(actor["roles"]) is not list:
+            raise FinancialMirrorError("trusted_authority_actor_roles")
+        roster.append(AuthorityActor(actor["actor_id"], tuple(actor["roles"])))
+    authority = SyntheticTrustedAuthority(
+        authority_id=value["authority_id"],
+        epoch=value["epoch"],
+        actors=tuple(roster),
+    )
+    if authority_file_record(authority) != value:
+        raise FinancialMirrorError("trusted_authority_digest")
+    return authority
+
+
+def _owner(args: argparse.Namespace) -> FinancialOwner:
+    database = _existing_database(args.database)
+    config = FinancialOwnerConfig(**_scope(args))
+    return FinancialOwner(path=database, config=config, trusted_authority=_trusted_authority(args))
 
 
 def _read_package(path: Path) -> bytes:
@@ -354,8 +406,12 @@ def _try_switch_document(path: Path | None, loader: Any, label: str) -> tuple[An
         return None, [f"{label}_invalid:{error}"]
 
 
-def _verify_switch_package(package: bytes) -> None:
-    verified = FinancialMirror.validate_continuity_package(package)
+def _verify_switch_package(package: bytes, authority: SyntheticTrustedAuthority, scope: dict[str, str]) -> None:
+    verified = FinancialMirror.validate_continuity_package(
+        package,
+        trusted_authority=authority,
+        expected_scope=scope,
+    )
     if (
         verified.get("version") != 7
         or verified.get("mode") != "SHADOW"
@@ -366,18 +422,22 @@ def _verify_switch_package(package: bytes) -> None:
 
 
 def _switch_prepare(args: argparse.Namespace) -> dict[str, object]:
+    authority = _trusted_authority(args)
+    scope = _scope(args)
     package = _read_package(args.package)
-    _verify_switch_package(package)
+    _verify_switch_package(package, authority, scope)
     approval = _read_cohort_approval(args.cohort_approval)
     reference = _read_reference_spec(args.reference_spec)
     candidate = _read_candidate_spec(args.candidate_spec)
     replay_input = prepare_shadow_replay_input(
         package,
+        trusted_authority=authority,
+        expected_scope=scope,
         cohort_approval=approval,
         reference=reference,
         candidate=candidate,
     )
-    decoded = decode_replay_input(replay_input)
+    decoded = decode_replay_input(replay_input, trusted_authority=authority, expected_scope=scope)
     _write_new(args.output, replay_input)
     return {
         "contract": "RR/SWITCH/CLI-PREPARE-REPORT/v1",
@@ -395,13 +455,17 @@ def _switch_prepare(args: argparse.Namespace) -> dict[str, object]:
 
 
 def _switch_compare(args: argparse.Namespace) -> dict[str, object]:
+    authority = _trusted_authority(args)
+    scope = _scope(args)
     package = _read_package(args.package)
-    _verify_switch_package(package)
+    _verify_switch_package(package, authority, scope)
     approval, approval_errors = _try_switch_document(args.cohort_approval, _read_cohort_approval, "cohort_approval")
     reference, reference_errors = _try_switch_document(args.reference_spec, _read_reference_spec, "reference_spec")
     candidate, candidate_errors = _try_switch_document(args.candidate_spec, _read_candidate_spec, "candidate_spec")
     report = run_shadow_replay(
         package,
+        trusted_authority=authority,
+        expected_scope=scope,
         cohort_approval=approval,
         reference=reference,
         candidate=candidate,
@@ -529,7 +593,7 @@ def _run(args: argparse.Namespace) -> Any:
         _write_new(args.output, package)
         return {"schema": "RR/FINANCIAL/MIRROR/v1", "status": "EXPORTED", "path": str(args.output), "package_bytes": len(package)}
     if command == "validate-continuity":
-        return mirror.validate_continuity_package(_read_package(args.package))
+        return mirror.validate_owner_continuity_package(_read_package(args.package))
     if command == "restore-continuity":
         shadow = mirror.restore_continuity(_read_package(args.package), args.destination)
         return {"status": "RESTORED_SHADOW", "destination": str(args.destination), "integrity": shadow.verify_integrity()}

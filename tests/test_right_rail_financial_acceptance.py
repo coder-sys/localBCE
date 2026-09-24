@@ -1688,11 +1688,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 "period_id": expected.PERIOD_ONE_ID,
                 "currency": expected.CURRENCY,
             },
-            expected_authority={
-                "authority_id": self.authority.authority_id,
-                "epoch": self.authority.epoch,
-                "digest": self.authority.digest,
-            },
+            expected_authority=self.authority,
         )
         self.assertEqual(package_result["package_digest"], package_result["package_digest"].upper())
         destination = self._path("shadow.sqlite")
@@ -1821,11 +1817,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     "period_id": test_config.period_id,
                     "currency": test_config.currency,
                 },
-                expected_authority={
-                    "authority_id": self.authority.authority_id,
-                    "epoch": self.authority.epoch,
-                    "digest": self.authority.digest,
-                },
+                expected_authority=self.authority,
             )
         wrong_restore_owner = _tamper_restore_identity("SHADOW", owner._TEST_OWNER_ID)
         with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:restore-owner"):
@@ -1840,11 +1832,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     "period_id": test_config.period_id,
                     "currency": test_config.currency,
                 },
-                expected_authority={
-                    "authority_id": self.authority.authority_id,
-                    "epoch": self.authority.epoch,
-                    "digest": self.authority.digest,
-                },
+                expected_authority=self.authority,
             )
 
         mode_only = self._path("test-promotion-mode-only.sqlite")
@@ -2003,7 +1991,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         independent_package = verify_continuity_package(
             second_package,
             expected_scope=package_identity["scope"],
-            expected_authority=package_identity["authority"],
+            expected_authority=self.authority,
             expected_schema_version=6,
         )
         self.assertEqual(independent_package["version"], 6)
@@ -2017,7 +2005,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             verify_continuity_package(
                 _independent_canonical(tampered_package),
                 expected_scope=package_identity["scope"],
-                expected_authority=package_identity["authority"],
+                expected_authority=self.authority,
                 expected_schema_version=6,
             )
         restored_mirror = mirror.restore_test_continuity(
@@ -2064,7 +2052,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             verify_continuity_package(
                 legacy_package,
                 expected_scope=legacy_view["scope"],
-                expected_authority=legacy_view["authority"],
+                expected_authority=self.authority,
                 expected_schema_version=5,
             )["version"],
             5,
@@ -2779,7 +2767,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             independent = verify_continuity_package(
                 raw_package,
                 expected_scope=binding["scope"],
-                expected_authority=binding["authority"],
+                expected_authority=self.authority,
                 expected_schema_version=6,
             )
             self.assertEqual(independent["version"], 6)
@@ -3060,15 +3048,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 "period_id": expected.PERIOD_ONE_ID,
                 "currency": expected.CURRENCY,
             },
-            expected_authority={
-                "authority_id": self.authority.authority_id,
-                "epoch": self.authority.epoch,
-                "digest": self.authority.digest,
-            },
+            expected_authority=self.authority,
         )
         self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v6")
         self.assertEqual(source_package_result["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
-        source_package_view = FinancialMirror.validate_continuity_package(source_package)
+        source_package_view = mirror.validate_owner_continuity_package(source_package)
         self.assertEqual(source_package_view["version"], 6)
         self.assertEqual(source_package_view["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
         self.assertFalse(source_package_view["dispatch_enabled"])
@@ -3639,7 +3623,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         verified = verify_continuity_package(
             package_bytes,
             expected_scope=package["scope"],
-            expected_authority=package["authority"],
+            expected_authority=self.authority,
             expected_schema_version=7,
         )
         self.assertEqual(verified["version"], 7)
@@ -3676,7 +3660,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     verify_continuity_package(
                         altered,
                         expected_scope=package["scope"],
-                        expected_authority=package["authority"],
+                        expected_authority=self.authority,
                         expected_schema_version=7,
                     )
         self._assert_verified(store)
@@ -3742,7 +3726,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         assert imported is not None
         self.assertEqual(tuple(imported), (0, 0))
         self.assertEqual(item_count, 1)
-        self.assertEqual(events, ["POPULATION_STAGED"])
+        self.assertEqual(events, ["POPULATION_IMPORT_OPENED", "POPULATION_STAGED"])
         self.assertEqual(store.summary()["obligation_count"], 0)
 
     def test_population_count_backpressure_preserves_prior_chunks(self) -> None:
@@ -3794,8 +3778,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertTrue(resumed["source_complete"])
         with store._read() as connection:
             after_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
-        self.assertEqual(before_resume_events, ["POPULATION_STAGED"])
-        self.assertEqual(after_resume_events, ["POPULATION_STAGED", "POPULATION_SOURCE_COMPLETED"])
+        self.assertEqual(before_resume_events, ["POPULATION_IMPORT_OPENED", "POPULATION_STAGED"])
+        self.assertEqual(
+            after_resume_events,
+            ["POPULATION_IMPORT_OPENED", "POPULATION_STAGED", "POPULATION_SOURCE_COMPLETED"],
+        )
         validated = store.validate_population(population_id)
         self.assertEqual(validated["status"], "VALIDATED")
         self.assertEqual(validated["validated_count"], 3)
@@ -3833,7 +3820,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
         assert imported is not None
         self.assertEqual(tuple(imported), (1, 0))
-        self.assertEqual(events, ["POPULATION_STAGED"])
+        self.assertEqual(events, ["POPULATION_IMPORT_OPENED", "POPULATION_STAGED"])
         self.assertEqual(store.summary()["obligation_count"], 0)
         self._assert_verified(store)
 
@@ -4550,8 +4537,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(reopened.current_evaluation_receipt(expected.H_ITEM_ID), receipt)
         mirror_receipt = FinancialMirror(reopened).current_evaluation_receipt(expected.H_ITEM_ID)
         self.assertEqual({key: value for key, value in mirror_receipt.items() if key not in {"schema", "resource"}}, receipt)
+        authority_file = self._path("trusted-authority.json")
+        authority_file.write_text(json.dumps(cli.authority_file_record(self.authority)), encoding="ascii")
         common = [
             "--database", str(reopened.path),
+            "--authority-file", str(authority_file),
             "--state-id", expected.STATE_ID,
             "--deployment-id", expected.DEPLOYMENT_ID,
             "--program-id", expected.PROGRAM_ID,

@@ -43,7 +43,30 @@ class FinancialSwitchCliTests(unittest.TestCase):
         self.package = self.shadow.export_continuity()
         self.incumbent_before = self.incumbent.export_continuity()
         self.shadow_before = self.shadow.export_continuity()
-        self.facts = inspect_shadow_snapshot(self.package)
+        config = self.shadow.config
+        # Trusted inputs come from the test's own authority and Owner config,
+        # never from the package under comparison.
+        self.trust = {
+            "trusted_authority": self.fixture.authority,
+            "expected_scope": {
+                "state_id": config.state_id,
+                "deployment_id": config.deployment_id,
+                "program_id": config.program_id,
+                "period_id": config.period_id,
+                "currency": config.currency,
+            },
+        }
+        self.facts = inspect_shadow_snapshot(self.package, **self.trust)
+        self.authority_path = self.fixture._path("switch-cli-authority.json")
+        self.authority_path.write_bytes(_json_bytes(financial_cli.authority_file_record(self.fixture.authority)))
+        self.trust_args = [
+            "--authority-file", str(self.authority_path),
+            "--state-id", config.state_id,
+            "--deployment-id", config.deployment_id,
+            "--program-id", config.program_id,
+            "--period-id", config.period_id,
+            "--currency", config.currency,
+        ]
 
         self.package_path = self.fixture._path("switch-cli-package.json")
         self.package_path.write_bytes(self.package)
@@ -109,10 +132,10 @@ class FinancialSwitchCliTests(unittest.TestCase):
         self.reference_path.write_bytes(_json_bytes(self.reference_document))
         self.candidate_path.write_bytes(_json_bytes(self.candidate_document))
 
-    def _invoke(self, args: list[str]) -> tuple[int, str]:
+    def _invoke(self, args: list[str], *, trusted: bool = True) -> tuple[int, str]:
         output = io.StringIO()
         with redirect_stdout(output):
-            exit_code = financial_cli.main(args)
+            exit_code = financial_cli.main((self.trust_args if trusted else []) + args)
         return exit_code, output.getvalue()
 
     def _prepare_input(self) -> tuple[bytes, object]:
@@ -136,7 +159,7 @@ class FinancialSwitchCliTests(unittest.TestCase):
         *,
         wrong_candidate_input: bool = False,
     ) -> tuple[dict[str, object], dict[str, object]]:
-        replay = decode_replay_input(replay_bytes)
+        replay = decode_replay_input(replay_bytes, **self.trust)
         expected_by_id = {item.item_id: item.owed_cents for item in expected.PROGRAM_ITEMS}
         reference_rows = [
             {"member_id": item_id, "currency": replay.currency, "owed_cents": expected_by_id[item_id]}
@@ -222,7 +245,7 @@ class FinancialSwitchCliTests(unittest.TestCase):
 
         exit_code, report = self._compare(report_path=report_path)
 
-        replay = decode_replay_input(replay_bytes)
+        replay = decode_replay_input(replay_bytes, **self.trust)
         comparison = report["comparison"]
         differences = {row["path"]: row for row in comparison["differences"]}
         self.assertEqual(exit_code, 0)
@@ -311,6 +334,19 @@ class FinancialSwitchCliTests(unittest.TestCase):
         self.assertEqual(report["comparison"]["reasons"], ["candidate_result_invalid"])
         self.assertTrue(any(row["reason"] == "candidate:input-binding" for row in report["comparison"]["unknowns"]))
         self.assertFalse(report["comparison"]["transfer_authorized"])
+        self._assert_owner_packages_unchanged()
+
+    def test_cli_switch_without_trusted_authority_file_fails_closed(self) -> None:
+        exit_code, output = self._invoke(
+            ["switch-compare", "--package", str(self.package_path)],
+            trusted=False,
+        )
+        report = json.loads(output)
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(report["completion"], "ERROR")
+        self.assertEqual(report["error"], {"code": "trusted_authority_missing"})
+        self.assertIsNone(report["comparison"])
         self._assert_owner_packages_unchanged()
 
     def test_cli_switch_error_returns_structured_nonzero_without_owner_writes(self) -> None:

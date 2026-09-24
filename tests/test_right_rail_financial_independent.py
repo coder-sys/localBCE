@@ -637,6 +637,27 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                     )
         self.assertEqual(self._verify()["mode"], "LIVE")
 
+    def test_continuity_package_verification_requires_caller_authority_roster(self) -> None:
+        package = self.store.export_continuity()
+        without_roster = {key: value for key, value in self.authority_binding.items() if key != "actors"}
+        for label, authority, code in (
+            ("absent", None, "identity:authority-required"),
+            ("roster-missing", without_roster, "identity:authority-roster-required"),
+        ):
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(independent.IndependentFinancialError, code):
+                    independent.verify_continuity_package(
+                        package,
+                        expected_scope=self.scope,
+                        expected_authority=authority,
+                    )
+        verified = independent.verify_continuity_package(
+            package,
+            expected_scope=self.scope,
+            expected_authority=self.authority_binding,
+        )
+        self.assertEqual(verified["authority"]["authority_id"], self.authority.authority_id)
+
     def test_event_payload_tamper_fails_closed_without_repair(self) -> None:
         target = self._copy_database("event-payload-tamper.sqlite")
 
@@ -695,11 +716,26 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-completion-order"):
             self._verify(after_validation)
 
+    def test_rehashed_population_history_requires_staging_event_first(self) -> None:
+        population_id = "population:history"
+        self._add_published_history_population(population_id)
+        reordered = self._copy_database("population-open-order-tamper.sqlite")
+        self._reorder_and_rehash_population_events(
+            reordered,
+            population_id,
+            "POPULATION_IMPORT_OPENED",
+            0,
+            "POPULATION_STAGED",
+            0,
+        )
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-open-order"):
+            self._verify(reordered)
+
     def test_partial_population_history_binds_persisted_count_through_restart_and_restore(self) -> None:
         valid_path = self._make_partial_import()
         valid_result = self._verify(valid_path)
         self.assertEqual(valid_result["counts"]["populations"], 1)
-        self.assertEqual(valid_result["sequence"], 4)
+        self.assertEqual(valid_result["sequence"], 5)
 
         reopened = owner.FinancialOwner(
             path=valid_path,

@@ -67,6 +67,14 @@ class FinancialMirrorTests(unittest.TestCase):
         self._populate_owner()
         self.mirror = FinancialMirror(self.store)
 
+    def _authority_file(self) -> Path:
+        from tools import right_rail_financial_cli as cli
+
+        path = self.root / "trusted-authority.json"
+        if not path.exists():
+            path.write_text(json.dumps(cli.authority_file_record(self.authority)), encoding="ascii")
+        return path
+
     def _populate_owner(self) -> None:
         scope = CONTROL_PACK_V1.scope
         pack = owner.ControlPack(
@@ -501,6 +509,7 @@ class FinancialMirrorTests(unittest.TestCase):
         )
         common = [
             "--database", str(self.db),
+            "--authority-file", str(self._authority_file()),
             "--state-id", self.config.state_id,
             "--deployment-id", self.config.deployment_id,
             "--program-id", self.config.program_id,
@@ -560,6 +569,7 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertNotIn("payload", receipt)
         common = [
             "--database", str(self.db),
+            "--authority-file", str(self._authority_file()),
             "--state-id", self.config.state_id,
             "--deployment-id", self.config.deployment_id,
             "--program-id", self.config.program_id,
@@ -605,6 +615,7 @@ class FinancialMirrorTests(unittest.TestCase):
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
         common = [
             "--database", str(self.db),
+            "--authority-file", str(self._authority_file()),
             "--state-id", self.config.state_id,
             "--deployment-id", self.config.deployment_id,
             "--program-id", self.config.program_id,
@@ -697,7 +708,7 @@ class FinancialMirrorTests(unittest.TestCase):
                 self.store._continuity_admission_package_size(connection),
                 len(package),
             )
-        metadata = self.mirror.validate_continuity_package(package)
+        metadata = self.mirror.validate_owner_continuity_package(package)
         self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v7")
         self.assertEqual(metadata["version"], 7)
         self.assertEqual(metadata["scope"]["state_id"], self.config.state_id)
@@ -758,6 +769,46 @@ class FinancialMirrorTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialMirrorDispatchError, "dispatch_disabled"):
             self.mirror.dispatch_outbox()
 
+    def test_continuity_validation_requires_caller_trusted_authority(self) -> None:
+        package = self.mirror.export_continuity()
+        scope = {
+            "state_id": self.config.state_id,
+            "deployment_id": self.config.deployment_id,
+            "program_id": self.config.program_id,
+            "period_id": self.config.period_id,
+            "currency": self.config.currency,
+        }
+        with self.assertRaisesRegex(FinancialMirrorContinuityError, "continuity_trusted_authority_required"):
+            FinancialMirror.validate_continuity_package(package, trusted_authority=None, expected_scope=scope)
+        other_authority = owner.SyntheticTrustedAuthority(authority_id="synthetic-authority-other")
+        with self.assertRaisesRegex(FinancialMirrorContinuityError, "continuity_authority_mismatch"):
+            FinancialMirror.validate_continuity_package(package, trusted_authority=other_authority, expected_scope=scope)
+        verified = FinancialMirror.validate_continuity_package(
+            package,
+            trusted_authority=self.authority,
+            expected_scope=scope,
+        )
+        self.assertEqual(verified["package_digest"], json.loads(package.decode("ascii"))["package_digest"])
+
+    def test_cli_requires_explicit_trusted_authority_file(self) -> None:
+        from tools import right_rail_financial_cli as cli
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        argv = [
+            "--database", str(self.db),
+            "--state-id", self.config.state_id,
+            "--deployment-id", self.config.deployment_id,
+            "--program-id", self.config.program_id,
+            "--period-id", self.config.period_id,
+            "summary",
+        ]
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            status = cli.main(argv)
+        self.assertEqual(status, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), "ERROR:trusted_authority_missing\n")
+
     def test_cli_summary_is_local_and_redacted(self) -> None:
         from tools import right_rail_financial_cli as cli
 
@@ -765,6 +816,7 @@ class FinancialMirrorTests(unittest.TestCase):
         stderr = io.StringIO()
         argv = [
             "--database", str(self.db),
+            "--authority-file", str(self._authority_file()),
             "--state-id", self.config.state_id,
             "--deployment-id", self.config.deployment_id,
             "--program-id", self.config.program_id,

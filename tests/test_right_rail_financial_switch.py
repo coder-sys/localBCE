@@ -37,7 +37,20 @@ class FinancialSwitchTests(unittest.TestCase):
         self.snapshot = self.shadow.export_continuity()
         self.incumbent_before = self.incumbent.export_continuity()
         self.shadow_before = self.shadow.export_continuity()
-        self.facts = inspect_shadow_snapshot(self.snapshot)
+        config = self.shadow.config
+        # Trusted inputs come from the test's own authority and Owner config,
+        # never from the snapshot being inspected.
+        self.trust = {
+            "trusted_authority": self.fixture.authority,
+            "expected_scope": {
+                "state_id": config.state_id,
+                "deployment_id": config.deployment_id,
+                "program_id": config.program_id,
+                "period_id": config.period_id,
+                "currency": config.currency,
+            },
+        }
+        self.facts = inspect_shadow_snapshot(self.snapshot, **self.trust)
         self.approval = self._approval()
         self.reference = self._reference()
         self.candidate = self._candidate()
@@ -73,7 +86,7 @@ class FinancialSwitchTests(unittest.TestCase):
         expected_by_id = {item.item_id: item.owed_cents for item in expected.PROGRAM_ITEMS}
 
         def evaluate(input_bytes: bytes) -> dict[str, object]:
-            replay = decode_replay_input(input_bytes)
+            replay = decode_replay_input(input_bytes, **self.trust)
             member_results = [
                 {"member_id": item_id, "currency": replay.currency, "owed_cents": expected_by_id[item_id]}
                 for item_id in replay.member_ids
@@ -103,7 +116,7 @@ class FinancialSwitchTests(unittest.TestCase):
 
     def _candidate(self, *, h_delta: int = 0, unknown_field: bool = False) -> CandidateSpec:
         def evaluate(input_bytes: bytes) -> dict[str, object]:
-            replay = decode_replay_input(input_bytes)
+            replay = decode_replay_input(input_bytes, **self.trust)
             package = json.loads(replay.snapshot_package_bytes.decode("ascii"))
             population_items = {
                 row["item_id"]: row
@@ -164,6 +177,7 @@ class FinancialSwitchTests(unittest.TestCase):
 
         report = run_shadow_replay(
             self.snapshot,
+            **self.trust,
             cohort_approval=self.approval,
             reference=reference_runner,
             candidate=candidate_runner,
@@ -196,12 +210,14 @@ class FinancialSwitchTests(unittest.TestCase):
 
         missing_approval = run_shadow_replay(
             self.snapshot,
+            **self.trust,
             cohort_approval=None,
             reference=reference,
             candidate=candidate,
         )
         missing_reference = run_shadow_replay(
             self.snapshot,
+            **self.trust,
             cohort_approval=self.approval,
             reference=None,
             candidate=candidate,
@@ -223,12 +239,14 @@ class FinancialSwitchTests(unittest.TestCase):
 
         invalid_snapshot = run_shadow_replay(
             tampered,
+            **self.trust,
             cohort_approval=self.approval,
             reference=reference,
             candidate=candidate,
         )
         invalid_approval = run_shadow_replay(
             self.snapshot,
+            **self.trust,
             cohort_approval=bad_approval,
             reference=reference,
             candidate=candidate,
@@ -240,9 +258,29 @@ class FinancialSwitchTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self._assert_source_bytes_unchanged()
 
+    def test_snapshot_without_caller_trusted_authority_is_invalid_before_evaluation(self) -> None:
+        calls: list[str] = []
+        reference = replace(self.reference, evaluate=lambda _raw: calls.append("reference"))
+        candidate = replace(self.candidate, evaluate=lambda _raw: calls.append("candidate"))
+
+        report = run_shadow_replay(
+            self.snapshot,
+            trusted_authority=None,
+            expected_scope=self.trust["expected_scope"],
+            cohort_approval=self.approval,
+            reference=reference,
+            candidate=candidate,
+        )
+
+        self.assertEqual(report["status"], "INVALID_SNAPSHOT")
+        self.assertEqual(report["reasons"], ["switch:trusted-authority-required"])
+        self.assertEqual(calls, [])
+        self._assert_source_bytes_unchanged()
+
     def test_unknown_candidate_fields_return_incomplete_unknown(self) -> None:
         report = run_shadow_replay(
             self.snapshot,
+            **self.trust,
             cohort_approval=self.approval,
             reference=self.reference,
             candidate=self._candidate(unknown_field=True),
@@ -266,6 +304,7 @@ class FinancialSwitchTests(unittest.TestCase):
         )
         report = run_shadow_replay(
             self.snapshot,
+            **self.trust,
             cohort_approval=self.approval,
             reference=reference,
             candidate=self._candidate(h_delta=1),

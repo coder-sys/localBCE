@@ -9,7 +9,6 @@ database paths read-only.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -136,6 +135,7 @@ NEXT_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v6\x00"
 MANIFEST_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
 POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
+POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
 PROGRAM_FUNDING_RECEIPT_DOMAIN = b"RR/FINANCIAL/PROGRAM-FUNDING-RECEIPT/v1\x00"
 PROGRAM_FUNDING_RECEIPT_SCHEMA = "RR/FINANCIAL/PROGRAM-FUNDING-RECEIPT/v1"
 PROGRAM_FUNDING_CONFIRMATION_CLASS = "STATE_PAYMENT_RECORD"
@@ -537,7 +537,13 @@ _TRIGGER_DEFS_BY_VERSION = {
 
 _EVENT_KINDS = {
     "CONTROL_PACK": {"CONTROL_PACK_PUBLISHED"},
-    "POPULATION": {"POPULATION_STAGED", "POPULATION_SOURCE_COMPLETED", "POPULATION_VALIDATED", "POPULATION_PUBLISHED"},
+    "POPULATION": {
+        "POPULATION_IMPORT_OPENED",
+        "POPULATION_STAGED",
+        "POPULATION_SOURCE_COMPLETED",
+        "POPULATION_VALIDATED",
+        "POPULATION_PUBLISHED",
+    },
     "POPULATION_MANIFEST": {"POPULATION_MANIFEST_REGISTERED", "POPULATION_MANIFEST_SUPERSEDED"},
     "PROGRAM_FUNDING_RECEIPT": {"FUNDING_RECEIPT_RECORDED", "FUNDING_RECEIPT_SUPERSEDED"},
     "OBLIGATION": {
@@ -592,23 +598,6 @@ _EVALUATION_VERIFICATION = {"MISSING_EVIDENCE", "SUPPORTED", "CONFLICT_VISIBLE"}
 _ACTION_KINDS = {"OFFSET_AUTHORIZATION", "CORRECTION_PAYMENT_REQUEST"}
 _ACTION_STATUSES = {"READY", "ACKNOWLEDGED", "CANCELLED"}
 _CLAIM_STATUSES = {"CLAIMED", "AUTHORIZED", "REJECTED"}
-
-
-@dataclass(frozen=True, slots=True)
-class ExpectedFinancialIdentity:
-    """External binding required before a database can be accepted."""
-
-    state_id: str
-    deployment_id: str
-    program_id: str
-    period_id: str
-    authority_id: str = "synthetic-authority-v1"
-    authority_epoch: int = 1
-    authority_digest: bytes | str | None = None
-    currency: str = CURRENCY
-    mode: str | None = None
-    owner_id: str | None = None
-    continuity_epoch: int | None = None
 
 
 def _canonical(value: object, code: str = "canonical") -> bytes:
@@ -1023,20 +1012,6 @@ def _field(value: object, name: str) -> object:
     _fail(f"identity:missing-{name}")
 
 
-def _default_authority_digest() -> bytes:
-    authority = {
-        "authority_id": "synthetic-authority-v1",
-        "epoch": 1,
-        "actors": [
-            {"actor_id": "synthetic-official", "roles": ["FINANCE_DECISION", "CASE_OWNER"]},
-            {"actor_id": "synthetic-reporter", "roles": ["REPORTING_EDITOR"]},
-            {"actor_id": "synthetic-receiver", "roles": ["RECEIVER"]},
-        ],
-        "synthetic_only": True,
-    }
-    return _digest(EVIDENCE_DOMAIN, _canonical(authority))
-
-
 def _actor_roles(value: object) -> dict[str, frozenset[str]] | None:
     if isinstance(value, Mapping):
         actors = value.get("actors")
@@ -1085,7 +1060,6 @@ def _identity(
     expected_mode: str | None,
     expected_owner_id: str | None,
     expected_continuity_epoch: int | None,
-    require_authority_roster: bool,
 ) -> dict[str, object]:
     scope_source = expected_scope if expected_scope is not None else expected_config
     if scope_source is None:
@@ -1107,31 +1081,20 @@ def _identity(
             authority_source = expected_config if "authority_id" in expected_config else None
         elif hasattr(expected_config, "authority_id"):
             authority_source = expected_config
+    # Every verification (database or continuity package) needs caller-supplied
+    # trusted authority with its digest-bound roster. There is no built-in
+    # default authority and no path that trusts the authority a package or
+    # database names for itself (Articles V.2, XI.10).
     if authority_source is None:
-        # Database verification always needs caller-supplied trusted authority
-        # material. Only the continuity-package check still accepts the fixed
-        # synthetic default, because app/right_rail_financial_switch.py calls it
-        # with no trusted authority to supply.
-        if require_authority_roster:
-            _fail("identity:authority-required")
-        authority_id = "synthetic-authority-v1"
-        authority_epoch = 1
-        authority_digest = _default_authority_digest()
-        actors = {
-            "synthetic-official": frozenset({"FINANCE_DECISION", "CASE_OWNER"}),
-            "synthetic-reporter": frozenset({"REPORTING_EDITOR"}),
-            "synthetic-receiver": frozenset({"RECEIVER"}),
-        }
-    else:
-        authority_id = _id(_field(authority_source, "authority_id"), "identity:authority-id")
-        authority_epoch = _integer(_field(authority_source, "epoch"), "identity:authority-epoch", minimum=1, maximum=MAX_CENTS)
-        authority_digest = _hex_digest(_field(authority_source, "digest"), "identity:authority-digest")
-        actors = _actor_roles(authority_source)
-        if actors is None:
-            if require_authority_roster:
-                _fail("identity:authority-roster-required")
-        elif _roster_authority_digest(authority_id, authority_epoch, authority_source) != authority_digest:
-            _fail("identity:authority-roster-digest")
+        _fail("identity:authority-required")
+    authority_id = _id(_field(authority_source, "authority_id"), "identity:authority-id")
+    authority_epoch = _integer(_field(authority_source, "epoch"), "identity:authority-epoch", minimum=1, maximum=MAX_CENTS)
+    authority_digest = _hex_digest(_field(authority_source, "digest"), "identity:authority-digest")
+    actors = _actor_roles(authority_source)
+    if actors is None:
+        _fail("identity:authority-roster-required")
+    if _roster_authority_digest(authority_id, authority_epoch, authority_source) != authority_digest:
+        _fail("identity:authority-roster-digest")
     mode = expected_mode
     if mode is None and expected_config is not None and hasattr(expected_config, "mode"):
         mode = getattr(expected_config, "mode")
@@ -1157,6 +1120,7 @@ def _identity(
             _fail("identity:schema-version")
     return {
         "scope": scope,
+        "authority_source": authority_source,
         "authority_id": authority_id,
         "authority_epoch": authority_epoch,
         "authority_digest": authority_digest,
@@ -1453,7 +1417,9 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object], sche
             _fail("history:event-kind")
         if schema_version not in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION} and aggregate_type == "PROGRAM_FUNDING_RECEIPT":
             _fail("history:event-schema")
-        if schema_version != MANIFEST_SCHEMA_VERSION and aggregate_type == "POPULATION_MANIFEST":
+        if schema_version != MANIFEST_SCHEMA_VERSION and (
+            aggregate_type == "POPULATION_MANIFEST" or kind == "POPULATION_IMPORT_OPENED"
+        ):
             _fail("history:event-schema")
         before = _integer(row["before_revision"], "history:before-revision")
         after = _integer(row["after_revision"], "history:after-revision")
@@ -2039,17 +2005,6 @@ def _verify_population_manifest_rows(
             _fail("population-manifest:duplicate")
         manifests[manifest_id] = row
         positions[manifest_id] = {}
-    if manifests and actors is None:
-        if (
-            authority_id == "synthetic-authority-v1"
-            and authority_epoch == 1
-            and authority_digest == _default_authority_digest()
-        ):
-            actors = {
-                "synthetic-official": frozenset({"FINANCE_DECISION", "CASE_OWNER"}),
-                "synthetic-reporter": frozenset({"REPORTING_EDITOR"}),
-                "synthetic-receiver": frozenset({"RECEIVER"}),
-            }
     for index, row in enumerate(member_rows):
         manifest_id = _id(row["manifest_id"], f"population-manifest-member:{index}:manifest")
         position = _integer(row["position"], f"population-manifest-member:{index}:position", maximum=MAX_ROWS)
@@ -2579,6 +2534,7 @@ def _verify_population_history(
                 "member_digest": _blob64(manifest["member_digest"], "history:population-member-digest").hex().upper(),
             }
         imported = 0
+        opened = False
         source_completed = False
         validated = False
         published = False
@@ -2613,6 +2569,48 @@ def _verify_population_history(
             if not isinstance(payload, dict):
                 _fail("history:population-payload")
             kind = str(event["kind"])
+            if schema_version == MANIFEST_SCHEMA_VERSION and kind != "POPULATION_IMPORT_OPENED" and not opened:
+                _fail("history:population-open-order")
+            if kind == "POPULATION_IMPORT_OPENED":
+                # Staging is recorded exactly once, before any import, completion,
+                # validation or publication event for the same population.
+                if schema_version != MANIFEST_SCHEMA_VERSION:
+                    _fail("history:population-open-schema")
+                if opened:
+                    _fail("history:population-open-duplicate")
+                if imported or source_completed or validated or published:
+                    _fail("history:population-open-order")
+                if set(payload) != {"population_id", "staging_digest"} | set(manifest_fields):
+                    _fail("history:population-open-payload")
+                if any(payload.get(key) != value for key, value in manifest_fields.items()):
+                    _fail("history:population-open-manifest")
+                if payload["population_id"] != population_id:
+                    _fail("history:population-open-population")
+                if before != 0 or after != 0:
+                    _fail("history:population-open-revision")
+                expected_staging_digest = _digest(
+                    POPULATION_STAGING_DOMAIN,
+                    _canonical(
+                        {
+                            "population_id": population_id,
+                            "pack_id": _id(population["pack_id"], "history:population-open-pack"),
+                            "cutoff_ms": _time(population["cutoff_ms"], "history:population-open-cutoff"),
+                            "inclusion_rules_json": _text(
+                                population["inclusion_rules_json"],
+                                "history:population-open-rules",
+                                max_bytes=MAX_JSON_BYTES,
+                            ),
+                            "expected_count": expected,
+                            "created_at_ms": _time(population["created_at_ms"], "history:population-open-created"),
+                        },
+                        "history:population-open-staging",
+                    ),
+                )
+                if _hex_digest(payload["staging_digest"], "history:population-open-staging-digest") != expected_staging_digest:
+                    _fail("history:population-open-staging-digest")
+                opened = True
+                continue
+
             if kind == "POPULATION_STAGED":
                 if source_completed or validated or published:
                     _fail("history:population-stage-order")
@@ -2708,6 +2706,8 @@ def _verify_population_history(
                     _fail("history:population-publication-binding")
                 published = True
 
+        if schema_version == MANIFEST_SCHEMA_VERSION and not opened:
+            _fail("history:population-open-missing")
         persisted_imported = _integer(population["imported_count"], "history:population-imported", maximum=MAX_ROWS)
         if imported != persisted_imported:
             _fail("history:population-imported-binding")
@@ -3982,7 +3982,6 @@ def verify_continuity_package(
         expected_mode=None,
         expected_owner_id=None,
         expected_continuity_epoch=expected_continuity_epoch,
-        require_authority_roster=False,
     )
     try:
         raw_text = raw.decode("ascii")
@@ -4231,11 +4230,7 @@ def _verify_connection(
             current_snapshot_package,
             expected_scope=meta["scope"],
             expected_schema_version=schema_version,
-            expected_authority={
-                "authority_id": meta["authority_id"],
-                "epoch": meta["authority_epoch"],
-                "digest": meta["authority_digest"],
-            },
+            expected_authority=identity["authority_source"],
             expected_sequence=meta["sequence"],
             expected_history_head=meta["history_head"],
             expected_continuity_epoch=meta["continuity_epoch"],
@@ -4250,11 +4245,7 @@ def _verify_connection(
             restore_source_package,
             expected_scope=meta["scope"],
             expected_schema_version=schema_version,
-            expected_authority={
-                "authority_id": meta["authority_id"],
-                "epoch": meta["authority_epoch"],
-                "digest": meta["authority_digest"],
-            },
+            expected_authority=identity["authority_source"],
             expected_continuity_epoch=meta["continuity_epoch"],
             _include_rows=True,
         )
@@ -4335,7 +4326,6 @@ def verify_database(
         expected_mode=expected_mode,
         expected_owner_id=expected_owner_id,
         expected_continuity_epoch=expected_continuity_epoch,
-        require_authority_roster=True,
     )
     connection = _open_readonly(path)
     try:
@@ -4379,7 +4369,6 @@ def verify_database_connection(
         expected_mode=expected_mode,
         expected_owner_id=expected_owner_id,
         expected_continuity_epoch=expected_continuity_epoch,
-        require_authority_roster=True,
     )
     try:
         return _verify_connection(

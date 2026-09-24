@@ -22,6 +22,7 @@ from app.right_rail_financial_owner import (
     FinancialDispatchError,
     FinancialOwner,
     ProgramFundingReceipt,
+    SyntheticTrustedAuthority,
 )
 
 
@@ -1507,21 +1508,45 @@ class FinancialMirror:
         _fail(FinancialMirrorDispatchError, "dispatch_disabled")
 
     @staticmethod
-    def validate_continuity_package(package_bytes: bytes) -> dict[str, Any]:
+    def validate_continuity_package(
+        package_bytes: bytes,
+        *,
+        trusted_authority: SyntheticTrustedAuthority,
+        expected_scope: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Validate package bytes against caller-supplied trusted authority and scope.
+
+        The authority (including its digest-bound roster) and the scope always
+        come from the caller, never from the package being checked, so a
+        package cannot certify itself (Articles V.2, XI.10).
+        """
+
         if type(package_bytes) is not bytes:
             _fail(FinancialMirrorContinuityError, "continuity_package_type")
         if len(package_bytes) > MAX_PACKAGE_BYTES:
             _fail(FinancialMirrorContinuityError, "continuity_package_size")
+        if type(trusted_authority) is not SyntheticTrustedAuthority:
+            _fail(FinancialMirrorContinuityError, "continuity_trusted_authority_required")
+        if not isinstance(expected_scope, Mapping):
+            _fail(FinancialMirrorContinuityError, "continuity_expected_scope_required")
         package = FinancialOwner.validate_continuity_package(package_bytes)
         tables = package.get("tables")
         if not isinstance(tables, Mapping):
             _fail(FinancialMirrorContinuityError, "continuity_package_tables")
+        if package.get("scope") != dict(expected_scope):
+            _fail(FinancialMirrorContinuityError, "continuity_scope_mismatch")
+        if package.get("authority") != {
+            "authority_id": trusted_authority.authority_id,
+            "epoch": trusted_authority.epoch,
+            "digest": trusted_authority.digest.hex().upper(),
+        }:
+            _fail(FinancialMirrorContinuityError, "continuity_authority_mismatch")
         from app.right_rail_financial_owner_independent import verify_continuity_package
 
         independently_verified = verify_continuity_package(
             package_bytes,
-            expected_scope=package["scope"],
-            expected_authority=package["authority"],
+            expected_scope=dict(expected_scope),
+            expected_authority=trusted_authority,
             expected_schema_version=package["version"],
         )
         result = {
@@ -1544,34 +1569,35 @@ class FinancialMirror:
             result["program_funding"] = _safe_value(independently_verified["program_funding"])
         return result
 
+    def validate_owner_continuity_package(self, package_bytes: bytes) -> dict[str, Any]:
+        """Validate package bytes against this Mirror's Owner authority and scope."""
+
+        config = self.owner.config
+        return self.validate_continuity_package(
+            package_bytes,
+            trusted_authority=self.owner.trusted_authority,
+            expected_scope={
+                "state_id": config.state_id,
+                "deployment_id": config.deployment_id,
+                "program_id": config.program_id,
+                "period_id": config.period_id,
+                "currency": config.currency,
+            },
+        )
+
     def export_continuity(self) -> bytes:
         package = self.owner.export_continuity()
         if type(package) is not bytes:
             _fail(FinancialMirrorContinuityError, "continuity_export_type")
         # Validate the exact bytes produced by the owner before exposing them.
-        self.validate_continuity_package(package)
+        self.validate_owner_continuity_package(package)
         return package
 
     def _validate_restore_binding(self, package_bytes: bytes) -> None:
+        # Scope and authority were already bound by validate_owner_continuity_package.
         package = FinancialOwner.validate_continuity_package(package_bytes)
-        expected_scope = {
-            "state_id": self.owner.config.state_id,
-            "deployment_id": self.owner.config.deployment_id,
-            "program_id": self.owner.config.program_id,
-            "period_id": self.owner.config.period_id,
-            "currency": self.owner.config.currency,
-        }
         if package.get("schema") != self.owner.continuity_schema or package.get("version") != self.owner.schema_version:
             _fail(FinancialMirrorContinuityError, "continuity_package_schema")
-        if package.get("scope") != expected_scope:
-            _fail(FinancialMirrorContinuityError, "continuity_scope_mismatch")
-        expected_authority = {
-            "authority_id": self.owner.trusted_authority.authority_id,
-            "epoch": self.owner.trusted_authority.epoch,
-            "digest": self.owner.trusted_authority.digest.hex().upper(),
-        }
-        if package.get("authority") != expected_authority:
-            _fail(FinancialMirrorContinuityError, "continuity_authority_mismatch")
         if package.get("dispatch_enabled") is not False or package.get("egress_enabled") is not False:
             _fail(FinancialMirrorContinuityError, "continuity_nonactivating_boundary")
 
@@ -1582,7 +1608,7 @@ class FinancialMirror:
             _fail(FinancialMirrorContinuityError, "continuity_restore_mode")
         if not isinstance(recovered_path, Path):
             _fail(FinancialMirrorContinuityError, "continuity_destination")
-        self.validate_continuity_package(package_bytes)
+        self.validate_owner_continuity_package(package_bytes)
         self._validate_restore_binding(package_bytes)
         source_name = _normalized_path(self.owner.path)
         destination_name = _normalized_path(recovered_path)

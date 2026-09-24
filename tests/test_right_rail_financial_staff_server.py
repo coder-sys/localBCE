@@ -745,7 +745,10 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             config=first_owner.config,
             trusted_authority=first_owner.trusted_authority,
             clock=first_owner.clock,
+            mode=first_owner.mode,
+            owner_id=first_owner.owner_id,
         )
+        self.assertEqual((writer.mode, writer.owner_id), ("TEST", "continuity-test-owner-v1"))
         before = first_owner.obligation_detail("item-01")
         connections = []
         transaction_states = []
@@ -850,7 +853,10 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             config=owner.config,
             trusted_authority=owner.trusted_authority,
             clock=owner.clock,
+            mode=owner.mode,
+            owner_id=owner.owner_id,
         )
+        self.assertEqual((writer.mode, writer.owner_id), ("TEST", "continuity-test-owner-v1"))
         unrelated = owner.obligation_detail("item-01")
         sequence_before = owner.summary()["sequence"]
         writer.record_support_evidence(

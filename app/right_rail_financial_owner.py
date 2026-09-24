@@ -168,6 +168,7 @@ _NEXT_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v6\x00"
 _MANIFEST_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
 _POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 _POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
+_POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
 _PROGRAM_FUNDING_RECEIPT_DOMAIN = b"RR/FINANCIAL/PROGRAM-FUNDING-RECEIPT/v1\x00"
 _PROGRAM_FUNDING_RECEIPT_SCHEMA: Final[str] = "RR/FINANCIAL/PROGRAM-FUNDING-RECEIPT/v1"
 _PROGRAM_FUNDING_CONFIRMATION_CLASS: Final[str] = "STATE_PAYMENT_RECORD"
@@ -424,6 +425,32 @@ def _hex(value: bytes) -> str:
     if type(value) is not bytes:
         _fail(FinancialIntegrityError, "bytes_required")
     return value.hex().upper()
+
+
+def _population_staging_digest(
+    *,
+    population_id: str,
+    pack_id: str,
+    cutoff_ms: int,
+    inclusion_rules_json: str,
+    expected_count: int,
+    created_at_ms: int,
+) -> bytes:
+    """Digest of the immutable identity columns of one staged population_imports row."""
+
+    return _digest(
+        _POPULATION_STAGING_DOMAIN,
+        _canonical(
+            {
+                "population_id": population_id,
+                "pack_id": pack_id,
+                "cutoff_ms": cutoff_ms,
+                "inclusion_rules_json": inclusion_rules_json,
+                "expected_count": expected_count,
+                "created_at_ms": created_at_ms,
+            }
+        ),
+    )
 
 
 def _identity_digest(
@@ -985,6 +1012,17 @@ class PopulationManifest:
     @property
     def digest(self) -> bytes:
         return _digest(_POPULATION_MANIFEST_DOMAIN, self.canonical_bytes)
+
+
+def _manifest_event_fields(manifest: PopulationManifest, manifest_row: Mapping[str, Any]) -> dict[str, Any]:
+    """Manifest binding carried by every POPULATION history event payload."""
+
+    return {
+        "manifest_id": manifest.manifest_id,
+        "manifest_version": manifest.manifest_version,
+        "manifest_digest": _hex(manifest.digest),
+        "member_digest": _hex(bytes(manifest_row["member_digest"])),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -2851,7 +2889,13 @@ class FinancialOwner:
             _fail(FinancialConflictError, "population_manifest_already_bound")
         return manifest, row
 
-    def _ensure_population_import(self, connection: sqlite3.Connection, *, population_id: str, pack_id: str, cutoff_ms: int, inclusion_rules: tuple[str, ...], expected_count: int, now_ms: int) -> sqlite3.Row:
+    def _ensure_population_import(self, connection: sqlite3.Connection, *, population_id: str, pack_id: str, cutoff_ms: int, inclusion_rules: tuple[str, ...], expected_count: int, now_ms: int, create: bool) -> tuple[sqlite3.Row, bool]:
+        """Return the staged import row and whether this call inserted it.
+
+        Only ``stage_population``'s opening transaction may create the row
+        (``create=True``); it appends the matching POPULATION_IMPORT_OPENED
+        event in that same transaction (Article III.2).
+        """
         pack = connection.execute("SELECT * FROM control_packs WHERE pack_id=? AND status='APPROVED'", (pack_id,)).fetchone()
         if pack is None:
             _fail(FinancialIntegrityError, "control_pack_missing")
@@ -2862,12 +2906,14 @@ class FinancialOwner:
                 _fail(FinancialConflictError, "population_import_identity_conflict")
             if str(existing["status"]) == "PUBLISHED":
                 _fail(FinancialConflictError, "population_already_published")
-            return existing
+            return existing, False
+        if not create:
+            _fail(FinancialIntegrityError, "population_import_missing")
         connection.execute(
             "INSERT INTO population_imports VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (population_id, pack_id, cutoff_ms, encoded_rules, expected_count, 0, 0, 0, None, "STAGED", now_ms, now_ms),
         )
-        return connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
+        return connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone(), True
 
     def _stage_population_chunk(
         self,
@@ -2884,7 +2930,7 @@ class FinancialOwner:
             return
         with self._write() as connection:
             now_ms = self._now()
-            population = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=now_ms)
+            population, _created = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=now_ms, create=False)
             manifest, manifest_row = self._bind_population_manifest(
                 connection,
                 population_id=population_id,
@@ -2989,8 +3035,9 @@ class FinancialOwner:
                 inclusion_rules=inclusion_rules,
                 expected_count=expected_count,
             )
-            self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=self._now())
-            self._bind_population_manifest(
+            opened_at_ms = self._now()
+            population, created = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=opened_at_ms, create=True)
+            manifest, manifest_row = self._bind_population_manifest(
                 connection,
                 population_id=population_id,
                 manifest_id=manifest_id,
@@ -2999,6 +3046,32 @@ class FinancialOwner:
                 inclusion_rules=inclusion_rules,
                 expected_count=expected_count,
             )
+            if created:
+                # Article III.2: the staged import row and its manifest binding
+                # commit together with their history event, exactly once.
+                self._append_event(
+                    connection,
+                    aggregate_type="POPULATION",
+                    aggregate_id=population_id,
+                    kind="POPULATION_IMPORT_OPENED",
+                    before_revision=0,
+                    after_revision=0,
+                    payload={
+                        "population_id": population_id,
+                        "staging_digest": _hex(
+                            _population_staging_digest(
+                                population_id=population_id,
+                                pack_id=str(population["pack_id"]),
+                                cutoff_ms=int(population["cutoff_ms"]),
+                                inclusion_rules_json=str(population["inclusion_rules_json"]),
+                                expected_count=int(population["expected_count"]),
+                                created_at_ms=int(population["created_at_ms"]),
+                            )
+                        ),
+                        **_manifest_event_fields(manifest, manifest_row),
+                    },
+                    committed_at_ms=opened_at_ms,
+                )
         chunk: list[PopulationItem] = []
         input_limit = min(_MAX_ROWS, expected_count + _MAX_DUPLICATE_INPUTS)
         consumed = 0

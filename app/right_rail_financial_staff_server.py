@@ -748,7 +748,7 @@ class StaffWorkflow:
             self._continuity = {
                 "restored": True,
                 "mode": "TEST",
-                "package_digest": str(FinancialMirror.validate_continuity_package(package_bytes)["package_digest"]),
+                "package_digest": str(restored.validate_owner_continuity_package(package_bytes)["package_digest"]),
                 "package_bytes": len(package_bytes),
                 "decision_package_equal": True,
             }

@@ -34,6 +34,7 @@ HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
 IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
 POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
+POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
 EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
@@ -124,6 +125,7 @@ PRIMARY_KEYS = {
 EVENT_KINDS = {
     "CONTROL_PACK": {"CONTROL_PACK_PUBLISHED"},
     "POPULATION": {
+        "POPULATION_IMPORT_OPENED",
         "POPULATION_STAGED",
         "POPULATION_SOURCE_COMPLETED",
         "POPULATION_VALIDATED",
@@ -946,6 +948,7 @@ def _verify_population_history(events: list[dict[str, Any]], state: Mapping[str,
             "member_digest": manifest["member_digest"].hex().upper(),
         }
         imported = 0
+        opened = False
         source_completed = False
         validated = False
         published = False
@@ -962,6 +965,35 @@ def _verify_population_history(events: list[dict[str, Any]], state: Mapping[str,
             after = event["after_revision"]
             payload = event["payload"]
             kind = event["kind"]
+            if kind != "POPULATION_IMPORT_OPENED" and not opened:
+                _reject("population_history_open_order")
+            if kind == "POPULATION_IMPORT_OPENED":
+                if opened or imported or source_completed or validated or published:
+                    _reject("population_history_open_order")
+                expected_keys = {"population_id", "staging_digest"} | set(manifest_fields)
+                if set(payload) != expected_keys or any(
+                    _canonical(payload.get(key)) != _canonical(value)
+                    for key, value in manifest_fields.items()
+                ):
+                    _reject("population_history_open_payload")
+                staging_digest = _digest(
+                    POPULATION_STAGING_DOMAIN,
+                    _canonical({
+                        "population_id": population_id,
+                        "pack_id": population["pack_id"],
+                        "cutoff_ms": population["cutoff_ms"],
+                        "inclusion_rules_json": population["inclusion_rules_json"],
+                        "expected_count": expected,
+                        "created_at_ms": population["created_at_ms"],
+                    }),
+                )
+                if (
+                    payload["population_id"] != population_id or before != 0 or after != 0
+                    or _hex_digest(payload["staging_digest"], "population_history_open_digest") != staging_digest
+                ):
+                    _reject("population_history_open_binding")
+                opened = True
+                continue
             if kind == "POPULATION_STAGED":
                 if source_completed or validated or published:
                     _reject("population_history_stage_order")
@@ -1034,6 +1066,8 @@ def _verify_population_history(events: list[dict[str, Any]], state: Mapping[str,
                 ):
                     _reject("population_history_publication_binding")
                 published = True
+        if not opened:
+            _reject("population_history_open_missing")
         persisted_imported = _integer(population["imported_count"], "population_history_imported", maximum=MAX_ROWS)
         if imported != persisted_imported:
             _reject("population_history_imported_binding")

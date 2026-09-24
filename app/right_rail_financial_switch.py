@@ -2,6 +2,8 @@
 
 This module consumes only independently verified Continuity SHADOW bytes. It
 never receives an incumbent Owner, Mirror, SQLite connection, or write API.
+Every entry point needs caller-supplied trusted authority (with its
+digest-bound roster) and scope; a snapshot never certifies its own authority.
 Reference and candidate evaluators receive the same immutable canonical input
 bytes and must be run by their caller inside an independently enforced,
 no-egress environment. This module does not provide that OS boundary and does
@@ -253,14 +255,29 @@ class SnapshotFacts:
         return _canonical_json(payload, maximum=MAX_PACKAGE_BYTES)
 
 
-def inspect_shadow_snapshot(snapshot_bytes: bytes) -> SnapshotFacts:
-    """Independently verify and inspect one exact, complete v7 SHADOW package."""
+def inspect_shadow_snapshot(
+    snapshot_bytes: bytes,
+    *,
+    trusted_authority: object,
+    expected_scope: Mapping[str, object],
+) -> SnapshotFacts:
+    """Independently verify and inspect one exact, complete v7 SHADOW package.
+
+    ``trusted_authority`` (authority id, epoch, digest and roster) and
+    ``expected_scope`` come from the caller; absent either, this fails closed.
+    """
 
     if type(snapshot_bytes) is not bytes or not snapshot_bytes or len(snapshot_bytes) > MAX_PACKAGE_BYTES:
         _fail("switch:snapshot-byte-cap")
+    if trusted_authority is None:
+        _fail("switch:trusted-authority-required")
+    if not isinstance(expected_scope, Mapping):
+        _fail("switch:expected-scope-required")
     try:
         verified = verify_continuity_package(
             snapshot_bytes,
+            expected_scope=expected_scope,
+            expected_authority=trusted_authority,
             expected_schema_version=CURRENT_OWNER_SCHEMA_VERSION,
             _include_rows=True,
         )
@@ -594,7 +611,12 @@ class DecodedReplayInput:
         )
 
 
-def decode_replay_input(raw: bytes) -> DecodedReplayInput:
+def decode_replay_input(
+    raw: bytes,
+    *,
+    trusted_authority: object,
+    expected_scope: Mapping[str, object],
+) -> DecodedReplayInput:
     """Strictly decode one canonical replay input for evaluator implementations."""
 
     value = _decode_canonical_json(raw, maximum=MAX_REPLAY_INPUT_BYTES, label="switch:replay-input")
@@ -627,7 +649,11 @@ def decode_replay_input(raw: bytes) -> DecodedReplayInput:
         _fail("switch:replay-snapshot-base64")
     if len(package_bytes) > MAX_PACKAGE_BYTES or hashlib.sha256(package_bytes).hexdigest().upper() != snapshot.get("sha256"):
         _fail("switch:replay-snapshot-digest")
-    facts = inspect_shadow_snapshot(package_bytes)
+    facts = inspect_shadow_snapshot(
+        package_bytes,
+        trusted_authority=trusted_authority,
+        expected_scope=expected_scope,
+    )
     expected_identity = {
         "owner_id": facts.owner_id,
         "schema": facts.owner_schema,
@@ -891,6 +917,8 @@ def _build_replay_input(
 def prepare_shadow_replay_input(
     snapshot_bytes: bytes,
     *,
+    trusted_authority: object,
+    expected_scope: Mapping[str, object],
     cohort_approval: CohortApproval,
     reference: ReferenceSpec,
     candidate: CandidateSpec,
@@ -902,7 +930,11 @@ def prepare_shadow_replay_input(
     runners, then submit their input-bound results to ``run_shadow_replay``.
     """
 
-    facts = inspect_shadow_snapshot(snapshot_bytes)
+    facts = inspect_shadow_snapshot(
+        snapshot_bytes,
+        trusted_authority=trusted_authority,
+        expected_scope=expected_scope,
+    )
     if type(reference) is not ReferenceSpec or type(candidate) is not CandidateSpec:
         _fail("switch:operator-spec-schema")
     approval_record, approval_error = _validate_approval(cohort_approval, facts)
@@ -1165,6 +1197,8 @@ def _base_report(
 def run_shadow_replay(
     snapshot_bytes: bytes,
     *,
+    trusted_authority: object,
+    expected_scope: Mapping[str, object],
     cohort_approval: CohortApproval | None = None,
     reference: ReferenceSpec | None = None,
     candidate: CandidateSpec | None = None,
@@ -1177,7 +1211,11 @@ def run_shadow_replay(
     """
 
     try:
-        facts = inspect_shadow_snapshot(snapshot_bytes)
+        facts = inspect_shadow_snapshot(
+            snapshot_bytes,
+            trusted_authority=trusted_authority,
+            expected_scope=expected_scope,
+        )
     except FinancialSwitchError as error:
         report = _base_report(status="INVALID_SNAPSHOT", reasons=[str(error)])
         report["unknowns"] = [{"class": "UNKNOWN", "reason": str(error)}]
