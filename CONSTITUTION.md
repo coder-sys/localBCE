@@ -215,6 +215,40 @@ revision). These are binding working principles, not suggestions.
     materially simpler approach and show the chosen tradeoff in the affected
     workflow.
 
+## Article XII — Felt value
+
+Correctness that nobody feels is not a product. Every product, feature and
+priority decision must answer, in writing, before work starts:
+
+1. **Who feels it** — a named role (state program analyst, finance approver,
+   program director, MCO/vendor operations, provider billing staff, auditor,
+   replacement operator).
+2. **When** — the concrete daily or periodic moment it changes (e.g. "Monday
+   reconciliation", "preparing an approval", "answering an auditor",
+   "onboarding a new rule", "replacing a contractor").
+3. **What changes** — the before/after in one of the plan's measured units:
+   unresolved-item age, decision-preparation time, repeated evidence
+   requests, staff steps, correction accuracy, implementation effort (days
+   to put a new rule or program live), support effort, contractor-transition
+   effort, and time to answer "what is actually happening and who owns it".
+4. **Friction targeted** — which structural pain it removes beyond our own
+   products: long implementation projects, difficulty replacing or
+   disciplining vendors and plans, missing or untrustworthy operational data,
+   repeated reconstruction of history, and chasing counterparties for records.
+
+Rules:
+- Work that moves none of these units for any role is deprioritized, however
+  elegant. Invisible correctness work is justified only by the felt outcome it
+  protects, and is named as such.
+- The synthetic demonstration (the Hospital H cycle and later workflows) is
+  the scorecard: it measures these units per role, and a change that makes a
+  measured unit worse is a regression, reviewed like a failing safety test.
+- The staff-facing surface (Mirror and the staff workspace) is held to the
+  same standard as the owner: it runs, is tested, and is where value is
+  demonstrated.
+- Each STATUS.md change-log entry for product work states its felt effect in
+  one line, or says "none (infrastructure for: …)".
+
 ## Enforcement
 
 - Every change, human or AI, must name which articles it touches and show it
@@ -238,3 +272,6 @@ never an amendment.
   2026-09-23) are incorporated as binding engineering principles.
 - 2026-09-24 — Article VI.4 added at the founder's direction: the pre-state
   build phase is the plan; missing state/receiver/real data is not a blocker.
+- 2026-09-24 — Article XII added at the founder's direction: every product
+  decision must name who feels it, when, the measured before/after, and the
+  structural friction removed; the synthetic demo is the scorecard.
