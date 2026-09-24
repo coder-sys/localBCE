@@ -15,14 +15,14 @@ application result authority.
 ## Build and artifact identity
 
 The package under `ProviderApp/` pins `leanprover/lean4:v4.33.1` and builds
-`providerAppLean.exe` with Lake, using `.lake/provider-lean-split-r7/` for this source revision. Lean module compilation is configured with
+`providerAppLean.exe` with Lake, using `.lake/provider-lean-split-r7/`. Lean module compilation is configured with
 `-j1`; this limits Lean threads per compiler process and does not claim a
 Lake-wide job or memory quota. The comparison adapter does not compile,
 download, or substitute an executable. Before each invocation it checks the
 root and package toolchain pins, the hashes of `lean.exe`, `lake.exe`, all
 Lean sources, the Lake file, package manifest, and exact built executable. An
 absent, changed, or unpinned artifact fails closed with a fixed error code.
-Build and execution evidence belongs in `STATE.md`.
+Run status belongs in `../../STATUS.md`.
 
 ## Input argument
 
@@ -116,11 +116,6 @@ executable read cap. A process that exceeds a deadline or output bound is
 terminated. Separate Python processes do not share a global concurrency
 quota. These are local adapter bounds, not a provider-profile capacity or
 memory-quota measurement. The guarded build cap remains externally enforced.
-The first post-split `-j1` build stopped at 2,028,584,960 private bytes,
-28,584,960 over the unchanged cap; no executable hash or differential run
-exists for that source revision. The additional semantics module split is
-source-only and remains uncompiled and untested; its artifact pin remains
-`PENDING`.
 
 The path is deterministic and nonactivating. It has no network, persistence,
 telemetry, submission, payment, or State financial-owner route. `REAL_USE`

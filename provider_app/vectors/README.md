@@ -4,4 +4,4 @@
 
 The vectors exercise PASS, MISSING, HUMAN_CHECK, missing fact enumeration, inclusive/exclusive date and amount boundaries, source completeness/conflict/replay/freshness, scope mismatch, publication, expiry, withdrawal, real-use rejection, and changed rule version. Every bundle remains `UNAPPROVED_SYNTHETIC_FIXTURE`; the vectors are not an authority catalog.
 
-Three architecture acceptance areas remain explicitly unexercised: package install/update, durable recovery, and rollback. This child intentionally has no installer, signature/revocation authority, persistence, or provider data source, so vectors cannot establish those behaviors. See `../docs/PRODUCTION_BACKLOG.md`.
+The vectors do not exercise package install/update, durable recovery, or rollback: the core has no installer, signature/revocation authority, persistence, or provider data source.

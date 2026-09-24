@@ -16,7 +16,8 @@
 This executable was compiled from an older Engine source set. The compiled
 `BlindLedger/Financial/CorrectionTransition/Transition.lean` was 25,674 bytes,
 SHA-256 `342F3B1DF777095D75FD12970F29DFBC09AC06DCF48147EFF804EBA78E9021AE`.
-That source is no longer recoverable: Engine's `STATE.md` records the
+That source is no longer recoverable: Engine's `STATE.md` (archived as
+`docs/history/lean-engine-20260913-STATE.md`) records the
 exact-source recovery search as `NOT_RECOVERABLE` in the accessible evidence.
 The compiled `Reuse.lean` (10,902 bytes, SHA-256
 `1391120ECCF022FA50B17C9BFBA9BEB15A21F658205C730228CAB17A2E2AF274`) also no

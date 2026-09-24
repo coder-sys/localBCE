@@ -1,9 +1,16 @@
 # Blind Ledger design ideology
 
-Updated: 2026-09-20. Owner: independent design contract for the smallest
+Updated: 2026-09-23. Owner: independent design contract for the smallest
 correct implementation, deterministic evidence, bounded resources, modular
-ownership, and fail-closed execution. It cannot override `AGENTS.md`,
-`CURRENT_TASK.md`, or `STATE.md`.
+ownership, and fail-closed execution. Constitution Article XI is distilled from
+it; the constitution wins any conflict.
+
+For substantial workflow changes, assess staff effort, repeated evidence
+requests, data movement, troubleshooting, installation and updates, recovery,
+independent exit, and reusable improvements. Compare a materially simpler
+approach and demonstrate the chosen tradeoff in the affected workflow. Keep
+routine fixes lightweight; cross-participant benefit must be shown by an
+integrated scenario, not a feature label.
 
 ## Invariant first
 
@@ -26,11 +33,9 @@ what it owns, what it receives, what it may mutate, and which evidence proves
 the boundary. Do not introduce a second ledger, speculative orchestration
 layer, or duplicate receipt format to compensate for an unresolved contract.
 
-For the current financial workflow, the Python v5 owner remains the sole
-transaction authority. Mirror is a caller/read model; Continuity is a bounded
-SHADOW/TEST handoff; Queue reservations and claimed-adjustment business state
-remain separate. State owns rules, authority, policy transitions, and official
-consequences.
+In the financial workflow the owner is the only writer. Mirror is a
+caller/read model; Continuity is a bounded SHADOW/TEST handoff. State owns
+rules, authority, policy transitions, and official consequences.
 
 ## Evidence, authority, and state
 
@@ -58,10 +63,10 @@ contract, not optional operational decoration.
 Continuity restore is bounded and isolated. SHADOW is read-only; TEST is
 non-live; dispatch and egress stay disabled; source bytes and owner identity
 remain protected. A restored package is not allowed to promote itself into a
-live writer or replace an existing identity. The current v5 restore uses a
-private attempt directory and atomic no-replace publication, so cleanup can
-remove only an owned attempt or an owned published identity; foreign
-destinations and sidecars remain intact, and cleanup failures are visible.
+live writer or replace an existing identity. Restore uses a private attempt
+directory and atomic no-replace publication, so cleanup can remove only an
+owned attempt or an owned published identity; foreign destinations and
+sidecars remain intact, and cleanup failures are visible.
 
 ## Determinism and adversarial simplicity
 
@@ -70,22 +75,14 @@ bounded parsing, and manually derived expected values. Make corruption,
 omission, duplication, replay, stale revision, wrong scope, cross-owner,
 cross-period, and wrong-mode cases fail visibly. Prefer the simplest
 falsifiable design; compare alternatives against mutation, replay, recovery,
-resource, and whole-system evidence before adding machinery.
+resource, and whole-system evidence before adding machinery. A failed
+determination must leave durable bytes unchanged, and a version-tag rejection
+test is not evidence of historical-schema compatibility.
 
-The locally re-verified bounded Python v5 evidence follows the same rule:
-populated evaluation receipts are independently reconstructed, determination
-failures are checked for unchanged durable bytes including current-receipt
-chronology, exact CLI retries are distinguished from changed bindings, and the
-v2/v3/v4 matrix is labeled tag-only rejection rather than historical-schema
-compatibility. `STATE.md` is the concise authority for the narrow Driver
-disposition; the owner-local acceptance does not qualify the wider original
-A-E, native, reservation, Lean, or production boundaries.
+## Lean direction
 
-## Active Lean direction
-
-Engine is implementing and correcting everything reasonably implementable in
-Lean, with executable semantics and useful modularity. The first financial
-implementation is the Engine semantic core:
+Implement everything reasonably implementable in Lean, with executable
+semantics and useful modularity:
 
 - a small trusted state and explicit deterministic state machines;
 - narrow, versioned modular interfaces between evidence, policy, owner, and
@@ -96,9 +93,8 @@ implementation is the Engine semantic core:
 - a pinned executable Lean artifact linked to the working runtime only after
   refinement, theorem, adapter, mutation, KAT, and resource evidence exists.
 
-The Python v5 owner remains the sole runtime transaction authority until that
-evidence exists. Separate Lean/native checkouts, source adapters, generated
-vectors, or differential tests do not themselves create formal authority.
+Source adapters, generated vectors, or differential tests do not themselves
+create formal authority.
 
 ## Bounded resources and privacy
 
@@ -116,12 +112,8 @@ recoveries, penalties, or savings.
 
 ## Claims and sequencing
 
-Claims must be proportional to current raw evidence. The present financial
-candidate is synthetic, local, nonactivating, nonpayment, and non-PHI with
-`proofSuiteId=null`, `production_usable=false`, and `activation=false`.
-Production qualification additionally requires state approval, authenticated
-sources, custody, persistence/recovery, privacy/support, independent
-assurance, formal linkage where applicable, and all profile-specific gates.
+Claims must be proportional to current raw evidence; standing claims live in
+`STATUS.md`.
 
 Implement in dependency order: stabilize the owner contract; independently
 verify schema, history, retries, and recovery; complete and verify the Lean
