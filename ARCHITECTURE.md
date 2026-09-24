@@ -151,4 +151,4 @@ independent result checker and a Lean comparison path. See
 - Fixed-shape/AIR compatibility as a production authority.
 
 The private zero-knowledge evidence mode and its native code are parked
-(`parked/README.md`, `native/tools/README.md`).
+(`parked/README.md`, `parked/private_zk/native/tools/README.md`).
