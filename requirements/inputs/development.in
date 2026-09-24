@@ -1,3 +1,0 @@
-# Declaration input only. Do not install this file.
-# Development is the complete production graph plus this direct test client.
-pytest==9.0.3

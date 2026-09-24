@@ -1,4 +1,0 @@
-# Generated from reviewed wheel bytes; every line is a complete install input.
-# Target: CPython 3.14.4 / Linux x86-64 / glibc >= 2.28
-# Profile: production; package count: 0
-# Install only through: python -m tools.locked_python_dependencies install

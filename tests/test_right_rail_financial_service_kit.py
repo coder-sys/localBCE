@@ -4,51 +4,65 @@ import unittest
 
 from tools.right_rail_financial_service_kit import (
     EXPECTED_PYTHON_EXE_SHA256,
-    EXPECTED_PYTHON_VERSION,
+    KIT_CLAIMS,
+    KIT_SCHEMA,
+    RUNTIME_EXE,
     KitError,
+    _check_names,
+    _check_runtime_member,
+    _manifest_files,
     _strict_canonical_json,
-    _validate_runtime_metadata,
 )
 
 
 class FinancialServiceKitManifestTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.interpreter_size = 1_234_567
+        self.members = {RUNTIME_EXE: (self.interpreter_size, EXPECTED_PYTHON_EXE_SHA256)}
+
     def test_receipt_json_requires_canonical_bytes(self) -> None:
         self.assertEqual(_strict_canonical_json(b'{"schema":"v2"}', "receipt"), {"schema": "v2"})
         with self.assertRaisesRegex(KitError, "json_not_canonical:receipt"):
             _strict_canonical_json(b'{ "schema": "v2"}\n', "receipt")
 
-    def setUp(self) -> None:
-        self.interpreter_size = 1_234_567
-        self.python_metadata = {
-            "executable_path": "runtime/python311/python.exe",
-            "executable_sha256": EXPECTED_PYTHON_EXE_SHA256,
-            "executable_size_bytes": self.interpreter_size,
-            "third_party_packages": [],
-            "version": EXPECTED_PYTHON_VERSION,
-        }
-        self.file_map = {
-            "runtime/python311/python.exe": {
-                "kind": "python_runtime",
-                "path": "runtime/python311/python.exe",
-                "sha256": EXPECTED_PYTHON_EXE_SHA256,
-                "size_bytes": self.interpreter_size,
-            }
-        }
-
-    def test_manifest_binds_metadata_to_the_pinned_runtime_member(self) -> None:
-        entry = _validate_runtime_metadata(self.python_metadata, self.file_map)
-        self.assertEqual(entry["sha256"], EXPECTED_PYTHON_EXE_SHA256)
-        self.assertEqual(entry["size_bytes"], self.interpreter_size)
+    def test_manifest_binds_the_pinned_runtime_member(self) -> None:
+        size, digest = _check_runtime_member(self.members)
+        self.assertEqual(digest, EXPECTED_PYTHON_EXE_SHA256)
+        self.assertEqual(size, self.interpreter_size)
 
     def test_manifest_rejects_a_self_consistent_unpinned_interpreter_member(self) -> None:
-        self.file_map["runtime/python311/python.exe"]["sha256"] = "A" * 64
+        self.members[RUNTIME_EXE] = (self.interpreter_size, "A" * 64)
         with self.assertRaisesRegex(KitError, "kit_python_executable_member_pin"):
-            _validate_runtime_metadata(self.python_metadata, self.file_map)
+            _check_runtime_member(self.members)
 
     def test_manifest_rejects_non_integer_interpreter_size(self) -> None:
-        self.file_map["runtime/python311/python.exe"]["size_bytes"] = True
+        self.members[RUNTIME_EXE] = (True, EXPECTED_PYTHON_EXE_SHA256)
         with self.assertRaisesRegex(KitError, "kit_python_executable_member_pin"):
-            _validate_runtime_metadata(self.python_metadata, self.file_map)
+            _check_runtime_member(self.members)
+
+    def test_manifest_rejects_missing_interpreter_member(self) -> None:
+        with self.assertRaisesRegex(KitError, "kit_python_executable_member_pin"):
+            _check_runtime_member({})
+
+    def test_archive_names_reject_traversal_and_portable_collisions(self) -> None:
+        for bad in ("../x", "/abs", "a/../b", "a\\b", "C:x", "aux.txt", "a/", "trail. "):
+            with self.subTest(name=bad), self.assertRaises(KitError):
+                _check_names([bad])
+        with self.assertRaisesRegex(KitError, "archive_path_portable_collision"):
+            _check_names(["README.md", "readme.md"])
+        with self.assertRaisesRegex(KitError, "archive_file_directory_collision"):
+            _check_names(["a", "a/b"])
+
+    def test_manifest_claims_are_exact_including_json_types(self) -> None:
+        entry = {"path": "a", "sha256": "0" * 64, "size_bytes": 1}
+        self.assertEqual(
+            _manifest_files({"claims": KIT_CLAIMS, "files": [entry], "schema": KIT_SCHEMA}),
+            {"a": (1, "0" * 64)},
+        )
+        with self.assertRaisesRegex(KitError, "kit_claims_pin"):
+            _manifest_files({"claims": {**KIT_CLAIMS, "activation": 0}, "files": [entry], "schema": KIT_SCHEMA})
+        with self.assertRaisesRegex(KitError, "kit_manifest_entry_value"):
+            _manifest_files({"claims": KIT_CLAIMS, "files": [{**entry, "size_bytes": True}], "schema": KIT_SCHEMA})
 
 
 if __name__ == "__main__":

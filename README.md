@@ -57,18 +57,18 @@ Suites live in `native/guard/suites.json` (`financial-correction`,
 `service-kit-scenario`, `lean-engine-build`, `selftest`). The default `pytest`
 configuration runs `tests/` and excludes `parked/`.
 
-**Python dependencies** are installed offline only, from a pre-provisioned
-wheelhouse checked against the hash locks in `requirements/locks/`:
+**Python dependencies** are installed offline only, into a fresh virtual
+environment, from a pre-provisioned wheelhouse; pip refuses any wheel whose
+SHA-256 differs from `requirements-dev.txt`:
 
 ```powershell
-python -m tools.locked_python_dependencies install --profile development --wheelhouse <dir> --attestation-out <new-file>
+python -m pip install --no-index --find-links <wheelhouse> --require-hashes --only-binary=:all: --no-deps -r requirements-dev.txt
 ```
 
-Production has no Python package dependency; development adds only pytest and
-its transitive packages. `requirements.txt` and `requirements-dev.txt`
-deliberately install nothing. Changing any dependency, interpreter, pip or
-platform means acquiring and reviewing new wheels and regenerating every lock
-and `docs/SBOM.python.spdx.json`.
+Production has no Python package dependency (`requirements.txt` is empty);
+development adds only pytest and its five dependencies. Changing any of them
+means acquiring and reviewing new wheels, re-pinning their hashes and updating
+`docs/SBOM.python.spdx.json`.
 
 **Staff workspace** (loopback only, synthetic TEST owner):
 

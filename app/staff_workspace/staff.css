@@ -126,7 +126,7 @@ tbody tr:nth-child(even) { background: #fafcfd; }
 tbody tr.highlight { background: #fff7e7; }
 .number { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .state-label { font-weight: 700; }
-.state-label.unknown, .state-label.missing { color: var(--amber); }
+.state-label.missing { color: var(--amber); }
 .state-label.unverified { color: #435a68; }
 
 .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; margin: 1rem 0; }
