@@ -2,8 +2,9 @@
   "schema": "blind_ledger_semantic_assurance_manifest_v1",
   "manifest_version": 1,
   "candidate": {
-    "required_head": "0f594f6333fab720127f94b1259688331befd004",
-    "required_tree": "b6eb1164f944625231cffae9ee282daadb41c389",
+    "required_head": "ae9ea2865fa1b64049295e86f8a58ac201a3c2ee",
+    "required_tree": "daab73b1e4e2775748766cf042a7d1d24bcf066e",
+    "lean_root": "lean",
     "module": "BlindLedger.Theorems",
     "theorem_source": "BlindLedger/Theorems.lean",
     "declaration_sources": {
@@ -20,15 +21,15 @@
       "decision_access_join_unique": "BlindLedger/Theorems.lean",
       "decode_encode_roundtrip": "BlindLedger/Theorems.lean",
       "canonical_encoding_injective": "BlindLedger/Theorems.lean",
-      "checkpoint_chain_append_only": "BlindLedger/Checkpoint.lean"
+      "checkpoint_chain_append_only": "BlindLedger/Kernel/Checkpoint.lean"
     },
     "source_files": [
       "BlindLedger.lean",
-      "BlindLedger/Checkpoint.lean",
       "BlindLedger/Codec.lean",
       "BlindLedger/ControlSet.lean",
       "BlindLedger/Evaluation.lean",
       "BlindLedger/Executable.lean",
+      "BlindLedger/Kernel/Checkpoint.lean",
       "BlindLedger/StateTransition.lean",
       "BlindLedger/Theorems.lean",
       "BlindLedger/Types.lean",

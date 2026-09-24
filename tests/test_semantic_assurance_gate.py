@@ -167,6 +167,9 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
         print(f"PRODUCTION_MANIFEST_REJECTION={reason}")
         return reason
 
+    def _lean_dir(self, root: Path) -> Path:
+        return root / Path(*self.manifest.candidate["lean_root"].split("/"))
+
     @staticmethod
     def _native_invocation(command) -> bool:
         return (
@@ -323,7 +326,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
         expectation = self._theorem_expectations()[0]
 
         def mutate(root: Path) -> None:
-            source_path = root / self.manifest.candidate["theorem_source"]
+            source_path = self._lean_dir(root) / self.manifest.candidate["theorem_source"]
             source = source_path.read_text(encoding="utf-8")
             pattern = re.compile(
                 rf"(?ms)^theorem {re.escape(expectation.name)}\b.*?(?=^theorem |\Z)"
@@ -355,7 +358,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
         expectation = self._theorem_expectations()[1]
 
         def mutate(root: Path) -> None:
-            source_path = root / self.manifest.candidate["theorem_source"]
+            source_path = self._lean_dir(root) / self.manifest.candidate["theorem_source"]
             source = source_path.read_text(encoding="utf-8")
             old = "theorem proof_acceptance_ne_clear :\n    proofSessionOnly true = none"
             new = "theorem proof_acceptance_ne_clear :\n    proofSessionOnly false = none"
@@ -377,14 +380,14 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
 
     def test_real_transitive_custom_axiom_reaches_containing_axiom_gate(self) -> None:
         def mutate(root: Path) -> None:
-            injected = root / "BlindLedger" / "Injected.lean"
+            injected = self._lean_dir(root) / "BlindLedger" / "Injected.lean"
             injected.write_text(
                 "namespace BlindLedger.Kernel\n\n"
                 "axiom injected_custom_axiom : True\n\n"
                 "end BlindLedger.Kernel\n",
                 encoding="utf-8",
             )
-            source_path = root / self.manifest.candidate["theorem_source"]
+            source_path = self._lean_dir(root) / self.manifest.candidate["theorem_source"]
             source = source_path.read_text(encoding="utf-8")
             self.assertEqual(1, source.count("import BlindLedger.Codec\n"))
             self.assertEqual(1, source.count("exact Option.some.inj"))
@@ -442,7 +445,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             del root
 
         with self._fresh_candidate(mutate) as (candidate, head, tree):
-            source_path = candidate / "BlindLedger" / "Types.lean"
+            source_path = self._lean_dir(candidate) / "BlindLedger" / "Types.lean"
             original_run = gate._run
             evidence: dict[str, str] = {}
 

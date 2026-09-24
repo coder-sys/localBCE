@@ -1,9 +1,11 @@
 """Build and check the separately pinned Blind Ledger semantic kernel.
 
-The candidate is an external, read-only Git checkout.  This gate binds that
-checkout to the reviewed commit/tree, extracts that commit into fresh build
-roots, checks the actual theorem declarations and proof bodies with the pinned
-Lean toolchain, checks the axiom closure, checks the independent Lean checker,
+The candidate is a clean, read-only checkout of the rightrail-main trunk at the
+pinned commit; its one Lake workspace is `candidate.lean_root` (`lean/`).  This
+gate binds that checkout to the reviewed commit/tree, extracts that commit's
+Lake workspace into fresh build roots, checks the actual theorem declarations
+and proof bodies with the pinned Lean toolchain, checks the axiom closure,
+checks the independent Lean checker,
 and fingerprints the freshly built native diagnostic artifact before and after
 execution.  The native diagnostic output is conformance evidence only; it is
 never used as proof evidence.
@@ -39,7 +41,7 @@ COMMAND_TIMEOUT_SECONDS = 180.0
 CHECK_TIMEOUT_SECONDS = 90.0
 NATIVE_TIMEOUT_SECONDS = 15.0
 
-REQUIRED_MANIFEST_SHA256 = "3a76e9a9e5279d904a98d9e92f7eb507fc91c3ec17fc0b6720843369df4fff61"
+REQUIRED_MANIFEST_SHA256 = "7fff2a70ab58f9f7cc928ba4b69f9ef6e093822d35dae33ca06bf2670616273b"
 
 THEOREM_DECLARATION_RE = re.compile(
     r"(?ms)^theorem\s+(?P<name>[A-Za-z0-9_']+)\s+(?P<header>.*?)\s*:=\s*by\b"
@@ -264,6 +266,7 @@ def _load_manifest() -> Manifest:
         {
             "required_head",
             "required_tree",
+            "lean_root",
             "module",
             "theorem_source",
             "declaration_sources",
@@ -273,6 +276,7 @@ def _load_manifest() -> Manifest:
     )
     _git_hex(candidate["required_head"], "candidate.required_head")
     _git_hex(candidate["required_tree"], "candidate.required_tree")
+    _relative_path(candidate["lean_root"], "candidate.lean_root")
     _string(candidate["module"], "candidate.module")
     theorem_source = _relative_path(candidate["theorem_source"], "candidate.theorem_source")
     source_files_value = candidate["source_files"]
@@ -573,18 +577,22 @@ def _worktree_identity(root: Path) -> tuple[str, int, str]:
     return status, count, hashlib.sha256(normalized).hexdigest()
 
 
-def _source_identity(root: Path, source_files: Sequence[str]) -> tuple[str, tuple[FileIdentity, ...]]:
+def _source_identity(
+    root: Path, lean_root: str, source_files: Sequence[str]
+) -> tuple[str, tuple[FileIdentity, ...]]:
+    """Identity of `source_files`, which are relative to `root/lean_root`."""
     digest = hashlib.sha256()
     identities: list[FileIdentity] = []
     for relative in source_files:
-        path = root / Path(*relative.split("/"))
+        path = root / Path(*lean_root.split("/")) / Path(*relative.split("/"))
         _regular_file(path, f"source file {relative}")
-        expected_blob = _git(root, "rev-parse", f"HEAD:{relative}").lower()
+        git_path = f"HEAD:{lean_root}/{relative}"
+        expected_blob = _git(root, "rev-parse", git_path).lower()
         # Git's canonical blob is the input to the fresh archive/build.  The
         # working tree may have a reviewed CRLF conversion on Windows, so the
         # identity is taken from `git show`, while the required clean status
         # still rejects any tracked edit or untracked source replacement.
-        content = _git_bytes(root, "show", f"HEAD:{relative}")
+        content = _git_bytes(root, "show", git_path)
         blob = hashlib.sha1(b"blob " + str(len(content)).encode("ascii") + b"\0" + content).hexdigest()
         if blob != expected_blob:
             raise AssuranceError(
@@ -999,8 +1007,12 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             f"candidate Git identity mismatch: expected head/tree={expected_head}/{expected_tree} "
             f"got={head}/{tree}"
         )
+    lean_root = str(manifest.candidate["lean_root"])
+    lean_dir = candidate_root / Path(*lean_root.split("/"))
     source_files = tuple(manifest.candidate["source_files"])
-    source_hash_before, file_identities = _source_identity(candidate_root, source_files)
+    source_hash_before, file_identities = _source_identity(
+        candidate_root, lean_root, source_files
+    )
     theorem_source = str(manifest.candidate["theorem_source"])
     declaration_sources = manifest.candidate["declaration_sources"]
     grouped_expectations: dict[str, list[DeclarationExpectation]] = {}
@@ -1010,7 +1022,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
     parsed_by_name: dict[str, dict[str, str]] = {}
     statement_records: list[dict[str, str]] = []
     for source_path, expectations in grouped_expectations.items():
-        source_file = candidate_root / Path(*source_path.split("/"))
+        source_file = lean_dir / Path(*source_path.split("/"))
         source_text = source_file.read_text(encoding="utf-8")
         parsed_records = _parse_source_declarations(source_text, expectations)
         for record in parsed_records:
@@ -1033,7 +1045,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             }
         )
     source_scan = _check_forbidden_sources(
-        candidate_root, source_files, manifest.forbidden_tokens
+        lean_dir, source_files, manifest.forbidden_tokens
     )
     tool_paths, tool_identities = _toolchain_paths(manifest)
     build_command = [str(tool_paths["lake"]), "build", str(manifest.build["target"])]
@@ -1042,7 +1054,9 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
     with tempfile.TemporaryDirectory(prefix="blind-ledger-semantic-assurance-") as temporary:
         temporary_root = Path(temporary)
         build_root = temporary_root / "build"
-        _extract_git_tree(candidate_root, expected_head, build_root)
+        # Extract only the pinned commit's Lake workspace (`<head>:<lean_root>`),
+        # so the build root is the workspace root.
+        _extract_git_tree(candidate_root, f"{expected_head}:{lean_root}", build_root)
         environment = _clean_environment(tool_paths)
         build = _run(
             build_command,
@@ -1146,7 +1160,9 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
         )
         _require_toolchain_identity_unchanged(tool_paths, tool_identities)
 
-        source_hash_after, file_identities_after = _source_identity(candidate_root, source_files)
+        source_hash_after, file_identities_after = _source_identity(
+            candidate_root, lean_root, source_files
+        )
         _require_source_identity_unchanged(
             (source_hash_before, file_identities),
             (source_hash_after, file_identities_after),
@@ -1256,7 +1272,7 @@ def _parser() -> argparse.ArgumentParser:
         "--candidate-root",
         type=Path,
         required=True,
-        help="the separately pinned formal-production-candidate Git checkout",
+        help="a clean checkout of rightrail-main at candidate.required_head",
     )
     return parser
 
