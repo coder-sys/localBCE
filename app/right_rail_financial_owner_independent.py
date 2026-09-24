@@ -8,10 +8,11 @@ database paths read-only.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import sqlite3
@@ -37,20 +38,92 @@ def _fail(code: str) -> NoReturn:
     raise error
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 SCHEMA = "RR/FINANCIAL/OWNER/v5"
 CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v5"
+NEXT_SCHEMA_VERSION = 6
+NEXT_SCHEMA = "RR/FINANCIAL/OWNER/v6"
+NEXT_CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v6"
+MANIFEST_SCHEMA_VERSION = 7
+MANIFEST_SCHEMA = "RR/FINANCIAL/OWNER/v7"
+MANIFEST_CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v7"
+POPULATION_MANIFEST_CONTRACT = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 CURRENCY = "USD"
 MAX_CENTS = (1 << 63) - 1
 MAX_ROWS = 10_000
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_PACKAGE_BYTES = 8 * 1024 * 1024
+MAX_DECISION_PACKAGE_BYTES = MAX_PACKAGE_BYTES - 512
+MAX_DECISION_PACKAGE_DEPTH = 32
 MAX_JSON_BYTES = 1 * 1024 * 1024
 MAX_PACKAGE_NODES = 250_000
+CONTINUITY_ADMISSION_TABLE = "right_rail_continuity_admission"
+CONTINUITY_ADMISSION_TABLE_DEFS = (
+    ("table_name", "TEXT", 1),
+    ("row_count", "INTEGER", 1),
+    ("row_bytes", "INTEGER", 1),
+)
+PRIVATE_INDEX_SET_VERSION = 1
+PRIVATE_INDEX_DEFS_V1 = {
+    "rr_financial_v1_evidence_item_id": (
+        "evidence",
+        ("item_id", "evidence_id"),
+        "CREATE INDEX rr_financial_v1_evidence_item_id ON evidence(item_id,evidence_id)",
+    ),
+    "rr_financial_v1_claims_obligation_id": (
+        "claimed_adjustments",
+        ("obligation_id", "claim_id"),
+        "CREATE INDEX rr_financial_v1_claims_obligation_id ON claimed_adjustments(obligation_id,claim_id)",
+    ),
+    "rr_financial_v1_cases_obligation_id": (
+        "cases",
+        ("obligation_id", "case_id"),
+        "CREATE INDEX rr_financial_v1_cases_obligation_id ON cases(obligation_id,case_id)",
+    ),
+    "rr_financial_v1_actions_obligation_id": (
+        "actions",
+        ("obligation_id", "action_id"),
+        "CREATE INDEX rr_financial_v1_actions_obligation_id ON actions(obligation_id,action_id)",
+    ),
+    "rr_financial_v1_conflicts_obligation_id": (
+        "financial_conflicts",
+        ("obligation_id", "conflict_id"),
+        "CREATE INDEX rr_financial_v1_conflicts_obligation_id ON financial_conflicts(obligation_id,conflict_id)",
+    ),
+    "rr_financial_v1_evaluations_obligation_revision": (
+        "evaluations",
+        ("obligation_id", "revision"),
+        "CREATE INDEX rr_financial_v1_evaluations_obligation_revision ON evaluations(obligation_id,revision)",
+    ),
+    "rr_financial_v1_determinations_obligation_id": (
+        "determinations",
+        ("obligation_id", "determination_id"),
+        "CREATE INDEX rr_financial_v1_determinations_obligation_id ON determinations(obligation_id,determination_id)",
+    ),
+}
+CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
+CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+CORRECTION_FOLLOWUP_DEPENDENCIES = [
+    "OBLIGATION_REVISION",
+    "CURRENT_EVALUATION_RECEIPT",
+    "CONTROL_PACK",
+    "TRUSTED_AUTHORITY",
+    "SUPPORTING_EVIDENCE",
+    "CURRENT_DETERMINATION",
+    "ACTION_DELIVERY",
+]
+CORRECTION_FOLLOWUP_READ_OBSERVATIONS = {
+    "action_id": ("ACTION_ID", "action_id"),
+    "determination_id": ("DETERMINATION_ID", "determination_id"),
+    "evaluation_consumed": ("EVALUATION_CONSUMED", "input_evaluation_id"),
+}
 
 EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
 HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
 GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v5\x00"
+NEXT_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v6\x00"
+MANIFEST_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v7\x00"
 EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
@@ -59,6 +132,14 @@ EVALUATION_INPUT_DOMAIN = b"RR/FINANCIAL/EVALUATION-INPUT/v1\x00"
 EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
 CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v5\x00"
+NEXT_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v6\x00"
+MANIFEST_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
+POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
+POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
+PROGRAM_FUNDING_RECEIPT_DOMAIN = b"RR/FINANCIAL/PROGRAM-FUNDING-RECEIPT/v1\x00"
+PROGRAM_FUNDING_RECEIPT_SCHEMA = "RR/FINANCIAL/PROGRAM-FUNDING-RECEIPT/v1"
+PROGRAM_FUNDING_CONFIRMATION_CLASS = "STATE_PAYMENT_RECORD"
+PROGRAM_FUNDING_EVIDENCE_STATUS = "SYNTHETIC_UNAPPROVED"
 IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
 EVALUATION_RECEIPT_CONTRACT = "RR/FINANCIAL/EVALUATION-RECEIPT/v1"
 ZERO_DIGEST = b"\x00" * 64
@@ -329,6 +410,105 @@ TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 TABLES = frozenset(_TABLE_DEFS)
 
+_PROGRAM_FUNDING_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = {
+    "program_funding_receipts": (
+        ("receipt_id", "TEXT", 1),
+        ("state_id", "TEXT", 0),
+        ("deployment_id", "TEXT", 0),
+        ("program_id", "TEXT", 0),
+        ("period_id", "TEXT", 0),
+        ("currency", "TEXT", 0),
+        ("source_record_ref", "TEXT", 0),
+        ("amount_cents", "INTEGER", 0),
+        ("confirmation_class", "TEXT", 0),
+        ("evidence_status", "TEXT", 0),
+        ("event_at_ms", "INTEGER", 0),
+        ("recorded_at_ms", "INTEGER", 0),
+        ("supersedes_receipt_id", "TEXT", 0),
+        ("receipt_digest", "BLOB", 0),
+    ),
+    "program_funding_projection": (
+        ("source_record_ref", "TEXT", 1),
+        ("receipt_id", "TEXT", 0),
+        ("amount_cents", "INTEGER", 0),
+        ("event_at_ms", "INTEGER", 0),
+        ("revision", "INTEGER", 0),
+        ("receipt_digest", "BLOB", 0),
+    ),
+}
+_POPULATION_MANIFEST_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = {
+    "population_manifests": (
+        ("manifest_id", "TEXT", 1),
+        ("contract", "TEXT", 0),
+        ("manifest_version", "INTEGER", 0),
+        ("state_id", "TEXT", 0),
+        ("deployment_id", "TEXT", 0),
+        ("program_id", "TEXT", 0),
+        ("period_id", "TEXT", 0),
+        ("currency", "TEXT", 0),
+        ("pack_id", "TEXT", 0),
+        ("cutoff_ms", "INTEGER", 0),
+        ("inclusion_rules_json", "TEXT", 0),
+        ("source_owner_id", "TEXT", 0),
+        ("authority_id", "TEXT", 0),
+        ("authority_epoch", "INTEGER", 0),
+        ("authority_digest", "BLOB", 0),
+        ("approved_by", "TEXT", 0),
+        ("approval_ref", "TEXT", 0),
+        ("source_id", "TEXT", 0),
+        ("source_version", "TEXT", 0),
+        ("source_digest", "BLOB", 0),
+        ("member_count", "INTEGER", 0),
+        ("member_digest", "BLOB", 0),
+        ("supersedes_manifest_id", "TEXT", 0),
+        ("supersedes_digest", "BLOB", 0),
+        ("manifest_digest", "BLOB", 0),
+        ("registered_at_ms", "INTEGER", 0),
+    ),
+    "population_manifest_members": (
+        ("manifest_id", "TEXT", 1),
+        ("position", "INTEGER", 2),
+        ("member_id", "TEXT", 0),
+    ),
+    "population_manifest_heads": (
+        ("state_id", "TEXT", 1),
+        ("deployment_id", "TEXT", 2),
+        ("program_id", "TEXT", 3),
+        ("period_id", "TEXT", 4),
+        ("currency", "TEXT", 0),
+        ("pack_id", "TEXT", 5),
+        ("cutoff_ms", "INTEGER", 6),
+        ("source_owner_id", "TEXT", 7),
+        ("manifest_id", "TEXT", 0),
+        ("manifest_version", "INTEGER", 0),
+        ("manifest_digest", "BLOB", 0),
+        ("updated_at_ms", "INTEGER", 0),
+    ),
+    "population_manifest_bindings": (
+        ("population_id", "TEXT", 1),
+        ("manifest_id", "TEXT", 0),
+        ("manifest_version", "INTEGER", 0),
+        ("manifest_digest", "BLOB", 0),
+    ),
+}
+_TABLE_DEFS_BY_VERSION = {
+    5: _TABLE_DEFS,
+    6: {**_TABLE_DEFS, **_PROGRAM_FUNDING_TABLE_DEFS},
+    7: {**_TABLE_DEFS, **_PROGRAM_FUNDING_TABLE_DEFS, **_POPULATION_MANIFEST_TABLE_DEFS},
+}
+TABLE_COLUMNS_BY_VERSION = {
+    version: {table: tuple(column[0] for column in definition) for table, definition in definitions.items()}
+    for version, definitions in _TABLE_DEFS_BY_VERSION.items()
+}
+TABLES_BY_VERSION = {
+    version: frozenset(definitions)
+    for version, definitions in _TABLE_DEFS_BY_VERSION.items()
+}
+SCHEMA_BY_VERSION = {5: SCHEMA, 6: NEXT_SCHEMA, 7: MANIFEST_SCHEMA}
+CONTINUITY_SCHEMA_BY_VERSION = {5: CONTINUITY_SCHEMA, 6: NEXT_CONTINUITY_SCHEMA, 7: MANIFEST_CONTINUITY_SCHEMA}
+GENESIS_DOMAIN_BY_VERSION = {5: GENESIS_DOMAIN, 6: NEXT_GENESIS_DOMAIN, 7: MANIFEST_GENESIS_DOMAIN}
+CONTINUITY_DOMAIN_BY_VERSION = {5: CONTINUITY_DOMAIN, 6: NEXT_CONTINUITY_DOMAIN, 7: MANIFEST_CONTINUITY_DOMAIN}
+
 _TRIGGER_DEFS = {
     "action_payload_immutable": "CREATE TRIGGER action_payload_immutable BEFORE UPDATE OF action_id,obligation_id,determination_id,kind,revision,payload_json,payload_digest,idempotency_key,created_at_ms ON actions BEGIN SELECT RAISE(ABORT,'action_payload_immutable'); END",
     "action_outbox_payload_immutable": "CREATE TRIGGER action_outbox_payload_immutable BEFORE UPDATE OF action_id,payload_digest ON action_outbox BEGIN SELECT RAISE(ABORT,'action_outbox_payload_immutable'); END",
@@ -337,10 +517,29 @@ _TRIGGER_DEFS = {
     "financial_identity_update_immutable": "CREATE TRIGGER financial_identity_update_immutable BEFORE UPDATE OF schema_version,provenance,bound_mode,bound_owner_id,anchor_sequence,anchor_head,genesis_head,source_package_digest,identity_digest ON financial_identity BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
     "financial_identity_delete_immutable": "CREATE TRIGGER financial_identity_delete_immutable BEFORE DELETE ON financial_identity BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
 }
+_V6_TRIGGER_DEFS = {
+    "program_funding_receipt_update_immutable": "CREATE TRIGGER program_funding_receipt_update_immutable BEFORE UPDATE ON program_funding_receipts BEGIN SELECT RAISE(ABORT,'program_funding_receipt_immutable'); END",
+    "program_funding_receipt_delete_immutable": "CREATE TRIGGER program_funding_receipt_delete_immutable BEFORE DELETE ON program_funding_receipts BEGIN SELECT RAISE(ABORT,'program_funding_receipt_immutable'); END",
+}
+_V7_TRIGGER_DEFS = {
+    "population_manifest_update_immutable": "CREATE TRIGGER population_manifest_update_immutable BEFORE UPDATE ON population_manifests BEGIN SELECT RAISE(ABORT,'population_manifest_immutable'); END",
+    "population_manifest_delete_immutable": "CREATE TRIGGER population_manifest_delete_immutable BEFORE DELETE ON population_manifests BEGIN SELECT RAISE(ABORT,'population_manifest_immutable'); END",
+    "population_manifest_member_update_immutable": "CREATE TRIGGER population_manifest_member_update_immutable BEFORE UPDATE ON population_manifest_members BEGIN SELECT RAISE(ABORT,'population_manifest_member_immutable'); END",
+    "population_manifest_member_delete_immutable": "CREATE TRIGGER population_manifest_member_delete_immutable BEFORE DELETE ON population_manifest_members BEGIN SELECT RAISE(ABORT,'population_manifest_member_immutable'); END",
+    "population_manifest_binding_update_immutable": "CREATE TRIGGER population_manifest_binding_update_immutable BEFORE UPDATE ON population_manifest_bindings BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END",
+    "population_manifest_binding_delete_immutable": "CREATE TRIGGER population_manifest_binding_delete_immutable BEFORE DELETE ON population_manifest_bindings BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END",
+}
+_TRIGGER_DEFS_BY_VERSION = {
+    5: _TRIGGER_DEFS,
+    6: {**_TRIGGER_DEFS, **_V6_TRIGGER_DEFS},
+    7: {**_TRIGGER_DEFS, **_V6_TRIGGER_DEFS, **_V7_TRIGGER_DEFS},
+}
 
 _EVENT_KINDS = {
     "CONTROL_PACK": {"CONTROL_PACK_PUBLISHED"},
     "POPULATION": {"POPULATION_STAGED", "POPULATION_SOURCE_COMPLETED", "POPULATION_VALIDATED", "POPULATION_PUBLISHED"},
+    "POPULATION_MANIFEST": {"POPULATION_MANIFEST_REGISTERED", "POPULATION_MANIFEST_SUPERSEDED"},
+    "PROGRAM_FUNDING_RECEIPT": {"FUNDING_RECEIPT_RECORDED", "FUNDING_RECEIPT_SUPERSEDED"},
     "OBLIGATION": {
         "SUPPORT_EVIDENCE_RECORDED",
         "PAYMENT_RECEIVED",
@@ -423,6 +622,124 @@ def _canonical(value: object, code: str = "canonical") -> bytes:
         ).encode("ascii")
     except (RecursionError, TypeError, ValueError, UnicodeError):
         _fail(f"{code}:canonical")
+
+
+def _snapshot_decision_package_input(value: object) -> dict[str, object]:
+    """Bound and detach caller input before opening the owner database."""
+
+    if type(value) is not dict:
+        _fail("decision-package:object")
+    encoded_bytes = 0
+    nodes = 0
+    active_containers: set[int] = set()
+
+    def add_size(size: int) -> None:
+        nonlocal encoded_bytes
+        encoded_bytes += size
+        if encoded_bytes > MAX_DECISION_PACKAGE_BYTES:
+            _fail("decision-package:input-limit")
+
+    def add_json_string(text: str) -> None:
+        if type(text) is not str:
+            _fail("decision-package:input")
+        size = 2
+        for character in text:
+            point = ord(character)
+            if point in {0x08, 0x09, 0x0A, 0x0C, 0x0D, 0x22, 0x5C}:
+                size += 2
+            elif point < 0x20:
+                size += 6
+            elif point <= 0x7E:
+                size += 1
+            elif point <= 0xFFFF:
+                size += 6
+            else:
+                size += 12
+            if encoded_bytes + size > MAX_DECISION_PACKAGE_BYTES:
+                _fail("decision-package:input-limit")
+        add_size(size)
+
+    def clone(current: object, depth: int) -> object:
+        nonlocal nodes
+        nodes += 1
+        if nodes > MAX_PACKAGE_NODES or depth > MAX_DECISION_PACKAGE_DEPTH:
+            _fail("decision-package:input-limit")
+        if current is None:
+            add_size(4)
+            return None
+        if type(current) is bool:
+            add_size(4 if current else 5)
+            return current
+        if type(current) is int:
+            if current < -(1 << 63) or current > MAX_CENTS:
+                _fail("decision-package:input-limit")
+            add_size(len(str(current)))
+            return current
+        if type(current) is float:
+            if not math.isfinite(current):
+                _fail("decision-package:input")
+            try:
+                encoded = json.dumps(
+                    current,
+                    ensure_ascii=True,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                ).encode("ascii")
+            except (TypeError, ValueError, UnicodeError):
+                _fail("decision-package:input")
+            add_size(len(encoded))
+            return current
+        if type(current) is str:
+            add_json_string(current)
+            return current
+        if type(current) not in {dict, list, tuple}:
+            _fail("decision-package:input")
+        identity = id(current)
+        if identity in active_containers:
+            _fail("decision-package:input-limit")
+        active_containers.add(identity)
+        try:
+            if type(current) is dict:
+                result: dict[str, object] = {}
+                add_size(1)
+                item_count = 0
+                try:
+                    for key, child in current.items():
+                        if type(key) is not str:
+                            _fail("decision-package:input")
+                        if item_count:
+                            add_size(1)
+                        item_count += 1
+                        add_json_string(key)
+                        add_size(1)
+                        result[key] = clone(child, depth + 1)
+                except IndependentFinancialError:
+                    raise
+                except RuntimeError:
+                    _fail("decision-package:input")
+                add_size(1)
+                return result
+            result_items: list[object] = []
+            add_size(1)
+            item_count = 0
+            try:
+                for child in current:
+                    if item_count:
+                        add_size(1)
+                    item_count += 1
+                    result_items.append(clone(child, depth + 1))
+            except IndependentFinancialError:
+                raise
+            except RuntimeError:
+                _fail("decision-package:input")
+            add_size(1)
+            return tuple(result_items) if type(current) is tuple else result_items
+        finally:
+            active_containers.remove(identity)
+
+    snapshot = clone(value, 0)
+    assert type(snapshot) is dict
+    return snapshot
 
 
 def _digest(domain: bytes, *parts: bytes) -> bytes:
@@ -607,10 +924,16 @@ def _identity_digest(
     )
 
 
-def _identity_record(value: Mapping[str, object], code_prefix: str = "identity") -> dict[str, object]:
-    if not isinstance(value, Mapping) or set(value) != set(TABLE_COLUMNS["financial_identity"]):
+def _identity_record(
+    value: Mapping[str, object],
+    code_prefix: str = "identity",
+    schema_version: int = SCHEMA_VERSION,
+) -> dict[str, object]:
+    if type(schema_version) is not int or schema_version not in TABLE_COLUMNS_BY_VERSION:
+        _fail(f"{code_prefix}:schema")
+    if not isinstance(value, Mapping) or set(value) != set(TABLE_COLUMNS_BY_VERSION[schema_version]["financial_identity"]):
         _fail(f"{code_prefix}:shape")
-    if value["id"] != 1 or value["schema_version"] != SCHEMA_VERSION:
+    if value["id"] != 1 or value["schema_version"] != schema_version:
         _fail(f"{code_prefix}:schema")
     provenance = value["provenance"]
     bound_mode = value["bound_mode"]
@@ -640,7 +963,7 @@ def _identity_record(value: Mapping[str, object], code_prefix: str = "identity")
         _fail(f"{code_prefix}:digest")
     return {
         "id": 1,
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
         "provenance": provenance,
         "bound_mode": bound_mode,
         "bound_owner_id": bound_owner_id,
@@ -656,6 +979,38 @@ def _normal_sql(value: object) -> str:
     if type(value) is not str:
         _fail("schema:sql")
     return re.sub(r"\s+", " ", value.strip()).rstrip(";").lower()
+
+
+def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
+    version_row = connection.execute("PRAGMA user_version").fetchone()
+    version = version_row[0] if version_row is not None else None
+    if type(version) is not int or version != PRIVATE_INDEX_SET_VERSION:
+        _fail("schema:private-index-version")
+    actual = {
+        str(row[0]): row[1]
+        for row in connection.execute(
+            "SELECT name,sql FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    if set(actual) != set(PRIVATE_INDEX_DEFS_V1):
+        _fail("schema:private-indexes")
+    for name, (table, columns, expected_sql) in PRIVATE_INDEX_DEFS_V1.items():
+        if _normal_sql(actual[name]) != _normal_sql(expected_sql):
+            _fail(f"schema:private-index:{name}")
+        listed = [
+            row
+            for row in connection.execute(f'PRAGMA index_list("{table}")')
+            if str(row[1]) == name
+        ]
+        if len(listed) != 1 or int(listed[0][2]) != 0 or str(listed[0][3]) != "c" or int(listed[0][4]) != 0:
+            _fail(f"schema:private-index:{name}")
+        key_parts = tuple(
+            (str(row[2]), int(row[3]), str(row[4]).upper())
+            for row in connection.execute(f'PRAGMA index_xinfo("{name}")')
+            if int(row[5]) == 1
+        )
+        if key_parts != tuple((column, 0, "BINARY") for column in columns):
+            _fail(f"schema:private-index:{name}")
 
 
 def _field(value: object, name: str, *aliases: str) -> object:
@@ -773,6 +1128,14 @@ def _identity(
         epoch = getattr(expected_config, "continuity_epoch")
     if epoch is not None:
         epoch = _integer(epoch, "identity:continuity-epoch", minimum=1, maximum=MAX_CENTS)
+    schema_version = None
+    if expected_config is not None:
+        if isinstance(expected_config, Mapping) and "schema_version" in expected_config:
+            schema_version = _integer(expected_config["schema_version"], "identity:schema-version", minimum=5, maximum=7)
+        elif hasattr(expected_config, "schema_version"):
+            schema_version = _integer(getattr(expected_config, "schema_version"), "identity:schema-version", minimum=5, maximum=7)
+        if schema_version is not None and schema_version not in TABLES_BY_VERSION:
+            _fail("identity:schema-version")
     return {
         "scope": scope,
         "authority_id": authority_id,
@@ -782,6 +1145,7 @@ def _identity(
         "mode": mode,
         "owner_id": owner_id,
         "continuity_epoch": epoch,
+        "schema_version": schema_version,
     }
 
 
@@ -809,36 +1173,146 @@ def _open_readonly(path: str | Path) -> sqlite3.Connection:
     return connection
 
 
-def _verify_schema(connection: sqlite3.Connection) -> None:
+def _verify_schema(connection: sqlite3.Connection) -> int:
     try:
+        meta = connection.execute("SELECT schema_version,schema FROM financial_meta WHERE id=1").fetchone()
+        if meta is None or type(meta["schema_version"]) is not int:
+            _fail("schema:version")
+        schema_version = int(meta["schema_version"])
+        if schema_version not in TABLES_BY_VERSION or meta["schema"] != SCHEMA_BY_VERSION[schema_version]:
+            _fail("schema:version")
         tables = {
             str(row[0])
             for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         }
-        if tables != TABLES:
+        expected_tables = TABLES_BY_VERSION[schema_version]
+        if schema_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
+            expected_tables = expected_tables | {CONTINUITY_ADMISSION_TABLE}
+        if tables != expected_tables:
             _fail("schema:tables")
-        for table, definition in _TABLE_DEFS.items():
+        table_definitions = _TABLE_DEFS_BY_VERSION[schema_version]
+        for table, definition in table_definitions.items():
             actual = tuple(
                 (str(row[1]), str(row[2]).upper(), int(row[5]))
                 for row in connection.execute(f"PRAGMA table_info({table})")
             )
             if actual != tuple(definition):
                 _fail(f"schema:columns:{table}")
+        if schema_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
+            admission_columns = tuple(
+                (str(row[1]), str(row[2]).upper(), int(row[3]))
+                for row in connection.execute(f"PRAGMA table_info({CONTINUITY_ADMISSION_TABLE})")
+            )
+            if admission_columns != CONTINUITY_ADMISSION_TABLE_DEFS:
+                _fail("schema:continuity-admission-columns")
         triggers = {
             str(row[0]): str(row[1])
             for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'")
         }
-        if set(triggers) != set(_TRIGGER_DEFS):
+        trigger_definitions = _TRIGGER_DEFS_BY_VERSION[schema_version]
+        if set(triggers) != set(trigger_definitions):
             _fail("schema:triggers")
-        for name, expected in _TRIGGER_DEFS.items():
+        for name, expected in trigger_definitions.items():
             if _normal_sql(triggers[name]) != _normal_sql(expected):
                 _fail(f"schema:trigger:{name}")
+        if schema_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
+            _verify_private_index_schema(connection)
+        return schema_version
     except IndependentFinancialError:
         raise
     except sqlite3.Error:
         _fail("schema:read")
+
+
+def _verify_continuity_admission(
+    connection: sqlite3.Connection,
+    schema_version: int,
+    meta: Mapping[str, object],
+) -> None:
+    """Recompute the local admission cache from source rows; never trust it as source data."""
+
+    if schema_version not in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
+        return
+    expected: dict[str, tuple[int, int]] = {}
+    for table in sorted(TABLES_BY_VERSION[schema_version]):
+        columns = TABLE_COLUMNS_BY_VERSION[schema_version][table]
+        count = 0
+        row_bytes = 0
+        try:
+            for row in connection.execute(f"SELECT * FROM {table}"):
+                count += 1
+                if count > MAX_ROWS:
+                    _fail(f"continuity-admission:row-cap:{table}")
+                exported: dict[str, object] = {}
+                for column in columns:
+                    value = row[column]
+                    if type(value) is bytes:
+                        exported[column] = {"hex": value.hex().upper()}
+                    elif value is None or type(value) in {str, int, float, bool}:
+                        exported[column] = value
+                    else:
+                        _fail("continuity-admission:value")
+                row_bytes += len(_canonical(exported, "continuity-admission:row"))
+        except IndependentFinancialError:
+            raise
+        except sqlite3.Error:
+            _fail(f"continuity-admission:read:{table}")
+        expected[table] = (count, row_bytes)
+    try:
+        rows = list(
+            connection.execute(
+                f"SELECT table_name,row_count,row_bytes FROM {CONTINUITY_ADMISSION_TABLE}"
+            )
+        )
+    except sqlite3.Error:
+        _fail("continuity-admission:read")
+    actual: dict[str, tuple[int, int]] = {}
+    for row in rows:
+        table = row["table_name"]
+        count = row["row_count"]
+        row_bytes = row["row_bytes"]
+        if (
+            type(table) is not str
+            or table not in expected
+            or type(count) is not int
+            or count < 0
+            or type(row_bytes) is not int
+            or row_bytes < 0
+            or table in actual
+        ):
+            _fail("continuity-admission:values")
+        actual[table] = (count, row_bytes)
+    if actual != expected:
+        _fail("continuity-admission:mismatch")
+    scope = meta["scope"]
+    assert isinstance(scope, Mapping)
+    body = {
+        "schema": CONTINUITY_SCHEMA_BY_VERSION[schema_version],
+        "version": schema_version,
+        "scope": dict(scope),
+        "authority": {
+            "authority_id": meta["authority_id"],
+            "epoch": meta["authority_epoch"],
+            "digest": bytes(meta["authority_digest"]).hex().upper(),
+        },
+        "continuity_epoch": meta["continuity_epoch"],
+        "sequence": meta["sequence"],
+        "history_head": bytes(meta["history_head"]).hex().upper(),
+        "dispatch_enabled": False,
+        "egress_enabled": False,
+        "mode": meta["mode"],
+        "tables": {table: [] for table in sorted(expected)},
+    }
+    package = {
+        **body,
+        "package_digest": _digest(CONTINUITY_DOMAIN_BY_VERSION[schema_version], _canonical(body)).hex().upper(),
+    }
+    exact_size = len(_canonical(package))
+    exact_size += sum(row_bytes + max(0, count - 1) for count, row_bytes in expected.values())
+    if exact_size > MAX_PACKAGE_BYTES:
+        _fail("continuity-admission:package-size")
 
 
 def _bounded_rows(connection: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
@@ -853,7 +1327,7 @@ def _bounded_rows(connection: sqlite3.Connection, table: str) -> list[sqlite3.Ro
         _fail(f"rows:read:{table}")
 
 
-def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object]) -> dict[str, object]:
+def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], schema_version: int) -> dict[str, object]:
     try:
         if int(connection.execute("SELECT COUNT(*) FROM financial_meta").fetchone()[0]) != 1:
             _fail("meta:cardinality")
@@ -862,8 +1336,10 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object]) ->
         _fail("meta:read")
     if row is None:
         _fail("meta:missing")
-    if row["id"] != 1 or row["schema_version"] != SCHEMA_VERSION or row["schema"] != SCHEMA:
+    if row["id"] != 1 or row["schema_version"] != schema_version or row["schema"] != SCHEMA_BY_VERSION[schema_version]:
         _fail("meta:schema")
+    if identity["schema_version"] is not None and identity["schema_version"] != schema_version:
+        _fail("meta:schema-version-binding")
     scope = identity["scope"]
     assert isinstance(scope, dict)
     for key in ("state_id", "deployment_id", "program_id", "period_id", "currency"):
@@ -903,13 +1379,14 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object]) ->
     if identity_row is None:
         _fail("identity:missing")
     identity_contract = _identity_record(
-        {column: identity_row[column] for column in TABLE_COLUMNS["financial_identity"]}
+        {column: identity_row[column] for column in TABLE_COLUMNS_BY_VERSION[schema_version]["financial_identity"]},
+        schema_version=schema_version,
     )
     if identity_contract["bound_mode"] != mode or identity_contract["bound_owner_id"] != owner_id:
         _fail("identity:meta-binding")
     scope_bytes = _canonical(scope, "meta:scope")
     if identity_contract["provenance"] == "ROOT":
-        expected_genesis = _digest(GENESIS_DOMAIN, scope_bytes, authority_digest, identity_contract["identity_digest"])
+        expected_genesis = _digest(GENESIS_DOMAIN_BY_VERSION[schema_version], scope_bytes, authority_digest, identity_contract["identity_digest"])
         if identity_contract["source_package_digest"] != ZERO_DIGEST or identity_contract["anchor_sequence"] != 0 or identity_contract["anchor_head"] != expected_genesis or identity_contract["genesis_head"] != expected_genesis:
             _fail("identity:genesis")
     else:
@@ -933,10 +1410,11 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object]) ->
         "authority_epoch": authority_epoch,
         "authority_digest": authority_digest,
         "scope": scope,
+        "schema_version": schema_version,
     }
 
 
-def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> list[sqlite3.Row]:
+def _verify_events(connection: sqlite3.Connection, meta: dict[str, object], schema_version: int) -> list[sqlite3.Row]:
     rows = list(connection.execute("SELECT * FROM financial_events ORDER BY event_sequence"))
     if len(rows) > MAX_ROWS:
         _fail("history:row-cap")
@@ -954,6 +1432,10 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
         kind = _kind(row["kind"], "history:event-kind")
         if aggregate_type not in _EVENT_KINDS or kind not in _EVENT_KINDS[aggregate_type]:
             _fail("history:event-kind")
+        if schema_version not in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION} and aggregate_type == "PROGRAM_FUNDING_RECEIPT":
+            _fail("history:event-schema")
+        if schema_version != MANIFEST_SCHEMA_VERSION and aggregate_type == "POPULATION_MANIFEST":
+            _fail("history:event-schema")
         before = _integer(row["before_revision"], "history:before-revision")
         after = _integer(row["after_revision"], "history:after-revision")
         if after < before:
@@ -997,6 +1479,399 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
         if anchor_sequence > len(rows) or bytes(rows[anchor_sequence - 1]["head"]) != identity["anchor_head"]:
             _fail("identity:history-anchor")
     return rows
+
+
+def _verify_correction_followup_records(
+    events: Iterable[Mapping[str, object]],
+    *,
+    evaluations: Mapping[str, Mapping[str, object]],
+    determinations: Mapping[str, Mapping[str, object]],
+    actions: Mapping[str, Mapping[str, object]],
+    cases: Mapping[str, Mapping[str, object]],
+    packs: Mapping[str, Mapping[str, object]],
+) -> None:
+    """Independently bind durable correction work to its committed source rows."""
+
+    seen_work_ids: set[str] = set()
+    for event_value in events:
+        event = dict(event_value)
+        if (
+            event.get("aggregate_type") != "OBLIGATION"
+            or event.get("kind") != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
+        ):
+            continue
+        payload = _parse_json(event.get("payload_json"), "history:correction-followup-payload")
+        if not isinstance(payload, dict):
+            _fail("history:correction-followup-payload")
+        if "correction_followup" not in payload:
+            continue
+        followup = payload["correction_followup"]
+        if not isinstance(followup, dict) or set(followup) != {
+            "contract", "work_id", "determination_id", "source", "artifact", "control_pack", "authority",
+            "input_evaluation", "result_evaluation", "determination_digest", "case_status",
+            "action_status", "outbox_status", "supporting_evidence",
+            "dependency_families", "read_observations", "outputs",
+        }:
+            _fail("history:correction-followup-shape")
+        if followup["contract"] != CORRECTION_FOLLOWUP_CONTRACT:
+            _fail("history:correction-followup-contract")
+        work_id = _id(followup["work_id"], "history:correction-followup-work-id")
+        if work_id in seen_work_ids:
+            _fail("history:correction-followup-duplicate")
+        seen_work_ids.add(work_id)
+        action_id = _id(payload.get("action_id"), "history:correction-followup-action-id")
+        determination_id = _id(payload.get("determination_id"), "history:correction-followup-determination-id")
+        result_evaluation_id = _id(payload.get("evaluation_id"), "history:correction-followup-result-evaluation")
+        event_sequence = _integer(event.get("event_sequence"), "history:correction-followup-sequence", minimum=1, maximum=MAX_ROWS)
+        aggregate_id = _id(event.get("aggregate_id"), "history:correction-followup-obligation")
+        if work_id != action_id or followup.get("determination_id") != determination_id:
+            _fail("history:correction-followup-work-binding")
+        source = followup["source"]
+        if not isinstance(source, dict) or set(source) != {
+            "action_id", "outbox_action_id", "case_id", "resulting_evaluation_id", "event_sequence",
+        }:
+            _fail("history:correction-followup-source")
+        case_id = _id(source["case_id"], "history:correction-followup-case-id")
+        if source != {
+            "action_id": action_id,
+            "outbox_action_id": action_id,
+            "case_id": case_id,
+            "resulting_evaluation_id": result_evaluation_id,
+            "event_sequence": event_sequence,
+        }:
+            _fail("history:correction-followup-source-binding")
+        if (
+            _integer(event.get("after_revision"), "history:correction-followup-revision", maximum=MAX_ROWS)
+            != _integer(followup.get("result_evaluation", {}).get("revision") if isinstance(followup.get("result_evaluation"), dict) else None, "history:correction-followup-result-revision", maximum=MAX_ROWS)
+        ):
+            _fail("history:correction-followup-revision-binding")
+
+        artifact = followup["artifact"]
+        if not isinstance(artifact, dict) or set(artifact) != {"contract", "version", "sha256"}:
+            _fail("history:correction-followup-artifact")
+        if (
+            artifact["contract"] != CORRECTION_TRANSITION_OPERATION
+            or _integer(artifact["version"], "history:correction-followup-artifact-version", minimum=1, maximum=MAX_ROWS) != 1
+            or artifact["sha256"] != CORRECTION_TRANSITION_ARTIFACT_SHA256
+        ):
+            _fail("history:correction-followup-artifact-binding")
+
+        control_pack = followup["control_pack"]
+        if not isinstance(control_pack, dict) or set(control_pack) != {"pack_id", "version", "digest"}:
+            _fail("history:correction-followup-control-pack")
+        pack_id = _id(control_pack["pack_id"], "history:correction-followup-pack-id")
+        pack = packs.get(pack_id)
+        if pack is None or (
+            _integer(control_pack["version"], "history:correction-followup-pack-version", minimum=1, maximum=MAX_ROWS)
+            != _integer(pack.get("version"), "history:correction-followup-stored-pack-version", minimum=1, maximum=MAX_ROWS)
+            or _hex_digest(control_pack["digest"], "history:correction-followup-pack-digest")
+            != _blob64(pack.get("pack_digest"), "history:correction-followup-stored-pack-digest")
+        ):
+            _fail("history:correction-followup-pack-binding")
+
+        result_evaluation = followup["result_evaluation"]
+        if not isinstance(result_evaluation, dict) or set(result_evaluation) != {
+            "evaluation_id", "revision", "result_digest", "receipt_digest",
+        }:
+            _fail("history:correction-followup-result-evaluation")
+        result_row = evaluations.get(result_evaluation_id)
+        if result_row is None:
+            _fail("history:correction-followup-result-missing")
+        if (
+            result_evaluation["evaluation_id"] != result_evaluation_id
+            or _integer(result_evaluation["revision"], "history:correction-followup-result-revision", maximum=MAX_ROWS)
+            != _integer(result_row.get("revision"), "history:correction-followup-stored-result-revision", maximum=MAX_ROWS)
+            or _hex_digest(result_evaluation["result_digest"], "history:correction-followup-result-digest")
+            != _blob64(result_row.get("result_digest"), "history:correction-followup-stored-result-digest")
+            or _hex_digest(result_evaluation["receipt_digest"], "history:correction-followup-receipt-digest")
+            != _blob64(result_row.get("receipt_digest"), "history:correction-followup-stored-receipt-digest")
+            or result_row.get("obligation_id") != aggregate_id
+            or result_row.get("control_pack_id") != pack_id
+            or _integer(result_row.get("control_pack_version"), "history:correction-followup-eval-pack-version", minimum=1, maximum=MAX_ROWS)
+            != control_pack["version"]
+            or _blob64(result_row.get("control_pack_digest"), "history:correction-followup-eval-pack-digest")
+            != _hex_digest(control_pack["digest"], "history:correction-followup-pack-digest")
+        ):
+            _fail("history:correction-followup-result-binding")
+        if (
+            payload.get("evaluation_input_digest") != bytes(result_row["input_snapshot_digest"]).hex().upper()
+            or payload.get("evaluation_result_digest") != bytes(result_row["result_digest"]).hex().upper()
+            or payload.get("evaluation_receipt_digest") != bytes(result_row["receipt_digest"]).hex().upper()
+        ):
+            _fail("history:correction-followup-event-evaluation")
+
+        authority = followup["authority"]
+        if not isinstance(authority, dict) or set(authority) != {"authority_id", "epoch", "digest"}:
+            _fail("history:correction-followup-authority")
+        if (
+            authority["authority_id"] != result_row.get("authority_id")
+            or _integer(authority["epoch"], "history:correction-followup-authority-epoch", minimum=1, maximum=MAX_CENTS)
+            != _integer(result_row.get("authority_epoch"), "history:correction-followup-stored-authority-epoch", minimum=1, maximum=MAX_CENTS)
+            or _hex_digest(authority["digest"], "history:correction-followup-authority-digest")
+            != _blob64(result_row.get("authority_digest"), "history:correction-followup-stored-authority-digest")
+        ):
+            _fail("history:correction-followup-authority-binding")
+
+        input_evaluation = followup["input_evaluation"]
+        if not isinstance(input_evaluation, dict) or set(input_evaluation) != {
+            "evaluation_id", "revision", "result_digest", "receipt_digest",
+        }:
+            _fail("history:correction-followup-input-evaluation")
+        input_evaluation_id = _id(input_evaluation["evaluation_id"], "history:correction-followup-input-id")
+        input_row = evaluations.get(input_evaluation_id)
+        determination = determinations.get(determination_id)
+        action = actions.get(action_id)
+        case = cases.get(case_id)
+        if input_row is None or determination is None or action is None or case is None:
+            _fail("history:correction-followup-result-rows")
+        if (
+            _integer(input_evaluation["revision"], "history:correction-followup-input-revision", maximum=MAX_ROWS)
+            != _integer(input_row.get("revision"), "history:correction-followup-stored-input-revision", maximum=MAX_ROWS)
+            or _hex_digest(input_evaluation["result_digest"], "history:correction-followup-input-digest")
+            != _blob64(input_row.get("result_digest"), "history:correction-followup-stored-input-digest")
+            or _hex_digest(input_evaluation["receipt_digest"], "history:correction-followup-input-receipt")
+            != _blob64(input_row.get("receipt_digest"), "history:correction-followup-stored-input-receipt")
+            or determination.get("obligation_id") != aggregate_id
+            or determination.get("decision") != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
+            or determination.get("input_evaluation_id") != input_evaluation_id
+            or _blob64(determination.get("input_evaluation_result_digest"), "history:correction-followup-determination-eval-digest")
+            != _hex_digest(input_evaluation["result_digest"], "history:correction-followup-input-digest")
+            or action.get("obligation_id") != aggregate_id
+            or action.get("determination_id") != determination_id
+            or action.get("kind") != "CORRECTION_PAYMENT_REQUEST"
+            or _hex_digest(followup.get("determination_digest"), "history:correction-followup-determination-digest")
+            != _blob64(determination.get("determination_digest"), "history:correction-followup-stored-determination-digest")
+            or followup.get("case_status") != result_row.get("case_status")
+            or followup.get("action_status") != "READY"
+            or followup.get("outbox_status") != "READY"
+            or case.get("obligation_id") != aggregate_id
+        ):
+            _fail("history:correction-followup-input-binding")
+        try:
+            evidence_value = json.loads(str(result_row["evidence_bindings_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            _fail("history:correction-followup-evidence")
+        if not isinstance(evidence_value, dict) or set(evidence_value) != {"bindings"} or followup["supporting_evidence"] != evidence_value["bindings"]:
+            _fail("history:correction-followup-evidence-binding")
+
+        if followup["dependency_families"] != CORRECTION_FOLLOWUP_DEPENDENCIES:
+            _fail("history:correction-followup-dependencies")
+        if followup["outputs"] != ["MIRROR_EXPLANATION", "STATE_REPORT", "CORPORATE_SUPPORT"]:
+            _fail("history:correction-followup-outputs")
+        observations = followup["read_observations"]
+        if not isinstance(observations, dict) or set(observations) != set(CORRECTION_FOLLOWUP_READ_OBSERVATIONS):
+            _fail("history:correction-followup-observations")
+        previous_head = _blob64(event.get("previous_head"), "history:correction-followup-previous-head").hex().upper()
+        for key, (predicate, subject_key) in CORRECTION_FOLLOWUP_READ_OBSERVATIONS.items():
+            observation = observations[key]
+            if not isinstance(observation, dict) or set(observation) != {
+                "predicate", "subject", "complete", "match_count", "result_identity",
+                "version_sequence", "version_head",
+            }:
+                _fail("history:correction-followup-observation-shape")
+            expected_subject = input_evaluation_id if subject_key == "input_evaluation_id" else action_id if subject_key == "action_id" else determination_id
+            if (
+                observation["predicate"] != predicate
+                or observation["subject"] != expected_subject
+                or observation["complete"] is not True
+                or observation["match_count"] != 0
+                or observation["result_identity"] is not None
+                or observation["version_sequence"] != event_sequence - 1
+                or observation["version_head"] != previous_head
+            ):
+                _fail("history:correction-followup-observation-binding")
+
+
+def _verify_program_funding_rows(
+    receipt_rows: list[Mapping[str, object]],
+    projection_rows: list[Mapping[str, object]],
+    events: list[Mapping[str, object]],
+    scope: Mapping[str, object],
+) -> tuple[dict[str, object], set[str]]:
+    """Reconstruct v6 funding leaves, projection, and bound history events."""
+
+    receipts: dict[str, dict[str, object]] = {}
+    grouped: dict[str, list[str]] = {}
+    for index, row in enumerate(receipt_rows):
+        receipt_id = _id(row["receipt_id"], f"funding:receipt:{index}:id")
+        if receipt_id in receipts:
+            _fail("funding:receipt-duplicate")
+        row_scope = {
+            key: _text(row[key], f"funding:receipt:{index}:{key}")
+            for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")
+        }
+        if row_scope != dict(scope):
+            _fail("funding:scope")
+        if row_scope["currency"] != CURRENCY or row_scope["period_id"] in _WILDCARD_PERIODS:
+            _fail("funding:scope")
+        source_ref = _id(row["source_record_ref"], f"funding:receipt:{index}:source-ref")
+        amount = _integer(row["amount_cents"], f"funding:receipt:{index}:amount", minimum=1, maximum=MAX_CENTS)
+        confirmation_class = _text(row["confirmation_class"], f"funding:receipt:{index}:class")
+        evidence_status = _text(row["evidence_status"], f"funding:receipt:{index}:status")
+        if confirmation_class != PROGRAM_FUNDING_CONFIRMATION_CLASS or evidence_status != PROGRAM_FUNDING_EVIDENCE_STATUS:
+            _fail("funding:unapproved-source-class")
+        event_at_ms = _time(row["event_at_ms"], f"funding:receipt:{index}:event-time")
+        recorded_at_ms = _time(row["recorded_at_ms"], f"funding:receipt:{index}:recorded-time")
+        supersedes = row["supersedes_receipt_id"]
+        if supersedes is not None:
+            supersedes = _id(supersedes, f"funding:receipt:{index}:supersedes")
+        record = {
+            "schema": PROGRAM_FUNDING_RECEIPT_SCHEMA,
+            "receipt_id": receipt_id,
+            "state_id": row_scope["state_id"],
+            "deployment_id": row_scope["deployment_id"],
+            "program_id": row_scope["program_id"],
+            "period_id": row_scope["period_id"],
+            "currency": row_scope["currency"],
+            "source_record_ref": source_ref,
+            "amount_cents": amount,
+            "confirmation_class": confirmation_class,
+            "evidence_status": evidence_status,
+            "event_at_ms": event_at_ms,
+            "supersedes_receipt_id": supersedes,
+        }
+        expected_digest = _digest(
+            PROGRAM_FUNDING_RECEIPT_DOMAIN,
+            _canonical(record, f"funding:receipt:{index}:canonical"),
+        )
+        digest = _blob64(row["receipt_digest"], f"funding:receipt:{index}:digest")
+        if digest != expected_digest:
+            _fail("funding:receipt-digest")
+        receipts[receipt_id] = {
+            **record,
+            "recorded_at_ms": recorded_at_ms,
+            "receipt_digest": digest,
+        }
+        grouped.setdefault(source_ref, []).append(receipt_id)
+
+    children: dict[str, str] = {}
+    for receipt_id, receipt in receipts.items():
+        parent_id = receipt["supersedes_receipt_id"]
+        if parent_id is None:
+            continue
+        parent = receipts.get(str(parent_id))
+        if parent is None:
+            _fail("funding:supersession-missing")
+        if parent["source_record_ref"] != receipt["source_record_ref"]:
+            _fail("funding:supersession-scope")
+        if int(receipt["recorded_at_ms"]) < int(parent["recorded_at_ms"]):
+            _fail("funding:supersession-chronology")
+        if str(parent_id) in children:
+            _fail("funding:supersession-fork")
+        children[str(parent_id)] = receipt_id
+
+    events_by_id: dict[str, Mapping[str, object]] = {}
+    funding_event_count = 0
+    for event in events:
+        if event["aggregate_type"] != "PROGRAM_FUNDING_RECEIPT":
+            continue
+        funding_event_count += 1
+        receipt_id = _id(event["aggregate_id"], "funding:event:aggregate-id")
+        if receipt_id in events_by_id:
+            _fail("funding:event-duplicate")
+        events_by_id[receipt_id] = event
+    if funding_event_count != len(receipts) or set(events_by_id) != set(receipts):
+        _fail("funding:event-count")
+
+    projection_by_ref: dict[str, Mapping[str, object]] = {}
+    for index, row in enumerate(projection_rows):
+        source_ref = _id(row["source_record_ref"], f"funding:projection:{index}:source-ref")
+        if source_ref in projection_by_ref:
+            _fail("funding:projection-duplicate")
+        projection_by_ref[source_ref] = row
+    if set(projection_by_ref) != set(grouped):
+        _fail("funding:projection-cardinality")
+
+    leaves: list[tuple[str, dict[str, object], int]] = []
+    visited: set[str] = set()
+    for source_ref, ids in grouped.items():
+        roots = [receipt_id for receipt_id in ids if receipts[receipt_id]["supersedes_receipt_id"] is None]
+        if len(roots) != 1:
+            _fail("funding:lineage-root")
+        receipt_id = roots[0]
+        revision = 0
+        prior_sequence = 0
+        lineage_seen: set[str] = set()
+        while True:
+            if receipt_id in lineage_seen:
+                _fail("funding:lineage-cycle")
+            lineage_seen.add(receipt_id)
+            visited.add(receipt_id)
+            revision += 1
+            receipt = receipts[receipt_id]
+            event = events_by_id[receipt_id]
+            kind = "FUNDING_RECEIPT_SUPERSEDED" if receipt["supersedes_receipt_id"] is not None else "FUNDING_RECEIPT_RECORDED"
+            if (
+                event["aggregate_type"] != "PROGRAM_FUNDING_RECEIPT"
+                or event["aggregate_id"] != receipt_id
+                or event["kind"] != kind
+                or _integer(event["before_revision"], "funding:event:before") != revision - 1
+                or _integer(event["after_revision"], "funding:event:after") != revision
+                or _time(event["committed_at_ms"], "funding:event:committed") != receipt["recorded_at_ms"]
+            ):
+                _fail("funding:event-binding")
+            sequence = _integer(event["event_sequence"], "funding:event:sequence", minimum=1, maximum=MAX_ROWS)
+            if sequence <= prior_sequence:
+                _fail("funding:event-order")
+            prior_sequence = sequence
+            payload = _parse_json(event["payload_json"], "funding:event:payload")
+            expected_payload = {
+                key: value
+                for key, value in receipt.items()
+                if key not in {"receipt_digest"}
+            }
+            expected_payload["receipt_digest"] = bytes(receipt["receipt_digest"]).hex().upper()
+            expected_payload["projection_revision"] = revision
+            if payload != expected_payload:
+                _fail("funding:event-payload")
+            child_id = children.get(receipt_id)
+            if child_id is None:
+                leaves.append((source_ref, receipt, revision))
+                break
+            child_event = events_by_id.get(child_id)
+            if child_event is None or int(child_event["event_sequence"]) <= sequence:
+                _fail("funding:supersession-event-order")
+            receipt_id = child_id
+        if len(lineage_seen) != len(ids):
+            _fail("funding:lineage-disconnected")
+    if visited != set(receipts):
+        _fail("funding:lineage-unreachable")
+
+    total = 0
+    for source_ref, receipt, revision in leaves:
+        projection = projection_by_ref[source_ref]
+        if (
+            projection["receipt_id"] != receipt["receipt_id"]
+            or _integer(projection["amount_cents"], "funding:projection:amount", minimum=1, maximum=MAX_CENTS) != receipt["amount_cents"]
+            or _time(projection["event_at_ms"], "funding:projection:event-time") != receipt["event_at_ms"]
+            or _integer(projection["revision"], "funding:projection:revision", minimum=1, maximum=MAX_ROWS) != revision
+            or _blob64(projection["receipt_digest"], "funding:projection:digest") != receipt["receipt_digest"]
+        ):
+            _fail("funding:projection-reconstruction")
+        total = _add_cents(total, int(receipt["amount_cents"]), "funding:total-overflow")
+    return (
+        {
+            "schema": PROGRAM_FUNDING_RECEIPT_SCHEMA,
+            "scope": dict(scope),
+            "reported_funding_cents": total,
+            "current_receipt_count": len(leaves),
+            "historical_receipt_count": len(receipts),
+            "confirmation_class": PROGRAM_FUNDING_CONFIRMATION_CLASS,
+            "evidence_status": PROGRAM_FUNDING_EVIDENCE_STATUS,
+            "money_movement_effect": False,
+            "recipient_cash_effect": False,
+            "payment_authorization_effect": False,
+        },
+        set(receipts),
+    )
+
+
+def _verify_program_funding(connection: sqlite3.Connection, meta: dict[str, object], events: list[sqlite3.Row]) -> tuple[dict[str, object], set[str]]:
+    receipt_rows = _bounded_rows(connection, "program_funding_receipts")
+    projection_rows = _bounded_rows(connection, "program_funding_projection")
+    scope = meta["scope"]
+    assert isinstance(scope, dict)
+    return _verify_program_funding_rows(receipt_rows, projection_rows, events, scope)
 
 
 def _values_json(raw: object, code: str) -> list[object]:
@@ -1111,10 +1986,343 @@ def _verify_packs(connection: sqlite3.Connection, meta: dict[str, object]) -> di
     return result
 
 
+def _verify_population_manifest_rows(
+    *,
+    schema_version: int,
+    manifest_rows: list[Mapping[str, object]],
+    member_rows: list[Mapping[str, object]],
+    head_rows: list[Mapping[str, object]],
+    binding_rows: list[Mapping[str, object]],
+    population_rows: list[Mapping[str, object]],
+    item_rows: list[Mapping[str, object]],
+    event_rows: list[Mapping[str, object]],
+    packs: Mapping[str, Mapping[str, object]],
+    scope: Mapping[str, object],
+    authority_id: str,
+    authority_epoch: int,
+    authority_digest: bytes,
+    actors: Mapping[str, frozenset[str]] | None,
+) -> dict[str, object]:
+    """Reconstruct manifest receipts, membership, supersession, and bindings."""
+
+    if schema_version != MANIFEST_SCHEMA_VERSION:
+        if manifest_rows or member_rows or head_rows or binding_rows:
+            _fail("population-manifest:legacy-schema-tables")
+        return {"manifests": {}, "members_by_manifest": {}, "bindings": {}, "heads": {}}
+    manifests: dict[str, Mapping[str, object]] = {}
+    members_by_manifest: dict[str, tuple[str, ...]] = {}
+    if len(manifest_rows) > MAX_ROWS or len(member_rows) > MAX_ROWS or len(head_rows) > MAX_ROWS or len(binding_rows) > MAX_ROWS:
+        _fail("population-manifest:row-cap")
+    positions: dict[str, dict[int, str]] = {}
+    for index, row in enumerate(manifest_rows):
+        manifest_id = _id(row["manifest_id"], f"population-manifest:{index}:id")
+        if manifest_id in manifests:
+            _fail("population-manifest:duplicate")
+        manifests[manifest_id] = row
+        positions[manifest_id] = {}
+    if manifests and actors is None:
+        if (
+            authority_id == "synthetic-authority-v1"
+            and authority_epoch == 1
+            and authority_digest == _default_authority_digest()
+        ):
+            actors = {
+                "synthetic-official": frozenset({"FINANCE_DECISION", "CASE_OWNER"}),
+                "synthetic-reporter": frozenset({"REPORTING_EDITOR"}),
+                "synthetic-receiver": frozenset({"RECEIVER"}),
+            }
+    for index, row in enumerate(member_rows):
+        manifest_id = _id(row["manifest_id"], f"population-manifest-member:{index}:manifest")
+        position = _integer(row["position"], f"population-manifest-member:{index}:position", maximum=MAX_ROWS)
+        member_id = _id(row["member_id"], f"population-manifest-member:{index}:id")
+        if manifest_id not in manifests or position in positions[manifest_id]:
+            _fail("population-manifest:member-reference")
+        positions[manifest_id][position] = member_id
+
+    manifest_keys: dict[tuple[object, ...], dict[int, str]] = {}
+    children: dict[str, str] = {}
+    children_by_scope: dict[tuple[object, ...], set[str]] = {}
+    events_by_manifest: dict[str, Mapping[str, object]] = {}
+    event_sequences: dict[str, int] = {}
+    manifest_events = [row for row in event_rows if row["aggregate_type"] == "POPULATION_MANIFEST"]
+    for event in manifest_events:
+        event_manifest_id = _id(event["aggregate_id"], "population-manifest:event-id")
+        if event_manifest_id in events_by_manifest:
+            _fail("population-manifest:event-duplicate")
+        events_by_manifest[event_manifest_id] = event
+    for index, (manifest_id, row) in enumerate(manifests.items()):
+        contract = row["contract"]
+        if contract != POPULATION_MANIFEST_CONTRACT:
+            _fail("population-manifest:contract")
+        version = _integer(row["manifest_version"], f"population-manifest:{index}:version", minimum=1, maximum=MAX_ROWS)
+        manifest_scope = {
+            "state_id": _id(row["state_id"], f"population-manifest:{index}:state"),
+            "deployment_id": _id(row["deployment_id"], f"population-manifest:{index}:deployment"),
+            "program_id": _id(row["program_id"], f"population-manifest:{index}:program"),
+            "period_id": _id(row["period_id"], f"population-manifest:{index}:period"),
+            "currency": row["currency"],
+        }
+        if manifest_scope != dict(scope) or manifest_scope["currency"] != CURRENCY:
+            _fail("population-manifest:scope")
+        pack_id = _id(row["pack_id"], f"population-manifest:{index}:pack")
+        pack = packs.get(pack_id)
+        if pack is None or pack["status"] != "APPROVED":
+            _fail("population-manifest:pack")
+        if any(pack[key] != manifest_scope[key] for key in ("state_id", "deployment_id", "program_id", "period_id")):
+            _fail("population-manifest:pack-scope")
+        cutoff_ms = _time(row["cutoff_ms"], f"population-manifest:{index}:cutoff")
+        pack_start = _time(pack["effective_start_ms"], f"population-manifest:{index}:pack-start")
+        pack_end = _time(pack["effective_end_ms"], f"population-manifest:{index}:pack-end")
+        if not pack_start <= cutoff_ms < pack_end:
+            _fail("population-manifest:pack-cutoff")
+        rules = _values_json(row["inclusion_rules_json"], f"population-manifest:{index}:rules")
+        if not rules:
+            _fail("population-manifest:rules")
+        for rule in rules:
+            _text(rule, f"population-manifest:{index}:rule")
+        source_owner_id = _id(row["source_owner_id"], f"population-manifest:{index}:source-owner")
+        row_authority_id = _id(row["authority_id"], f"population-manifest:{index}:authority")
+        row_authority_epoch = _integer(row["authority_epoch"], f"population-manifest:{index}:authority-epoch", minimum=1, maximum=MAX_CENTS)
+        row_authority_digest = _blob64(row["authority_digest"], f"population-manifest:{index}:authority-digest")
+        if (row_authority_id, row_authority_epoch, row_authority_digest) != (authority_id, authority_epoch, authority_digest):
+            _fail("population-manifest:authority")
+        approved_by = _id(row["approved_by"], f"population-manifest:{index}:approver")
+        if actors is None or "FINANCE_DECISION" not in actors.get(approved_by, frozenset()):
+            _fail("population-manifest:approver")
+        approval_ref = _id(row["approval_ref"], f"population-manifest:{index}:approval-ref")
+        source_id = _id(row["source_id"], f"population-manifest:{index}:source")
+        source_version = _text(row["source_version"], f"population-manifest:{index}:source-version")
+        source_digest = _blob64(row["source_digest"], f"population-manifest:{index}:source-digest")
+        member_count = _integer(row["member_count"], f"population-manifest:{index}:member-count", minimum=1, maximum=MAX_ROWS)
+        indexed_members = positions[manifest_id]
+        if sorted(indexed_members) != list(range(member_count)):
+            _fail("population-manifest:member-position")
+        member_ids = tuple(indexed_members[position] for position in range(member_count))
+        if tuple(sorted(set(member_ids))) != member_ids:
+            _fail("population-manifest:member-order")
+        member_digest = _blob64(row["member_digest"], f"population-manifest:{index}:member-digest")
+        expected_member_digest = _digest(
+            POPULATION_MANIFEST_MEMBERS_DOMAIN,
+            _canonical({"member_ids": list(member_ids)}, f"population-manifest:{index}:members-canonical"),
+        )
+        if member_digest != expected_member_digest:
+            _fail("population-manifest:member-digest")
+        parent_id = row["supersedes_manifest_id"]
+        parent_digest_value = row["supersedes_digest"]
+        parent_digest = None if parent_digest_value is None else _blob64(parent_digest_value, f"population-manifest:{index}:parent-digest")
+        if (parent_id is None) != (parent_digest is None):
+            _fail("population-manifest:parent-binding")
+        source_key = (
+            manifest_scope["state_id"], manifest_scope["deployment_id"], manifest_scope["program_id"],
+            manifest_scope["period_id"], manifest_scope["currency"], pack_id, cutoff_ms, source_owner_id,
+        )
+        versions = manifest_keys.setdefault(source_key, {})
+        if version in versions:
+            _fail("population-manifest:version-duplicate")
+        versions[version] = manifest_id
+        if version == 1:
+            if parent_id is not None:
+                _fail("population-manifest:root-parent")
+        else:
+            parent_id = _id(parent_id, f"population-manifest:{index}:parent")
+            parent = manifests.get(parent_id)
+            if parent is None:
+                _fail("population-manifest:parent-missing")
+            parent_version = _integer(parent["manifest_version"], "population-manifest:parent-version", minimum=1, maximum=MAX_ROWS)
+            parent_key = (
+                parent["state_id"], parent["deployment_id"], parent["program_id"], parent["period_id"],
+                parent["currency"], parent["pack_id"], parent["cutoff_ms"], parent["source_owner_id"],
+            )
+            if parent_key != source_key or parent_version + 1 != version or _blob64(parent["manifest_digest"], "population-manifest:parent-manifest-digest") != parent_digest:
+                _fail("population-manifest:parent-binding")
+            if parent_id in children:
+                _fail("population-manifest:fork")
+            children[parent_id] = manifest_id
+            children_by_scope.setdefault(source_key, set()).add(parent_id)
+        body = {
+            "contract": POPULATION_MANIFEST_CONTRACT,
+            "manifest_id": manifest_id,
+            "manifest_version": version,
+            "scope": manifest_scope,
+            "pack_id": pack_id,
+            "cutoff_ms": cutoff_ms,
+            "inclusion_rules": rules,
+            "source_owner_id": source_owner_id,
+            "authority": {
+                "authority_id": row_authority_id,
+                "epoch": row_authority_epoch,
+                "digest": row_authority_digest.hex().upper(),
+            },
+            "approved_by": approved_by,
+            "approval_ref": approval_ref,
+            "source": {"source_id": source_id, "version": source_version, "digest": source_digest.hex().upper()},
+            "member_count": member_count,
+            "member_ids": list(member_ids),
+            "member_digest": member_digest.hex().upper(),
+            "supersedes": None
+            if parent_id is None
+            else {"manifest_id": parent_id, "digest": parent_digest.hex().upper()},
+        }
+        manifest_digest = _blob64(row["manifest_digest"], f"population-manifest:{index}:digest")
+        if manifest_digest != _digest(POPULATION_MANIFEST_DOMAIN, _canonical(body, f"population-manifest:{index}:canonical")):
+            _fail("population-manifest:digest")
+        registered_at = _time(row["registered_at_ms"], f"population-manifest:{index}:registered")
+        members_by_manifest[manifest_id] = member_ids
+
+        event = events_by_manifest.get(manifest_id)
+        if event is None:
+            _fail("population-manifest:event-count")
+        event_sequence = _integer(
+            event["event_sequence"],
+            f"population-manifest:{index}:event-sequence",
+            minimum=1,
+            maximum=MAX_ROWS,
+        )
+        event_sequences[manifest_id] = event_sequence
+        if parent_id is not None:
+            parent_event = events_by_manifest.get(parent_id)
+            if parent_event is None or event_sequence <= _integer(
+                parent_event["event_sequence"],
+                "population-manifest:parent-event-sequence",
+                minimum=1,
+                maximum=MAX_ROWS,
+            ):
+                _fail("population-manifest:event-lineage-order")
+        event_kind = "POPULATION_MANIFEST_REGISTERED" if version == 1 else "POPULATION_MANIFEST_SUPERSEDED"
+        before = 0 if version == 1 else version - 1
+        expected_event_payload = {
+            "contract": POPULATION_MANIFEST_CONTRACT,
+            "manifest_id": manifest_id,
+            "manifest_version": version,
+            "manifest_digest": manifest_digest.hex().upper(),
+            "member_digest": member_digest.hex().upper(),
+            "member_count": member_count,
+            "supersedes_manifest_id": parent_id,
+            "supersedes_digest": None if parent_digest is None else parent_digest.hex().upper(),
+        }
+        payload = _parse_json(event["payload_json"], "population-manifest:event-payload")
+        if (
+            event["kind"] != event_kind
+            or _integer(event["before_revision"], "population-manifest:event-before", maximum=MAX_ROWS) != before
+            or _integer(event["after_revision"], "population-manifest:event-after", minimum=1, maximum=MAX_ROWS) != version
+            or _time(event["committed_at_ms"], "population-manifest:event-committed") != registered_at
+            or payload != expected_event_payload
+        ):
+            _fail("population-manifest:event-binding")
+    if len(manifest_events) != len(manifests) or set(events_by_manifest) != set(manifests):
+        _fail("population-manifest:event-cardinality")
+    expected_heads: dict[tuple[object, ...], tuple[str, Mapping[str, object]]] = {}
+    for source_key, version_map in manifest_keys.items():
+        if sorted(version_map) != list(range(1, max(version_map) + 1)):
+            _fail("population-manifest:version-sequence")
+        leaf_ids = set(version_map.values()) - children_by_scope.get(source_key, set())
+        if len(leaf_ids) != 1:
+            _fail("population-manifest:head-lineage")
+        head_id = next(iter(leaf_ids))
+        expected_heads[source_key] = (head_id, manifests[head_id])
+    actual_heads: dict[tuple[object, ...], Mapping[str, object]] = {}
+    for index, row in enumerate(head_rows):
+        key = (
+            _id(row["state_id"], f"population-head:{index}:state"),
+            _id(row["deployment_id"], f"population-head:{index}:deployment"),
+            _id(row["program_id"], f"population-head:{index}:program"),
+            _id(row["period_id"], f"population-head:{index}:period"),
+            row["currency"],
+            _id(row["pack_id"], f"population-head:{index}:pack"),
+            _time(row["cutoff_ms"], f"population-head:{index}:cutoff"),
+            _id(row["source_owner_id"], f"population-head:{index}:source-owner"),
+        )
+        if key in actual_heads:
+            _fail("population-manifest:head-duplicate")
+        actual_heads[key] = row
+    if set(actual_heads) != set(expected_heads):
+        _fail("population-manifest:head-cardinality")
+    for key, (manifest_id, expected_row) in expected_heads.items():
+        row = actual_heads[key]
+        if (
+            row["manifest_id"] != manifest_id
+            or _integer(row["manifest_version"], "population-manifest:head-version", minimum=1, maximum=MAX_ROWS)
+            != _integer(expected_row["manifest_version"], "population-manifest:expected-head-version", minimum=1, maximum=MAX_ROWS)
+            or _blob64(row["manifest_digest"], "population-manifest:head-digest") != expected_row["manifest_digest"]
+            or _time(row["updated_at_ms"], "population-manifest:head-updated") != expected_row["registered_at_ms"]
+        ):
+            _fail("population-manifest:head-binding")
+
+    bindings: dict[str, Mapping[str, object]] = {}
+    bound_manifests: set[str] = set()
+    for index, row in enumerate(binding_rows):
+        population_id = _id(row["population_id"], f"population-binding:{index}:population")
+        manifest_id = _id(row["manifest_id"], f"population-binding:{index}:manifest")
+        manifest = manifests.get(manifest_id)
+        if population_id in bindings or manifest is None or manifest_id in bound_manifests:
+            _fail("population-manifest:binding-duplicate")
+        if (
+            _integer(row["manifest_version"], "population-binding:version", minimum=1, maximum=MAX_ROWS) != manifest["manifest_version"]
+            or _blob64(row["manifest_digest"], "population-binding:digest") != manifest["manifest_digest"]
+        ):
+            _fail("population-manifest:binding")
+        bindings[population_id] = row
+        bound_manifests.add(manifest_id)
+    if len(bindings) != len(population_rows):
+        _fail("population-manifest:population-binding-cardinality")
+    imports_by_id = {_id(row["population_id"], "population-manifest:import-population"): row for row in population_rows}
+    if set(bindings) != set(imports_by_id):
+        _fail("population-manifest:population-binding-set")
+    items_by_population: dict[str, set[str]] = {}
+    for row in item_rows:
+        population_id = _id(row["population_id"], "population-manifest:item-population")
+        item_id = _id(row["item_id"], "population-manifest:item-id")
+        if population_id not in imports_by_id or item_id in items_by_population.setdefault(population_id, set()):
+            _fail("population-manifest:item-duplicate")
+        items_by_population[population_id].add(item_id)
+    for population_id, binding in bindings.items():
+        manifest_id = str(binding["manifest_id"])
+        manifest = manifests[manifest_id]
+        population = imports_by_id[population_id]
+        if (
+            population["pack_id"] != manifest["pack_id"]
+            or population["cutoff_ms"] != manifest["cutoff_ms"]
+            or _values_json(population["inclusion_rules_json"], "population-manifest:import-rules") != _values_json(manifest["inclusion_rules_json"], "population-manifest:rules")
+            or _integer(population["expected_count"], "population-manifest:expected-count", minimum=1, maximum=MAX_ROWS) != manifest["member_count"]
+        ):
+            _fail("population-manifest:import-binding")
+        actual = items_by_population.get(population_id, set())
+        expected = set(members_by_manifest[manifest_id])
+        if not actual <= expected:
+            _fail("population-manifest:extra-imported-member")
+        if _integer(population["imported_count"], "population-manifest:imported-count", maximum=MAX_ROWS) != len(actual):
+            _fail("population-manifest:imported-count")
+        complete = _flag(population["source_complete"], "population-manifest:source-complete")
+        status = population["status"]
+        if complete == 1 and actual != expected:
+            _fail("population-manifest:source-complete-members")
+        if status in {"VALIDATED", "PUBLISHED"} and (complete != 1 or actual != expected):
+            _fail("population-manifest:validated-members")
+        source_key = (
+            manifest["state_id"], manifest["deployment_id"], manifest["program_id"], manifest["period_id"],
+            manifest["currency"], manifest["pack_id"], manifest["cutoff_ms"], manifest["source_owner_id"],
+        )
+        head = actual_heads.get(source_key)
+        if status == "PUBLISHED" and (head is None or head["manifest_id"] != manifest_id):
+            _fail("population-manifest:published-stale")
+    return {
+        "manifests": manifests,
+        "members_by_manifest": members_by_manifest,
+        "bindings": bindings,
+        "heads": actual_heads,
+        "event_sequences": event_sequences,
+        "superseded_at": {
+            parent_id: event_sequences[child_id]
+            for parent_id, child_id in children.items()
+        },
+    }
+
+
 def _verify_populations(
     connection: sqlite3.Connection,
     meta: dict[str, object],
     packs: dict[str, sqlite3.Row],
+    manifest_state: Mapping[str, object],
 ) -> tuple[dict[str, sqlite3.Row], dict[str, sqlite3.Row]]:
     imports = _bounded_rows(connection, "population_imports")
     items = _bounded_rows(connection, "population_items")
@@ -1123,6 +2331,12 @@ def _verify_populations(
     item_by_id: dict[str, sqlite3.Row] = {}
     scope = meta["scope"]
     assert isinstance(scope, dict)
+    manifest_records = manifest_state["manifests"]
+    manifest_members = manifest_state["members_by_manifest"]
+    manifest_bindings = manifest_state["bindings"]
+    assert isinstance(manifest_records, dict)
+    assert isinstance(manifest_members, dict)
+    assert isinstance(manifest_bindings, dict)
     for row in imports:
         population_id = _id(row["population_id"], "population:id")
         if population_id in populations:
@@ -1161,6 +2375,20 @@ def _verify_populations(
             _fail("population:staged-digest")
         if imported > expected or validated > expected:
             _fail("population:count")
+        if meta["schema_version"] == MANIFEST_SCHEMA_VERSION:
+            binding = manifest_bindings.get(population_id)
+            if binding is None:
+                _fail("population:manifest-binding")
+            manifest_id = str(binding["manifest_id"])
+            manifest = manifest_records.get(manifest_id)
+            if manifest is None:
+                _fail("population:manifest-reference")
+            if (
+                row["pack_id"] != manifest["pack_id"]
+                or row["cutoff_ms"] != manifest["cutoff_ms"]
+                or expected != manifest["member_count"]
+            ):
+                _fail("population:manifest-binding")
         items_by_population[population_id] = []
         _ = scope
     for row in items:
@@ -1186,6 +2414,14 @@ def _verify_populations(
         actual_items = items_by_population.get(population_id, [])
         if len(actual_items) != row["imported_count"]:
             _fail("population:imported-count")
+        if meta["schema_version"] == MANIFEST_SCHEMA_VERSION:
+            binding = manifest_bindings[population_id]
+            expected_members = manifest_members[str(binding["manifest_id"])]
+            actual_members = tuple(sorted(str(item["item_id"]) for item in actual_items))
+            if not set(actual_members) <= set(expected_members):
+                _fail("population:manifest-extra-member")
+            if row["source_complete"] == 1 and actual_members != expected_members:
+                _fail("population:manifest-completeness")
         if row["status"] in {"VALIDATED", "PUBLISHED"}:
             material = b"".join(
                 _digest(
@@ -1275,9 +2511,11 @@ def _verify_obligations(
 
 
 def _verify_population_history(
-    events: list[sqlite3.Row],
+    events: list[Mapping[str, object]],
     populations: dict[str, sqlite3.Row],
     packs: dict[str, sqlite3.Row],
+    manifest_state: Mapping[str, object],
+    schema_version: int,
 ) -> None:
     """Reconstruct each population's lifecycle from ordered history events."""
 
@@ -1292,12 +2530,60 @@ def _verify_population_history(
 
     for population_id, population in populations.items():
         expected = _integer(population["expected_count"], "history:population-expected", minimum=1, maximum=MAX_ROWS)
+        manifest_fields: dict[str, object] = {}
+        if schema_version == MANIFEST_SCHEMA_VERSION:
+            bindings = manifest_state["bindings"]
+            manifests = manifest_state["manifests"]
+            event_sequences = manifest_state["event_sequences"]
+            superseded_at = manifest_state["superseded_at"]
+            assert (
+                isinstance(bindings, dict)
+                and isinstance(manifests, dict)
+                and isinstance(event_sequences, dict)
+                and isinstance(superseded_at, dict)
+            )
+            binding = bindings.get(population_id)
+            if binding is None:
+                _fail("history:population-manifest-binding")
+            manifest_id = str(binding["manifest_id"])
+            manifest = manifests.get(manifest_id)
+            if manifest is None:
+                _fail("history:population-manifest-reference")
+            manifest_event_sequence = event_sequences.get(manifest_id)
+            if type(manifest_event_sequence) is not int:
+                _fail("history:population-manifest-event")
+            superseded_sequence = superseded_at.get(manifest_id)
+            manifest_fields = {
+                "manifest_id": manifest_id,
+                "manifest_version": int(manifest["manifest_version"]),
+                "manifest_digest": _blob64(manifest["manifest_digest"], "history:population-manifest-digest").hex().upper(),
+                "member_digest": _blob64(manifest["member_digest"], "history:population-member-digest").hex().upper(),
+            }
         imported = 0
         source_completed = False
         validated = False
         published = False
         previous_committed_at: int | None = None
         for event in by_population[population_id]:
+            if schema_version == MANIFEST_SCHEMA_VERSION:
+                event_sequence = _integer(
+                    event["event_sequence"],
+                    "history:population-event-sequence",
+                    minimum=1,
+                    maximum=MAX_ROWS,
+                )
+                if event_sequence <= manifest_event_sequence:
+                    _fail("history:population-manifest-order")
+                if (
+                    superseded_sequence is not None
+                    and event_sequence >= _integer(
+                        superseded_sequence,
+                        "history:population-superseded-sequence",
+                        minimum=1,
+                        maximum=MAX_ROWS,
+                    )
+                ):
+                    _fail("history:population-manifest-stale-event")
             committed_at = _time(event["committed_at_ms"], "history:population-committed-at")
             if previous_committed_at is not None and committed_at < previous_committed_at:
                 _fail("history:population-chronology")
@@ -1311,8 +2597,13 @@ def _verify_population_history(
             if kind == "POPULATION_STAGED":
                 if source_completed or validated or published:
                     _fail("history:population-stage-order")
-                if set(payload) != {"population_id", "imported_count", "chunk_count"}:
+                stage_fields = {"population_id", "imported_count", "chunk_count"}
+                if schema_version == MANIFEST_SCHEMA_VERSION:
+                    stage_fields |= set(manifest_fields)
+                if set(payload) != stage_fields:
                     _fail("history:population-stage-payload")
+                if any(payload.get(key) != value for key, value in manifest_fields.items()):
+                    _fail("history:population-stage-manifest")
                 if payload["population_id"] != population_id:
                     _fail("history:population-stage-population")
                 count = _integer(payload["imported_count"], "history:population-stage-imported", maximum=MAX_ROWS)
@@ -1329,8 +2620,13 @@ def _verify_population_history(
                     _fail("history:population-completion-duplicate")
                 if validated or published:
                     _fail("history:population-completion-order")
-                if set(payload) != {"population_id", "imported_count", "expected_count"}:
+                completion_fields = {"population_id", "imported_count", "expected_count"}
+                if schema_version == MANIFEST_SCHEMA_VERSION:
+                    completion_fields |= set(manifest_fields)
+                if set(payload) != completion_fields:
                     _fail("history:population-completion-payload")
+                if any(payload.get(key) != value for key, value in manifest_fields.items()):
+                    _fail("history:population-completion-manifest")
                 if payload["population_id"] != population_id:
                     _fail("history:population-completion-population")
                 completed_imported = _integer(payload["imported_count"], "history:population-completion-imported", maximum=MAX_ROWS)
@@ -1347,8 +2643,13 @@ def _verify_population_history(
                     _fail("history:population-completion-order")
                 if validated or published:
                     _fail("history:population-validation-order")
-                if set(payload) != {"population_id", "validated_count", "validation_digest"}:
+                validation_fields = {"population_id", "validated_count", "validation_digest"}
+                if schema_version == MANIFEST_SCHEMA_VERSION:
+                    validation_fields |= set(manifest_fields)
+                if set(payload) != validation_fields:
                     _fail("history:population-validation-payload")
+                if any(payload.get(key) != value for key, value in manifest_fields.items()):
+                    _fail("history:population-validation-manifest")
                 if payload["population_id"] != population_id:
                     _fail("history:population-validation-population")
                 validated_count = _integer(payload["validated_count"], "history:population-validation-count", minimum=1, maximum=MAX_ROWS)
@@ -1367,8 +2668,13 @@ def _verify_population_history(
                     _fail("history:population-validation-order")
                 if published:
                     _fail("history:population-publication-duplicate")
-                if set(payload) != {"population_id", "item_count", "pack_id", "pack_version", "evaluation_count", "evaluation_binding_digest"}:
+                publication_fields = {"population_id", "item_count", "pack_id", "pack_version", "evaluation_count", "evaluation_binding_digest"}
+                if schema_version == MANIFEST_SCHEMA_VERSION:
+                    publication_fields |= set(manifest_fields)
+                if set(payload) != publication_fields:
                     _fail("history:population-publication-payload")
+                if any(payload.get(key) != value for key, value in manifest_fields.items()):
+                    _fail("history:population-publication-manifest")
                 if payload["population_id"] != population_id:
                     _fail("history:population-publication-population")
                 item_count = _integer(payload["item_count"], "history:population-publication-count", minimum=1, maximum=MAX_ROWS)
@@ -2077,7 +3383,12 @@ def _evaluation_input_snapshot(raw: object, code: str) -> dict[str, object]:
     }
 
 
-def _evaluation_projection_from_input(snapshot: dict[str, object], *, evaluation: sqlite3.Row) -> dict[str, object]:
+def _evaluation_projection_from_input(
+    snapshot: dict[str, object],
+    *,
+    evaluation: sqlite3.Row,
+    action_revisions: dict[str, int],
+) -> dict[str, object]:
     obligation = snapshot["obligation"]
     assert isinstance(obligation, dict)
     evidence = snapshot["evidence"]
@@ -2126,7 +3437,9 @@ def _evaluation_projection_from_input(snapshot: dict[str, object], *, evaluation
         case_status = prior_case
     else:
         case_status = "OPEN"
-    delivery = "NONE" if not actions else str(max(actions, key=lambda row: (int(row["created_at_ms"]), str(row["action_id"])))["status"])
+    delivery = "NONE" if not actions else str(
+        max(actions, key=lambda row: (action_revisions[str(row["action_id"])], str(row["action_id"])))["status"]
+    )
     return {
         "revision": int(evaluation["revision"]),
         "rule_version": int(obligation["rule_version"]),
@@ -2230,15 +3543,23 @@ def _verify_evaluations(
             case = connection.execute("SELECT obligation_id FROM cases WHERE case_id=?", (item["case_id"],)).fetchone()
             if case is None or case["obligation_id"] != obligation_id:
                 _fail("evaluation:input-case")
+        snapshot_action_revisions: dict[str, int] = {}
         for item in snapshot["actions"]:
-            action = connection.execute("SELECT obligation_id,created_at_ms FROM actions WHERE action_id=?", (item["action_id"],)).fetchone()
+            action = connection.execute("SELECT obligation_id,created_at_ms,revision FROM actions WHERE action_id=?", (item["action_id"],)).fetchone()
             if action is None or action["obligation_id"] != obligation_id or int(action["created_at_ms"]) != int(item["created_at_ms"]):
                 _fail("evaluation:input-action")
+            snapshot_action_revisions[str(item["action_id"])] = _integer(
+                action["revision"], "evaluation:input-action-revision"
+            )
         for conflict_id in snapshot["conflicts"]:
             conflict = connection.execute("SELECT obligation_id FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone()
             if conflict is None or conflict["obligation_id"] != obligation_id:
                 _fail("evaluation:input-conflict")
-        input_projection = _evaluation_projection_from_input(snapshot, evaluation=row)
+        input_projection = _evaluation_projection_from_input(
+            snapshot,
+            evaluation=row,
+            action_revisions=snapshot_action_revisions,
+        )
         if evidence_ids != input_projection["evidence_ids"]:
             _fail("evaluation:input-projection:evidence_ids")
         for key in ("revision", "rule_version", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
@@ -2419,7 +3740,9 @@ def _verify_projections(
         cash_satisfied = int(cash >= owed)
         reporting_complete = int(obligation["reporting_complete"])
         action_rows = [row for row in actions.values() if row["obligation_id"] == obligation_id]
-        delivery = "NONE" if not action_rows else str(max(action_rows, key=lambda row: (row["created_at_ms"], row["action_id"]))["status"])
+        delivery = "NONE" if not action_rows else str(
+            max(action_rows, key=lambda row: (row["revision"], row["action_id"]))["status"]
+        )
         case_rows = cases.get(obligation_id, [])
         prior_case = "OPEN" if not case_rows else str(max(case_rows, key=lambda row: row["case_id"])["status"])
         if amount_satisfied and reporting_complete:
@@ -2479,6 +3802,8 @@ def _verify_event_references(
     packs: dict[str, sqlite3.Row],
     populations: dict[str, sqlite3.Row],
     obligations: dict[str, sqlite3.Row],
+    funding_receipt_ids: set[str],
+    manifest_ids: set[str],
 ) -> None:
     for row in events:
         aggregate_type = row["aggregate_type"]
@@ -2487,8 +3812,12 @@ def _verify_event_references(
             _fail("history:pack-reference")
         if aggregate_type == "POPULATION" and aggregate_id not in populations:
             _fail("history:population-reference")
+        if aggregate_type == "POPULATION_MANIFEST" and aggregate_id not in manifest_ids:
+            _fail("history:population-manifest-reference")
         if aggregate_type == "OBLIGATION" and aggregate_id not in obligations:
             _fail("history:obligation-reference")
+        if aggregate_type == "PROGRAM_FUNDING_RECEIPT" and aggregate_id not in funding_receipt_ids:
+            _fail("history:funding-reference")
 
 
 def _package_payload_without_digest(value: Mapping[str, object]) -> dict[str, object]:
@@ -2499,14 +3828,16 @@ def _package_payload_without_digest(value: Mapping[str, object]) -> dict[str, ob
     return payload
 
 
-def continuity_package_digest(payload: Mapping[str, object]) -> str:
+def continuity_package_digest(payload: Mapping[str, object], *, schema_version: int = SCHEMA_VERSION) -> str:
     """Return the independent digest for a package payload without its digest."""
 
     if not isinstance(payload, Mapping):
         _fail("continuity:payload")
     if "package_digest" in payload:
         _fail("continuity:digest-field")
-    return _digest(CONTINUITY_DOMAIN, _canonical(dict(payload), "continuity:digest-input")).hex().upper()
+    if type(schema_version) is not int or schema_version not in CONTINUITY_DOMAIN_BY_VERSION:
+        _fail("continuity:digest-version")
+    return _digest(CONTINUITY_DOMAIN_BY_VERSION[schema_version], _canonical(dict(payload), "continuity:digest-input")).hex().upper()
 
 
 def _package_import_value(value: object, code: str) -> object:
@@ -2527,11 +3858,11 @@ def _package_import_value(value: object, code: str) -> object:
     _fail(f"{code}:value")
 
 
-def _verify_package_rows(raw_rows: object, table: str) -> list[dict[str, object]]:
+def _verify_package_rows(raw_rows: object, table: str, schema_version: int) -> list[dict[str, object]]:
     if not isinstance(raw_rows, list) or len(raw_rows) > MAX_ROWS:
         _fail(f"continuity:rows:{table}")
-    definition = _TABLE_DEFS[table]
-    columns = TABLE_COLUMNS[table]
+    definition = _TABLE_DEFS_BY_VERSION[schema_version][table]
+    columns = TABLE_COLUMNS_BY_VERSION[schema_version][table]
     decoded_rows: list[dict[str, object]] = []
     for row_index, raw_row in enumerate(raw_rows):
         if type(raw_row) is not dict or set(raw_row) != set(columns):
@@ -2551,17 +3882,17 @@ def _verify_package_rows(raw_rows: object, table: str) -> list[dict[str, object]
     return decoded_rows
 
 
-def _snapshot_row_key(row: Mapping[str, object], table: str) -> tuple[object, ...]:
-    primary_columns = [column for column, _declared_type, primary in _TABLE_DEFS[table] if primary]
+def _snapshot_row_key(row: Mapping[str, object], table: str, schema_version: int) -> tuple[object, ...]:
+    primary_columns = [column for column, _declared_type, primary in _TABLE_DEFS_BY_VERSION[schema_version][table] if primary]
     return tuple(row[column] for column in primary_columns)
 
 
-def _database_snapshot_rows(connection: sqlite3.Connection) -> dict[str, list[dict[str, object]]]:
+def _database_snapshot_rows(connection: sqlite3.Connection, schema_version: int) -> dict[str, list[dict[str, object]]]:
     snapshot: dict[str, list[dict[str, object]]] = {}
-    for table in TABLES:
+    for table in TABLES_BY_VERSION[schema_version]:
         rows = _bounded_rows(connection, table)
         snapshot[table] = [
-            {column: row[column] for column in TABLE_COLUMNS[table]}
+            {column: row[column] for column in TABLE_COLUMNS_BY_VERSION[schema_version][table]}
             for row in rows
         ]
     return snapshot
@@ -2570,13 +3901,14 @@ def _database_snapshot_rows(connection: sqlite3.Connection) -> dict[str, list[di
 def _verify_current_snapshot(
     connection: sqlite3.Connection,
     package_rows: dict[str, list[dict[str, object]]],
+    schema_version: int,
 ) -> None:
     """Bind a current-snapshot package to every allowlisted row in this database."""
 
-    database_rows = _database_snapshot_rows(connection)
-    for table in TABLES:
-        package_sorted = sorted(package_rows[table], key=lambda row: _snapshot_row_key(row, table))
-        database_sorted = sorted(database_rows[table], key=lambda row: _snapshot_row_key(row, table))
+    database_rows = _database_snapshot_rows(connection, schema_version)
+    for table in TABLES_BY_VERSION[schema_version]:
+        package_sorted = sorted(package_rows[table], key=lambda row: _snapshot_row_key(row, table, schema_version))
+        database_sorted = sorted(database_rows[table], key=lambda row: _snapshot_row_key(row, table, schema_version))
         if package_sorted != database_sorted:
             _fail("continuity:current-snapshot-mismatch")
 
@@ -2610,6 +3942,7 @@ def verify_continuity_package(
     *,
     expected_config: object | None = None,
     expected_scope: object | None = None,
+    expected_schema_version: int | None = None,
     expected_authority: object | None = None,
     expected_sequence: int | None = None,
     expected_history_head: bytes | str | None = None,
@@ -2642,8 +3975,15 @@ def verify_continuity_package(
     }
     if set(value) != required:
         _fail("continuity:keys")
-    if value["schema"] != CONTINUITY_SCHEMA or value["version"] != 5:
+    package_version = value["version"]
+    if type(package_version) is not int or package_version not in TABLES_BY_VERSION:
         _fail("continuity:schema")
+    if value["schema"] != CONTINUITY_SCHEMA_BY_VERSION[package_version]:
+        _fail("continuity:schema")
+    if expected_schema_version is not None and package_version != _integer(expected_schema_version, "continuity:expected-schema-version", minimum=5, maximum=7):
+        _fail("continuity:schema-version-binding")
+    if identity["schema_version"] is not None and identity["schema_version"] != package_version:
+        _fail("continuity:schema-version-binding")
     scope = value["scope"]
     if not isinstance(scope, dict) or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
         _fail("continuity:scope")
@@ -2679,17 +4019,17 @@ def verify_continuity_package(
     if expected_continuity_epoch is not None and epoch != _integer(expected_continuity_epoch, "continuity:expected-epoch", minimum=1, maximum=MAX_CENTS):
         _fail("continuity:epoch-binding")
     tables = value["tables"]
-    if not isinstance(tables, dict) or set(tables) != TABLES:
+    if not isinstance(tables, dict) or set(tables) != TABLES_BY_VERSION[package_version]:
         _fail("continuity:tables")
     counts: dict[str, int] = {}
     decoded_rows: dict[str, list[dict[str, object]]] = {}
-    for table in TABLES:
-        decoded_rows[table] = _verify_package_rows(tables[table], table)
+    for table in TABLES_BY_VERSION[package_version]:
+        decoded_rows[table] = _verify_package_rows(tables[table], table, package_version)
         counts[table] = len(decoded_rows[table])
     if counts["financial_meta"] != 1:
         _fail("continuity:meta-cardinality")
     meta = decoded_rows["financial_meta"][0]
-    if meta["id"] != 1 or meta["schema_version"] != SCHEMA_VERSION or meta["schema"] != SCHEMA:
+    if meta["id"] != 1 or meta["schema_version"] != package_version or meta["schema"] != SCHEMA_BY_VERSION[package_version]:
         _fail("continuity:meta-schema")
     for key, expected in scope.items():
         if meta[key] != expected:
@@ -2712,11 +4052,15 @@ def verify_continuity_package(
         _fail("continuity:meta-epoch")
     if counts["financial_identity"] != 1:
         _fail("continuity:identity-cardinality")
-    identity_contract = _identity_record(decoded_rows["financial_identity"][0], "continuity:identity")
+    identity_contract = _identity_record(
+        decoded_rows["financial_identity"][0],
+        "continuity:identity",
+        schema_version=package_version,
+    )
     if identity_contract["bound_mode"] != mode or identity_contract["bound_owner_id"] != meta["owner_id"]:
         _fail("continuity:identity-binding")
     if identity_contract["provenance"] == "ROOT":
-        expected_genesis = _digest(GENESIS_DOMAIN, _canonical(scope, "continuity:scope"), authority_digest, identity_contract["identity_digest"])
+        expected_genesis = _digest(GENESIS_DOMAIN_BY_VERSION[package_version], _canonical(scope, "continuity:scope"), authority_digest, identity_contract["identity_digest"])
         if identity_contract["source_package_digest"] != ZERO_DIGEST or identity_contract["anchor_sequence"] != 0 or identity_contract["anchor_head"] != expected_genesis or identity_contract["genesis_head"] != expected_genesis:
             _fail("continuity:identity-genesis")
     else:
@@ -2729,12 +4073,52 @@ def verify_continuity_package(
             if anchor_row is None or anchor_row["head"] != identity_contract["anchor_head"]:
                 _fail("continuity:identity-history-anchor")
     payload = _package_payload_without_digest(value)
-    expected_digest = continuity_package_digest(payload)
+    expected_digest = continuity_package_digest(payload, schema_version=package_version)
     package_digest = value["package_digest"]
     if type(package_digest) is not str or package_digest != package_digest.upper() or _HEX128.fullmatch(package_digest) is None or package_digest != expected_digest:
         _fail("continuity:package-digest")
+    _verify_correction_followup_records(
+        decoded_rows["financial_events"],
+        evaluations={str(row["evaluation_id"]): row for row in decoded_rows["evaluations"]},
+        determinations={str(row["determination_id"]): row for row in decoded_rows["determinations"]},
+        actions={str(row["action_id"]): row for row in decoded_rows["actions"]},
+        cases={str(row["case_id"]): row for row in decoded_rows["cases"]},
+        packs={str(row["pack_id"]): row for row in decoded_rows["control_packs"]},
+    )
+    if package_version == MANIFEST_SCHEMA_VERSION:
+        package_packs = {
+            _id(row["pack_id"], "continuity:manifest-pack-id"): row
+            for row in decoded_rows["control_packs"]
+        }
+        manifest_state = _verify_population_manifest_rows(
+            schema_version=package_version,
+            manifest_rows=decoded_rows["population_manifests"],
+            member_rows=decoded_rows["population_manifest_members"],
+            head_rows=decoded_rows["population_manifest_heads"],
+            binding_rows=decoded_rows["population_manifest_bindings"],
+            population_rows=decoded_rows["population_imports"],
+            item_rows=decoded_rows["population_items"],
+            event_rows=decoded_rows["financial_events"],
+            packs=package_packs,
+            scope=scope,
+            authority_id=authority_id,
+            authority_epoch=authority_epoch,
+            authority_digest=authority_digest,
+            actors=identity.get("actors"),
+        )
+        package_populations = {
+            str(row["population_id"]): row for row in decoded_rows["population_imports"]
+        }
+        _verify_population_history(
+            decoded_rows["financial_events"],
+            package_populations,
+            package_packs,
+            manifest_state,
+            package_version,
+        )
     result: dict[str, object] = {
-        "schema": CONTINUITY_SCHEMA,
+        "schema": CONTINUITY_SCHEMA_BY_VERSION[package_version],
+        "version": package_version,
         "scope": dict(scope),
         "authority": {"authority_id": authority_id, "epoch": authority_epoch, "digest": authority_digest.hex().upper()},
         "continuity_epoch": epoch,
@@ -2743,6 +4127,14 @@ def verify_continuity_package(
         "table_counts": counts,
         "package_digest": package_digest,
     }
+    if package_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
+        funding, _receipt_ids = _verify_program_funding_rows(
+            decoded_rows["program_funding_receipts"],
+            decoded_rows["program_funding_projection"],
+            decoded_rows["financial_events"],
+            scope,
+        )
+        result["program_funding"] = funding
     if _include_rows:
         result["_decoded_rows"] = decoded_rows
     return result
@@ -2755,12 +4147,31 @@ def _verify_connection(
     current_snapshot_package: bytes | None,
     restore_source_package: bytes | None,
 ) -> dict[str, object]:
-    _verify_schema(connection)
-    meta = _verify_meta(connection, identity)
-    events = _verify_events(connection, meta)
+    schema_version = _verify_schema(connection)
+    meta = _verify_meta(connection, identity, schema_version)
+    events = _verify_events(connection, meta, schema_version)
     packs = _verify_packs(connection, meta)
-    populations, items = _verify_populations(connection, meta, packs)
-    _verify_population_history(events, populations, packs)
+    if schema_version == MANIFEST_SCHEMA_VERSION:
+        manifest_state = _verify_population_manifest_rows(
+            schema_version=schema_version,
+            manifest_rows=[dict(row) for row in _bounded_rows(connection, "population_manifests")],
+            member_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_members")],
+            head_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_heads")],
+            binding_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_bindings")],
+            population_rows=[dict(row) for row in _bounded_rows(connection, "population_imports")],
+            item_rows=[dict(row) for row in _bounded_rows(connection, "population_items")],
+            event_rows=[dict(row) for row in events],
+            packs={pack_id: dict(row) for pack_id, row in packs.items()},
+            scope=meta["scope"],
+            authority_id=str(meta["authority_id"]),
+            authority_epoch=int(meta["authority_epoch"]),
+            authority_digest=bytes(meta["authority_digest"]),
+            actors=identity.get("actors"),
+        )
+    else:
+        manifest_state = {"manifests": {}, "members_by_manifest": {}, "bindings": {}, "heads": {}}
+    populations, items = _verify_populations(connection, meta, packs, manifest_state)
+    _verify_population_history([dict(row) for row in events], populations, packs, manifest_state, schema_version)
     obligations = _verify_obligations(connection, meta, populations, items, packs)
     evidence = _verify_evidence(connection, items, obligations)
     payments = _verify_payments(connection, obligations, items, evidence)
@@ -2771,7 +4182,13 @@ def _verify_connection(
     determinations = _verify_determinations(connection, meta, obligations, populations, packs, claims, evidence, evaluations)
     actions = _verify_actions(connection, meta, obligations, claims, determinations)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
-    _verify_event_references(events, packs, populations, obligations)
+    funding: dict[str, object] | None = None
+    funding_receipt_ids: set[str] = set()
+    if schema_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
+        funding, funding_receipt_ids = _verify_program_funding(connection, meta, events)
+    manifest_records = manifest_state["manifests"]
+    assert isinstance(manifest_records, dict)
+    _verify_event_references(events, packs, populations, obligations, funding_receipt_ids, set(manifest_records))
     projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, cases, determinations, actions, conflicts, evaluations)
     package_result: dict[str, object] | None = None
     if current_snapshot_package is not None and restore_source_package is not None:
@@ -2780,6 +4197,7 @@ def _verify_connection(
         package_result = verify_continuity_package(
             current_snapshot_package,
             expected_scope=meta["scope"],
+            expected_schema_version=schema_version,
             expected_authority={
                 "authority_id": meta["authority_id"],
                 "epoch": meta["authority_epoch"],
@@ -2792,12 +4210,13 @@ def _verify_connection(
         )
         package_rows = package_result.pop("_decoded_rows")
         assert isinstance(package_rows, dict)
-        _verify_current_snapshot(connection, package_rows)
+        _verify_current_snapshot(connection, package_rows, schema_version)
         package_result["role"] = "current_snapshot"
     elif restore_source_package is not None:
         package_result = verify_continuity_package(
             restore_source_package,
             expected_scope=meta["scope"],
+            expected_schema_version=schema_version,
             expected_authority={
                 "authority_id": meta["authority_id"],
                 "epoch": meta["authority_epoch"],
@@ -2810,9 +4229,18 @@ def _verify_connection(
         assert isinstance(package_rows, dict)
         _verify_restore_source_binding(meta, package_result, package_rows)
         package_result["role"] = "restore_source"
-    return {
-        "schema": SCHEMA,
-        "schema_version": SCHEMA_VERSION,
+    _verify_correction_followup_records(
+        events,
+        evaluations={str(row["evaluation_id"]): dict(row) for row in _bounded_rows(connection, "evaluations")},
+        determinations={str(row["determination_id"]): dict(row) for row in _bounded_rows(connection, "determinations")},
+        actions={str(row["action_id"]): dict(row) for row in _bounded_rows(connection, "actions")},
+        cases={str(row["case_id"]): dict(row) for row in _bounded_rows(connection, "cases")},
+        packs={str(row["pack_id"]): dict(row) for row in _bounded_rows(connection, "control_packs")},
+    )
+    _verify_continuity_admission(connection, schema_version, meta)
+    result = {
+        "schema": SCHEMA_BY_VERSION[schema_version],
+        "schema_version": schema_version,
         "scope": dict(meta["scope"]),
         "authority": {
             "authority_id": meta["authority_id"],
@@ -2842,6 +4270,9 @@ def _verify_connection(
         "obligations": projections,
         "continuity": package_result,
     }
+    if funding is not None:
+        result["program_funding"] = funding
+    return result
 
 
 def verify_database(
@@ -2926,6 +4357,561 @@ def verify_database_connection(
         raise
     except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
         _fail("database:malformed")
+
+
+def verify_decision_package(
+    path: str | Path,
+    item_id: str,
+    package: object,
+    *,
+    expected_config: object | None = None,
+    expected_scope: object | None = None,
+    expected_authority: object | None = None,
+    expected_mode: str | None = None,
+    expected_owner_id: str | None = None,
+) -> dict[str, object]:
+    """Reconstruct and verify an owner decision package from durable rows.
+
+    This checker does not import or call the financial owner. It first verifies
+    the complete owner database, then rebuilds the package's receipt, pages,
+    links, and conclusions from the same read-only SQLite snapshot.
+    """
+
+    _id(item_id, "decision-package:item")
+    package = _snapshot_decision_package_input(package)
+    connection = _open_readonly(path)
+    try:
+        try:
+            connection.execute("BEGIN")
+            verified = verify_database_connection(
+                connection,
+                expected_config=expected_config,
+                expected_scope=expected_scope,
+                expected_authority=expected_authority,
+                expected_mode=expected_mode,
+                expected_owner_id=expected_owner_id,
+            )
+            scope = dict(verified["scope"])
+            obligations = connection.execute(
+                "SELECT * FROM obligations WHERE item_id=? ORDER BY obligation_id",
+                (item_id,),
+            ).fetchall()
+            if len(obligations) != 1:
+                _fail("decision-package:obligation")
+            obligation = obligations[0]
+            obligation_id = str(obligation["obligation_id"])
+            expected_obligation = {
+                "obligation_id": obligation_id,
+                "item_id": str(obligation["item_id"]),
+                "population_id": str(obligation["population_id"]),
+                "period_id": str(obligation["period_id"]),
+                "currency": str(obligation["currency"]),
+                "revision": int(obligation["revision"]),
+                "owed_cents": int(obligation["owed_cents"]),
+                "claimed_adjustment_cents": int(obligation["claimed_adjustment_cents"]),
+                "lawful_adjustment_cents": int(obligation["lawful_adjustment_cents"]),
+                "received_cash_cents": int(obligation["received_cash_cents"]),
+                "shortfall_cents": int(obligation["shortfall_cents"]),
+                "overage_cents": int(obligation["overage_cents"]),
+                "cash_satisfied": bool(obligation["cash_satisfied"]),
+                "amount_satisfied": bool(obligation["amount_satisfied"]),
+                "timely": bool(obligation["timely"]),
+                "reporting_complete": bool(obligation["reporting_complete"]),
+                "verification_status": str(obligation["verification_status"]),
+                "case_status": str(obligation["case_status"]),
+                "delivery_status": str(obligation["delivery_status"]),
+                "current_evaluation_id": None if obligation["current_evaluation_id"] is None else str(obligation["current_evaluation_id"]),
+                "due_at_ms": int(obligation["due_at_ms"]),
+            }
+            schema_version = int(verified["schema_version"])
+            population_binding: dict[str, object] | None = None
+            if schema_version == 7:
+                population_id = _id(obligation["population_id"], "decision-package:population-id")
+                population_row = connection.execute(
+                    """
+                    SELECT p.status,p.source_complete,p.expected_count,p.imported_count,p.validated_count,
+                           b.manifest_id,b.manifest_version AS binding_version,
+                           b.manifest_digest AS binding_digest,
+                           m.manifest_version AS manifest_version,m.manifest_digest,
+                           m.member_digest,m.member_count
+                    FROM population_imports p
+                    JOIN population_manifest_bindings b USING(population_id)
+                    JOIN population_manifests m USING(manifest_id)
+                    JOIN population_items i ON i.population_id=p.population_id
+                    WHERE p.population_id=? AND i.item_id=?
+                    """,
+                    (population_id, str(obligation["item_id"])),
+                ).fetchone()
+                if population_row is None:
+                    _fail("decision-package:population-binding")
+                expected_count = _integer(population_row["expected_count"], "decision-package:population-expected", minimum=1, maximum=MAX_ROWS)
+                imported_count = _integer(population_row["imported_count"], "decision-package:population-imported", maximum=MAX_ROWS)
+                validated_count = _integer(population_row["validated_count"], "decision-package:population-validated", maximum=MAX_ROWS)
+                if (
+                    population_row["status"] != "PUBLISHED"
+                    or _flag(population_row["source_complete"], "decision-package:population-source-complete") != 1
+                    or imported_count != expected_count
+                    or validated_count != expected_count
+                ):
+                    _fail("decision-package:population-incomplete")
+                manifest_id = _id(population_row["manifest_id"], "decision-package:manifest-id")
+                manifest_version = _integer(population_row["manifest_version"], "decision-package:manifest-version", minimum=1, maximum=MAX_ROWS)
+                if _integer(population_row["binding_version"], "decision-package:binding-version", minimum=1, maximum=MAX_ROWS) != manifest_version:
+                    _fail("decision-package:population-binding")
+                manifest_digest = _blob64(population_row["manifest_digest"], "decision-package:manifest-digest")
+                if _blob64(population_row["binding_digest"], "decision-package:binding-digest") != manifest_digest:
+                    _fail("decision-package:population-binding")
+                member_digest = _blob64(population_row["member_digest"], "decision-package:member-digest")
+                member_count = _integer(population_row["member_count"], "decision-package:member-count", minimum=1, maximum=MAX_ROWS)
+                if member_count != expected_count:
+                    _fail("decision-package:population-binding")
+                imported_members = tuple(
+                    _id(row["item_id"], "decision-package:population-member")
+                    for row in connection.execute(
+                        "SELECT item_id FROM population_items WHERE population_id=? ORDER BY item_id",
+                        (population_id,),
+                    )
+                )
+                manifest_members = tuple(
+                    _id(row["member_id"], "decision-package:manifest-member")
+                    for row in connection.execute(
+                        "SELECT member_id FROM population_manifest_members WHERE manifest_id=? ORDER BY position",
+                        (manifest_id,),
+                    )
+                )
+                if (
+                    imported_members != manifest_members
+                    or len(imported_members) != member_count
+                    or str(obligation["item_id"]) not in imported_members
+                ):
+                    _fail("decision-package:population-membership")
+                population_binding = {
+                    "population_id": population_id,
+                    "status": "PUBLISHED",
+                    "completeness": "EXACT",
+                    "source_complete": True,
+                    "manifest_id": manifest_id,
+                    "manifest_version": manifest_version,
+                    "manifest_digest": manifest_digest.hex().upper(),
+                    "member_id": str(obligation["item_id"]),
+                    "member_count": member_count,
+                    "member_digest": member_digest.hex().upper(),
+                }
+            if obligation["current_evaluation_id"] is None:
+                _fail("decision-package:evaluation")
+            evaluation = connection.execute(
+                "SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?",
+                (obligation["current_evaluation_id"], obligation_id),
+            ).fetchone()
+            if evaluation is None:
+                _fail("decision-package:evaluation")
+            evidence_ids = _evidence_ids_json(evaluation["evidence_ids_json"], "decision-package:evidence")
+            evidence_bindings = _evaluation_bindings_json(evaluation["evidence_bindings_json"], "decision-package:bindings")
+            evaluation_scope = _parse_json(evaluation["scope_json"], "decision-package:scope")
+            if not isinstance(evaluation_scope, dict):
+                _fail("decision-package:scope")
+            input_digest = _blob64(evaluation["input_snapshot_digest"], "decision-package:input-digest")
+            pack_row = connection.execute(
+                """
+                SELECT cp.* FROM control_packs cp
+                JOIN population_imports pi ON pi.pack_id=cp.pack_id
+                WHERE pi.population_id=?
+                """,
+                (obligation["population_id"],),
+            ).fetchone()
+            if pack_row is None:
+                _fail("decision-package:control-pack")
+            authority_digest = _blob64(evaluation["authority_digest"], "decision-package:authority-digest")
+            expected_receipt_body = _evaluation_receipt_body(
+                row=evaluation,
+                evidence_ids=evidence_ids,
+                evidence_bindings=evidence_bindings,
+                scope=evaluation_scope,
+                control_pack_id=str(pack_row["pack_id"]),
+                control_pack_version=int(pack_row["version"]),
+                control_pack_digest=_blob64(pack_row["pack_digest"], "decision-package:pack-digest"),
+                authority_epoch=int(evaluation["authority_epoch"]),
+                authority_digest=authority_digest,
+                input_snapshot_digest=input_digest,
+            )
+            expected_receipt = {
+                **expected_receipt_body,
+                "receipt_digest": _blob64(evaluation["receipt_digest"], "decision-package:receipt-digest").hex().upper(),
+                "evaluation_result_digest": _blob64(evaluation["result_digest"], "decision-package:result-digest").hex().upper(),
+            }
+
+            references = package.get("references")
+            if type(references) is not dict or type(references.get("evidence")) is not dict:
+                _fail("decision-package:references")
+            page_limit = references["evidence"].get("limit")
+            page_offset = references["evidence"].get("offset")
+            if type(page_limit) is not int or not 1 <= page_limit <= 200 or type(page_offset) is not int or not 0 <= page_offset <= MAX_ROWS:
+                _fail("decision-package:page-bounds")
+
+            def build_page(
+                name: str,
+                select_sql: str,
+                count_sql: str,
+                args: tuple[object, ...],
+                project: object,
+            ) -> dict[str, object]:
+                total = int(connection.execute(count_sql, args).fetchone()[0])
+                rows = connection.execute(select_sql + " LIMIT ? OFFSET ?", (*args, page_limit, page_offset)).fetchall()
+                items = [project(row) for row in rows]  # type: ignore[operator]
+                next_offset = page_offset + len(items) if page_offset + len(items) < total else None
+                result = {
+                    "offset": page_offset,
+                    "limit": page_limit,
+                    "count": len(items),
+                    "total": total,
+                    "next_offset": next_offset,
+                    "items": items,
+                }
+                actual = references.get(name)
+                if _canonical(actual, f"decision-package:{name}") != _canonical(result, f"decision-package:{name}:expected"):
+                    _fail(f"decision-package:{name}")
+                return result
+
+            def project_evidence(row: sqlite3.Row) -> dict[str, object]:
+                return {
+                    "evidence_id": str(row["evidence_id"]),
+                    "item_id": str(row["item_id"]),
+                    "kind": str(row["kind"]),
+                    "common_origin_id": str(row["common_origin_id"]),
+                    "source_id": str(row["source_id"]),
+                    "source_version": str(row["source_version"]),
+                    "local_ref": str(row["local_ref"]),
+                    "applicable_at_ms": int(row["applicable_at_ms"]),
+                    "event_at_ms": int(row["event_at_ms"]),
+                    "received_at_ms": int(row["received_at_ms"]),
+                    "amount_cents": None if row["amount_cents"] is None else int(row["amount_cents"]),
+                    "reversal_of": None if row["reversal_of"] is None else str(row["reversal_of"]),
+                    "supersedes": None if row["supersedes"] is None else str(row["supersedes"]),
+                    "record_digest": _blob64(row["record_digest"], "decision-package:evidence-record").hex().upper(),
+                    "obligation_id": obligation_id,
+                }
+
+            def project_case(row: sqlite3.Row) -> dict[str, object]:
+                conditions = _parse_json(row["completion_conditions_json"], "decision-package:case-conditions")
+                if not isinstance(conditions, dict):
+                    _fail("decision-package:case-conditions")
+                return {
+                    "case_id": str(row["case_id"]),
+                    "obligation_id": obligation_id,
+                    "reason": str(row["reason"]),
+                    "contractual_accountability": str(row["contractual_accountability"]),
+                    "next_action_owner": str(row["next_action_owner"]),
+                    "due_at_ms": int(row["due_at_ms"]),
+                    "completion_conditions": {key: bool(conditions[key]) for key in sorted(conditions)},
+                    "status": str(row["status"]),
+                    "updated_at_ms": int(row["updated_at_ms"]),
+                }
+
+            def project_payment(row: sqlite3.Row) -> dict[str, object]:
+                return {
+                    "payment_id": str(row["payment_id"]),
+                    "obligation_id": obligation_id,
+                    "evidence_id": str(row["evidence_id"]),
+                    "common_origin_id": str(row["common_origin_id"]),
+                    "amount_cents": int(row["amount_cents"]),
+                    "event_at_ms": int(row["event_at_ms"]),
+                    "active": bool(row["active"]),
+                    "reversed_by_evidence_id": None if row["reversed_by_evidence_id"] is None else str(row["reversed_by_evidence_id"]),
+                }
+
+            def project_claim(row: sqlite3.Row) -> dict[str, object]:
+                return {
+                    "claim_id": str(row["claim_id"]),
+                    "obligation_id": obligation_id,
+                    "evidence_id": str(row["evidence_id"]),
+                    "amount_cents": int(row["amount_cents"]),
+                    "owner_role": str(row["owner_role"]),
+                    "deadline_ms": int(row["deadline_ms"]),
+                    "status": str(row["status"]),
+                    "created_at_ms": int(row["created_at_ms"]),
+                    "updated_at_ms": int(row["updated_at_ms"]),
+                }
+
+            def project_determination(row: sqlite3.Row) -> dict[str, object]:
+                supporting = _evaluation_bindings_json(row["supporting_evidence_json"], "decision-package:determination-evidence")
+                return {
+                    "determination_id": str(row["determination_id"]),
+                    "obligation_id": obligation_id,
+                    "claim_id": None if row["claim_id"] is None else str(row["claim_id"]),
+                    "actor_id": str(row["actor_id"]),
+                    "actor_role": str(row["actor_role"]),
+                    "authority": {
+                        "authority_id": str(row["authority_id"]),
+                        "epoch": int(row["authority_epoch"]),
+                        "digest": _blob64(row["authority_digest"], "decision-package:determination-authority").hex().upper(),
+                    },
+                    "decision": str(row["decision"]),
+                    "amount_cents": int(row["amount_cents"]),
+                    "supporting_evidence": supporting,
+                    "expected_revision": int(row["expected_revision"]),
+                    "resulting_revision": int(row["resulting_revision"]),
+                    "decided_at_ms": int(row["decided_at_ms"]),
+                    "determination_digest": _blob64(row["determination_digest"], "decision-package:determination-digest").hex().upper(),
+                    "input_evaluation_id": str(row["input_evaluation_id"]),
+                    "input_evaluation_result_digest": _blob64(row["input_evaluation_result_digest"], "decision-package:determination-evaluation").hex().upper(),
+                }
+
+            action_fields = (
+                "action", "action_id", "obligation_id", "determination_id", "kind", "claim_id",
+                "amount_cents", "currency", "revision", "input_evaluation_id",
+                "input_evaluation_result_digest", "dispatch",
+            )
+
+            def project_action(row: sqlite3.Row) -> dict[str, object]:
+                payload = _parse_json(row["payload_json"], "decision-package:action-payload")
+                if not isinstance(payload, dict):
+                    _fail("decision-package:action-payload")
+                return {
+                    "action_id": str(row["action_id"]),
+                    "obligation_id": obligation_id,
+                    "determination_id": str(row["determination_id"]),
+                    "kind": str(row["kind"]),
+                    "status": str(row["status"]),
+                    "revision": int(row["revision"]),
+                    "payload_digest": _blob64(row["payload_digest"], "decision-package:action-digest").hex().upper(),
+                    "payload_fields": {key: payload[key] for key in action_fields if key in payload},
+                    "created_at_ms": int(row["created_at_ms"]),
+                    "acknowledgment": {
+                        "status": str(row["outbox_status"]),
+                        "reference": None if row["acknowledgment_ref"] is None else str(row["acknowledgment_ref"]),
+                        "attempt": int(row["attempt"]),
+                        "updated_at_ms": int(row["outbox_updated_at_ms"]),
+                        "cash_effect_cents": 0,
+                    },
+                }
+
+            def project_conflict(row: sqlite3.Row) -> dict[str, object]:
+                return {
+                    "conflict_id": str(row["conflict_id"]),
+                    "obligation_id": obligation_id,
+                    "common_origin_id": str(row["common_origin_id"]),
+                    "existing_payment_id": None if row["existing_payment_id"] is None else str(row["existing_payment_id"]),
+                    "candidate_evidence_id": str(row["candidate_evidence_id"]),
+                    "existing_amount_cents": None if row["existing_amount_cents"] is None else int(row["existing_amount_cents"]),
+                    "candidate_amount_cents": None if row["candidate_amount_cents"] is None else int(row["candidate_amount_cents"]),
+                    "reason": str(row["reason"]),
+                    "visible_at_ms": int(row["visible_at_ms"]),
+                }
+
+            case_page = build_page("cases", "SELECT * FROM cases WHERE obligation_id=? ORDER BY case_id", "SELECT COUNT(*) FROM cases WHERE obligation_id=?", (obligation_id,), project_case)
+            evidence_select = "SELECT evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,amount_cents,reversal_of,supersedes,record_digest FROM evidence WHERE item_id=? ORDER BY evidence_id"
+            evidence_page = build_page("evidence", evidence_select, "SELECT COUNT(*) FROM evidence WHERE item_id=?", (item_id,), project_evidence)
+            payment_page = build_page("payments", "SELECT * FROM payments WHERE obligation_id=? ORDER BY payment_id", "SELECT COUNT(*) FROM payments WHERE obligation_id=?", (obligation_id,), project_payment)
+            claim_page = build_page("claims", "SELECT * FROM claimed_adjustments WHERE obligation_id=? ORDER BY claim_id", "SELECT COUNT(*) FROM claimed_adjustments WHERE obligation_id=?", (obligation_id,), project_claim)
+            determination_page = build_page("determinations", "SELECT * FROM determinations WHERE obligation_id=? ORDER BY determination_id", "SELECT COUNT(*) FROM determinations WHERE obligation_id=?", (obligation_id,), project_determination)
+            action_base = "SELECT a.*,o.status AS outbox_status,o.attempt,o.acknowledgment_ref,o.updated_at_ms AS outbox_updated_at_ms FROM actions a JOIN action_outbox o ON o.action_id=a.action_id WHERE a.obligation_id=?"
+            action_page = build_page("actions", action_base + " ORDER BY a.action_id", "SELECT COUNT(*) FROM actions WHERE obligation_id=?", (obligation_id,), project_action)
+            conflict_page = build_page("conflicts", "SELECT * FROM financial_conflicts WHERE obligation_id=? ORDER BY conflict_id", "SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?", (obligation_id,), project_conflict)
+            report_select = "SELECT evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,amount_cents,reversal_of,supersedes,record_digest FROM evidence WHERE item_id=? AND kind IN ('REPORT','REPORT_CORRECTION') ORDER BY evidence_id"
+            reporting_page = build_page("reporting_evidence", report_select, "SELECT COUNT(*) FROM evidence WHERE item_id=? AND kind IN ('REPORT','REPORT_CORRECTION')", (item_id,), project_evidence)
+
+            case_row = connection.execute("SELECT * FROM cases WHERE obligation_id=? ORDER BY case_id DESC LIMIT 1", (obligation_id,)).fetchone()
+            current_case = None if case_row is None else project_case(case_row)
+            action_row = connection.execute(action_base + " ORDER BY a.revision DESC,a.action_id DESC LIMIT 1", (obligation_id,)).fetchone()
+            current_action = None if action_row is None else project_action(action_row)
+            determination_row = connection.execute("SELECT * FROM determinations WHERE obligation_id=? ORDER BY resulting_revision DESC,determination_id DESC LIMIT 1", (obligation_id,)).fetchone()
+            current_determination = None if determination_row is None else project_determination(determination_row)
+
+            pack_scope = {"state_id": str(pack_row["state_id"]), "deployment_id": str(pack_row["deployment_id"]), "program_id": str(pack_row["program_id"]), "period_id": str(pack_row["period_id"])}
+            source_refs = _parse_json(pack_row["source_refs_json"], "decision-package:pack-source-refs")
+            authorized_roles = _parse_json(pack_row["authorized_roles_json"], "decision-package:pack-roles")
+            if not isinstance(source_refs, dict) or set(source_refs) != {"values"} or not isinstance(authorized_roles, dict) or set(authorized_roles) != {"values"}:
+                _fail("decision-package:control-pack")
+            expected_pack = {
+                "pack_id": str(pack_row["pack_id"]),
+                "version": int(pack_row["version"]),
+                "digest": _blob64(pack_row["pack_digest"], "decision-package:pack-digest").hex().upper(),
+                "calculation_rule_id": str(pack_row["calculation_rule_id"]),
+                "adjustment_rule_id": str(pack_row["adjustment_rule_id"]),
+                "source_refs": list(source_refs["values"]),
+                "authorized_roles": list(authorized_roles["values"]),
+                "effective_start_ms": int(pack_row["effective_start_ms"]),
+                "effective_end_ms": int(pack_row["effective_end_ms"]),
+                "recorded_at_ms": int(pack_row["recorded_at_ms"]),
+                "approved_at_ms": int(pack_row["approved_at_ms"]),
+            }
+            if pack_scope != {key: scope[key] for key in pack_scope}:
+                _fail("decision-package:control-pack-scope")
+
+            active_payment_count = int(connection.execute("SELECT COUNT(*) FROM payments WHERE obligation_id=? AND active=1", (obligation_id,)).fetchone()[0])
+            authorized_claim_count = int(connection.execute("SELECT COUNT(*) FROM claimed_adjustments WHERE obligation_id=? AND status='AUTHORIZED'", (obligation_id,)).fetchone()[0])
+            conflict_count = int(connection.execute("SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?", (obligation_id,)).fetchone()[0])
+            report_count = int(reporting_page["total"])
+            active_payment_cents = _sum_cents(
+                [int(row[0]) for row in connection.execute("SELECT amount_cents FROM payments WHERE obligation_id=? AND active=1 ORDER BY payment_id", (obligation_id,))],
+                "decision-package:cash-support",
+            )
+            adjustment_rows = connection.execute(
+                "SELECT amount_cents,status FROM claimed_adjustments WHERE obligation_id=? AND status IN ('CLAIMED','AUTHORIZED') ORDER BY claim_id",
+                (obligation_id,),
+            ).fetchall()
+            claimed_adjustment_cents = _sum_cents([int(row["amount_cents"]) for row in adjustment_rows], "decision-package:claimed-support")
+            lawful_adjustment_cents = _sum_cents([int(row["amount_cents"]) for row in adjustment_rows if row["status"] == "AUTHORIZED"], "decision-package:lawful-support")
+            active_payment_ids = [str(row["evidence_id"]) for row in payment_page["items"] if row["active"]]
+            authorized_evidence_ids = [str(row["evidence_id"]) for row in claim_page["items"] if row["status"] == "AUTHORIZED"]
+            reporting_evidence_ids = [str(row["evidence_id"]) for row in reporting_page["items"]]
+            payment_references_complete = page_offset == 0 and payment_page["next_offset"] is None
+            claim_references_complete = page_offset == 0 and claim_page["next_offset"] is None
+            reporting_references_complete = page_offset == 0 and reporting_page["next_offset"] is None
+            payment_support = (
+                "SUPPORTED" if active_payment_count and active_payment_cents == int(obligation["received_cash_cents"])
+                else "NO_LINKED_EVIDENCE" if not active_payment_count and int(obligation["received_cash_cents"]) == 0
+                else "CONFLICTED"
+            )
+            adjustment_support = (
+                "SUPPORTED"
+                if (authorized_claim_count or adjustment_rows)
+                and claimed_adjustment_cents == int(obligation["claimed_adjustment_cents"])
+                and lawful_adjustment_cents == int(obligation["lawful_adjustment_cents"])
+                else "NO_LINKED_EVIDENCE"
+                if not adjustment_rows and int(obligation["claimed_adjustment_cents"]) == 0 and int(obligation["lawful_adjustment_cents"]) == 0
+                else "CONFLICTED"
+            )
+            reporting_support = (
+                "SUPPORTED" if bool(obligation["reporting_complete"]) and report_count
+                else "UNKNOWN" if bool(obligation["reporting_complete"])
+                else "CONFLICTED" if report_count
+                else "NOT_SATISFIED"
+            )
+            if current_action is None:
+                delivery_support = "UNKNOWN"
+            elif current_action["status"] == "ACKNOWLEDGED" and current_action["acknowledgment"]["reference"] is not None:
+                delivery_support = "SUPPORTED"
+            else:
+                delivery_support = "NOT_SATISFIED"
+            amount_evidence_ids = sorted(set(active_payment_ids + authorized_evidence_ids))
+            amount_satisfied = bool(obligation["amount_satisfied"])
+            if payment_support == "CONFLICTED" or adjustment_support == "CONFLICTED":
+                amount_support = "CONFLICTED"
+            elif amount_satisfied and not active_payment_count and not authorized_claim_count:
+                amount_support = "UNKNOWN"
+            elif str(obligation["verification_status"]) == "CONFLICT_VISIBLE":
+                amount_support = "CONFLICTED"
+            else:
+                amount_support = "SUPPORTED" if amount_evidence_ids else "NO_LINKED_EVIDENCE"
+            requirements = {
+                "amount_satisfied": "SUPPORTED" if amount_satisfied and amount_support == "SUPPORTED" else (
+                    "NOT_SATISFIED" if not amount_satisfied and amount_support != "CONFLICTED"
+                    else "CONFLICTED" if amount_support == "CONFLICTED" else "UNKNOWN"
+                ),
+                "delivery_acknowledged_or_not_required": delivery_support,
+                "reporting_complete": reporting_support,
+            }
+            missing_requirements = sorted(key for key, value in requirements.items() if value != "SUPPORTED")
+            observed_case_status = None if current_case is None else current_case["status"]
+            if observed_case_status != "RESOLVED":
+                resolution_assessment = "NOT_RESOLVED"
+            elif conflict_count or amount_support == "CONFLICTED" or reporting_support == "CONFLICTED":
+                resolution_assessment = "CONFLICTED"
+            elif any(value == "NOT_SATISFIED" for value in requirements.values()):
+                resolution_assessment = "UNSUPPORTED"
+            elif missing_requirements:
+                resolution_assessment = "UNKNOWN"
+            else:
+                resolution_assessment = "SUPPORTED"
+
+            expected_package = {
+                "contract": (
+                    "RR/FINANCIAL/DECISION-PACKAGE/v2"
+                    if schema_version == 7
+                    else "RR/FINANCIAL/DECISION-PACKAGE/v1"
+                ),
+                "scope": scope,
+                "obligation": expected_obligation,
+                **({"population_binding": population_binding} if population_binding is not None else {}),
+                "evaluation_receipt": expected_receipt,
+                "control_pack": expected_pack,
+                "case": current_case,
+                "current_determination": current_determination,
+                "current_action": current_action,
+                "cash": {
+                    "recorded_received_cash_cents": int(obligation["received_cash_cents"]),
+                    "cash_satisfied": bool(obligation["cash_satisfied"]),
+                    "claimed_adjustment_cents": int(obligation["claimed_adjustment_cents"]),
+                    "lawful_adjustment_cents": int(obligation["lawful_adjustment_cents"]),
+                    "amount_satisfied": bool(obligation["amount_satisfied"]),
+                    "shortfall_cents": int(obligation["shortfall_cents"]),
+                    "overage_cents": int(obligation["overage_cents"]),
+                    "active_payment_count": active_payment_count,
+                    "authorized_adjustment_count": authorized_claim_count,
+                },
+                "reporting": {"complete": bool(obligation["reporting_complete"]), "evidence_count": report_count},
+                "references": {
+                    "cases": case_page,
+                    "evidence": evidence_page,
+                    "payments": payment_page,
+                    "claims": claim_page,
+                    "determinations": determination_page,
+                    "actions": action_page,
+                    "conflicts": conflict_page,
+                    "reporting_evidence": reporting_page,
+                },
+                "conclusions": {
+                    "cash_satisfaction": {
+                        "result": "SATISFIED" if bool(obligation["cash_satisfied"]) else "NOT_SATISFIED",
+                        "evidence_status": payment_support,
+                        "recorded_received_cash_cents": int(obligation["received_cash_cents"]),
+                        "required_cents": int(obligation["owed_cents"]),
+                        "missing_cents": max(int(obligation["owed_cents"]) - int(obligation["received_cash_cents"]), 0),
+                        "supporting_evidence_ids": active_payment_ids,
+                        "supporting_references_complete": payment_references_complete,
+                    },
+                    "amount_satisfaction": {
+                        "result": "SATISFIED" if amount_satisfied else "NOT_SATISFIED",
+                        "evidence_status": amount_support,
+                        "supporting_evidence_ids": amount_evidence_ids,
+                        "supporting_references_complete": payment_references_complete and claim_references_complete,
+                    },
+                    "reporting_completion": {
+                        "result": reporting_support,
+                        "supporting_evidence_ids": reporting_evidence_ids,
+                        "supporting_references_complete": reporting_references_complete,
+                    },
+                    "action_acknowledgment": {
+                        "result": delivery_support,
+                        "action_id": None if current_action is None else current_action["action_id"],
+                        "reference": None if current_action is None else current_action["acknowledgment"]["reference"],
+                        "cash_effect_cents": 0,
+                    },
+                    "case_resolution": {
+                        "case_id": None if current_case is None else current_case["case_id"],
+                        "obligation_id": obligation_id,
+                        "observed_status": observed_case_status,
+                        "assessment": resolution_assessment,
+                        "required_conditions": requirements,
+                        "missing_requirements": missing_requirements,
+                        "supporting_evidence_ids": sorted(set(amount_evidence_ids + reporting_evidence_ids)),
+                        "supporting_references_complete": payment_references_complete and claim_references_complete and reporting_references_complete,
+                        "conflict_count": conflict_count,
+                        "conflict_ids": [str(row["conflict_id"]) for row in conflict_page["items"]],
+                    },
+                },
+            }
+            if _canonical(package, "decision-package:actual") != _canonical(expected_package, "decision-package:expected"):
+                _fail("decision-package:mismatch")
+            connection.execute("COMMIT")
+            return {
+                "integrity": "VERIFIED",
+                "obligation_id": obligation_id,
+                "evaluation_id": str(evaluation["evaluation_id"]),
+                "revision": int(evaluation["revision"]),
+                "case_status": observed_case_status,
+            }
+        except IndependentFinancialError:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            _fail("decision-package:malformed")
+    finally:
+        connection.close()
 
 
 verify = verify_database

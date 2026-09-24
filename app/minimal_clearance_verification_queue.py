@@ -21,7 +21,10 @@ import re
 import secrets
 import sqlite3
 import stat
+import struct
+import tempfile
 import threading
+import time
 import weakref
 from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
 
@@ -34,6 +37,9 @@ from app.minimal_clearance_resource_limits import (
 
 class VerificationQueueError(RuntimeError):
     pass
+
+
+_SYNTHETIC_REFERENCE_ADMISSION = object()
 
 
 class QueueConflictError(VerificationQueueError):
@@ -68,6 +74,10 @@ class QueueIndeterminateError(VerificationQueueError):
     pass
 
 
+class LeanAdmissionError(VerificationQueueError):
+    pass
+
+
 def _raise_fixed(error: VerificationQueueError) -> NoReturn:
     error.__cause__ = None
     error.__context__ = None
@@ -77,6 +87,11 @@ def _raise_fixed(error: VerificationQueueError) -> NoReturn:
 
 SCHEMA_VERSION: Final[int] = 13
 _SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v13"
+_ADMISSION_STATE_HANDOFF_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/ADMISSION-STATE-HANDOFF/v1"
+_ADMISSION_STATE_HANDOFF_MAGIC: Final[bytes] = b"BLQST001"
+_ADMISSION_STATE_HANDOFF_MAX: Final[int] = 64 * 1024
+ISSUE_REQUEST_ID_BYTES: Final[int] = 32
+_ISSUE_REQUEST_DOMAIN_V1: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/ISSUE-REQUEST-BATCH-ID/v1\x00"
 MAX_QUEUE_CAPACITY: Final[int] = 512
 DATABASE_PAGE_SIZE: Final[int] = 4096
 DATABASE_MAX_PAGE_COUNT: Final[int] = 32768
@@ -98,6 +113,472 @@ SOURCE_ADMISSION_S_UPPER: Final[int] = SOURCE_ADMISSION_RETRY_LIMIT
 SOURCE_ADMISSION_M_UPPER: Final[int] = RANGE100_COUNT
 SOURCE_ADMISSION_U_ISSUANCES: Final[int] = 1
 VERIFIER_LAUNCH_V_UPPER: Final[int] = 1
+LEAN_ADMISSION_INPUT_MAGIC: Final[bytes] = b"BLADIN01"
+LEAN_ADMISSION_OUTPUT_MAGIC: Final[bytes] = b"BLADOUT1"
+LEAN_ADMISSION_ADAPTER_MAGIC: Final[bytes] = b"BLADAP01"
+LEAN_ADMISSION_WIRE_VERSION: Final[int] = 1
+LEAN_ADMISSION_INPUT_BYTES: Final[int] = 110
+LEAN_ADMISSION_RESULT_BYTES: Final[int] = 112
+LEAN_ADMISSION_RESPONSE_BYTES: Final[int] = 216
+LEAN_ADMISSION_TIMEOUT_SECONDS: Final[float] = 3.0
+LEAN_ADMISSION_MAX_ADAPTER_BYTES: Final[int] = 16 * 1024 * 1024
+LEAN_ADMISSION_MAX_ARTIFACT_BYTES: Final[int] = 16 * 1024 * 1024
+LEAN_ADMISSION_TOOLCHAIN: Final[bytes] = b"leanprover/lean4:v4.33.1\n"
+LEAN_ADMISSION_ACTIVE_PROCESS_LIMIT: Final[int] = 1
+LEAN_ADMISSION_ADAPTER_SIZE_BYTES: Final[int] = 6_470_656
+LEAN_ADMISSION_ADAPTER_SHA256: Final[bytes] = bytes.fromhex("0aeb8ccd18e4eb905c1147889bf66265c94d9dcc2311c3d699571a85cf3fb577")
+LEAN_ADMISSION_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex("86cedcae0f9758b75c7a4a4d3de5ca9c28b05b628e08b1868b26ca74584ca13c")
+LEAN_ADMISSION_SOURCE_BINDING_SHA256: Final[bytes] = bytes.fromhex("768f9d69ebb660875448088bfc1983862b2db46f69e773bde19b7ee0feb09de6")
+_LEAN_ADMISSION_SOURCE_FILES: Final[tuple[str, ...]] = (
+    "Admission/Model.lean",
+    "Admission/Library.lean",
+    "Admission/Main.lean",
+    "Admission/Checker.lean",
+    "BlindLedger/Sha3.lean",
+    "lakefile.toml",
+    "lean-toolchain",
+    "lake-manifest.json",
+)
+_LEAN_ADMISSION_OP_CODES: Final[dict[str, int]] = {
+    "issue": 1,
+    "source_admit": 2,
+    "source_start": 3,
+    "source_finish_success": 4,
+    "source_finish_unknown": 5,
+    "verifier_reserve": 6,
+    "verifier_finish_accepted": 7,
+    "verifier_finish_rejected": 8,
+    "verifier_finish_aborted": 9,
+    "verifier_finish_unknown": 10,
+    "recover": 11,
+}
+_LEAN_ADMISSION_BATCH_CODES: Final[dict[str, int]] = {
+    "AWAITING_HANDOFF": 0,
+    "QUEUED": 1,
+    "LEASED": 2,
+    "VERIFIED": 3,
+    "REJECTED": 4,
+    "HELD": 5,
+}
+_LEAN_ADMISSION_SOURCE_CODES: Final[dict[str, int]] = {
+    "ABSENT": 0,
+    "AUTHORIZED": 1,
+    "STARTED": 2,
+    "COMPLETED": 3,
+    "UNKNOWN": 4,
+}
+_LEAN_ADMISSION_VERIFIER_CODES: Final[dict[str, int]] = {
+    "UNRESERVED": 0,
+    "STARTED": 1,
+    "COMPLETED": 2,
+    "UNKNOWN": 3,
+}
+_LEAN_ADMISSION_TERMINAL_CODES: Final[dict[str, int]] = {
+    "NONE": 0,
+    "ACCEPTED": 1,
+    "REJECTED": 2,
+    "ABORTED": 3,
+    "UNKNOWN": 4,
+}
+_LEAN_ADMISSION_DECISION_CODES: Final[dict[int, str]] = {
+    0: "ok",
+    1: "overflow",
+    2: "illegal_transition",
+    3: "inconsistent_state",
+    4: "wire_overflow",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class LeanAdmissionDecision:
+    accepted: bool
+    code: str
+    operation: str
+    batch_status: str
+    source_status: str
+    verifier_status: str
+    terminal_status: str
+    proof_used: int
+    proof_cap: int
+    source_a_used: int
+    source_a_cap: int
+    source_s_used: int
+    source_s_cap: int
+    source_m_used: int
+    source_m_cap: int
+    source_u_used: int
+    source_u_cap: int
+    verifier_v_used: int
+    verifier_v_cap: int
+    input_sha256: bytes = field(repr=False)
+    artifact_sha256: bytes = field(repr=False)
+    source_binding_sha256: bytes = field(repr=False)
+
+
+def _lean_error(code: str) -> NoReturn:
+    error = LeanAdmissionError(code)
+    error.__cause__ = None
+    error.__context__ = None
+    error.__suppress_context__ = True
+    raise error
+
+
+def _lean_file_digest(path: Path, *, maximum: int, label: str) -> tuple[int, bytes]:
+    try:
+        metadata = os.lstat(path)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            _lean_error(f"lean_admission_{label}_not_regular")
+        canonical = path.resolve(strict=True)
+        if canonical != path:
+            _lean_error(f"lean_admission_{label}_location")
+        size = int(metadata.st_size)
+        if not 0 < size <= maximum:
+            _lean_error(f"lean_admission_{label}_size")
+        digest = hashlib.sha256()
+        total = 0
+        with canonical.open("rb") as stream:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > size:
+                    _lean_error(f"lean_admission_{label}_size")
+                digest.update(chunk)
+        after = os.lstat(path)
+        if (
+            stat.S_ISLNK(after.st_mode)
+            or not stat.S_ISREG(after.st_mode)
+            or int(after.st_size) != size
+            or int(after.st_dev) != int(metadata.st_dev)
+            or int(after.st_ino) != int(metadata.st_ino)
+            or total != size
+        ):
+            _lean_error(f"lean_admission_{label}_changed")
+        return size, digest.digest()
+    except LeanAdmissionError:
+        raise
+    except BaseException:
+        _lean_error(f"lean_admission_{label}_unavailable")
+
+
+def _lean_source_binding(root: Path) -> bytes:
+    try:
+        metadata = os.lstat(root)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            _lean_error("lean_admission_source_root")
+        canonical_root = root.resolve(strict=True)
+        if canonical_root != root:
+            _lean_error("lean_admission_source_root")
+        toolchain = root.joinpath("lean-toolchain").read_bytes()
+        if toolchain != LEAN_ADMISSION_TOOLCHAIN:
+            _lean_error("lean_admission_toolchain")
+        digest = hashlib.sha256()
+        for relative in _LEAN_ADMISSION_SOURCE_FILES:
+            path = root.joinpath(*relative.split("/"))
+            _size, file_digest = _lean_file_digest(
+                path, maximum=LEAN_ADMISSION_MAX_ARTIFACT_BYTES, label="source_file"
+            )
+            data = path.read_bytes()
+            if hashlib.sha256(data).digest() != file_digest:
+                _lean_error("lean_admission_source_file_changed")
+            digest.update(relative.encode("ascii"))
+            digest.update(b"\0")
+            digest.update(len(data).to_bytes(8, "big"))
+            digest.update(data)
+        native_boundary = root.parent / "rust" / "native_boundary.c"
+        native_boundary_root = (root.parent / "rust").resolve(strict=True)
+        if native_boundary.resolve(strict=True) != native_boundary or not native_boundary.resolve(strict=True).is_relative_to(native_boundary_root):
+            _lean_error("lean_admission_native_boundary_location")
+        _size, file_digest = _lean_file_digest(
+            native_boundary, maximum=LEAN_ADMISSION_MAX_ARTIFACT_BYTES, label="native_boundary"
+        )
+        data = native_boundary.read_bytes()
+        if hashlib.sha256(data).digest() != file_digest:
+            _lean_error("lean_admission_native_boundary_changed")
+        digest.update(b"native_boundary.c")
+        digest.update(b"\0")
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+        return digest.digest()
+    except LeanAdmissionError:
+        raise
+    except BaseException:
+        _lean_error("lean_admission_source_unavailable")
+
+
+class LeanAdmissionKernel:
+    """Fail-closed bounded caller for the compiled Lean admission decision."""
+
+    __slots__ = ("_adapter_path", "_calls", "_last_decision")
+
+    def __init__(self, adapter_path: Path | None = None) -> None:
+        default_path = (
+            Path(__file__).resolve().parents[1]
+            / "semantic_kernel/rust/target/x86_64-pc-windows-gnu/release"
+            / ("blind_ledger_admission_adapter.exe" if os.name == "nt" else "blind_ledger_admission_adapter")
+        )
+        if adapter_path is None:
+            adapter_path = default_path
+        if not isinstance(adapter_path, Path) or not adapter_path.is_absolute():
+            _lean_error("lean_admission_configuration")
+        try:
+            if adapter_path.resolve() != default_path.resolve():
+                _lean_error("lean_admission_configuration")
+        except BaseException:
+            _lean_error("lean_admission_configuration")
+        try:
+            if adapter_path.is_symlink() or not adapter_path.is_file():
+                _lean_error("lean_admission_unavailable")
+        except BaseException:
+            _lean_error("lean_admission_unavailable")
+        self._adapter_path = default_path
+        self._calls = 0
+        self._last_decision: LeanAdmissionDecision | None = None
+        self._verify_identity()
+
+    def _verify_identity(self) -> tuple[int, bytes]:
+        if os.environ.get("BL_ADMISSION_KERNEL_EXE") is not None:
+            _lean_error("lean_admission_kernel_override")
+        project_root = Path(__file__).resolve().parents[1]
+        lean_root = project_root / "semantic_kernel" / "lean"
+        try:
+            lean_root = lean_root.resolve(strict=True)
+        except BaseException:
+            _lean_error("lean_admission_source_unavailable")
+        source_binding = _lean_source_binding(lean_root)
+        if source_binding != LEAN_ADMISSION_SOURCE_BINDING_SHA256:
+            _lean_error("lean_admission_source_binding")
+        kernel_path = lean_root / ".lake" / "build" / "lib" / "blind_ledger_admission_link.gnu.a"
+        artifact_size, artifact_digest = _lean_file_digest(
+            kernel_path, maximum=LEAN_ADMISSION_MAX_ARTIFACT_BYTES, label="artifact"
+        )
+        if artifact_digest != LEAN_ADMISSION_ARTIFACT_SHA256:
+            _lean_error("lean_admission_artifact_binding")
+        adapter_size, adapter_digest = _lean_file_digest(
+            self._adapter_path,
+            maximum=LEAN_ADMISSION_MAX_ADAPTER_BYTES,
+            label="adapter",
+        )
+        if (
+            adapter_size != LEAN_ADMISSION_ADAPTER_SIZE_BYTES
+            or adapter_digest != LEAN_ADMISSION_ADAPTER_SHA256
+        ):
+            _lean_error("lean_admission_adapter_binding")
+        if artifact_size <= 0:
+            _lean_error("lean_admission_artifact_size")
+        return adapter_size, adapter_digest
+
+    @property
+    def adapter_path(self) -> Path:
+        return self._adapter_path
+
+    @property
+    def calls(self) -> int:
+        return self._calls
+
+    @property
+    def last_decision(self) -> LeanAdmissionDecision | None:
+        return self._last_decision
+
+    @staticmethod
+    def _code(mapping: dict[str, int], value: str, label: str) -> int:
+        if type(value) is not str or value not in mapping:
+            _lean_error(f"lean_admission_{label}")
+        return mapping[value]
+
+    @staticmethod
+    def _counter(value: int) -> int:
+        if type(value) is not int or isinstance(value, bool) or value < 0 or value >= 2**64:
+            _lean_error("lean_admission_counter")
+        return value
+
+    def _frame(
+        self,
+        operation: str,
+        *,
+        batch_status: str,
+        source_status: str,
+        verifier_status: str,
+        terminal_status: str,
+        proof_used: int,
+        proof_cap: int,
+        source_a_used: int,
+        source_a_cap: int,
+        source_s_used: int,
+        source_s_cap: int,
+        source_m_used: int,
+        source_m_cap: int,
+        source_u_used: int,
+        source_u_cap: int,
+        verifier_v_used: int,
+        verifier_v_cap: int,
+    ) -> bytes:
+        values = tuple(
+            self._counter(value)
+            for value in (
+                proof_used,
+                proof_cap,
+                source_a_used,
+                source_a_cap,
+                source_s_used,
+                source_s_cap,
+                source_m_used,
+                source_m_cap,
+                source_u_used,
+                source_u_cap,
+                verifier_v_used,
+                verifier_v_cap,
+            )
+        )
+        frame = struct.pack(
+            "<8sBBBBBB12Q",
+            LEAN_ADMISSION_INPUT_MAGIC,
+            LEAN_ADMISSION_WIRE_VERSION,
+            self._code(_LEAN_ADMISSION_OP_CODES, operation, "operation"),
+            self._code(_LEAN_ADMISSION_BATCH_CODES, batch_status, "batch"),
+            self._code(_LEAN_ADMISSION_SOURCE_CODES, source_status, "source"),
+            self._code(_LEAN_ADMISSION_VERIFIER_CODES, verifier_status, "verifier"),
+            self._code(_LEAN_ADMISSION_TERMINAL_CODES, terminal_status, "terminal"),
+            *values,
+        )
+        if len(frame) != LEAN_ADMISSION_INPUT_BYTES:
+            _lean_error("lean_admission_wire")
+        return frame
+
+    @staticmethod
+    def _decode(response: bytes, *, frame: bytes, operation: str) -> LeanAdmissionDecision:
+        if type(response) is not bytes or len(response) != LEAN_ADMISSION_RESPONSE_BYTES:
+            _lean_error("lean_admission_result_grammar")
+        if response[:8] != LEAN_ADMISSION_ADAPTER_MAGIC:
+            _lean_error("lean_admission_result_grammar")
+        input_sha256 = hashlib.sha256(frame).digest()
+        if response[8:40] != input_sha256:
+            _lean_error("lean_admission_input_binding")
+        if response[40:72] != LEAN_ADMISSION_ARTIFACT_SHA256:
+            _lean_error("lean_admission_artifact_binding")
+        if response[72:104] != LEAN_ADMISSION_SOURCE_BINDING_SHA256:
+            _lean_error("lean_admission_source_binding")
+        result = response[104:]
+        if len(result) != LEAN_ADMISSION_RESULT_BYTES:
+            _lean_error("lean_admission_result_grammar")
+        unpacked = struct.unpack("<8sBBBBBBBB12Q", result)
+        (
+            magic,
+            version,
+            accepted,
+            code,
+            operation_code,
+            batch_code,
+            source_code,
+            verifier_code,
+            terminal_code,
+            proof_used,
+            proof_cap,
+            source_a_used,
+            source_a_cap,
+            source_s_used,
+            source_s_cap,
+            source_m_used,
+            source_m_cap,
+            source_u_used,
+            source_u_cap,
+            verifier_v_used,
+            verifier_v_cap,
+        ) = unpacked
+        if magic != LEAN_ADMISSION_OUTPUT_MAGIC or version != LEAN_ADMISSION_WIRE_VERSION or accepted not in (0, 1):
+            _lean_error("lean_admission_result_grammar")
+        expected_operation_code = _LEAN_ADMISSION_OP_CODES[operation]
+        if operation_code != expected_operation_code:
+            _lean_error("lean_admission_operation_binding")
+        batch_by_code = {value: key for key, value in _LEAN_ADMISSION_BATCH_CODES.items()}
+        source_by_code = {value: key for key, value in _LEAN_ADMISSION_SOURCE_CODES.items()}
+        verifier_by_code = {value: key for key, value in _LEAN_ADMISSION_VERIFIER_CODES.items()}
+        terminal_by_code = {value: key for key, value in _LEAN_ADMISSION_TERMINAL_CODES.items()}
+        if code not in _LEAN_ADMISSION_DECISION_CODES or batch_code not in batch_by_code or source_code not in source_by_code or verifier_code not in verifier_by_code or terminal_code not in terminal_by_code:
+            _lean_error("lean_admission_result_enum")
+        counters = (proof_used, proof_cap, source_a_used, source_a_cap, source_s_used, source_s_cap, source_m_used, source_m_cap, source_u_used, source_u_cap, verifier_v_used, verifier_v_cap)
+        for used, cap in zip(counters[::2], counters[1::2]):
+            if used > PROOF_ATTEMPTS_CAP or cap > PROOF_ATTEMPTS_CAP or used > cap:
+                _lean_error("lean_admission_result_counter")
+        return LeanAdmissionDecision(
+            accepted=accepted == 1,
+            code=_LEAN_ADMISSION_DECISION_CODES[code],
+            operation=operation,
+            batch_status=batch_by_code[batch_code],
+            source_status=source_by_code[source_code],
+            verifier_status=verifier_by_code[verifier_code],
+            terminal_status=terminal_by_code[terminal_code],
+            proof_used=proof_used,
+            proof_cap=proof_cap,
+            source_a_used=source_a_used,
+            source_a_cap=source_a_cap,
+            source_s_used=source_s_used,
+            source_s_cap=source_s_cap,
+            source_m_used=source_m_used,
+            source_m_cap=source_m_cap,
+            source_u_used=source_u_used,
+            source_u_cap=source_u_cap,
+            verifier_v_used=verifier_v_used,
+            verifier_v_cap=verifier_v_cap,
+            input_sha256=input_sha256,
+            artifact_sha256=response[40:72],
+            source_binding_sha256=response[72:104],
+        )
+
+    def decide(self, operation: str, **kwargs: int | str) -> LeanAdmissionDecision:
+        frame = self._frame(operation, **kwargs)  # type: ignore[arg-type]
+        adapter_size, adapter_digest = self._verify_identity()
+        try:
+            from app.minimal_clearance_verifier_process import (
+                VerifierProcessError,
+                run_contained_verifier_stream,
+            )
+        except BaseException:
+            _lean_error("lean_admission_containment_unavailable")
+        try:
+            with tempfile.TemporaryDirectory(prefix="bl-admission-") as workspace:
+                completed = run_contained_verifier_stream(
+                    self._adapter_path,
+                    (),
+                    frame,
+                    workspace=Path(workspace).resolve(),
+                    timeout_seconds=LEAN_ADMISSION_TIMEOUT_SECONDS,
+                    expected_executable_size_bytes=adapter_size,
+                    expected_executable_sha256=adapter_digest,
+                    stdout_cap_bytes=LEAN_ADMISSION_RESPONSE_BYTES,
+                    stderr_cap_bytes=8 * 1024,
+                    stdout_ascii=False,
+                    stderr_ascii=False,
+                    expected_input_bytes=LEAN_ADMISSION_INPUT_BYTES,
+                )
+        except VerifierProcessError as error:
+            code = str(error)
+            if code.startswith("verifier_timeout"):
+                _lean_error("lean_admission_timeout")
+            _lean_error(f"lean_admission_containment:{code}")
+        except BaseException:
+            _lean_error("lean_admission_containment_unavailable")
+        if (
+            completed.exit_code != 0
+            or completed.timed_out
+            or completed.stderr
+            or len(completed.stdout) != LEAN_ADMISSION_RESPONSE_BYTES
+            or not completed.cap_enforced
+            or completed.cap_bytes != ADMISSION_CAP_BYTES
+            or completed.active_process_limit != LEAN_ADMISSION_ACTIVE_PROCESS_LIMIT
+            or not completed.process_tree_complete
+            or not completed.measurement_complete
+            or not completed.cleanup_complete
+            or completed.peak_job_commit_bytes > ADMISSION_CAP_BYTES
+        ):
+            _lean_error("lean_admission_containment")
+        if not isinstance(completed.stdout, bytes):
+            _lean_error("lean_admission_result_grammar")
+        decision = self._decode(completed.stdout, frame=frame, operation=operation)
+        self._calls += 1
+        self._last_decision = decision
+        return decision
 _SOURCE_IDENTITY_PINS: Final[dict[str, tuple[int, bytes]]] = {
     "accepted": (
         275_968,
@@ -214,6 +695,21 @@ def _sha3(domain: bytes, *parts: bytes) -> bytes:
     return digest.digest()
 
 
+def _issue_request_batch_id_v1(*, queue_id: str, request_id: bytes) -> bytes:
+    if type(request_id) is not bytes or len(request_id) != ISSUE_REQUEST_ID_BYTES:
+        _raise_fixed(VerificationQueueError("issue_request_id"))
+    if type(queue_id) is not str:
+        _raise_fixed(VerificationQueueError("issue_request_id"))
+    try:
+        queue_id_bytes = queue_id.encode("ascii")
+    except UnicodeEncodeError:
+        _raise_fixed(VerificationQueueError("issue_request_id"))
+    if not 1 <= len(queue_id_bytes) <= 128:
+        _raise_fixed(VerificationQueueError("issue_request_id"))
+    preimage = _ISSUE_REQUEST_DOMAIN_V1 + len(queue_id_bytes).to_bytes(8, "big") + queue_id_bytes + request_id
+    return hashlib.sha3_256(preimage).digest()
+
+
 def _hex(value: bytes) -> str:
     return value.hex().upper()
 
@@ -240,7 +736,8 @@ _ALLOWED_CODES: Final[frozenset[str]] = frozenset({
     "verifier_result_shape", "verifier_result_flags", "verifier_key_epoch",
     "verifier_result_code", "proof_handoff_stream", "proof_handoff_length",
     "proof_handoff_oversize", "proof_handoff_empty", "proof_handoff_closed",
-    "proof_handoff_bytes", "proof_handoff_used", "batch_binding", "batch_unknown", "queue_capacity",
+    "proof_handoff_bytes", "proof_handoff_used", "batch_binding", "batch_unknown", "queue_capacity", "state_outbox_capacity",
+    "issue_request_id", "issue_request_conflict",
     "computational_budget_exhausted", "queue_database_bounds", "queue_schema_unsupported",
     "queue_profile_mismatch", "queue_config_encoding", "queue_config_binding",
     "queue_integrity_failed", "startup_recovery", "runtime_startup",
@@ -956,12 +1453,20 @@ class QueueResult:
 
 
 @dataclass(frozen=True, slots=True)
+class _QueueTransactionClock:
+    sampled_ms: int
+    monotonic_ns: int
+
+
+@dataclass(frozen=True, slots=True)
 class _QueueWorkItem:
     batch: IssuedVerificationBatch
     attempt: int
     worker_id: str
     claim_sequence: int
     lease_token: bytes
+    lease_started_ms: int
+    lease_started_monotonic_ns: int
     lease_expires_ms: int
 
 
@@ -1910,7 +2415,7 @@ def _source_admission_from_row(connection: sqlite3.Connection, source_row: tuple
 
 
 class _VerificationQueueStore:
-    def __init__(self, *, path: Path, config: QueueConfig, owner: _QueueRuntimeOwnership | None = None, clock: "QueueClock | None" = None, before_fault: Callable[[str], None] | None = None, after_commit_fault: Callable[[str], None] | None = None, composition_config: object | None = None) -> None:
+    def __init__(self, *, path: Path, config: QueueConfig, owner: _QueueRuntimeOwnership | None = None, clock: "QueueClock | None" = None, before_fault: Callable[[str], None] | None = None, after_commit_fault: Callable[[str], None] | None = None, composition_config: object | None = None, admission_kernel: object | None = None) -> None:
         if owner is None:
             _raise_fixed(VerificationQueueError("queue_owner_required"))
         try:
@@ -1930,12 +2435,16 @@ class _VerificationQueueStore:
         self.clock = clock or SystemQueueClock()
         self._before_fault = before_fault
         self._after_commit_fault = after_commit_fault
+        self._admission_kernel = admission_kernel
         from app.minimal_clearance_composition import CompositionConfigV2
         if composition_config is None:
             composition_config = CompositionConfigV2(config.queue_id, config.digest, capacity=max(RANGE100_COUNT, config.capacity))
         if type(composition_config) is not CompositionConfigV2 or composition_config.queue_id != config.queue_id or composition_config.queue_config_digest != config.digest:
             owner._startup_cleanup()
             _raise_fixed(VerificationQueueError("composition_schema"))
+        if composition_config.capacity < RANGE100_COUNT:
+            owner._startup_cleanup()
+            _raise_fixed(VerificationQueueError("queue_configuration"))
         self.composition_config = composition_config
         self._handoffs: dict[bytes, VolatileProofHandoff] = {}
         self._closed = False
@@ -1965,6 +2474,112 @@ class _VerificationQueueStore:
         if self._closed:
             _raise_fixed(VerificationQueueError("queue_closed"))
         self.owner.assert_live()
+
+    def _lean_transition(
+        self,
+        operation: str,
+        *,
+        batch_status: str,
+        source_status: str,
+        verifier_status: str,
+        terminal_status: str,
+        meta: tuple[Any, ...],
+    ) -> LeanAdmissionDecision | None:
+        """Run one whole checked transition before its durable SQL mutation."""
+
+        if self._admission_kernel is None or self._admission_kernel is _SYNTHETIC_REFERENCE_ADMISSION:
+            return None
+        cap = min(int(meta[18]), PROOF_ATTEMPTS_CAP)
+        try:
+            decide = getattr(self._admission_kernel, "decide", None)
+            if not callable(decide):
+                _lean_error("lean_admission_configuration")
+            decision = decide(
+                operation,
+                batch_status=batch_status,
+                source_status=source_status,
+                verifier_status=verifier_status,
+                terminal_status=terminal_status,
+                proof_used=int(meta[17]),
+                proof_cap=cap,
+                source_a_used=int(meta[_META_SOURCE_A]),
+                source_a_cap=cap,
+                source_s_used=int(meta[_META_SOURCE_S]),
+                source_s_cap=cap,
+                source_m_used=int(meta[_META_SOURCE_M]),
+                source_m_cap=cap,
+                source_u_used=int(meta[_META_SOURCE_U]),
+                source_u_cap=cap,
+                verifier_v_used=int(meta[_META_VERIFIER_V]),
+                verifier_v_cap=cap,
+            )
+        except LeanAdmissionError as error:
+            _raise_fixed(QueueHeldError(str(error)))
+        except BaseException:
+            _raise_fixed(QueueHeldError("lean_admission_unavailable"))
+        if type(decision) is not LeanAdmissionDecision:
+            _raise_fixed(QueueIntegrityError("lean_admission_result"))
+        if not decision.accepted:
+            if decision.code == "overflow":
+                _raise_fixed(QueueBackpressureError("computational_budget_exhausted"))
+            _raise_fixed(QueueIntegrityError("lean_admission_rejected"))
+        return decision
+
+    @staticmethod
+    def _check_lean_transition(
+        decision: LeanAdmissionDecision | None,
+        *,
+        batch_status: str,
+        source_status: str,
+        verifier_status: str,
+        terminal_status: str,
+        meta: tuple[Any, ...],
+        proof_used: int,
+        source_a_used: int,
+        source_s_used: int,
+        source_m_used: int,
+        source_u_used: int,
+        verifier_v_used: int,
+    ) -> None:
+        if decision is None:
+            return
+        cap = min(int(meta[18]), PROOF_ATTEMPTS_CAP)
+        if (
+            decision.batch_status,
+            decision.source_status,
+            decision.verifier_status,
+            decision.terminal_status,
+            decision.proof_cap,
+            decision.source_a_cap,
+            decision.source_s_cap,
+            decision.source_m_cap,
+            decision.source_u_cap,
+            decision.verifier_v_cap,
+            decision.proof_used,
+            decision.source_a_used,
+            decision.source_s_used,
+            decision.source_m_used,
+            decision.source_u_used,
+            decision.verifier_v_used,
+        ) != (
+            batch_status,
+            source_status,
+            verifier_status,
+            terminal_status,
+            cap,
+            cap,
+            cap,
+            cap,
+            cap,
+            cap,
+            proof_used,
+            source_a_used,
+            source_s_used,
+            source_m_used,
+            source_u_used,
+            verifier_v_used,
+        ):
+            _raise_fixed(QueueIntegrityError("lean_admission_result"))
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path), timeout=5.0)
@@ -2049,6 +2664,82 @@ class _VerificationQueueStore:
             _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
         return tuple(verified["meta"])
 
+    def _capture_verified_durable_state(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        transaction_token: object,
+    ) -> Any:
+        """Capture one immutable independent image for the active claim transaction."""
+
+        from app.minimal_clearance_verification_queue_independent import (
+            _capture_verified_lifecycle_image,
+        )
+
+        try:
+            return _capture_verified_lifecycle_image(
+                connection,
+                expected_config=self.config.as_json,
+                owner_token=self,
+                transaction_token=transaction_token,
+            )
+        except BaseException:
+            _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+
+    def _check_lifecycle_transition_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        batch_id: bytes,
+        operation: str,
+        now_ms: int,
+        handoff_attached: bool,
+        verified_image: Any = None,
+        transaction_token: object | None = None,
+    ) -> Any:
+        """Return the pinned lifecycle decision before Queue SQL writes."""
+
+        self._assert_owner()
+        if not connection.in_transaction:
+            _raise_fixed(QueueIntegrityError("lifecycle_transaction_required"))
+        from app.minimal_clearance_lifecycle_adapter import evaluate_lifecycle_transition
+
+        def evaluate() -> Any:
+            with tempfile.TemporaryDirectory(prefix="blind-ledger-lifecycle-") as workspace:
+                return evaluate_lifecycle_transition(
+                    connection,
+                    batch_id=batch_id,
+                    operation=operation,  # type: ignore[arg-type]
+                    now_ms=now_ms,
+                    handoff_attached=handoff_attached,
+                    workspace=Path(workspace),
+                    expected_config=self.config.as_json,
+                )
+
+        if verified_image is None:
+            if transaction_token is not None:
+                _raise_fixed(QueueIntegrityError("lifecycle_verified_image_binding"))
+            return evaluate()
+        if transaction_token is None:
+            _raise_fixed(QueueIntegrityError("lifecycle_verified_image_binding"))
+        from app.minimal_clearance_verification_queue_independent import (
+            IndependentQueueError,
+            _bind_verified_lifecycle_image,
+        )
+
+        try:
+            with _bind_verified_lifecycle_image(
+                verified_image,
+                connection=connection,
+                owner_token=self,
+                transaction_token=transaction_token,
+                batch_id=batch_id,
+                expected_config=self.config.as_json,
+            ):
+                return evaluate()
+        except IndependentQueueError:
+            _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+
     def _fault(self, label: str) -> None:
         if self._before_fault is not None:
             self._before_fault(label)
@@ -2058,17 +2749,93 @@ class _VerificationQueueStore:
             self._after_commit_fault(label)
 
     def _now_ms(self) -> int:
-        """Read a durable timestamp without coercing malformed clock output."""
+        """Read a wall-clock epoch timestamp without coercing malformed output."""
 
         value = self.clock.now_ms()
         if type(value) is not int or not 0 <= value < 2**64:
             _raise_fixed(QueueIntegrityError("queue_clock"))
         return value
 
-    def _append_event(self, connection: sqlite3.Connection, *, kind: str, batch_id: bytes, status: str, error_code: str | None, attempt: int, at_ms: int, extra: Mapping[str, Any] | None = None) -> None:
+    def _monotonic_ns(self) -> int:
+        value = time.monotonic_ns()
+        if type(value) is not int or value < 0:
+            _raise_fixed(QueueIntegrityError("queue_monotonic_clock"))
+        return value
+
+    def _transaction_clock(self) -> _QueueTransactionClock:
+        """Pair a post-lock wall sample with a volatile elapsed-time anchor."""
+
+        monotonic_ns = self._monotonic_ns()
+        return _QueueTransactionClock(self._now_ms(), monotonic_ns)
+
+    def _transaction_commit_time(self, start: _QueueTransactionClock) -> tuple[int, int]:
+        """Return a conservative local time at the final pre-COMMIT fence.
+
+        SQLite does not couple this sample atomically to durable COMMIT, so it
+        is a local admission fence rather than a trusted commit-time claim.
+        """
+
+        wall_now_ms = self._now_ms()
+        monotonic_ns = self._monotonic_ns()
+        if monotonic_ns < start.monotonic_ns:
+            _raise_fixed(QueueIntegrityError("queue_monotonic_clock"))
+        elapsed_ns = monotonic_ns - start.monotonic_ns
+        elapsed_ms = (elapsed_ns + 999_999) // 1_000_000
+        projected_ms = start.sampled_ms + elapsed_ms
+        if projected_ms >= 2**64:
+            _raise_fixed(QueueIntegrityError("queue_clock"))
+        return max(wall_now_ms, projected_ms), monotonic_ns
+
+    def _transaction_expiry_reason(
+        self,
+        start: _QueueTransactionClock,
+        *,
+        valid_until_ms: int | None = None,
+        validity_deadline_monotonic_ns: int | None = None,
+        lease_expires_ms: int | None = None,
+        lease_deadline_monotonic_ns: int | None = None,
+    ) -> tuple[str | None, int]:
+        effective_now, monotonic_ns = self._transaction_commit_time(start)
+        if (
+            valid_until_ms is not None and effective_now >= valid_until_ms
+        ) or (
+            validity_deadline_monotonic_ns is not None
+            and monotonic_ns >= validity_deadline_monotonic_ns
+        ):
+            return "validity_expired", effective_now
+        if lease_expires_ms is not None and effective_now >= lease_expires_ms:
+            return "lease_expired", effective_now
+        if lease_deadline_monotonic_ns is not None and monotonic_ns >= lease_deadline_monotonic_ns:
+            return "lease_expired", effective_now
+        return None, effective_now
+
+    def _work_clock_now(self, work: _QueueWorkItem, wall_now_ms: int) -> tuple[int, int]:
+        monotonic_ns = self._monotonic_ns()
+        if monotonic_ns < work.lease_started_monotonic_ns:
+            _raise_fixed(QueueIntegrityError("queue_monotonic_clock"))
+        elapsed_ns = monotonic_ns - work.lease_started_monotonic_ns
+        elapsed_ms = (elapsed_ns + 999_999) // 1_000_000
+        projected_ms = work.lease_started_ms + elapsed_ms
+        if projected_ms >= 2**64:
+            _raise_fixed(QueueIntegrityError("queue_clock"))
+        return max(wall_now_ms, projected_ms), monotonic_ns
+
+    def _append_event(self, connection: sqlite3.Connection, *, kind: str, batch_id: bytes, status: str, error_code: str | None, attempt: int, at_ms: int, extra: Mapping[str, Any] | None = None, expected_event_bytes: bytes | None = None) -> None:
         if kind not in _EVENT_KINDS or status not in _STATUSES or type(attempt) is not int or not 0 <= attempt <= 1:
             _raise_fixed(QueueIntegrityError("event_fields"))
         _u64(at_ms)
+        previous = connection.execute(
+            "SELECT event_bytes FROM queue_transitions WHERE batch_id=? ORDER BY sequence DESC LIMIT 1",
+            (batch_id,),
+        ).fetchone()
+        if previous is not None:
+            try:
+                previous_event = json.loads(bytes(previous[0]).decode("ascii"))
+            except (TypeError, UnicodeDecodeError, json.JSONDecodeError):
+                _raise_fixed(QueueIntegrityError("queue_clock"))
+            previous_at = previous_event.get("at_ms") if type(previous_event) is dict else None
+            if type(previous_at) is not int or at_ms < previous_at:
+                _raise_fixed(QueueIntegrityError("queue_clock"))
         if error_code is not None:
             error_code = _code(error_code, "event_code")
         meta = self._meta(connection)
@@ -2079,12 +2846,67 @@ class _VerificationQueueStore:
                 _raise_fixed(QueueIntegrityError("event_fields"))
             event.update(extra)
         raw = _json_bytes(event)
+        if expected_event_bytes is not None and (
+            type(expected_event_bytes) is not bytes
+            or len(expected_event_bytes) > _MAX_EVENT_BYTES
+            or raw != expected_event_bytes
+        ):
+            _raise_fixed(QueueIntegrityError("lifecycle_event_binding"))
         if len(raw) > _MAX_EVENT_BYTES:
             _raise_fixed(QueueIntegrityError("event_bounds"))
         digest = _sha3(_EVENT, _u64(sequence), raw)
         after = _sha3(_HEAD, bytes(meta[12]), _u64(sequence), digest)
         connection.execute("INSERT INTO queue_transitions VALUES (?,?,?,?,?,?,?)", (sequence, kind, batch_id, bytes(meta[12]), after, raw, digest))
         connection.execute("UPDATE queue_metadata SET head_root=?,next_transition_seq=? WHERE id=1", (after, sequence))
+
+    def _append_lifecycle_event(self, connection: sqlite3.Connection, event: Any) -> None:
+        """Persist the canonical event returned by the lifecycle executable."""
+
+        from app.minimal_clearance_lifecycle_adapter import (
+            LifecycleEvent,
+            canonical_queue_event_bytes,
+        )
+
+        if type(event) is not LifecycleEvent:
+            _raise_fixed(QueueIntegrityError("lifecycle_event_type"))
+        raw = canonical_queue_event_bytes(event)
+        try:
+            payload = json.loads(raw.decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            _raise_fixed(QueueIntegrityError("lifecycle_event_encoding"))
+        required = {
+            "schema",
+            "sequence",
+            "kind",
+            "batch_id",
+            "status",
+            "error_code",
+            "attempt",
+            "at_ms",
+            "member_count",
+        }
+        optional = {"receipt_id", "identity_digest", "reservation_before", "reservation_after"}
+        if type(payload) is not dict or not required.issubset(payload) or set(payload) - (required | optional):
+            _raise_fixed(QueueIntegrityError("lifecycle_event_shape"))
+        batch_id_text = payload["batch_id"]
+        if type(batch_id_text) is not str or len(batch_id_text) != 64 or batch_id_text != batch_id_text.upper():
+            _raise_fixed(QueueIntegrityError("lifecycle_event_batch_id"))
+        try:
+            batch_id = bytes.fromhex(batch_id_text)
+        except ValueError:
+            _raise_fixed(QueueIntegrityError("lifecycle_event_batch_id"))
+        extra = {name: payload[name] for name in optional if name in payload}
+        self._append_event(
+            connection,
+            kind=payload["kind"],
+            batch_id=batch_id,
+            status=payload["status"],
+            error_code=payload["error_code"],
+            attempt=payload["attempt"],
+            at_ms=payload["at_ms"],
+            extra={"member_count": payload["member_count"], **extra},
+            expected_event_bytes=raw,
+        )
 
     def _insert_batch(self, connection: sqlite3.Connection, *, batch: IssuedVerificationBatch, now: int, batch_admission_seq: int, attempt_id: int, reservation_before: int, reservation_after: int, source_u_after: int) -> None:
         connection.execute("INSERT INTO queue_batches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (batch.batch_id, batch.batch_root, batch.session_ref, batch.template.assertion_identifier, batch.template.assertion_version, batch.template.state_profile_version, batch.template.valid_from_ms, batch.template.valid_until_ms, batch.template.approved_source_registry_root, _flags_bytes(batch.template.qualification_flags), batch.identity_digest, "AWAITING_HANDOFF", batch_admission_seq, 0, now, now, now, None, batch.public_coin))
@@ -2165,9 +2987,31 @@ class _VerificationQueueStore:
                         return existing
                     _raise_fixed(QueueConflictError("fresh_handoff_required"))
                 cap = min(int(meta[18]), PROOF_ATTEMPTS_CAP)
+                decision = self._lean_transition(
+                    "source_admit",
+                    batch_status="AWAITING_HANDOFF",
+                    source_status="ABSENT",
+                    verifier_status="UNRESERVED",
+                    terminal_status="NONE",
+                    meta=tuple(meta),
+                )
                 source_a_after = _reserve_accounting(meta[_META_SOURCE_A], candidate.a_upper, cap=cap)
                 source_s_after = _reserve_accounting(meta[_META_SOURCE_S], candidate.s_upper, cap=cap)
                 source_m_after = _reserve_accounting(meta[_META_SOURCE_M], candidate.m_upper, cap=cap)
+                self._check_lean_transition(
+                    decision,
+                    batch_status="AWAITING_HANDOFF",
+                    source_status="AUTHORIZED",
+                    verifier_status="UNRESERVED",
+                    terminal_status="NONE",
+                    meta=tuple(meta),
+                    proof_used=int(meta[17]),
+                    source_a_used=source_a_after,
+                    source_s_used=source_s_after,
+                    source_m_used=source_m_after,
+                    source_u_used=int(meta[_META_SOURCE_U]),
+                    verifier_v_used=int(meta[_META_VERIFIER_V]),
+                )
                 connection.execute("INSERT INTO queue_source_admissions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (candidate.batch.batch_id, candidate.profile_version, candidate.profile_digest, candidate.source_auth_profile, _u64(candidate.source_key_epoch), candidate.proof_context, candidate.public_coin, candidate.request_digest, candidate.retry_limit, candidate.source_configuration_digest, candidate.source_identity_profile, candidate.source_executable_size_bytes, candidate.source_executable_sha256, candidate.a_upper, candidate.s_upper, candidate.m_upper, candidate.u_issuances, "AUTHORIZED"))
                 connection.execute("UPDATE queue_metadata SET source_a_used=?,source_s_used=?,source_m_used=? WHERE id=1", (source_a_after, source_s_after, source_m_after))
                 self._append_event(connection, kind="SOURCE_AUTHORIZED", batch_id=batch.batch_id, status="AWAITING_HANDOFF", error_code=None, attempt=0, at_ms=self._now_ms(), extra={"member_count": RANGE100_COUNT})
@@ -2190,7 +3034,7 @@ class _VerificationQueueStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                self._revalidate_durable_state(connection)
+                meta = self._revalidate_durable_state(connection)
                 row = self._source_admission_row(connection, admission.batch.batch_id)
                 if row is None:
                     _raise_fixed(QueueConflictError("source_authorization"))
@@ -2203,6 +3047,28 @@ class _VerificationQueueStore:
                 now = self._now_ms()
                 if now < admission.batch.template.valid_from_ms or now >= admission.batch.template.valid_until_ms:
                     _raise_fixed(QueueConflictError("validity_expired"))
+                decision = self._lean_transition(
+                    "source_start",
+                    batch_status="AWAITING_HANDOFF",
+                    source_status="AUTHORIZED",
+                    verifier_status="UNRESERVED",
+                    terminal_status="NONE",
+                    meta=tuple(meta),
+                )
+                self._check_lean_transition(
+                    decision,
+                    batch_status="AWAITING_HANDOFF",
+                    source_status="STARTED",
+                    verifier_status="UNRESERVED",
+                    terminal_status="NONE",
+                    meta=tuple(meta),
+                    proof_used=int(meta[17]),
+                    source_a_used=int(meta[_META_SOURCE_A]),
+                    source_s_used=int(meta[_META_SOURCE_S]),
+                    source_m_used=int(meta[_META_SOURCE_M]),
+                    source_u_used=int(meta[_META_SOURCE_U]),
+                    verifier_v_used=int(meta[_META_VERIFIER_V]),
+                )
                 connection.execute("UPDATE queue_source_admissions SET source_status='STARTED' WHERE batch_id=? AND source_status='AUTHORIZED'", (admission.batch.batch_id,))
                 self._append_event(connection, kind="SOURCE_STARTED", batch_id=admission.batch.batch_id, status="AWAITING_HANDOFF", error_code=None, attempt=0, at_ms=now, extra={"member_count": RANGE100_COUNT})
                 self._fault("before_source_start_commit")
@@ -2225,7 +3091,6 @@ class _VerificationQueueStore:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 now = self._now_ms()
-                self._mark_source_unknown_locked(connection, batch_id=batch_id, now=now)
                 self._hold_batch_locked(connection, batch_id=batch_id, now=now, code="fresh_handoff_required")
                 connection.commit()
                 self._close_handoff_locked(batch_id)
@@ -2262,7 +3127,7 @@ class _VerificationQueueStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                self._revalidate_durable_state(connection)
+                meta = self._revalidate_durable_state(connection)
                 row = self._source_admission_row(connection, admission.batch.batch_id)
                 if row is None:
                     _raise_fixed(QueueConflictError("source_authorization"))
@@ -2274,13 +3139,57 @@ class _VerificationQueueStore:
                 if batch_row is None or str(batch_row[11]) != "AWAITING_HANDOFF":
                     _raise_fixed(QueueConflictError("fresh_handoff_required"))
                 if success:
+                    decision = self._lean_transition(
+                        "source_finish_success",
+                        batch_status="AWAITING_HANDOFF",
+                        source_status="STARTED",
+                        verifier_status="UNRESERVED",
+                        terminal_status="NONE",
+                        meta=tuple(meta),
+                    )
+                    self._check_lean_transition(
+                        decision,
+                        batch_status="AWAITING_HANDOFF",
+                        source_status="COMPLETED",
+                        verifier_status="UNRESERVED",
+                        terminal_status="NONE",
+                        meta=tuple(meta),
+                        proof_used=int(meta[17]),
+                        source_a_used=int(meta[_META_SOURCE_A]),
+                        source_s_used=int(meta[_META_SOURCE_S]),
+                        source_m_used=int(meta[_META_SOURCE_M]),
+                        source_u_used=int(meta[_META_SOURCE_U]),
+                        verifier_v_used=int(meta[_META_VERIFIER_V]),
+                    )
                     connection.execute("UPDATE queue_source_admissions SET source_status='COMPLETED' WHERE batch_id=? AND source_status='STARTED'", (admission.batch.batch_id,))
                     self._append_event(connection, kind="SOURCE_COMPLETED", batch_id=admission.batch.batch_id, status="AWAITING_HANDOFF", error_code=None, attempt=0, at_ms=now, extra={"member_count": RANGE100_COUNT})
                     self._fault("before_source_complete_commit")
                 else:
+                    decision = self._lean_transition(
+                        "source_finish_unknown",
+                        batch_status="AWAITING_HANDOFF",
+                        source_status="STARTED",
+                        verifier_status="UNRESERVED",
+                        terminal_status="NONE",
+                        meta=tuple(meta),
+                    )
+                    self._check_lean_transition(
+                        decision,
+                        batch_status="HELD",
+                        source_status="UNKNOWN",
+                        verifier_status="UNRESERVED",
+                        terminal_status="UNKNOWN",
+                        meta=tuple(meta),
+                        proof_used=int(meta[17]),
+                        source_a_used=int(meta[_META_SOURCE_A]),
+                        source_s_used=int(meta[_META_SOURCE_S]),
+                        source_m_used=int(meta[_META_SOURCE_M]),
+                        source_u_used=int(meta[_META_SOURCE_U]),
+                        verifier_v_used=int(meta[_META_VERIFIER_V]),
+                    )
                     connection.execute("UPDATE queue_source_admissions SET source_status='UNKNOWN' WHERE batch_id=? AND source_status='STARTED'", (admission.batch.batch_id,))
                     self._append_event(connection, kind="SOURCE_UNKNOWN", batch_id=admission.batch.batch_id, status="AWAITING_HANDOFF", error_code=None, attempt=0, at_ms=now, extra={"member_count": RANGE100_COUNT})
-                    self._hold_batch_locked(connection, batch_id=admission.batch.batch_id, now=now, code="fresh_handoff_required")
+                    self._hold_batch_locked(connection, batch_id=admission.batch.batch_id, now=now, code="fresh_handoff_required", transition_already_validated=True)
                     self._fault("before_source_unknown_commit")
                 connection.commit()
             except BaseException:
@@ -2297,42 +3206,153 @@ class _VerificationQueueStore:
             raise
 
     def issue_batch(self, *, template: OperationTemplate) -> IssuedVerificationBatch:
+        """Issue through the existing unkeyed schema-13 compatibility path."""
+
+        return self._issue_batch_core(template=template, request_id=None, request_batch_id=None)
+
+    def issue_batch_v1(self, *, request_id: bytes, template: OperationTemplate) -> IssuedVerificationBatch:
+        """Issue or recover one batch by its durable opaque request identity v1."""
+
+        self._assert_owner()
+        request_batch_id = _issue_request_batch_id_v1(queue_id=self.config.queue_id, request_id=request_id)
+        return self._issue_batch_core(
+            template=template,
+            request_id=request_id,
+            request_batch_id=request_batch_id,
+        )
+
+    def _issue_batch_core(
+        self,
+        *,
+        template: OperationTemplate,
+        request_id: bytes | None,
+        request_batch_id: bytes | None,
+    ) -> IssuedVerificationBatch:
         self._assert_owner()
         _template_value_check(template)
-        with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                meta = self._revalidate_durable_state(connection)
-                if type(meta[15]) is not int or type(meta[17]) is not int or type(meta[18]) is not int or type(meta[19]) is not int:
-                    _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
-                if meta[15] * RANGE100_COUNT + RANGE100_COUNT > self.config.capacity:
-                    _raise_fixed(QueueBackpressureError("queue_capacity"))
+        commit_attempted = False
+        try:
+            with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 try:
-                    reservation_after = _reserve_proof_attempt(meta[17], cap=min(meta[18], PROOF_ATTEMPTS_CAP))
-                except QueueBackpressureError:
-                    _raise_fixed(QueueBackpressureError("computational_budget_exhausted"))
-                try:
-                    source_u_after = _reserve_accounting(meta[_META_SOURCE_U], SOURCE_ADMISSION_U_ISSUANCES, cap=min(meta[18], PROOF_ATTEMPTS_CAP))
-                except QueueBackpressureError:
-                    _raise_fixed(QueueBackpressureError("computational_budget_exhausted"))
-                reservation_before = meta[17]
-                batch_admission_seq = meta[14] // RANGE100_COUNT + 1
-                now = self._now_ms()
-                operation_refs = _generate_operation_refs()
-                root = _compute_batch_root_from_refs(template, operation_refs)
-                session_ref = secrets.token_bytes(MAX_SESSION_REF_BYTES)
-                batch_id = secrets.token_bytes(32)
-                public_coin = _sample_public_coin()
-                proof_context = _profile12_context(session_ref=session_ref, ordered_batch_root=root, public_coin=public_coin, valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
-                provisional = IssuedVerificationBatch(batch_id, template, operation_refs, root, session_ref, public_coin, proof_context, batch_admission_seq, bytes(64))
-                batch = IssuedVerificationBatch(batch_id, template, operation_refs, root, session_ref, public_coin, proof_context, batch_admission_seq, _batch_identity_digest(provisional, self.config))
-                self._insert_batch(connection, batch=batch, now=now, batch_admission_seq=batch_admission_seq, attempt_id=meta[19] + 1, reservation_before=reservation_before, reservation_after=reservation_after, source_u_after=source_u_after)
-                self._fault("before_issue_commit")
-                connection.commit()
-            except BaseException:
-                connection.rollback()
-                raise
-        self._after_commit("after_issue_commit")
+                    if request_batch_id is not None:
+                        from app.minimal_clearance_verification_queue_independent import (
+                            IndependentQueueError,
+                            resolve_issue_request_from_connection,
+                        )
+
+                        try:
+                            resolution = resolve_issue_request_from_connection(
+                                connection,
+                                request_id=request_id,
+                                expected_template=template.as_json,
+                                expected_config=self.config.as_json,
+                            )
+                        except IndependentQueueError as error:
+                            if str(error) == "issue_request_conflict":
+                                _raise_fixed(QueueConflictError("issue_request_conflict"))
+                            _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+                        except BaseException:
+                            _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+                        if resolution.config_digest != self.config.digest:
+                            _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+                        meta = tuple(resolution.meta)
+                        recovered = resolution.batch
+                        if recovered is not None:
+                            if (
+                                recovered.request_version != 1
+                                or recovered.batch_id != request_batch_id
+                            ):
+                                _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+                            existing_row = connection.execute(
+                                "SELECT * FROM queue_batches WHERE batch_id=?",
+                                (request_batch_id,),
+                            ).fetchone()
+                            if existing_row is None:
+                                _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+                            batch = _statement_from_batch(connection, tuple(existing_row))
+                            if (
+                                batch.batch_id != recovered.batch_id
+                                or batch.batch_root != recovered.batch_root
+                                or batch.session_ref != recovered.session_ref
+                                or batch.operation_refs != recovered.operation_refs
+                                or batch.public_coin != recovered.public_coin
+                                or batch.proof_context != recovered.proof_context
+                                or batch.identity_digest != recovered.identity_digest
+                                or batch.admission_seq != recovered.admission_seq
+                            ):
+                                _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+                            connection.rollback()
+                            return batch
+                    else:
+                        meta = self._revalidate_durable_state(connection)
+                    if type(meta[15]) is not int or type(meta[17]) is not int or type(meta[18]) is not int or type(meta[19]) is not int:
+                        _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
+                    if meta[15] * RANGE100_COUNT + RANGE100_COUNT > self.config.capacity:
+                        _raise_fixed(QueueBackpressureError("queue_capacity"))
+                    decision = self._lean_transition(
+                        "issue",
+                        batch_status="AWAITING_HANDOFF",
+                        source_status="ABSENT",
+                        verifier_status="UNRESERVED",
+                        terminal_status="NONE",
+                        meta=tuple(meta),
+                    )
+                    try:
+                        reservation_after = _reserve_proof_attempt(meta[17], cap=min(meta[18], PROOF_ATTEMPTS_CAP))
+                    except QueueBackpressureError:
+                        _raise_fixed(QueueBackpressureError("computational_budget_exhausted"))
+                    try:
+                        source_u_after = _reserve_accounting(meta[_META_SOURCE_U], SOURCE_ADMISSION_U_ISSUANCES, cap=min(meta[18], PROOF_ATTEMPTS_CAP))
+                    except QueueBackpressureError:
+                        _raise_fixed(QueueBackpressureError("computational_budget_exhausted"))
+                    self._check_lean_transition(
+                        decision,
+                        batch_status="AWAITING_HANDOFF",
+                        source_status="ABSENT",
+                        verifier_status="UNRESERVED",
+                        terminal_status="NONE",
+                        meta=tuple(meta),
+                        proof_used=reservation_after,
+                        source_a_used=int(meta[_META_SOURCE_A]),
+                        source_s_used=int(meta[_META_SOURCE_S]),
+                        source_m_used=int(meta[_META_SOURCE_M]),
+                        source_u_used=source_u_after,
+                        verifier_v_used=int(meta[_META_VERIFIER_V]),
+                    )
+                    reservation_before = meta[17]
+                    batch_admission_seq = meta[14] // RANGE100_COUNT + 1
+                    issue_monotonic_ns = self._monotonic_ns()
+                    transaction_clock = _QueueTransactionClock(self._now_ms(), issue_monotonic_ns)
+                    now = transaction_clock.sampled_ms
+                    if now >= template.valid_until_ms:
+                        _raise_fixed(QueueConflictError("validity_expired"))
+                    operation_refs = _generate_operation_refs()
+                    root = _compute_batch_root_from_refs(template, operation_refs)
+                    session_ref = secrets.token_bytes(MAX_SESSION_REF_BYTES)
+                    batch_id = secrets.token_bytes(32) if request_batch_id is None else request_batch_id
+                    public_coin = _sample_public_coin()
+                    proof_context = _profile12_context(session_ref=session_ref, ordered_batch_root=root, public_coin=public_coin, valid_from_ms=template.valid_from_ms, valid_until_ms=template.valid_until_ms)
+                    provisional = IssuedVerificationBatch(batch_id, template, operation_refs, root, session_ref, public_coin, proof_context, batch_admission_seq, bytes(64))
+                    batch = IssuedVerificationBatch(batch_id, template, operation_refs, root, session_ref, public_coin, proof_context, batch_admission_seq, _batch_identity_digest(provisional, self.config))
+                    self._insert_batch(connection, batch=batch, now=now, batch_admission_seq=batch_admission_seq, attempt_id=meta[19] + 1, reservation_before=reservation_before, reservation_after=reservation_after, source_u_after=source_u_after)
+                    self._fault("before_issue_commit")
+                    expiry_reason, _commit_now = self._transaction_expiry_reason(
+                        transaction_clock,
+                        valid_until_ms=template.valid_until_ms,
+                    )
+                    if expiry_reason is not None:
+                        _raise_fixed(QueueConflictError(expiry_reason))
+                    commit_attempted = True
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+            self._after_commit("after_issue_commit")
+        except Exception:
+            if commit_attempted:
+                _raise_fixed(QueueIndeterminateError("issue_result_indeterminate"))
+            raise
         return batch
 
     def _close_handoff_locked(self, batch_id: bytes) -> None:
@@ -2340,7 +3360,7 @@ class _VerificationQueueStore:
         if handoff is not None:
             handoff.close()
 
-    def _hold_batch_locked(self, connection: sqlite3.Connection, *, batch_id: bytes, now: int, code: str) -> bool:
+    def _hold_batch_locked(self, connection: sqlite3.Connection, *, batch_id: bytes, now: int, code: str, transition_already_validated: bool = False) -> bool:
         code = _code(code, "hold_code")
         row = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (batch_id,)).fetchone()
         if row is None:
@@ -2356,6 +3376,39 @@ class _VerificationQueueStore:
         attempt_row = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (batch_id,)).fetchone()
         if attempt_row is None or str(attempt_row[6]) != "RESERVED" or int(attempt_row[4]) != PROOF_ATTEMPTS_PER_BATCH:
             _raise_fixed(QueueIntegrityError("attempt_missing"))
+        source_row = self._source_admission_row(connection, batch_id)
+        source_status = "ABSENT" if source_row is None else str(source_row[17])
+        verifier_status = str(attempt_row[_ATTEMPT_VERIFIER_STATUS])
+        if transition_already_validated:
+            if status != "AWAITING_HANDOFF" or source_status != "UNKNOWN" or verifier_status != "UNRESERVED":
+                _raise_fixed(QueueIntegrityError("recovery_transition"))
+        else:
+            meta = self._revalidate_durable_state(connection)
+            decision = self._lean_transition(
+                "recover",
+                batch_status=status,
+                source_status=source_status,
+                verifier_status=verifier_status,
+                terminal_status="NONE",
+                meta=tuple(meta),
+            )
+            source_after = "UNKNOWN" if source_status in {"AUTHORIZED", "STARTED"} else source_status
+            verifier_after = "UNKNOWN" if verifier_status == "STARTED" else verifier_status
+            terminal_after = "UNKNOWN" if source_after == "UNKNOWN" or verifier_after == "UNKNOWN" else "ABORTED"
+            self._check_lean_transition(
+                decision,
+                batch_status="HELD",
+                source_status=source_after,
+                verifier_status=verifier_after,
+                terminal_status=terminal_after,
+                meta=tuple(meta),
+                proof_used=int(meta[17]),
+                source_a_used=int(meta[_META_SOURCE_A]),
+                source_s_used=int(meta[_META_SOURCE_S]),
+                source_m_used=int(meta[_META_SOURCE_M]),
+                source_u_used=int(meta[_META_SOURCE_U]),
+                verifier_v_used=int(meta[_META_VERIFIER_V]),
+            )
         self._mark_source_unknown_locked(connection, batch_id=batch_id, now=now)
         self._mark_verifier_unknown_locked(connection, batch_id=batch_id, now=now)
         connection.execute("UPDATE queue_attempts SET status='HELD',closed_ms=?,result_code=? WHERE attempt_id=?", (now, code, int(attempt_row[0])))
@@ -2369,6 +3422,36 @@ class _VerificationQueueStore:
         live_leases = max(0, int(meta[16]) - (1 if status == "LEASED" else 0))
         connection.execute("UPDATE queue_metadata SET nonterminal_count=?,live_lease_count=? WHERE id=1", (max(0, int(meta[15]) - 1), live_leases))
         return True
+
+    def _hold_after_clock_fence(
+        self,
+        *,
+        batch_id: bytes,
+        code: str,
+        minimum_now_ms: int,
+        work: _QueueWorkItem | None = None,
+    ) -> QueueResult | None:
+        """Persist a conservative hold after a successful-path fence failed."""
+
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                now = max(self._now_ms(), minimum_now_ms)
+                if work is not None:
+                    now = max(now, self._work_clock_now(work, now)[0])
+                self._hold_batch_locked(connection, batch_id=batch_id, now=now, code=code)
+                row = connection.execute(
+                    "SELECT terminal_status,receipt_bytes,error_code FROM queue_results WHERE batch_id=?",
+                    (batch_id,),
+                ).fetchone()
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+        self._close_handoff_locked(batch_id)
+        if row is None:
+            return None
+        return QueueResult(batch_id, str(row[0]), bytes(row[1]), None if row[2] is None else str(row[2]), 0)
 
     def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: VolatileProofHandoff) -> IssuedVerificationBatch:
         self._assert_owner()
@@ -2385,9 +3468,13 @@ class _VerificationQueueStore:
             handoff.close()
             _raise_fixed(QueueConflictError("batch_required"))
         stored = False
+        late_expiry_reason: str | None = None
+        late_fence_now = 0
         try:
             with closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                transaction_clock = self._transaction_clock()
+                now = transaction_clock.sampled_ms
                 try:
                     row = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (issued_batch.batch_id,)).fetchone()
                     if row is None:
@@ -2400,7 +3487,6 @@ class _VerificationQueueStore:
                             self._close_handoff_locked(issued_batch.batch_id)
                             handoff.close()
                         _raise_fixed(QueueConflictError("batch_binding"))
-                    now = self._now_ms()
                     if type(row[15]) is not int or type(row[16]) is not int or now < row[16] or now < row[15]:
                         _raise_fixed(QueueIntegrityError("queue_clock"))
                     if str(row[11]) != "AWAITING_HANDOFF":
@@ -2425,14 +3511,50 @@ class _VerificationQueueStore:
                             self._close_handoff_locked(issued_batch.batch_id)
                             handoff.close()
                         _raise_fixed(QueueConflictError("validity_expired"))
+                    from app.minimal_clearance_lifecycle_adapter import LifecycleTransition
+
+                    lifecycle_transition = self._check_lifecycle_transition_locked(
+                        connection,
+                        batch_id=issued_batch.batch_id,
+                        operation="submitHandoff",
+                        now_ms=now,
+                        handoff_attached=False,
+                    )
+                    if type(lifecycle_transition) is not LifecycleTransition:
+                        _raise_fixed(QueueIntegrityError("lifecycle_transition_type"))
+                    after = lifecycle_transition.after
+                    if (
+                        after.identity.batch_id != issued_batch.batch_id
+                        or after.batch != "queued"
+                        or after.handoff_attached is not True
+                    ):
+                        _raise_fixed(QueueIntegrityError("lifecycle_submit_decision"))
                     self._handoffs[issued_batch.batch_id] = handoff
                     stored = True
-                    connection.execute("UPDATE queue_batches SET status='QUEUED',next_eligible_ms=?,updated_ms=? WHERE batch_id=?", (now, now, issued_batch.batch_id))
-                    self._append_event(connection, kind="HANDOFF_SUBMITTED", batch_id=issued_batch.batch_id, status="QUEUED", error_code=None, attempt=0, at_ms=now, extra={"member_count": RANGE100_COUNT})
-                    connection.commit()
+                    connection.execute(
+                        "UPDATE queue_batches SET status=?,next_eligible_ms=?,updated_ms=? WHERE batch_id=?",
+                        (after.batch.upper(), after.next_eligible_ms, after.updated_ms, issued_batch.batch_id),
+                    )
+                    self._append_lifecycle_event(connection, lifecycle_transition.event)
+                    self._fault("before_handoff_commit")
+                    late_expiry_reason, late_fence_now = self._transaction_expiry_reason(
+                        transaction_clock,
+                        valid_until_ms=issued_batch.template.valid_until_ms,
+                    )
+                    if late_expiry_reason is None:
+                        connection.commit()
+                    else:
+                        connection.rollback()
                 except BaseException:
                     connection.rollback()
                     raise
+            if late_expiry_reason is not None:
+                self._hold_after_clock_fence(
+                    batch_id=issued_batch.batch_id,
+                    code=late_expiry_reason,
+                    minimum_now_ms=late_fence_now,
+                )
+                _raise_fixed(QueueConflictError(late_expiry_reason))
         except BaseException:
             # A failed submission never leaves a volatile handoff attached to a
             # rolled-back or otherwise uncommitted queue state.
@@ -2479,10 +3601,12 @@ class _VerificationQueueStore:
         self._assert_owner()
         self._last_claim_error = None
         self._last_claim_held_count = 0
-        now = self._now_ms()
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            claim_transaction_token = object()
             try:
+                transaction_clock = self._transaction_clock()
+                now = transaction_clock.sampled_ms
                 try:
                     self._revalidate_durable_state(connection)
                 except VerificationQueueError:
@@ -2491,26 +3615,63 @@ class _VerificationQueueStore:
                     return None
                 held = list(self._expire_locked(connection, now))
                 try:
-                    self._revalidate_durable_state(connection)
+                    verified_image = self._capture_verified_durable_state(
+                        connection,
+                        transaction_token=claim_transaction_token,
+                    )
                 except VerificationQueueError:
                     connection.rollback()
                     self._last_claim_error = "queue_integrity_failed"
                     return None
                 row = connection.execute("SELECT * FROM queue_batches WHERE status='QUEUED' AND next_eligible_ms<=? ORDER BY admission_seq LIMIT 1", (now,)).fetchone()
                 if row is None:
+                    commit_now, _monotonic_ns = self._transaction_commit_time(transaction_clock)
+                    held.extend(self._expire_locked(connection, commit_now))
                     connection.commit()
                     for batch_id in held:
                         self._close_handoff_locked(batch_id)
                     self._last_claim_held_count = len(held)
                     return None
-                meta = self._revalidate_durable_state(connection)
-                lease_count = connection.execute("SELECT COUNT(*) FROM queue_leases").fetchone()[0]
-                if type(meta[16]) is not int or type(lease_count) is not int or meta[16] != 0 or lease_count != 0:
+                meta = tuple(verified_image.verified["meta"])
+                batch_id = bytes(row[0])
+                verified_batch = verified_image.verified["batches"].get(batch_id)
+                if verified_batch is None or tuple(row) != tuple(verified_batch):
+                    connection.rollback()
+                    self._last_claim_error = "queue_integrity_failed"
+                    return None
+                composition_meta = connection.execute(
+                    "SELECT schema_version,config_json,config_digest,active_dispatch_count FROM composition_meta WHERE id=1"
+                ).fetchone()
+                if (
+                    composition_meta is None
+                    or type(composition_meta[0]) is not int or composition_meta[0] != 4
+                    or type(composition_meta[1]) is not bytes or composition_meta[1] != self.composition_config.canonical_bytes
+                    or type(composition_meta[2]) is not bytes or composition_meta[2] != self.composition_config.digest
+                    or type(composition_meta[3]) is not int
+                    or not 0 <= composition_meta[3] <= self.composition_config.capacity
+                    or tuple(composition_meta)
+                    != tuple(
+                        verified_image.verified["composition"]["meta"][index]
+                        for index in (1, 2, 3, 16)
+                    )
+                ):
+                    connection.rollback()
+                    self._last_claim_error = "queue_integrity_failed"
+                    return None
+                if composition_meta[3] + RANGE100_COUNT > self.composition_config.capacity:
+                    commit_now, _monotonic_ns = self._transaction_commit_time(transaction_clock)
+                    held.extend(self._expire_locked(connection, commit_now))
+                    connection.commit()
+                    for batch_id in held:
+                        self._close_handoff_locked(batch_id)
+                    self._last_claim_held_count = len(held)
+                    self._last_claim_error = "state_outbox_capacity"
+                    _raise_fixed(QueueBackpressureError("state_outbox_capacity"))
+                if meta[16] != 0:
                     connection.rollback()
                     self._last_claim_error = "proof_session_active"
                     return None
-                batch_id = bytes(row[0])
-                attempt_row = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (batch_id,)).fetchone()
+                attempt_row = verified_image.verified["attempts"].get(batch_id)
                 if attempt_row is None or type(attempt_row[0]) is not int or attempt_row[0] <= 0 or type(attempt_row[4]) is not int or attempt_row[4] != PROOF_ATTEMPTS_PER_BATCH or str(attempt_row[6]) != "RESERVED" or str(attempt_row[_ATTEMPT_VERIFIER_STATUS]) != "UNRESERVED" or type(row[13]) is not int or row[13] != 0:
                     connection.rollback()
                     self._last_claim_error = "queue_integrity_failed"
@@ -2535,21 +3696,83 @@ class _VerificationQueueStore:
                     connection.rollback()
                     self._last_claim_error = "queue_integrity_failed"
                     return None
-                before = attempt_row[2]
-                after = attempt_row[3]
-                if type(before) is not int or type(after) is not int or type(meta[13]) is not int:
-                    connection.rollback()
-                    self._last_claim_error = "queue_integrity_failed"
-                    return None
-                claim_seq = meta[13] + 1
+                handoff = self._handoffs.get(batch_id)
+                handoff_attached = (
+                    type(handoff) is VolatileProofHandoff
+                    and not handoff.closed
+                    and not handoff.used
+                    and not handoff.exhausted
+                )
+                from app.minimal_clearance_lifecycle_adapter import (
+                    LifecycleEvent,
+                    LifecycleState,
+                    LifecycleTransition,
+                )
+
+                claim_transition = self._check_lifecycle_transition_locked(
+                    connection,
+                    batch_id=batch_id,
+                    operation="claimNextBatch",
+                    now_ms=now,
+                    handoff_attached=handoff_attached,
+                    verified_image=verified_image,
+                    transaction_token=claim_transaction_token,
+                )
+                if (
+                    type(claim_transition) is not LifecycleTransition
+                    or type(claim_transition.after) is not LifecycleState
+                    or type(claim_transition.event) is not LifecycleEvent
+                ):
+                    _raise_fixed(QueueIntegrityError("lifecycle_transition_type"))
+                claim_after = claim_transition.after
+                if (
+                    claim_after.identity.batch_id != batch_id
+                    or claim_after.batch != "leased"
+                    or claim_after.updated_ms != now
+                    or claim_after.attempt != 1
+                    or claim_after.global_live_lease_count != 1
+                    or claim_after.live_lease_count != 1
+                    or claim_after.lease_expires_ms <= claim_after.updated_ms
+                    or claim_after.claim_sequence != claim_transition.event.sequence
+                    or claim_after.transition_sequence != claim_transition.event.sequence
+                ):
+                    _raise_fixed(QueueIntegrityError("lifecycle_claim_state_shape"))
+                claim_seq = claim_after.claim_sequence
+                lease_started_ms = claim_after.updated_ms
+                expires = claim_after.lease_expires_ms
+                lease_duration_ms = expires - lease_started_ms
                 token = secrets.token_bytes(32)
-                expires = now + _LEASE_MS
-                token_digest = hmac.new(token, _sha3(_LEASE, self.config.digest, batch_id, _u64(1), _u64(claim_seq), _u64(now), _u64(expires)), hashlib.sha3_512).digest()
-                connection.execute("UPDATE queue_metadata SET live_lease_count=1 WHERE id=1")
-                connection.execute("UPDATE queue_batches SET status='LEASED',attempt=1,updated_ms=? WHERE batch_id=?", (now, batch_id))
-                connection.execute("INSERT INTO queue_leases VALUES (?,?,?,?,?,?,?)", (batch_id, _RUNTIME_WORKER, token_digest, 1, claim_seq, now, expires))
-                self._append_event(connection, kind="VERIFICATION_STARTED", batch_id=batch_id, status="LEASED", error_code=None, attempt=1, at_ms=now, extra={"member_count": RANGE100_COUNT, "reservation_before": before, "reservation_after": after})
-                connection.commit()
+                token_digest = hmac.new(token, _sha3(_LEASE, self.config.digest, batch_id, _u64(claim_after.attempt), _u64(claim_seq), _u64(lease_started_ms), _u64(expires)), hashlib.sha3_512).digest()
+                connection.execute("UPDATE queue_metadata SET live_lease_count=? WHERE id=1", (claim_after.global_live_lease_count,))
+                connection.execute(
+                    "UPDATE queue_batches SET status=?,attempt=?,updated_ms=? WHERE batch_id=?",
+                    (claim_after.batch.upper(), claim_after.attempt, claim_after.updated_ms, batch_id),
+                )
+                connection.execute(
+                    "INSERT INTO queue_leases VALUES (?,?,?,?,?,?,?)",
+                    (batch_id, _RUNTIME_WORKER, token_digest, claim_after.attempt, claim_seq, lease_started_ms, expires),
+                )
+                self._append_lifecycle_event(connection, claim_transition.event)
+                self._fault("before_claim_commit")
+                late_expiry_reason, late_fence_now = self._transaction_expiry_reason(
+                    transaction_clock,
+                    valid_until_ms=durable.template.valid_until_ms,
+                    lease_expires_ms=expires,
+                    lease_deadline_monotonic_ns=transaction_clock.monotonic_ns + lease_duration_ms * 1_000_000,
+                )
+                if late_expiry_reason is None:
+                    connection.commit()
+                else:
+                    connection.rollback()
+                    connection.execute("BEGIN IMMEDIATE")
+                    cleanup_now = max(self._now_ms(), late_fence_now)
+                    held = list(self._expire_locked(connection, cleanup_now))
+                    connection.commit()
+                    for held_id in held:
+                        self._close_handoff_locked(held_id)
+                    self._last_claim_held_count = len(held)
+                    self._last_claim_error = late_expiry_reason
+                    return None
                 for held_id in held:
                     self._close_handoff_locked(held_id)
                 self._last_claim_held_count = len(held)
@@ -2566,10 +3789,37 @@ class _VerificationQueueStore:
             if row is None:
                 _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
             batch = _statement_from_batch(connection, tuple(row))
-        return _QueueWorkItem(batch, 1, _RUNTIME_WORKER, claim_seq, token, expires)
+        work = _QueueWorkItem(
+            batch,
+            claim_after.attempt,
+            _RUNTIME_WORKER,
+            claim_seq,
+            token,
+            lease_started_ms,
+            transaction_clock.monotonic_ns,
+            expires,
+        )
+        post_commit_expiry, post_commit_now = self._transaction_expiry_reason(
+            transaction_clock,
+            valid_until_ms=work.batch.template.valid_until_ms,
+            lease_expires_ms=work.lease_expires_ms,
+            lease_deadline_monotonic_ns=work.lease_started_monotonic_ns + (work.lease_expires_ms - work.lease_started_ms) * 1_000_000,
+        )
+        if post_commit_expiry is not None:
+            held_result = self._hold_after_clock_fence(
+                batch_id=batch_id,
+                code=post_commit_expiry,
+                minimum_now_ms=post_commit_now,
+                work=work,
+            )
+            if held_result is not None and held_result.status == "HELD":
+                self._last_claim_held_count += 1
+            self._last_claim_error = post_commit_expiry
+            return None
+        return work
 
-    def _lease_fence(self, connection: sqlite3.Connection, work: _QueueWorkItem) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
-        row = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
+    def _lease_fence(self, connection: sqlite3.Connection, work: _QueueWorkItem, *, batch_row: Any = None) -> tuple[tuple[Any, ...], tuple[Any, ...], tuple[Any, ...]]:
+        row = batch_row if batch_row is not None else connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
         lease = connection.execute("SELECT * FROM queue_leases WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
         attempt = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
         if row is None or lease is None or str(row[11]) != "LEASED" or int(row[13]) != work.attempt or str(lease[1]) != work.worker_id or int(lease[3]) != work.attempt or int(lease[4]) != work.claim_sequence or int(lease[6]) != work.lease_expires_ms:
@@ -2585,7 +3835,7 @@ class _VerificationQueueStore:
         expected = hmac.new(work.lease_token, _sha3(_LEASE, self.config.digest, work.batch.batch_id, _u64(work.attempt), _u64(work.claim_sequence), _u64(int(lease[5])), _u64(int(lease[6]))), hashlib.sha3_512).digest()
         if bytes(lease[2]) != expected:
             _raise_fixed(QueueLeaseError("completion_lease_fence"))
-        return tuple(row), tuple(lease)
+        return tuple(row), tuple(lease), tuple(attempt)
 
     def _reserve_verifier_launch(self, work: _QueueWorkItem) -> None:
         """Commit the single verifier-launch claim before invoking the verifier."""
@@ -2594,22 +3844,58 @@ class _VerificationQueueStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                _row, lease = self._lease_fence(connection, work)
-                now = self._now_ms()
+                transaction_clock = self._transaction_clock()
+                _row, lease, attempt = self._lease_fence(connection, work)
+                now = self._work_clock_now(work, transaction_clock.sampled_ms)[0]
                 if now < work.batch.template.valid_from_ms or now >= work.batch.template.valid_until_ms:
                     _raise_fixed(QueueHeldError("validity_expired"))
                 if int(lease[6]) <= now:
                     _raise_fixed(QueueHeldError("lease_expired"))
-                attempt = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
-                if attempt is None or str(attempt[_ATTEMPT_VERIFIER_STATUS]) != "UNRESERVED":
+                if str(attempt[_ATTEMPT_VERIFIER_STATUS]) != "UNRESERVED":
                     _raise_fixed(QueueLeaseError("completion_not_live"))
                 meta = self._revalidate_durable_state(connection)
                 cap = min(int(meta[18]), PROOF_ATTEMPTS_CAP)
+                source_row = self._source_admission_row(connection, work.batch.batch_id)
+                source_status = "ABSENT" if source_row is None else str(source_row[17])
+                decision = self._lean_transition(
+                    "verifier_reserve",
+                    batch_status="LEASED",
+                    source_status=source_status,
+                    verifier_status="UNRESERVED",
+                    terminal_status="NONE",
+                    meta=tuple(meta),
+                )
                 v_after = _reserve_accounting(int(meta[_META_VERIFIER_V]), VERIFIER_LAUNCH_V_UPPER, cap=cap)
+                self._check_lean_transition(
+                    decision,
+                    batch_status="LEASED",
+                    source_status=source_status,
+                    verifier_status="STARTED",
+                    terminal_status="NONE",
+                    meta=tuple(meta),
+                    proof_used=int(meta[17]),
+                    source_a_used=int(meta[_META_SOURCE_A]),
+                    source_s_used=int(meta[_META_SOURCE_S]),
+                    source_m_used=int(meta[_META_SOURCE_M]),
+                    source_u_used=int(meta[_META_SOURCE_U]),
+                    verifier_v_used=v_after,
+                )
                 connection.execute("UPDATE queue_attempts SET verifier_status='STARTED' WHERE batch_id=? AND status='RESERVED' AND verifier_status='UNRESERVED'", (work.batch.batch_id,))
                 connection.execute("UPDATE queue_metadata SET verifier_v_used=? WHERE id=1", (v_after,))
                 self._append_event(connection, kind="VERIFIER_STARTED", batch_id=work.batch.batch_id, status="LEASED", error_code=None, attempt=1, at_ms=now, extra={"member_count": RANGE100_COUNT})
                 self._fault("before_verifier_start_commit")
+                expiry_reason, _commit_now = self._transaction_expiry_reason(
+                    transaction_clock,
+                    valid_until_ms=work.batch.template.valid_until_ms,
+                    validity_deadline_monotonic_ns=(
+                        work.lease_started_monotonic_ns
+                        + max(0, work.batch.template.valid_until_ms - work.lease_started_ms) * 1_000_000
+                    ),
+                    lease_expires_ms=int(lease[6]),
+                    lease_deadline_monotonic_ns=work.lease_started_monotonic_ns + _LEASE_MS * 1_000_000,
+                )
+                if expiry_reason is not None:
+                    _raise_fixed(QueueHeldError(expiry_reason))
                 connection.commit()
             except BaseException:
                 connection.rollback()
@@ -2629,8 +3915,190 @@ class _VerificationQueueStore:
         from app.minimal_clearance_verification_queue_independent import IndependentVerifiedQueueJob
         return tuple(IndependentVerifiedQueueJob(self.config.queue_id, self.config.digest, operation_ref, "VERIFIED", True, work.attempt, b"", bytes(32), work.batch.template.assertion_identifier, work.batch.template.assertion_version, work.batch.template.state_profile_version, work.batch.template.valid_from_ms, work.batch.template.valid_until_ms, position, work.batch.batch_root, work.batch.template.approved_source_registry_root, self.config.profile_version, verifier_result.result_code, self.config.qualification_flags) for position, operation_ref in enumerate(work.batch.operation_refs))
 
-    def _verified_duplicate_result(self, connection: sqlite3.Connection, work: _QueueWorkItem, verifier_result: BatchVerifierResult) -> tuple[Any, ...]:
-        existing_batch = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
+    def _admission_state_handoff_bytes(self, connection: sqlite3.Connection, *, batch_id: bytes) -> bytes:
+        """Encode the durable accepted Queue image for the same-transaction State writer."""
+
+        if not connection.in_transaction:
+            _raise_fixed(QueueIntegrityError("state_handoff_transaction"))
+        batch_rows = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (batch_id,)).fetchall()
+        attempt_rows = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (batch_id,)).fetchall()
+        result_rows = connection.execute("SELECT * FROM queue_results WHERE batch_id=?", (batch_id,)).fetchall()
+        if len(batch_rows) != 1 or len(attempt_rows) != 1 or len(result_rows) != 1:
+            _raise_fixed(QueueIntegrityError("state_handoff_durable_shape"))
+        batch_row = tuple(batch_rows[0])
+        attempt_row = tuple(attempt_rows[0])
+        result_row = tuple(result_rows[0])
+        batch = _statement_from_batch(connection, batch_row)
+        source_rows = connection.execute("SELECT * FROM queue_source_admissions WHERE batch_id=?", (batch_id,)).fetchall()
+        if len(source_rows) > 1:
+            _raise_fixed(QueueIntegrityError("state_handoff_source_shape"))
+        source_value: dict[str, Any]
+        if source_rows:
+            source_row = tuple(source_rows[0])
+            if str(source_row[17]) != "COMPLETED":
+                _raise_fixed(QueueIntegrityError("state_handoff_source_status"))
+            source_value = {
+                "status": "COMPLETED",
+                "profile_version": str(source_row[1]),
+                "profile_digest": _hex(_blob(source_row[2], 64, "state_handoff_source_profile")),
+                "source_auth_profile": str(source_row[3]),
+                "source_key_epoch": self.config.source_key_epoch,
+                "request_digest": _hex(_blob(source_row[7], 64, "state_handoff_source_request")),
+                "retry_limit": int(source_row[8]),
+                "source_configuration_digest": _hex(_blob(source_row[9], 64, "state_handoff_source_config")),
+                "source_identity_profile": str(source_row[10]),
+                "source_executable_size_bytes": int(source_row[11]),
+                "source_executable_sha256": _hex(_blob(source_row[12], 32, "state_handoff_source_executable")),
+            }
+            source_retry_limit: int | None = int(source_row[8])
+        else:
+            source_value = {
+                "status": "ABSENT",
+                "profile_version": None,
+                "profile_digest": None,
+                "source_auth_profile": None,
+                "source_key_epoch": None,
+                "request_digest": None,
+                "retry_limit": None,
+                "source_configuration_digest": None,
+                "source_identity_profile": None,
+                "source_executable_size_bytes": None,
+                "source_executable_sha256": None,
+            }
+            source_retry_limit = None
+
+        event_specs: list[dict[str, Any]] = []
+        expected_events = (
+            ("HANDOFF_SUBMITTED", "QUEUED", 0),
+            ("VERIFICATION_STARTED", "LEASED", 1),
+            ("VERIFIER_STARTED", "LEASED", 1),
+            ("VERIFIER_COMPLETED", "LEASED", 1),
+            ("BATCH_COMPLETED", "VERIFIED", 1),
+        )
+        for kind, status_value, attempt_number in expected_events:
+            rows = connection.execute(
+                "SELECT sequence,event_digest FROM queue_transitions WHERE batch_id=? AND transition_kind=?",
+                (batch_id, kind),
+            ).fetchall()
+            if len(rows) != 1:
+                _raise_fixed(QueueIntegrityError("state_handoff_event_shape"))
+            sequence, event_digest = tuple(rows[0])
+            if type(sequence) is not int or sequence <= 0:
+                _raise_fixed(QueueIntegrityError("state_handoff_event_sequence"))
+            descriptor: dict[str, Any] = {
+                "kind": kind,
+                "status": status_value,
+                "attempt": attempt_number,
+                "sequence": sequence,
+                "event_digest": _hex(_blob(event_digest, 64, "state_handoff_event_digest")),
+            }
+            if kind == "VERIFICATION_STARTED":
+                if type(attempt_row[2]) is not int or type(attempt_row[3]) is not int:
+                    _raise_fixed(QueueIntegrityError("state_handoff_reservation"))
+                descriptor["reservation_before"] = attempt_row[2]
+                descriptor["reservation_after"] = attempt_row[3]
+            event_specs.append(descriptor)
+
+        members = connection.execute(
+            "SELECT batch_position,operation_ref,admission_seq FROM queue_members WHERE batch_id=? ORDER BY batch_position",
+            (batch_id,),
+        ).fetchall()
+        if len(members) != RANGE100_COUNT:
+            _raise_fixed(QueueIntegrityError("state_handoff_member_count"))
+        operations: list[dict[str, Any]] = []
+        for position, member in enumerate(members):
+            member_position, operation_ref, member_admission_seq = tuple(member)
+            operation_ref = _blob(operation_ref, MAX_OPERATION_REF_BYTES, "state_handoff_operation_ref")
+            if type(member_position) is not int or member_position != position or type(member_admission_seq) is not int:
+                _raise_fixed(QueueIntegrityError("state_handoff_member_order"))
+            operations.append({
+                "position": position,
+                "operation_ref": _hex(operation_ref),
+                "member_admission_seq": member_admission_seq,
+                "outbox_correlation_id": _hex(operation_ref),
+                "outbox_attempt": 0,
+            })
+
+        composition_meta = connection.execute("SELECT config_digest FROM composition_meta WHERE id=1").fetchone()
+        if composition_meta is None or type(composition_meta[0]) is not bytes:
+            _raise_fixed(QueueIntegrityError("state_handoff_composition_config"))
+        if type(result_row[3]) is not bytes or not 0 < len(result_row[3]) <= MAX_RECEIPT_BYTES:
+            _raise_fixed(QueueIntegrityError("state_handoff_receipt"))
+        receipt_bytes = result_row[3]
+        payload = {
+            "schema": _ADMISSION_STATE_HANDOFF_SCHEMA,
+            "queue_schema_version": SCHEMA_VERSION,
+            "composition_schema_version": 4,
+            "profile_version": self.config.profile_version,
+            "profile_digest": _hex(self.config.profile_digest),
+            "queue_id": self.config.queue_id,
+            "queue_config_digest": _hex(self.config.digest),
+            "composition_config_digest": _hex(_blob(composition_meta[0], 64, "state_handoff_composition_config")),
+            "batch": {
+                "batch_id": _hex(batch.batch_id),
+                "batch_root": _hex(batch.batch_root),
+                "identity_digest": _hex(batch.identity_digest),
+                "admission_seq": batch.admission_seq,
+                "template": {
+                    "assertion_identifier": batch.template.assertion_identifier,
+                    "assertion_version": batch.template.assertion_version,
+                    "state_profile_version": batch.template.state_profile_version,
+                    "valid_from_ms": batch.template.valid_from_ms,
+                    "valid_until_ms": batch.template.valid_until_ms,
+                    "approved_source_registry_root": None if batch.template.approved_source_registry_root is None else _hex(batch.template.approved_source_registry_root),
+                    "qualification_flags": list(batch.template.qualification_flags),
+                },
+                "proof_context": _hex(batch.proof_context),
+                "public_coin": _hex(batch.public_coin),
+            },
+            "attempt": {
+                "attempt_id": attempt_row[0],
+                "attempt_number": 1,
+                "status": str(attempt_row[6]),
+                "proof_attempts": attempt_row[4],
+                "reservation_before": attempt_row[2],
+                "reservation_after": attempt_row[3],
+                "source_key_epoch": self.config.source_key_epoch,
+                "verifier_status": str(attempt_row[10]),
+                "verifier_v_upper": attempt_row[11],
+            },
+            "events": event_specs,
+            "source": source_value,
+            "attestation": {
+                "proof_accepted": bool(result_row[4]),
+                "source_authenticated": bool(result_row[5]),
+                "source_auth_profile": str(result_row[7]),
+                "source_key_epoch": self.config.source_key_epoch,
+                "result_code": str(result_row[9]),
+                "qualification_flags": list(self.config.qualification_flags),
+            },
+            "terminal_result": {
+                "status": str(result_row[1]),
+                "attempt": result_row[12],
+                "receipt_id": _hex(_blob(result_row[2], 32, "state_handoff_receipt_id")),
+                "receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest().upper(),
+                "completed_ms": result_row[11],
+                "error_code": result_row[13],
+            },
+            "retry_policy": {
+                "source_attempt_retry_limit": source_retry_limit,
+                "queue_attempt_number": 1,
+                "state_outbox_initial_attempt": 0,
+                "state_outbox_retry_limit": self.composition_config.max_attempts,
+                "exact_postcommit_retry": "READ_DURABLE_RESULT",
+                "replay_policy": "REJECT_STALE_OR_CONFLICTING",
+            },
+            "operations": operations,
+            "proof_suite_id": None,
+            "production_usable": False,
+            "activation": False,
+        }
+        payload_raw = _json_bytes(payload)
+        if len(payload_raw) + 12 > _ADMISSION_STATE_HANDOFF_MAX:
+            _raise_fixed(QueueIntegrityError("state_handoff_bounds"))
+        return _ADMISSION_STATE_HANDOFF_MAGIC + len(payload_raw).to_bytes(4, "big") + payload_raw
+
+    def _verified_duplicate_result(self, connection: sqlite3.Connection, work: _QueueWorkItem, verifier_result: BatchVerifierResult, *, existing_batch: Any) -> tuple[Any, ...]:
         if existing_batch is None or str(existing_batch[11]) != "VERIFIED":
             _raise_fixed(QueueLeaseError("completion_not_live"))
         try:
@@ -2676,25 +4144,28 @@ class _VerificationQueueStore:
         result_code = verifier_result.result_code if verifier_result is not None else ("rejected" if status == "REJECTED" else "fresh_handoff_required")
         result_code = _code(result_code, "completion_code")
         final_error = None if error_code is None else _code(error_code, "completion_error")
+        late_expiry_reason: str | None = None
+        late_fence_now = 0
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                transaction_clock = self._transaction_clock()
                 existing_batch = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
                 if existing_batch is None:
                     _raise_fixed(QueueLeaseError("completion_not_live"))
                 if str(existing_batch[11]) == "VERIFIED":
                     if status != "VERIFIED" or verifier_result is None:
                         _raise_fixed(QueueLeaseError("completion_not_live"))
-                    existing_result = self._verified_duplicate_result(connection, work, verifier_result)
+                    existing_result = self._verified_duplicate_result(connection, work, verifier_result, existing_batch=existing_batch)
                     from app.minimal_clearance_composition import _apply_verified_jobs_in_transaction
-                    _apply_verified_jobs_in_transaction(connection, config=self.composition_config, jobs=self._composition_jobs(work, verifier_result), state_controls=state_controls, now=self._now_ms())  # type: ignore[arg-type]
+                    _apply_verified_jobs_in_transaction(connection, config=self.composition_config, jobs=self._composition_jobs(work, verifier_result), state_controls=state_controls, now=transaction_clock.sampled_ms)  # type: ignore[arg-type]
                     connection.commit()
                     self._close_handoff_locked(work.batch.batch_id)
                     return QueueResult(work.batch.batch_id, "VERIFIED", bytes(existing_result[3]), None if existing_result[13] is None else str(existing_result[13]), RANGE100_COUNT)
-                row, lease = self._lease_fence(connection, work)
+                row, lease, attempt_row = self._lease_fence(connection, work, batch_row=existing_batch)
                 # Recheck the clock after the live lease fence, within the
                 # same completion transaction that closes the reservation.
-                now = self._now_ms()
+                now = self._work_clock_now(work, transaction_clock.sampled_ms)[0]
                 if now < work.batch.template.valid_from_ms or now >= work.batch.template.valid_until_ms:
                     status = "HELD"
                     result_code = "validity_expired"
@@ -2708,12 +4179,50 @@ class _VerificationQueueStore:
                     authenticated = False
                     if final_error is None:
                         final_error = result_code
-                attempt_row = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (work.batch.batch_id,)).fetchone()
-                if attempt_row is None or str(attempt_row[6]) != "RESERVED":
-                    _raise_fixed(QueueLeaseError("completion_not_live"))
                 verifier_status = str(attempt_row[_ATTEMPT_VERIFIER_STATUS])
                 if status in {"VERIFIED", "REJECTED"} and verifier_status != "STARTED":
                     _raise_fixed(QueueLeaseError("completion_not_live"))
+                source_row = self._source_admission_row(connection, work.batch.batch_id)
+                source_status = "ABSENT" if source_row is None else str(source_row[17])
+                if source_status not in {"ABSENT", "COMPLETED"}:
+                    _raise_fixed(QueueIntegrityError("source_status"))
+                meta = self._revalidate_durable_state(connection)
+                if status in {"VERIFIED", "REJECTED"}:
+                    lean_operation = "verifier_finish_accepted" if status == "VERIFIED" else "verifier_finish_rejected"
+                    lean_verifier_after = "COMPLETED"
+                    lean_terminal_after = "ACCEPTED" if status == "VERIFIED" else "REJECTED"
+                elif verifier_status == "STARTED":
+                    lean_operation = "verifier_finish_unknown"
+                    lean_verifier_after = "UNKNOWN"
+                    lean_terminal_after = "UNKNOWN"
+                elif verifier_status == "UNRESERVED":
+                    lean_operation = "recover"
+                    lean_verifier_after = "UNRESERVED"
+                    lean_terminal_after = "ABORTED"
+                else:
+                    _raise_fixed(QueueIntegrityError("verifier_status"))
+                decision = self._lean_transition(
+                    lean_operation,
+                    batch_status="LEASED",
+                    source_status=source_status,
+                    verifier_status=verifier_status,
+                    terminal_status="NONE",
+                    meta=tuple(meta),
+                )
+                self._check_lean_transition(
+                    decision,
+                    batch_status=status if status in {"VERIFIED", "REJECTED"} else "HELD",
+                    source_status=source_status,
+                    verifier_status=lean_verifier_after,
+                    terminal_status=lean_terminal_after,
+                    meta=tuple(meta),
+                    proof_used=int(meta[17]),
+                    source_a_used=int(meta[_META_SOURCE_A]),
+                    source_s_used=int(meta[_META_SOURCE_S]),
+                    source_m_used=int(meta[_META_SOURCE_M]),
+                    source_u_used=int(meta[_META_SOURCE_U]),
+                    verifier_v_used=int(meta[_META_VERIFIER_V]),
+                )
                 verifier_status_after = verifier_status
                 if verifier_status == "STARTED":
                     verifier_status_after = "COMPLETED" if status in {"VERIFIED", "REJECTED"} else "UNKNOWN"
@@ -2731,13 +4240,51 @@ class _VerificationQueueStore:
                 connection.execute("UPDATE queue_metadata SET live_lease_count=0,nonterminal_count=? WHERE id=1", (max(0, int(meta[15]) - 1),))
                 if status == "VERIFIED":
                     from app.minimal_clearance_composition import _apply_verified_jobs_in_transaction
-                    composition_jobs = self._composition_jobs(work, verifier_result)
+                    from app.minimal_clearance_verification_queue_independent import _verify_connection, verify_admission_state_handoff
+                    handoff_bytes = self._admission_state_handoff_bytes(connection, batch_id=work.batch.batch_id)
+                    try:
+                        composition_jobs = verify_admission_state_handoff(
+                            connection,
+                            handoff_bytes,
+                            expected_config=self.config.as_json,
+                        )
+                    except BaseException:
+                        _raise_fixed(QueueIntegrityError("state_handoff_invalid"))
                     _apply_verified_jobs_in_transaction(connection, config=self.composition_config, jobs=composition_jobs, state_controls=state_controls, now=now, before_fault=self._fault)  # type: ignore[arg-type]
+                    try:
+                        _verify_connection(connection, expected_config=self.config.as_json, configure_connection=False)
+                    except BaseException:
+                        _raise_fixed(QueueIntegrityError("queue_integrity_failed"))
                 self._fault("before_queue_commit")
-                connection.commit()
+                if status in {"VERIFIED", "REJECTED"}:
+                    late_expiry_reason, late_fence_now = self._transaction_expiry_reason(
+                        transaction_clock,
+                        valid_until_ms=work.batch.template.valid_until_ms,
+                        validity_deadline_monotonic_ns=(
+                            work.lease_started_monotonic_ns
+                            + max(0, work.batch.template.valid_until_ms - work.lease_started_ms) * 1_000_000
+                        ),
+                        lease_expires_ms=int(lease[6]),
+                        lease_deadline_monotonic_ns=work.lease_started_monotonic_ns + _LEASE_MS * 1_000_000,
+                    )
+                if late_expiry_reason is None:
+                    connection.commit()
+                else:
+                    connection.rollback()
             except BaseException:
                 connection.rollback()
                 raise
+        if late_expiry_reason is not None:
+            held_result = self._hold_after_clock_fence(
+                batch_id=work.batch.batch_id,
+                code=late_expiry_reason,
+                minimum_now_ms=late_fence_now,
+                work=work,
+            )
+            if held_result is None or held_result.status != "HELD":
+                _raise_fixed(QueueIntegrityError("completion_clock_hold"))
+            self._after_commit("batch_complete")
+            return held_result
         # Close the volatile handoff only after the terminal commit is durable.
         self._close_handoff_locked(work.batch.batch_id)
         self._after_commit("batch_complete")
@@ -2803,7 +4350,7 @@ class _VerificationQueueStore:
                 return self._complete_batch(work, status="REJECTED", error_code=_code(str(exc), "completion_error"))
             except (QueueHeldError, QueueIntegrityError) as exc:
                 raw = str(exc)
-                code = raw if raw in {"verifier_stream_not_consumed", "verifier_result_unknown_field", "verifier_result_shape", "verifier_result_flags", "verifier_key_epoch", "verifier_result_code", "verifier_transport", "state_disposition", "state_control_set", "state_control_shape"} else "fresh_handoff_required"
+                code = raw if raw in {"validity_expired", "lease_expired", "verifier_stream_not_consumed", "verifier_result_unknown_field", "verifier_result_shape", "verifier_result_flags", "verifier_key_epoch", "verifier_result_code", "verifier_transport", "state_disposition", "state_control_set", "state_control_shape"} else "fresh_handoff_required"
                 return self._complete_batch(work, status="HELD", error_code=code)
             except QueueRetryableError:
                 return self._complete_batch(work, status="HELD", error_code="fresh_handoff_required")
@@ -2862,9 +4409,10 @@ class QueueClock(Protocol):
 
 
 class SystemQueueClock:
+    """Sample local wall-clock epoch milliseconds; this is not trusted time."""
+
     def now_ms(self) -> int:
-        import time
-        return int(time.time() * 1000)
+        return time.time_ns() // 1_000_000
 
 
 def _parse_receipt(raw: bytes) -> dict[str, Any]:
@@ -2903,5 +4451,5 @@ __all__ = (
     "DIRECTIVES", "MAX_QUEUE_DATABASE_BYTES", "MAX_QUEUE_CAPACITY", "MAX_TERMINAL_GROWTH_PER_NONTERMINAL", "PROCESS_TREE_PEAK_CAP_BYTES",
     "CIRCUIT_FINGERPRINT", "MAX_SESSION_REF_BYTES", "POLICY_SCHEMA_VERSION", "PROFILE12_CONTEXT_KAT", "PROFILE12_CONTEXT_PREIMAGE_BYTES", "PROFILE_FINGERPRINT", "PROFILE_VERSION", "PUBLIC_COIN_BYTES", "PROOF_CONTEXT_BYTES", "RANGE100_COUNT", "PROOF_ATTEMPTS_CAP", "PROOF_ATTEMPTS_PER_BATCH", "SOURCE_ADMISSION_RETRY_LIMIT", "SOURCE_ADMISSION_A_UPPER", "SOURCE_ADMISSION_S_UPPER", "SOURCE_ADMISSION_M_UPPER", "SOURCE_ADMISSION_U_ISSUANCES", "VERIFIER_LAUNCH_V_UPPER",
     "BatchVerifierResult", "IssuedOperationStatement", "IssuedVerificationBatch", "OperationTemplate", "QueueBackpressureError", "QueueClock", "QueueConfig",
-    "QueueConflictError", "QueueDeterministicRejectError", "QueueHeldError", "QueueIndeterminateError", "QueueIntegrityError", "QueueLeaseError", "QueueResult", "QueueRetryableError", "SourceAdmission", "SourceLaunchAuthorization", "SourceLaunchOwnership", "SystemQueueClock", "VerificationOutcome", "VerificationQueueError", "VerifierPort", "VolatileProofHandoff", "parse_batch_verifier_result", "source_configuration_digest", "_QueueRuntimeOwnership", "_VerificationQueueStore", "_compute_batch_root", "_parse_receipt", "_profile12_context", "_reserve_proof_attempt", "_sample_public_coin", "_validate_profile12_context", "BOOTSTRAP_CAPABILITY_LIMITATION_COUNT",
+    "LeanAdmissionDecision", "LeanAdmissionError", "LeanAdmissionKernel", "QueueConflictError", "QueueDeterministicRejectError", "QueueHeldError", "QueueIndeterminateError", "QueueIntegrityError", "QueueLeaseError", "QueueResult", "QueueRetryableError", "SourceAdmission", "SourceLaunchAuthorization", "SourceLaunchOwnership", "SystemQueueClock", "VerificationOutcome", "VerificationQueueError", "VerifierPort", "VolatileProofHandoff", "parse_batch_verifier_result", "source_configuration_digest", "_QueueRuntimeOwnership", "_VerificationQueueStore", "_compute_batch_root", "_parse_receipt", "_profile12_context", "_reserve_proof_attempt", "_sample_public_coin", "_validate_profile12_context", "BOOTSTRAP_CAPABILITY_LIMITATION_COUNT",
 )

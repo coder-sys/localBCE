@@ -2,20 +2,45 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from dataclasses import replace
+from dataclasses import fields, replace
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import sqlite3
 from threading import Lock
+from types import SimpleNamespace
 
 import pytest
 
+import app.direct_state_owned_clearance_v1 as direct_clearance_module
+import app.transactional_database_boundary as database_boundary_module
 from app.direct_state_owned_clearance_v1 import (
     DIRECT_INITIAL_CLEARANCE_ROOT,
     DIRECT_INITIAL_PAYMENT_ROOT,
     DirectStateOwnedAtomicClearanceV1,
     DirectStateOwnedClearanceError,
+)
+from app.semantic_kernel_binding import (
+    DIRECTIVE_NAMES,
+    POLICY_NAMES,
+    PinnedSemanticKernelBinding,
+    SEMANTIC_ADAPTER_PROTOCOL,
+    SEMANTIC_KERNEL_PACKAGE_PROTOCOL,
+    SemanticKernelBindingError,
+    SemanticKernelPackageFile,
+    SemanticKernelPin,
+    SemanticKernelResult,
+    StateKernelRequest,
+    StateKernelResult,
+    STATE_ADAPTER_PROTOCOL,
+    STATE_KERNEL_BUILD_ID,
+    STATE_KERNEL_SCHEMA,
+    build_production_semantic_kernel_binding,
+    parse_semantic_adapter_output,
+    parse_state_kernel_adapter_output,
+    parse_state_kernel_request,
+    semantic_result_from_details,
 )
 from app.transactional_database_boundary import (
     AntiRollbackAnchorSnapshot,
@@ -41,10 +66,15 @@ from experiments.native_v3_plaintext_continuity.continuity import (
     make_completeness,
 )
 from experiments.native_v3_plaintext_continuity.independent import (
+    CONTROL_SET_ID,
+    EVALUATOR_ID,
     IndependentParseError,
+    MODE_ID,
+    RULE_ID,
     parse_bundle,
     parse_bundle_details,
 )
+from experiments.native_v3_trust_boundary.profile import build_profile_bindings
 
 
 def _digest(domain: bytes, *parts: bytes) -> bytes:
@@ -65,6 +95,559 @@ def _case(name: str) -> tuple[bytes, object, object, object, object]:
         completeness,
         receipt,
     )
+
+
+def _encode_state_kernel_result(result: StateKernelResult) -> bytes:
+    values: list[str] = []
+    for field in fields(result):
+        if field.name == "protocol":
+            continue
+        value = getattr(result, field.name)
+        if field.name == "policy":
+            encoded = POLICY_NAMES[value]
+        elif field.name == "directive":
+            encoded = DIRECTIVE_NAMES[value]
+        elif type(value) is bytes:
+            encoded = value.hex()
+        elif type(value) is bool:
+            encoded = str(value).lower()
+        else:
+            encoded = str(value)
+        values.append(f"{field.name}={encoded}")
+    return (result.protocol + ";" + ";".join(values) + "\n").encode("ascii")
+
+
+def _legacy_pinned_semantic_kernel_binding(root: Path) -> PinnedSemanticKernelBinding:
+    package_root = root / "legacy-semantic-kernel"
+    digest = b"\xA1" * 32
+    package_file = SemanticKernelPackageFile(
+        path=package_root / "adapter.exe",
+        size_bytes=1,
+        sha256=digest,
+        role="adapter_executable",
+    )
+    return PinnedSemanticKernelBinding(
+        SemanticKernelPin(
+            package_protocol=SEMANTIC_KERNEL_PACKAGE_PROTOCOL,
+            package_root=package_root,
+            adapter_executable=package_file.path,
+            kernel_artifact=package_root / "kernel.bin",
+            source_manifest=package_root / "source.json",
+            build_receipt=package_root / "build-receipt.json",
+            workspace=package_root.parent,
+            adapter_size_bytes=1,
+            adapter_sha256=digest,
+            kernel_artifact_size_bytes=1,
+            kernel_artifact_sha256=digest,
+            source_manifest_size_bytes=1,
+            source_manifest_sha256=digest,
+            build_receipt_size_bytes=1,
+            build_receipt_sha256=digest,
+            source_binding_sha256=digest,
+            kernel_build_id="BLSK-BLCBND02-EXACT-V2",
+            handoff_commit="a" * 40,
+            handoff_tree="b" * 40,
+            package_files=(package_file,),
+            adapter_protocol=SEMANTIC_ADAPTER_PROTOCOL,
+        )
+    )
+
+
+class _TestSemanticKernel:
+    """Explicit test-only provider; its synthetic pin is not bridge evidence."""
+
+    kernel_artifact_sha256 = b"\xA1" * 32
+    source_binding_sha256 = b"\xB2" * 32
+
+    @property
+    def pin(self) -> "_TestSemanticKernel":
+        return self
+
+    def evaluate(self, bundle: bytes) -> SemanticKernelResult:
+        details = parse_bundle_details(bundle)
+        profile = build_profile_bindings()
+        return semantic_result_from_details(
+            details,
+            profile_id=profile.profile_id,
+            schema_id=direct_clearance_module.DIRECT_DATABASE_SCHEMA_ID,
+            program_id=direct_clearance_module.DIRECT_DATABASE_PROGRAM_ID,
+            mode_id=MODE_ID,
+            evaluator_id=EVALUATOR_ID,
+            rule_id=RULE_ID,
+        )
+
+    def evaluate_state_request(self, request: StateKernelRequest) -> StateKernelResult:
+        details = parse_bundle_details(request.bundle)
+        evidence = self.evaluate(request.bundle)
+        bundle_id = _digest(
+            b"BL/NATIVE-V3/CONTINUITY/BUNDLE/v2\x00",
+            request.bundle,
+        )
+        if request.prior_operation is not None:
+            prior = request.prior_operation
+            values = {
+                "receipt_id": prior.receipt_id,
+                "request_id": prior.request_id,
+                "decision_id": prior.decision_id,
+                "join_id": prior.join_id,
+                "profile_id": prior.profile_id,
+                "schema_id": prior.schema_id,
+                "program_id": prior.program_id,
+                "mode_id": prior.mode_id,
+                "evaluator_id": prior.evaluator_id,
+                "control_set_id": prior.control_set_id,
+                "rule_id": prior.rule_id,
+                "phase0_receipt_binding": prior.phase0_receipt_binding,
+                "source_root": prior.source_root,
+                "completeness_id": details.completeness["id"],
+                "exception_id": prior.exception_id,
+                "before_state_id": prior.continuity_before_state_id,
+                "after_state_id": prior.continuity_after_state_id,
+                "receipt_id": prior.receipt_id,
+                "chronology_id": details.decision["chronology_id"],
+                "replay_id": (
+                    details.decision["replay_id"]
+                    if prior.operation_version == 0
+                    else _digest(
+                        b"BL/DIRECT-STATE-OWNED/STATE-REPLAY/v1\x00",
+                        prior.request_id,
+                        prior.continuity_before_state_id,
+                        prior.bundle_id,
+                        prior.control_set_id,
+                    )
+                ),
+                "decision_path_id": (
+                    details.decision["decision_path_id"]
+                    if prior.operation_version == 0
+                    else _digest(
+                        b"BL/DIRECT-STATE-OWNED/STATE-DECISION-PATH/v1\x00",
+                        details.decision["decision_path_id"],
+                        prior.decision_id,
+                    )
+                ),
+                "before_audit_head": prior.continuity_before_audit_head,
+                "before_continuity_root": prior.continuity_before_root,
+                "after_audit_head": prior.continuity_after_audit_head,
+                "after_continuity_root": prior.continuity_after_root,
+                "audit_head_after": prior.continuity_after_audit_head,
+                "continuity_root_after": prior.continuity_after_root,
+                "policy": prior.policy_result,
+                "directive": prior.effective_directive,
+                "event_time": prior.event_time,
+                "observation_time": prior.observation_time,
+                "rule_effective_time": prior.rule_effective_time,
+                "decision_time": prior.decision_time,
+                "continuity_epoch": prior.continuity_epoch,
+                "sequence_before": prior.continuity_sequence_before,
+                "sequence_after": prior.continuity_sequence_after,
+                "economic_mutation": prior.clearance_advanced,
+                "disposition": "REPLAY",
+                "prior_operation_digest": prior.operation_digest,
+            }
+        else:
+            before_state = request.continuity_state_id
+            before_audit = request.continuity_audit_head
+            before_root = request.continuity_root
+            before_sequence = request.global_sequence
+            before_row_count = request.continuity_row_count
+            new_request_id = _digest(
+                b"BL/DIRECT-STATE-OWNED/STATE-REQUEST/v1\x00",
+                request.command_id,
+                bundle_id,
+                request.expected_revision.to_bytes(8, "big"),
+                before_state,
+                request.governance_commitment,
+                request.control_set_id,
+                request.mode_id,
+            )
+            new_decision_id = _digest(
+                b"BL/DIRECT-STATE-OWNED/STATE-DECISION/v1\x00",
+                new_request_id,
+                evidence.decision_id,
+                before_state,
+                details.facts["source_root"],
+                bytes((evidence.policy, evidence.directive)),
+                details.decision["exception_id"],
+            )
+            after_audit = _digest(
+                b"BL/NATIVE-V3/CONTINUITY/AUDIT-HEAD/v2\x00",
+                before_audit,
+                new_decision_id,
+                bytes((evidence.directive,)),
+            )
+            after_root = _digest(
+                b"BL/NATIVE-V3/CONTINUITY/ROOT/v2\x00",
+                before_root,
+                details.facts["source_root"],
+                new_decision_id,
+            )
+            context_id = _digest(
+                b"BL/NATIVE-V3/CONTINUITY/STATE-CONTEXT/v2\x00",
+                request.profile_id,
+                request.mode_id,
+            )
+            raw_state = b"".join(
+                (
+                    b"BLCSTA02",
+                    (2).to_bytes(2, "big"),
+                    b"\x00\x00",
+                    context_id,
+                    (before_sequence + 1).to_bytes(8, "big"),
+                    (before_row_count + 1).to_bytes(4, "big"),
+                    b"\x00" * 4,
+                    after_audit,
+                    after_root,
+                )
+            )
+            after_state = _digest(
+                b"BL/NATIVE-V3/CONTINUITY/STATE-ID/v2\x00",
+                raw_state,
+            )
+            values = {
+                "receipt_id": _digest(
+                    b"BL/DIRECT-STATE-OWNED/STATE-RECEIPT/v1\x00",
+                    new_decision_id,
+                    after_state,
+                    evidence.receipt_id,
+                ),
+                "request_id": new_request_id,
+                "decision_id": new_decision_id,
+                "join_id": _digest(
+                    b"BL/DIRECT-STATE-OWNED/STATE-JOIN/v1\x00",
+                    new_decision_id,
+                    evidence.join_id,
+                ),
+                "profile_id": request.profile_id,
+                "schema_id": request.schema_id,
+                "program_id": request.program_id,
+                "mode_id": request.mode_id,
+                "evaluator_id": request.evaluator_id,
+                "control_set_id": request.control_set_id,
+                "rule_id": request.rule_id,
+                "phase0_receipt_binding": request.phase0_receipt_binding,
+                "source_root": details.facts["source_root"],
+                "completeness_id": details.completeness["id"],
+                "exception_id": details.decision["exception_id"],
+                "before_state_id": before_state,
+                "after_state_id": after_state,
+                "chronology_id": evidence.chronology_id,
+                "replay_id": _digest(
+                    b"BL/DIRECT-STATE-OWNED/STATE-REPLAY/v1\x00",
+                    new_request_id,
+                    before_state,
+                    bundle_id,
+                    request.control_set_id,
+                ),
+                "decision_path_id": _digest(
+                    b"BL/DIRECT-STATE-OWNED/STATE-DECISION-PATH/v1\x00",
+                    evidence.decision_path_id,
+                    new_decision_id,
+                ),
+                "before_audit_head": before_audit,
+                "before_continuity_root": before_root,
+                "after_audit_head": after_audit,
+                "after_continuity_root": after_root,
+                "audit_head_after": after_audit,
+                "continuity_root_after": after_root,
+                "evidence_request_id": details.request["id"],
+                "evidence_decision_id": details.decision["decision_id"],
+                "evidence_join_id": details.join_id,
+                "evidence_receipt_id": details.receipt_id,
+                "evidence_decision_path_id": details.decision["decision_path_id"],
+                "policy": evidence.policy,
+                "directive": evidence.directive,
+                "event_time": evidence.event_time,
+                "observation_time": evidence.observation_time,
+                "rule_effective_time": evidence.rule_effective_time,
+                "decision_time": evidence.decision_time,
+                "continuity_epoch": request.continuity_epoch,
+                "sequence_before": before_sequence,
+                "sequence_after": before_sequence + 1,
+                "economic_mutation": evidence.directive in (1, 5),
+                "disposition": "ACCEPT",
+                "prior_operation_digest": b"\x00" * 64,
+            }
+        if "evidence_request_id" not in values:
+            values.update(
+                {
+                    "evidence_request_id": details.request["id"],
+                    "evidence_decision_id": details.decision["decision_id"],
+                    "evidence_join_id": details.join_id,
+                    "evidence_receipt_id": details.receipt_id,
+                    "evidence_decision_path_id": details.decision["decision_path_id"],
+                }
+            )
+        return StateKernelResult(
+            protocol=STATE_ADAPTER_PROTOCOL,
+            schema=STATE_KERNEL_SCHEMA,
+            result="PASS",
+            kernel_build_id=STATE_KERNEL_BUILD_ID,
+            artifact_sha256=b"\xA1" * 32,
+            source_binding_sha256=b"\xB2" * 32,
+            input_sha3_512=request.input_sha3_512,
+            command_id=request.command_id,
+            expected_revision=request.expected_revision,
+            current_sequence=request.global_sequence,
+            bundle_id=bundle_id,
+            bundle_bytes=len(request.bundle),
+            reason=evidence.reason,
+            reason_id=evidence.reason_id,
+            attempt_id=request.command_id,
+            proof_suite_id="NONE",
+            proof_session_accepted=False,
+            replay_stateful=True,
+            **values,
+        )
+
+
+class _StateRequestCaptureKernel(_TestSemanticKernel):
+    def __init__(self) -> None:
+        self.request: StateKernelRequest | None = None
+        self.result: StateKernelResult | None = None
+
+    def evaluate_state_request(self, request: StateKernelRequest) -> StateKernelResult:
+        self.request = request
+        self.result = super().evaluate_state_request(request)
+        return self.result
+
+
+class _UnavailableSemanticKernel(_TestSemanticKernel):
+    def evaluate(self, bundle: bytes) -> SemanticKernelResult:
+        raise SemanticKernelBindingError("kernel-artifact-binding-mismatch")
+
+    def evaluate_state_request(self, request: StateKernelRequest) -> StateKernelResult:
+        raise SemanticKernelBindingError("kernel-artifact-binding-mismatch")
+
+
+class _MalformedSemanticKernel(_TestSemanticKernel):
+    def evaluate(self, bundle: bytes) -> SemanticKernelResult:
+        parse_semantic_adapter_output(b"BL-SEMANTIC-ADAPTER/2;result=PASS\n")
+        raise AssertionError("unreachable")
+
+    def evaluate_state_request(self, request: StateKernelRequest) -> StateKernelResult:
+        parse_state_kernel_adapter_output(b"BL-STATE-SEMANTIC-ADAPTER/1;result=PASS\n")
+        raise AssertionError("unreachable")
+
+
+class _MismatchingKernelIdentitySemanticKernel(_TestSemanticKernel):
+    def __init__(self, field: str) -> None:
+        if field not in {"artifact_sha256", "source_binding_sha256"}:
+            raise ValueError("test_kernel_identity_field")
+        self._field = field
+
+    def evaluate_state_request(self, request: StateKernelRequest) -> StateKernelResult:
+        result = super().evaluate_state_request(request)
+        return replace(result, **{self._field: b"\xC3" * 32})
+
+
+class _MismatchingSemanticKernel(_TestSemanticKernel):
+    def evaluate(self, bundle: bytes) -> SemanticKernelResult:
+        return replace(super().evaluate(bundle), decision_id=b"\x01" * 64)
+
+    def evaluate_state_request(self, request: StateKernelRequest) -> StateKernelResult:
+        return replace(
+            super().evaluate_state_request(request),
+            decision_id=b"\x01" * 64,
+        )
+
+
+class _MalformedAfterNativeSemanticKernel:
+    """Run the real adapter, then inject a malformed response at the typed seam."""
+
+    def __init__(self, binding: object) -> None:
+        self._binding = binding
+
+    def evaluate_state_request(self, request: StateKernelRequest) -> StateKernelResult:
+        self._binding.evaluate_state_request(request)  # type: ignore[attr-defined]
+        parse_state_kernel_adapter_output(b"BL-STATE-SEMANTIC-ADAPTER/1;result=PASS\n")
+        raise AssertionError("unreachable")
+
+
+class _MismatchingAfterNativeSemanticKernel:
+    """Run the real adapter, then corrupt one semantic field before State sees it."""
+
+    def __init__(self, binding: object) -> None:
+        self._binding = binding
+
+    def evaluate_state_request(self, request: StateKernelRequest) -> StateKernelResult:
+        result = self._binding.evaluate_state_request(request)  # type: ignore[attr-defined]
+        return replace(result, decision_id=b"\x01" * 64)
+
+
+def _install_test_semantic_kernel(
+    monkeypatch: pytest.MonkeyPatch,
+    semantic_kernel: object,
+) -> None:
+    """Replace the production loader only inside this test module."""
+
+    monkeypatch.setattr(
+        direct_clearance_module,
+        "build_production_semantic_kernel_binding",
+        lambda: semantic_kernel,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _inject_test_semantic_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install a synthetic provider; this is not real Lean acceptance."""
+
+    if os.environ.get("BLIND_LEDGER_RUN_NATIVE_STATE") == "1":
+        return
+
+    _install_test_semantic_kernel(monkeypatch, _TestSemanticKernel())
+
+
+def test_semantic_adapter_rejects_legacy_or_incomplete_output() -> None:
+    with pytest.raises(SemanticKernelBindingError, match="semantic_kernel_output"):
+        parse_semantic_adapter_output(b"BL-SEMANTIC-ADAPTER/2;result=PASS\n")
+
+
+def test_semantic_adapter_parser_accepts_the_complete_result_surface() -> None:
+    raw, _, _, _, _ = _case("valid-continuity")
+    result = _TestSemanticKernel().evaluate(raw)
+    values: list[str] = []
+    for field in fields(result):
+        if field.name == "protocol":
+            continue
+        value = getattr(result, field.name)
+        if field.name == "policy":
+            encoded = POLICY_NAMES[value]
+        elif field.name == "directive":
+            encoded = DIRECTIVE_NAMES[value]
+        elif type(value) is bytes:
+            encoded = value.hex()
+        elif type(value) is bool:
+            encoded = str(value).lower()
+        else:
+            encoded = str(value)
+        values.append(f"{field.name}={encoded}")
+    encoded_line = (result.protocol + ";" + ";".join(values) + "\n").encode("ascii")
+    assert parse_semantic_adapter_output(encoded_line) == result
+
+
+@pytest.mark.parametrize(
+    "semantic_kernel",
+    (
+        _UnavailableSemanticKernel(),
+        _MalformedSemanticKernel(),
+        _MismatchingSemanticKernel(),
+        _MismatchingKernelIdentitySemanticKernel("artifact_sha256"),
+        _MismatchingKernelIdentitySemanticKernel("source_binding_sha256"),
+    ),
+    ids=(
+        "unavailable-or-tampered",
+        "malformed-response",
+        "semantic-mismatch",
+        "artifact-identity-mismatch",
+        "source-binding-identity-mismatch",
+    ),
+)
+def test_native_faults_leave_database_untouched(
+    tmp_path: Path,
+    semantic_kernel: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, _, _, _, _ = _case("valid-continuity")
+    _install_test_semantic_kernel(monkeypatch, semantic_kernel)
+    service = DirectStateOwnedAtomicClearanceV1(
+        path=tmp_path / "native-fault.sqlite3",
+    )
+    before = service.snapshot()
+    with pytest.raises(DirectStateOwnedClearanceError, match="direct_semantic_kernel_reject"):
+        service.submit(raw)
+    assert service.snapshot() == before
+    assert _direct_count(service.path) == 0
+    service.verify_integrity()
+    service.close()
+
+
+def test_synthetic_legacy_protocol_binding_stays_fail_closed_for_state_operations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, _, _, _, _ = _case("valid-continuity")
+    legacy_binding = _legacy_pinned_semantic_kernel_binding(tmp_path)
+    _install_test_semantic_kernel(monkeypatch, legacy_binding)
+    service = DirectStateOwnedAtomicClearanceV1(
+        path=tmp_path / "production-native.sqlite3",
+    )
+    try:
+        before = service.snapshot()
+        with pytest.raises(
+            DirectStateOwnedClearanceError,
+            match="direct_semantic_kernel_reject:state_kernel_release_not_pinned",
+        ):
+            service.submit(raw)
+        assert service.snapshot() == before
+        assert _direct_count(service.path) == 0
+        service.verify_integrity()
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize("case_name", DEMO_CASES)
+def test_typed_state_kernel_seam_handles_every_direct_case(
+    tmp_path: Path,
+    case_name: str,
+) -> None:
+    raw, _, _, _, _ = _case(case_name)
+    service = DirectStateOwnedAtomicClearanceV1(path=tmp_path / f"state-{case_name}.sqlite3")
+    try:
+        receipt = service.submit(raw)
+        details = parse_bundle_details(raw)
+        assert receipt.effective_directive == details.effective_directive
+        assert receipt.policy_result == details.policy_result
+        assert _direct_count(service.path) == 1
+        service.verify_integrity()
+    finally:
+        service.close()
+
+
+def test_pending_production_pin_prevents_state_service_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "pending-production-pin.sqlite3"
+    monkeypatch.setattr(
+        direct_clearance_module,
+        "build_production_semantic_kernel_binding",
+        build_production_semantic_kernel_binding,
+    )
+    with pytest.raises(
+        DirectStateOwnedClearanceError,
+        match="direct_semantic_kernel_unavailable:semantic_kernel_artifact_pin_fields",
+    ):
+        DirectStateOwnedAtomicClearanceV1(path=path)
+    assert not path.exists()
+
+
+def test_production_native_stale_before_state_leaves_database_untouched(
+    tmp_path: Path,
+) -> None:
+    first_raw, _, _, _, _ = _case("valid-continuity")
+    stale_raw, _, _, _, _ = _case("expired-credential")
+    path = tmp_path / "production-native-stale.sqlite3"
+    first = DirectStateOwnedAtomicClearanceV1(
+        path=path,
+    )
+    try:
+        first.submit(first_raw)
+    finally:
+        first.close()
+
+    stale = DirectStateOwnedAtomicClearanceV1(
+        path=path,
+    )
+    try:
+        before = stale.snapshot()
+        count_before = _direct_count(stale.path)
+        with pytest.raises(DirectStateOwnedClearanceError, match="state_kernel_stale_revision"):
+            stale.submit(stale_raw)
+        assert stale.snapshot() == before
+        assert _direct_count(stale.path) == count_before == 1
+        stale.verify_integrity()
+    finally:
+        stale.close()
 
 
 def _split_bundle(raw: bytes) -> list[bytes]:
@@ -346,6 +929,242 @@ def _tamper_direct_state(path: Path, field: str) -> None:
             )
 
 
+def _tamper_direct_continuity_before(path: Path) -> None:
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(
+                "DROP TRIGGER direct_clearance_requests_no_update"
+            )
+            record = connection.execute(
+                "SELECT * FROM direct_clearance_requests WHERE sequence_after=2"
+            ).fetchone()
+            assert record is not None
+            operation = database_boundary_module._direct_operation_from_record(
+                tuple(record[:41])
+            )
+            before_audit_head = b"\xA9" * 64
+            before_root = b"\xB8" * 64
+            before_state_id = database_boundary_module._direct_continuity_state_id(
+                profile_id=operation.profile_id,
+                mode_id=operation.mode_id,
+                sequence=operation.continuity_sequence_before,
+                row_count=operation.continuity_sequence_before,
+                audit_head=before_audit_head,
+                continuity_root=before_root,
+            )
+            after_audit_head = database_boundary_module._direct_continuity_sha(
+                database_boundary_module._DIRECT_CONTINUITY_AUDIT_HEAD_DOMAIN,
+                before_audit_head,
+                operation.decision_id,
+                bytes((operation.effective_directive,)),
+            )
+            after_root = database_boundary_module._direct_continuity_sha(
+                database_boundary_module._DIRECT_CONTINUITY_ROOT_DOMAIN,
+                before_root,
+                operation.source_root,
+                operation.decision_id,
+            )
+            after_state_id = database_boundary_module._direct_continuity_state_id(
+                profile_id=operation.profile_id,
+                mode_id=operation.mode_id,
+                sequence=operation.continuity_sequence_after,
+                row_count=operation.continuity_sequence_after,
+                audit_head=after_audit_head,
+                continuity_root=after_root,
+            )
+            tampered_operation = replace(
+                operation,
+                continuity_before_state_id=before_state_id,
+                continuity_after_state_id=after_state_id,
+                continuity_before_audit_head=before_audit_head,
+                continuity_after_audit_head=after_audit_head,
+                continuity_before_root=before_root,
+                continuity_after_root=after_root,
+            )
+            operation_digest = database_boundary_module._direct_operation_digest(
+                tampered_operation
+            )
+            cursor = connection.execute(
+                "UPDATE direct_clearance_requests SET operation_digest=?, "
+                "continuity_before_state_id=?, continuity_after_state_id=?, "
+                "continuity_before_audit_head=?, continuity_after_audit_head=?, "
+                "continuity_before_root=?, continuity_after_root=? "
+                "WHERE sequence_after=2",
+                (
+                    operation_digest,
+                    before_state_id,
+                    after_state_id,
+                    before_audit_head,
+                    after_audit_head,
+                    before_root,
+                    after_root,
+                ),
+            )
+            assert cursor.rowcount == 1
+            tampered_record = connection.execute(
+                "SELECT * FROM direct_clearance_requests WHERE sequence_after=2"
+            ).fetchone()
+            assert tampered_record is not None
+            assert database_boundary_module._direct_operation_from_record(
+                tuple(tampered_record[:41])
+            ) == tampered_operation
+        finally:
+            connection.execute(
+                "CREATE TRIGGER IF NOT EXISTS direct_clearance_requests_no_update "
+                "BEFORE UPDATE ON direct_clearance_requests "
+                "BEGIN SELECT RAISE(ABORT, "
+                "'direct_clearance_requests_append_only'); END"
+            )
+        connection.commit()
+
+
+def _operation_namespace_with_changes(
+    operation: object,
+    **changes: object,
+) -> SimpleNamespace:
+    values = {item.name: getattr(operation, item.name) for item in fields(operation)}
+    values.update(changes)
+    return SimpleNamespace(**values)
+
+
+def _direct_continuity_after(
+    operation: object,
+    *,
+    before_audit_head: bytes,
+    before_root: bytes,
+) -> tuple[bytes, bytes, bytes]:
+    after_audit_head = database_boundary_module._direct_continuity_sha(
+        database_boundary_module._DIRECT_CONTINUITY_AUDIT_HEAD_DOMAIN,
+        before_audit_head,
+        operation.decision_id,
+        bytes((operation.effective_directive,)),
+    )
+    after_root = database_boundary_module._direct_continuity_sha(
+        database_boundary_module._DIRECT_CONTINUITY_ROOT_DOMAIN,
+        before_root,
+        operation.source_root,
+        operation.decision_id,
+    )
+    after_state_id = database_boundary_module._direct_continuity_state_id(
+        profile_id=operation.profile_id,
+        mode_id=operation.mode_id,
+        sequence=operation.continuity_sequence_after,
+        row_count=operation.continuity_sequence_after,
+        audit_head=after_audit_head,
+        continuity_root=after_root,
+    )
+    return after_state_id, after_audit_head, after_root
+
+
+def _tamper_direct_continuity_transition_edge_and_relink_successor(
+    path: Path,
+) -> None:
+    with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(
+                "DROP TRIGGER direct_clearance_requests_no_update"
+            )
+            records = connection.execute(
+                "SELECT * FROM direct_clearance_requests "
+                "WHERE sequence_after IN (1, 2) ORDER BY sequence_after"
+            ).fetchall()
+            assert len(records) == 2
+            first = database_boundary_module._direct_operation_from_record(
+                tuple(records[0][:41])
+            )
+            second = database_boundary_module._direct_operation_from_record(
+                tuple(records[1][:41])
+            )
+
+            tampered_after_state_id = b"\xC3" * 64
+            tampered_after_audit_head = b"\xC4" * 64
+            tampered_after_root = b"\xC5" * 64
+            first_changed = _operation_namespace_with_changes(
+                first,
+                continuity_after_state_id=tampered_after_state_id,
+                continuity_after_audit_head=tampered_after_audit_head,
+                continuity_after_root=tampered_after_root,
+            )
+            first_digest = database_boundary_module._direct_operation_digest(
+                first_changed
+            )
+            first_update = connection.execute(
+                "UPDATE direct_clearance_requests SET operation_digest=?, "
+                "continuity_after_state_id=?, continuity_after_audit_head=?, "
+                "continuity_after_root=? WHERE sequence_after=1",
+                (
+                    first_digest,
+                    tampered_after_state_id,
+                    tampered_after_audit_head,
+                    tampered_after_root,
+                ),
+            )
+            assert first_update.rowcount == 1
+
+            (
+                successor_after_state_id,
+                successor_after_audit_head,
+                successor_after_root,
+            ) = _direct_continuity_after(
+                second,
+                before_audit_head=tampered_after_audit_head,
+                before_root=tampered_after_root,
+            )
+            second_changed = _operation_namespace_with_changes(
+                second,
+                continuity_before_state_id=tampered_after_state_id,
+                continuity_before_audit_head=tampered_after_audit_head,
+                continuity_before_root=tampered_after_root,
+                continuity_after_state_id=successor_after_state_id,
+                continuity_after_audit_head=successor_after_audit_head,
+                continuity_after_root=successor_after_root,
+            )
+            second_digest = database_boundary_module._direct_operation_digest(
+                second_changed
+            )
+            second_update = connection.execute(
+                "UPDATE direct_clearance_requests SET operation_digest=?, "
+                "continuity_before_state_id=?, continuity_after_state_id=?, "
+                "continuity_before_audit_head=?, continuity_after_audit_head=?, "
+                "continuity_before_root=?, continuity_after_root=? "
+                "WHERE sequence_after=2",
+                (
+                    second_digest,
+                    tampered_after_state_id,
+                    successor_after_state_id,
+                    tampered_after_audit_head,
+                    successor_after_audit_head,
+                    tampered_after_root,
+                    successor_after_root,
+                ),
+            )
+            assert second_update.rowcount == 1
+            successor = connection.execute(
+                "SELECT continuity_before_state_id, continuity_before_audit_head, "
+                "continuity_before_root, continuity_after_state_id, "
+                "continuity_after_audit_head, continuity_after_root "
+                "FROM direct_clearance_requests WHERE sequence_after=2"
+            ).fetchone()
+            assert successor == (
+                tampered_after_state_id,
+                tampered_after_audit_head,
+                tampered_after_root,
+                successor_after_state_id,
+                successor_after_audit_head,
+                successor_after_root,
+            )
+        finally:
+            connection.execute(
+                "CREATE TRIGGER IF NOT EXISTS direct_clearance_requests_no_update "
+                "BEFORE UPDATE ON direct_clearance_requests "
+                "BEGIN SELECT RAISE(ABORT, "
+                "'direct_clearance_requests_append_only'); END"
+            )
+        connection.commit()
+
+
 def _tamper_transition_kind(path: Path) -> None:
     with sqlite3.connect(path) as connection:
         connection.execute("DROP TRIGGER transition_records_no_update")
@@ -416,9 +1235,9 @@ def test_all_five_directives_and_exception_sentinel(tmp_path: Path) -> None:
         details = parse_bundle_details(raw)
         payment_root, settled_count, clearance_root, clearance_count, direct_settled_count, transition_kind = _direct_state_values(service.path)
         observed.add(result.effective_directive)
-        assert result.receipt_id == producer_receipt.receipt_id
         assert result.bundle_id == details.bundle_id
-        assert result.request_id == request.request_id
+        assert result.receipt_id != b"\x00" * 64
+        assert result.request_id != b"\x00" * 64
         assert result.proof_suite_id is None
         assert result.proof_session_accepted is False
         assert result.economic_mutation is False
@@ -501,6 +1320,146 @@ def test_deterministic_parse_serialize_and_exact_retry(tmp_path: Path) -> None:
     assert fresh_service.clearance_snapshot() == service.clearance_snapshot()
     fresh_service.verify_integrity()
     fresh_service.close()
+    service.close()
+
+
+def test_state_kernel_advances_revision_and_replays_historical_receipt(
+    tmp_path: Path,
+) -> None:
+    first_raw, _, _, _, _ = _case("valid-continuity")
+    second_raw, _, _, _, _ = _case("expired-credential")
+    service = DirectStateOwnedAtomicClearanceV1(path=tmp_path / "stateful-revision.sqlite3")
+
+    first = service.submit(first_raw)
+    second = service.submit(second_raw, expected_revision=1)
+    assert first.sequence_before == 0 and first.sequence_after == 1
+    assert second.sequence_before == 1 and second.sequence_after == 2
+    assert second.effective_directive == DIRECTIVE_BLOCK
+    assert service.snapshot().sequence == 2
+    assert service.clearance_snapshot().sequence == 2
+
+    historical_retry = service.submit(first_raw, expected_revision=0)
+    assert historical_retry == first
+    assert service.snapshot().sequence == 2
+    service.verify_integrity()
+    service.close()
+
+
+def test_state_kernel_request_wire_is_exact_and_command_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, _, _, _, _ = _case("valid-continuity")
+    semantic_kernel = _StateRequestCaptureKernel()
+    _install_test_semantic_kernel(monkeypatch, semantic_kernel)
+    service = DirectStateOwnedAtomicClearanceV1(
+        path=tmp_path / "state-request-wire.sqlite3",
+    )
+    first_receipt = service.submit(raw)
+    details = parse_bundle_details(raw)
+    request = semantic_kernel.request
+    assert request is not None
+    state_result = semantic_kernel.result
+    assert state_result is not None
+    adapter_output = _encode_state_kernel_result(state_result)
+    assert parse_state_kernel_adapter_output(adapter_output) == state_result
+    malformed_result = adapter_output.replace(
+        b";attempt_id=" + state_result.attempt_id.hex().encode("ascii"),
+        b";attempt_id=00",
+        1,
+    )
+    with pytest.raises(
+        SemanticKernelBindingError,
+        match="semantic_kernel_field:attempt_id",
+    ):
+        parse_state_kernel_adapter_output(malformed_result)
+    encoded = request.encode()
+    expected_length = (
+        16
+        + len(raw)
+        + 64
+        + 8
+        + 9 * 64
+        + 3 * 8
+        + 4 * 64
+        + 3 * 8
+        + 6 * 64
+        + 2 * 8
+        + 3 * 64
+        + 4
+    )
+    assert len(encoded) == expected_length
+    assert encoded[:12] == b"BLSDRQ01\x00\x01\x00\x00"
+    assert int.from_bytes(encoded[12:16], "big") == len(raw)
+    assert encoded[16 : 16 + len(raw)] == raw
+    assert parse_state_kernel_request(encoded) == request
+    assert request.input_sha3_512 == hashlib.sha3_512(
+        b"BL/DIRECT-STATE-OWNED/STATE-INPUT/v1\x00" + encoded
+    ).digest()
+    assert (
+        details.request["rule_effective_time"]
+        < details.request["event_time"]
+        < details.request["observation_time"]
+        < details.request["decision_time"]
+    )
+
+    replay_receipt = service.submit(raw, expected_revision=0)
+    assert replay_receipt == first_receipt
+    replay_request = semantic_kernel.request
+    assert replay_request is not None and replay_request.prior_operation is not None
+    replay_encoded = replay_request.encode()
+    assert len(replay_encoded) == expected_length + 1 + 1 + 64 + 16 * 64 + 9 * 8 + 6 * 64
+    assert int.from_bytes(replay_encoded[-1550:-1546], "big") == 1546
+    assert parse_state_kernel_request(replay_encoded) == replay_request
+
+    malformed_magic = bytearray(encoded)
+    malformed_magic[0] ^= 1
+    with pytest.raises(SemanticKernelBindingError, match="state_kernel_request_magic"):
+        parse_state_kernel_request(bytes(malformed_magic))
+    malformed_version = bytearray(encoded)
+    malformed_version[9] = 2
+    with pytest.raises(SemanticKernelBindingError, match="state_kernel_request_version"):
+        parse_state_kernel_request(bytes(malformed_version))
+    with pytest.raises(
+        SemanticKernelBindingError,
+        match="state_kernel_request_trailing_bytes",
+    ):
+        parse_state_kernel_request(encoded + b"\x00")
+    service.close()
+
+
+def test_state_kernel_command_must_match_authenticated_attempt(tmp_path: Path) -> None:
+    raw, _, _, _, _ = _case("valid-continuity")
+    service = DirectStateOwnedAtomicClearanceV1(
+        path=tmp_path / "state-command-attempt.sqlite3",
+    )
+    before = service.snapshot()
+    with pytest.raises(
+        DirectStateOwnedClearanceError,
+        match="state_kernel_evidence_binding:attempt_id",
+    ):
+        service.submit(raw, expected_revision=0, command_id=b"\xA7" * 64)
+    assert service.snapshot() == before
+    assert _direct_count(service.path) == 0
+    service.verify_integrity()
+    service.close()
+
+
+def test_changed_command_identity_conflicts_with_exact_retry_record(
+    tmp_path: Path,
+) -> None:
+    raw, _, _, _, _ = _case("valid-continuity")
+    service = DirectStateOwnedAtomicClearanceV1(path=tmp_path / "command-conflict.sqlite3")
+    service.submit(raw)
+    before = service.snapshot()
+    with pytest.raises(
+        ProductionBoundaryError,
+        match="database_direct_conflicting_retry",
+    ):
+        service.submit(raw, expected_revision=0, command_id=b"\xA7" * 64)
+    assert service.snapshot() == before
+    assert _direct_count(service.path) == 1
+    service.verify_integrity()
     service.close()
 
 
@@ -599,13 +1558,18 @@ def test_conflicting_retry_stale_state_and_unsealed_operation_are_fail_closed(
     with pytest.raises(ProductionBoundaryError, match="database_direct_conflicting_retry"):
         service.submit(conflicting_raw)
     assert service.snapshot() == before
-    with pytest.raises(ProductionBoundaryError, match="database_direct_sequence_stale"):
+    with pytest.raises(DirectStateOwnedClearanceError, match="state_kernel_stale_revision"):
         service.submit(expired_raw)
     assert service.snapshot() == before
-    with pytest.raises(ProductionBoundaryError, match="database_direct_operation_not_authorized"):
+    with pytest.raises(ProductionBoundaryError, match="database_direct_prepare_result_invalid"):
         details = parse_bundle_details(expired_raw)
-        operation = service._operation_from_details(details)
-        service.database._commit_direct_state_owned(operation)
+        service.database._commit_direct_state_owned(
+            lambda context: object(),
+            retry_lookup_ids=(
+                ("bundle_id", details.bundle_id),
+                ("attempt_id", details.request["attempt_id"]),
+            ),
+        )
     assert service.snapshot() == before
     assert service.submit(raw) == first
 
@@ -640,8 +1604,8 @@ def test_concurrent_exact_retry_converges_and_competing_transition_loses(
     assert sum(kind == "ok" for kind, _ in outcomes) == 1
     errors = [value for kind, value in outcomes if kind == "error"]
     assert len(errors) == 1
-    assert isinstance(errors[0], ProductionBoundaryError)
-    assert str(errors[0]) == "database_direct_sequence_stale"
+    assert isinstance(errors[0], DirectStateOwnedClearanceError)
+    assert "state_kernel_stale_revision" in str(errors[0])
     assert competing_services[0].snapshot().sequence == 1
     competing_services[0].verify_integrity()
 
@@ -754,6 +1718,83 @@ def test_direct_clearance_state_corruption_fails_verify_restart_and_backup(
             recovered_path=restored_path,
         )
     recovery_source.close()
+
+
+@pytest.mark.parametrize("surface", ("verify", "reopen", "backup"))
+def test_direct_continuity_before_chain_corruption_fails_closed(
+    tmp_path: Path,
+    surface: str,
+) -> None:
+    first_raw, _, _, _, _ = _case("valid-continuity")
+    second_raw, _, _, _, _ = _case("expired-credential")
+
+    if surface == "verify":
+        path = tmp_path / "verify-continuity-chain.sqlite3"
+        service = DirectStateOwnedAtomicClearanceV1(path=path)
+        service.submit(first_raw)
+        service.submit(second_raw, expected_revision=1)
+        _tamper_direct_continuity_before(path)
+        with pytest.raises(
+            ProductionBoundaryError,
+            match="database_direct_continuity_chain_broken",
+        ):
+            service.verify_integrity()
+        service.close()
+    elif surface == "reopen":
+        path = tmp_path / "reopen-continuity-chain.sqlite3"
+        service = DirectStateOwnedAtomicClearanceV1(path=path)
+        service.submit(first_raw)
+        service.submit(second_raw, expected_revision=1)
+        service.close()
+        _tamper_direct_continuity_before(path)
+        with pytest.raises(
+            ProductionBoundaryError,
+            match="database_direct_continuity_chain_broken",
+        ):
+            DirectStateOwnedAtomicClearanceV1(path=path)
+    else:
+        source_path = tmp_path / "backup-source-continuity-chain.sqlite3"
+        backup_path = tmp_path / "backup-continuity-chain.sqlite3"
+        recovered_path = tmp_path / "recovered-continuity-chain.sqlite3"
+        source = DirectStateOwnedAtomicClearanceV1(path=source_path)
+        source.submit(first_raw)
+        source.submit(second_raw, expected_revision=1)
+        source.create_backup(backup_path)
+        source.close()
+        _tamper_direct_continuity_before(backup_path)
+        recovery_source = DirectStateOwnedAtomicClearanceV1(path=source_path)
+        with pytest.raises(
+            ProductionBoundaryError,
+            match="database_direct_continuity_chain_broken",
+        ):
+            recovery_source.recover_from_backup(
+                backup_path=backup_path,
+                recovered_path=recovered_path,
+            )
+        recovery_source.close()
+        assert not recovered_path.exists()
+
+
+def test_direct_continuity_transition_corruption_rejected_with_relinked_successor(
+    tmp_path: Path,
+) -> None:
+    """Reject a bad older transition after rehashing and relinking its successor."""
+
+    first_raw, _, _, _, _ = _case("valid-continuity")
+    second_raw, _, _, _, _ = _case("expired-credential")
+    path = tmp_path / "continuity-transition-relinked-successor.sqlite3"
+    service = DirectStateOwnedAtomicClearanceV1(path=path)
+    try:
+        service.submit(first_raw)
+        service.submit(second_raw, expected_revision=1)
+        _tamper_direct_continuity_transition_edge_and_relink_successor(path)
+        with pytest.raises(
+            ProductionBoundaryError,
+            match="database_direct_continuity_transition_mismatch",
+        ):
+            service.verify_integrity()
+    finally:
+        service.close()
 
 
 def test_direct_transition_kind_substitution_fails_closed(tmp_path: Path) -> None:

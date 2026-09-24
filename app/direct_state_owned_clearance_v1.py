@@ -1,11 +1,4 @@
-"""Nonactivating Direct-State-Owned Atomic Clearance V1 composition seam.
-
-The service accepts only the canonical plaintext continuity bundle.  It first
-uses the independent parser as the semantic acceptance boundary, then sends a
-sealed commitment-only operation to the existing serializable SQLite state
-boundary.  This is a local synthetic qualification seam: it is not a proof
-backend, a payment rail, a production evaluator, or an activation path.
-"""
+"""Nonactivating Lean-controlled Direct-State-Owned atomic clearance seam."""
 
 from __future__ import annotations
 
@@ -16,10 +9,20 @@ from typing import Callable
 
 from app.batch.poseidon import FIELD_MODULUS
 from app.governance_authority_v2 import GovernanceAuthorityV2
+from app.semantic_kernel_binding import (
+    SemanticKernelBindingError,
+    SemanticKernelResultMismatch,
+    StateKernelPriorOperation,
+    StateKernelRequest,
+    StateKernelResult,
+    assert_state_kernel_result_agrees,
+    build_production_semantic_kernel_binding,
+)
 from app.transactional_database_boundary import (
     AntiRollbackReference,
     DirectStateOwnedDatabaseReceiptV1,
     DirectStateOwnedOperationV1,
+    DirectStateOwnedCommitContextV1,
     SQLiteSettlementStoreV2,
 )
 from experiments.native_v3_plaintext_continuity.independent import (
@@ -169,9 +172,41 @@ class DirectStateOwnedAtomicClearanceV1:
     ) -> None:
         if not isinstance(path, Path):
             raise TypeError("direct_database_path_required")
+        try:
+            semantic_kernel = build_production_semantic_kernel_binding()
+        except SemanticKernelBindingError as exc:
+            raise DirectStateOwnedClearanceError(
+                f"direct_semantic_kernel_unavailable:{exc}"
+            ) from exc
+        if not callable(getattr(semantic_kernel, "evaluate_state_request", None)):
+            raise DirectStateOwnedClearanceError("direct_semantic_kernel_port_invalid")
+        try:
+            # Capture expected identities from the loaded pin, never from a result.
+            pin = semantic_kernel.pin
+            artifact_sha256 = pin.kernel_artifact_sha256
+            source_binding_sha256 = pin.source_binding_sha256
+        except (AttributeError, SemanticKernelBindingError, TypeError) as exc:
+            raise DirectStateOwnedClearanceError(
+                "direct_semantic_kernel_unavailable:semantic_kernel_trusted_pin"
+            ) from exc
+        if (
+            type(artifact_sha256) is not bytes
+            or len(artifact_sha256) != 32
+            or not any(artifact_sha256)
+            or type(source_binding_sha256) is not bytes
+            or len(source_binding_sha256) != 32
+            or not any(source_binding_sha256)
+        ):
+            raise DirectStateOwnedClearanceError(
+                "direct_semantic_kernel_unavailable:semantic_kernel_trusted_pin"
+            )
+        self._semantic_kernel = semantic_kernel
+        self._semantic_kernel_artifact_sha256 = artifact_sha256
+        self._semantic_kernel_source_binding_sha256 = source_binding_sha256
         profile = build_profile_bindings()
         self._anti_rollback = anti_rollback
         self._profile_id = profile.profile_id
+        self._phase0_receipt_binding = profile.frozen_receipt_binding
         self._store = SQLiteSettlementStoreV2(
             path=path,
             settlement_domain=DIRECT_DATABASE_DOMAIN,
@@ -207,59 +242,155 @@ class DirectStateOwnedAtomicClearanceV1:
 
         return self._store
 
-    def _operation_from_details(
+    @staticmethod
+    def _prior_operation(
+        operation: DirectStateOwnedOperationV1 | None,
+        operation_digest: bytes | None,
+    ) -> StateKernelPriorOperation | None:
+        if operation is None or operation_digest is None:
+            if operation is not None or operation_digest is not None:
+                raise DirectStateOwnedClearanceError("direct_retry_record_incomplete")
+            return None
+        return StateKernelPriorOperation(
+            operation_digest=operation_digest,
+            operation_version=0 if operation.clearance_advanced is None else 1,
+            clearance_advanced=(
+                operation.effective_directive in (1, 5)
+                if operation.clearance_advanced is None
+                else operation.clearance_advanced
+            ),
+            bundle_id=operation.bundle_id,
+            receipt_id=operation.receipt_id,
+            request_id=operation.request_id,
+            attempt_id=operation.attempt_id,
+            decision_id=operation.decision_id,
+            join_id=operation.join_id,
+            source_root=operation.source_root,
+            profile_id=operation.profile_id,
+            schema_id=operation.schema_id,
+            program_id=operation.program_id,
+            mode_id=operation.mode_id,
+            evaluator_id=operation.evaluator_id,
+            control_set_id=operation.control_set_id,
+            rule_id=operation.rule_id,
+            phase0_receipt_binding=operation.phase0_receipt_binding,
+            exception_id=operation.exception_id,
+            policy_result=operation.policy_result,
+            effective_directive=operation.effective_directive,
+            event_time=operation.event_time,
+            observation_time=operation.observation_time,
+            rule_effective_time=operation.rule_effective_time,
+            decision_time=operation.decision_time,
+            continuity_epoch=operation.continuity_epoch,
+            continuity_sequence_before=operation.continuity_sequence_before,
+            continuity_sequence_after=operation.continuity_sequence_after,
+            continuity_before_state_id=operation.continuity_before_state_id,
+            continuity_after_state_id=operation.continuity_after_state_id,
+            continuity_before_audit_head=operation.continuity_before_audit_head,
+            continuity_after_audit_head=operation.continuity_after_audit_head,
+            continuity_before_root=operation.continuity_before_root,
+            continuity_after_root=operation.continuity_after_root,
+        )
+
+    def _state_request(
         self,
-        details: IndependentBundleDetails,
-    ) -> DirectStateOwnedOperationV1:
-        decision = details.decision
-        if (
-            details.control_set_id != CONTROL_SET_ID
-            or decision["mode_id"] != MODE_ID
-            or decision["rule_id"] != RULE_ID
-            or decision["control_set_id"] != CONTROL_SET_ID
-            or decision["phase0_receipt_binding"] != details.phase0_receipt_binding
-            or decision["state_before_id"] != details.before["id"]
-            or decision["state_after_id"] != details.after["id"]
-            or details.request["epoch"] != DIRECT_EPOCH
-            or details.request["sequence_before"] != 0
-        ):
-            raise DirectStateOwnedClearanceError("direct_composition_binding_mismatch")
-        return DirectStateOwnedOperationV1(
-            bundle_id=details.bundle_id,
-            receipt_id=details.receipt_id,
-            request_id=details.request["id"],
-            attempt_id=details.request["attempt_id"],
-            decision_id=decision["decision_id"],
-            join_id=details.join_id,
-            source_root=details.facts["source_root"],
+        *,
+        bundle: bytes,
+        command_id: bytes,
+        expected_revision: int,
+        context: DirectStateOwnedCommitContextV1,
+    ) -> StateKernelRequest:
+        prior = self._prior_operation(
+            context.prior_operation,
+            context.prior_operation_digest,
+        )
+        direct = context.direct_state
+        return StateKernelRequest(
+            bundle=bundle,
+            command_id=command_id,
+            expected_revision=expected_revision,
             profile_id=self._profile_id,
             schema_id=DIRECT_DATABASE_SCHEMA_ID,
             program_id=DIRECT_DATABASE_PROGRAM_ID,
-            mode_id=decision["mode_id"],
+            mode_id=MODE_ID,
             evaluator_id=EVALUATOR_ID,
-            control_set_id=details.control_set_id,
-            rule_id=decision["rule_id"],
-            phase0_receipt_binding=details.phase0_receipt_binding,
-            exception_id=decision["exception_id"],
-            policy_result=details.policy_result,
-            effective_directive=details.effective_directive,
-            event_time=decision["event_time"],
-            observation_time=decision["observation_time"],
-            rule_effective_time=decision["rule_effective_time"],
-            decision_time=decision["decision_time"],
-            continuity_epoch=details.request["epoch"],
-            continuity_sequence_before=details.request["sequence_before"],
-            continuity_sequence_after=details.after["sequence"],
-            continuity_before_state_id=details.before["id"],
-            continuity_after_state_id=details.after["id"],
-            continuity_before_audit_head=details.before["audit"],
-            continuity_after_audit_head=details.after["audit"],
-            continuity_before_root=details.before["root"],
-            continuity_after_root=details.after["root"],
+            control_set_id=CONTROL_SET_ID,
+            rule_id=RULE_ID,
+            phase0_receipt_binding=self._phase0_receipt_binding,
+            governance_commitment=context.governance_commitment,
+            continuity_epoch=direct.epoch,
+            global_sequence=context.global_sequence,
+            anti_rollback_epoch=context.anti_rollback_epoch,
+            global_state_binding=context.global_state_binding,
+            global_audit_head=context.global_audit_head,
+            nullifier_root=context.nullifier_root,
+            payment_root=context.payment_root,
+            direct_sequence=direct.sequence,
+            direct_count=context.direct_count,
+            clearance_root=direct.clearance_root,
+            direct_state_binding=direct.state_binding,
+            database_state_binding=direct.database_state_binding,
+            direct_payment_root=direct.payment_root,
+            direct_settled_batch_count=direct.settled_batch_count,
+            direct_audit_head=direct.audit_head,
+            last_operation_digest=(
+                b"\x00" * 64
+                if direct.last_operation_digest is None
+                else direct.last_operation_digest
+            ),
+            continuity_sequence=context.continuity_sequence,
+            continuity_row_count=context.continuity_row_count,
+            continuity_state_id=context.continuity_state_id,
+            continuity_audit_head=context.continuity_audit_head,
+            continuity_root=context.continuity_root,
+            prior_operation=prior,
         )
 
-    def submit(self, bundle: bytes) -> DirectClearanceReceiptV1:
-        """Independently verify and atomically commit one canonical bundle."""
+    @staticmethod
+    def _operation_from_result(result: StateKernelResult) -> DirectStateOwnedOperationV1:
+        return DirectStateOwnedOperationV1(
+            bundle_id=result.bundle_id,
+            receipt_id=result.receipt_id,
+            request_id=result.request_id,
+            attempt_id=result.attempt_id,
+            decision_id=result.decision_id,
+            join_id=result.join_id,
+            source_root=result.source_root,
+            profile_id=result.profile_id,
+            schema_id=result.schema_id,
+            program_id=result.program_id,
+            mode_id=result.mode_id,
+            evaluator_id=result.evaluator_id,
+            control_set_id=result.control_set_id,
+            rule_id=result.rule_id,
+            phase0_receipt_binding=result.phase0_receipt_binding,
+            exception_id=result.exception_id,
+            policy_result=result.policy,
+            effective_directive=result.directive,
+            event_time=result.event_time,
+            observation_time=result.observation_time,
+            rule_effective_time=result.rule_effective_time,
+            decision_time=result.decision_time,
+            continuity_epoch=result.continuity_epoch,
+            continuity_sequence_before=result.sequence_before,
+            continuity_sequence_after=result.sequence_after,
+            continuity_before_state_id=result.before_state_id,
+            continuity_after_state_id=result.after_state_id,
+            continuity_before_audit_head=result.before_audit_head,
+            continuity_after_audit_head=result.after_audit_head,
+            continuity_before_root=result.before_continuity_root,
+            continuity_after_root=result.after_continuity_root,
+            clearance_advanced=result.economic_mutation,
+        )
+
+    def submit(
+        self,
+        bundle: bytes,
+        *,
+        expected_revision: int | None = None,
+        command_id: bytes | None = None,
+    ) -> DirectClearanceReceiptV1:
+        """Evaluate and commit one versioned State request under SQLite's write lock."""
 
         if type(bundle) is not bytes:
             raise DirectStateOwnedClearanceError("direct_bundle_bytes_required")
@@ -269,22 +400,71 @@ class DirectStateOwnedAtomicClearanceV1:
             raise DirectStateOwnedClearanceError(
                 f"direct_independent_reject:{exc}"
             ) from exc
-        operation = self._operation_from_details(details)
-        sealed = self._store._seal_direct_state_owned(operation)
-        committed = self._store._commit_direct_state_owned(sealed)
-        return self._receipt(details, committed)
+        if details.request["epoch"] != DIRECT_EPOCH:
+            raise DirectStateOwnedClearanceError("direct_bundle_epoch_mismatch")
+        if expected_revision is None:
+            expected_revision = details.request["sequence_before"]
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise DirectStateOwnedClearanceError("direct_expected_revision_invalid")
+        if command_id is None:
+            command_id = details.request["attempt_id"]
+        if type(command_id) is not bytes or len(command_id) != 64 or not any(command_id):
+            raise DirectStateOwnedClearanceError("direct_command_id_invalid")
+        retry_lookup_ids = (
+            ("bundle_id", details.bundle_id),
+            ("attempt_id", command_id),
+        )
+
+        def prepare(context: DirectStateOwnedCommitContextV1) -> DirectStateOwnedOperationV1:
+            if (
+                context.prior_operation is not None
+                and context.prior_operation.continuity_sequence_before != expected_revision
+            ):
+                raise SemanticKernelResultMismatch("state_kernel_retry_revision_conflict")
+            request = self._state_request(
+                bundle=bundle,
+                command_id=command_id,
+                expected_revision=expected_revision,
+                context=context,
+            )
+            result = self._semantic_kernel.evaluate_state_request(request)
+            if type(result) is not StateKernelResult:
+                raise SemanticKernelBindingError("state_kernel_result_type")
+            assert_state_kernel_result_agrees(
+                result,
+                request,
+                artifact_sha256=self._semantic_kernel_artifact_sha256,
+                source_binding_sha256=self._semantic_kernel_source_binding_sha256,
+                details=details,
+            )
+            if result.disposition == "REPLAY":
+                if context.prior_operation is None:
+                    raise SemanticKernelResultMismatch("state_kernel_replay_without_record")
+                return context.prior_operation
+            return self._operation_from_result(result)
+
+        try:
+            committed, operation = self._store._commit_direct_state_owned(
+                prepare,
+                retry_lookup_ids=retry_lookup_ids,
+            )
+        except (SemanticKernelBindingError, SemanticKernelResultMismatch) as exc:
+            raise DirectStateOwnedClearanceError(
+                f"direct_semantic_kernel_reject:{exc}"
+            ) from exc
+        return self._receipt(operation, committed)
 
     @staticmethod
     def _receipt(
-        details: IndependentBundleDetails,
+        operation: DirectStateOwnedOperationV1,
         committed: DirectStateOwnedDatabaseReceiptV1,
     ) -> DirectClearanceReceiptV1:
         return DirectClearanceReceiptV1(
             operation_digest=committed.operation_digest,
             bundle_id=committed.bundle_id,
             receipt_id=committed.receipt_id,
-            request_id=details.request["id"],
-            attempt_id=details.request["attempt_id"],
+            request_id=operation.request_id,
+            attempt_id=operation.attempt_id,
             decision_id=committed.decision_id,
             join_id=committed.join_id,
             sequence_before=committed.sequence_before,
@@ -301,8 +481,8 @@ class DirectStateOwnedAtomicClearanceV1:
             settled_batch_count_after=committed.settled_batch_count_after,
             state_binding=committed.state_binding,
             audit_head=committed.audit_head,
-            policy_result=details.policy_result,
-            effective_directive=details.effective_directive,
+            policy_result=operation.policy_result,
+            effective_directive=operation.effective_directive,
             clearance_advanced=committed.clearance_advanced,
         )
 

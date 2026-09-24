@@ -1,0 +1,73 @@
+import BlindLedger.Financial.Executable
+import BlindLedger.Financial.CodecLaws
+import BlindLedger.Financial.CodecLawsCheck
+import BlindLedger.Financial.CorrectionTransition.Theorems
+
+namespace BlindLedger.Financial
+
+/-! The guarded dependency-report target is source-based.  It does not consume
+    a cached manifest or generated artifact. -/
+
+#print axioms BlindLedger.Financial.evaluation_deterministic
+#print axioms BlindLedger.Financial.evaluateWellFormed_matches_specification
+#print axioms BlindLedger.Financial.evaluate_rejects_not_well_formed
+#print axioms BlindLedger.Financial.evaluate_satisfies_specification
+#print axioms BlindLedger.Financial.accepted_evaluation_contract
+#print axioms BlindLedger.Financial.evaluate_rejects_total_overflow
+#print axioms BlindLedger.Financial.evalAdd_rejects_left_out_of_bounds
+#print axioms BlindLedger.Financial.evalAdd_rejects_right_out_of_bounds
+#print axioms BlindLedger.Financial.authorized_kat_is_correct
+#print axioms BlindLedger.Financial.missing_evidence_requires_support
+#print axioms BlindLedger.Financial.conflict_precedence_is_visible
+#print axioms BlindLedger.Financial.acknowledgement_is_not_cash
+#print axioms BlindLedger.Financial.late_completion_is_deterministic
+#print axioms BlindLedger.Financial.overflow_is_rejected
+#print axioms BlindLedger.Financial.malformed_order_is_rejected
+#print axioms BlindLedger.Financial.scope_mutation_is_rejected
+#print axioms BlindLedger.Financial.authority_mutation_is_rejected
+#print axioms BlindLedger.Financial.actor_role_mutation_is_rejected
+#print axioms BlindLedger.Financial.terminal_authorization_requires_determination
+#print axioms BlindLedger.Financial.duplicate_confirmation_is_preserved
+#print axioms BlindLedger.Financial.active_reversal_evidence_is_rejected
+#print axioms BlindLedger.Financial.reversed_payment_excludes_cash
+#print axioms BlindLedger.Financial.repeated_reversal_evidence_is_preserved
+#print axioms BlindLedger.Financial.pack_source_refs_and_roles_keep_owner_order
+#print axioms BlindLedger.Financial.repeated_pack_source_refs_preserve_wire_and_digest
+#print axioms BlindLedger.Financial.lawful_completion_fallback_is_preserved
+#print axioms BlindLedger.Financial.historical_revision_binding_is_checked
+#print axioms BlindLedger.Financial.latest_delivery_uses_timestamp_then_id
+#print axioms BlindLedger.Financial.direct_add_operands_are_bounded
+#print axioms BlindLedger.Financial.codec_roundtrip_kat
+#print axioms BlindLedger.Financial.codec_trailing_bytes_rejected
+#print axioms BlindLedger.Financial.codec_mutation_rejected
+#print axioms BlindLedger.Financial.codec_enum_mutation_rejected
+#print axioms BlindLedger.Financial.codec_count_overflow_rejected
+#print axioms BlindLedger.Financial.result_codec_roundtrip_kat
+#print axioms BlindLedger.Financial.result_codec_trailing_bytes_rejected
+#print axioms BlindLedger.Financial.result_codec_mutation_rejected
+#print axioms BlindLedger.Financial.evaluator_corresponds_to_independent_specification
+#print axioms BlindLedger.Financial.exportedEvaluate_is_evaluate
+#print axioms BlindLedger.Financial.codecLawsProofManifest
+#print axioms BlindLedger.Financial.codecLawsNoTrailingManifest
+#print axioms BlindLedger.Financial.codecLawsWholeWireManifest
+#print axioms BlindLedger.Financial.CorrectionTransition.canonicalActionPayload_dispatch_is_synthetic_record_only
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_mutation_links
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_nonaccepted_has_no_mutation
+#print axioms BlindLedger.Financial.CorrectionTransition.rejectedCorrectionTransition_has_no_mutation
+#print axioms BlindLedger.Financial.CorrectionTransition.duplicateCorrectionTransition_has_no_mutation
+#print axioms BlindLedger.Financial.CorrectionTransition.executionDenial_none_implies_valid_axes
+#print axioms BlindLedger.Financial.CorrectionTransition.assessAcceptedCorrectionReuse_allowed_implies_valid_axes
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_allowed_implies_valid_axes
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_calculation_independent_of_approval_and_execution_observations
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_local_permission_matches_denial
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_never_permits_external_dispatch
+
+def main : IO Unit := do
+  IO.println "FINANCIAL_AXIOM_CHECK=SOURCE_PRINTED"
+  IO.println "FINANCIAL_EXECUTABLE_SEAM=exportedEvaluate"
+  IO.println "FINANCIAL_NONACTIVATING=true"
+
+end BlindLedger.Financial
+
+def main : IO Unit := BlindLedger.Financial.main

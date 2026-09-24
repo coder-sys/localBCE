@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RR/PROVIDER-APP/CHECK-REQUEST/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "mode", "scope", "evaluatedAt", "facts"],
+  "properties": {
+    "contract": {
+      "const": "RR/PROVIDER-APP/CHECK-REQUEST/v1"
+    },
+    "mode": {
+      "enum": ["SYNTHETIC_TEST", "REAL_USE"]
+    },
+    "scope": {
+      "enum": ["RR-SYNTHETIC-PROVIDER-A", "RR-SYNTHETIC-PROVIDER-B"]
+    },
+    "evaluatedAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "serviceDate",
+        "serviceCategory",
+        "supportReference",
+        "chargeCents",
+        "sourceBinding"
+      ],
+      "properties": {
+        "serviceDate": {
+          "type": ["string", "null"],
+          "format": "date"
+        },
+        "serviceCategory": {
+          "enum": ["SYNTH-CATEGORY-A", "SYNTH-CATEGORY-B", null]
+        },
+        "supportReference": {
+          "enum": ["PRESENT", "ABSENT", null]
+        },
+        "chargeCents": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 100000000
+        },
+        "sourceBinding": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source", "version", "status", "effectiveAt", "receivedAt"],
+              "properties": {
+                "source": {
+                  "enum": [
+                    "SYNTHETIC-SOURCE-ALPHA",
+                    "SYNTHETIC-SOURCE-BETA"
+                  ]
+                },
+                "version": {
+                  "const": "SYNTHETIC-SOURCE/v1"
+                },
+                "status": {
+                  "enum": [
+                    "COMPLETE_FIXTURE",
+                    "PARTIAL",
+                    "STALE",
+                    "CONFLICT",
+                    "REPLAYED",
+                    "UNKNOWN"
+                  ]
+                },
+                "effectiveAt": {
+                  "type": ["string", "null"],
+                  "format": "date"
+                },
+                "receivedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "x-contract-bounds": {"maximumJsonBytes": 16384, "maximumJsonNesting": 8},
+  "x-contract-note": "Effective intervals, strict UTC timestamps, duplicate-key rejection, and digest rules are enforced by the reference byte adapter."
+}

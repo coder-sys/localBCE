@@ -1,0 +1,12 @@
+name = "blind_ledger_security_arithmetic"
+version = "0.1.0"
+defaultTargets = ["BlindLedger", "blind_security_arithmetic_v2"]
+buildDir = ".lake/build-v2"
+
+[[lean_lib]]
+name = "BlindLedger"
+
+[[lean_exe]]
+name = "blind_security_arithmetic_v2"
+root = "BlindLedger.SecurityExecutable"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]

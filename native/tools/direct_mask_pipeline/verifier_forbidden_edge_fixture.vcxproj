@@ -1,0 +1,9 @@
+<!-- Controlled negative fixture: the real verifier closure must reject this edge. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <ProjectName>controlled_forbidden_edge_fixture</ProjectName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="dm_pipeline_source.vcxproj" />
+  </ItemGroup>
+</Project>

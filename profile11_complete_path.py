@@ -604,6 +604,7 @@ def _file_pins() -> tuple[FilePin, ...]:
         FilePin("c_verifier", C_VERIFIER, SOURCE_AUTH_EXECUTABLE_SIZE_BYTES, SOURCE_AUTH_EXECUTABLE_SHA256.hex().upper()),
         FilePin("c_source_library", C_SOURCE_LIBRARY, C_SOURCE_LIBRARY_SIZE_BYTES, C_SOURCE_LIBRARY_SHA256),
         FilePin("c_range_library", C_RANGE_LIBRARY, C_RANGE_LIBRARY_SIZE_BYTES, C_RANGE_LIBRARY_SHA256),
+        FilePin("source_host", SOURCE_HOST, SOURCE_HOST_SIZE_BYTES, SOURCE_HOST_SHA256.hex().upper()),
     )
 
 

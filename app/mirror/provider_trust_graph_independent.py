@@ -371,12 +371,6 @@ def _parse(raw: bytes) -> dict[str, object]:
     return value
 
 
-def _parse_input(raw: bytes) -> dict[str, object]:
-    if type(raw) is not bytes or not raw or len(raw) > 262_144:
-        raise IndependentProviderTrustGraphError("input:byte-cap")
-    return _parse(raw)
-
-
 def _digest(label: str, value: object, *, profile: _GraphProfile | None = None) -> str:
     h = hashlib.sha3_512()
     version = "v2" if profile is not None and profile.v2 else "v1"
@@ -851,10 +845,6 @@ def verify_artifact_v2(raw: bytes, profile_registry: Mapping[str, object]) -> _V
 
 def verify_bytes_v2(raw: bytes, profile_registry: Mapping[str, object]) -> dict[str, object]:
     return dict(_new_graph_checked(raw, profile_registry).summary)
-
-
-def _bind_input_to_verified_v2(graph_input_raw: bytes, artifact_raw: bytes, *, verified: _VerifiedGraphArtifactV2) -> dict[str, object]:
-    return _new_bind_input(graph_input_raw, artifact_raw, verified=verified)
 
 
 def verify_input_binding_v2(graph_input_raw: bytes, artifact_raw: bytes, profile_registry: Mapping[str, object]) -> dict[str, object]:

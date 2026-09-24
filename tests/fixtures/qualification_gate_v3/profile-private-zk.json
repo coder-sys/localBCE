@@ -1,0 +1,111 @@
+{
+  "schema_version": "blind_ledger_qualification_profile_v3",
+  "synthetic_only": true,
+  "selection_state": "UNSELECTED",
+  "profile_id": "SYNTH-PROFILE-PRIVATE-001",
+  "candidate_capability": "SYNTH-CAPABILITY",
+  "candidate_mode": "PRIVATE_ZK",
+  "scope": {
+    "jurisdiction_id": "SYNTH-STATE",
+    "program_id": "SYNTH-PROGRAM",
+    "period_id": "SYNTH-2026-Q3",
+    "effective_from": "2026-09-01T00:00:00Z",
+    "effective_until": "2026-10-01T00:00:00Z",
+    "issuer_ids": [
+      "SYNTH-STATE-AUTHORITY"
+    ],
+    "source_ids": [
+      "SYNTH-SOURCE-01"
+    ],
+    "receiver_ids": [
+      "SYNTH-RECEIVER-01"
+    ]
+  },
+  "release_binding": {
+    "release_id": "SYNTH-RELEASE-001",
+    "release_sha3_512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "schema_id": "SYNTH-SCHEMA-001",
+    "schema_sha3_512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "control_set_id": "SYNTH-CONTROL-SET-001",
+    "control_set_sha3_512": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "expected_artifacts": {
+    "proof_suite_artifact_id": "SYNTH-PROOF-SUITE-001",
+    "proof_suite_artifact_sha3_512": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "verifier_executable_sha3_512": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "proof_statement_id": "SYNTH-PROOF-STATEMENT-001",
+    "source_binding_profile_id": "SYNTH-SOURCE-BINDING-001",
+    "proof_request_id": "SYNTH-PROOF-REQUEST-001"
+  },
+  "provenance_model": "SOURCE_BOUND_PRIVATE_PROOF_V1",
+  "approval_claim": {
+    "authority_id": "SYNTH-STATE-AUTHORITY",
+    "approver_id": "SYNTH-APPROVER-01",
+    "approver_role": "FINANCE_OWNER",
+    "key_id": "SYNTH-STATE-KEY-01",
+    "attestation_model": "SYNTH-STATE-PROFILE-ATTESTATION-V1",
+    "signature_algorithm": "SYNTH-SIGNATURE-ALGORITHM-V1",
+    "approved_at": "2026-09-01T00:00:00Z",
+    "valid_from": "2026-09-01T00:00:00Z",
+    "valid_until": "2026-10-01T00:00:00Z",
+    "scope": {
+      "jurisdiction_id": "SYNTH-STATE",
+      "program_id": "SYNTH-PROGRAM",
+      "period_id": "SYNTH-2026-Q3",
+      "effective_from": "2026-09-01T00:00:00Z",
+      "effective_until": "2026-10-01T00:00:00Z",
+      "issuer_ids": [
+        "SYNTH-STATE-AUTHORITY"
+      ],
+      "source_ids": [
+        "SYNTH-SOURCE-01"
+      ],
+      "receiver_ids": [
+        "SYNTH-RECEIVER-01"
+      ]
+    },
+    "profile_binding": {
+      "profile_id": "SYNTH-PROFILE-PRIVATE-001",
+      "candidate_mode": "PRIVATE_ZK",
+      "release_id": "SYNTH-RELEASE-001",
+      "release_sha3_512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "schema_id": "SYNTH-SCHEMA-001",
+      "schema_sha3_512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "control_set_id": "SYNTH-CONTROL-SET-001",
+      "control_set_sha3_512": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "candidate_capability": "SYNTH-CAPABILITY",
+      "expected_artifacts": {
+        "proof_suite_artifact_id": "SYNTH-PROOF-SUITE-001",
+        "proof_suite_artifact_sha3_512": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "verifier_executable_sha3_512": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "proof_statement_id": "SYNTH-PROOF-STATEMENT-001",
+        "source_binding_profile_id": "SYNTH-SOURCE-BINDING-001",
+        "proof_request_id": "SYNTH-PROOF-REQUEST-001"
+      },
+      "provenance_model": "SOURCE_BOUND_PRIVATE_PROOF_V1",
+      "proof_throughput_applicability": {
+        "decision": "REQUIRED",
+        "basis": "PRIVATE_ZK_COMPLETE_PATH",
+        "decision_id": null,
+        "state_approver_id": null,
+        "engineering_approver_id": null,
+        "valid_from": null,
+        "valid_until": null,
+        "state_attestation_sha3_512": null,
+        "engineering_attestation_sha3_512": null
+      }
+    },
+    "signature_artifact_sha3_512": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "proof_throughput_applicability": {
+    "decision": "REQUIRED",
+    "basis": "PRIVATE_ZK_COMPLETE_PATH",
+    "decision_id": null,
+    "state_approver_id": null,
+    "engineering_approver_id": null,
+    "valid_from": null,
+    "valid_until": null,
+    "state_attestation_sha3_512": null,
+    "engineering_attestation_sha3_512": null
+  }
+}

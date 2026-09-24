@@ -19,8 +19,10 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from app import right_rail_financial_owner as owner
+from app import right_rail_financial_engine as financial_engine
 from app import right_rail_financial_semantic_adapter as adapter
 from app.right_rail_financial_owner import (
     ControlPack,
@@ -128,8 +130,34 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         pack_expectation = expected.CONTROL_PACK_V1
         pack = self._pack(pack_expectation)
         store.publish_control_pack(pack)
+        manifest_fixture = expected.POPULATION_MANIFEST_V1
+        authority = store.trusted_authority
+        manifest = owner.PopulationManifest(
+            manifest_id=manifest_fixture.manifest_id,
+            manifest_version=manifest_fixture.manifest_version,
+            state_id=manifest_fixture.scope.state_id,
+            deployment_id=manifest_fixture.scope.deployment_id,
+            program_id=manifest_fixture.scope.program_id,
+            period_id=manifest_fixture.scope.period_id,
+            currency=manifest_fixture.scope.currency,
+            pack_id=manifest_fixture.pack_id,
+            cutoff_ms=manifest_fixture.cutoff_ms,
+            inclusion_rules=manifest_fixture.inclusion_rules,
+            source_owner_id=manifest_fixture.source_owner_id,
+            authority_id=authority.authority_id,
+            authority_epoch=authority.epoch,
+            authority_digest=authority.digest,
+            approved_by=manifest_fixture.approved_by,
+            approval_ref=manifest_fixture.approval_ref,
+            source_id=manifest_fixture.source_id,
+            source_version=manifest_fixture.source_version,
+            source_digest=bytes.fromhex(manifest_fixture.source_digest_hex),
+            member_ids=manifest_fixture.member_ids,
+        )
+        store.register_population_manifest(manifest)
         store.stage_population(
             population_id=expected.POPULATION_ONE_ID,
+            manifest_id=manifest.manifest_id,
             pack_id=pack.pack_id,
             cutoff_ms=pack_expectation.effective_start_ms,
             inclusion_rules=("included:synthetic",),
@@ -482,6 +510,21 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(data["owner"]["mode"], "LIVE")
         self.assertEqual(data["owner"]["provenance"], "ROOT")
         self.assertEqual(data["authority"]["context"], "CURRENT")
+        self.assertEqual(
+            set(data["population"]),
+            {
+                "population_id",
+                "pack_id",
+                "cutoff_ms",
+                "inclusion_rules",
+                "expected_count",
+                "source_complete",
+                "imported_count",
+                "validated_count",
+                "validation_digest",
+                "status",
+            },
+        )
         self.assertEqual(data["population"]["expected_count"], EXPECTED_HOSPITAL_COUNT)
         self.assertEqual(data["population_item"]["owed_cents"], EXPECTED_H_OWED_CENTS)
         self.assertEqual(data["obligation"]["received_cash_cents"], EXPECTED_H_CASH_CENTS)
@@ -786,6 +829,51 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             expected.H_P3_REPLACED,
             completion_at_ms=expected.P3_EVENT_MS,
         )
+
+    def test_correction_refuses_missing_or_bypassed_transition_without_mutation(self) -> None:
+        store = self._build_base()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        before_hash = self._hash(store.path)
+        before_package = store.export_continuity()
+        before_data = self._snapshot(store).data
+
+        command = {
+            "item_id": expected.H_ITEM_ID,
+            "claim_id": claim_id,
+            "expected_revision": receipt["revision"],
+            "action_id": expected.ACTION_CORRECTION_ID,
+            "decision_at_ms": expected.CORRECTION_AUTH_MS,
+            "evaluation_id": receipt["evaluation_id"],
+            "evaluation_result_digest": receipt["result_digest"],
+        }
+
+        with self.assertRaisesRegex(
+            owner.FinancialIntegrityError,
+            "correction_transition_unavailable",
+        ):
+            store.reject_offset_and_authorize_correction(**command)
+
+        with (
+            patch.object(financial_engine, "require_correction_transition_v1", return_value=None),
+            patch.object(financial_engine, "evaluate_financial_snapshot", return_value=object()) as projection_bypass,
+        ):
+            with self.assertRaisesRegex(
+                owner.FinancialIntegrityError,
+                "correction_transition_unavailable",
+            ):
+                store.reject_offset_and_authorize_correction(**command)
+            projection_bypass.assert_not_called()
+
+        self._assert_no_source_mutation(store, before_hash)
+        self.assertEqual(store.export_continuity(), before_package)
+        after_data = self._snapshot(store).data
+        self.assertEqual(after_data["obligation"]["revision"], before_data["obligation"]["revision"])
+        self.assertEqual(after_data["claims"], before_data["claims"])
+        self.assertEqual(after_data["determinations"], before_data["determinations"])
+        self.assertEqual(after_data["actions"], before_data["actions"])
+        self.assertEqual(after_data["action_outbox"], before_data["action_outbox"])
 
     def test_historical_context_reopen_and_shadow_test_restore(self) -> None:
         store = self._build_base()

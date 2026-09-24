@@ -15,12 +15,16 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import statistics
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from unittest.mock import patch
 
+from app import right_rail_financial_engine as financial_engine
 from app import right_rail_financial_owner as owner
 from app.right_rail_financial_owner import (
     ControlPack,
@@ -32,13 +36,134 @@ from app.right_rail_financial_owner import (
     FinancialIntegrityError,
     FinancialOwner,
     FinancialOwnerConfig,
+    PopulationManifest,
     FinancialRevisionError,
     PopulationItem,
+    ProgramFundingReceipt,
     SyntheticTrustedAuthority,
 )
 from app.right_rail_financial_mirror import FinancialMirror
-from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database, verify_continuity_package
+from app.right_rail_financial_owner_independent import (
+    IndependentFinancialError,
+    continuity_package_digest,
+    verify_database,
+    verify_decision_package,
+    verify_continuity_package,
+)
 from tests import rightrail_financial_expected_cases as expected
+
+
+_CORRECTION_ENGINE_PATH = (
+    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction-e911" / "blind_financial_correction.exe"
+)
+_CORRECTION_VECTOR_DIR = (
+    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction-e911" / "vectors"
+)
+_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_245_376
+_EXPECTED_CORRECTION_ARTIFACT_SHA256 = bytes.fromhex(
+    "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+)
+_EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
+    "13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537"
+)
+_EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
+    "312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E"
+)
+_EXPECTED_PRIVATE_INDEX_SET_VERSION = 1
+_EXPECTED_PRIVATE_INDEXES = (
+    (
+        "rr_financial_v1_evidence_item_id",
+        "evidence",
+        ("item_id", "evidence_id"),
+        "CREATE INDEX rr_financial_v1_evidence_item_id ON evidence(item_id,evidence_id)",
+    ),
+    (
+        "rr_financial_v1_claims_obligation_id",
+        "claimed_adjustments",
+        ("obligation_id", "claim_id"),
+        "CREATE INDEX rr_financial_v1_claims_obligation_id ON claimed_adjustments(obligation_id,claim_id)",
+    ),
+    (
+        "rr_financial_v1_cases_obligation_id",
+        "cases",
+        ("obligation_id", "case_id"),
+        "CREATE INDEX rr_financial_v1_cases_obligation_id ON cases(obligation_id,case_id)",
+    ),
+    (
+        "rr_financial_v1_actions_obligation_id",
+        "actions",
+        ("obligation_id", "action_id"),
+        "CREATE INDEX rr_financial_v1_actions_obligation_id ON actions(obligation_id,action_id)",
+    ),
+    (
+        "rr_financial_v1_conflicts_obligation_id",
+        "financial_conflicts",
+        ("obligation_id", "conflict_id"),
+        "CREATE INDEX rr_financial_v1_conflicts_obligation_id ON financial_conflicts(obligation_id,conflict_id)",
+    ),
+    (
+        "rr_financial_v1_evaluations_obligation_revision",
+        "evaluations",
+        ("obligation_id", "revision"),
+        "CREATE INDEX rr_financial_v1_evaluations_obligation_revision ON evaluations(obligation_id,revision)",
+    ),
+    (
+        "rr_financial_v1_determinations_obligation_id",
+        "determinations",
+        ("obligation_id", "determination_id"),
+        "CREATE INDEX rr_financial_v1_determinations_obligation_id ON determinations(obligation_id,determination_id)",
+    ),
+)
+
+
+def _correction_transition_test_release(
+    *,
+    workspace: Path,
+) -> financial_engine.FinancialCorrectionTransitionRelease:
+    if financial_engine.CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES != _EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES:
+        raise AssertionError("correction_transition_artifact_size_pin_mismatch")
+    if financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256 != _EXPECTED_CORRECTION_ARTIFACT_SHA256:
+        raise AssertionError("correction_transition_artifact_pin_mismatch")
+    if financial_engine.CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256 != _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256:
+        raise AssertionError("correction_transition_request_pin_mismatch")
+    if financial_engine.CORRECTION_TRANSITION_RESULT_VECTOR_SHA256 != _EXPECTED_CORRECTION_RESULT_VECTOR_SHA256:
+        raise AssertionError("correction_transition_result_pin_mismatch")
+
+    artifact_path = Path(os.environ.get("RR_FINANCIAL_CORRECTION_ENGINE_PATH", _CORRECTION_ENGINE_PATH))
+    vector_dir = Path(os.environ.get("RR_FINANCIAL_CORRECTION_VECTOR_DIR", _CORRECTION_VECTOR_DIR))
+    artifact = artifact_path.read_bytes()
+    if (
+        len(artifact) != _EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES
+        or hashlib.sha256(artifact).digest() != _EXPECTED_CORRECTION_ARTIFACT_SHA256
+    ):
+        raise AssertionError("correction_transition_artifact_bytes_mismatch")
+
+    request = (vector_dir / "request.bin").read_bytes()
+    expected_result = (vector_dir / "result.expected.bin").read_bytes()
+    actual_result = (vector_dir / "result.actual.bin").read_bytes()
+    if hashlib.sha256(request).digest() != _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256:
+        raise AssertionError("correction_transition_request_vector_bytes_mismatch")
+    if hashlib.sha256(expected_result).digest() != _EXPECTED_CORRECTION_RESULT_VECTOR_SHA256:
+        raise AssertionError("correction_transition_result_vector_bytes_mismatch")
+    if actual_result != expected_result:
+        raise AssertionError("correction_transition_result_vector_not_byte_equal")
+    workspace.mkdir(parents=True, exist_ok=True)
+    if any(workspace.iterdir()):
+        raise AssertionError("correction_transition_test_workspace_not_empty")
+
+    return financial_engine.FinancialCorrectionTransitionRelease(
+        executable=artifact_path,
+        executable_size_bytes=_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES,
+        executable_sha256=_EXPECTED_CORRECTION_ARTIFACT_SHA256,
+        request_vector_sha256=_EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256,
+        result_vector_sha256=_EXPECTED_CORRECTION_RESULT_VECTOR_SHA256,
+        timeout_seconds=30.0,
+        input_max_bytes=financial_engine.MAX_CORRECTION_TRANSITION_BYTES,
+        output_max_bytes=financial_engine.MAX_CORRECTION_TRANSITION_BYTES,
+        stderr_max_bytes=financial_engine.process.MAX_STDERR_BYTES,
+        workspace=workspace,
+        job_memory_cap_bytes=1_000_000_000,
+    )
 
 
 class _Clock:
@@ -144,6 +269,7 @@ class _WriteBoundaryOwner(FinancialOwner):
         trusted_authority: SyntheticTrustedAuthority,
         clock: _Clock,
         fault: str,
+        correction_transition_release: object | None = None,
     ) -> None:
         self._fault = fault
         super().__init__(
@@ -151,6 +277,7 @@ class _WriteBoundaryOwner(FinancialOwner):
             config=config,
             trusted_authority=trusted_authority,
             clock=clock,
+            correction_transition_release=correction_transition_release,
         )
 
     @contextmanager
@@ -180,7 +307,7 @@ from pathlib import Path
 
 from app.right_rail_financial_owner import FinancialOwnerConfig, SyntheticTrustedAuthority
 from tests import rightrail_financial_expected_cases as expected
-from tests.test_right_rail_financial_acceptance import _Clock, _WriteBoundaryOwner
+from tests.test_right_rail_financial_acceptance import _Clock, _WriteBoundaryOwner, _correction_transition_test_release
 
 path = Path(sys.argv[1])
 claim_id = sys.argv[2]
@@ -199,6 +326,9 @@ store = _WriteBoundaryOwner(
     trusted_authority=SyntheticTrustedAuthority(),
     clock=clock,
     fault=fault,
+    correction_transition_release=_correction_transition_test_release(
+        workspace=path.parent / "correction-engine-workspace",
+    ),
 )
 receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
 revision = receipt["revision"]
@@ -216,6 +346,50 @@ raise SystemExit(99)
 """
 
 
+_PROCESS_FUNDING_BOUNDARY_CHILD = """
+import sys
+from pathlib import Path
+
+from app.right_rail_financial_owner import FinancialOwnerConfig, ProgramFundingReceipt, SyntheticTrustedAuthority
+from tests import rightrail_financial_expected_cases as expected
+from tests.test_right_rail_financial_acceptance import _Clock, _WriteBoundaryOwner
+
+path = Path(sys.argv[1])
+fault = sys.argv[2]
+clock = _Clock(int(sys.argv[3]))
+config = FinancialOwnerConfig(
+    state_id=expected.STATE_ID,
+    deployment_id=expected.DEPLOYMENT_ID,
+    program_id=expected.PROGRAM_ID,
+    period_id=expected.PERIOD_ONE_ID,
+    currency=expected.CURRENCY,
+    schema_version=6,
+)
+store = _WriteBoundaryOwner(
+    path=path,
+    config=config,
+    trusted_authority=SyntheticTrustedAuthority(),
+    clock=clock,
+    fault=fault,
+)
+fixture = expected.PROGRAM_FUNDING_RECEIPT
+receipt = ProgramFundingReceipt(
+    receipt_id=fixture.receipt_id,
+    state_id=fixture.scope.state_id,
+    deployment_id=fixture.scope.deployment_id,
+    program_id=fixture.scope.program_id,
+    period_id=fixture.scope.period_id,
+    currency=fixture.scope.currency,
+    source_record_ref=fixture.source_record_ref,
+    amount_cents=fixture.amount_cents,
+    event_at_ms=fixture.event_at_ms,
+)
+print("PHASE=BEFORE_FUNDING_RECORD", flush=True)
+store.record_program_funding_receipt(receipt)
+raise SystemExit(99)
+"""
+
+
 class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="right-rail-financial-acceptance-")
@@ -227,12 +401,139 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._path_counter += 1
         return Path(self.temp_dir.name) / (name or f"owner-{self._path_counter}.sqlite")
 
+    def _private_index_fixture_row(
+        self,
+        table: str,
+        ordinal: int,
+        *,
+        per_obligation: int = 20,
+    ) -> tuple[object, ...]:
+        obligation_number = ordinal % 20
+        values: dict[str, object] = {
+            "obligation_id": f"obligation:{obligation_number:02d}",
+            "item_id": f"item:{obligation_number:02d}",
+            "evidence_id": f"evidence:{ordinal:04d}",
+            "payment_id": f"payment:{ordinal:04d}",
+            "claim_id": f"claim:{ordinal:04d}",
+            "case_id": f"case:{ordinal:04d}",
+            "action_id": f"action:{ordinal:04d}",
+            "conflict_id": f"conflict:{ordinal:04d}",
+            "evaluation_id": f"evaluation:{ordinal:04d}",
+            "determination_id": f"determination:{ordinal:04d}",
+            "input_evaluation_id": f"evaluation:{ordinal:04d}",
+            "revision": ordinal // per_obligation,
+            "existing_payment_id": f"payment:{ordinal:04d}",
+            "candidate_evidence_id": f"evidence:{ordinal:04d}",
+            "authority_id": self.authority.authority_id,
+            "authority_digest": self.authority.digest,
+            "contract_version": owner._EVALUATION_RECEIPT_CONTRACT,
+            "control_pack_id": "pack:plan",
+            "currency": "USD",
+            "status": "CLAIMED" if table == "claimed_adjustments" else "READY",
+            "decision": "REJECT_OFFSET",
+            "owner_role": "FINANCE_DECISION",
+            "actor_role": "FINANCE_DECISION",
+            "verification_status": "VERIFIED",
+            "case_status": "OPEN",
+            "delivery_status": "READY",
+            "kind": "PLAN_FIXTURE",
+            "common_origin_id": f"origin:{ordinal:04d}",
+            "reason": "PLAN_FIXTURE",
+            "content_digest": b"d" * 64,
+            "record_digest": b"d" * 64,
+            "determination_digest": b"d" * 64,
+            "input_evaluation_result_digest": b"d" * 64,
+            "result_digest": b"d" * 64,
+            "control_pack_digest": b"d" * 64,
+            "input_snapshot_digest": b"d" * 64,
+            "receipt_digest": b"d" * 64,
+            "payload_digest": b"d" * 64,
+            "idempotency_key": b"d" * 64,
+            "evidence_ids_json": '{"evidence_ids":[]}',
+            "evidence_bindings_json": '{"bindings":[]}',
+            "scope_json": "{}",
+            "input_snapshot_json": "{}",
+            "supporting_evidence_json": "{\"bindings\":[]}",
+            "payload_json": "{}",
+            "completion_conditions_json": "{}",
+            "reversal_of": None,
+            "supersedes": None,
+            "reversed_by_evidence_id": None,
+            "acknowledgment_ref": None,
+        }
+        integer_columns = {
+            "active", "amount_cents", "amount_satisfied", "attempt", "authority_epoch",
+            "cash_satisfied", "claimed_adjustment_cents", "control_pack_version",
+            "created_at_ms", "deadline_ms", "due_at_ms", "event_at_ms", "evaluated_at_ms",
+            "expected_revision", "lawful_adjustment_cents", "overage_cents", "received_at_ms",
+            "received_cash_cents", "reporting_complete", "resulting_revision", "revision",
+            "rule_version", "shortfall_cents", "timely", "updated_at_ms", "visible_at_ms",
+        }
+        columns = owner._TABLE_COLUMNS_BY_VERSION[7][table]
+        row: list[object] = []
+        for column in columns:
+            if column in values:
+                value = values[column]
+            elif column in integer_columns:
+                value = 1
+            elif column.endswith("_json"):
+                value = "{}"
+            elif column.endswith("_digest"):
+                value = b"d" * 64
+            else:
+                value = f"plan:{table}:{ordinal:04d}:{column}"
+            row.append(value)
+        return tuple(row)
+
+    def _populate_private_index_fixture(self, store: FinancialOwner, *, per_obligation: int = 20) -> int:
+        tables = (
+            "evidence", "payments", "claimed_adjustments", "cases", "actions",
+            "action_outbox", "financial_conflicts", "evaluations", "determinations",
+        )
+        rows_per_table = per_obligation * 20
+        with store._write() as connection:
+            for table in tables:
+                columns = owner._TABLE_COLUMNS_BY_VERSION[store.schema_version][table]
+                statement = (
+                    f"INSERT INTO {table} ({','.join(columns)}) "
+                    f"VALUES ({','.join('?' for _ in columns)})"
+                )
+                connection.executemany(
+                    statement,
+                    (
+                        self._private_index_fixture_row(table, ordinal, per_obligation=per_obligation)
+                        for ordinal in range(rows_per_table)
+                    ),
+                )
+            self.assertLessEqual(
+                store._continuity_admission_package_size(connection),
+                owner._MAX_PACKAGE_BYTES,
+            )
+        return rows_per_table
+
+    def _assert_private_index_schema(self, path: Path) -> None:
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+            self.assertEqual(
+                connection.execute("PRAGMA user_version").fetchone()[0],
+                _EXPECTED_PRIVATE_INDEX_SET_VERSION,
+            )
+            actual = {
+                str(row[0]): str(row[1])
+                for row in connection.execute(
+                    "SELECT name,sql FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+        expected_indexes = {name: sql for name, _table, _columns, sql in _EXPECTED_PRIVATE_INDEXES}
+        self.assertEqual(actual, expected_indexes)
+
     def _make_owner(
         self,
         *,
         period_id: str = expected.PERIOD_ONE_ID,
         path: Path | None = None,
         clock: _Clock | None = None,
+        schema_version: int = 7,
+        correction_transition_release: object | None = None,
     ) -> FinancialOwner:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
@@ -240,12 +541,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             program_id=expected.PROGRAM_ID,
             period_id=period_id,
             currency=expected.CURRENCY,
+            schema_version=schema_version,
         )
         return FinancialOwner(
             path=path or self._path(),
             config=config,
             trusted_authority=self.authority,
             clock=clock or _Clock(),
+            correction_transition_release=correction_transition_release,
         )
 
     def _make_write_boundary_owner(
@@ -255,6 +558,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         period_id: str = expected.PERIOD_ONE_ID,
         path: Path,
         clock: _Clock | None = None,
+        schema_version: int = 7,
+        correction_transition_release: object | None = None,
     ) -> _WriteBoundaryOwner:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
@@ -262,6 +567,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             program_id=expected.PROGRAM_ID,
             period_id=period_id,
             currency=expected.CURRENCY,
+            schema_version=schema_version,
         )
         return _WriteBoundaryOwner(
             path=path,
@@ -269,6 +575,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=clock or _Clock(),
             fault=fault,
+            correction_transition_release=correction_transition_release,
         )
 
     @staticmethod
@@ -286,10 +593,25 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "evaluations",
         )
         with closing(sqlite3.connect(str(path))) as connection:
-            return {
-                table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                for table in tables
+            available = {
+                str(row[0])
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
+            selected = [table for table in tables if table in available]
+            selected.extend(
+                table
+                for table in ("program_funding_receipts", "program_funding_projection")
+                if table in available
+            )
+            return {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in selected}
+
+    @staticmethod
+    def _durable_meta(path: Path) -> tuple[object, ...]:
+        with closing(sqlite3.connect(str(path))) as connection:
+            row = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
+            if row is None:
+                raise AssertionError("financial_meta row missing")
+            return tuple(row)
 
     def _run_process_boundary(
         self,
@@ -323,6 +645,38 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             process.kill()
             stdout, stderr = process.communicate(timeout=5)
             self.fail(f"process_boundary_timeout stdout={stdout!r} stderr={stderr!r}")
+        return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+
+    def _run_funding_process_boundary(
+        self,
+        *,
+        store: FinancialOwner,
+        fault: str,
+        clock_value: int,
+    ) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _PROCESS_FUNDING_BOUNDARY_CHILD,
+                str(store.path),
+                fault,
+                str(clock_value),
+            ],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5)
+            self.fail(f"funding_process_boundary_timeout stdout={stdout!r} stderr={stderr!r}")
         return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     @staticmethod
@@ -359,19 +713,99 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             for item in expected.PROGRAM_ITEMS
         )
 
+    def _population_manifest(
+        self,
+        fixture: expected.PopulationManifestExpectation = expected.POPULATION_MANIFEST_V1,
+        *,
+        manifest_id: str | None = None,
+        source_owner_id: str | None = None,
+        member_ids: tuple[str, ...] | None = None,
+        manifest_version: int | None = None,
+        supersedes: PopulationManifest | None = None,
+        approved_by: str | None = None,
+        approval_ref: str | None = None,
+        inclusion_rules: tuple[str, ...] | None = None,
+        cutoff_ms: int | None = None,
+    ) -> PopulationManifest:
+        scope = fixture.scope
+        version = manifest_version
+        if version is None:
+            version = supersedes.manifest_version + 1 if supersedes is not None else fixture.manifest_version
+        return PopulationManifest(
+            manifest_id=manifest_id or fixture.manifest_id,
+            manifest_version=version,
+            state_id=scope.state_id,
+            deployment_id=scope.deployment_id,
+            program_id=scope.program_id,
+            period_id=scope.period_id,
+            currency=scope.currency,
+            pack_id=fixture.pack_id,
+            cutoff_ms=fixture.cutoff_ms if cutoff_ms is None else cutoff_ms,
+            inclusion_rules=fixture.inclusion_rules if inclusion_rules is None else inclusion_rules,
+            source_owner_id=source_owner_id or fixture.source_owner_id,
+            authority_id=self.authority.authority_id,
+            authority_epoch=self.authority.epoch,
+            authority_digest=self.authority.digest,
+            approved_by=approved_by or fixture.approved_by,
+            approval_ref=approval_ref or fixture.approval_ref,
+            source_id=fixture.source_id,
+            source_version=fixture.source_version,
+            source_digest=bytes.fromhex(fixture.source_digest_hex),
+            member_ids=fixture.member_ids if member_ids is None else member_ids,
+            supersedes_manifest_id=None if supersedes is None else supersedes.manifest_id,
+            supersedes_digest=None if supersedes is None else supersedes.digest,
+        )
+
+    @staticmethod
+    def _funding_receipt(
+        *,
+        receipt_id: str | None = None,
+        state_id: str | None = None,
+        source_record_ref: str | None = None,
+        amount_cents: int | None = None,
+        event_at_ms: int | None = None,
+        supersedes_receipt_id: str | None = None,
+    ) -> ProgramFundingReceipt:
+        fixture = expected.PROGRAM_FUNDING_RECEIPT
+        return ProgramFundingReceipt(
+            receipt_id=receipt_id or fixture.receipt_id,
+            state_id=state_id or fixture.scope.state_id,
+            deployment_id=fixture.scope.deployment_id,
+            program_id=fixture.scope.program_id,
+            period_id=fixture.scope.period_id,
+            currency=fixture.scope.currency,
+            source_record_ref=source_record_ref or fixture.source_record_ref,
+            amount_cents=fixture.amount_cents if amount_cents is None else amount_cents,
+            event_at_ms=fixture.event_at_ms if event_at_ms is None else event_at_ms,
+            supersedes_receipt_id=supersedes_receipt_id,
+            confirmation_class=fixture.confirmation_class,
+            evidence_status=fixture.evidence_status,
+        )
+
     def _build_base(
         self,
         *,
         period_id: str = expected.PERIOD_ONE_ID,
         population_id: str = expected.POPULATION_ONE_ID,
         clock: _Clock | None = None,
+        schema_version: int = 7,
+        correction_transition_release: object | None = None,
     ) -> FinancialOwner:
-        owner = self._make_owner(period_id=period_id, clock=clock)
+        owner = self._make_owner(
+            period_id=period_id,
+            clock=clock,
+            schema_version=schema_version,
+            correction_transition_release=correction_transition_release,
+        )
         pack_expectation = expected.CONTROL_PACK_V1 if period_id == expected.PERIOD_ONE_ID else expected.CONTROL_PACK_V2
         pack = self._pack(pack_expectation)
         owner.publish_control_pack(pack)
+        manifest_fixture = expected.POPULATION_MANIFEST_V1 if period_id == expected.PERIOD_ONE_ID else expected.POPULATION_MANIFEST_V2
+        manifest = self._population_manifest(manifest_fixture)
+        owner.register_population_manifest(manifest)
         owner.stage_population(
             population_id=population_id,
+            manifest_id=manifest.manifest_id,
             pack_id=pack.pack_id,
             cutoff_ms=pack_expectation.effective_start_ms,
             inclusion_rules=("included:synthetic",),
@@ -384,6 +818,24 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         for evidence in expected.OTHER_SUPPORT_EVIDENCE:
             self._record_support(owner, evidence)
         return owner
+
+    def _build_base_for_correction(
+        self,
+        *,
+        period_id: str = expected.PERIOD_ONE_ID,
+        population_id: str = expected.POPULATION_ONE_ID,
+        clock: _Clock | None = None,
+        schema_version: int = 7,
+    ) -> FinancialOwner:
+        return self._build_base(
+            period_id=period_id,
+            population_id=population_id,
+            clock=clock,
+            schema_version=schema_version,
+            correction_transition_release=_correction_transition_test_release(
+                workspace=Path(self.temp_dir.name) / "correction-engine-workspace",
+            ),
+        )
 
     @staticmethod
     def _record_support(store: FinancialOwner, evidence: expected.EvidenceExpectation) -> None:
@@ -616,6 +1068,123 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         }
         self.assertEqual(len(item_ids_with_evidence), expected_evidence_items)
 
+    @staticmethod
+    def _record_expected_recipient_payment(
+        store: FinancialOwner | FinancialMirror,
+        payment: expected.RecipientPaymentExpectation,
+    ) -> dict[str, object]:
+        return store.record_payment_evidence(
+            item_id=payment.item_id,
+            payment_id=payment.payment_id,
+            common_origin_id=payment.common_origin_id,
+            amount_cents=payment.amount_cents,
+            evidence_id=payment.evidence_id,
+            event_at_ms=payment.event_at_ms,
+            source_id=payment.source_id,
+            source_version=payment.source_version,
+            local_ref=payment.local_ref,
+        )
+
+    def _first_service_decision_package(self, mirror: FinancialMirror) -> dict[str, object]:
+        """Assemble a test-only view from existing owner-backed Mirror references."""
+
+        summary = mirror.summary()
+        obligation_page = mirror.list_obligations(status="ALL", limit=100)
+        rows = obligation_page["items"]
+        detail = mirror.obligation_detail(expected.H_ITEM_ID)
+        self.assertEqual(len(detail["case_references"]), 1)
+        self.assertEqual(len(detail["determination_references"]), 1)
+        self.assertEqual(len(detail["action_references"]), 1)
+        case = detail["case_references"][0]
+        determination = detail["determination_references"][0]
+        action = detail["action_references"][0]
+        claim_evidence = next(
+            row for row in detail["evidence_references"]
+            if row["evidence_id"] == expected.OFFSET_CLAIM_EVIDENCE.evidence_id
+        )
+        action_payload = mirror.action_payload(str(action["action_id"]))["payload_fields"]
+        other_recipient_cash = sum(
+            int(row["received_cash_cents"])
+            for row in rows
+            if row["item_id"] != expected.H_ITEM_ID
+        )
+        active_payments = sorted(
+            (
+                {
+                    "payment_id": str(row["payment_id"]),
+                    "evidence_id": str(row["evidence_id"]),
+                    "amount_cents": int(row["amount_cents"]),
+                    "event_at_ms": int(row["event_at_ms"]),
+                }
+                for row in detail["payment_references"]
+                if int(row["active"]) == 1
+            ),
+            key=lambda row: row["payment_id"],
+        )
+        acknowledged_action_ids = sorted(
+            str(row["action_id"])
+            for row in detail["action_references"]
+            if row["status"] == "ACKNOWLEDGED"
+        )
+        reporting_evidence = sorted(
+            str(row["evidence_id"])
+            for row in detail["evidence_references"]
+            if row["kind"] in {"REPORT", "REPORT_CORRECTION"}
+        )
+        return {
+            "journey_id": expected.FIRST_SERVICE_JOURNEY_ID,
+            "scope": {
+                key: summary[key]
+                for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")
+            },
+            "nonactivation": {
+                "production_usable": summary["production_usable"],
+                "activation": summary["activation"],
+                "proof_suite_id": summary["proof_suite_id"],
+                "dispatch_enabled": summary["dispatch_enabled"],
+                "egress_enabled": summary["egress_enabled"],
+            },
+            "funding_receipt": mirror.program_funding_summary(),
+            "program": {
+                "denominator_basis": "published_obligations",
+                "population_count": summary["population_count"],
+                "recipient_count": summary["obligation_count"],
+                "owed_cents": summary["owed_cents"],
+                "recipient_cash_cents": summary["received_cash_cents"],
+                "other_recipient_cash_cents": other_recipient_cash,
+            },
+            "hospital_h": {
+                "obligation_id": detail["obligation_id"],
+                "owed_cents": detail["owed_cents"],
+                "received_cash_cents": detail["received_cash_cents"],
+                "offset_claim_cents": claim_evidence["amount_cents"],
+                "shortfall_cents": detail["shortfall_cents"],
+                "timely": detail["timely"],
+                "reporting_complete": detail["reporting_complete"],
+                "case_id": case["case_id"],
+                "case_status": case["status"],
+                "owner_role": case["next_action_owner"],
+                "deadline_ms": case["due_at_ms"],
+                "completion_conditions": case["completion_conditions"],
+                "decision": determination["decision"],
+                "decision_amount_cents": determination["amount_cents"],
+                "decision_actor_role": determination["actor_role"],
+                "decision_supporting_evidence_ids": determination["supporting_evidence_ids"],
+                "next_action": {
+                    "action_id": action["action_id"],
+                    "kind": action_payload["kind"],
+                    "amount_cents": action_payload["amount_cents"],
+                    "status": action["status"],
+                    "dispatch": action_payload["dispatch"],
+                },
+                "completion_references": {
+                    "acknowledged_action_ids": acknowledged_action_ids,
+                    "active_payments": active_payments,
+                    "reporting_evidence_ids": reporting_evidence,
+                },
+            },
+        }
+
     def _assert_verified(
         self,
         store: FinancialOwner,
@@ -638,6 +1207,25 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(result["scope"]["period_id"], store.config.period_id)
         return result
+
+    def _assert_decision_package_verified(
+        self,
+        store: FinancialOwner,
+        package: dict[str, object],
+    ) -> dict[str, object]:
+        return verify_decision_package(
+            store.path,
+            expected.H_ITEM_ID,
+            package,
+            expected_config=store.config,
+            expected_authority={
+                "authority_id": self.authority.authority_id,
+                "epoch": self.authority.epoch,
+                "digest": self.authority.digest,
+            },
+            expected_mode=store.mode,
+            expected_owner_id=store.owner_id,
+        )
 
     def test_case_01_publish_and_missing_h(self) -> None:
         self.assertEqual(expected.CASE_01.number, 1)
@@ -669,7 +1257,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_04_reject_and_authorize_correction(self) -> None:
         self.assertEqual(expected.CASE_04.number, 4)
-        store = self._build_base()
+        store = self._build_base_for_correction()
         self._record_cash(store)
         claim_id = self._record_claim(store)
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
@@ -702,7 +1290,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_05_ack_without_cash_and_immutable_action_retry(self) -> None:
         self.assertEqual(expected.CASE_05.number, 5)
-        store = self._build_base()
+        store = self._build_base_for_correction()
         self._prepare_rejected(store)
         payload = store.action_payload(expected.ACTION_CORRECTION_ID)["payload"]
         retry = store.retry_action(expected.ACTION_CORRECTION_ID, payload=payload)
@@ -717,7 +1305,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_06_late_payment_and_report_correction(self) -> None:
         self.assertEqual(expected.CASE_06.number, 6)
-        store = self._build_base()
+        store = self._build_base_for_correction()
         self._prepare_acknowledged(store)
         self._record_p2(store)
         self._assert_snapshot(store, expected.H_P2_RECEIVED_LATE)
@@ -727,7 +1315,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_07_duplicates_conflict_reversal_and_replacement(self) -> None:
         self.assertEqual(expected.CASE_07.number, 7)
-        store = self._build_base()
+        store = self._build_base_for_correction()
         self._prepare_reported(store)
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
         result = store.record_payment_evidence(
@@ -785,7 +1373,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_08_revision_race_one_winner_one_stale_loser(self) -> None:
         self.assertEqual(expected.CASE_08.number, 8)
-        store = self._build_base()
+        store = self._build_base_for_correction()
         self._record_cash(store)
         claim_id = self._record_claim(store)
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
@@ -829,7 +1417,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_09_second_period_rule_change_isolated_and_complete(self) -> None:
         self.assertEqual(expected.CASE_09.number, 9)
-        store = self._build_base(period_id=expected.PERIOD_TWO_ID, population_id=expected.POPULATION_TWO_ID)
+        store = self._build_base_for_correction(
+            period_id=expected.PERIOD_TWO_ID,
+            population_id=expected.POPULATION_TWO_ID,
+        )
         self._prepare_final(store)
         self._assert_snapshot(store, expected.H_P3_REPLACED)
         result = self._assert_verified(store)
@@ -838,10 +1429,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_10_interrupted_import_restart_and_disabled_dispatch(self) -> None:
         self.assertEqual(expected.CASE_10.number, 10)
-        store = self._build_base()
+        correction_release = _correction_transition_test_release(
+            workspace=Path(self.temp_dir.name) / "correction-engine-workspace",
+        )
+        store = self._build_base_for_correction()
         self._prepare_rejected(store)
         self._assert_snapshot(store, expected.H_REJECTED_CORRECTION)
         interrupted_population = "population:fixture-interrupted"
+        interrupted_manifest = self._population_manifest(
+            manifest_id="population-manifest:fixture-interrupted:v1",
+            source_owner_id="source-owner:fixture-interrupted",
+        )
+        store.register_population_manifest(interrupted_manifest)
 
         def interrupted_items() -> Iterator[PopulationItem]:
             for index, item in enumerate(self._items(interrupted_population)):
@@ -852,6 +1451,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "synthetic_import_interrupt"):
             store.stage_population(
                 population_id=interrupted_population,
+                manifest_id=interrupted_manifest.manifest_id,
                 pack_id=expected.CONTROL_PACK_V1.pack_id,
                 cutoff_ms=expected.PERIOD_ONE_START_MS,
                 inclusion_rules=("included:synthetic",),
@@ -875,18 +1475,27 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(reopened.summary(), before)
         self._assert_verified(reopened)
 
-        precommit_store = self._build_base()
+        precommit_store = self._build_base_for_correction()
         self._record_cash(precommit_store)
         precommit_claim = self._record_claim(precommit_store)
         precommit_receipt = precommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
         precommit_package = precommit_store.export_continuity()
         precommit_summary = precommit_store.summary()
         precommit_counts = self._durable_counts(precommit_store.path)
-        precommit_fault = self._make_write_boundary_owner(path=precommit_store.path, fault="precommit", clock=precommit_store.clock)
+        precommit_fault = self._make_write_boundary_owner(
+            path=precommit_store.path,
+            fault="precommit",
+            clock=precommit_store.clock,
+            correction_transition_release=correction_release,
+        )
         with self.assertRaisesRegex(RuntimeError, "synthetic_financial_precommit_interrupt"):
             self._reject(precommit_fault, precommit_claim, precommit_receipt)
 
-        reopened_precommit = self._make_owner(path=precommit_store.path, clock=precommit_store.clock)
+        reopened_precommit = self._make_owner(
+            path=precommit_store.path,
+            clock=precommit_store.clock,
+            correction_transition_release=correction_release,
+        )
         self.assertEqual(reopened_precommit.summary(), precommit_summary)
         self.assertEqual(reopened_precommit.export_continuity(), precommit_package)
         self.assertEqual(self._durable_counts(reopened_precommit.path), precommit_counts)
@@ -908,15 +1517,24 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(detail_after_duplicate["actions"]), 1)
         self._assert_verified(reopened_precommit)
 
-        postcommit_store = self._build_base()
+        postcommit_store = self._build_base_for_correction()
         self._record_cash(postcommit_store)
         postcommit_claim = self._record_claim(postcommit_store)
         postcommit_receipt = postcommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
-        postcommit_fault = self._make_write_boundary_owner(path=postcommit_store.path, fault="postcommit", clock=postcommit_store.clock)
+        postcommit_fault = self._make_write_boundary_owner(
+            path=postcommit_store.path,
+            fault="postcommit",
+            clock=postcommit_store.clock,
+            correction_transition_release=correction_release,
+        )
         with self.assertRaisesRegex(RuntimeError, "synthetic_financial_result_lost_after_commit"):
             self._reject(postcommit_fault, postcommit_claim, postcommit_receipt)
 
-        reopened_postcommit = self._make_owner(path=postcommit_store.path, clock=postcommit_store.clock)
+        reopened_postcommit = self._make_owner(
+            path=postcommit_store.path,
+            clock=postcommit_store.clock,
+            correction_transition_release=correction_release,
+        )
         self._assert_snapshot(reopened_postcommit, expected.H_REJECTED_CORRECTION)
         self._assert_verified(reopened_postcommit)
         postcommit_package = reopened_postcommit.export_continuity()
@@ -930,7 +1548,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(postcommit_detail["actions"]), 1)
         self._assert_verified(reopened_postcommit)
 
-        process_precommit_store = self._build_base()
+        process_precommit_store = self._build_base_for_correction()
         self._record_cash(process_precommit_store)
         process_precommit_claim = self._record_claim(process_precommit_store)
         process_precommit_receipt = process_precommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
@@ -955,6 +1573,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_process_precommit = self._make_owner(
             path=process_precommit_store.path,
             clock=_Clock(process_precommit_clock + 1),
+            correction_transition_release=correction_release,
         )
         self.assertEqual(reopened_process_precommit.summary(), process_precommit_summary)
         self.assertEqual(reopened_process_precommit.export_continuity(), process_precommit_package)
@@ -975,7 +1594,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(process_precommit_committed_counts["action_outbox"], 1)
         self._assert_verified(reopened_process_precommit)
 
-        process_postcommit_store = self._build_base()
+        process_postcommit_store = self._build_base_for_correction()
         self._record_cash(process_postcommit_store)
         process_postcommit_claim = self._record_claim(process_postcommit_store)
         process_postcommit_receipt = process_postcommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
@@ -997,6 +1616,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_process_postcommit = self._make_owner(
             path=process_postcommit_store.path,
             clock=_Clock(process_postcommit_clock + 1),
+            correction_transition_release=correction_release,
         )
         self._assert_snapshot(reopened_process_postcommit, expected.H_REJECTED_CORRECTION)
         self._assert_verified(reopened_process_postcommit)
@@ -1009,7 +1629,51 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(process_postcommit_counts["determinations"], 1)
         self.assertEqual(process_postcommit_counts["actions"], 1)
         self.assertEqual(process_postcommit_counts["action_outbox"], 1)
+        recovered_followup_snapshot = reopened_process_postcommit.export_continuity()
+        first_followup_page = reopened_process_postcommit.drain_correction_followups(limit=10)
+        self.assertEqual(first_followup_page["count"], 1)
+        self.assertFalse(first_followup_page["has_more"])
+        self.assertEqual(first_followup_page["items"][0]["followup_status"], "CURRENT")
+        self.assertEqual(
+            first_followup_page["items"][0]["work_id"],
+            expected.ACTION_CORRECTION_ID,
+        )
+        self.assertEqual(
+            reopened_process_postcommit.drain_correction_followups(limit=10),
+            first_followup_page,
+        )
+        self.assertEqual(
+            reopened_process_postcommit.export_continuity(),
+            recovered_followup_snapshot,
+        )
+        other_item_id = next(
+            item.item_id
+            for item in expected.PROGRAM_ITEMS
+            if item.item_id != expected.H_ITEM_ID
+        )
+        reopened_process_postcommit.evaluate_obligation(other_item_id)
+        self.assertEqual(
+            reopened_process_postcommit.correction_followup_outputs(
+                expected.H_ITEM_ID,
+                expected.ACTION_CORRECTION_ID,
+            )["followup_status"],
+            "CURRENT",
+        )
+        reopened_process_postcommit.acknowledge_action(
+            expected.ACTION_CORRECTION_ID,
+            "ack:process-postcommit-correction",
+        )
+        reopened_outputs = reopened_process_postcommit.correction_followup_outputs(
+            expected.H_ITEM_ID,
+            expected.ACTION_CORRECTION_ID,
+        )
+        self.assertEqual(reopened_outputs["followup_status"], "REOPENED")
+        self.assertEqual(
+            reopened_outputs["corporate_support"]["error_class"],
+            "STALE_DEPENDENCY",
+        )
         process_postcommit_package = reopened_process_postcommit.export_continuity()
+        process_postcommit_counts = self._durable_counts(reopened_process_postcommit.path)
         process_postcommit_duplicate = self._reject(reopened_process_postcommit, process_postcommit_claim, process_postcommit_receipt)
         self.assertEqual(process_postcommit_duplicate["status"], "DUPLICATE")
         self.assertEqual(reopened_process_postcommit.export_continuity(), process_postcommit_package)
@@ -1018,7 +1682,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_11_shadow_export_restore_and_test_owner_continuation(self) -> None:
         self.assertEqual(expected.CASE_11.number, 11)
-        store = self._build_base()
+        store = self._build_base_for_correction()
         self._prepare_acknowledged(store)
         self._assert_snapshot(store, expected.H_ACKNOWLEDGED)
         source_before_restore = store.path.read_bytes()
@@ -1263,6 +1927,1349 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         self.assertEqual(store.path.read_bytes(), source_before_restore)
 
+    def test_v6_program_funding_receipt_identity_supersession_and_test_restore(self) -> None:
+        store = self._make_owner(schema_version=6)
+        mirror = FinancialMirror(store)
+        original_package = store.export_continuity()
+        original_counts = self._durable_counts(store.path)
+        receipt = self._funding_receipt()
+
+        wrong_scope = self._funding_receipt(state_id="another-synthetic-state")
+        with self.assertRaisesRegex(FinancialInputError, "program_funding_scope"):
+            mirror.record_program_funding_receipt(wrong_scope)
+        self.assertEqual(store.export_continuity(), original_package)
+        self.assertEqual(self._durable_counts(store.path), original_counts)
+
+        recorded = mirror.record_program_funding_receipt(receipt)
+        self.assertEqual(recorded["status"], "RECORDED")
+        self.assertEqual(store.summary()["sequence"], 1)
+        first_package = store.export_continuity()
+        first_counts = self._durable_counts(store.path)
+        first_summary = mirror.program_funding_summary()
+        self.assertEqual(first_summary["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self.assertEqual(first_summary["current_receipt_count"], 1)
+        self.assertEqual(first_summary["historical_receipt_count"], 1)
+        self.assertEqual(first_summary["current_receipts"][0]["receipt_id"], receipt.receipt_id)
+        self.assertEqual(store.summary()["owed_cents"], 0)
+        self.assertEqual(store.summary()["received_cash_cents"], 0)
+
+        duplicate = mirror.record_program_funding_receipt(receipt)
+        self.assertEqual(duplicate["status"], "DUPLICATE")
+        self.assertEqual(store.export_continuity(), first_package)
+        self.assertEqual(self._durable_counts(store.path), first_counts)
+
+        changed_amount = replace(receipt, amount_cents=receipt.amount_cents + 1)
+        with self.assertRaisesRegex(FinancialConflictError, "program_funding_receipt_identity_conflict"):
+            mirror.record_program_funding_receipt(changed_amount)
+        self.assertEqual(store.export_continuity(), first_package)
+        self.assertEqual(self._durable_counts(store.path), first_counts)
+
+        changed_supersession = replace(receipt, supersedes_receipt_id="funding-receipt:unrelated")
+        with self.assertRaisesRegex(FinancialConflictError, "program_funding_receipt_identity_conflict"):
+            mirror.record_program_funding_receipt(changed_supersession)
+        self.assertEqual(store.export_continuity(), first_package)
+
+        missing_supersession = self._funding_receipt(
+            receipt_id="funding-receipt:state:period-01:missing-supersession",
+        )
+        with self.assertRaisesRegex(FinancialConflictError, "program_funding_supersession_required"):
+            mirror.record_program_funding_receipt(missing_supersession)
+        self.assertEqual(store.export_continuity(), first_package)
+
+        missing_parent = self._funding_receipt(
+            receipt_id="funding-receipt:state:period-01:missing-parent",
+            supersedes_receipt_id="funding-receipt:state:period-01:does-not-exist",
+        )
+        with self.assertRaisesRegex(FinancialConflictError, "program_funding_supersession_missing"):
+            mirror.record_program_funding_receipt(missing_parent)
+        self.assertEqual(store.export_continuity(), first_package)
+
+        replacement = self._funding_receipt(
+            receipt_id="funding-receipt:state:period-01:v2",
+            amount_cents=99_000_000,
+            event_at_ms=expected.PROGRAM_FUNDING_RECEIPT.event_at_ms + 1,
+            supersedes_receipt_id=receipt.receipt_id,
+        )
+        superseded = mirror.record_program_funding_receipt(replacement)
+        self.assertEqual(superseded["status"], "RECORDED")
+        second_package = store.export_continuity()
+        second_counts = self._durable_counts(store.path)
+        current_summary = mirror.program_funding_summary()
+        self.assertEqual(current_summary["reported_funding_cents"], 99_000_000)
+        self.assertEqual(current_summary["current_receipt_count"], 1)
+        self.assertEqual(current_summary["historical_receipt_count"], 2)
+        self.assertEqual(current_summary["current_receipts"][0]["receipt_id"], replacement.receipt_id)
+        self.assertEqual(store.summary()["received_cash_cents"], 0)
+
+        replayed_original = mirror.record_program_funding_receipt(receipt)
+        self.assertEqual(replayed_original["status"], "DUPLICATE")
+        self.assertEqual(mirror.program_funding_summary(), current_summary)
+        self.assertEqual(store.export_continuity(), second_package)
+        self.assertEqual(self._durable_counts(store.path), second_counts)
+
+        stale_fork = self._funding_receipt(
+            receipt_id="funding-receipt:state:period-01:stale-fork",
+            supersedes_receipt_id=receipt.receipt_id,
+        )
+        with self.assertRaisesRegex(FinancialConflictError, "program_funding_supersession_stale"):
+            mirror.record_program_funding_receipt(stale_fork)
+        self.assertEqual(store.export_continuity(), second_package)
+
+        package_identity = json.loads(second_package.decode("ascii"))
+        independent_package = verify_continuity_package(
+            second_package,
+            expected_scope=package_identity["scope"],
+            expected_authority=package_identity["authority"],
+            expected_schema_version=6,
+        )
+        self.assertEqual(independent_package["version"], 6)
+        self.assertEqual(independent_package["program_funding"]["reported_funding_cents"], 99_000_000)
+        tampered_package = json.loads(second_package.decode("ascii"))
+        tampered_package["tables"]["program_funding_projection"][0]["amount_cents"] += 1
+        tampered_body = dict(tampered_package)
+        del tampered_body["package_digest"]
+        tampered_package["package_digest"] = continuity_package_digest(tampered_body, schema_version=6)
+        with self.assertRaisesRegex(IndependentFinancialError, "funding:projection-reconstruction"):
+            verify_continuity_package(
+                _independent_canonical(tampered_package),
+                expected_scope=package_identity["scope"],
+                expected_authority=package_identity["authority"],
+                expected_schema_version=6,
+            )
+        restored_mirror = mirror.restore_test_continuity(
+            second_package,
+            self._path("v6-funding-test-restore.sqlite"),
+        )
+        restored = restored_mirror.owner
+        self.assertEqual(restored.mode, "TEST")
+        self.assertEqual(restored_mirror.program_funding_summary(), current_summary)
+        self.assertEqual(restored_mirror.verify_integrity()["program_funding"]["reported_funding_cents"], 99_000_000)
+        restored_package_before_retry = restored.export_continuity()
+        restored_duplicate = restored_mirror.record_program_funding_receipt(receipt)
+        self.assertEqual(restored_duplicate["status"], "DUPLICATE")
+        self.assertEqual(restored_mirror.program_funding_summary(), current_summary)
+        self.assertEqual(restored.export_continuity(), restored_package_before_retry)
+        self._assert_verified(restored, restore_source_package=second_package)
+
+        legacy = self._make_owner(schema_version=5)
+        legacy_package = legacy.export_continuity()
+        legacy_view = FinancialOwner.validate_continuity_package(legacy_package)
+        self.assertEqual(legacy_view["version"], 5)
+        self.assertEqual(legacy_view["schema"], "RR/FINANCIAL/CONTINUITY/v5")
+        self.assertNotIn("program_funding_receipts", legacy_view["tables"])
+        self.assertNotIn("program_funding_projection", legacy_view["tables"])
+        self.assertNotIn("schema_version", legacy.summary())
+        self.assertEqual(
+            legacy.config.canonical_bytes,
+            _independent_canonical(
+                {
+                    "state_id": expected.STATE_ID,
+                    "deployment_id": expected.DEPLOYMENT_ID,
+                    "program_id": expected.PROGRAM_ID,
+                    "period_id": expected.PERIOD_ONE_ID,
+                    "currency": expected.CURRENCY,
+                }
+            ),
+        )
+        with self.assertRaisesRegex(FinancialInputError, "program_funding_schema_v6_required"):
+            legacy.record_program_funding_receipt(receipt)
+        with self.assertRaisesRegex(FinancialInputError, "program_funding_schema_v6_required"):
+            legacy.program_funding_summary()
+        self.assertEqual(legacy.export_continuity(), legacy_package)
+        self.assertEqual(
+            verify_continuity_package(
+                legacy_package,
+                expected_scope=legacy_view["scope"],
+                expected_authority=legacy_view["authority"],
+                expected_schema_version=5,
+            )["version"],
+            5,
+        )
+        legacy_database_bytes = legacy.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_version_incompatible"):
+            self._make_owner(path=legacy.path, schema_version=6)
+        self.assertEqual(legacy.path.read_bytes(), legacy_database_bytes)
+
+        bounded = self._make_owner(schema_version=6)
+        maximum = self._funding_receipt(
+            receipt_id="funding-receipt:bounded:maximum",
+            source_record_ref="state-payment-record:maximum",
+            amount_cents=(1 << 63) - 1,
+        )
+        self.assertEqual(bounded.record_program_funding_receipt(maximum)["status"], "RECORDED")
+        bounded_package = bounded.export_continuity()
+        overflow = self._funding_receipt(
+            receipt_id="funding-receipt:bounded:overflow",
+            source_record_ref="state-payment-record:overflow",
+            amount_cents=1,
+        )
+        with self.assertRaisesRegex(FinancialInputError, "program_funding_total_cents"):
+            bounded.record_program_funding_receipt(overflow)
+        self.assertEqual(bounded.export_continuity(), bounded_package)
+        self.assertEqual(bounded.program_funding_summary()["reported_funding_cents"], (1 << 63) - 1)
+        self._assert_verified(bounded)
+
+    def test_v6_program_funding_supersession_clock_rollback_rejects_atomically(self) -> None:
+        clock = _Clock(initial=1_700_000_000_000)
+        store = self._make_owner(clock=clock, schema_version=6)
+        mirror = FinancialMirror(store)
+        parent_receipt = self._funding_receipt()
+        recorded = mirror.record_program_funding_receipt(parent_receipt)
+        self.assertEqual(recorded["status"], "RECORDED")
+        parent_recorded_at = int(recorded["receipt"]["recorded_at_ms"])
+
+        before_package = store.export_continuity()
+        before_counts = self._durable_counts(store.path)
+        before_meta = self._durable_meta(store.path)
+        clock.value = parent_recorded_at - 2
+        rolled_back_child = self._funding_receipt(
+            receipt_id="funding-receipt:state:period-01:clock-rollback",
+            event_at_ms=parent_receipt.event_at_ms + 1,
+            supersedes_receipt_id=parent_receipt.receipt_id,
+        )
+        with self.assertRaisesRegex(FinancialInputError, "program_funding_supersession_chronology"):
+            mirror.record_program_funding_receipt(rolled_back_child)
+        self.assertEqual(clock.value, parent_recorded_at - 1)
+        self.assertEqual(store.export_continuity(), before_package)
+        self.assertEqual(self._durable_counts(store.path), before_counts)
+        self.assertEqual(self._durable_meta(store.path), before_meta)
+        self._assert_verified(store)
+
+        retry_clock_value = clock.value
+        self.assertEqual(mirror.record_program_funding_receipt(parent_receipt)["status"], "DUPLICATE")
+        self.assertEqual(clock.value, retry_clock_value)
+        self.assertEqual(store.export_continuity(), before_package)
+        self._assert_verified(store)
+
+    def test_v5_owner_does_not_install_private_snapshot_indexes(self) -> None:
+        store = self._make_owner(schema_version=5)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+            indexes = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        self.assertEqual(indexes, [])
+        store.verify_integrity()
+
+    def test_v6_v7_private_snapshot_index_migration_prevalidates_identity_and_preserves_restore(self) -> None:
+        for schema_version in (6, 7):
+            with self.subTest(schema_version=schema_version):
+                source = self._make_owner(schema_version=schema_version)
+                source_package = source.export_continuity()
+                legacy_path = self._path(f"v{schema_version}-private-index-legacy.sqlite")
+                legacy_path.write_bytes(source.path.read_bytes())
+                with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+                    for name, _table, _columns, _sql in _EXPECTED_PRIVATE_INDEXES:
+                        connection.execute(f'DROP INDEX "{name}"')
+                    connection.execute("PRAGMA user_version=0")
+                legacy_bytes = legacy_path.read_bytes()
+
+                wrong_config = replace(source.config, state_id="state:wrong-private-index-scope")
+                with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
+                    FinancialOwner(
+                        path=legacy_path,
+                        config=wrong_config,
+                        trusted_authority=self.authority,
+                        clock=_Clock(initial=1_700_000_000_000),
+                    )
+                self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+
+                migrated = self._make_owner(schema_version=schema_version, path=legacy_path)
+                self._assert_private_index_schema(legacy_path)
+                self.assertEqual(migrated.export_continuity(), source_package)
+                migrated.verify_integrity()
+
+                reopened = self._make_owner(schema_version=schema_version, path=legacy_path)
+                self._assert_private_index_schema(legacy_path)
+                self.assertEqual(reopened.export_continuity(), source_package)
+                reopened.verify_integrity()
+
+                restored_path = self._path(f"v{schema_version}-private-index-restored.sqlite")
+                restored = FinancialOwner.restore_test_continuity(
+                    package_bytes=source_package,
+                    recovered_path=restored_path,
+                    trusted_authority=self.authority,
+                    clock=_Clock(initial=1_700_000_000_000),
+                )
+                self._assert_private_index_schema(restored_path)
+                restored.verify_integrity()
+
+    def test_private_snapshot_index_upgrade_serializes_concurrent_openers(self) -> None:
+        source = self._make_owner(schema_version=7)
+        source_package = source.export_continuity()
+        legacy_path = self._path("v7-private-index-concurrent-legacy.sqlite")
+        legacy_path.write_bytes(source.path.read_bytes())
+        with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+            for name, _table, _columns, _sql in _EXPECTED_PRIVATE_INDEXES:
+                connection.execute(f'DROP INDEX "{name}"')
+            connection.execute("PRAGMA user_version=0")
+
+        barrier = threading.Barrier(2)
+        results: list[bytes] = []
+        errors: list[BaseException] = []
+
+        def open_owner() -> None:
+            try:
+                barrier.wait(timeout=5)
+                store = self._make_owner(
+                    schema_version=7,
+                    path=legacy_path,
+                    clock=_Clock(initial=1_700_000_000_000),
+                )
+                results.append(store.export_continuity())
+            except BaseException as error:
+                errors.append(error)
+
+        workers = [threading.Thread(target=open_owner) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=15)
+        self.assertFalse(any(worker.is_alive() for worker in workers))
+        self.assertEqual(errors, [])
+        self.assertEqual(results, [source_package, source_package])
+        self._assert_private_index_schema(legacy_path)
+
+    def test_owner_rejects_unapproved_or_mismatched_private_indexes_without_repair(self) -> None:
+        source = self._make_owner(schema_version=7)
+        corruptions = (
+            ("extra-index", "CREATE INDEX unapproved_plan_index ON evidence(source_id)"),
+            (
+                "wrong-definition",
+                "DROP INDEX rr_financial_v1_evidence_item_id; "
+                "CREATE INDEX rr_financial_v1_evidence_item_id ON evidence(source_id)",
+            ),
+        )
+        for label, statement in corruptions:
+            with self.subTest(label=label):
+                target = self._path(f"private-index-{label}.sqlite")
+                target.write_bytes(source.path.read_bytes())
+                with closing(sqlite3.connect(str(target), isolation_level=None)) as connection:
+                    for sql in statement.split("; "):
+                        connection.execute(sql)
+                before = target.read_bytes()
+                with self.assertRaisesRegex(FinancialIntegrityError, "schema_private_indexes"):
+                    self._make_owner(schema_version=7, path=target)
+                self.assertEqual(target.read_bytes(), before)
+
+    def test_v7_private_snapshot_indexes_avoid_scans_in_bounded_fixture(self) -> None:
+        # These SQL-shaped rows exercise plans and index cost only; this fixture
+        # does not claim event-history or financial-semantic validity.
+        store = self._make_owner(schema_version=7)
+        rows_per_table = self._populate_private_index_fixture(store)
+        with store._read_snapshot() as connection:
+            admission = store._continuity_admission_values(connection)
+            package_bytes = store._continuity_admission_package_size(connection)
+        self.assertEqual(rows_per_table, 400)
+        for table in (
+            "evidence", "payments", "claimed_adjustments", "cases", "actions",
+            "action_outbox", "financial_conflicts", "evaluations", "determinations",
+        ):
+            self.assertEqual(admission[table][0], rows_per_table)
+            self.assertLessEqual(admission[table][0], owner._MAX_ROWS)
+        self.assertLessEqual(package_bytes, owner._MAX_PACKAGE_BYTES)
+
+        queries = (
+            (
+                "evidence_by_item",
+                "evidence",
+                "SELECT evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,content_digest,record_digest,amount_cents,reversal_of,supersedes FROM evidence WHERE item_id=? ORDER BY evidence_id",
+                ("item:00",),
+                "rr_financial_v1_evidence_item_id",
+            ),
+            (
+                "payments_by_obligation",
+                "payments",
+                "SELECT payment_id,obligation_id,item_id,evidence_id,common_origin_id,amount_cents,event_at_ms,active,reversed_by_evidence_id FROM payments WHERE obligation_id=? ORDER BY payment_id",
+                ("obligation:00",),
+                None,
+            ),
+            (
+                "claims_by_obligation",
+                "claimed_adjustments",
+                "SELECT claim_id,obligation_id,evidence_id,amount_cents,owner_role,deadline_ms,status,created_at_ms,updated_at_ms FROM claimed_adjustments WHERE obligation_id=? ORDER BY claim_id",
+                ("obligation:00",),
+                "rr_financial_v1_claims_obligation_id",
+            ),
+            (
+                "cases_by_obligation",
+                "cases",
+                "SELECT case_id,obligation_id,reason,contractual_accountability,next_action_owner,due_at_ms,completion_conditions_json,status,updated_at_ms FROM cases WHERE obligation_id=? ORDER BY case_id",
+                ("obligation:00",),
+                "rr_financial_v1_cases_obligation_id",
+            ),
+            (
+                "actions_by_obligation",
+                "actions",
+                "SELECT action_id,obligation_id,determination_id,kind,status,revision,payload_json,payload_digest,idempotency_key,created_at_ms FROM actions WHERE obligation_id=? ORDER BY action_id",
+                ("obligation:00",),
+                "rr_financial_v1_actions_obligation_id",
+            ),
+            (
+                "outbox_by_obligation_actions",
+                "actions",
+                "SELECT action_id,status,attempt,payload_digest,acknowledgment_ref,updated_at_ms FROM action_outbox WHERE action_id IN (SELECT action_id FROM actions WHERE obligation_id=?) ORDER BY action_id",
+                ("obligation:00",),
+                "rr_financial_v1_actions_obligation_id",
+            ),
+            (
+                "conflicts_by_obligation",
+                "financial_conflicts",
+                "SELECT conflict_id,obligation_id,common_origin_id,existing_payment_id,candidate_evidence_id,existing_amount_cents,candidate_amount_cents,reason,visible_at_ms FROM financial_conflicts WHERE obligation_id=? ORDER BY conflict_id",
+                ("obligation:00",),
+                "rr_financial_v1_conflicts_obligation_id",
+            ),
+            (
+                "evaluations_by_obligation",
+                "evaluations",
+                "SELECT evaluation_id,obligation_id,revision,rule_version,evidence_ids_json,authority_id,evaluated_at_ms,owed_cents,claimed_adjustment_cents,lawful_adjustment_cents,received_cash_cents,shortfall_cents,overage_cents,cash_satisfied,amount_satisfied,timely,reporting_complete,verification_status,case_status,delivery_status,result_digest,contract_version,scope_json,control_pack_id,control_pack_version,control_pack_digest,authority_epoch,authority_digest,evidence_bindings_json,input_snapshot_json,input_snapshot_digest,receipt_digest FROM evaluations WHERE obligation_id=? ORDER BY revision",
+                ("obligation:00",),
+                "rr_financial_v1_evaluations_obligation_revision",
+            ),
+            (
+                "determinations_by_obligation",
+                "determinations",
+                "SELECT determination_id,obligation_id,claim_id,actor_id,actor_role,authority_id,authority_epoch,authority_digest,decision,amount_cents,supporting_evidence_json,expected_revision,resulting_revision,decided_at_ms,determination_digest,input_evaluation_id,input_evaluation_result_digest FROM determinations WHERE obligation_id=? ORDER BY determination_id",
+                ("obligation:00",),
+                "rr_financial_v1_determinations_obligation_id",
+            ),
+            (
+                "determination_by_input_evaluation",
+                "determinations",
+                "SELECT determination_id FROM determinations WHERE input_evaluation_id=?",
+                ("evaluation:0000",),
+                None,
+            ),
+        )
+
+        baseline_path = self._path("v7-private-index-plan-baseline.sqlite")
+        baseline_path.write_bytes(store.path.read_bytes())
+        with closing(sqlite3.connect(str(baseline_path), isolation_level=None)) as connection:
+            for name, _table, _columns, _sql in _EXPECTED_PRIVATE_INDEXES:
+                connection.execute(f'DROP INDEX "{name}"')
+            connection.execute("PRAGMA user_version=0")
+
+        def prepare_statistics(path: Path) -> int:
+            with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                connection.execute("ANALYZE")
+                connection.execute("VACUUM")
+                page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+                page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+                return page_count * page_size
+
+        baseline_storage = prepare_statistics(baseline_path)
+        indexed_storage = prepare_statistics(store.path)
+
+        def plans_and_read_samples(path: Path) -> tuple[dict[str, list[str]], dict[str, list[float]]]:
+            query_plans: dict[str, list[str]] = {}
+            read_samples: dict[str, list[float]] = {}
+            with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                connection.execute("PRAGMA automatic_index=OFF")
+                for label, _table, sql, params, _index in queries:
+                    query_plans[label] = [
+                        str(row[3])
+                        for row in connection.execute(f"EXPLAIN QUERY PLAN {sql}", params)
+                    ]
+                    samples: list[float] = []
+                    for _ in range(3):
+                        started = time.perf_counter_ns()
+                        connection.execute(sql, params).fetchall()
+                        samples.append((time.perf_counter_ns() - started) / 1_000_000)
+                    read_samples[label] = samples
+            return query_plans, read_samples
+
+        baseline_plans, baseline_reads = plans_and_read_samples(baseline_path)
+        indexed_plans, indexed_reads = plans_and_read_samples(store.path)
+        for label, table, _sql, _params, index_name in queries:
+            before = baseline_plans[label]
+            after = indexed_plans[label]
+            if index_name is not None:
+                self.assertTrue(
+                    any("SCAN" in detail.upper() and table.upper() in detail.upper() for detail in before),
+                    (label, before),
+                )
+                self.assertTrue(any(index_name in detail for detail in after), (label, after))
+            else:
+                self.assertTrue(
+                    any("SEARCH" in detail.upper() and table.upper() in detail.upper() for detail in before),
+                    (label, before),
+                )
+                self.assertTrue(
+                    any("SEARCH" in detail.upper() and table.upper() in detail.upper() for detail in after),
+                    (label, after),
+                )
+
+        write_tables = (
+            "evidence", "payments", "claimed_adjustments", "cases", "actions",
+            "action_outbox", "financial_conflicts", "evaluations", "determinations",
+        )
+
+        def write_samples(path: Path) -> list[float]:
+            samples: list[float] = []
+            with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                for sample in range(3):
+                    connection.execute("BEGIN IMMEDIATE")
+                    started = time.perf_counter_ns()
+                    try:
+                        for table in write_tables:
+                            columns = owner._TABLE_COLUMNS_BY_VERSION[7][table]
+                            statement = (
+                                f"INSERT INTO {table} ({','.join(columns)}) "
+                                f"VALUES ({','.join('?' for _ in columns)})"
+                            )
+                            first = 10_000 + sample * 10
+                            connection.executemany(
+                                statement,
+                                (
+                                    self._private_index_fixture_row(table, ordinal)
+                                    for ordinal in range(first, first + 10)
+                                ),
+                            )
+                        connection.execute("COMMIT")
+                    except BaseException:
+                        if connection.in_transaction:
+                            connection.execute("ROLLBACK")
+                        raise
+                    samples.append((time.perf_counter_ns() - started) / 1_000_000)
+            return samples
+
+        baseline_writes = write_samples(baseline_path)
+        indexed_writes = write_samples(store.path)
+        print(
+            "FINANCIAL_PRIVATE_INDEX_PROFILE "
+            + json.dumps(
+                {
+                    "fixture": {
+                        "obligations": 20,
+                        "rows_per_obligation_per_table": 20,
+                        "rows_per_table": rows_per_table,
+                        "package_bytes": package_bytes,
+                    },
+                    "storage_bytes": {
+                        "without_private_indexes": baseline_storage,
+                        "with_private_indexes": indexed_storage,
+                        "delta": indexed_storage - baseline_storage,
+                    },
+                    "query_plan_before": baseline_plans,
+                    "query_plan_after": indexed_plans,
+                    "read_ms_samples_before": baseline_reads,
+                    "read_ms_samples_after": indexed_reads,
+                    "insert_transaction_ms_samples_before": baseline_writes,
+                    "insert_transaction_ms_samples_after": indexed_writes,
+                },
+                sort_keys=True,
+            )
+        )
+
+    def test_v6_continuity_admission_migration_prevalidates_identity(self) -> None:
+        config = FinancialOwnerConfig(
+            state_id=expected.STATE_ID,
+            deployment_id=expected.DEPLOYMENT_ID,
+            program_id=expected.PROGRAM_ID,
+            period_id=expected.PERIOD_ONE_ID,
+            currency=expected.CURRENCY,
+            schema_version=6,
+        )
+        source = FinancialOwner(
+            path=self._path("v6-admission-migration-source.sqlite"),
+            config=config,
+            trusted_authority=self.authority,
+            clock=_Clock(initial=1_700_000_000_000),
+        )
+        source_package = source.export_continuity()
+        legacy_path = self._path("v6-admission-migration-legacy.sqlite")
+        legacy_path.write_bytes(source.path.read_bytes())
+        with closing(sqlite3.connect(legacy_path, isolation_level=None)) as connection:
+            connection.execute("DROP TABLE right_rail_continuity_admission")
+        legacy_bytes = legacy_path.read_bytes()
+        wrong_config = FinancialOwnerConfig(
+            state_id="state:wrong-admission-scope",
+            deployment_id=expected.DEPLOYMENT_ID,
+            program_id=expected.PROGRAM_ID,
+            period_id=expected.PERIOD_ONE_ID,
+            currency=expected.CURRENCY,
+            schema_version=6,
+        )
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
+            FinancialOwner(
+                path=legacy_path,
+                config=wrong_config,
+                trusted_authority=self.authority,
+                clock=_Clock(initial=1_700_000_000_000),
+            )
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+
+        migrated = FinancialOwner(
+            path=legacy_path,
+            config=config,
+            trusted_authority=self.authority,
+            clock=_Clock(initial=1_700_000_000_000),
+        )
+        self.assertEqual(migrated.export_continuity(), source_package)
+        self._assert_verified(migrated)
+
+    def test_v6_continuity_admission_cache_is_independently_recomputed(self) -> None:
+        config = FinancialOwnerConfig(
+            state_id=expected.STATE_ID,
+            deployment_id=expected.DEPLOYMENT_ID,
+            program_id=expected.PROGRAM_ID,
+            period_id=expected.PERIOD_ONE_ID,
+            currency=expected.CURRENCY,
+            schema_version=6,
+        )
+        store = FinancialOwner(
+            path=self._path("v6-admission-cache.sqlite"),
+            config=config,
+            trusted_authority=self.authority,
+            clock=_Clock(initial=1_700_000_000_000),
+        )
+        self._assert_verified(store)
+        tampered = self._path("v6-admission-cache-tampered.sqlite")
+        tampered.write_bytes(store.path.read_bytes())
+        with closing(sqlite3.connect(tampered, isolation_level=None)) as connection:
+            connection.execute(
+                "UPDATE right_rail_continuity_admission SET row_bytes=row_bytes+1 "
+                "WHERE table_name='financial_events'"
+            )
+        with self.assertRaisesRegex(IndependentFinancialError, "continuity-admission:mismatch"):
+            verify_database(
+                tampered,
+                expected_config=config,
+                expected_authority={
+                    "authority_id": self.authority.authority_id,
+                    "epoch": self.authority.epoch,
+                    "digest": self.authority.digest,
+                },
+            )
+        self._assert_verified(store)
+
+    def test_v6_continuity_admission_row_cap_rolls_back_all_deltas(self) -> None:
+        config = FinancialOwnerConfig(
+            state_id=expected.STATE_ID,
+            deployment_id=expected.DEPLOYMENT_ID,
+            program_id=expected.PROGRAM_ID,
+            period_id=expected.PERIOD_ONE_ID,
+            currency=expected.CURRENCY,
+            schema_version=6,
+        )
+        store = FinancialOwner(
+            path=self._path("v6-admission-row-cap.sqlite"),
+            config=config,
+            trusted_authority=self.authority,
+            clock=_Clock(initial=1_700_000_000_000),
+        )
+        package_before = store.export_continuity()
+        with self.assertRaisesRegex(FinancialContinuityError, "continuity_row_cap"):
+            with store._write() as connection:
+                for index in range(owner._MAX_ROWS + 1):
+                    connection.execute(
+                        "INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)",
+                        (
+                            f"conflict:cap:{index:05d}",
+                            "obligation:cap",
+                            f"origin:cap:{index:05d}",
+                            None,
+                            f"evidence:cap:{index:05d}",
+                            None,
+                            1,
+                            "CAP_TEST",
+                            index,
+                        ),
+                    )
+        self.assertEqual(store.export_continuity(), package_before)
+        with store._read_snapshot() as connection:
+            self.assertEqual(
+                store._continuity_admission_values(connection)["financial_conflicts"],
+                (0, 0),
+            )
+        self._assert_verified(store)
+
+    def test_v7_continuity_admission_row_cap_rolls_back_all_deltas(self) -> None:
+        config = FinancialOwnerConfig(
+            state_id=expected.STATE_ID,
+            deployment_id=expected.DEPLOYMENT_ID,
+            program_id=expected.PROGRAM_ID,
+            period_id=expected.PERIOD_ONE_ID,
+            currency=expected.CURRENCY,
+            schema_version=7,
+        )
+        store = FinancialOwner(
+            path=self._path("v7-admission-row-cap.sqlite"),
+            config=config,
+            trusted_authority=self.authority,
+            clock=_Clock(initial=1_700_000_000_000),
+        )
+        package_before = store.export_continuity()
+        with self.assertRaisesRegex(FinancialContinuityError, "continuity_row_cap"):
+            with store._write() as connection:
+                for index in range(owner._MAX_ROWS + 1):
+                    connection.execute(
+                        "INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)",
+                        (
+                            f"conflict:v7-cap:{index:05d}",
+                            "obligation:v7-cap",
+                            f"origin:v7-cap:{index:05d}",
+                            None,
+                            f"evidence:v7-cap:{index:05d}",
+                            None,
+                            1,
+                            "CAP_TEST",
+                            index,
+                        ),
+                    )
+        self.assertEqual(store.export_continuity(), package_before)
+        with store._read_snapshot() as connection:
+            self.assertEqual(
+                store._continuity_admission_values(connection)["financial_conflicts"],
+                (0, 0),
+            )
+        self._assert_verified(store)
+
+    def test_v6_continuity_admission_cost_tracks_changed_work(self) -> None:
+        config = FinancialOwnerConfig(
+            state_id=expected.STATE_ID,
+            deployment_id=expected.DEPLOYMENT_ID,
+            program_id=expected.PROGRAM_ID,
+            period_id=expected.PERIOD_ONE_ID,
+            currency=expected.CURRENCY,
+            schema_version=6,
+        )
+        measurements: list[dict[str, object]] = []
+
+        def receipt_for(index: int) -> ProgramFundingReceipt:
+            return ProgramFundingReceipt(
+                receipt_id=f"funding-measure:{index:06d}",
+                state_id=config.state_id,
+                deployment_id=config.deployment_id,
+                program_id=config.program_id,
+                period_id=config.period_id,
+                currency=config.currency,
+                source_record_ref=f"state-funding-measure:{index:06d}",
+                amount_cents=1,
+                event_at_ms=1_700_000_000_000 + index,
+            )
+
+        class _RollbackMeasurement(Exception):
+            pass
+
+        for history_size in (0, 250, 1_000, 3_000):
+            store = FinancialOwner(
+                path=self._path(f"v6-admission-measure-{history_size}.sqlite"),
+                config=config,
+                trusted_authority=self.authority,
+                clock=_Clock(initial=1_700_100_000_000),
+            )
+            if history_size:
+                with store._write() as connection:
+                    for index in range(history_size):
+                        status, _value = store._record_program_funding_receipt_in_transaction(
+                            connection,
+                            receipt_for(index),
+                        )
+                        self.assertEqual(status, "RECORDED")
+            package_before = store.export_continuity()
+            with store._read_snapshot() as connection:
+                self.assertEqual(
+                    store._continuity_admission_package_size(connection),
+                    len(package_before),
+                )
+            full_package_ms: list[float] = []
+            incremental_commit_ms: list[float] = []
+            first_index = history_size
+            for sample in range(3):
+                receipt = receipt_for(first_index + sample)
+                started = time.perf_counter()
+                try:
+                    with store._write() as connection:
+                        status, _value = store._record_program_funding_receipt_in_transaction(
+                            connection,
+                            receipt,
+                        )
+                        self.assertEqual(status, "RECORDED")
+                        store._continuity_package_bytes(connection)
+                        raise _RollbackMeasurement()
+                except _RollbackMeasurement:
+                    pass
+                full_package_ms.append((time.perf_counter() - started) * 1_000)
+
+                started = time.perf_counter()
+                result = store.record_program_funding_receipt(receipt)
+                incremental_commit_ms.append((time.perf_counter() - started) * 1_000)
+                self.assertEqual(result["status"], "RECORDED")
+                committed_package = store.export_continuity()
+                with store._read_snapshot() as connection:
+                    self.assertEqual(
+                        store._continuity_admission_package_size(connection),
+                        len(committed_package),
+                    )
+            measurements.append(
+                {
+                    "unrelated_funding_records_before_samples": history_size,
+                    "package_bytes_before_samples": len(package_before),
+                    "full_package_preview_ms": [round(value, 3) for value in full_package_ms],
+                    "incremental_commit_ms": [round(value, 3) for value in incremental_commit_ms],
+                    "full_package_preview_median_ms": round(statistics.median(full_package_ms), 3),
+                    "incremental_commit_median_ms": round(statistics.median(incremental_commit_ms), 3),
+                }
+            )
+            self._assert_verified(store)
+        print("CONTINUITY_ADMISSION_MEASUREMENT " + json.dumps(measurements, sort_keys=True))
+
+    def test_v6_continuity_package_cap_is_checked_before_commit(self) -> None:
+        package_cap = owner._MAX_PACKAGE_BYTES
+        scope = {
+            "state_id": "s" * 128,
+            "deployment_id": "d" * 128,
+            "program_id": "p" * 128,
+            "period_id": "r" * 128,
+            "currency": expected.CURRENCY,
+        }
+        config = FinancialOwnerConfig(**scope, schema_version=6)
+        clock = _Clock(initial=1_700_000_000_000)
+        store = FinancialOwner(
+            path=self._path("v6-continuity-cap.sqlite"),
+            config=config,
+            trusted_authority=self.authority,
+            clock=clock,
+            owner_id="o" * 128,
+        )
+
+        def receipt_for(index: int) -> ProgramFundingReceipt:
+            receipt_prefix = f"funding-cap-receipt:{index:05d}:"
+            source_prefix = f"state-payment-record-cap:{index:05d}:"
+            return ProgramFundingReceipt(
+                receipt_id=receipt_prefix + "r" * (128 - len(receipt_prefix)),
+                state_id=scope["state_id"],
+                deployment_id=scope["deployment_id"],
+                program_id=scope["program_id"],
+                period_id=scope["period_id"],
+                currency=scope["currency"],
+                source_record_ref=source_prefix + "x" * (128 - len(source_prefix)),
+                amount_cents=1,
+                event_at_ms=1_700_000_000_000,
+            )
+
+        def append_batch(start: int, count: int) -> None:
+            with store._write() as connection:
+                for index in range(start, start + count):
+                    status, _receipt = store._record_program_funding_receipt_in_transaction(
+                        connection,
+                        receipt_for(index),
+                    )
+                    self.assertEqual(status, "RECORDED")
+
+        package_before_first = store.export_continuity()
+        self.assertLess(len(package_before_first), package_cap)
+        self.assertEqual(store.record_program_funding_receipt(receipt_for(0))["status"], "RECORDED")
+        package = store.export_continuity()
+        first_delta = len(package) - len(package_before_first)
+        self.assertGreater(first_delta, 0)
+        self.assertLess(len(package), package_cap)
+
+        next_index = 1
+        target_margin = max(256_000, (first_delta + 16) * 8)
+        while package_cap - len(package) > target_margin:
+            remaining = package_cap - len(package)
+            batch_count = min(256, max(1, (remaining - target_margin) // (first_delta + 16)))
+            while True:
+                try:
+                    append_batch(next_index, batch_count)
+                except FinancialContinuityError as error:
+                    self.assertRegex(str(error), "continuity_package_size")
+                    self.assertGreater(batch_count, 1)
+                    batch_count //= 2
+                    continue
+                break
+            next_index += batch_count
+            package = store.export_continuity()
+            self.assertLess(len(package), package_cap)
+        self.assertLessEqual(package_cap - len(package), target_margin + 4_096)
+        self.assertLess(store.summary()["sequence"], owner._MAX_ROWS)
+
+        before_positive = package
+        self.assertEqual(store.record_program_funding_receipt(receipt_for(next_index))["status"], "RECORDED")
+        next_index += 1
+        package = store.export_continuity()
+        self.assertGreater(len(package), len(before_positive))
+        self.assertLess(len(package), package_cap)
+        self._assert_verified(store)
+
+        def verify_and_restore(raw_package: bytes, destination_name: str) -> None:
+            binding = json.loads(raw_package.decode("ascii"))
+            independent = verify_continuity_package(
+                raw_package,
+                expected_scope=binding["scope"],
+                expected_authority=binding["authority"],
+                expected_schema_version=6,
+            )
+            self.assertEqual(independent["version"], 6)
+            restored = FinancialMirror(store).restore_test_continuity(
+                raw_package,
+                self._path(destination_name),
+            )
+            restored_package = restored.owner.export_continuity()
+            self.assertLessEqual(len(restored_package), package_cap)
+            self.assertEqual(restored.owner.mode, "TEST")
+            self._assert_verified(restored.owner, current_snapshot_package=restored_package)
+
+        class _RollbackPackagePreview(Exception):
+            pass
+
+        def preview_receipt_package(receipt: ProgramFundingReceipt) -> bool:
+            """Measure a candidate using the exact in-transaction package builder, then roll it back."""
+
+            try:
+                with store._write() as connection:
+                    status, _receipt = store._record_program_funding_receipt_in_transaction(
+                        connection,
+                        receipt,
+                    )
+                    self.assertEqual(status, "RECORDED")
+                    serialized = store._continuity_package_bytes(connection)
+                    self.assertEqual(
+                        store._continuity_admission_package_size(connection),
+                        len(serialized),
+                    )
+                    raise _RollbackPackagePreview()
+            except _RollbackPackagePreview:
+                return True
+            except FinancialContinuityError as error:
+                self.assertRegex(str(error), "continuity_package_size")
+                return False
+
+        rejected = False
+        for _attempt in range(128):
+            candidate = receipt_for(next_index)
+            if not preview_receipt_package(candidate):
+                self.assertGreater(package_cap - len(package), 0)
+                self.assertLessEqual(package_cap - len(package), target_margin + 4_096)
+                verify_and_restore(package, "v6-continuity-before-cap-rejection.sqlite")
+                before_counts = self._durable_counts(store.path)
+                before_meta = self._durable_meta(store.path)
+                with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_size"):
+                    store.record_program_funding_receipt(candidate)
+                package_after_rejection = store.export_continuity()
+                self.assertEqual(package_after_rejection, package)
+                self.assertEqual(self._durable_counts(store.path), before_counts)
+                self.assertEqual(self._durable_meta(store.path), before_meta)
+                self._assert_verified(store)
+                verify_and_restore(package_after_rejection, "v6-continuity-after-cap-rejection.sqlite")
+                rejected = True
+                break
+
+            before_candidate = package
+            self.assertEqual(store.record_program_funding_receipt(candidate)["status"], "RECORDED")
+            next_index += 1
+            package = store.export_continuity()
+            self.assertGreater(len(package), len(before_candidate))
+            self.assertLess(len(package), package_cap)
+        self.assertTrue(rejected, "the 8 MiB Continuity boundary was not reached within the bounded receipt window")
+
+    def test_v6_program_funding_receipt_process_crash_boundaries(self) -> None:
+        receipt = self._funding_receipt()
+        initial_clock = receipt.event_at_ms
+
+        precommit_store = self._make_owner(
+            path=self._path("funding-precommit.sqlite"),
+            clock=_Clock(initial_clock),
+            schema_version=6,
+        )
+        before_precommit_package = precommit_store.export_continuity()
+        before_precommit_counts = self._durable_counts(precommit_store.path)
+        precommit = self._run_funding_process_boundary(
+            store=precommit_store,
+            fault="process_precommit",
+            clock_value=initial_clock,
+        )
+        self.assertEqual(precommit.returncode, 73)
+        self.assertEqual(
+            precommit.stdout,
+            "PHASE=BEFORE_FUNDING_RECORD\nPHASE=PRECOMMIT_AFTER_MUTATION\n",
+        )
+        self.assertEqual(precommit.stderr, "")
+        reopened_precommit = self._make_owner(
+            path=precommit_store.path,
+            clock=_Clock(initial_clock + 1),
+            schema_version=6,
+        )
+        self.assertEqual(reopened_precommit.export_continuity(), before_precommit_package)
+        self.assertEqual(self._durable_counts(reopened_precommit.path), before_precommit_counts)
+        self.assertEqual(reopened_precommit.program_funding_summary()["historical_receipt_count"], 0)
+        self._assert_verified(reopened_precommit)
+        committed_retry = reopened_precommit.record_program_funding_receipt(receipt)
+        self.assertEqual(committed_retry["status"], "RECORDED")
+        committed_precommit_package = reopened_precommit.export_continuity()
+        committed_precommit_counts = self._durable_counts(reopened_precommit.path)
+
+        postcommit_store = self._make_owner(
+            path=self._path("funding-postcommit.sqlite"),
+            clock=_Clock(initial_clock),
+            schema_version=6,
+        )
+        pre_postcommit_package = postcommit_store.export_continuity()
+        postcommit = self._run_funding_process_boundary(
+            store=postcommit_store,
+            fault="process_postcommit",
+            clock_value=initial_clock,
+        )
+        self.assertEqual(postcommit.returncode, 74)
+        self.assertEqual(
+            postcommit.stdout,
+            "PHASE=BEFORE_FUNDING_RECORD\nPHASE=POSTCOMMIT_AFTER_COMMIT\n",
+        )
+        self.assertEqual(postcommit.stderr, "")
+        self.assertNotEqual(pre_postcommit_package, postcommit_store.export_continuity())
+        reopened_postcommit = self._make_owner(
+            path=postcommit_store.path,
+            clock=_Clock(initial_clock + 1),
+            schema_version=6,
+        )
+        self.assertEqual(reopened_postcommit.program_funding_summary()["historical_receipt_count"], 1)
+        self._assert_verified(reopened_postcommit)
+        committed_postcommit_package = reopened_postcommit.export_continuity()
+        committed_postcommit_counts = self._durable_counts(reopened_postcommit.path)
+        duplicate = reopened_postcommit.record_program_funding_receipt(receipt)
+        self.assertEqual(duplicate["status"], "DUPLICATE")
+        self.assertEqual(reopened_postcommit.export_continuity(), committed_postcommit_package)
+        self.assertEqual(self._durable_counts(reopened_postcommit.path), committed_postcommit_counts)
+        self.assertNotEqual(committed_precommit_package, before_precommit_package)
+        self.assertNotEqual(committed_precommit_counts, before_precommit_counts)
+        self._assert_verified(reopened_postcommit)
+
+    def test_first_service_acceptance_journey_and_effective_rule_change(self) -> None:
+        # The v6 receipt is reported separately; $1,000,000 remains the published-obligation denominator.
+        self.assertEqual(len(expected.PROGRAM_ITEMS), 20)
+        self.assertEqual(sum(item.owed_cents for item in expected.PROGRAM_ITEMS), expected.PROGRAM_TOTAL_CENTS)
+        self.assertEqual(len(expected.OTHER_RECIPIENT_PAYMENTS), 19)
+        self.assertEqual(sum(item.amount_cents for item in expected.OTHER_RECIPIENT_PAYMENTS), expected.OTHER_TOTAL_CENTS)
+        self.assertEqual(
+            sum(item.amount_cents for item in expected.OTHER_RECIPIENT_PAYMENTS[:18]),
+            expected.PARTIAL_OTHER_RECIPIENT_CASH_CENTS,
+        )
+
+        store = self._build_base(schema_version=7)
+        mirror = FinancialMirror(store)
+        funding_fixture = expected.PROGRAM_FUNDING_RECEIPT
+        funding_record = self._funding_receipt()
+        owner_summary_before_funding = store.summary()
+        funding_result = mirror.record_program_funding_receipt(funding_record)
+        self.assertEqual(funding_result["status"], "RECORDED")
+        funding_summary = mirror.program_funding_summary()
+        self.assertEqual(funding_summary["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self.assertEqual(funding_summary["current_receipt_count"], 1)
+        self.assertEqual(funding_summary["historical_receipt_count"], 1)
+        self.assertEqual(funding_summary["confirmation_class"], funding_fixture.confirmation_class)
+        self.assertEqual(funding_summary["evidence_status"], funding_fixture.evidence_status)
+        self.assertFalse(funding_summary["money_movement_effect"])
+        self.assertFalse(funding_summary["recipient_cash_effect"])
+        self.assertFalse(funding_summary["payment_authorization_effect"])
+        owner_summary_after_funding = store.summary()
+        self.assertEqual(owner_summary_after_funding["owed_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self.assertEqual(owner_summary_after_funding["received_cash_cents"], 0)
+        for field in ("obligation_count", "owed_cents", "received_cash_cents"):
+            self.assertEqual(owner_summary_after_funding[field], owner_summary_before_funding[field])
+        self.assertEqual(funding_result["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self._assert_population(store, expected.CASE_01.expected_population_evidence_count)
+        self._assert_snapshot(store, expected.H_MISSING)
+        for payment in expected.OTHER_RECIPIENT_PAYMENTS[:18]:
+            result = self._record_expected_recipient_payment(mirror, payment)
+            self.assertEqual(result["status"], "RECORDED")
+
+        partial = mirror.summary()
+        self.assertEqual(partial["obligation_count"], 20)
+        self.assertEqual(partial["owed_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self.assertEqual(partial["received_cash_cents"], expected.PARTIAL_OTHER_RECIPIENT_CASH_CENTS)
+        partial_rows = {row["item_id"]: row for row in mirror.list_obligations(status="ALL", limit=100)["items"]}
+        self.assertEqual(partial_rows["item-19"]["received_cash_cents"], 0)
+        self.assertEqual(partial_rows[expected.H_ITEM_ID]["received_cash_cents"], 0)
+        self.assertEqual(mirror.obligation_detail(expected.H_ITEM_ID)["verification_status"], "MISSING_EVIDENCE")
+
+        final_other = self._record_expected_recipient_payment(mirror, expected.OTHER_RECIPIENT_PAYMENTS[18])
+        self.assertEqual(final_other["status"], "RECORDED")
+        self.assertEqual(mirror.summary()["received_cash_cents"], expected.OTHER_TOTAL_CENTS)
+        self.assertEqual(mirror.obligation_detail(expected.H_ITEM_ID)["verification_status"], "MISSING_EVIDENCE")
+
+        h_cash = expected.H_CASH_EVIDENCE
+        h_cash_result = mirror.record_payment_evidence(
+            item_id=h_cash.item_id,
+            payment_id=expected.H_INITIAL_PAYMENT_ID,
+            common_origin_id=h_cash.common_origin_id,
+            amount_cents=h_cash.amount_cents or 0,
+            evidence_id=h_cash.evidence_id,
+            event_at_ms=h_cash.event_at_ms,
+            source_id=h_cash.source_id,
+            source_version=h_cash.source_version,
+            local_ref=h_cash.local_ref,
+        )
+        self.assertEqual(h_cash_result["status"], "RECORDED")
+        claim = expected.OFFSET_CLAIM_EVIDENCE
+        claim_result = store.record_offset_claim(
+            item_id=claim.item_id,
+            claim_id=expected.H_CLAIM_ID,
+            amount_cents=claim.amount_cents or 0,
+            evidence_id=claim.evidence_id,
+            owner_role="CASE_OWNER",
+            deadline_ms=expected.H_DUE_AT_MS,
+        )
+        self.assertEqual(claim_result["status"], "CLAIMED")
+        receipt = mirror.current_evaluation_receipt(expected.H_ITEM_ID)
+        rejection = mirror.reject_offset_and_authorize_correction(
+            item_id=expected.H_ITEM_ID,
+            claim_id=expected.H_CLAIM_ID,
+            expected_revision=receipt["revision"],
+            action_id=expected.ACTION_CORRECTION_ID,
+            decision_at_ms=expected.CORRECTION_AUTH_MS,
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
+        )
+        self.assertEqual(rejection["status"], "CORRECTION_AUTHORIZED")
+        self.assertEqual(rejection["action_id"], expected.ACTION_CORRECTION_ID)
+        self._assert_snapshot(store, expected.H_REJECTED_CORRECTION)
+        rejected_view = self._first_service_decision_package(mirror)
+        self.assertEqual(rejected_view["funding_receipt"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self.assertEqual(rejected_view["funding_receipt"]["current_receipt_count"], 1)
+        self.assertEqual(rejected_view["journey_id"], expected.FIRST_SERVICE_JOURNEY_ID)
+        self.assertEqual(rejected_view["program"]["denominator_basis"], "published_obligations")
+        self.assertEqual(rejected_view["program"]["owed_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self.assertEqual(rejected_view["program"]["population_count"], 1)
+        self.assertEqual(rejected_view["program"]["recipient_count"], 20)
+        self.assertEqual(rejected_view["program"]["other_recipient_cash_cents"], expected.OTHER_TOTAL_CENTS)
+        self.assertEqual(rejected_view["program"]["recipient_cash_cents"], expected.OTHER_TOTAL_CENTS + expected.H_CASH_CENTS)
+        h_view = rejected_view["hospital_h"]
+        self.assertEqual(h_view["case_id"], expected.H_CASE_ID)
+        self.assertEqual(h_view["case_status"], "CORRECTION_REQUIRED")
+        self.assertEqual(h_view["owner_role"], "CASE_OWNER")
+        self.assertEqual(h_view["deadline_ms"], expected.H_DUE_AT_MS)
+        self.assertEqual(h_view["decision"], "OFFSET_REJECTED_CORRECTION_AUTHORIZED")
+        self.assertEqual(h_view["decision_amount_cents"], expected.CORRECTION_PAYMENT_CENTS)
+        self.assertEqual(h_view["decision_actor_role"], "FINANCE_DECISION")
+        self.assertIn(claim.evidence_id, h_view["decision_supporting_evidence_ids"])
+        self.assertEqual(h_view["next_action"]["action_id"], expected.ACTION_CORRECTION_ID)
+        self.assertEqual(h_view["next_action"]["kind"], "CORRECTION_PAYMENT_REQUEST")
+        self.assertEqual(h_view["next_action"]["amount_cents"], expected.CORRECTION_PAYMENT_CENTS)
+        self.assertEqual(h_view["next_action"]["dispatch"], "SYNTHETIC_RECORD_ONLY")
+        self.assertEqual(
+            h_view["completion_conditions"],
+            {"amount_satisfied": True, "delivery_acknowledged_or_not_required": True, "reporting_complete": True},
+        )
+
+        sequence_before_ack = store.summary()["sequence"]
+        acknowledgment = mirror.acknowledge_action(expected.ACTION_CORRECTION_ID, expected.H_ACKNOWLEDGMENT_REF)
+        self.assertEqual(acknowledgment["status"], "ACKNOWLEDGED")
+        self.assertEqual(store.summary()["sequence"], sequence_before_ack + 1)
+        self._assert_snapshot(store, expected.H_ACKNOWLEDGED)
+        acknowledged_view = self._first_service_decision_package(mirror)
+        self.assertEqual(acknowledged_view["hospital_h"]["received_cash_cents"], expected.H_CASH_CENTS)
+        self.assertEqual(acknowledged_view["hospital_h"]["shortfall_cents"], expected.CORRECTION_PAYMENT_CENTS)
+        self.assertEqual(
+            acknowledged_view["hospital_h"]["next_action"]["status"],
+            "ACKNOWLEDGED",
+        )
+        self.assertEqual(
+            acknowledged_view["hospital_h"]["completion_references"]["acknowledged_action_ids"],
+            [expected.ACTION_CORRECTION_ID],
+        )
+        source_bytes_before_restore = store.path.read_bytes()
+        source_package = mirror.export_continuity()
+        source_package_result = verify_continuity_package(
+            source_package,
+            expected_scope={
+                "state_id": expected.STATE_ID,
+                "deployment_id": expected.DEPLOYMENT_ID,
+                "program_id": expected.PROGRAM_ID,
+                "period_id": expected.PERIOD_ONE_ID,
+                "currency": expected.CURRENCY,
+            },
+            expected_authority={
+                "authority_id": self.authority.authority_id,
+                "epoch": self.authority.epoch,
+                "digest": self.authority.digest,
+            },
+        )
+        self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v6")
+        self.assertEqual(source_package_result["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
+        source_package_view = FinancialMirror.validate_continuity_package(source_package)
+        self.assertEqual(source_package_view["version"], 6)
+        self.assertEqual(source_package_view["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self.assertFalse(source_package_view["dispatch_enabled"])
+        self.assertFalse(source_package_view["egress_enabled"])
+
+        test_mirror = mirror.restore_test_continuity(source_package, self._path("first-service-test-restore.sqlite"))
+        test_store = test_mirror.owner
+        self.assertEqual(test_store.mode, "TEST")
+        self.assertEqual(test_store.owner_id, owner._TEST_OWNER_ID)
+        self.assertFalse(test_mirror.summary()["dispatch_enabled"])
+        self.assertFalse(test_mirror.summary()["egress_enabled"])
+        self.assertEqual(test_mirror.verify_integrity()["integrity"], "VERIFIED")
+        self._assert_snapshot(test_store, expected.H_ACKNOWLEDGED)
+        self.assertEqual(self._first_service_decision_package(test_mirror), acknowledged_view)
+        self.assertEqual(test_mirror.program_funding_summary(), funding_summary)
+        funding_retry_after_restore = test_mirror.record_program_funding_receipt(funding_record)
+        self.assertEqual(funding_retry_after_restore["status"], "DUPLICATE")
+        self.assertEqual(test_mirror.program_funding_summary(), funding_summary)
+        self._assert_verified(test_store, restore_source_package=source_package)
+        self.assertEqual(store.path.read_bytes(), source_bytes_before_restore)
+
+        sequence_before_retry = test_store.summary()["sequence"]
+        exact_retry = test_mirror.retry_action(
+            expected.ACTION_CORRECTION_ID,
+            payload=test_store.action_payload(expected.ACTION_CORRECTION_ID)["payload"],
+        )
+        self.assertEqual(exact_retry["status"], "DUPLICATE")
+        self.assertEqual(test_store.summary()["sequence"], sequence_before_retry)
+        changed_payload = dict(test_store.action_payload(expected.ACTION_CORRECTION_ID)["payload"])
+        changed_payload["amount_cents"] = expected.CORRECTION_PAYMENT_CENTS + 1
+        with self.assertRaisesRegex(FinancialConflictError, expected.ACTION_PAYLOAD_REJECTION.expected_error):
+            test_mirror.retry_action(expected.ACTION_CORRECTION_ID, payload=changed_payload)
+        self.assertEqual(test_store.summary()["sequence"], sequence_before_retry)
+        with self.assertRaisesRegex(FinancialDispatchError, "dispatch_disabled"):
+            test_store.dispatch_outbox()
+
+        late_payment = expected.P2_PAYMENT_EVIDENCE
+        self._advance_clock(test_store, late_payment.event_at_ms)
+        late_result = test_mirror.record_payment_evidence(
+            item_id=late_payment.item_id,
+            payment_id="payment:h:p2",
+            common_origin_id=late_payment.common_origin_id,
+            amount_cents=late_payment.amount_cents or 0,
+            evidence_id=late_payment.evidence_id,
+            event_at_ms=late_payment.event_at_ms,
+            source_id=late_payment.source_id,
+            source_version=late_payment.source_version,
+            local_ref=late_payment.local_ref,
+        )
+        self.assertEqual(late_result["status"], "RECORDED")
+        self._assert_snapshot(test_store, expected.H_P2_RECEIVED_LATE)
+
+        duplicate = expected.P2_CONFIRMATION_EVIDENCE
+        cash_before_duplicate = test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"]
+        duplicate_result = test_mirror.record_payment_evidence(
+            item_id=duplicate.item_id,
+            payment_id="payment:h:p2-confirmation",
+            common_origin_id=duplicate.common_origin_id,
+            amount_cents=duplicate.amount_cents or 0,
+            evidence_id=duplicate.evidence_id,
+            event_at_ms=duplicate.event_at_ms,
+            source_id=duplicate.source_id,
+            source_version=duplicate.source_version,
+            local_ref=duplicate.local_ref,
+        )
+        self.assertEqual(duplicate_result["status"], "DUPLICATE")
+        self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"], cash_before_duplicate)
+
+        conflict = expected.P2_CONFLICT_EVIDENCE
+        conflict_result = test_mirror.record_payment_evidence(
+            item_id=conflict.item_id,
+            payment_id="payment:h:p2-conflict",
+            common_origin_id=conflict.common_origin_id,
+            amount_cents=conflict.amount_cents or 0,
+            evidence_id=conflict.evidence_id,
+            event_at_ms=conflict.event_at_ms,
+            source_id=conflict.source_id,
+            source_version=conflict.source_version,
+            local_ref=conflict.local_ref,
+        )
+        self.assertEqual(conflict_result["status"], "CONFLICT")
+        self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"], cash_before_duplicate)
+        self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["timely"], 0)
+        self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["reporting_complete"], 0)
+
+        original_report = expected.REPORT_ORIGINAL_EVIDENCE
+        self._advance_clock(test_store, original_report.event_at_ms)
+        report_result = test_mirror.record_reporting_evidence(
+            item_id=original_report.item_id,
+            report_id="report:h:v1",
+            evidence_id=original_report.evidence_id,
+            event_at_ms=original_report.event_at_ms,
+        )
+        self.assertEqual(report_result["status"], "RECORDED")
+        corrected_report = expected.REPORT_CORRECTION_EVIDENCE
+        self._advance_clock(test_store, corrected_report.event_at_ms)
+        correction_result = test_mirror.record_reporting_correction(
+            item_id=corrected_report.item_id,
+            report_id="report:h:v2",
+            evidence_id=corrected_report.evidence_id,
+            event_at_ms=corrected_report.event_at_ms,
+            supersedes=original_report.evidence_id,
+        )
+        self.assertEqual(correction_result["status"], "RECORDED")
+        self._assert_snapshot(test_store, expected.H_P2_CONFLICT_VISIBLE)
+        final_view = self._first_service_decision_package(test_mirror)
+        final_h = final_view["hospital_h"]
+        self.assertEqual(final_view["program"]["recipient_cash_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self.assertEqual(final_view["program"]["other_recipient_cash_cents"], expected.OTHER_TOTAL_CENTS)
+        self.assertEqual(final_h["received_cash_cents"], expected.H_OWED_CENTS)
+        self.assertFalse(final_h["timely"])
+        self.assertTrue(final_h["reporting_complete"])
+        self.assertEqual(final_h["case_status"], "RESOLVED")
+        self.assertEqual(final_h["completion_references"]["acknowledged_action_ids"], [expected.ACTION_CORRECTION_ID])
+        self.assertEqual(
+            final_h["completion_references"]["reporting_evidence_ids"],
+            sorted((original_report.evidence_id, corrected_report.evidence_id)),
+        )
+        self.assertEqual(
+            {row["payment_id"]: row["amount_cents"] for row in final_h["completion_references"]["active_payments"]},
+            {expected.H_INITIAL_PAYMENT_ID: expected.H_CASH_CENTS, "payment:h:p2": expected.CORRECTION_PAYMENT_CENTS},
+        )
+        self.assertEqual(final_h["deadline_ms"], expected.H_DUE_AT_MS)
+        self.assertEqual(final_h["owner_role"], "CASE_OWNER")
+        self.assertEqual(final_view["funding_receipt"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
+        self.assertEqual(final_view["funding_receipt"]["current_receipt_count"], 1)
+        self.assertEqual(final_view["funding_receipt"]["historical_receipt_count"], 1)
+        self.assertFalse(final_view["nonactivation"]["production_usable"])
+        self.assertFalse(final_view["nonactivation"]["activation"])
+        self.assertIsNone(final_view["nonactivation"]["proof_suite_id"])
+        self.assertFalse(final_view["nonactivation"]["dispatch_enabled"])
+        self.assertFalse(final_view["nonactivation"]["egress_enabled"])
+        self.assertEqual(store.path.read_bytes(), source_bytes_before_restore)
+
+        final_test_package = test_mirror.export_continuity()
+        self._assert_verified(test_store, restore_source_package=source_package)
+        self._assert_verified(test_store, current_snapshot_package=final_test_package)
+
+        v1_history_before_rule_change = tuple(
+            (
+                row["evaluation_id"],
+                row["revision"],
+                row["control_pack_id"],
+                row["control_pack_version"],
+                row["control_pack_digest"],
+                row["result_digest"],
+            )
+            for row in store.obligation_detail(expected.H_ITEM_ID)["evaluations"]
+        )
+        v1_receipt_before_rule_change = mirror.current_evaluation_receipt(expected.H_ITEM_ID)
+        self.assertEqual(v1_receipt_before_rule_change["control_pack"]["pack_id"], expected.CONTROL_PACK_V1.pack_id)
+        self.assertEqual(v1_receipt_before_rule_change["control_pack"]["version"], 1)
+        self.assertEqual(v1_receipt_before_rule_change["rule_version"], 1)
+        self.assertEqual(expected.CONTROL_PACK_V1.effective_end_ms, expected.CONTROL_PACK_V2.effective_start_ms)
+
+        period_two = self._build_base(period_id=expected.PERIOD_TWO_ID, population_id=expected.POPULATION_TWO_ID)
+        period_two_mirror = FinancialMirror(period_two)
+        v2_receipt = period_two_mirror.current_evaluation_receipt(expected.H_ITEM_ID)
+        self.assertEqual(v2_receipt["control_pack"]["pack_id"], expected.CONTROL_PACK_V2.pack_id)
+        self.assertEqual(v2_receipt["control_pack"]["version"], 2)
+        self.assertEqual(v2_receipt["rule_version"], 2)
+        self.assertEqual(v2_receipt["scope"]["period_id"], expected.PERIOD_TWO_ID)
+        self.assertEqual(mirror.current_evaluation_receipt(expected.H_ITEM_ID), v1_receipt_before_rule_change)
+        v1_history_after_rule_change = tuple(
+            (
+                row["evaluation_id"],
+                row["revision"],
+                row["control_pack_id"],
+                row["control_pack_version"],
+                row["control_pack_digest"],
+                row["result_digest"],
+            )
+            for row in store.obligation_detail(expected.H_ITEM_ID)["evaluations"]
+        )
+        self.assertEqual(v1_history_after_rule_change, v1_history_before_rule_change)
+        self.assertTrue(
+            all(row["control_pack_id"] == expected.CONTROL_PACK_V1.pack_id for row in store.obligation_detail(expected.H_ITEM_ID)["evaluations"])
+        )
+        self._assert_verified(store)
+        self._assert_verified(period_two)
+
     def test_case_12_scope_oversize_and_egress_boundaries(self) -> None:
         self.assertEqual(expected.CASE_12.number, 12)
         store = self._build_base()
@@ -1389,19 +3396,395 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "control_pack_roles_unsupported"):
             store.publish_control_pack(missing_receiver)
 
-    def test_population_count_backpressure_preserves_prior_chunks(self) -> None:
+    def test_population_import_requires_manifest_without_mutation(self) -> None:
         store = self._make_owner()
         pack = self._pack(expected.CONTROL_PACK_V1)
         store.publish_control_pack(pack)
-        population_id = "population:fixture-overflow"
-        with self.assertRaisesRegex(FinancialIntegrityError, "population_count_exceeded"):
+        before_package = store.export_continuity()
+        before_counts = self._durable_counts(store.path)
+        population_id = "population:fixture:no-manifest"
+        with self.assertRaisesRegex(FinancialInputError, "population_manifest_required"):
             store.stage_population(
                 population_id=population_id,
                 pack_id=pack.pack_id,
                 cutoff_ms=pack.effective_start_ms,
                 inclusion_rules=("included:synthetic",),
+                expected_count=len(expected.PROGRAM_ITEMS),
+                items=self._items(population_id),
+            )
+        self.assertEqual(store.export_continuity(), before_package)
+        self.assertEqual(self._durable_counts(store.path), before_counts)
+        self.assertEqual(store.summary()["obligation_count"], 0)
+        self._assert_verified(store)
+
+    def test_v6_funding_owner_rejects_population_writes_without_mutation(self) -> None:
+        store = self._make_owner(schema_version=6)
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        before_package = store.export_continuity()
+        before_counts = self._durable_counts(store.path)
+        population_id = "population:fixture:v6-rejected"
+        with self.assertRaisesRegex(FinancialInputError, "population_manifest_schema_v7_required"):
+            store.stage_population(
+                population_id=population_id,
+                manifest_id="population-manifest:fixture:v6-rejected:v1",
+                pack_id=pack.pack_id,
+                cutoff_ms=pack.effective_start_ms,
+                inclusion_rules=("included:synthetic",),
+                expected_count=1,
+                items=self._items(population_id)[:1],
+            )
+        with self.assertRaisesRegex(FinancialInputError, "population_manifest_schema_v7_required"):
+            store.validate_population(population_id)
+        with self.assertRaisesRegex(FinancialInputError, "population_manifest_schema_v7_required"):
+            store.publish_population(population_id)
+        self.assertEqual(store.export_continuity(), before_package)
+        self.assertEqual(self._durable_counts(store.path), before_counts)
+        self.assertEqual(store.summary()["obligation_count"], 0)
+        self._assert_verified(store)
+
+    def test_population_same_count_substitution_stays_incomplete_and_unpublishable(self) -> None:
+        store = self._make_owner()
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        population_id = "population:fixture:substitution"
+        manifest = self._population_manifest(
+            manifest_id="population-manifest:fixture:substitution:v1",
+        )
+        store.register_population_manifest(manifest)
+        expected_items = self._items(population_id)
+        substituted_items = (*expected_items[:-1], replace(expected_items[-1], item_id="item-z"))
+        with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_extra_member"):
+            store.stage_population(
+                population_id=population_id,
+                manifest_id=manifest.manifest_id,
+                pack_id=pack.pack_id,
+                cutoff_ms=pack.effective_start_ms,
+                inclusion_rules=("included:synthetic",),
+                expected_count=len(expected.PROGRAM_ITEMS),
+                items=substituted_items,
+                chunk_size=len(expected_items) - 1,
+            )
+        status = store.population_status(population_id)
+        self.assertEqual(status["imported_count"], len(expected_items) - 1)
+        self.assertEqual(status["expected_count"], len(expected_items))
+        self.assertEqual(status["manifest_status"], "CURRENT")
+        self.assertEqual(status["completeness"], "INCOMPLETE")
+        self.assertFalse(status["source_complete"])
+        before_validation = store.export_continuity()
+        with self.assertRaisesRegex(FinancialIntegrityError, "population_source_incomplete"):
+            store.validate_population(population_id)
+        self.assertEqual(store.export_continuity(), before_validation)
+        self.assertEqual(store.summary()["obligation_count"], 0)
+        self._assert_verified(store)
+
+    def test_exact_roster_completeness_is_not_source_authentication(self) -> None:
+        store = self._make_owner()
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        population_id = "population:fixture:caller-asserted-roster"
+        items = self._items(population_id)
+        unrelated_source_bytes = b"source bytes not supplied to the owner"
+        asserted_source_digest = bytes.fromhex("A5" * 64)
+        self.assertNotEqual(
+            hashlib.sha3_512(unrelated_source_bytes).digest(),
+            asserted_source_digest,
+        )
+        manifest = replace(
+            self._population_manifest(
+                manifest_id="population-manifest:fixture:caller-asserted-roster:v1",
+                member_ids=tuple(sorted(item.item_id for item in items)),
+            ),
+            source_id="source:caller-asserted",
+            source_version="caller-asserted-v1",
+            source_digest=asserted_source_digest,
+        )
+        store.register_population_manifest(manifest)
+        # Exactness here is only relative to this caller-supplied roster; neither
+        # the owner nor checker receives source bytes or an external attestation.
+        store.stage_population(
+            population_id=population_id,
+            manifest_id=manifest.manifest_id,
+            pack_id=pack.pack_id,
+            cutoff_ms=pack.effective_start_ms,
+            inclusion_rules=("included:synthetic",),
+            expected_count=len(items),
+            items=items,
+            chunk_size=len(items),
+        )
+        status = store.population_status(population_id)
+        self.assertEqual(status["completeness"], "EXACT")
+        self.assertTrue(status["source_complete"])
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            row = connection.execute(
+                "SELECT source_digest FROM population_manifests WHERE manifest_id=?",
+                (manifest.manifest_id,),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(bytes(row[0]), asserted_source_digest)
+        self.assertNotEqual(
+            bytes(row[0]),
+            hashlib.sha3_512(unrelated_source_bytes).digest(),
+        )
+        self._assert_verified(store)
+
+    def test_population_manifest_retry_authorization_supersession_and_binding(self) -> None:
+        store = self._make_owner()
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        root = self._population_manifest()
+        self.assertEqual(store.register_population_manifest(root)["status"], "REGISTERED")
+        registered_package = store.export_continuity()
+        self.assertEqual(store.register_population_manifest(root)["status"], "DUPLICATE")
+        self.assertEqual(store.export_continuity(), registered_package)
+
+        conflicting_identity = replace(root, source_digest=bytes.fromhex("FF" * 64))
+        with self.assertRaisesRegex(FinancialConflictError, "population_manifest_identity_conflict"):
+            store.register_population_manifest(conflicting_identity)
+        unauthorized = self._population_manifest(
+            manifest_id="population-manifest:fixture:unauthorized:v1",
+            source_owner_id="source-owner:fixture:unauthorized",
+            approved_by="synthetic-reporter",
+        )
+        with self.assertRaisesRegex(FinancialAuthorityError, "authority_actor_not_authorized"):
+            store.register_population_manifest(unauthorized)
+        wrong_parent = replace(
+            self._population_manifest(
+                manifest_id="population-manifest:fixture:wrong-parent:v2",
+                supersedes=root,
+            ),
+            supersedes_digest=bytes.fromhex("00" * 64),
+        )
+        with self.assertRaisesRegex(FinancialConflictError, "population_manifest_supersession_conflict"):
+            store.register_population_manifest(wrong_parent)
+        self.assertEqual(store.export_continuity(), registered_package)
+
+        population_id = "population:fixture:superseded-before-publish"
+        store.stage_population(
+            population_id=population_id,
+            manifest_id=root.manifest_id,
+            pack_id=pack.pack_id,
+            cutoff_ms=pack.effective_start_ms,
+            inclusion_rules=("included:synthetic",),
+            expected_count=len(root.member_ids),
+            items=self._items(population_id),
+            chunk_size=5,
+        )
+        store.validate_population(population_id)
+        child = self._population_manifest(
+            manifest_id="population-manifest:fixture-2026-01:v2",
+            supersedes=root,
+        )
+        self.assertEqual(store.register_population_manifest(child)["status"], "SUPERSEDED")
+        stale = store.population_status(population_id)
+        self.assertEqual(stale["manifest_status"], "SUPERSEDED")
+        self.assertEqual(stale["completeness"], "STALE")
+        self.assertFalse(stale["source_complete"])
+        stale_package = store.export_continuity()
+        with self.assertRaisesRegex(FinancialConflictError, "population_manifest_binding_conflict"):
+            store.stage_population(
+                population_id=population_id,
+                manifest_id=child.manifest_id,
+                pack_id=pack.pack_id,
+                cutoff_ms=pack.effective_start_ms,
+                inclusion_rules=("included:synthetic",),
+                expected_count=len(child.member_ids),
+                items=self._items(population_id),
+            )
+        with self.assertRaisesRegex(FinancialConflictError, "population_manifest_stale"):
+            store.publish_population(population_id)
+        self.assertEqual(store.export_continuity(), stale_package)
+        self.assertEqual(store.summary()["obligation_count"], 0)
+        self._assert_verified(store)
+
+        published_store = self._build_base()
+        published_root = self._population_manifest()
+        after_publish = self._population_manifest(
+            manifest_id="population-manifest:fixture-2026-01:after-publish:v2",
+            supersedes=published_root,
+        )
+        before_rejected_supersession = published_store.export_continuity()
+        with self.assertRaisesRegex(FinancialConflictError, "population_manifest_supersede_after_publish"):
+            published_store.register_population_manifest(after_publish)
+        self.assertEqual(published_store.export_continuity(), before_rejected_supersession)
+        self._assert_verified(published_store)
+
+    def test_concurrent_population_manifest_supersession_has_one_winner(self) -> None:
+        store = self._make_owner()
+        store.publish_control_pack(self._pack(expected.CONTROL_PACK_V1))
+        root = self._population_manifest()
+        store.register_population_manifest(root)
+        children = (
+            self._population_manifest(
+                manifest_id="population-manifest:fixture:race-a:v2",
+                supersedes=root,
+            ),
+            self._population_manifest(
+                manifest_id="population-manifest:fixture:race-b:v2",
+                supersedes=root,
+            ),
+        )
+        barrier = threading.Barrier(2)
+        outcomes: list[str] = []
+        errors: list[tuple[type[BaseException], str]] = []
+
+        def register(manifest: PopulationManifest) -> None:
+            try:
+                barrier.wait(timeout=5)
+                outcomes.append(str(store.register_population_manifest(manifest)["status"]))
+            except BaseException as error:
+                errors.append((type(error), str(error)))
+
+        threads = [threading.Thread(target=register, args=(manifest,)) for manifest in children]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(outcomes, ["SUPERSEDED"])
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0][0], FinancialConflictError)
+        self.assertIn("population_manifest_supersession_conflict", errors[0][1])
+        with store._read() as connection:
+            manifests = int(connection.execute("SELECT COUNT(*) FROM population_manifests").fetchone()[0])
+            events = int(connection.execute("SELECT COUNT(*) FROM financial_events WHERE aggregate_type='POPULATION_MANIFEST'").fetchone()[0])
+            heads = int(connection.execute("SELECT COUNT(*) FROM population_manifest_heads").fetchone()[0])
+        self.assertEqual((manifests, events, heads), (2, 2, 1))
+        self._assert_verified(store)
+
+    def test_continuity_v7_reconstructs_manifest_and_rejects_tampered_rows(self) -> None:
+        store = self._build_base()
+        package_bytes = store.export_continuity()
+        package = json.loads(package_bytes.decode("ascii"))
+        verified = verify_continuity_package(
+            package_bytes,
+            expected_scope=package["scope"],
+            expected_authority=package["authority"],
+            expected_schema_version=7,
+        )
+        self.assertEqual(verified["version"], 7)
+        self.assertEqual(verified["table_counts"]["population_manifests"], 1)
+        self.assertEqual(verified["table_counts"]["population_manifest_members"], len(expected.POPULATION_MANIFEST_MEMBER_IDS))
+        self.assertEqual(verified["table_counts"]["population_manifest_bindings"], 1)
+
+        def tamper_and_rehash(mutator) -> bytes:
+            altered = json.loads(package_bytes.decode("ascii"))
+            mutator(altered)
+            body = dict(altered)
+            del body["package_digest"]
+            altered["package_digest"] = continuity_package_digest(body, schema_version=7)
+            return _independent_canonical(altered)
+
+        tampered_member = tamper_and_rehash(
+            lambda value: value["tables"]["population_manifest_members"][0].__setitem__("member_id", "item-z")
+        )
+        tampered_binding = tamper_and_rehash(
+            lambda value: value["tables"]["population_manifest_bindings"][0].__setitem__("manifest_digest", "00" * 64)
+        )
+        tampered_head = tamper_and_rehash(
+            lambda value: value["tables"]["population_manifest_heads"][0].__setitem__("manifest_id", "population-manifest:not-the-head")
+        )
+        tampered_event = tamper_and_rehash(
+            lambda value: next(
+                row for row in value["tables"]["financial_events"]
+                if row["aggregate_type"] == "POPULATION_MANIFEST"
+            ).__setitem__("payload_json", "{}")
+        )
+        for altered in (tampered_member, tampered_binding, tampered_head, tampered_event):
+            with self.subTest(package="tampered_manifest_continuity"):
+                with self.assertRaises(IndependentFinancialError):
+                    verify_continuity_package(
+                        altered,
+                        expected_scope=package["scope"],
+                        expected_authority=package["authority"],
+                        expected_schema_version=7,
+                    )
+        self._assert_verified(store)
+
+    def test_population_staging_rejects_imported_count_projection_drift(self) -> None:
+        store = self._make_owner()
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        population_id = "population:fixture:imported-count-drift"
+        items = self._items(population_id)
+        manifest = self._population_manifest(
+            manifest_id="population-manifest:fixture:imported-count-drift:v1",
+            member_ids=tuple(sorted(item.item_id for item in items[:2])),
+        )
+        store.register_population_manifest(manifest)
+        store.stage_population(
+            population_id=population_id,
+            manifest_id=manifest.manifest_id,
+            pack_id=pack.pack_id,
+            cutoff_ms=pack.effective_start_ms,
+            inclusion_rules=("included:synthetic",),
+            expected_count=2,
+            items=items[:1],
+            chunk_size=1,
+        )
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            connection.execute(
+                "UPDATE population_imports SET imported_count=0 WHERE population_id=?",
+                (population_id,),
+            )
+            connection.commit()
+        before = store.export_continuity()
+        with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_imported_count"):
+            store.stage_population(
+                population_id=population_id,
+                manifest_id=manifest.manifest_id,
+                pack_id=pack.pack_id,
+                cutoff_ms=pack.effective_start_ms,
+                inclusion_rules=("included:synthetic",),
+                expected_count=2,
+                items=items[1:2],
+                chunk_size=1,
+            )
+        self.assertEqual(store.export_continuity(), before)
+        with store._read() as connection:
+            imported = connection.execute(
+                "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",
+                (population_id,),
+            ).fetchone()
+            item_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM population_items WHERE population_id=?",
+                    (population_id,),
+                ).fetchone()[0]
+            )
+            events = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence",
+                    (population_id,),
+                )
+            ]
+        assert imported is not None
+        self.assertEqual(tuple(imported), (0, 0))
+        self.assertEqual(item_count, 1)
+        self.assertEqual(events, ["POPULATION_STAGED"])
+        self.assertEqual(store.summary()["obligation_count"], 0)
+
+    def test_population_count_backpressure_preserves_prior_chunks(self) -> None:
+        store = self._make_owner()
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        population_id = "population:fixture-overflow"
+        items = self._items(population_id)
+        manifest = self._population_manifest(
+            manifest_id="population-manifest:fixture-overflow:v1",
+            member_ids=tuple(sorted(item.item_id for item in items[:3])),
+        )
+        store.register_population_manifest(manifest)
+        with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_extra_member"):
+            store.stage_population(
+                population_id=population_id,
+                manifest_id=manifest.manifest_id,
+                pack_id=pack.pack_id,
+                cutoff_ms=pack.effective_start_ms,
+                inclusion_rules=("included:synthetic",),
                 expected_count=3,
-                items=self._items(population_id)[:4],
+                items=items[:4],
                 chunk_size=3,
             )
         with store._read() as connection:
@@ -1420,11 +3803,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             before_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
         resumed = store.stage_population(
             population_id=population_id,
+            manifest_id=manifest.manifest_id,
             pack_id=pack.pack_id,
             cutoff_ms=pack.effective_start_ms,
             inclusion_rules=("included:synthetic",),
             expected_count=3,
-            items=self._items(population_id)[:3],
+            items=items[:3],
             chunk_size=3,
         )
         self.assertTrue(resumed["source_complete"])
@@ -1439,15 +3823,21 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(published["item_count"], 3)
         self._assert_verified(store)
 
-    def test_population_duplicate_input_limit_preserves_verifiable_prefix(self) -> None:
+    def test_population_duplicate_member_is_rejected_before_source_completion(self) -> None:
         store = self._make_owner()
         pack = self._pack(expected.CONTROL_PACK_V1)
         store.publish_control_pack(pack)
         population_id = "population:fixture-duplicate-input-limit"
         item = self._items(population_id)[0]
-        with self.assertRaisesRegex(FinancialIntegrityError, "population_input_limit"):
+        manifest = self._population_manifest(
+            manifest_id="population-manifest:fixture-duplicate-input-limit:v1",
+            member_ids=(item.item_id,),
+        )
+        store.register_population_manifest(manifest)
+        with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_duplicate_member"):
             store.stage_population(
                 population_id=population_id,
+                manifest_id=manifest.manifest_id,
                 pack_id=pack.pack_id,
                 cutoff_ms=pack.effective_start_ms,
                 inclusion_rules=("included:synthetic",),
@@ -1464,6 +3854,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         assert imported is not None
         self.assertEqual(tuple(imported), (1, 0))
         self.assertEqual(events, ["POPULATION_STAGED"])
+        self.assertEqual(store.summary()["obligation_count"], 0)
         self._assert_verified(store)
 
     def test_reporting_correction_requires_bound_prior_report(self) -> None:
@@ -1670,6 +4061,355 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         self._assert_verified(shadow, restore_source_package=package)
 
+    def test_c05_decision_package_tracks_evidence_and_keeps_ack_separate_from_cash(self) -> None:
+        store = self._build_base_for_correction()
+        mirror = FinancialMirror(store)
+        fixture = expected.DECISION_PACKAGE_EXPECTATION
+        program = store.summary()
+        self.assertEqual(program["obligation_count"], fixture["recipient_count"])
+        self.assertEqual(program["owed_cents"], fixture["program_owed_cents"])
+        self.assertEqual(fixture["program_owed_dollars"], 1_000_000)
+
+        initial = store.decision_package(expected.H_ITEM_ID)
+        self.assertEqual(initial["evaluation_receipt"], store.current_evaluation_receipt(expected.H_ITEM_ID))
+        self.assertEqual(initial["references"]["evidence"]["total"], 0)
+        self.assertEqual(initial["conclusions"]["case_resolution"]["assessment"], "NOT_RESOLVED")
+        self.assertEqual(initial["conclusions"]["case_resolution"]["missing_requirements"], [
+            "amount_satisfied", "delivery_acknowledged_or_not_required", "reporting_complete",
+        ])
+        self.assertEqual(self._assert_decision_package_verified(store, initial)["integrity"], "VERIFIED")
+        with self.assertRaisesRegex(FinancialRevisionError, "evaluation_reference_conflict"):
+            store.decision_package(
+                expected.H_ITEM_ID,
+                expected_evaluation_id=str(initial["evaluation_receipt"]["evaluation_id"]),
+                expected_evaluation_result_digest="00" * 64,
+            )
+
+        self._prepare_rejected(store)
+        rejected = store.decision_package(expected.H_ITEM_ID)
+        self.assertEqual(rejected["case"]["case_id"], expected.H_CASE_ID)
+        self.assertEqual(rejected["case"]["status"], "CORRECTION_REQUIRED")
+        self.assertEqual(rejected["cash"]["recorded_received_cash_cents"], fixture["item_h_initial_cash_cents"])
+        self.assertEqual(rejected["cash"]["shortfall_cents"], fixture["item_h_shortfall_cents"])
+        with self.assertRaisesRegex(FinancialRevisionError, "evaluation_revision_conflict"):
+            store.decision_package(
+                expected.H_ITEM_ID,
+                expected_evaluation_id=str(initial["evaluation_receipt"]["evaluation_id"]),
+                expected_evaluation_result_digest=str(initial["evaluation_receipt"]["result_digest"]),
+            )
+
+        sequence_before_ack = store.summary()["sequence"]
+        self._ack(store)
+        self.assertEqual(store.summary()["sequence"], sequence_before_ack + 1)
+        acknowledged = store.decision_package(
+            expected.H_ITEM_ID,
+            expected_evaluation_id=str(store.current_evaluation_receipt(expected.H_ITEM_ID)["evaluation_id"]),
+            expected_evaluation_result_digest=str(store.current_evaluation_receipt(expected.H_ITEM_ID)["result_digest"]),
+        )
+        self.assertEqual(acknowledged["cash"]["recorded_received_cash_cents"], fixture["item_h_initial_cash_cents"])
+        self.assertEqual(acknowledged["cash"]["shortfall_cents"], fixture["item_h_shortfall_cents"])
+        self.assertEqual(acknowledged["current_action"]["status"], "ACKNOWLEDGED")
+        self.assertEqual(acknowledged["current_action"]["acknowledgment"]["reference"], expected.H_ACKNOWLEDGMENT_REF)
+        self.assertEqual(acknowledged["current_action"]["acknowledgment"]["cash_effect_cents"], 0)
+        self.assertEqual(acknowledged["conclusions"]["action_acknowledgment"]["cash_effect_cents"], 0)
+        self.assertEqual(acknowledged["conclusions"]["cash_satisfaction"]["result"], "NOT_SATISFIED")
+        self.assertEqual(acknowledged["conclusions"]["case_resolution"]["required_conditions"]["amount_satisfied"], "NOT_SATISFIED")
+        self.assertEqual(self._assert_decision_package_verified(store, acknowledged)["integrity"], "VERIFIED")
+
+        self._record_p2(store)
+        self._record_report(store)
+        conflict = expected.P2_CONFLICT_EVIDENCE
+        conflict_result = store.record_payment_evidence(
+            item_id=conflict.item_id,
+            payment_id="payment:h:p2-conflict",
+            common_origin_id=conflict.common_origin_id,
+            amount_cents=conflict.amount_cents or 0,
+            evidence_id=conflict.evidence_id,
+            event_at_ms=conflict.event_at_ms,
+            source_id=conflict.source_id,
+            source_version=conflict.source_version,
+            local_ref=conflict.local_ref,
+        )
+        self.assertEqual(conflict_result["status"], "CONFLICT")
+        final_package = store.decision_package(expected.H_ITEM_ID)
+        self.assertEqual(final_package["case"]["status"], "RESOLVED")
+        self.assertEqual(final_package["cash"]["recorded_received_cash_cents"], fixture["item_h_cash_after_correction_cents"])
+        self.assertEqual(final_package["reporting"]["complete"], True)
+        self.assertEqual(final_package["evaluation_receipt"]["verification_status"], "CONFLICT_VISIBLE")
+        self.assertEqual(final_package["conclusions"]["case_resolution"]["assessment"], "CONFLICTED")
+        self.assertEqual(final_package["conclusions"]["case_resolution"]["conflict_count"], 1)
+        conflict_reference = final_package["references"]["conflicts"]["items"][0]
+        self.assertEqual(conflict_reference["candidate_evidence_id"], expected.P2_CONFLICT_EVIDENCE.evidence_id)
+        self.assertEqual(conflict_reference["existing_amount_cents"], expected.CORRECTION_PAYMENT_CENTS)
+        self.assertEqual(conflict_reference["candidate_amount_cents"], expected.CONFLICTING_P2_CENTS)
+        self.assertEqual(final_package["conclusions"]["case_resolution"]["case_id"], expected.H_CASE_ID)
+        self.assertTrue(final_package["conclusions"]["case_resolution"]["supporting_references_complete"])
+        self.assertEqual(final_package["control_pack"]["pack_id"], expected.CONTROL_PACK_V1.pack_id)
+        self.assertEqual(final_package["control_pack"]["version"], expected.CONTROL_PACK_V1.version)
+        self.assertEqual(final_package["control_pack"]["calculation_rule_id"], expected.CONTROL_PACK_V1.calculation_rule_id)
+        self.assertEqual(final_package["control_pack"]["adjustment_rule_id"], expected.CONTROL_PACK_V1.adjustment_rule_id)
+        self.assertEqual(final_package["control_pack"]["digest"], final_package["evaluation_receipt"]["control_pack"]["digest"])
+        self.assertEqual(final_package["evaluation_receipt"]["authority"]["authority_id"], self.authority.authority_id)
+        self.assertEqual(final_package["evaluation_receipt"]["authority"]["epoch"], self.authority.epoch)
+        self.assertEqual(final_package["evaluation_receipt"]["authority"]["digest"], _independent_hex(self.authority.digest))
+        self.assertTrue(all(row["item_id"] == expected.H_ITEM_ID for row in final_package["references"]["evidence"]["items"]))
+        self.assertTrue(all(type(row["record_digest"]) is str for row in final_package["references"]["evidence"]["items"]))
+        self.assertEqual(final_package["current_determination"]["decision"], "OFFSET_REJECTED_CORRECTION_AUTHORIZED")
+        self.assertIn(expected.OFFSET_CLAIM_EVIDENCE.evidence_id, [
+            row["evidence_id"] for row in final_package["current_determination"]["supporting_evidence"]
+        ])
+        payment_evidence_ids = {
+            row["evidence_id"] for row in final_package["references"]["payments"]["items"] if row["active"]
+        }
+        report_evidence_ids = {
+            row["evidence_id"] for row in final_package["references"]["reporting_evidence"]["items"]
+        }
+        resolution_support = set(final_package["conclusions"]["case_resolution"]["supporting_evidence_ids"])
+        self.assertTrue(payment_evidence_ids.issubset(resolution_support))
+        self.assertTrue(report_evidence_ids.issubset(resolution_support))
+        self.assertTrue(resolution_support)
+        self.assertEqual(self._assert_decision_package_verified(store, final_package)["integrity"], "VERIFIED")
+        omitted = json.loads(_independent_canonical(final_package))
+        omitted["references"]["payments"]["items"].pop()
+        with self.assertRaisesRegex(IndependentFinancialError, "decision-package:payments"):
+            verify_decision_package(
+                store.path,
+                expected.H_ITEM_ID,
+                omitted,
+                expected_config=store.config,
+                expected_authority={
+                    "authority_id": self.authority.authority_id,
+                    "epoch": self.authority.epoch,
+                    "digest": self.authority.digest,
+                },
+                expected_mode=store.mode,
+                expected_owner_id=store.owner_id,
+            )
+
+        sequence_before_reads = store.summary()["sequence"]
+        durable_snapshot_before = store.export_continuity()
+        first = mirror.decision_package(expected.H_ITEM_ID, limit=2, offset=0)
+        second = mirror.decision_package(expected.H_ITEM_ID, limit=2, offset=2)
+        first_ids = {row["evidence_id"] for row in first["references"]["evidence"]["items"]}
+        second_ids = {row["evidence_id"] for row in second["references"]["evidence"]["items"]}
+        self.assertEqual(first["references"]["evidence"]["next_offset"], 2)
+        self.assertEqual(second["references"]["evidence"]["offset"], 2)
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+        self.assertEqual(store.summary()["sequence"], sequence_before_reads)
+        self.assertEqual(store.export_continuity(), durable_snapshot_before)
+        with self.assertRaisesRegex(FinancialInputError, "decision_package_page"):
+            store.decision_package(expected.H_ITEM_ID, limit=201)
+        with self.assertRaisesRegex(FinancialInputError, "decision_package_page"):
+            store.decision_package(expected.H_ITEM_ID, offset=10_001)
+
+    def test_c05_v7_decision_package_survives_test_restore(self) -> None:
+        store = self._build_base_for_correction(schema_version=7)
+        self._prepare_acknowledged(store)
+        mirror = FinancialMirror(store)
+        source_package = store.decision_package(expected.H_ITEM_ID)
+        continuity = mirror.export_continuity()
+        restored = mirror.restore_test_continuity(
+            continuity,
+            self._path("decision-package-test-restore.sqlite"),
+        )
+        restored_package = restored.owner.decision_package(expected.H_ITEM_ID)
+        self.assertEqual(restored_package, source_package)
+        result = verify_decision_package(
+            restored.owner.path,
+            expected.H_ITEM_ID,
+            restored_package,
+            expected_config=restored.owner.config,
+            expected_authority={
+                "authority_id": self.authority.authority_id,
+                "epoch": self.authority.epoch,
+                "digest": self.authority.digest,
+            },
+            expected_mode="TEST",
+            expected_owner_id=owner._TEST_OWNER_ID,
+        )
+        self.assertEqual(result["integrity"], "VERIFIED")
+        self.assertEqual(restored_package["cash"]["recorded_received_cash_cents"], expected.DECISION_PACKAGE_EXPECTATION["item_h_initial_cash_cents"])
+        self.assertEqual(restored_package["current_action"]["status"], "ACKNOWLEDGED")
+
+    def test_c05_v7_population_revision_binding_is_verified_and_restored(self) -> None:
+        store = self._build_base_for_correction(schema_version=7)
+        self._prepare_acknowledged(store)
+        package = store.decision_package(expected.H_ITEM_ID)
+        manifest = self._population_manifest()
+        expected_binding = {
+            "population_id": expected.POPULATION_ONE_ID,
+            "status": "PUBLISHED",
+            "completeness": "EXACT",
+            "source_complete": True,
+            "manifest_id": manifest.manifest_id,
+            "manifest_version": manifest.manifest_version,
+            "manifest_digest": _independent_hex(manifest.digest),
+            "member_id": expected.H_ITEM_ID,
+            "member_count": len(expected.POPULATION_MANIFEST_MEMBER_IDS),
+            "member_digest": _independent_hex(manifest.member_digest),
+        }
+        self.assertEqual(package["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v2")
+        self.assertEqual(package["population_binding"], expected_binding)
+        obligation_id = package["obligation"]["obligation_id"]
+        self.assertEqual(package["obligation"]["population_id"], expected_binding["population_id"])
+        self.assertEqual(package["current_determination"]["obligation_id"], obligation_id)
+        self.assertEqual(package["current_action"]["obligation_id"], obligation_id)
+        self.assertEqual(package["current_action"]["acknowledgment"]["status"], "ACKNOWLEDGED")
+        self.assertEqual(package["references"]["actions"]["items"][0]["obligation_id"], obligation_id)
+        self.assertEqual(self._assert_decision_package_verified(store, package)["integrity"], "VERIFIED")
+
+        for field, value in (
+            ("manifest_version", expected_binding["manifest_version"] + 1),
+            ("manifest_digest", "00" * 64),
+            ("member_id", "item-19"),
+        ):
+            altered = json.loads(_independent_canonical(package).decode("ascii"))
+            altered["population_binding"][field] = value
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(IndependentFinancialError, "decision-package:mismatch"):
+                    self._assert_decision_package_verified(store, altered)
+
+        continuity = store.export_continuity()
+        restored = FinancialMirror(store).restore_test_continuity(
+            continuity,
+            self._path("population-revision-test-restore.sqlite"),
+        )
+        restored_package = restored.owner.decision_package(expected.H_ITEM_ID)
+        self.assertEqual(restored_package, package)
+        self.assertEqual(self._assert_decision_package_verified(restored.owner, restored_package)["integrity"], "VERIFIED")
+
+    def test_c05_current_action_and_determination_follow_revision_after_clock_rollback(self) -> None:
+        clock = _Clock()
+        store = self._build_base(clock=clock)
+        self._record_cash(store)
+
+        first_claim_id = "claim:clock-rollback:first"
+        first_action_id = "action:clock-rollback:first"
+        store.record_offset_claim(
+            item_id=expected.H_ITEM_ID,
+            claim_id=first_claim_id,
+            amount_cents=200_000,
+            evidence_id="evidence:clock-rollback:first",
+            owner_role="CASE_OWNER",
+            deadline_ms=expected.H_DUE_AT_MS,
+        )
+        first_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        low_clock_value = clock.value
+        clock.value = low_clock_value + 10_000
+        first_result = store.authorize_offset(
+            item_id=expected.H_ITEM_ID,
+            claim_id=first_claim_id,
+            expected_revision=int(first_receipt["revision"]),
+            action_id=first_action_id,
+            evaluation_id=str(first_receipt["evaluation_id"]),
+            evaluation_result_digest=str(first_receipt["result_digest"]),
+        )
+        self.assertEqual(first_result["action_id"], first_action_id)
+
+        second_claim_id = "claim:clock-rollback:second"
+        second_action_id = "action:clock-rollback:second"
+        clock.value = low_clock_value
+        store.record_offset_claim(
+            item_id=expected.H_ITEM_ID,
+            claim_id=second_claim_id,
+            amount_cents=100_000,
+            evidence_id="evidence:clock-rollback:second",
+            owner_role="CASE_OWNER",
+            deadline_ms=expected.H_DUE_AT_MS,
+        )
+        second_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        second_result = store.authorize_offset(
+            item_id=expected.H_ITEM_ID,
+            claim_id=second_claim_id,
+            expected_revision=int(second_receipt["revision"]),
+            action_id=second_action_id,
+            evaluation_id=str(second_receipt["evaluation_id"]),
+            evaluation_result_digest=str(second_receipt["result_digest"]),
+        )
+        self.assertEqual(second_result["action_id"], second_action_id)
+        store.acknowledge_action(second_action_id, "ack:clock-rollback:second")
+
+        detail = store.obligation_detail(expected.H_ITEM_ID)
+        first_action = next(row for row in detail["actions"] if row["action_id"] == first_action_id)
+        second_action = next(row for row in detail["actions"] if row["action_id"] == second_action_id)
+        first_determination = next(
+            row for row in detail["determinations"] if row["determination_id"] == first_result["determination_id"]
+        )
+        second_determination = next(
+            row for row in detail["determinations"] if row["determination_id"] == second_result["determination_id"]
+        )
+        self.assertGreater(second_action["revision"], first_action["revision"])
+        self.assertLess(second_action["created_at_ms"], first_action["created_at_ms"])
+        self.assertLess(second_determination["decided_at_ms"], first_determination["decided_at_ms"])
+
+        package = store.decision_package(expected.H_ITEM_ID)
+        self.assertEqual(package["current_action"]["action_id"], second_action_id)
+        self.assertEqual(package["current_action"]["revision"], second_action["revision"])
+        self.assertEqual(package["current_action"]["status"], "ACKNOWLEDGED")
+        self.assertEqual(package["current_action"]["acknowledgment"]["cash_effect_cents"], 0)
+        self.assertEqual(package["current_determination"]["determination_id"], second_determination["determination_id"])
+        self.assertEqual(
+            package["current_determination"]["resulting_revision"],
+            second_determination["resulting_revision"],
+        )
+        self.assertEqual(package["obligation"]["delivery_status"], "ACKNOWLEDGED")
+        self.assertEqual(package["cash"]["recorded_received_cash_cents"], expected.H_CASH_CENTS)
+        self.assertEqual(detail["received_cash_cents"], expected.H_CASH_CENTS)
+        self.assertEqual(self._assert_decision_package_verified(store, package)["integrity"], "VERIFIED")
+
+        durable_snapshot_before_retries = store.export_continuity()
+        duplicate = store.authorize_offset(
+            item_id=expected.H_ITEM_ID,
+            claim_id=first_claim_id,
+            expected_revision=int(first_receipt["revision"]),
+            action_id=first_action_id,
+            evaluation_id=str(first_receipt["evaluation_id"]),
+            evaluation_result_digest=str(first_receipt["result_digest"]),
+        )
+        self.assertEqual(duplicate["status"], "DUPLICATE")
+        with self.assertRaisesRegex(FinancialConflictError, "determination_request_conflict"):
+            store.authorize_offset(
+                item_id=expected.H_ITEM_ID,
+                claim_id=first_claim_id,
+                expected_revision=int(first_receipt["revision"]),
+                action_id=first_action_id,
+                decision_at_ms=int(first_determination["decided_at_ms"]) + 1,
+                evaluation_id=str(first_receipt["evaluation_id"]),
+                evaluation_result_digest=str(first_receipt["result_digest"]),
+            )
+        self.assertEqual(store.export_continuity(), durable_snapshot_before_retries)
+
+    def test_c05_independent_package_input_is_bounded_before_database_open(self) -> None:
+        store = self._build_base()
+        package = store.decision_package(expected.H_ITEM_ID)
+        continuity_before = store.export_continuity()
+        missing_database = self._path("missing-decision-package-input.sqlite")
+        self.assertFalse(missing_database.exists())
+
+        def assert_rejected_before_open(value: object) -> None:
+            with self.assertRaisesRegex(IndependentFinancialError, "decision-package:input-limit"):
+                verify_decision_package(missing_database, expected.H_ITEM_ID, value)
+
+        oversized = dict(package)
+        oversized["untrusted_extra"] = "x" * (8 * 1024 * 1024)
+        assert_rejected_before_open(oversized)
+
+        nested: object = None
+        for _ in range(33):
+            nested = [nested]
+        too_deep = dict(package)
+        too_deep["untrusted_extra"] = nested
+        assert_rejected_before_open(too_deep)
+
+        cycle: list[object] = []
+        cycle.append(cycle)
+        cyclic = dict(package)
+        cyclic["untrusted_extra"] = cycle
+        assert_rejected_before_open(cyclic)
+
+        self.assertFalse(missing_database.exists())
+        self.assertEqual(store.export_continuity(), continuity_before)
+
     def test_v5_evaluation_receipt_is_durable_and_returned_by_evaluate(self) -> None:
         store = self._build_base()
         before = store.current_evaluation_receipt(expected.H_ITEM_ID)
@@ -1864,7 +4604,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(shadow, restore_source_package=package)
 
     def test_v5_action_requires_current_evaluation_and_exact_retry_identity(self) -> None:
-        store = self._build_base()
+        store = self._build_base_for_correction()
         self._record_cash(store)
         claim_id = self._record_claim(store)
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
@@ -1887,38 +4627,36 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 evaluation_id=foreign["evaluation_id"],
                 evaluation_result_digest=foreign["result_digest"],
             )
-        first = store.reject_offset_and_authorize_correction(
-            item_id=expected.H_ITEM_ID,
-            claim_id=claim_id,
-            expected_revision=receipt["revision"],
-            action_id="action:exact-retry-v5",
-            evaluation_id=receipt["evaluation_id"],
-            evaluation_result_digest=receipt["result_digest"],
-        )
-        self.assertEqual(first["status"], "CORRECTION_AUTHORIZED")
+        command = {
+            "item_id": expected.H_ITEM_ID,
+            "claim_id": claim_id,
+            "expected_revision": receipt["revision"],
+            "action_id": "action:exact-retry-v5",
+            "decision_at_ms": expected.CORRECTION_AUTH_MS,
+            "evaluation_id": receipt["evaluation_id"],
+            "evaluation_result_digest": receipt["result_digest"],
+        }
+        reject = store.reject_offset_and_authorize_correction
+
+        def lose_response_after_commit(**kwargs: object) -> None:
+            reject(**kwargs)
+            raise RuntimeError("simulated_postcommit_response_loss")
+
+        with patch.object(
+            store,
+            "reject_offset_and_authorize_correction",
+            side_effect=lose_response_after_commit,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "simulated_postcommit_response_loss"):
+                store.reject_offset_and_authorize_correction(**command)
         detail = store.obligation_detail(expected.H_ITEM_ID)
         determination = next(row for row in detail["determinations"] if row["determination_id"] == "determination:action:exact-retry-v5")
         decision_time = int(determination["decided_at_ms"])
+        self.assertEqual(decision_time, expected.CORRECTION_AUTH_MS)
         before_retry = store.export_continuity()
-        retry = store.reject_offset_and_authorize_correction(
-            item_id=expected.H_ITEM_ID,
-            claim_id=claim_id,
-            expected_revision=receipt["revision"],
-            action_id="action:exact-retry-v5",
-            evaluation_id=receipt["evaluation_id"],
-            evaluation_result_digest=receipt["result_digest"],
-        )
+        retry = store.reject_offset_and_authorize_correction(**command)
         self.assertEqual(retry["status"], "DUPLICATE")
-        explicit_retry = store.reject_offset_and_authorize_correction(
-            item_id=expected.H_ITEM_ID,
-            claim_id=claim_id,
-            expected_revision=receipt["revision"],
-            action_id="action:exact-retry-v5",
-            decision_at_ms=decision_time,
-            evaluation_id=receipt["evaluation_id"],
-            evaluation_result_digest=receipt["result_digest"],
-        )
-        self.assertEqual(explicit_retry["status"], "DUPLICATE")
+        self.assertEqual(store.export_continuity(), before_retry)
         with self.assertRaisesRegex(FinancialConflictError, "determination_request_conflict"):
             store.reject_offset_and_authorize_correction(
                 item_id=expected.H_ITEM_ID,
@@ -1929,6 +4667,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 evaluation_id=receipt["evaluation_id"],
                 evaluation_result_digest=receipt["result_digest"],
             )
+        self.assertEqual(store.export_continuity(), before_retry)
+        cash_before_ack = store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"]
+        store.acknowledge_action("action:exact-retry-v5", "ack:exact-retry-v5")
+        after_ack = store.export_continuity()
+        acknowledged_retry = store.reject_offset_and_authorize_correction(**command)
+        self.assertEqual(acknowledged_retry["status"], "DUPLICATE")
+        self.assertEqual(store.export_continuity(), after_ack)
+        self.assertEqual(store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"], cash_before_ack)
         with self.assertRaisesRegex(FinancialConflictError, "determination_request_conflict"):
             store.reject_offset_and_authorize_correction(
                 item_id="item-01",
@@ -1937,7 +4683,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 evaluation_id=receipt["evaluation_id"],
                 evaluation_result_digest=receipt["result_digest"],
             )
-        self.assertEqual(store.export_continuity(), before_retry)
         self._assert_verified(store)
 
     def test_v5_determination_bad_stale_and_consumed_references_are_side_effect_free(self) -> None:

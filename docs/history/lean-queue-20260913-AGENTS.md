@@ -1,0 +1,860 @@
+# Agent instructions for Blind Ledger
+
+Blind Ledger is RightRail's database-backed payment-clearance system. Treat proof, policy, state,
+signature, custody, clearance-transition, and downstream payment-interface code as trust-critical.
+
+## Before editing
+
+1. Work from this repository root.
+2. Read `docs/DATABASE_ZK_ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
+   `docs/LEAN_FORMAL_KERNEL.md`, and `docs/IMPLEMENTATION_ROADMAP.md`.
+   For Mirror work, also read `docs/MIRROR_ARCHITECTURE.md`.
+3. After context loss, re-read this file, `CURRENT_TASK.md`, and `STATE.md`. A published source
+   archive may omit workspace-only authority records; in that archive, use the current root
+   documents and `RELEASE_FILE_MANIFEST.json`.
+4. Use existing Python, Rust, and CUDA installations. Keep generated outputs outside release archives.
+5. For work that changes a gate, proof claim, or continuation decision, also read
+   `docs/DESIGN_IDEOLOGY.md` and `docs/IMPLEMENTATION_ROADMAP.md` before acting.
+
+## Current architecture boundary
+
+- The application database is the operational source of truth for Blind Ledger clearance state; the
+  official state payment system remains the source of truth for actual funds movement.
+- An undisclosed payment-relevant assertion crossing the clearance trust boundary and affecting
+  automation requires a mandatory application ZK proof. Evidence already lawfully held in plaintext by the state
+  clearance service uses the same inspectable deterministic rule and atomic state machine without
+  purposeless ZK ceremony.
+- The verifier-owned automatic control set fixes the evidence mode and evaluator identity before
+  admission. A caller cannot select `DIRECT_STATE_OWNED`, and a failed `PRIVATE_ZK` request cannot
+  downgrade to it.
+- The native verifier must accept before one atomic private-path database transaction can consume
+  nullifiers and update clearance state. Proof acceptance never defaults to `CLEAR`.
+- The later mandatory target gives an executable Lean kernel authority over clearance semantics and
+  legal state transitions. It is not active now: Rust retains cryptographic proof acceptance and
+  the database retains durability/concurrency until the kernel is linked and every theorem/build
+  gate passes.
+- The fixed directives are `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and
+  `EXCEPTION_APPROVED`; the last requires a governed signed state authorization.
+- Government and oracle signatures authenticate provenance and authority; they do not prove that the underlying facts are true.
+- No L2, rollup, sequencer, bridge, public data-availability layer, or Solidity settlement contract is part of the current design.
+- Ethereum is a committed later L1 checkpoint capability, not a Phase 0-2 dependency, settlement
+  role, or fixed-cadence requirement.
+- The executable chronology is strict: `rule_effective < event < observation < decision`. The same
+  four times are bound across the request, decision, receipt, and exact retry.
+- The database boundary admits one decision and exactly two accesses indexed `[0,1]`: `decision_index=0`,
+  `access_count=2`, and each access carries the matching `decision_id`. Reads use observation time;
+  the clearance-state write uses decision time.
+
+## Document precedence
+
+`AGENTS.md` owns execution and safety rules. `CURRENT_TASK.md` owns only the current bounded
+objective and blockers. `STATE.md` owns verified implementation evidence and nonclaims.
+`ARCHITECTURE.md` owns system boundaries and component ownership. The active `docs/` authorities
+own their named technical boundaries, and `docs/DESIGN_IDEOLOGY.md` remains an independent design
+contract. Retired or compatibility documents cannot override any of these authorities.
+
+## Protected trust-critical paths
+
+Do not edit these unless the owner explicitly authorizes the exact change:
+
+- `app/minimal_clearance_verification_queue.py`
+- `app/minimal_clearance_verification_queue_independent.py`
+- `app/minimal_clearance_composition.py`
+- `app/minimal_clearance_composition_independent.py`
+- `experiments/longfellow_v09_native_v3/`
+- `app/mirror/`
+
+## Protected-path delegation status
+
+The protected list above is the active default and remains owner-gated. The four bounded Mirror
+grants issued on 2026-09-05 and consumed by the immutable `0607a275bb5158dd4b4c70dfcd95d0967c80b839`
+base are closed historical permissions; their exact scopes and evidence remain in Git history. The
+driver-reviewed Mirror patch `46a4c965464ea2cd72a3205d82652ddbf8ae51f6`, approved under the
+owner-delegated engineering authority and integrated here as local commit
+`57e5f1f938ff7346880c6fd6a01138cecd575712`, is limited to the exact deleted adapter/test files,
+`app/mirror/source_admission.py`, and `tests/test_mirror_state_source_contract.py`. The
+nonprotected source-only cleanup `6df4578aa5c98ca23ba38b563b74a075a504c483`, integrated here as
+`47eb2309e08d17913bb2fc99ffb33e02dc9bffaa`, removes only unused governance aliases. These are
+completed reviewed changes, not open permission; future protected changes need a new owner
+delegation from the owner, or a driver-issued packet within an existing owner delegation, naming
+the exact paths, tests, invariants, and evidence. This child neither extends nor revokes a separate
+owner packet in another task.
+
+The separately approved source-only deletion `d50f0f28134e40fc5a6a04028ef401f801d6596e`, integrated
+here as local commit `c230aa518f95397f2dac0af8592aae93796c2b53`, removes exactly the two obsolete
+Native throughput/runner wrappers and their obsolete test; no replacement Queue/runtime,
+source-auth, Profile 11, or protected-path implementation was changed by that deletion.
+
+The completed Mirror boundary remains governed by these invariants: independent Core/Ingress
+reconstruction is fail-closed; every native and service release result is checked; partial release
+retains exact ownership; an ambiguous POSIX descriptor is never retried; Windows unlock/handle
+failures are observable and retryable only while handle identity is safe; constructor failures
+release every acquired resource; and WriterAuthority is not reported closed until physical release
+is resolved. The read-only export bridge selects only the independently verified current Core
+`SOURCE_OBSERVATION`, rebinds it to the exact current Ingress artifact/receipt/profile, keeps the
+existing exporter as sole response producer, and fails closed without mutation or raw-data leakage.
+Native-release fault injection, normal close/reopen, scope/concurrency lifecycle, constructor and
+close-retry regressions, independent Core/Ingress diagnostics, and export/privacy checks remain the
+required evidence for any future delegated change.
+
+## Operational authority
+
+`ops/` is canonical. `tools/ops_authority.py` freezes its exact regular-file set, lengths, and SHA3-512 identities. Never change policy bytes merely to make a check pass.
+This protects the canonical byte identity; it does not freeze documented gate predicates. Evolve a
+gate through the explicit policy record below, not by mutating authoritative bytes until a check
+passes.
+
+## Claims
+
+The repository is nonactivating. `proofSuiteId` remains null and `production_usable=false`. Do not
+claim production readiness, a deployed formally verified kernel, independent audit acceptance,
+real-PHI safety, real-payment authorization, or Ethereum settlement without current raw evidence.
+
+## Gate governance and continued execution
+
+Gates are executable controls derived from invariants; they are not sacred text. A gate predicate
+can be stale, incorrect, over-broad, non-applicable to the current profile, or contradicted by
+current executable behavior. When current evidence demonstrates that condition, an explicitly
+authorized change may weaken, disable, suspend, replace, or relabel the gate. That is gate
+evolution, not a silent bypass.
+
+Before proceeding under a changed gate, record all of the following in the active run or design
+record:
+
+1. the gate name/version and exact predicate;
+2. the invariant and failure mode the predicate was intended to protect;
+3. the raw evidence showing that the predicate is stale, incorrect, over-broad, or non-applicable;
+4. the disposition: retain, replace, weaken, disable, suspend, or relabel;
+5. the replacement or compensating control, or an explicit statement that none exists;
+6. the exact scope, profile, and duration of the disposition; and
+7. the resulting claim, credit, qualification, and activation consequences.
+
+Never change policy bytes, falsify telemetry, delete failures, hide warnings, or call a failed
+predicate a pass merely to make a run succeed. A relaxed or disabled gate may support diagnosis,
+synthetic exploration, or an explicitly labelled nonqualifying lane, but it cannot silently retain
+the old assurance. It cannot qualify production, authorize a payment, advance `proofSuiteId`, or
+enable activation unless a separately evidenced policy restores those claims. Changing a gate is
+not permission to accept malformed proofs, skip independent verification, bypass atomic mutation,
+exceed a physical safety limit, use real PHI or payments, or suppress an unresolved security fact.
+
+When implementation, test, or run work is authorized, continue through successful substeps and
+recoverable failures until the authorized objective is complete. A passing test, completed
+document section, preflight result, compile, or discovered launch blocker is a phase boundary, not
+an automatic end to the task. After each boundary, re-anchor to current repository evidence,
+identify the next dependency, make the smallest correct change or run the next safe check, verify
+it, and continue. Do not return a status-only handoff while requested work remains.
+
+Classify a blocker precisely:
+
+- A blocked launch means the named run cannot start; safe implementation, test, evidence, and
+  replacement-gate work may continue.
+- A blocked claim means current evidence cannot support the named claim; nonactivating work may
+  continue under an honest lower claim.
+- A blocked task means no safe, in-scope work remains, or an unresolved authority, protected-path,
+  destructive-action, or resource-safety decision requires the owner.
+
+Stop the affected operation rather than guess when a trust-critical fact is unresolved. Stop the
+entire task only for explicit user stop, completion, an unsafe resource/identity condition, a
+protected-path or destructive-action conflict requiring approval, or an unresolved ambiguity after
+safe alternatives and gate review have been exhausted. An outdated gate is an investigation and
+policy-evolution task, not by itself a reason to abandon the authorized objective.
+
+## Git and source-archive continuity
+
+Use Git continuously as the repository's change ledger. At the start and end of every phase,
+before and after every run, before an archive refresh, and after archive publication, inspect and
+record at minimum:
+
+```powershell
+git rev-parse HEAD
+git status --short
+git diff --check
+git diff --name-status
+```
+
+Use `git diff`, `git diff --stat`, and targeted file reads to understand the actual change. Preserve
+the dirty worktree: never use `git reset`, `git clean`, destructive checkout/revert, or broad
+autofix to erase unrelated work. Do not stage or commit unrelated changes. A Git commit identifier
+alone does not describe a dirty worktree; record the commit plus the relevant worktree diff or
+staged-source identity for every run and archive.
+
+For a successful archive refresh, the three retained source-archive roles are one Downloads copy,
+one Desktop-root copy, and one nested Desktop source-backup copy of
+`Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip`. Discover them before each successful refresh;
+never assume a remembered path or accept only the first three matches:
+
+```powershell
+$archiveName = 'Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip'
+$userRoot = [Environment]::GetFolderPath('UserProfile')
+$targets = @(Get-ChildItem -LiteralPath $userRoot -Filter $archiveName -File -Recurse -ErrorAction SilentlyContinue | Sort-Object FullName)
+if ($targets.Count -ne 3) { throw "expected exactly 3 retained source archives; found $($targets.Count)" }
+$identities = foreach ($target in $targets) {
+    $hash = Get-FileHash -LiteralPath $target.FullName -Algorithm SHA256
+    [pscustomobject]@{ Path = $target.FullName; Bytes = $target.Length; SHA256 = $hash.Hash }
+}
+$identities | Format-Table -AutoSize
+if (@($identities.Bytes | Sort-Object -Unique).Count -ne 1 -or @($identities.SHA256 | Sort-Object -Unique).Count -ne 1) {
+    throw 'the three retained source archives are not byte-identical'
+}
+```
+
+The exact current role paths are discovery results, not portable policy. During a successful refresh,
+if the scan finds zero, more than three, a missing role, differing lengths, or differing hashes,
+classify archive custody as blocked and preserve the raw inventory; do not silently choose, delete,
+or overwrite a target.
+Unrelated dependency, toolchain, and research ZIPs are not source-archive targets.
+
+Only a successful, verified run enters the source-archive refresh lifecycle. A failed, timed-out,
+cancelled, or preflight-blocked run must not refresh or publish source archives and must not create
+a builder receipt for that failed outcome; retain its raw evidence and Git checkpoint instead.
+For a successful refresh, the archive contains only the reviewed source and documentation allowlist;
+it must never contain proof outputs, generated build trees, private run artifacts,
+workspace-only continuation records, real PHI, payments, or credentials. The required sequence is:
+
+1. complete and retain the run's raw evidence and Git checkpoint;
+2. create or refresh the exact reviewed `APP_RELEASE_FILE_MANIFEST.json` in a bounded staged source
+   root, including every intended publishable source/documentation change and excluding generated or
+   private artifacts;
+3. build one fresh archive outside that source root with the deterministic builder and its exact
+   readback:
+
+   ```powershell
+   py -3.14 -B -m tools.build_release_archive `
+     --source-root <bounded-staged-source-root> `
+     --manifest <bounded-staged-source-root>\APP_RELEASE_FILE_MANIFEST.json `
+     --output <fresh-output-directory>\Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip
+   ```
+
+   The checked-in builder is create-only and rejects an existing output. Resolve the staged source
+   root and manifest from the current release-manifest authority; never invent an allowlist or point
+   the builder directly at an existing publication target.
+
+4. publish the verified fresh bytes to exactly the three discovered targets using the bounded
+   same-directory temporary/backup publisher; retain rollback copies until all replacements pass;
+5. independently read back all three targets and require equal byte length, equal SHA-256, canonical
+   ZIP/CRC readback, no duplicate or unexpected entries, zero temporary publication artifacts, and
+   `three_way_byte_identical=true`; and
+6. retain the builder receipt, source/manifest identity, Git identity, target inventory, hashes,
+   readback result, cleanup result, and any failure or skipped step with its reason.
+
+If a successful archive refresh is attempted but the staging, manifest-generation, or three-target
+publication seam is missing, do not claim the archive was refreshed. Continue implementing or
+repairing that seam as the next safe dependency; the run may remain nonactivating and lower-claim
+while this is resolved.
+
+## Active Profile12 protected-path delegation — 2026-09-08
+
+The owner-delegated driver packet authorizes this existing child to implement one cohesive,
+nonactivating Profile12 Queue/State integration stage. This exact grant supersedes the stale cleanup
+objective in the child `CURRENT_TASK.md` and does not authorize work in the separate direct-mask
+calculator checkout. Starting identity is detached HEAD
+`98a3d9ea7f156653633996170c17236db804eed7` / tree
+`3d8d555397b86384d57fe7db8f530134026eb037`. Before authority-record mutation, the child contained
+only the preserved partial dirty patch in
+`app/minimal_clearance_verification_queue.py` (67 additions, 9 deletions, source SHA-256
+`0953422A72FB34974FC3BF4F0CA1A0403B8FEB02E265665573576A3A30BC4D79`).
+
+### Exact writable grant
+
+The implementation grant covers only:
+
+- `app/minimal_clearance_verification_queue.py`
+- `app/minimal_clearance_verification_queue_independent.py`
+- `app/minimal_clearance_verification_runtime.py`, only necessary Profile12 typed plumbing
+- `tests/test_minimal_clearance_verification_queue.py`
+- `tests/test_minimal_clearance_verification_runtime.py`
+- `tests/test_minimal_clearance_source_auth_verifier_adapter.py`
+- one focused `tests/test_direct_mask_state_profile12.py` if required
+- focused release/documentation expectation updates only in
+  `tests/test_release_manifest_gate.py` and `tests/test_documentation_governance.py`
+- this child's `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `README.md`, `ARCHITECTURE.md`, and
+  the named authority docs only for Profile12 reconciliation and finite retired-path records.
+
+The native adapter `app/minimal_clearance_source_auth_verifier_adapter.py` is deferred until the
+driver supplies an accepted exact C binary and source-appliance identity. Until then it is
+read-only, as are `app/minimal_clearance_verifier_process.py` and
+`app/minimal_clearance_resource_limits.py`. `app/minimal_clearance_composition.py`, its
+independent implementation, every Lean/formal/semantic candidate, `app/mirror/`,
+`experiments/longfellow_v09_native_v3/`, `ops/`, dependency locks, all C/crypto checkouts, source
+archives, deployment/profile-selection/payment/custody paths, and all other source paths are
+protected and unchanged.
+
+### Frozen invariants and evidence boundary
+
+Profile12 is a clean schema break at exactly version 12; no Profile11 migration, fallback, dual
+reader, aliasing, legacy proof acceptance, or compatibility relabeling is authorized. The state
+owner independently issues and persists one nonzero 96-byte public coin with the exact four-draw
+OS-CSPRNG rule, derives the 405-byte context from the frozen state bindings, persists only the
+allowlisted public fields, and reserves exactly one 101-unit lifetime opportunity atomically at
+issue before returning the request. Reservation is never refunded/reset; postcommit ambiguity
+burns it. The independent checker owns independent reconstruction and exact event/row/counter/
+timestamp/epoch/U/context validation. State policy, directives, source truth, native proof
+acceptance, Lean semantics, and payment remain separate authorities.
+
+This stage remains unverified/in progress until its focused tests and whole-boundary review pass.
+Native adapter/process acceptance is explicitly pending the driver's exact identity packet and
+must be reported as a dependency, never as a passed or silently skipped test. Keep
+`proofSuiteId=null`, `production_usable=false`, `activation=false`, and
+`NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
+
+## Active E2E complete-path delegation — 2026-09-12
+
+The current driver packet supersedes the preceding native-adapter deferral only for this
+nonactivating integration stage. The child is the detached worktree
+'C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\pq-direct-mask-complete-path-20260912',
+created from State commit '6129625a88e94d005f5dfe5fd4f6fb8e05a19793' / tree
+'997e4a8e5543139ea9b81e70574eba5a44d53094d'. The accepted State/runtime correction is the
+source-selected commit '6aa9e634948b6b3a40d1c3c4f07299f8fd5493db' / tree
+'a8c6c2f1845686b80e9e079c807ad50c3f1deb92'; the accepted adapter source is commit
+'55b1d71fc5f6fa1860225e590a6dbff5af3db2e1'; the accepted Queue caller is commit
+'4f7d8d9475de5e4042af0f85c00a955259da737f'.
+
+### Exact active write scope
+
+The active integration may touch only:
+
+- 'app/minimal_clearance_source_auth_verifier_adapter.py'
+- 'tests/test_minimal_clearance_source_auth_verifier_adapter.py'
+- 'tests/test_minimal_clearance_verification_runtime.py'
+- 'app/minimal_clearance_verification_queue.py'
+- 'tests/test_minimal_clearance_verification_queue.py'
+- 'tests/test_direct_mask_state_profile12.py'
+- 'tools/direct_mask_complete_path/'
+- 'tests/test_direct_mask_source_boundary.py'
+- 'tests/test_direct_mask_complete_path.py'
+- exact source-only classifications in 'tools/release_manifest_gate.py' and their existing
+  dynamic expectations
+- narrow authority records in this file, 'CURRENT_TASK.md', and 'STATE.md'
+
+The source-selected State/runtime files are accepted handoffs, not a license to alter the
+independent verifier, composition implementation, C/vendor/crypto code, ops, selection/custody/
+payment paths, Lean/formal files, deployment/profile files, or any other protected path.
+
+### Frozen E2E boundary
+
+The valid proof run must be one fresh source-appliance request
+'DMSR0001 || u64LE1 || u32LE4096 || context64 || nonzeroU96' for exactly one State-issued
+100-member batch, through the accepted source caller, the independent native verifier, the
+atomic Queue/State/composition transaction, and the opaque outbox/ACK lane. The source capsule
+and verifier IPC remain memory-only. The source executable pin is 275968 bytes with SHA-256
+'D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8'; the verifier pin is
+240128 bytes with SHA-256
+'38FB45E017D08AC11098D8837C78D02143B86753AA4F085174073C64353AC835'. The public-key header
+pin is 19249 bytes with SHA-256
+'ED5B965981E766AA3EFB59303D33719B6C1579C0025D615BB8354AA63AC6FAC9', with decoded public
+bytes SHA-256 '91DC389CFAA01470B7F66EEE45A4AE9026D154817C754DFE22298B3FA241FFCD'.
+
+Preprovision exact empty non-reparse source/verifier workspaces under the child
+'build-complete-path' tree. The copied outer guard must retain child exit 7/0 preflight,
+physical reserve '1073741824', process-tree cap '<5000000000', active process limit '1',
+mutex 'Local\BlindLedgerDirectMaskBuild20260907', and cleanup/resource markers. The guard
+must not capture proof bytes; only the inner Python runner may pass volatile bytes between the
+source and verifier calls.
+
+The source-only release boundary is explicit: the fixture-bound source caller, complete-path
+module, CMake file, and their tests are retained in Git for evidence but excluded by exact
+'SOURCE_ONLY' classifications. Keep 'proofSuiteId=null', 'production_usable=false',
+'activation=false', 'NOT_QUALIFIED'/'INACTIVE'/'UNSELECTED'; synthetic State/receiver
+implementations do not confer official authority or production qualification.
+
+### Complete-path review correction — 2026-09-12
+
+The correction is a new child commit after the advertised E2E commit
+'00e864e2c9c1f9b550f667e3c5bf4759982f26b3' / tree
+'77b6e97880b39aa4419762ba6ee19c522f5f6e19'; the advertised commit is not amended. The
+runtime lifetime now uses its checked '__enter__'/'__exit__'/'close' ownership for the whole
+acquired span, groups primary and release failures, retains failed run directories while
+release or primary failure is unresolved, and wipes local capsule/handoff state before
+submission failure. Native wrapper attempts are counted in append-only per-stage measurement
+lists; the valid path requires exactly one source, one independent verifier, and one State-port
+call. The prior commit's 'verifier_calls' value came from 'getattr(..., 1)' and is withdrawn as
+independent measured evidence; only the corrected run's actual count is usable.
+
+The suffix-only proof-file scan was removed. After the first runtime closes, the exact file
+inventory is required to be ('state.sqlite',): no owner marker, SQLite journal/WAL/SHM sidecar,
+source workspace file, or verifier workspace file is accepted. This reports the isolated
+State/owner/SQLite inventory and does not claim OS zeroization, whole-host persistence
+absence, or arbitrary byte absence.
+
+The focused fault matrix passed 4/4 with no skips: source failure releases the owner while
+retaining the failed run directory, simultaneous primary/release failure preserves both
+exceptions and the directory, handoff-construction failure wipes the local capsule, and
+repeated native attempts are counted without overwriting measurements. The single required
+fresh guarded run passed 9/9 integration tests in 19.355s with outer child exit 7/0,
+physical reserve 1073741824, minimum free bytes 2276630528, process-tree peak below
+5000000000, cleanup PASS, and the shared mutex released. Its valid evidence is exactly
+100 operations, one batch, one verifier acceptance, 100 durable transactions, 100
+acknowledgments, 100 unique idempotency keys, zero duplicates, source_calls=1,
+verifier_calls=1, state_port_calls=1, source/verifier stdout bytes 539013/0, stderr bytes
+0/0, and run_artifact_inventory=['state.sqlite']. No unchanged State, adapter, or malformed
+native suites were rerun by instruction; their accepted prior raw gates remain the evidence.
+All nonactivation and source-only restrictions remain fixed.
+
+## Active native arithmetic performance assignment — 2026-09-12
+
+This fresh child is the only writable checkout for the shutdown-recovery performance phase:
+'C:\Users\neers\Documents\Codex\2026-09-04\blind-ledger-astra-driver-v1\work\pq-direct-mask-performance-20260912'.
+It was created as a detached worktree from accepted E2E commit
+'51158c2db5c4d1b82c88875ea23707a6e7fa1d89' / tree
+'bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306'. The prior complete-path child and every input
+checkout remain read-only.
+
+### Immutable input identities
+
+The performance phase may source-select only committed blobs from these inputs:
+
+- 'pq-direct-mask-pipeline-20260908': commit
+  '530e880ef6cbd5fa4e023f42d3aa66a0d213d9e2', tree
+  'e1119b850c3a886a4df09f375fd50d9ac81e94d7'
+- 'pq-direct-mask-vole-20260907': commit
+  '392e53e2b3d5936cb9cb2681b9e2d803143b1e17', tree
+  '34dc614591712efd4faca0dedc064bfd63e51a92'
+- 'pq-direct-mask-fixture-20260908': commit
+  '5473dd9e97841621430a05f0874bee199f631ec1', tree
+  '1ec1a033fd31d891b402fd23c2072eebcc1f011f'
+- 'pq-aes-circuit-export-20260907': commit
+  '0bce17b884f0076f078026645bef8302b5ed1a53', tree
+  '0a0872d3e7ae5aefa6742921909f70b49e58566f'
+- 'vendor/faest-ref' source: commit
+  'ebefcbd8adda5faf447ef3dba5103794d17b4281', tree
+  'f0c2e69f3eb0735fd544d04dc3dcfcc12e275e31'; vendor files are read-only
+- ML-DSA input: 'C:\Users\neers\Documents\Codex\2026-08-31\blind-zkbpp-c-profile11-extmu-v1',
+  commit '9ca1ba2ccb6fa78384e3c3e21cfd3dfd0cb38eb2', tree
+  '178a5f20c6738f7272cd38f77315da83650bbac0'
+
+Imports must be exact committed paths only. Generated artifacts, dirty files, and vendor
+copies are not interchangeable with these identities.
+
+### Exact writable scope and invariants
+
+The child may add the tracked native directories 'tools/direct_mask_{authenticated_proof,
+circuit,kernel,native,pipeline,source_auth,source_proof,wire}' from the pinned pipeline plus
+the exact primitive/fixture directories. Native edits are limited to child-local field
+acceleration C/header sources under 'tools/direct_mask_vole', necessary nonsemantic hot-call
+site/layout changes in 'tools/direct_mask_kernel'/'tools/direct_mask_circuit', and CMake/build
+wiring in imported native directories. Source/proof/signature/codec implementations must remain
+byte-equivalent to their inputs; vendor files are protected. A constant-time replacement and
+explicitly linked symbol-isolated portable reference are allowed only if all consumers bind to
+the intended implementation.
+
+The complete-path files 'tools/direct_mask_complete_path/{complete_path.py,source_boundary.py,
+CMakeLists.txt}' and 'app/minimal_clearance_source_auth_verifier_adapter.py' may change only
+for explicit child-local rebuilt executable identity plumbing. State/runtime/composition/Queue
+semantics, protocol bytes, filtered mode, Profile13, custody, deployment, payment, PHI, Lean,
+operations, and formal sources are protected. Existing native probes may be adapted only for
+actual changed behavior; no generic benchmark/controller framework is authorized.
+
+Preserve canonical field representation/reduction, ABI/alignment/aliasing, secret-independent
+control and memory access, fresh entropy, source/witness/signature binding, six masks,
+transcript bytes, independent verifier linkage, retry limits, volatile proof/capsule/IPC,
+atomic State/outbox/ACK behavior, and all existing guards. Hardware dispatch needs a correct
+portable fallback, supported-instruction checks, and no global unsafe CPU flags or
+secret-indexed tables. Profile flags remain 'proofSuiteId=null', 'production_usable=false',
+inactive, unselected, and unqualified.
+
+### Performance and evidence boundary
+
+The accepted complete path measured 10.546812s source, 6.671242s verifier, and 17.870595s
+total for one synthetic State-issued 100-operation batch. The concrete hypothesis is the
+255-bit 'bf256_mul'/'bf256_mul_inplace' loop in pinned vendor 'fields.c:724-742', used by the
+kernel/algebra/circuit. Measure the actual dominant calls before and after; preserve an
+independently checkable portable reference and byte/arithmetic correspondence. Bounded paired
+fresh complete-path samples are evidence, not p95 or qualification.
+
+The accepted complete-path guard remains the only containment primitive: child exit 7/0
+preflight, non-null exit gate, physical reserve '1073741824', process-tree cap
+'<5000000000', native cap '4500000000', active process limit '1', mutex
+'Local\BlindLedgerDirectMaskBuild20260907', cleanup/resource telemetry, and raw failure
+retention. Adapt it only for the exact new child build/path/commands. Do not capture secret
+proof/witness bytes in logs or files.
+
+The phase is not complete until the affected native arithmetic/link/probe/acceptance/
+malformed gates and a freshly built guarded source -> independent verifier -> atomic
+State/ACK path pass, with exact before/after timings, retries, binary hashes, import hashes,
+changed paths, warnings, failures, skips, and unresolved gates recorded. Do not claim a
+material speedup, production security, official authority, or Profile13 readiness without
+current raw evidence.
+
+### Native arithmetic performance verified handoff — 2026-09-12
+
+Repository state is detached HEAD `51158c2db5c4d1b82c88875ea23707a6e7fa1d89`, HEAD tree
+`bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306`; the worktree is intentionally uncommitted and
+contains the authorized native imports, acceleration, CMake wiring, child-local executable
+identity wiring, and this evidence update. No input checkout or vendor tree was modified.
+
+The implementation adds `tools/direct_mask_vole/direct_mask_bf256_accel.{c,h}`: fixed 4x4
+PCLMUL carry-less multiplication and fixed-word reduction for the pinned
+`x^256+x^10+x^5+x^2+1` field, with public CPU-feature dispatch, alias-safe in-place use, and
+the renamed pinned-vendor implementation retained as an independently linked portable
+reference. The exact native source hashes are C
+`5FC9AA99647C7F38060545F05AC45C2394A1A442C8061C5E520D1F77C50C3625` and H
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`.
+
+Import verification against the committed pipeline/primitive/fixture inputs reported exactly
+`IMPORT_CHECKED=74`, `CMAKE_WIRING_DIFFS=9`, and `UNAUTHORIZED_IMPORT_ERRORS=0`. The only
+additional imported-tree files are `tools/direct_mask_vole/direct_mask_bf256_accel.c` and
+`.h`; `MISSING_EXPECTED_FILES=0`. All non-CMake imported source/proof/signature/codec/fixture
+blobs are byte-equivalent to their pinned inputs. The nine intentional CMake differences are
+the wiring files under `tools/direct_mask_authenticated_proof`, `tools/direct_mask_circuit`,
+`tools/direct_mask_kernel`, `tools/direct_mask_pipeline`, `tools/direct_mask_source_auth`,
+`tools/direct_mask_source_proof`, `tools/direct_mask_wire`, `tools/direct_mask_vole`, and
+`tools/direct_mask_fixture`.
+
+Current native gates:
+
+- Rebuilt arithmetic probe: `BF256_BACKEND=pclmul PCLMUL_AVAILABLE=1`; `BF256_OUT_OF_PLACE_MATCH=PASS BF256_IN_PLACE_MATCH=PASS`; build and process exits `0`.
+- Circuit probe: build/process exits `0`; `DIRECT_MASK_CIRCUIT status=PASS`; all listed negative descriptor/AES/inverse/bitness/transcript/direct-mask cases were rejected or detected.
+- Kernel: `1/1 Test #1: direct_mask_kernel_full_field ... Passed`, `100% tests passed, 0 tests failed out of 1`, CTest exit `0`.
+- VOLE: `VOLE_IDENTITY rows=1792 mismatches=0 delta_zero=0`, `SOURCE_PROVE_STATUS status=0 prover_calls=1`, `E2E_VERIFY_STATUS status=0`, `SOURCE_BOUND_COUNTS ... counts_equal=1`, `DIRECT_MASK_PROBE_COUNTS passed=53 failed=0`, `DIRECT_MASK_PROBE_STATUS=PASS`, build/process exits `0`.
+- Fixture: `FIXTURE_IMPORTED_LIBRARY_IDENTITY=PASS count=8`; `1/1` CTest passed, build/CTest exits `0`.
+- Integrated Release CTest: `100% tests passed, 0 tests failed out of 8`, total `34.02 sec`, exit `0`. The probe checks reported `CHECK_COUNT=114 FAILED=0`, `CHECK_COUNT=96 FAILED=0`, `CHECK_COUNT=58 FAILED=0`, and `CHECK_COUNT=86 FAILED=0`; all real-symbol/closure gates passed (`checked=3/2/3`, `forbidden=9/7/7`, and `checked=6/4/3/3`).
+
+The child-local candidate identities are source executable size `276480`, SHA-256
+`176B237D8277A1CF09EECE1DC58DBB9B012C9B6700C6FB8C04FEF46011FDD626`, and verifier size
+`240640`, SHA-256 `37EB37C8A86C010D3C69400E26BA5DCFA9E2A75C407F48DAEC1D03586D364AEF`.
+The key accelerated library `dm_faest_public.lib` is size `333298`, SHA-256
+`B664A72471120AAA1D236236AE1BF7C5BB46B3989471771712566BEBD39069ED`. The default
+accepted source/verifier pins remain unchanged at `275968/D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8` and
+`240128/38FB45E017D08AC11098D8837C78D02143B86753AA4F085174073C64353AC835`.
+
+The bounded guarded pair used the existing exit `7/0` preflight, 1-GiB reserve,
+`<5000000000` process-tree cap, `4500000000` native cap, active-process limit `1`, mutex,
+cleanup telemetry, and memory-only proof boundary. The final candidate raw
+`COMPLETE_PATH_EVIDENCE` reported `operation_count=100`, `issued_batch_count=1`,
+`independent_verified_batch_count=1`, `source_calls=1`, `verifier_calls=1`,
+`state_port_calls=1`, `transaction_count=100`, `outbox_acknowledged_count=100`,
+`unique_idempotency_keys=100`, `receiver_duplicate_dispatches=0`,
+`receiver_side_effects=100`, `reopened_without_work=true`,
+`run_artifact_inventory=["state.sqlite"]`, empty source/verifier workspaces, and fixed
+`proof_suite_id=null`, `production_usable=false`, `activation=false`. Candidate measured
+source/verifier/total times were `5267.863/2884.734/8851.049 ms`; baseline times were
+`10637.985/6845.545/18141.746 ms`, a single guarded sample reduction of
+`50.48%/57.86%/51.21%` (source/verifier/total), not a p95 or qualification result. Candidate
+outer telemetry was `PHYSICAL_PREFLIGHT free_bytes=3154444288 reserve_bytes=1073741824`,
+minimum free `3049099264`, peak working set `80388096`, peak private `54861824`, child
+exit `7/0`, cleanup `PASS`, mutex released. Baseline minimum free was `3463213056`, peak
+working set `82063360`, peak private `54972416`, with the same child/cleanup result.
+
+Intermediate command failures were corrected and are not unresolved gates: the original long
+path build hit MSVC `C1083`/`FTK1011` and was rerun through the validated `Q:` mapped path;
+one kernel configure received literal `$vendor`/`$oracle` paths and was rerun with quoted
+arguments; one integrated CTest run initially had three `Not Run` EXCLUDE_FROM_ALL probes and
+those exact nested targets were built; and a final no-configuration CTest invocation reported
+`0% tests passed, 8 tests failed out of 8` with all eight `Not Run` for `Missing "-C
+<config>"`, then `ctest -C Release` passed all eight. The VOLE probe explicitly reports
+`REMOVED_SYNTHETIC_CHECKS count=6 reason=obsolete_local_polynomial_and_hash_path_removed
+replacement=accepted_direct_mask_kernel_and_algebra_probes`; this is an existing probe
+disposition, not an unreported skip. Build warnings are pre-existing pinned-vendor warnings:
+`C4141` duplicate `inline`, `C4146` unsigned unary minus, and `C4244` conversion warnings;
+no new acceleration-source warning or error remained. No unresolved gates or authorized
+skips remain. Product, formal, custody, payment, PHI, deployment, filtered/Profile13, and
+production-qualification restrictions remain fixed.
+
+### Native performance source review and remaining gates — corrective closure — 2026-09-12
+
+The immediately preceding native-performance handoff is preserved historical evidence. Its
+`51158c2db5c4d1b82c88875ea23707a6e7fa1d89` / `bc779ad6ae3f0b6bf0b9e82020bae7b1f4c8f306`
+identity and its statement that the work was uncommitted describe an earlier state and are
+superseded here. The correction started from the clean committed
+`e42d3dc8ccf7891aebad8576402950cedac9ce07` / tree
+`544ac79a7964a5d6cad032bdb38a64aa07aa7107`; the worktree then contained exactly seven tracked
+paths and the preserved untracked `build-performance/` evidence tree. No vendor checkout,
+pinned input, protected Queue/runtime/composition/State path, protocol byte, filtered/Profile13
+path, or deployment/product path was changed.
+
+The exact corrective scope is limited to the existing arithmetic/kernel probe and its CMake,
+the existing fixture CMake/library-identity script, the child-local acceleration C seam, and
+child-local executable identity constants:
+
+- `tools/direct_mask_kernel/direct_mask_kernel_probe.c`
+- `tools/direct_mask_kernel/CMakeLists.txt`
+- `tools/direct_mask_vole/direct_mask_bf256_accel.c`
+- `tools/direct_mask_fixture/CMakeLists.txt`
+- `tools/direct_mask_fixture/verify_imported_libraries.cmake`
+- `tools/direct_mask_complete_path/source_boundary.py`
+- `app/minimal_clearance_source_auth_verifier_adapter.py`
+
+The actual adapter path is `app/minimal_clearance_source_auth_verifier_adapter.py`. The prior
+supplement's `tools/direct_mask_complete_path/app/adapter.py` path does not exist and must not be
+used as an identity or evidence reference.
+
+The arithmetic probe now compares the accelerated public API against the independently linked,
+per-source-renamed pinned portable `fields.c` reference over all `256x256` polynomial basis pairs
+and 289 pairs from 17 zero/one/all-ones and dense limb-boundary vectors. Each pair checks public
+out-of-place, forced portable test-seam out-of-place, public destination-as-lhs, public
+destination-as-rhs, public in-place lhs, public in-place rhs, public self-alias, public
+self-in-place, and forced portable in-place behavior. The seam is compile-guarded by
+`DIRECT_MASK_BF256_TEST_SEAM` and is present only in the standalone kernel target; the current
+production `dm_faest_public.lib` symbol readback contains zero `direct_mask_bf256_test_*`
+symbols. The current acceleration source/header SHA-256 identities are
+`EF831E68E2589F68E9D99753D13758DADFE0C8F78432D9E2DCF90FD7FB8ACDDC` and
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`.
+
+The complete raw kernel transcript is retained at
+`build-performance/kernel-candidate/ctest-verbose-20260912-after-callsite.log`. Its decisive
+lines are:
+
+```text
+BF256_ARITHMETIC_BACKEND=pclmul PCLMUL_AVAILABLE=1 FORCED_PORTABLE_SEAM=compiled
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=592425 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+DIRECT_MASK_KERNEL status=PASS skips=0 fixture_rng=deterministic cpu_seconds=23.055
+1/1 Test #1: direct_mask_kernel_full_field ....   Passed
+100% tests passed, 0 tests failed out of 1
+KERNEL_CTEST_AFTER_CALLSITE_EXIT=0
+```
+
+The existing fixture target now validates the exact child candidate root `build-performance/q`,
+all eight candidate Release libraries by exact size and SHA-256, and retains the baseline
+eight-library identity check independently. The successful candidate build raw log is
+`build-performance/fixture-candidate/build-candidate-identity-20260912-after-arg.log`; it
+reports `FIXTURE_IMPORTED_LIBRARY_IDENTITY=PASS count=8`, eight candidate library records,
+`FIXTURE_CANDIDATE_LIBRARY_IDENTITY=PASS ... count=8`, build exit `0`, warning lines `0`, and
+error lines `0`. The generated Release link-input records remain at
+`build-performance/fixture-candidate/candidate-release-link-inputs-20260912.log` and
+`build-performance/q/pipeline-source-cli-release-link-inputs-20260912.log`; the former is tied
+to the eight candidate libraries and `direct_mask_fixture_source.c`, and the latter records the
+q source CLI's eight-library link and `direct_mask_pipeline_source_main.c`.
+
+The current candidate library identities are:
+
+```text
+Release/dm_pipeline_source.lib 3432 01809151898F2E7C9E814A0885D25EA3AF092FA412DAB7ECA0DE1C3DA44BFA94
+Release/dm_pipeline_codec.lib 8486 C5CD2229B8A92C704E1F290114D09FAC18011C01C50B5D771055E32E20A62755
+dm_source_proof_build/Release/dm_source_proof.lib 18486 3AF9D80DA4EE4C26D2CD464D4488A0CBCC87819971A86CD48A7B7D9D85C167B2
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_source_auth.lib 18232 09735205900E2B2A1F19C02155113D1F60F171869ED537BBF0F58EC425443E6D
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_wire_codec.lib 270926 89AC129A25A84870066114EDF61B978D274474BF95FD64AA6890B2691FF4EBE9
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/mldsa_source_auth_wrapper.lib 141094 5DD4B6DB42FBDF78F7C0090E975ECC834A74D2E42C5F810E6C5E743C4B2228DE
+dm_source_proof_build/Release/dm_native_fixture_source_proof.lib 33998 13A79E7AA7D44D2EA3F09D37E60D2E601954E1F9B6F8A5BDBBC19C34A3E56CFC
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_faest_public.lib 333298 B7DBCBE97A19C9C1B5D77AE2A8E0D595A6EE6D98669F13856D81BB2CB8E1E551
+```
+
+The identity gate rejected all three controlled negatives with expected exit `1`: wrong root,
+missing root, and wrong library. Their complete logs are
+`build-performance/identity-negatives-20260912/{wrong-root,missing-root,wrong-library}.log`.
+The wrong-root raw error was `candidate performance build root mismatch`; the missing-root raw
+error was `candidate performance build root is not a directory`; the wrong-library raw error
+was `pinned library identity mismatch` with actual `8486/C5CD2229...` versus expected
+`3432/018091518...`. The negative copied root is intentionally retained as generated evidence.
+
+The current q verifier is size `240640`, SHA-256
+`FF7E69D004BF21C5E3F7C2A43F4EDD45F73BBF3E2E812AC9A6E657416F86DA93`; the source appliance is
+size `276480`, SHA-256
+`3BC225CE230433BC14DF94FEBAC47C713D94759505158BBA8FCE84B7E22C3285`. The adapter identity
+unit suite was rerun after correcting the pin: `Ran 14 tests in 4.656s`, `OK`, exit `0`, with
+raw log `build-performance/complete-path-candidate/adapter-unit-correction-20260912.log`.
+The first corrected guarded attempt is retained, not deleted: it exposed the one-nibble stale
+verifier pin, ended `HELD` with `verifier_transport`, and recorded source/verifier/state-port
+counts `1/1/0`. The corrected pin is the `...004BF21C5...` identity above.
+
+The required single fresh corrected guarded candidate path then passed. Raw outer telemetry is
+in `build-performance/complete-path-candidate/guarded-candidate-correction-2-20260912.log`;
+CTest stdout/stderr are the matching `guarded-ctest-candidate-correction-2-20260912.stdout.log`
+and `.stderr.log` (5679 and 0 bytes). The raw CTest result is `Ran 9 tests in 8.660s`, `OK`,
+`1/1 Test #2 ... Passed`, `100% tests passed, 0 tests failed out of 1`, and CTest exit `0`.
+Its exact `COMPLETE_PATH_EVIDENCE` records one issued/verified batch and 100 operations,
+source/verifier/state-port calls `1/1/1`, 100 transactions and ACKs, 100 unique idempotency
+keys, zero duplicate dispatches, 100 receiver side effects, successful reopen with no work,
+`["state.sqlite"]` inventory, empty source/verifier workspaces, and
+`proof_suite_id=null`, `production_usable=false`, `activation=false`. The current measured
+source/verifier/total stages are `3817.523/2711.830/7134.644 ms` (one bounded candidate sample).
+The guard recorded preflight free `3948408832`, reserve `1073741824`, minimum free
+`3815194624`, peak working set `81043456`, peak private `55885824`, child exits `7/0`, cleanup
+`PASS`, and mutex release. The earlier accepted baseline sample was intentionally not rerun
+because it is unchanged; comparisons remain single-sample evidence, not p95, qualification,
+production security, or activation evidence.
+
+All intermediate failures remain retained and accurately classified. The first physical-path q
+rebuild failed because its cache still named `Q:` (`Q_CANDIDATE_REBUILD_EXIT=-2`) and is retained
+at `build-performance/q/rebuild-candidate-libraries-20260912.log`; the validated restored `Q:`
+mapping rebuilt the eight libraries and both CLIs with exit `0`, 48 warning-code lines, and zero
+error-code lines in `rebuild-candidate-libraries-20260912-after-subst.log`. The first candidate
+fixture build omitted `PMB_BUILD_DIR`, failed with `MSB8066`/exit `1`, and remains at
+`build-performance/fixture-candidate/build-candidate-identity-20260912.log`; the CMake command
+was corrected and the exact target passed. A diagnostic `subst Q:` listing command printed
+`Invalid parameter - Q:`; `Test-Path` verified both required mapped paths and the subsequent
+build passed, so no successful mapping claim is based on that failed listing command.
+
+The corrected q and kernel build logs each contain exactly 48 `warning C4141` lines, all from
+the pinned vendor `fields.h` duplicate-`inline` warning; neither corrected log contains C4146
+or C4244. The candidate fixture build reports zero warning/error lines. The earlier deleted
+one-vector probe source/output remains unavailable and is terminal-only historical evidence; no
+source or output was reconstructed. Earlier terminal-only circuit/VOLE output and old warning
+totals/conversion wording remain unknown and are not relabelled as current raw evidence. Profile
+flags remain `proofSuiteId=null`, `production_usable=false`, inactive, unselected, and
+unqualified.
+
+### Immutable correction commit closure — 2026-09-12
+
+The authorized native-performance correction is committed as
+`800030a4a6b4899e38799934efaaefb5832a6bf6`, tree
+`afbe96235f4c5d711ca0d3e689502b5e28c86b17`, parent
+`e42d3dc8ccf7891aebad8576402950cedac9ce07`. Post-commit verification reported that exact HEAD,
+the matching tree and parent, clean tracked status, and clean `git diff --check`; only the
+intentionally preserved untracked `build-performance/` evidence tree remains. The source/gate
+correction, retained raw evidence, and nonactivation boundary are complete and are handed
+directly to the Driver for review.
+
+### Native arithmetic fallback correction and bounded optimization decision — 2026-09-12
+
+This append-only record supersedes the immediately preceding review's open fallback obligation
+and records the one authorized optimization attempt. The phase started from detached HEAD
+`f73378a3bf33f5356887ba1e46b758a544392507`, tree
+`3418585dc5f5f6091b37db90cd50291a4db69ff6`, parent
+`800030a4a6b4899e38799934efaaefb5832a6bf6`; the actual tree of `800030a` is
+`afbe96235f4c5d711ca0d3e689502b5e28c86b17`. Before this phase there were no tracked changes;
+the untracked `build-performance/` evidence tree was preserved. No vendor, protocol, field,
+relation, source/proof/signature/codec, State/runtime/Queue, filtered/PQ, containment, or
+product path was touched.
+
+The fallback correction is now a compile-only forced-capability configuration of the existing
+kernel probe. The forced build uses the public `bf256_mul` and `bf256_mul_inplace` dispatch
+functions, with the existing probe's arithmetic-only mode; it does not call a private portable
+wrapper. The normal and forced transcripts both compare against the independently linked,
+per-source-renamed pinned portable reference over all 65,536 basis pairs and 289 boundary
+pairs. Their decisive raw lines are:
+
+```text
+BF256_ARITHMETIC_MODE=normal_dispatch
+BF256_ARITHMETIC_BACKEND=pclmul PCLMUL_AVAILABLE=1
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=460775 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+DIRECT_MASK_KERNEL status=PASS skips=0 fixture_rng=deterministic cpu_seconds=22.326
+KERNEL_FINAL_CURRENT_CTEST_EXIT=0
+
+BF256_ARITHMETIC_MODE=forced_capability_false
+BF256_ARITHMETIC_BACKEND=portable PCLMUL_AVAILABLE=0
+BF256_ARITHMETIC_BASIS_PAIRS=65536 BOUNDARY_VECTORS=17 BOUNDARY_PAIRS=289 CHECKS=460775 MISMATCHES=0
+BF256_ARITHMETIC_STATUS=PASS
+DIRECT_MASK_KERNEL_ARITHMETIC_ONLY status=PASS
+KERNEL_PORTABLE_FINAL_CURRENT_CTEST_EXIT=0
+```
+
+The normal raw build/test logs are
+`build-performance/kernel-candidate/{build-20260912-final-current.log,ctest-verbose-20260912-final-current.log}`;
+the forced logs are
+`build-performance/kernel-portable/{build-20260912-final-current.log,ctest-verbose-20260912-final-current.log}`.
+The production `dm_faest_public.lib` readback used `dumpbin /symbols`, exited `0`, had
+`DUMPBIN_FINAL_CURRENT_SYMBOL_LINES=3293`, public BF256 matches `27`, portable-reference
+matches `7`, static accelerator matches `6`, and
+`DUMPBIN_FINAL_CURRENT_TEST_ONLY_MATCHES=0`. Its raw log is
+`build-performance/q/dumpbin-faest-public-symbols-20260912-final-current.log` with SHA-256
+`378E1B77EEBD1E1DAB6F0C7AE95E0E3691B5A8AAC1903E7296FEA0932EE8BA84`. The source compile guard
+rejects `DIRECT_MASK_BF256_FORCE_PORTABLE` without the standalone-only
+`DIRECT_MASK_BF256_TEST_SEAM`; production has neither override nor test-seam symbols.
+
+The first forced public-dispatch run exposed a real alias contract issue in the pinned portable
+implementation: the retained raw log
+`build-performance/kernel-portable/ctest-verbose-20260912.log` begins with
+`case=public_dst_rhs_alias` and ends with `CHECKS=460775 MISMATCHES=131325` and arithmetic-only
+failure. The production dispatch boundary now copies both inputs before calling the unchanged
+pinned portable reference, making `dst=lhs`, `dst=rhs`, and in-place public behavior match the
+accelerated alias contract. The pinned vendor source was not edited. The failed raw log is
+`53244937` bytes with SHA-256
+`D29F1460601F01B1EC5A5CF3D542567EFFF5A3AE5D7B3B91CA5BF5F6938ED253`.
+
+The single authorized performance hypothesis was implemented as a fixed two-level Karatsuba
+candidate (nine 64-bit carry-less products), preserving the existing field modulus, reduction,
+constant-time control, alias safety, public dispatch, and portable reference. Corrected normal
+and forced arithmetic gates passed (`460775/0`), the candidate q rebuild exited `0` with the
+retained pinned-vendor warning profile, the candidate fixture identity gate passed all eight
+libraries, and the candidate production symbol check found zero test-only symbols. The initial
+incorrect cross-term implementation failed and is preserved at
+`build-performance/kernel-candidate/ctest-verbose-20260912-karatsuba.log` (75,923,051 bytes,
+SHA-256 `FFF5D13BAEFDB7FA1C89F57FB7ED09E05CDB9CAFFB97858076E7DD6FCB1C947F`). Its corrected
+arithmetic and forced-fallback logs remain at
+`build-performance/kernel-candidate/ctest-verbose-20260912-karatsuba-fallback-alias.log` and
+`build-performance/kernel-portable/ctest-verbose-20260912-fallback-alias.log`.
+
+The required fresh guarded comparison used one baseline sample captured before replacing q
+binaries and one candidate sample, each through the existing source -> independent verifier ->
+atomic State/ACK path. The exact measured stages were:
+
+```text
+BASELINE source_ms=3126.333 verifier_ms=2656.820 total_ms=6355.661
+KARATSUBA source_ms=3505.107 verifier_ms=2696.914 total_ms=6771.051
+TOTAL_REGRESSION_PERCENT=6.535748
+SOURCE_REGRESSION_PERCENT=12.115600
+VERIFIER_REGRESSION_PERCENT=1.509097
+```
+
+The baseline raw outer/test files are
+`build-performance/complete-path-candidate/guarded-baseline-karatsuba-20260912.log` and its
+matching `guarded-ctest-baseline-karatsuba-20260912.{stdout,stderr}.log`; the candidate files
+are `guarded-candidate-karatsuba-20260912.log` and its matching stdout/stderr files. The
+candidate complete-path evidence passed with one issued/verified batch, 100 operations,
+source/verifier/State calls `1/1/1`, 100 transactions and ACKs, 100 unique idempotency keys,
+zero duplicate dispatches, 100 receiver side effects, successful reopen with no work,
+`["state.sqlite"]` inventory, empty source/verifier workspaces, `proof_suite_id=null`,
+`production_usable=false`, and `activation=false`. Candidate outer telemetry was preflight
+free `3730313216`, reserve `1073741824`, minimum free `3648487424`, peak working set
+`81895424`, peak private `55009280`, child exits `7/0`, cleanup `PASS`, and released mutex
+`Local\\BlindLedgerDirectMaskBuild20260907`. The Karatsuba candidate regressed, so it was
+rejected and removed; no second optimization campaign or extra benchmark was run. The correct
+retained implementation is the original fixed 4x4 PCLMUL path plus the corrected portable
+alias-safe dispatch boundary.
+
+The final retained q rebuild exited `0` and removed the temporary `Q:` mapping with exit `0`.
+It contains exactly 48 pinned-vendor `warning C4141` lines and zero C4146/C4244 lines. The
+final fixture identity build reports `FIXTURE_IMPORTED_LIBRARY_IDENTITY=PASS count=8`,
+`FIXTURE_CANDIDATE_LIBRARY_IDENTITY=PASS` for the exact child root, exit `0`, warning lines
+`0`, and error lines `0`. The final adapter identity unit reports `Ran 14 tests in 4.407s`,
+`OK`, exit `0`. The final retained source appliance is `276480` bytes,
+`25254DCBEB4FAB9A20911C874D7F633BD9953E804FE999F3AFD1C4BFAC649069`; the verifier is
+`241152` bytes,
+`59F5CFF5C0C0B4979705BFE3FC69329FCCB2062A73748BC72F7E6A39760CB756`. The final native
+source/header hashes are
+`08923E5EB209FFBFB89CC489D2C21770769F0AB45F31984BBC075DDDDCF52399` and
+`00E1D9C1E078BD35BCCA95AE76865590ED1B78969DAFBD89D85EBB7C09FF21E2`.
+
+The final eight candidate Release-library identities bound by the existing fixture target are:
+
+```text
+Release/dm_pipeline_source.lib 3432 01809151898F2E7C9E814A0885D25EA3AF092FA412DAB7ECA0DE1C3DA44BFA94
+Release/dm_pipeline_codec.lib 8486 C5CD2229B8A92C704E1F290114D09FAC18011C01C50B5D771055E32E20A62755
+dm_source_proof_build/Release/dm_source_proof.lib 18486 3AF9D80DA4EE4C26D2CD464D4488A0CBCC87819971A86CD48A7B7D9D85C167B2
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_source_auth.lib 18232 09735205900E2B2A1F19C02155113D1F60F171869ED537BBF0F58EC425443E6D
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_wire_codec.lib 270926 89AC129A25A84870066114EDF61B978D274474BF95FD64AA6890B2691FF4EBE9
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/mldsa_source_auth_wrapper.lib 141094 5DD4B6DB42FBDF78F7C0090E975ECC834A74D2E42C5F810E6C5E743C4B2228DE
+dm_source_proof_build/Release/dm_native_fixture_source_proof.lib 33998 13A79E7AA7D44D2EA3F09D37E60D2E601954E1F9B6F8A5BDBBC19C34A3E56CFC
+dm_source_proof_build/dm_authenticated_proof_build/dm_source_auth_build/Release/dm_faest_public.lib 333932 F023C33E752DE95DC9D04332212D47333792EEF2424377E1B6E047E9F9B76593
+Release/dm_pipeline_source_cli.exe 261120 4E1B9EAF13A30918F9C4FEDBEA64DF81BFCD38909A8015148394FAF46E26ED02
+Release/dm_pipeline_verifier_cli.exe 241152 59F5CFF5C0C0B4979705BFE3FC69329FCCB2062A73748BC72F7E6A39760CB756
+```
+
+The final retained guarded path raw test reports `Ran 9 tests in 8.219s`, `100% tests
+passed, 0 tests failed out of 1`, CTest exit `0`, and stderr bytes `0`. Its exact
+`COMPLETE_PATH_EVIDENCE` is retained in
+`build-performance/complete-path-candidate/guarded-ctest-retained-current-20260912.stdout.log`;
+the measured source/verifier/total stages are `3428.429/2695.773/6770.956 ms`, with source
+measurement elapsed `3426.666 ms`, one source and verifier call, and one State port call. The
+record has 100 operations/transactions/ACKs/unique keys, one issued and independently verified
+batch, zero unconfirmed operations and duplicate dispatches, 100 receiver side effects,
+`reopened_without_work=true`, `run_artifact_inventory=["state.sqlite"]`, empty workspaces,
+`proof_suite_id=null`, `production_usable=false`, `activation=false`, and
+`pagefile_growth_evidence="unavailable"`. The final guard reports preflight free
+`3608154112`, reserve `1073741824`, minimum free `3477954560`, peak working set `80916480`,
+peak private `54906880`, child exits `7/0`, cleanup `PASS`, released mutex, and outer exit `0`.
+The stdout/stderr/outer log sizes and hashes are retained with the raw files; stdout is 5680
+bytes with SHA-256 `12C7E45F0ADE5BC85982084E3AE00C4C58DCF278761895DD035FEA918C1344E6`, stderr
+is 0 bytes with SHA-256 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`, and
+the outer log is 3411 bytes with SHA-256
+`19413D75AB2C37A7E9C468DB0BF3123F5CE3CACBA7E749699330BF7AF8C065C4`.
+
+All earlier physical q-cache, missing-`PMB_BUILD_DIR`, stale-verifier-pin, wrong-root,
+missing-root, wrong-library, warning, and unavailable-old-probe evidence remains preserved in
+its prior records and raw files. The newly exposed Karatsuba cross-term and portable-alias
+failures remain preserved above. No item was silently skipped; no final gate is unresolved.
+The phase remains synthetic, nonactivating, and unqualified: `proof_suite_id=null`,
+`production_usable=false`, `activation=false`, `NOT_QUALIFIED`/`INACTIVE`/`UNSELECTED`.
+
+### Immutable bounded native closure — 2026-09-12
+
+The implementation and evidence record above are committed in the first immutable phase
+commit `4dd3ea2ece80b43e29befe63c644e3b6b46eea61`, tree
+`3061d6b77e60bb28f92ea4667bdbe72fcd7c2e50`, parent
+`f73378a3bf33f5356887ba1e46b758a544392507`. This commit contains only the six authorized
+implementation/identity paths and the three narrow current records. Post-commit verification
+matched HEAD/tree/parent, reported no tracked modifications, and kept only the intentionally
+untracked `build-performance/` evidence tree. The final docs-only closure commit is the next
+and final mutation in this child.

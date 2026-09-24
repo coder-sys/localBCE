@@ -57,6 +57,39 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             "digest": self.authority.digest,
         }
 
+    def _register_manifest(
+        self,
+        *,
+        manifest_id: str,
+        member_ids: tuple[str, ...],
+        source_owner_id: str = "source-owner:test",
+        source_version: str = "roster-test-v1",
+    ) -> owner.PopulationManifest:
+        manifest = owner.PopulationManifest(
+            manifest_id=manifest_id,
+            manifest_version=1,
+            state_id=self.config.state_id,
+            deployment_id=self.config.deployment_id,
+            program_id=self.config.program_id,
+            period_id=self.config.period_id,
+            currency=self.config.currency,
+            pack_id="pack:test",
+            cutoff_ms=4,
+            inclusion_rules=("INCLUDED",),
+            source_owner_id=source_owner_id,
+            authority_id=self.authority.authority_id,
+            authority_epoch=self.authority.epoch,
+            authority_digest=self.authority.digest,
+            approved_by="synthetic-official",
+            approval_ref=f"approval:{manifest_id}",
+            source_id="source:population-roster",
+            source_version=source_version,
+            source_digest=bytes.fromhex("AB" * 64),
+            member_ids=tuple(sorted(member_ids)),
+        )
+        self.store.register_population_manifest(manifest)
+        return manifest
+
     def _populate_owner(self) -> None:
         pack = owner.ControlPack(
             pack_id="pack:test",
@@ -88,8 +121,13 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             owed_cents=10_000_000,
             due_at_ms=10_000,
         )
+        manifest = self._register_manifest(
+            manifest_id="population-manifest:test:v1",
+            member_ids=(item.item_id,),
+        )
         self.store.stage_population(
             population_id="population:test",
+            manifest_id=manifest.manifest_id,
             pack_id=pack.pack_id,
             cutoff_ms=4,
             inclusion_rules=("INCLUDED",),
@@ -240,8 +278,14 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 due_at_ms=10_002,
             ),
         )
+        manifest = self._register_manifest(
+            manifest_id=f"population-manifest:{population_id}:v1",
+            member_ids=tuple(item.item_id for item in items),
+            source_owner_id=f"source-owner:{population_id}",
+        )
         self.store.stage_population(
             population_id=population_id,
+            manifest_id=manifest.manifest_id,
             pack_id="pack:test",
             cutoff_ms=4,
             inclusion_rules=("INCLUDED",),
@@ -294,8 +338,32 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             )
             for index in range(1, 5)
         )
+        manifest = owner.PopulationManifest(
+            manifest_id="population-manifest:partial-history:v1",
+            manifest_version=1,
+            state_id=self.config.state_id,
+            deployment_id=self.config.deployment_id,
+            program_id=self.config.program_id,
+            period_id=self.config.period_id,
+            currency=self.config.currency,
+            pack_id=pack.pack_id,
+            cutoff_ms=4,
+            inclusion_rules=("INCLUDED",),
+            source_owner_id="source-owner:partial-history",
+            authority_id=self.authority.authority_id,
+            authority_epoch=self.authority.epoch,
+            authority_digest=self.authority.digest,
+            approved_by="synthetic-official",
+            approval_ref="approval:partial-history",
+            source_id="source:population-roster",
+            source_version="roster-partial-v1",
+            source_digest=bytes.fromhex("CD" * 64),
+            member_ids=tuple(sorted((*(item.item_id for item in items), "item:partial-5"))),
+        )
+        partial.register_population_manifest(manifest)
         result = partial.stage_population(
             population_id=population_id,
+            manifest_id=manifest.manifest_id,
             pack_id=pack.pack_id,
             cutoff_ms=4,
             inclusion_rules=("INCLUDED",),
@@ -339,6 +407,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             identity = connection.execute("SELECT identity_digest FROM financial_identity WHERE id=1").fetchone()
             assert identity is not None
             base_committed_at = min(int(row["committed_at_ms"]) for row in rows)
+            registered_at_by_manifest = {
+                str(row["manifest_id"]): int(row["registered_at_ms"])
+                for row in connection.execute(
+                    "SELECT manifest_id,registered_at_ms FROM population_manifests"
+                )
+            }
             scope = {
                 "state_id": str(meta["state_id"]),
                 "deployment_id": str(meta["deployment_id"]),
@@ -347,13 +421,15 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 "currency": str(meta["currency"]),
             }
             previous = independent._digest(
-                independent.GENESIS_DOMAIN,
+                independent.GENESIS_DOMAIN_BY_VERSION[int(meta["schema_version"])],
                 independent._canonical(scope, "test:genesis-scope"),
                 bytes(meta["trusted_authority_digest"]),
                 bytes(identity["identity_digest"]),
             )
             for sequence, row in enumerate(rows, start=1):
                 committed_at = base_committed_at + sequence
+                if row["aggregate_type"] == "POPULATION_MANIFEST":
+                    committed_at = registered_at_by_manifest[str(row["aggregate_id"])]
                 payload_bytes = str(row["payload_json"]).encode("ascii")
                 payload_digest = independent._digest(independent.EVENT_DOMAIN, payload_bytes)
                 row["payload_digest"] = payload_digest
@@ -421,6 +497,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             identity = connection.execute("SELECT identity_digest FROM financial_identity WHERE id=1").fetchone()
             assert identity is not None
             base_committed_at = min(int(row["committed_at_ms"]) for row in rows)
+            registered_at_by_manifest = {
+                str(row["manifest_id"]): int(row["registered_at_ms"])
+                for row in connection.execute(
+                    "SELECT manifest_id,registered_at_ms FROM population_manifests"
+                )
+            }
             scope = {
                 "state_id": str(meta["state_id"]),
                 "deployment_id": str(meta["deployment_id"]),
@@ -429,13 +511,15 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 "currency": str(meta["currency"]),
             }
             previous = independent._digest(
-                independent.GENESIS_DOMAIN,
+                independent.GENESIS_DOMAIN_BY_VERSION[int(meta["schema_version"])],
                 independent._canonical(scope, "test:genesis-scope"),
                 bytes(meta["trusted_authority_digest"]),
                 bytes(identity["identity_digest"]),
             )
             for sequence, row in enumerate(rows, start=1):
                 committed_at = base_committed_at + sequence
+                if row["aggregate_type"] == "POPULATION_MANIFEST":
+                    committed_at = registered_at_by_manifest[str(row["aggregate_id"])]
                 header = independent._event_header(
                     int(row["before_revision"]),
                     int(row["after_revision"]),
@@ -468,7 +552,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
         obligation = next(iter(result["obligations"].values()))
-        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v5")
+        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v7")
         self.assertEqual(result["mode"], "LIVE")
         self.assertEqual(result["totals"], {
             "owed_cents": 10_000_000,
@@ -563,7 +647,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         valid_path = self._make_partial_import()
         valid_result = self._verify(valid_path)
         self.assertEqual(valid_result["counts"]["populations"], 1)
-        self.assertEqual(valid_result["sequence"], 3)
+        self.assertEqual(valid_result["sequence"], 4)
 
         reopened = owner.FinancialOwner(
             path=valid_path,
@@ -613,11 +697,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             else:
                 self.fail(f"variant={variant} was accepted by owner verification")
             tampered_package = tampered_owner.export_continuity()
-            independent.verify_continuity_package(
-                tampered_package,
-                expected_scope=self.scope,
-                expected_authority=self.authority_binding,
-            )
+            with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-imported-binding"):
+                independent.verify_continuity_package(
+                    tampered_package,
+                    expected_scope=self.scope,
+                    expected_authority=self.authority_binding,
+                )
             rejected_restore = Path(self.temp_dir.name) / f"partial-{variant}-restore.sqlite"
             with self.assertRaisesRegex(owner.FinancialContinuityError, "continuity_restore_integrity"):
                 owner.FinancialOwner.restore_continuity(
@@ -836,6 +921,36 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         self.assertEqual(result["counts"]["conflicts"], 1)
         self.assertEqual(obligation["verification_status"], "CONFLICT_VISIBLE")
         self.assertEqual(obligation["received_cash_cents"], 9_700_000)
+
+    def test_private_index_inventory_rejects_unapproved_and_mismatched_indexes(self) -> None:
+        corruptions = (
+            (
+                "unapproved-index",
+                "CREATE INDEX unapproved_plan_index ON evidence(source_id)",
+                "schema:private-indexes",
+            ),
+            (
+                "mismatched-approved-name",
+                "DROP INDEX rr_financial_v1_evidence_item_id; "
+                "CREATE INDEX rr_financial_v1_evidence_item_id ON evidence(source_id)",
+                "schema:private-index",
+            ),
+        )
+        for label, statement, expected_error in corruptions:
+            with self.subTest(label=label):
+                target = Path(self.temp_dir.name) / f"{label}.sqlite"
+                shutil.copyfile(self.db, target)
+                with closing(sqlite3.connect(target, isolation_level=None)) as connection:
+                    for sql in statement.split("; "):
+                        connection.execute(sql)
+                before = target.read_bytes()
+                with self.assertRaisesRegex(independent.IndependentFinancialError, expected_error):
+                    independent.verify_database(
+                        target,
+                        expected_config=self.config,
+                        expected_authority=self.authority_binding,
+                    )
+                self.assertEqual(target.read_bytes(), before)
 
     def test_owner_continuity_package_digest_and_oversized_input_fail_closed(self) -> None:
         package = self.store.export_continuity()

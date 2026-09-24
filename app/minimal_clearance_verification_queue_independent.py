@@ -8,7 +8,8 @@ complete VERIFIED batch from the batch owner plus its ordered members.
 
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -17,7 +18,9 @@ from pathlib import Path
 import re
 import sqlite3
 import tempfile
-from typing import Any, Final, Mapping
+from threading import get_ident
+from types import MappingProxyType
+from typing import Any, Final, Iterator, Mapping
 
 
 class IndependentQueueError(RuntimeError):
@@ -26,6 +29,9 @@ class IndependentQueueError(RuntimeError):
 
 SCHEMA_VERSION: Final[int] = 13
 _SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/v13"
+_ADMISSION_STATE_HANDOFF_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/ADMISSION-STATE-HANDOFF/v1"
+_ADMISSION_STATE_HANDOFF_MAGIC: Final[bytes] = b"BLQST001"
+_ADMISSION_STATE_HANDOFF_MAX: Final[int] = 64 * 1024
 _MATERIAL: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/MATERIAL/v13\x00"
 _ADMISSION_CAP: Final[int] = 4_500_000_000
 _DATABASE_PAGE_SIZE: Final[int] = 4096
@@ -43,6 +49,8 @@ _VERIFIER_LAUNCH_V_UPPER: Final[int] = 1
 _SOURCE_REQUEST_MAGIC: Final[bytes] = b"DMSR0001"
 _SOURCE_REQUEST_BYTES: Final[int] = 180
 _SOURCE_REQUEST_DOMAIN: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/SOURCE-REQUEST/v1\x00"
+_ISSUE_REQUEST_ID_BYTES: Final[int] = 32
+_ISSUE_REQUEST_DOMAIN_V1: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/VERIFICATION-QUEUE/ISSUE-REQUEST-BATCH-ID/v1\x00"
 _SOURCE_IDENTITY_PINS: Final[dict[str, tuple[int, bytes]]] = {
     "accepted": (275_968, bytes.fromhex("D3A36CFAADBB1B6A3455DA44C4DC0E941C00906EC7E281199876F851C503FCA8")),
     "child-performance": (275_968, bytes.fromhex("E07865D9CE6C2644142D3EA61030BD308D5BBD09FE861C630CC5EEBE1F3FE5D9")),
@@ -120,6 +128,7 @@ _ALLOWED_CODES = frozenset({
     "completion_acceptance", "batch_required", "queue_closed", "runtime_closed", "runtime_scope",
     "runtime_already_owned", "runtime_configuration", "queue_parent", "queue_owner_required", "queue_configuration",
     "queue_integer", "queue_batch_shape", "queue_batch_order", "queue_batch_requires_100", "batch_window_mismatch",
+    "issue_request_id", "issue_request_template", "issue_request_conflict", "issue_request_transaction",
     "source_key_epoch", "queue_profile_invalid", "queue_profile_epoch", "queue_profile_version", "queue_capacity_invalid",
     "qualification_flags_invalid", "validity_window_invalid", "validity_window_too_long", "queue_randomness", "template_shape",
     "assertion_identifier_invalid", "assertion_identifier_forbidden", "assertion_version_invalid", "state_profile_version_invalid",
@@ -399,6 +408,64 @@ def _template_bytes(row: tuple[Any, ...]) -> bytes:
     return _json_bytes({"assertion_identifier": row[3], "assertion_version": row[4], "state_profile_version": row[5], "valid_from_ms": row[6], "valid_until_ms": row[7], "approved_source_registry_root": root, "qualification_flags": list(_parse_flags(row[9]))})
 
 
+def _expected_issue_template_bytes(value: Mapping[str, Any]) -> bytes:
+    required = {
+        "assertion_identifier", "assertion_version", "state_profile_version",
+        "valid_from_ms", "valid_until_ms", "approved_source_registry_root",
+        "qualification_flags",
+    }
+    if type(value) is not dict or set(value) != required:
+        _fail("issue_request_template")
+    if (
+        type(value["assertion_identifier"]) is not str
+        or type(value["assertion_version"]) is not int
+        or type(value["state_profile_version"]) is not str
+        or type(value["valid_from_ms"]) is not int
+        or type(value["valid_until_ms"]) is not int
+    ):
+        _fail("issue_request_template")
+    _token(value["assertion_identifier"], "issue_request_template", 96)
+    _token(value["state_profile_version"], "issue_request_template", 96)
+    if value["assertion_version"] < 1 or value["assertion_version"] > 2**31:
+        _fail("issue_request_template")
+    start = _strict_int(value["valid_from_ms"], "issue_request_template", minimum=0, maximum=_MAX_EPOCH)
+    end = _strict_int(value["valid_until_ms"], "issue_request_template", minimum=0, maximum=_MAX_EPOCH)
+    if not start < end or end - start > _MAX_WINDOW:
+        _fail("issue_request_template")
+    root = value["approved_source_registry_root"]
+    if root is not None:
+        if type(root) is not str or _hex(_parse_hex(root, 64, "issue_request_template")) != root:
+            _fail("issue_request_template")
+    flags = value["qualification_flags"]
+    if type(flags) is not list or len(flags) > 32 or any(type(flag) is not str for flag in flags):
+        _fail("issue_request_template")
+    if tuple(sorted(flags)) != tuple(flags) or len(set(flags)) != len(flags):
+        _fail("issue_request_template")
+    for flag in flags:
+        _token(flag, "issue_request_template", 96)
+    try:
+        return _json_bytes(value)
+    except (TypeError, ValueError):
+        _fail("issue_request_template")
+
+
+def issue_request_batch_id_v1(*, queue_id: str, request_id: bytes) -> bytes:
+    """Derive the schema-13 batch primary key for an opaque request ID v1."""
+
+    if type(request_id) is not bytes or len(request_id) != _ISSUE_REQUEST_ID_BYTES:
+        _fail("issue_request_id")
+    if type(queue_id) is not str:
+        _fail("issue_request_id")
+    try:
+        queue_id_bytes = queue_id.encode("ascii")
+    except UnicodeEncodeError:
+        _fail("issue_request_id")
+    if not 1 <= len(queue_id_bytes) <= 128:
+        _fail("issue_request_id")
+    preimage = _ISSUE_REQUEST_DOMAIN_V1 + len(queue_id_bytes).to_bytes(8, "big") + queue_id_bytes + request_id
+    return hashlib.sha3_256(preimage).digest()
+
+
 def _expected_batch_root(owner: tuple[Any, ...], members: tuple[tuple[Any, ...], ...]) -> bytes:
     if len(members) != _COUNT:
         _fail("batch_member_count")
@@ -496,6 +563,513 @@ class IndependentBatchAcceptance:
 class IndependentVerifiedQueueBatch:
     batch: IndependentBatchAcceptance
     jobs: tuple[IndependentVerifiedQueueJob, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class IndependentIssuedQueueRequest:
+    request_version: int
+    batch_id: bytes
+    batch_root: bytes
+    session_ref: bytes
+    operation_refs: tuple[bytes, ...]
+    public_coin: bytes
+    proof_context: bytes
+    identity_digest: bytes
+    admission_seq: int
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class IndependentIssueRequestLookup:
+    request_version: int
+    config_digest: bytes
+    meta: tuple[Any, ...] = field(repr=False)
+    batch: IndependentIssuedQueueRequest | None = None
+
+
+def parse_admission_state_handoff(raw: bytes) -> dict[str, Any]:
+    """Decode the bounded canonical Queue-to-State v1 contract without trusting its sender."""
+
+    if type(raw) is not bytes or not 12 <= len(raw) <= _ADMISSION_STATE_HANDOFF_MAX:
+        _fail("state_handoff_bounds")
+    if raw[:8] != _ADMISSION_STATE_HANDOFF_MAGIC:
+        _fail("state_handoff_magic")
+    payload_length = int.from_bytes(raw[8:12], "big")
+    payload_raw = raw[12:]
+    if payload_length != len(payload_raw):
+        _fail("state_handoff_length")
+    try:
+        value = json.loads(payload_raw.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _fail("state_handoff_encoding")
+    required = {
+        "schema", "queue_schema_version", "composition_schema_version", "profile_version",
+        "profile_digest", "queue_id", "queue_config_digest", "composition_config_digest",
+        "batch", "attempt", "events", "source", "attestation", "retry_policy",
+        "terminal_result", "operations", "proof_suite_id", "production_usable", "activation",
+    }
+    if type(value) is not dict or set(value) != required or payload_raw != _json_bytes(value):
+        _fail("state_handoff_shape")
+    if (
+        value["schema"] != _ADMISSION_STATE_HANDOFF_SCHEMA
+        or _strict_int(value["queue_schema_version"], "state_handoff_version") != SCHEMA_VERSION
+        or _strict_int(value["composition_schema_version"], "state_handoff_version") != 4
+        or value["profile_version"] != _PROFILE_TOKEN
+        or _parse_hex(value["profile_digest"], 64, "state_handoff_profile") != _PROFILE
+        or value["proof_suite_id"] is not None
+        or type(value["production_usable"]) is not bool or value["production_usable"] is not False
+        or type(value["activation"]) is not bool or value["activation"] is not False
+    ):
+        _fail("state_handoff_version")
+    _token(value["queue_id"], "state_handoff_queue_id", 96)
+    queue_config_digest = _parse_hex(value["queue_config_digest"], 64, "state_handoff_queue_config")
+    composition_config_digest = _parse_hex(value["composition_config_digest"], 64, "state_handoff_composition_config")
+
+    batch = value["batch"]
+    if type(batch) is not dict or set(batch) != {
+        "batch_id", "batch_root", "identity_digest", "admission_seq", "template",
+        "proof_context", "public_coin",
+    }:
+        _fail("state_handoff_batch")
+    batch_id = _parse_hex(batch["batch_id"], 32, "state_handoff_batch_id")
+    _parse_hex(batch["batch_root"], 64, "state_handoff_batch_root")
+    _parse_hex(batch["identity_digest"], 64, "state_handoff_identity")
+    admission_seq = _strict_int(batch["admission_seq"], "state_handoff_admission_seq", minimum=1)
+    proof_context = _parse_hex(batch["proof_context"], _PROOF_CONTEXT_BYTES, "state_handoff_context")
+    public_coin = _parse_hex(batch["public_coin"], _PUBLIC_COIN_BYTES, "state_handoff_coin")
+    if public_coin == bytes(_PUBLIC_COIN_BYTES):
+        _fail("state_handoff_coin")
+    template = batch["template"]
+    if type(template) is not dict or set(template) != {
+        "assertion_identifier", "assertion_version", "state_profile_version", "valid_from_ms",
+        "valid_until_ms", "approved_source_registry_root", "qualification_flags",
+    }:
+        _fail("state_handoff_template")
+    _token(template["assertion_identifier"], "state_handoff_assertion", 96)
+    _strict_int(template["assertion_version"], "state_handoff_assertion_version", minimum=1, maximum=_MAX_EPOCH)
+    if template["state_profile_version"] != _PROFILE_TOKEN:
+        _fail("state_handoff_template")
+    valid_from = _strict_int(template["valid_from_ms"], "state_handoff_window", minimum=0, maximum=_MAX_EPOCH)
+    valid_until = _strict_int(template["valid_until_ms"], "state_handoff_window", minimum=0, maximum=_MAX_EPOCH)
+    if valid_from >= valid_until or valid_until - valid_from > _MAX_WINDOW:
+        _fail("state_handoff_window")
+    registry_root = template["approved_source_registry_root"]
+    if registry_root is not None:
+        _parse_hex(registry_root, 64, "state_handoff_registry")
+    flags = template["qualification_flags"]
+    if type(flags) is not list or len(flags) > 32 or tuple(sorted(flags)) != tuple(flags) or len(set(flags)) != len(flags):
+        _fail("state_handoff_flags")
+    for flag in flags:
+        _token(flag, "state_handoff_flag", 96)
+
+    attempt = value["attempt"]
+    if type(attempt) is not dict or set(attempt) != {
+        "attempt_id", "attempt_number", "status", "proof_attempts", "reservation_before",
+        "reservation_after", "source_key_epoch", "verifier_status", "verifier_v_upper",
+    }:
+        _fail("state_handoff_attempt")
+    _strict_int(attempt["attempt_id"], "state_handoff_attempt_id", minimum=1)
+    if (
+        _strict_int(attempt["attempt_number"], "state_handoff_attempt_number") != 1
+        or attempt["status"] != "ACCEPTED"
+        or _strict_int(attempt["proof_attempts"], "state_handoff_proof_attempts") != _PROOF_ATTEMPTS_PER_BATCH
+        or attempt["verifier_status"] != "COMPLETED"
+        or _strict_int(attempt["verifier_v_upper"], "state_handoff_verifier_bound") != _VERIFIER_LAUNCH_V_UPPER
+    ):
+        _fail("state_handoff_attempt")
+    reservation_before = _strict_int(attempt["reservation_before"], "state_handoff_reservation", minimum=0, maximum=_PROOF_ATTEMPTS_CAP)
+    reservation_after = _strict_int(attempt["reservation_after"], "state_handoff_reservation", minimum=1, maximum=_PROOF_ATTEMPTS_CAP)
+    if reservation_after - reservation_before != _PROOF_ATTEMPTS_PER_BATCH:
+        _fail("state_handoff_reservation")
+    source_key_epoch = _strict_int(attempt["source_key_epoch"], "state_handoff_source_epoch", minimum=1, maximum=_MAX_EPOCH)
+
+    events = value["events"]
+    expected_events = (
+        ("HANDOFF_SUBMITTED", "QUEUED", 0),
+        ("VERIFICATION_STARTED", "LEASED", 1),
+        ("VERIFIER_STARTED", "LEASED", 1),
+        ("VERIFIER_COMPLETED", "LEASED", 1),
+        ("BATCH_COMPLETED", "VERIFIED", 1),
+    )
+    if type(events) is not list or len(events) != len(expected_events):
+        _fail("state_handoff_events")
+    previous_sequence = 0
+    for index, (event, expected) in enumerate(zip(events, expected_events)):
+        expected_keys = {"kind", "status", "attempt", "sequence", "event_digest"}
+        if index == 1:
+            expected_keys |= {"reservation_before", "reservation_after"}
+        if type(event) is not dict or set(event) != expected_keys:
+            _fail("state_handoff_events")
+        kind, status, attempt_number = expected
+        sequence = _strict_int(event["sequence"], "state_handoff_event_sequence", minimum=1)
+        _parse_hex(event["event_digest"], 64, "state_handoff_event_digest")
+        if event["kind"] != kind or event["status"] != status or _strict_int(event["attempt"], "state_handoff_event_attempt") != attempt_number or sequence <= previous_sequence:
+            _fail("state_handoff_events")
+        if index == 1 and (
+            _strict_int(event["reservation_before"], "state_handoff_event_reservation", minimum=0) != reservation_before
+            or _strict_int(event["reservation_after"], "state_handoff_event_reservation", minimum=1) != reservation_after
+        ):
+            _fail("state_handoff_events")
+        previous_sequence = sequence
+
+    source = value["source"]
+    source_keys = {
+        "status", "profile_version", "profile_digest", "source_auth_profile", "source_key_epoch",
+        "request_digest", "retry_limit", "source_configuration_digest", "source_identity_profile",
+        "source_executable_size_bytes", "source_executable_sha256",
+    }
+    if type(source) is not dict or set(source) != source_keys:
+        _fail("state_handoff_source")
+    if source["status"] == "ABSENT":
+        if any(source[name] is not None for name in source_keys - {"status"}):
+            _fail("state_handoff_source")
+        source_retry_limit = None
+    elif source["status"] == "COMPLETED":
+        if (
+            source["profile_version"] != _PROFILE_TOKEN
+            or _parse_hex(source["profile_digest"], 64, "state_handoff_source_profile") != _PROFILE
+            or source["source_auth_profile"] != _SOURCE_AUTH_PROFILE
+            or _strict_int(source["source_key_epoch"], "state_handoff_source_epoch", minimum=1, maximum=_MAX_EPOCH) != source_key_epoch
+        ):
+            _fail("state_handoff_source")
+        _parse_hex(source["request_digest"], 64, "state_handoff_source_request")
+        source_retry_limit = _strict_int(source["retry_limit"], "state_handoff_source_retry", minimum=1)
+        if source_retry_limit != _SOURCE_ADMISSION_RETRY_LIMIT:
+            _fail("state_handoff_source_retry")
+        _parse_hex(source["source_configuration_digest"], 64, "state_handoff_source_config")
+        identity_profile = source["source_identity_profile"]
+        _token(identity_profile, "state_handoff_source_identity", 96)
+        exe_size = _strict_int(source["source_executable_size_bytes"], "state_handoff_source_executable", minimum=1)
+        exe_sha256 = _parse_hex(source["source_executable_sha256"], 32, "state_handoff_source_executable")
+        if _SOURCE_IDENTITY_PINS.get(identity_profile) != (exe_size, exe_sha256):
+            _fail("state_handoff_source_executable")
+    else:
+        _fail("state_handoff_source")
+
+    attestation = value["attestation"]
+    if type(attestation) is not dict or set(attestation) != {
+        "proof_accepted", "source_authenticated", "source_auth_profile", "source_key_epoch",
+        "result_code", "qualification_flags",
+    }:
+        _fail("state_handoff_attestation")
+    if (
+        type(attestation["proof_accepted"]) is not bool or attestation["proof_accepted"] is not True
+        or type(attestation["source_authenticated"]) is not bool or attestation["source_authenticated"] is not True
+        or attestation["source_auth_profile"] != _SOURCE_AUTH_PROFILE
+        or _strict_int(attestation["source_key_epoch"], "state_handoff_attestation_epoch", minimum=1, maximum=_MAX_EPOCH) != source_key_epoch
+        or attestation["result_code"] != "accepted"
+        or type(attestation["qualification_flags"]) is not list
+        or tuple(attestation["qualification_flags"]) != tuple(flags)
+    ):
+        _fail("state_handoff_attestation")
+    for flag in attestation["qualification_flags"]:
+        _token(flag, "state_handoff_attestation_flag", 96)
+
+    terminal_result = value["terminal_result"]
+    if type(terminal_result) is not dict or set(terminal_result) != {
+        "status", "attempt", "receipt_id", "receipt_sha256", "completed_ms", "error_code",
+    }:
+        _fail("state_handoff_terminal")
+    if (
+        terminal_result["status"] != "VERIFIED"
+        or _strict_int(terminal_result["attempt"], "state_handoff_terminal_attempt") != 1
+        or terminal_result["error_code"] is not None
+    ):
+        _fail("state_handoff_terminal")
+    _parse_hex(terminal_result["receipt_id"], 32, "state_handoff_receipt_id")
+    _parse_hex(terminal_result["receipt_sha256"], 32, "state_handoff_receipt_digest")
+    _strict_int(terminal_result["completed_ms"], "state_handoff_completed_ms", minimum=0, maximum=_MAX_EPOCH)
+
+    retry_policy = value["retry_policy"]
+    if type(retry_policy) is not dict or set(retry_policy) != {
+        "source_attempt_retry_limit", "queue_attempt_number", "state_outbox_initial_attempt",
+        "state_outbox_retry_limit", "exact_postcommit_retry", "replay_policy",
+    }:
+        _fail("state_handoff_retry")
+    if (
+        retry_policy["source_attempt_retry_limit"] != source_retry_limit
+        or _strict_int(retry_policy["queue_attempt_number"], "state_handoff_retry") != 1
+        or _strict_int(retry_policy["state_outbox_initial_attempt"], "state_handoff_retry") != 0
+        or _strict_int(retry_policy["state_outbox_retry_limit"], "state_handoff_retry") != 3
+        or retry_policy["exact_postcommit_retry"] != "READ_DURABLE_RESULT"
+        or retry_policy["replay_policy"] != "REJECT_STALE_OR_CONFLICTING"
+    ):
+        _fail("state_handoff_retry")
+
+    operations = value["operations"]
+    if type(operations) is not list or len(operations) != _COUNT:
+        _fail("state_handoff_operations")
+    operation_refs: list[bytes] = []
+    for position, operation in enumerate(operations):
+        if type(operation) is not dict or set(operation) != {
+            "position", "operation_ref", "member_admission_seq", "outbox_correlation_id", "outbox_attempt",
+        }:
+            _fail("state_handoff_operations")
+        if _strict_int(operation["position"], "state_handoff_position") != position:
+            _fail("state_handoff_operations")
+        ref = _parse_hex(operation["operation_ref"], 32, "state_handoff_operation_ref")
+        if _parse_hex(operation["outbox_correlation_id"], 32, "state_handoff_outbox_ref") != ref:
+            _fail("state_handoff_outbox_ref")
+        expected_admission_seq = (admission_seq - 1) * _COUNT + position + 1
+        if _strict_int(operation["member_admission_seq"], "state_handoff_member_admission_seq", minimum=1) != expected_admission_seq or _strict_int(operation["outbox_attempt"], "state_handoff_outbox_attempt") != 0:
+            _fail("state_handoff_operations")
+        operation_refs.append(ref)
+    if len(set(operation_refs)) != _COUNT:
+        _fail("state_handoff_replay")
+    return value
+
+
+def verify_admission_state_handoff(
+    connection: sqlite3.Connection,
+    raw: bytes,
+    *,
+    expected_config: Mapping[str, Any],
+) -> tuple[IndependentVerifiedQueueJob, ...]:
+    """Bind a decoded handoff to the same live Queue transaction and reject replay."""
+
+    if not connection.in_transaction:
+        _fail("state_handoff_transaction")
+    value = parse_admission_state_handoff(raw)
+    try:
+        _schema_version_gate(connection)
+    except IndependentQueueError:
+        raise
+    meta = connection.execute("SELECT * FROM queue_metadata WHERE id=1").fetchone()
+    if meta is None or len(meta) != len(_TABLE_COLUMNS["queue_metadata"]):
+        _fail("state_handoff_metadata")
+    config_raw = _db_bytes(meta[3], "state_handoff_config")
+    config = _parse_config(config_raw, expected_config)
+    queue_config_digest = _sha(_MATERIAL, config_raw)
+    if (
+        type(meta[4]) is not bytes or bytes(meta[4]) != queue_config_digest
+        or _strict_int(meta[1], "state_handoff_metadata") != SCHEMA_VERSION
+        or value["queue_id"] != config["queue_id"]
+        or _parse_hex(value["queue_config_digest"], 64, "state_handoff_config_digest") != queue_config_digest
+        or value["profile_version"] != config["profile_version"]
+        or _parse_hex(value["profile_digest"], 64, "state_handoff_profile") != _parse_hex(config["profile_digest"], 64, "state_handoff_profile")
+    ):
+        _fail("state_handoff_config_binding")
+
+    composition_meta = connection.execute("SELECT * FROM composition_meta WHERE id=1").fetchone()
+    if composition_meta is None or len(composition_meta) != len(_TABLE_COLUMNS["composition_meta"]) or _strict_int(composition_meta[1], "state_handoff_composition_schema") != 4:
+        _fail("state_handoff_composition")
+    composition_config_raw = _db_bytes(composition_meta[2], "state_handoff_composition_config")
+    try:
+        composition_config = json.loads(composition_config_raw.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _fail("state_handoff_composition_config")
+    composition_config_digest = _sha(_COMPOSITION_MATERIAL, composition_config_raw)
+    if (
+        type(composition_config) is not dict or composition_config_raw != _json_bytes(composition_config)
+        or type(composition_meta[3]) is not bytes or bytes(composition_meta[3]) != composition_config_digest
+        or _parse_hex(value["composition_config_digest"], 64, "state_handoff_composition_config") != composition_config_digest
+        or composition_config.get("schema_version") != 4
+        or composition_config.get("queue_id") != config["queue_id"]
+        or composition_config.get("queue_config_digest") != _hex(queue_config_digest)
+        or composition_config.get("max_attempts") != 3
+        or composition_config.get("proof_suite_id") is not None
+        or composition_config.get("production_usable") is not False
+        or composition_config.get("activation") is not False
+    ):
+        _fail("state_handoff_composition_config")
+
+    batch_value = value["batch"]
+    batch_id = _parse_hex(batch_value["batch_id"], 32, "state_handoff_batch_id")
+    batch_rows = connection.execute("SELECT * FROM queue_batches WHERE batch_id=?", (batch_id,)).fetchall()
+    if len(batch_rows) != 1:
+        _fail("state_handoff_batch")
+    batch = tuple(batch_rows[0])
+    template = batch_value["template"]
+    flags = tuple(template["qualification_flags"])
+    root = _parse_hex(batch_value["batch_root"], 64, "state_handoff_batch_root")
+    identity = _parse_hex(batch_value["identity_digest"], 64, "state_handoff_identity")
+    batch_public_coin = _blob(_db_bytes(batch[18], "state_handoff_coin"), _PUBLIC_COIN_BYTES, "state_handoff_coin")
+    context = _profile12_context(
+        session_ref=_blob(_db_bytes(batch[2], "state_handoff_session"), 64, "state_handoff_session"),
+        batch_root=_blob(_db_bytes(batch[1], "state_handoff_batch_root"), 64, "state_handoff_batch_root"),
+        public_coin=batch_public_coin,
+        valid_from_ms=_strict_int(batch[6], "state_handoff_window", minimum=0, maximum=_MAX_EPOCH),
+        valid_until_ms=_strict_int(batch[7], "state_handoff_window", minimum=0, maximum=_MAX_EPOCH),
+    )
+    if (
+        str(batch[11]) != "VERIFIED" or _strict_int(batch[12], "state_handoff_admission_seq", minimum=1) != _strict_int(batch_value["admission_seq"], "state_handoff_admission_seq", minimum=1)
+        or _strict_int(batch[13], "state_handoff_batch_attempt") != 1
+        or (batch[8] is not None and type(batch[8]) is not bytes)
+        or _db_bytes(batch[1], "state_handoff_batch_root") != root
+        or _db_bytes(batch[10], "state_handoff_identity") != identity
+        or batch[3] != template["assertion_identifier"] or batch[4] != template["assertion_version"]
+        or batch[5] != template["state_profile_version"] or batch[6] != template["valid_from_ms"]
+        or batch[7] != template["valid_until_ms"]
+        or (None if batch[8] is None else _hex(_blob(_db_bytes(batch[8], "state_handoff_registry"), 64, "state_handoff_registry"))) != template["approved_source_registry_root"]
+        or _parse_flags(_db_bytes(batch[9], "state_handoff_flags")) != tuple(template["qualification_flags"])
+        or batch_public_coin != _parse_hex(batch_value["public_coin"], _PUBLIC_COIN_BYTES, "state_handoff_coin")
+        or context != _parse_hex(batch_value["proof_context"], _PROOF_CONTEXT_BYTES, "state_handoff_context")
+    ):
+        _fail("state_handoff_batch_binding")
+
+    members = [tuple(row) for row in connection.execute("SELECT * FROM queue_members WHERE batch_id=? ORDER BY batch_position", (batch_id,)).fetchall()]
+    if len(members) != _COUNT or _expected_batch_root(batch, tuple(members)) != root or _identity_digest(batch, tuple(members), config) != identity:
+        _fail("state_handoff_identity")
+    operations = value["operations"]
+    if any(
+        type(member[0]) is not bytes or bytes(member[0]) != batch_id
+        or _strict_int(member[1], "state_handoff_member_position") != position
+        or _db_bytes(member[2], "state_handoff_member_ref") != _parse_hex(operation["operation_ref"], 32, "state_handoff_operation_ref")
+        or _strict_int(member[3], "state_handoff_member_admission_seq", minimum=1) != _strict_int(operation["member_admission_seq"], "state_handoff_member_admission_seq", minimum=1)
+        for position, (member, operation) in enumerate(zip(members, operations))
+    ):
+        _fail("state_handoff_identity")
+
+    attempt_value = value["attempt"]
+    source_key_epoch = _strict_int(attempt_value["source_key_epoch"], "state_handoff_source_epoch", minimum=1, maximum=_MAX_EPOCH)
+    attempt_rows = connection.execute("SELECT * FROM queue_attempts WHERE batch_id=?", (batch_id,)).fetchall()
+    if len(attempt_rows) != 1:
+        _fail("state_handoff_attempt")
+    attempt_row = tuple(attempt_rows[0])
+    if (
+        _strict_int(attempt_row[0], "state_handoff_attempt_id", minimum=1) != attempt_value["attempt_id"]
+        or _db_bytes(attempt_row[1], "state_handoff_attempt_batch") != batch_id
+        or _strict_int(attempt_row[2], "state_handoff_reservation", minimum=0) != attempt_value["reservation_before"]
+        or _strict_int(attempt_row[3], "state_handoff_reservation", minimum=1) != attempt_value["reservation_after"]
+        or _strict_int(attempt_row[4], "state_handoff_proof_attempts") != _PROOF_ATTEMPTS_PER_BATCH
+        or _db_bytes(attempt_row[5], "state_handoff_source_epoch") != _u64(source_key_epoch)
+        or str(attempt_row[6]) != "ACCEPTED" or attempt_row[8] is None
+        or str(attempt_row[9]) != "accepted" or str(attempt_row[10]) != "COMPLETED"
+        or _strict_int(attempt_row[11], "state_handoff_verifier_bound") != _VERIFIER_LAUNCH_V_UPPER
+    ):
+        _fail("state_handoff_attempt_binding")
+
+    source_rows = connection.execute("SELECT * FROM queue_source_admissions WHERE batch_id=?", (batch_id,)).fetchall()
+    source_value = value["source"]
+    if not source_rows:
+        if source_value["status"] != "ABSENT":
+            _fail("state_handoff_source_binding")
+    elif len(source_rows) == 1:
+        source_row = tuple(source_rows[0])
+        if (
+            source_value["status"] != "COMPLETED" or str(source_row[17]) != "COMPLETED"
+            or source_row[1] != source_value["profile_version"]
+            or _db_bytes(source_row[2], "state_handoff_source_profile") != _parse_hex(source_value["profile_digest"], 64, "state_handoff_source_profile")
+            or source_row[3] != source_value["source_auth_profile"]
+            or _db_bytes(source_row[4], "state_handoff_source_epoch") != _u64(source_key_epoch)
+            or _db_bytes(source_row[5], "state_handoff_source_context") != context
+            or _db_bytes(source_row[6], "state_handoff_source_coin") != batch_public_coin
+            or _db_bytes(source_row[7], "state_handoff_source_request") != _parse_hex(source_value["request_digest"], 64, "state_handoff_source_request")
+            or _strict_int(source_row[8], "state_handoff_source_retry") != source_value["retry_limit"]
+            or _db_bytes(source_row[9], "state_handoff_source_config") != _parse_hex(source_value["source_configuration_digest"], 64, "state_handoff_source_config")
+            or source_row[10] != source_value["source_identity_profile"]
+            or _strict_int(source_row[11], "state_handoff_source_executable") != source_value["source_executable_size_bytes"]
+            or _db_bytes(source_row[12], "state_handoff_source_executable") != _parse_hex(source_value["source_executable_sha256"], 32, "state_handoff_source_executable")
+        ):
+            _fail("state_handoff_source_binding")
+        if _expected_source_request_digest(batch, config) != _db_bytes(source_row[7], "state_handoff_source_request"):
+            _fail("state_handoff_source_request")
+        if _source_configuration_digest(
+            identity_profile=str(source_row[10]),
+            executable_size_bytes=_strict_int(source_row[11], "state_handoff_source_executable", minimum=1),
+            executable_sha256=_blob(_db_bytes(source_row[12], "state_handoff_source_executable"), 32, "state_handoff_source_executable"),
+            retry_limit=_strict_int(source_row[8], "state_handoff_source_retry", minimum=1),
+        ) != _db_bytes(source_row[9], "state_handoff_source_config"):
+            _fail("state_handoff_source_config")
+    else:
+        _fail("state_handoff_source_binding")
+
+    result_rows = connection.execute("SELECT * FROM queue_results WHERE batch_id=?", (batch_id,)).fetchall()
+    if len(result_rows) != 1:
+        _fail("state_handoff_result")
+    result = tuple(result_rows[0])
+    receipt_raw = _db_bytes(result[3], "state_handoff_receipt")
+    receipt = _parse_receipt(receipt_raw)
+    if (
+        str(result[1]) != "VERIFIED" or _db_bytes(result[0], "state_handoff_result_batch") != batch_id
+        or _db_bytes(result[2], "state_handoff_receipt_id") != _parse_hex(value["terminal_result"]["receipt_id"], 32, "state_handoff_receipt_id")
+        or hashlib.sha256(receipt_raw).hexdigest().upper() != value["terminal_result"]["receipt_sha256"]
+        or type(result[4]) is not int or result[4] != 1 or type(result[5]) is not int or result[5] != 1
+        or _db_bytes(result[6], "state_handoff_result_root") != root or result[7] != _SOURCE_AUTH_PROFILE
+        or _db_bytes(result[8], "state_handoff_result_epoch") != _u64(source_key_epoch)
+        or result[9] != "accepted" or _parse_flags(_db_bytes(result[10], "state_handoff_result_flags")) != tuple(flags)
+        or _strict_int(result[11], "state_handoff_completed_ms", minimum=0) != value["terminal_result"]["completed_ms"]
+        or _strict_int(result[12], "state_handoff_result_attempt") != 1 or result[13] is not None
+        or receipt["batch_id"] != _hex(batch_id) or receipt["batch_root"] != _hex(root)
+        or receipt["proof_accepted"] is not True or receipt["source_authenticated"] is not True
+        or receipt["source_auth_profile"] != _SOURCE_AUTH_PROFILE or receipt["source_key_epoch"] != source_key_epoch
+        or receipt["result_code"] != "accepted" or tuple(receipt["qualification_flags"]) != tuple(flags)
+    ):
+        _fail("state_handoff_result_binding")
+
+    event_specs = value["events"]
+    for descriptor in event_specs:
+        rows = connection.execute(
+            "SELECT sequence,before_root,after_root,event_bytes,event_digest FROM queue_transitions WHERE batch_id=? AND transition_kind=?",
+            (batch_id, descriptor["kind"]),
+        ).fetchall()
+        if len(rows) != 1:
+            _fail("state_handoff_events")
+        sequence, before_root_raw, after_root_raw, event_raw, digest_raw = tuple(rows[0])
+        sequence = _strict_int(sequence, "state_handoff_event_sequence", minimum=1)
+        before_root = _blob(_db_bytes(before_root_raw, "state_handoff_event_root"), 64, "state_handoff_event_root")
+        after_root = _blob(_db_bytes(after_root_raw, "state_handoff_event_root"), 64, "state_handoff_event_root")
+        event_bytes = _db_bytes(event_raw, "state_handoff_event")
+        digest = _blob(_db_bytes(digest_raw, "state_handoff_event_digest"), 64, "state_handoff_event_digest")
+        try:
+            event = json.loads(event_bytes.decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            _fail("state_handoff_event_encoding")
+        expected_event = {
+            "schema": _SCHEMA,
+            "sequence": sequence,
+            "kind": descriptor["kind"],
+            "batch_id": _hex(batch_id),
+            "status": descriptor["status"],
+            "error_code": None,
+            "attempt": descriptor["attempt"],
+        }
+        expected_event_fields = {"schema", "sequence", "kind", "batch_id", "status", "error_code", "attempt", "at_ms", "member_count"}
+        if descriptor["kind"] == "VERIFICATION_STARTED":
+            expected_event.update({"reservation_before": attempt_value["reservation_before"], "reservation_after": attempt_value["reservation_after"]})
+            expected_event_fields |= {"reservation_before", "reservation_after"}
+        if (
+            type(event) is not dict or set(event) != expected_event_fields
+            or any(event.get(name) != expected for name, expected in expected_event.items())
+            or _strict_int(event.get("at_ms"), "state_handoff_event_time", minimum=0) < 0
+            or _strict_int(event.get("member_count"), "state_handoff_event_members") != _COUNT
+            or event_bytes != _json_bytes(event)
+            or sequence != descriptor["sequence"]
+            or digest != _parse_hex(descriptor["event_digest"], 64, "state_handoff_event_digest")
+            or digest != _sha(_EVENT, _u64(sequence), event_bytes)
+            or after_root != _sha(_HEAD, before_root, _u64(sequence), digest)
+        ):
+            _fail("state_handoff_event_binding")
+        if descriptor["kind"] == "BATCH_COMPLETED" and event["at_ms"] != value["terminal_result"]["completed_ms"]:
+            _fail("state_handoff_event_binding")
+        previous = connection.execute("SELECT after_root FROM queue_transitions WHERE sequence=?", (sequence - 1,)).fetchone()
+        if sequence == 1:
+            expected_before = _sha(_GENESIS, queue_config_digest)
+        elif previous is None:
+            _fail("state_handoff_event_chain")
+        else:
+            expected_before = _blob(_db_bytes(previous[0], "state_handoff_event_root"), 64, "state_handoff_event_root")
+        if before_root != expected_before:
+            _fail("state_handoff_event_chain")
+    if event_specs[-1]["sequence"] > _strict_int(meta[13], "state_handoff_next_transition", minimum=1):
+        _fail("state_handoff_event_sequence")
+
+    operation_refs = tuple(_parse_hex(operation["operation_ref"], 32, "state_handoff_operation_ref") for operation in operations)
+    placeholders = ",".join("?" for _ in operation_refs)
+    for table in ("composition_transactions", "composition_events", "composition_outbox"):
+        rows = connection.execute(f"SELECT operation_ref FROM {table} WHERE operation_ref IN ({placeholders})", operation_refs).fetchall()
+        if rows:
+            _fail("state_handoff_replay")
+
+    return tuple(
+        IndependentVerifiedQueueJob(
+            config["queue_id"], queue_config_digest, ref, "VERIFIED", True, 1, b"", bytes(32),
+            str(batch[3]), int(batch[4]), str(batch[5]), int(batch[6]), int(batch[7]), position,
+            root, None if batch[8] is None else _blob(_db_bytes(batch[8], "state_handoff_registry"), 64, "state_handoff_registry"),
+            config["profile_version"], "accepted", tuple(flags),
+        )
+        for position, ref in enumerate(operation_refs)
+    )
 
 
 def _columns(connection: sqlite3.Connection, table: str) -> tuple[str, ...]:
@@ -954,18 +1528,21 @@ def _verify_composition(connection: sqlite3.Connection, *, config: Mapping[str, 
     return {"meta": tuple(meta), "transactions": tx_rows, "events": event_rows, "outbox": outbox_rows}
 
 
-def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _verify_connection(
+    connection: sqlite3.Connection,
+    *,
+    expected_config: Mapping[str, Any] | None = None,
+    configure_connection: bool = True,
+) -> dict[str, Any]:
     # Composition and direct callers pass writable handles here.  Reject a
     # retired schema before any setting PRAGMA can touch that handle.
     _schema_version_gate(connection)
     try:
-        # Verification is a read-only operation.  The schema/version gate has
-        # now run on this exact handle, so only connection-local FK mode is
-        # enabled here; no PRAGMA assignment may alter the source DB.
-        connection.execute("PRAGMA foreign_keys=ON")
-        # max_page_count is a connection-local SQLite limit on this build;
-        # setting it on the read-only handle does not change the source file.
-        connection.execute("PRAGMA max_page_count=32768")
+        if configure_connection:
+            # Standalone verification establishes its connection-local limits
+            # only after the exact schema/version gate has passed.
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA max_page_count=32768")
         checks = {"foreign_keys": int(connection.execute("PRAGMA foreign_keys").fetchone()[0]), "page_size": int(connection.execute("PRAGMA page_size").fetchone()[0]), "max_page_count": int(connection.execute("PRAGMA max_page_count").fetchone()[0]), "journal_mode": str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower(), "synchronous": int(connection.execute("PRAGMA synchronous").fetchone()[0])}
     except sqlite3.Error:
         _fail("database_pragmas")
@@ -1339,7 +1916,338 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         )
         _verify_terminal_bindings(row, attempt_row, result_map.get(batch_id), events_by_batch[batch_id])
     composition = _verify_composition(connection, config=config, queue_config_digest=config_digest, batch_map=batch_map, member_groups=member_groups)
-    return {"schema": _SCHEMA, "config": config, "config_digest": config_digest, "meta": tuple(meta), "batches": batch_map, "members": member_groups, "source_admissions": source_map, "results": result_map, "transitions": transition_rows, "events": events_by_batch, "composition": composition, "head_root": _db_bytes(meta[12], "head_root"), "status_counts": status_counts, "transition_count": len(transition_rows), "verified_batch_count": status_counts["VERIFIED"], "accepted_operation_count": status_counts["VERIFIED"] * _COUNT, "verified_count": status_counts["VERIFIED"], "source_admission_count": len(source_map), "source_accounting": {"a_used": int(meta[20]), "s_used": int(meta[21]), "m_used": int(meta[22]), "u_used": int(meta[23]), "v_used": int(meta[24])}, "proof_bytes_persisted": False, "path_custody": False, "proof_suite_id": None, "production_usable": False, "activation": False}
+    return {"schema": _SCHEMA, "config": config, "config_digest": config_digest, "meta": tuple(meta), "batches": batch_map, "members": member_groups, "attempts": attempt_map, "leases": lease_map, "source_admissions": source_map, "results": result_map, "transitions": transition_rows, "events": events_by_batch, "composition": composition, "head_root": _db_bytes(meta[12], "head_root"), "status_counts": status_counts, "transition_count": len(transition_rows), "verified_batch_count": status_counts["VERIFIED"], "accepted_operation_count": status_counts["VERIFIED"] * _COUNT, "verified_count": status_counts["VERIFIED"], "source_admission_count": len(source_map), "source_accounting": {"a_used": int(meta[20]), "s_used": int(meta[21]), "m_used": int(meta[22]), "u_used": int(meta[23]), "v_used": int(meta[24])}, "proof_bytes_persisted": False, "path_custody": False, "proof_suite_id": None, "production_usable": False, "activation": False}
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedLifecycleImage:
+    connection: sqlite3.Connection
+    owner_token: object
+    transaction_token: object
+    expected_config_bytes: bytes
+    connection_fingerprint: tuple[Any, ...]
+    thread_id: int
+    verified: Mapping[str, Any]
+    seal: object
+
+
+@dataclass(frozen=True, slots=True)
+class _LifecycleImageBinding:
+    image: _VerifiedLifecycleImage
+    connection: sqlite3.Connection
+    owner_token: object
+    transaction_token: object
+    batch_id: bytes
+    thread_id: int
+
+
+_VERIFIED_LIFECYCLE_IMAGE_SEAL: Final[object] = object()
+# The adapter's sole snapshot consumer is indirect. Bind the immutable image
+# only for one synchronous Queue evaluation and reset it with the ContextVar
+# token; any active but stale or mismatched binding fails closed.
+_LIFECYCLE_IMAGE_CONTEXT: ContextVar[_LifecycleImageBinding | None] = ContextVar(
+    "blind_ledger_queue_lifecycle_verified_image", default=None
+)
+
+
+def _freeze_verified_image(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_verified_image(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_verified_image(item) for item in value)
+    if isinstance(value, bytearray):
+        return bytes(value)
+    return value
+
+
+def _lifecycle_expected_config_bytes(expected_config: Mapping[str, Any] | None) -> bytes:
+    if not isinstance(expected_config, Mapping):
+        _fail("lifecycle_verified_image_config")
+    try:
+        return json.dumps(
+            dict(expected_config),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
+    except (TypeError, ValueError, UnicodeEncodeError):
+        _fail("lifecycle_verified_image_config")
+
+
+def _lifecycle_connection_fingerprint(connection: sqlite3.Connection) -> tuple[Any, ...]:
+    if not isinstance(connection, sqlite3.Connection) or not connection.in_transaction:
+        _fail("lifecycle_verified_image_transaction")
+    pragma_names = (
+        "data_version",
+        "schema_version",
+        "user_version",
+        "application_id",
+        "foreign_keys",
+        "page_size",
+        "max_page_count",
+        "journal_mode",
+        "synchronous",
+        "busy_timeout",
+    )
+    try:
+        pragma_values: list[tuple[str, Any]] = []
+        for name in pragma_names:
+            row = connection.execute(f"PRAGMA {name}").fetchone()
+            if row is None or len(row) != 1:
+                _fail("lifecycle_verified_image_connection")
+            value = row[0]
+            pragma_values.append((name, str(value).lower() if name == "journal_mode" else value))
+    except sqlite3.Error:
+        _fail("lifecycle_verified_image_connection")
+    checks = dict(pragma_values)
+    if (
+        type(checks["data_version"]) is not int
+        or type(checks["schema_version"]) is not int
+        or type(checks["user_version"]) is not int
+        or type(checks["application_id"]) is not int
+        or checks["foreign_keys"] != 1
+        or checks["page_size"] != _DATABASE_PAGE_SIZE
+        or checks["max_page_count"] != 32768
+        or checks["journal_mode"] != "delete"
+        or checks["synchronous"] != 2
+        or checks["busy_timeout"] != 5000
+    ):
+        _fail("lifecycle_verified_image_connection")
+    return (
+        connection.total_changes,
+        tuple(pragma_values),
+        connection.row_factory,
+        connection.text_factory,
+        connection.isolation_level,
+        getattr(connection, "autocommit", None),
+    )
+
+
+def _same_lifecycle_connection_fingerprint(
+    left: tuple[Any, ...], right: tuple[Any, ...]
+) -> bool:
+    return (
+        len(left) == len(right) == 6
+        and left[:2] == right[:2]
+        and left[2] is right[2]
+        and left[3] is right[3]
+        and left[4:] == right[4:]
+    )
+
+
+def _capture_verified_lifecycle_image(
+    connection: sqlite3.Connection,
+    *,
+    expected_config: Mapping[str, Any],
+    owner_token: object,
+    transaction_token: object,
+) -> _VerifiedLifecycleImage:
+    if owner_token is None or transaction_token is None:
+        _fail("lifecycle_verified_image_owner")
+    before = _lifecycle_connection_fingerprint(connection)
+    verified = _verify_connection(
+        connection,
+        expected_config=expected_config,
+        configure_connection=False,
+    )
+    after = _lifecycle_connection_fingerprint(connection)
+    if not _same_lifecycle_connection_fingerprint(before, after):
+        _fail("lifecycle_verified_image_changed")
+    return _VerifiedLifecycleImage(
+        connection=connection,
+        owner_token=owner_token,
+        transaction_token=transaction_token,
+        expected_config_bytes=_lifecycle_expected_config_bytes(expected_config),
+        connection_fingerprint=after,
+        thread_id=get_ident(),
+        verified=_freeze_verified_image(verified),
+        seal=_VERIFIED_LIFECYCLE_IMAGE_SEAL,
+    )
+
+
+def _assert_lifecycle_image_current(
+    binding: _LifecycleImageBinding,
+    *,
+    connection: sqlite3.Connection,
+    batch_id: bytes,
+    expected_config: Mapping[str, Any] | None,
+) -> Mapping[str, Any]:
+    image = binding.image
+    if (
+        image.seal is not _VERIFIED_LIFECYCLE_IMAGE_SEAL
+        or binding.connection is not connection
+        or image.connection is not connection
+        or binding.owner_token is not image.owner_token
+        or binding.transaction_token is not image.transaction_token
+        or binding.thread_id != get_ident()
+        or image.thread_id != get_ident()
+        or binding.batch_id != batch_id
+        or _lifecycle_expected_config_bytes(expected_config) != image.expected_config_bytes
+    ):
+        _fail("lifecycle_verified_image_binding")
+    if not _same_lifecycle_connection_fingerprint(
+        _lifecycle_connection_fingerprint(connection), image.connection_fingerprint
+    ):
+        _fail("lifecycle_verified_image_stale")
+    verified = image.verified
+    cached_batch = verified["batches"].get(batch_id)
+    if cached_batch is None:
+        _fail("lifecycle_batch_unknown")
+    try:
+        current_batch = connection.execute(
+            "SELECT * FROM queue_batches WHERE batch_id=?", (batch_id,)
+        ).fetchone()
+        current_members = tuple(
+            tuple(row)
+            for row in connection.execute(
+                "SELECT * FROM queue_members WHERE batch_id=? ORDER BY batch_position",
+                (batch_id,),
+            ).fetchall()
+        )
+    except sqlite3.Error:
+        _fail("lifecycle_database_sqlite")
+    if current_batch is None or tuple(current_batch) != tuple(cached_batch):
+        _fail("lifecycle_verified_image_batch")
+    cached_members = verified["members"].get(batch_id)
+    if cached_members is None:
+        _fail("lifecycle_batch_members")
+    expected_members = tuple(
+        sorted((tuple(row) for row in cached_members), key=lambda row: int(row[1]))
+    )
+    if current_members != expected_members:
+        _fail("lifecycle_verified_image_members")
+    if not _same_lifecycle_connection_fingerprint(
+        _lifecycle_connection_fingerprint(connection), image.connection_fingerprint
+    ):
+        _fail("lifecycle_verified_image_stale")
+    return verified
+
+
+@contextmanager
+def _bind_verified_lifecycle_image(
+    image: _VerifiedLifecycleImage,
+    *,
+    connection: sqlite3.Connection,
+    owner_token: object,
+    transaction_token: object,
+    batch_id: bytes,
+    expected_config: Mapping[str, Any],
+) -> Iterator[None]:
+    if not isinstance(image, _VerifiedLifecycleImage) or image.seal is not _VERIFIED_LIFECYCLE_IMAGE_SEAL:
+        _fail("lifecycle_verified_image_type")
+    if _LIFECYCLE_IMAGE_CONTEXT.get() is not None:
+        _fail("lifecycle_verified_image_nested")
+    binding = _LifecycleImageBinding(
+        image=image,
+        connection=connection,
+        owner_token=owner_token,
+        transaction_token=transaction_token,
+        batch_id=batch_id,
+        thread_id=get_ident(),
+    )
+    _assert_lifecycle_image_current(
+        binding,
+        connection=connection,
+        batch_id=batch_id,
+        expected_config=expected_config,
+    )
+    token = _LIFECYCLE_IMAGE_CONTEXT.set(binding)
+    try:
+        yield
+        _assert_lifecycle_image_current(
+            binding,
+            connection=connection,
+            batch_id=batch_id,
+            expected_config=expected_config,
+        )
+    finally:
+        _LIFECYCLE_IMAGE_CONTEXT.reset(token)
+
+
+def _verified_image_for_lifecycle_snapshot(
+    connection: sqlite3.Connection,
+    *,
+    batch_id: bytes,
+    expected_config: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    binding = _LIFECYCLE_IMAGE_CONTEXT.get()
+    if binding is None:
+        return None
+    return _assert_lifecycle_image_current(
+        binding,
+        connection=connection,
+        batch_id=batch_id,
+        expected_config=expected_config,
+    )
+
+
+def lifecycle_snapshot_from_connection(
+    connection: sqlite3.Connection,
+    *,
+    batch_id: bytes,
+    expected_config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a validated lifecycle input from the caller's active SQLite transaction.
+
+    This helper never opens, closes, commits, rolls back, or writes to the supplied
+    connection. Its caller must already hold the Queue owner lock and have begun
+    the intended transaction; the SQLite API exposes only the active-transaction
+    bit here, not the transaction's BEGIN mode or the external owner-lock state.
+    """
+
+    if not isinstance(connection, sqlite3.Connection) or not connection.in_transaction:
+        _fail("lifecycle_transaction_required")
+    if type(batch_id) is not bytes or len(batch_id) != 32:
+        _fail("lifecycle_batch_id")
+    try:
+        verified = _verified_image_for_lifecycle_snapshot(
+            connection,
+            batch_id=batch_id,
+            expected_config=expected_config,
+        )
+        if verified is None:
+            verified = _verify_connection(
+                connection,
+                expected_config=expected_config,
+                configure_connection=False,
+            )
+        batch = verified["batches"].get(batch_id)
+        members = verified["members"].get(batch_id)
+        if batch is None or members is None:
+            _fail("lifecycle_batch_unknown")
+        ordered_members = tuple(sorted(members, key=lambda row: int(row[1])))
+        if len(ordered_members) != _COUNT or tuple(int(row[1]) for row in ordered_members) != tuple(range(_COUNT)):
+            _fail("lifecycle_batch_members")
+        attempt = verified["attempts"].get(batch_id)
+        lease = verified["leases"].get(batch_id)
+        if attempt is None:
+            _fail("lifecycle_attempt_or_lease")
+        proof_context = _profile12_context(
+            session_ref=_db_bytes(batch[2], "lifecycle_session_ref"),
+            batch_root=_db_bytes(batch[1], "lifecycle_batch_root"),
+            public_coin=_db_bytes(batch[18], "lifecycle_public_coin"),
+            valid_from_ms=_strict_int(batch[6], "lifecycle_valid_from", minimum=0, maximum=_MAX_EPOCH),
+            valid_until_ms=_strict_int(batch[7], "lifecycle_valid_until", minimum=0, maximum=_MAX_EPOCH),
+        )
+        return {
+            "schema": verified["schema"],
+            "config": verified["config"],
+            "config_digest": verified["config_digest"],
+            "proof_context": proof_context,
+            "meta": verified["meta"],
+            "batch": tuple(batch),
+            "members": ordered_members,
+            "source_admission": verified["source_admissions"].get(batch_id),
+            "attempt": tuple(attempt),
+            "lease": None if lease is None else tuple(lease),
+            "result": verified["results"].get(batch_id),
+            "events": tuple(verified["events"].get(batch_id, ())),
+            "composition_meta": tuple(verified["composition"]["meta"]),
+            "head_root": verified["head_root"],
+            "transition_count": verified["transition_count"],
+        }
+    except sqlite3.Error:
+        _fail("database_sqlite")
 
 
 def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -1355,9 +2263,116 @@ def _verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = 
         _fail("database_sqlite")
 
 
+def _resolve_issue_request_from_verified(
+    verified: Mapping[str, Any],
+    *,
+    request_id: bytes,
+    expected_template: Mapping[str, Any],
+) -> IndependentIssueRequestLookup:
+    template_bytes = _expected_issue_template_bytes(expected_template)
+    queue_id = verified["config"].get("queue_id")
+    batch_id = issue_request_batch_id_v1(queue_id=queue_id, request_id=request_id)
+    row = verified["batches"].get(batch_id)
+    if row is None:
+        return IndependentIssueRequestLookup(
+            1,
+            bytes(verified["config_digest"]),
+            tuple(verified["meta"]),
+            None,
+        )
+    row = tuple(row)
+    if _template_bytes(row) != template_bytes:
+        _fail("issue_request_conflict")
+    members = verified["members"].get(batch_id)
+    if members is None:
+        _fail("queue_integrity_failed")
+    ordered = tuple(sorted((tuple(member) for member in members), key=lambda member: int(member[1])))
+    if len(ordered) != _COUNT or tuple(int(member[1]) for member in ordered) != tuple(range(_COUNT)):
+        _fail("queue_integrity_failed")
+    refs = tuple(_blob(_db_bytes(member[2], "issue_request_operation_ref"), 32, "issue_request_operation_ref") for member in ordered)
+    batch_root = _blob(_db_bytes(row[1], "issue_request_batch_root"), 64, "issue_request_batch_root")
+    session_ref = _blob(_db_bytes(row[2], "issue_request_session_ref"), 64, "issue_request_session_ref")
+    public_coin = _blob(_db_bytes(row[18], "issue_request_public_coin"), _PUBLIC_COIN_BYTES, "issue_request_public_coin")
+    proof_context = _profile12_context(
+        session_ref=session_ref,
+        batch_root=batch_root,
+        public_coin=public_coin,
+        valid_from_ms=_strict_int(row[6], "issue_request_validity", minimum=0, maximum=_MAX_EPOCH),
+        valid_until_ms=_strict_int(row[7], "issue_request_validity", minimum=0, maximum=_MAX_EPOCH),
+    )
+    resolved = IndependentIssuedQueueRequest(
+        1,
+        batch_id,
+        batch_root,
+        session_ref,
+        refs,
+        public_coin,
+        proof_context,
+        _blob(_db_bytes(row[10], "issue_request_identity"), 64, "issue_request_identity"),
+        _strict_int(row[12], "issue_request_admission_seq", minimum=1),
+        str(row[11]),
+    )
+    return IndependentIssueRequestLookup(
+        1,
+        bytes(verified["config_digest"]),
+        tuple(verified["meta"]),
+        resolved,
+    )
+
+
+def resolve_issue_request_from_connection(
+    connection: sqlite3.Connection,
+    *,
+    request_id: bytes,
+    expected_template: Mapping[str, Any],
+    expected_config: Mapping[str, Any],
+) -> IndependentIssueRequestLookup:
+    """Independently resolve an issue request in its caller's active transaction."""
+
+    if not isinstance(connection, sqlite3.Connection) or not connection.in_transaction:
+        _fail("issue_request_transaction")
+    if not isinstance(expected_config, Mapping):
+        _fail("config_binding")
+    if type(request_id) is not bytes or len(request_id) != _ISSUE_REQUEST_ID_BYTES:
+        _fail("issue_request_id")
+    _expected_issue_template_bytes(expected_template)
+    verified = _verify_connection(
+        connection,
+        expected_config=expected_config,
+        configure_connection=False,
+    )
+    return _resolve_issue_request_from_verified(
+        verified,
+        request_id=request_id,
+        expected_template=expected_template,
+    )
+
+
+def resolve_issue_request(
+    path: Path,
+    *,
+    request_id: bytes,
+    expected_template: Mapping[str, Any],
+    expected_config: Mapping[str, Any],
+) -> IndependentIssueRequestLookup:
+    """Read-only independent lookup for a durable issue request v1."""
+
+    if not isinstance(expected_config, Mapping):
+        _fail("config_binding")
+    if type(request_id) is not bytes or len(request_id) != _ISSUE_REQUEST_ID_BYTES:
+        _fail("issue_request_id")
+    _expected_issue_template_bytes(expected_template)
+    verified = _verify_database(path, expected_config=expected_config)
+    return _resolve_issue_request_from_verified(
+        verified,
+        request_id=request_id,
+        expected_template=expected_template,
+    )
+
+
 def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     verified = _verify_database(path, expected_config=expected_config)
-    return {key: value for key, value in verified.items() if key not in {"config", "config_digest", "meta", "batches", "members", "results", "transitions", "events", "composition"}}
+    return {key: value for key, value in verified.items() if key not in {"config", "config_digest", "meta", "batches", "members", "attempts", "leases", "results", "transitions", "events", "composition"}}
 
 
 def _job_from_rows(config: Mapping[str, Any], config_digest: bytes, owner: tuple[Any, ...], member: tuple[Any, ...], result: tuple[Any, ...]) -> IndependentVerifiedQueueJob:
@@ -1452,4 +2467,4 @@ def restore_export_to_fresh_database(*, export_bytes: bytes, destination: Path, 
         raise
 
 
-__all__ = ("IndependentQueueError", "IndependentVerifiedQueueBatch", "IndependentVerifiedQueueJob", "IndependentBatchAcceptance", "read_verified_batch", "restore_export_to_fresh_database", "verify_database", "verify_export_bytes", "_parse_config")
+__all__ = ("IndependentQueueError", "IndependentVerifiedQueueBatch", "IndependentVerifiedQueueJob", "IndependentBatchAcceptance", "IndependentIssuedQueueRequest", "IndependentIssueRequestLookup", "issue_request_batch_id_v1", "resolve_issue_request_from_connection", "resolve_issue_request", "parse_admission_state_handoff", "verify_admission_state_handoff", "read_verified_batch", "restore_export_to_fresh_database", "verify_database", "verify_export_bytes", "_parse_config")

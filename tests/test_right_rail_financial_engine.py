@@ -35,6 +35,16 @@ ACCEPTED_INPUT_SHA256 = bytes.fromhex(
 ACCEPTED_OUTPUT_SHA256 = bytes.fromhex(
     "278D98485EBE968C88AC0E85BCCD4F69C5B7FF1A38F0B20681DD7E79C82A7598"
 )
+EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_245_376
+EXPECTED_CORRECTION_ARTIFACT_SHA256 = bytes.fromhex(
+    "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+)
+EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
+    "13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537"
+)
+EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
+    "312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E"
+)
 
 
 class RightRailFinancialEngineTests(unittest.TestCase):
@@ -65,6 +75,26 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         }
         values.update(overrides)
         return engine.FinancialEngineRelease(**values)
+
+    def _correction_release(self, **overrides: object) -> engine.FinancialCorrectionTransitionRelease:
+        root = Path(self.release_dir.name)
+        workspace = root / "correction-workspace"
+        workspace.mkdir(exist_ok=True)
+        values: dict[str, object] = {
+            "executable": root / "blind_financial_correction.exe",
+            "executable_size_bytes": EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES,
+            "executable_sha256": EXPECTED_CORRECTION_ARTIFACT_SHA256,
+            "request_vector_sha256": EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256,
+            "result_vector_sha256": EXPECTED_CORRECTION_RESULT_VECTOR_SHA256,
+            "timeout_seconds": 30.0,
+            "input_max_bytes": engine.MAX_CORRECTION_TRANSITION_BYTES,
+            "output_max_bytes": engine.MAX_CORRECTION_TRANSITION_BYTES,
+            "stderr_max_bytes": process.MAX_STDERR_BYTES,
+            "workspace": workspace,
+            "job_memory_cap_bytes": 123_456_789,
+        }
+        values.update(overrides)
+        return engine.FinancialCorrectionTransitionRelease(**values)
 
     def _owner_with_cash_claim(self):
         store = self.fixture._build_base()
@@ -179,6 +209,57 @@ class RightRailFinancialEngineTests(unittest.TestCase):
             with self.subTest(code=code):
                 with self.assertRaisesRegex(engine.FinancialEngineConfigError, code):
                     self._release(**overrides)
+
+    def test_correction_transition_release_is_immutable_and_pins_artifact_and_vectors(self) -> None:
+        self.assertEqual(engine.CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES, EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES)
+        self.assertEqual(engine.CORRECTION_TRANSITION_ARTIFACT_SHA256, EXPECTED_CORRECTION_ARTIFACT_SHA256)
+        self.assertEqual(engine.CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256, EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256)
+        self.assertEqual(engine.CORRECTION_TRANSITION_RESULT_VECTOR_SHA256, EXPECTED_CORRECTION_RESULT_VECTOR_SHA256)
+        release = self._correction_release()
+        self.assertIs(engine.require_correction_transition_v1(release), release)
+        with self.assertRaises(FrozenInstanceError):
+            release.request_vector_sha256 = b"x" * 32
+
+        invalid_config = (
+            ("engine_correction_request_vector_hash", {"request_vector_sha256": b"short"}),
+            ("engine_correction_result_vector_hash", {"result_vector_sha256": b"short"}),
+        )
+        for code, overrides in invalid_config:
+            with self.subTest(code=code):
+                with self.assertRaisesRegex(engine.FinancialEngineConfigError, code):
+                    self._correction_release(**overrides)
+
+        invalid_identity = (
+            ("engine_correction_transition_artifact_identity", {"executable_sha256": b"x" * 32}),
+            ("engine_correction_transition_artifact_identity", {"executable_size_bytes": EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES + 1}),
+            ("engine_correction_transition_request_vector_identity", {"request_vector_sha256": b"r" * 32}),
+            ("engine_correction_transition_result_vector_identity", {"result_vector_sha256": b"s" * 32}),
+        )
+        for code, overrides in invalid_identity:
+            with self.subTest(code=code):
+                with self.assertRaisesRegex(engine.FinancialEngineArtifactError, code):
+                    engine.require_correction_transition_v1(self._correction_release(**overrides))
+
+    def test_correction_transition_gate_rejects_missing_and_wrong_release_type(self) -> None:
+        with self.assertRaisesRegex(
+            engine.FinancialEngineTransitionUnavailable,
+            "engine_correction_transition_release_required",
+        ):
+            engine.require_correction_transition_v1(None)
+        with self.assertRaisesRegex(
+            engine.FinancialEngineConfigError,
+            "engine_correction_transition_release_type",
+        ):
+            engine.require_correction_transition_v1(self._release())
+
+    def test_correction_transition_digest_accepts_owner_bytes_and_checked_hex(self) -> None:
+        digest = bytes(range(64))
+        self.assertEqual(engine._transition_digest(digest, "digest"), digest)
+        self.assertEqual(engine._transition_digest(digest.hex().upper(), "digest"), digest)
+        for invalid in (b"short", b"x" * 32, "not-a-digest", None):
+            with self.subTest(invalid=type(invalid).__name__):
+                with self.assertRaisesRegex(engine.FinancialEngineInputError, "digest"):
+                    engine._transition_digest(invalid, "digest")
 
     def test_artifact_identity_rejects_before_snapshot_or_launch(self) -> None:
         release = self._release(executable_sha256=b"x" * 32)

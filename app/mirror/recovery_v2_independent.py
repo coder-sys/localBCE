@@ -17,6 +17,7 @@ from typing import Mapping
 
 from app.mirror import core_v2_independent as core
 from app.mirror import ingress_v2_independent as ingress
+from app.mirror import profile_governance_v1_independent as profile_governance
 
 
 SCHEMA = "mirror-recovery-v3"
@@ -83,6 +84,13 @@ _COMPONENT_KEYS = {
     "database_id", "chain_id", "config_digest", "head_root", "watermark",
     "image_digest", "image_length",
 }
+_V5_COMPONENT_KEYS = _COMPONENT_KEYS | {
+    "component_schema", "component_schema_version", "profile_registry_digest", "profiles",
+}
+V5_BUNDLE_SCHEMA = "mirror-recovery-bundle-v5"
+V5_BUNDLE_VERSION = 5
+V5_CORE_SCHEMA = "mirror-core-v5"
+V5_CORE_SCHEMA_VERSION = 5
 _PENDING_KEYS = {"point_id", "object_id", "storage_id", "key_id", "key_epoch"}
 _VERIFIED_KEYS = {"point_id", "object_id", "bundle_digest", "bundle_length", "storage_id", "key_id", "key_epoch"}
 _INVALIDATED_KEYS = {"point_id", "object_id", "key_id", "key_epoch", "reason"}
@@ -98,6 +106,47 @@ _PUBLICATION_BASE_KEYS = {
 _PUBLISHED_KEYS = _PUBLICATION_BASE_KEYS | {
     "pending_event_id", "pending_sequence", "pending_after_root",
 }
+
+V5_SCHEMA = "mirror-recovery-v5"
+V5_SCHEMA_VERSION = 5
+V5_VERIFIER_ID = "MIRROR_RECOVERY_INDEPENDENT_V5"
+V5_DOMAIN = "BL/MIRROR/RECOVERY/V5/"
+V5_META_COLUMNS = _META_COLUMNS + (
+    "config_material",
+    "profile_registry_material",
+    "core_schema",
+    "core_schema_version",
+    "profile_registry_digest",
+)
+V5_POINT_COLUMNS = tuple(
+    "storage_id_digest" if column == "storage_id" else column
+    for column in _POINT_COLUMNS
+)
+V5_EVENT_COLUMNS = _EVENT_COLUMNS
+V5_PROFILE_REGISTRY_SCHEMA = "mirror-recovery-profile-registry-v5"
+V5_PROFILE_REGISTRY_VERSION = 5
+V5_PROFILE_REGISTRY_KEYS = {
+    "schema", "schema_version", "profile_registry_digest", "profiles", "flags",
+}
+V5_PROFILE_DESCRIPTOR_KEYS = {
+    "profile_id", "version", "profile_digest", "source_registry_root",
+    "verifier_id", "verifier_epoch", "evidence_mode", "require_complete",
+    "allow_nonmembership",
+}
+V5_CONFIG_KEYS = {
+    "schema", "schema_version", "database_id", "chain_id", "profile_digest",
+    "custody_id_digest", "storage_id_digest", "ingress_database_id",
+    "core_database_id", "ingress_config_digest", "core_config_digest",
+    "core_schema", "core_schema_version", "profile_registry_digest",
+    "max_bundle_bytes", "flags",
+}
+V5_PREPARE_KEYS = (_PREPARE_KEYS - {"storage_id"}) | {"storage_id_digest"}
+V5_PUBLICATION_BASE_KEYS = (_PUBLICATION_BASE_KEYS - {"storage_id"}) | {"storage_id_digest"}
+V5_PUBLISHED_KEYS = (_PUBLISHED_KEYS - {"storage_id"}) | {"storage_id_digest"}
+V5_PENDING_KEYS = (_PENDING_KEYS - {"storage_id"}) | {"storage_id_digest"}
+V5_VERIFIED_KEYS = (_VERIFIED_KEYS - {"storage_id"}) | {"storage_id_digest"}
+V5_MAX_CONFIG_BYTES = 64 * 1024
+V5_MAX_PROFILE_REGISTRY_BYTES = 256 * 1024
 
 
 class RecoveryVerificationError(ValueError):
@@ -154,6 +203,22 @@ def _raw_digest(label: str, raw: bytes) -> str:
     return digest.hexdigest()
 
 
+def _v5_digest(label: str, value: object) -> str:
+    digest = hashlib.sha3_512()
+    digest.update((V5_DOMAIN + label + "\0").encode("ascii"))
+    digest.update(_canonical(value))
+    return digest.hexdigest()
+
+
+def _v5_raw_digest(label: str, raw: bytes) -> str:
+    if type(raw) is not bytes:
+        raise RecoveryVerificationError("recovery:bytes")
+    digest = hashlib.sha3_512()
+    digest.update((V5_DOMAIN + label + "\0").encode("ascii"))
+    digest.update(raw)
+    return digest.hexdigest()
+
+
 def _hex(value: object, label: str) -> str:
     if type(value) is not str or len(value) != 128 or any(char not in "0123456789abcdef" for char in value):
         raise RecoveryVerificationError(label)
@@ -203,6 +268,15 @@ def _event_root(sequence: int, previous: str, event_id: str, kind: str, point_id
     })
 
 
+def _v5_event_root(sequence: int, previous: str, event_id: str, kind: str, point_id: str, next_state: str, material_digest: str, stream_kind: str = "POINT", stream_id: str | None = None) -> str:
+    return _v5_digest("event-root", {
+        "sequence": sequence, "previous_root": previous, "event_id": event_id,
+        "event_kind": kind, "point_id": point_id, "stream_kind": stream_kind,
+        "stream_id": stream_id or point_id, "next_state": next_state,
+        "material_digest": material_digest,
+    })
+
+
 def _verify_meta(connection: sqlite3.Connection, expected_database_id: str | None, expected_config_digest: str | None) -> sqlite3.Row:
     row = connection.execute("SELECT * FROM recovery_meta WHERE meta_id=1").fetchone()
     if row is None or tuple(row.keys()) != _META_COLUMNS or row["meta_id"] != 1 or row["schema"] != SCHEMA or row["schema_version"] != SCHEMA_VERSION:
@@ -245,8 +319,41 @@ def _validate_point_shape(row: Mapping[str, object], meta: Mapping[str, object])
         raise RecoveryVerificationError("recovery:point-sequence")
 
 
-def _component(value: object, label: str) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != _COMPONENT_KEYS:
+def _validate_v5_point_shape(
+    row: Mapping[str, object],
+    meta: Mapping[str, object],
+    config_material: Mapping[str, object],
+) -> None:
+    if tuple(row.keys()) != V5_POINT_COLUMNS or row["state"] not in STATES:
+        raise RecoveryVerificationError("recovery:v5-point")
+    for key in (
+        "point_id", "object_id", "bundle_digest", "ingress_config_digest",
+        "ingress_head_root", "core_config_digest", "core_head_root",
+        "storage_id_digest", "prior_root", "operation_id", "request_digest",
+    ):
+        _hex(row[key], "recovery:v5-point-identity")
+    if row["prior_point_id"] is not None:
+        _hex(row["prior_point_id"], "recovery:v5-point-prior")
+    for key in ("ingress_database_id", "core_database_id", "key_id"):
+        _opaque(row[key], "recovery:v5-point-identity")
+    if row["ingress_database_id"] != meta["ingress_database_id"] or row["core_database_id"] != meta["core_database_id"] or row["storage_id_digest"] != meta["storage_id_digest"]:
+        raise RecoveryVerificationError("recovery:v5-point-owner")
+    if row["ingress_config_digest"] != config_material["ingress_config_digest"] or row["core_config_digest"] != config_material["core_config_digest"]:
+        raise RecoveryVerificationError("recovery:v5-point-config")
+    if type(row["generation"]) is not int or not 1 <= row["generation"] <= MAX_RECOVERY_POINTS:
+        raise RecoveryVerificationError("recovery:v5-point-generation")
+    if type(row["bundle_length"]) is not int or not 0 < row["bundle_length"] <= config_material["max_bundle_bytes"]:
+        raise RecoveryVerificationError("recovery:v5-point-size")
+    if type(row["ingress_watermark"]) is not int or row["ingress_watermark"] < 0 or type(row["core_watermark"]) is not int or row["core_watermark"] < 0:
+        raise RecoveryVerificationError("recovery:v5-point-watermark")
+    if type(row["key_epoch"]) is not int or row["key_epoch"] < 0 or row["key_state"] not in {"ACTIVE", "REVOKED", "UNKNOWN"}:
+        raise RecoveryVerificationError("recovery:v5-key")
+    if any(type(row[key]) is not int or row[key] < 0 for key in ("sequence", "updated_sequence")):
+        raise RecoveryVerificationError("recovery:v5-point-sequence")
+
+
+def _component(value: object, label: str, *, allow_v5: bool = False) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != _COMPONENT_KEYS and (not allow_v5 or set(value) != _V5_COMPONENT_KEYS):
         raise RecoveryVerificationError(label)
     _opaque(value["database_id"], label)
     _opaque(value["chain_id"], label)
@@ -256,7 +363,49 @@ def _component(value: object, label: str) -> dict[str, object]:
     cap = ingress.MAX_DATABASE_BYTES if "ingress" in label else core.MAX_DATABASE_BYTES if "core" in label else 0
     if type(value["watermark"]) is not int or value["watermark"] < 0 or type(value["image_length"]) is not int or not 0 < value["image_length"] <= cap:
         raise RecoveryVerificationError(label)
+    if set(value) == _V5_COMPONENT_KEYS:
+        if value["component_schema"] != V5_CORE_SCHEMA or value["component_schema_version"] != V5_CORE_SCHEMA_VERSION:
+            raise RecoveryVerificationError(label)
+        _hex(value["profile_registry_digest"], label)
+        profiles = value["profiles"]
+        if not isinstance(profiles, list) or any(
+            not isinstance(item, list) or len(item) != 3 or type(item[1]) is not int or item[1] <= 0
+            or type(item[0]) is not str or not item[0] or type(item[2]) is not str
+            or len(item[2]) != 128 or any(char not in "0123456789abcdef" for char in item[2])
+            for item in profiles
+        ) or profiles != sorted(profiles, key=lambda item: (item[0], item[1], item[2])):
+            raise RecoveryVerificationError(label)
+        if len({tuple(item) for item in profiles}) != len(profiles):
+            raise RecoveryVerificationError(label)
     return value
+
+
+def _v5_component(value: object, label: str, *, core_component: bool = False) -> dict[str, object]:
+    expected_keys = _V5_COMPONENT_KEYS if core_component else _COMPONENT_KEYS
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise RecoveryVerificationError(label)
+    _opaque(value["database_id"], label)
+    _opaque(value["chain_id"], label)
+    for key in ("config_digest", "head_root", "image_digest"):
+        _hex(value[key], label)
+    cap = ingress.MAX_DATABASE_BYTES if "ingress" in label else core.MAX_DATABASE_BYTES if "core" in label else 0
+    if type(value["watermark"]) is not int or value["watermark"] < 0 or type(value["image_length"]) is not int or not 0 < value["image_length"] <= cap:
+        raise RecoveryVerificationError(label)
+    if core_component:
+        if value["component_schema"] != V5_CORE_SCHEMA or value["component_schema_version"] != V5_CORE_SCHEMA_VERSION:
+            raise RecoveryVerificationError(label)
+        _hex(value["profile_registry_digest"], label)
+        profiles = value["profiles"]
+        if not isinstance(profiles, list) or any(
+            not isinstance(item, list) or len(item) != 3 or type(item[0]) is not str or not item[0]
+            or type(item[1]) is not int or item[1] <= 0 or type(item[2]) is not str
+            or len(item[2]) != 128 or any(char not in "0123456789abcdef" for char in item[2])
+            for item in profiles
+        ) or profiles != sorted(profiles, key=lambda item: (item[0], item[1], item[2])):
+            raise RecoveryVerificationError(label)
+        if len({tuple(item) for item in profiles}) != len(profiles):
+            raise RecoveryVerificationError(label)
+    return dict(value)
 
 
 def _publication_operation(material: Mapping[str, object]) -> str:
@@ -296,6 +445,141 @@ def _publication_base(point: Mapping[str, object], image_claim: Mapping[str, obj
     if material["ingress_image_length"] > ingress.MAX_DATABASE_BYTES or material["core_image_length"] > core.MAX_DATABASE_BYTES:
         raise RecoveryVerificationError("recovery:publication-image")
     return dict(material)
+
+
+def _v5_publication_operation(material: Mapping[str, object]) -> str:
+    try:
+        value = {key: material[key] for key in V5_PUBLICATION_BASE_KEYS if key != "pair_operation_id"}
+    except (KeyError, TypeError):
+        raise RecoveryVerificationError("recovery:v5-publication-material") from None
+    return _v5_digest("pair-publication-operation", value)
+
+
+def _v5_publication_base(point: Mapping[str, object], image_claim: Mapping[str, object], material: object) -> dict[str, object]:
+    if not isinstance(material, dict) or set(material) != V5_PUBLICATION_BASE_KEYS:
+        raise RecoveryVerificationError("recovery:v5-publication-material")
+    expected = {
+        "point_id": point["point_id"], "object_id": point["object_id"],
+        "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"],
+        "storage_id_digest": point["storage_id_digest"], "key_id": point["key_id"], "key_epoch": point["key_epoch"],
+        "ingress_database_id": point["ingress_database_id"], "ingress_config_digest": point["ingress_config_digest"],
+        "ingress_head_root": point["ingress_head_root"], "ingress_watermark": point["ingress_watermark"],
+        "core_database_id": point["core_database_id"], "core_config_digest": point["core_config_digest"],
+        "core_head_root": point["core_head_root"], "core_watermark": point["core_watermark"],
+        "ingress_image_digest": image_claim["ingress_image_digest"],
+        "ingress_image_length": image_claim["ingress_image_length"],
+        "core_image_digest": image_claim["core_image_digest"],
+        "core_image_length": image_claim["core_image_length"],
+        "ingress_target_binding": material["ingress_target_binding"],
+        "core_target_binding": material["core_target_binding"],
+    }
+    for key in ("ingress_target_binding", "core_target_binding", "pair_operation_id"):
+        _hex(material[key], "recovery:v5-publication-identity")
+    for key in ("ingress_image_digest", "core_image_digest"):
+        _hex(material[key], "recovery:v5-publication-image")
+    if any(material[key] != expected[key] for key in expected) or material["pair_operation_id"] != _v5_publication_operation(material):
+        raise RecoveryVerificationError("recovery:v5-publication-binding")
+    if any(type(material[key]) is not int or material[key] <= 0 for key in ("ingress_image_length", "core_image_length")):
+        raise RecoveryVerificationError("recovery:v5-publication-image")
+    if material["ingress_image_length"] > ingress.MAX_DATABASE_BYTES or material["core_image_length"] > core.MAX_DATABASE_BYTES:
+        raise RecoveryVerificationError("recovery:v5-publication-image")
+    return dict(material)
+
+
+def _v5_prepare_point(
+    material: Mapping[str, object],
+    event: Mapping[str, object],
+    meta: Mapping[str, object],
+    config_material: Mapping[str, object],
+    registry_material: Mapping[str, object],
+) -> dict[str, object]:
+    if set(material) != V5_PREPARE_KEYS:
+        raise RecoveryVerificationError("recovery:v5-prepare-material")
+    ingress_value = _v5_component(material["ingress"], "recovery:v5-prepare-ingress")
+    core_value = _v5_component(material["core"], "recovery:v5-prepare-core", core_component=True)
+    registry_projection = _v5_registry_projection(registry_material)
+    if core_value["profile_registry_digest"] != meta["profile_registry_digest"] or any(item not in registry_projection for item in core_value["profiles"]):
+        raise RecoveryVerificationError("recovery:v5-prepare-profile")
+    for key in ("point_id", "object_id", "bundle_digest", "operation_id", "request_digest", "storage_id_digest"):
+        _hex(material[key], "recovery:v5-prepare-identity")
+    if material["point_id"] != event["point_id"] or material["operation_id"] != event["operation_id"] or material["request_digest"] != event["request_digest"]:
+        raise RecoveryVerificationError("recovery:v5-prepare-binding")
+    _opaque(material["key_id"], "recovery:v5-prepare-key")
+    if type(material["generation"]) is not int or type(material["bundle_length"]) is not int or type(material["key_epoch"]) is not int or material["generation"] <= 0 or material["key_epoch"] < 0 or not 0 < material["bundle_length"] <= config_material["max_bundle_bytes"]:
+        raise RecoveryVerificationError("recovery:v5-prepare-range")
+    if material["key_state"] not in {"ACTIVE", "REVOKED", "UNKNOWN"} or material["storage_id_digest"] != meta["storage_id_digest"]:
+        raise RecoveryVerificationError("recovery:v5-prepare-owner")
+    if ingress_value["config_digest"] != config_material["ingress_config_digest"] or core_value["config_digest"] != config_material["core_config_digest"]:
+        raise RecoveryVerificationError("recovery:v5-prepare-config")
+    prior_point_id = material["prior_point_id"]
+    if prior_point_id is not None:
+        _hex(prior_point_id, "recovery:v5-prepare-prior")
+    _hex(material["prior_root"], "recovery:v5-prepare-root")
+    if material["point_id"] != _v5_digest("point-id", {"config_digest": meta["config_digest"], "generation": material["generation"]}):
+        raise RecoveryVerificationError("recovery:v5-prepare-point")
+    if material["object_id"] != _v5_digest("object-id", {"bundle_digest": material["bundle_digest"], "profile_digest": meta["profile_digest"], "key_id": material["key_id"], "key_epoch": material["key_epoch"]}):
+        raise RecoveryVerificationError("recovery:v5-prepare-object")
+    if material["operation_id"] != _v5_digest("operation-id", {"point_id": material["point_id"]}) or material["request_digest"] != _v5_digest("request", {"point_id": material["point_id"], "bundle_digest": material["bundle_digest"], "object_id": material["object_id"]}):
+        raise RecoveryVerificationError("recovery:v5-prepare-request")
+    if event["before_root"] != material["prior_root"]:
+        raise RecoveryVerificationError("recovery:v5-prepare-prior-root")
+    if ingress_value["database_id"] != meta["ingress_database_id"] or core_value["database_id"] != meta["core_database_id"]:
+        raise RecoveryVerificationError("recovery:v5-prepare-component")
+    return {
+        "point_id": material["point_id"], "generation": material["generation"], "state": "PREPARED",
+        "object_id": material["object_id"], "bundle_digest": material["bundle_digest"], "bundle_length": material["bundle_length"],
+        "ingress_database_id": ingress_value["database_id"], "ingress_config_digest": ingress_value["config_digest"], "ingress_head_root": ingress_value["head_root"], "ingress_watermark": ingress_value["watermark"],
+        "core_database_id": core_value["database_id"], "core_config_digest": core_value["config_digest"], "core_head_root": core_value["head_root"], "core_watermark": core_value["watermark"],
+        "key_id": material["key_id"], "key_epoch": material["key_epoch"], "key_state": material["key_state"], "storage_id_digest": material["storage_id_digest"],
+        "prior_point_id": prior_point_id, "prior_root": material["prior_root"], "operation_id": material["operation_id"], "request_digest": material["request_digest"],
+        "sequence": event["sequence"], "updated_sequence": event["sequence"],
+    }
+
+
+def _v5_transition_material(
+    kind: str,
+    material: object,
+    point: Mapping[str, object],
+    image_claim: Mapping[str, object],
+    publication_claims: dict[str, dict[str, object]],
+    event: Mapping[str, object],
+    payload_digest: str,
+    payload_length: int,
+) -> None:
+    if not isinstance(material, dict):
+        raise RecoveryVerificationError("recovery:v5-transition-material")
+    if kind == "OBJECT_PENDING":
+        expected = {"point_id": point["point_id"], "object_id": point["object_id"], "storage_id_digest": point["storage_id_digest"], "key_id": point["key_id"], "key_epoch": point["key_epoch"]}
+        if set(material) != V5_PENDING_KEYS or any(material[key] != expected[key] for key in expected) or payload_digest != point["object_id"] or payload_length != 0:
+            raise RecoveryVerificationError("recovery:v5-pending-material")
+    elif kind == "VERIFIED":
+        expected = {"point_id": point["point_id"], "object_id": point["object_id"], "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"], "storage_id_digest": point["storage_id_digest"], "key_id": point["key_id"], "key_epoch": point["key_epoch"]}
+        if set(material) != V5_VERIFIED_KEYS or any(material[key] != expected[key] for key in expected) or payload_digest != point["object_id"] or payload_length != 0:
+            raise RecoveryVerificationError("recovery:v5-verified-material")
+    elif kind == "INVALIDATED":
+        expected = {"point_id": point["point_id"], "object_id": point["object_id"], "key_id": point["key_id"], "key_epoch": point["key_epoch"], "reason": "key-revoked"}
+        if material != expected or payload_digest != point["object_id"] or payload_length != 0:
+            raise RecoveryVerificationError("recovery:v5-invalidated-material")
+    elif kind == "PUBLICATION_PENDING":
+        if payload_digest != point["object_id"] or payload_length != 0:
+            raise RecoveryVerificationError("recovery:v5-publication-material")
+        claim = _v5_publication_base(point, image_claim, material)
+        publication_claims[point["point_id"]] = {"material": claim, "event_id": event["event_id"], "sequence": event["sequence"], "after_root": event["after_root"]}
+    elif kind == "PUBLISHED":
+        if set(material) != V5_PUBLISHED_KEYS or payload_digest != point["object_id"] or payload_length != 0:
+            raise RecoveryVerificationError("recovery:v5-published-material")
+        pending = publication_claims.get(point["point_id"])
+        if pending is None:
+            raise RecoveryVerificationError("recovery:v5-published-material")
+        base = {key: material[key] for key in V5_PUBLICATION_BASE_KEYS}
+        if _v5_publication_base(point, image_claim, base) != pending["material"] or material["pending_event_id"] != pending["event_id"] or material["pending_sequence"] != pending["sequence"] or material["pending_after_root"] != pending["after_root"]:
+            raise RecoveryVerificationError("recovery:v5-published-binding")
+        _hex(material["pending_event_id"], "recovery:v5-published-identity")
+        if type(material["pending_sequence"]) is not int or material["pending_sequence"] <= 0:
+            raise RecoveryVerificationError("recovery:v5-published-sequence")
+        _hex(material["pending_after_root"], "recovery:v5-published-root")
+    else:
+        raise RecoveryVerificationError("recovery:v5-event-kind")
 
 
 def parse_bundle(
@@ -342,6 +626,65 @@ def parse_bundle(
         except (ValueError, binascii.Error):
             raise RecoveryVerificationError(label) from None
         if len(image) != length or _raw_digest(digest_label, image) != component["image_digest"] or base64.b64encode(image) != encoded_bytes:
+            raise RecoveryVerificationError(label)
+        images.append(image)
+    return value, images[0], images[1]
+
+
+def parse_bundle_v5(
+    raw: bytes,
+    *,
+    max_bundle_bytes: int,
+    expected_generation: int | None = None,
+    expected_prior_root: str | None = None,
+    expected_ingress: Mapping[str, object] | None = None,
+    expected_core: Mapping[str, object] | None = None,
+    expected_profile_registry_digest: str | None = None,
+) -> tuple[dict[str, object], bytes, bytes]:
+    """Parse a V5 recovery bundle and bind its Core V5 profile projection."""
+
+    if type(max_bundle_bytes) is not int or not 1024 <= max_bundle_bytes <= MAX_BUNDLE_BYTES:
+        raise RecoveryVerificationError("recovery:bundle-config")
+    value = _parse(raw, "recovery:bundle-v5", max_bytes=max_bundle_bytes)
+    required = {"schema", "schema_version", "generation", "prior_recovery_root", "ingress", "core", "ingress_image", "core_image", "flags"}
+    if set(value) != required or value["schema"] != V5_BUNDLE_SCHEMA or value["schema_version"] != V5_BUNDLE_VERSION or value["flags"] != FIXED_FLAGS:
+        raise RecoveryVerificationError("recovery:bundle-v5")
+    if type(value["generation"]) is not int or value["generation"] <= 0:
+        raise RecoveryVerificationError("recovery:bundle-v5-generation")
+    _hex(value["prior_recovery_root"], "recovery:bundle-v5-prior")
+    ing = _v5_component(value["ingress"], "recovery:bundle-v5-ingress")
+    cor = _v5_component(value["core"], "recovery:bundle-v5-core", core_component=True)
+    if set(cor) != _V5_COMPONENT_KEYS:
+        raise RecoveryVerificationError("recovery:bundle-v5-core")
+    if expected_generation is not None and value["generation"] != expected_generation:
+        raise RecoveryVerificationError("recovery:bundle-v5-binding")
+    if expected_prior_root is not None and value["prior_recovery_root"] != expected_prior_root:
+        raise RecoveryVerificationError("recovery:bundle-v5-binding")
+    if expected_profile_registry_digest is not None and cor["profile_registry_digest"] != expected_profile_registry_digest:
+        raise RecoveryVerificationError("recovery:bundle-v5-profile")
+    for actual, expected, label in ((ing, expected_ingress, "recovery:bundle-v5-ingress-binding"), (cor, expected_core, "recovery:bundle-v5-core-binding")):
+        if expected is not None and (set(actual) != set(expected) or any(actual[key] != expected[key] for key in actual)):
+            raise RecoveryVerificationError(label)
+    images: list[bytes] = []
+    for component, field, cap, label, digest_label in (
+        (ing, "ingress_image", ingress.MAX_DATABASE_BYTES, "recovery:bundle-v5-ingress-image", "ingress-image"),
+        (cor, "core_image", core.MAX_DATABASE_BYTES, "recovery:bundle-v5-core-image", "core-image"),
+    ):
+        encoded = value[field]
+        if type(encoded) is not str:
+            raise RecoveryVerificationError(label)
+        try:
+            encoded_bytes = encoded.encode("ascii")
+        except UnicodeEncodeError:
+            raise RecoveryVerificationError(label) from None
+        length = component["image_length"]
+        if length > cap or len(encoded_bytes) != 4 * ((length + 2) // 3) or len(encoded_bytes) > 4 * ((cap + 2) // 3):
+            raise RecoveryVerificationError(label)
+        try:
+            image = base64.b64decode(encoded_bytes, validate=True)
+        except (ValueError, binascii.Error):
+            raise RecoveryVerificationError(label) from None
+        if len(image) != length or _v5_raw_digest(digest_label, image) != component["image_digest"] or base64.b64encode(image) != encoded_bytes:
             raise RecoveryVerificationError(label)
         images.append(image)
     return value, images[0], images[1]
@@ -584,6 +927,319 @@ def verify_database(path: str | Path, *, expected_database_id: str | None = None
         connection.close()
 
 
+def _v5_profile_descriptor(value: object, label: str = "recovery:v5-profile") -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != V5_PROFILE_DESCRIPTOR_KEYS:
+        raise RecoveryVerificationError(label)
+    _opaque(value["profile_id"], label)
+    if type(value["version"]) is not int or value["version"] <= 0:
+        raise RecoveryVerificationError(label)
+    _hex(value["profile_digest"], label)
+    _hex(value["source_registry_root"], label)
+    _opaque(value["verifier_id"], label)
+    if type(value["verifier_epoch"]) is not int or value["verifier_epoch"] < 0:
+        raise RecoveryVerificationError(label)
+    _opaque(value["evidence_mode"], label)
+    if type(value["require_complete"]) is not bool or type(value["allow_nonmembership"]) is not bool:
+        raise RecoveryVerificationError(label)
+    return dict(value)
+
+
+def _v5_registry_material(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != V5_PROFILE_REGISTRY_KEYS:
+        raise RecoveryVerificationError("recovery:v5-registry")
+    if value["schema"] != V5_PROFILE_REGISTRY_SCHEMA or value["schema_version"] != V5_PROFILE_REGISTRY_VERSION or value["flags"] != FIXED_FLAGS:
+        raise RecoveryVerificationError("recovery:v5-registry")
+    _hex(value["profile_registry_digest"], "recovery:v5-registry")
+    profiles = value["profiles"]
+    if not isinstance(profiles, list) or not profiles:
+        raise RecoveryVerificationError("recovery:v5-registry")
+    descriptors = [_v5_profile_descriptor(item) for item in profiles]
+    if descriptors != sorted(descriptors, key=lambda item: (item["profile_id"], item["version"], item["profile_digest"])):
+        raise RecoveryVerificationError("recovery:v5-registry-order")
+    if len({(item["profile_id"], item["version"]) for item in descriptors}) != len(descriptors):
+        raise RecoveryVerificationError("recovery:v5-registry-duplicate")
+    try:
+        computed = profile_governance._digest("profile-registry", descriptors)
+    except Exception:
+        raise RecoveryVerificationError("recovery:v5-registry") from None
+    if computed != value["profile_registry_digest"]:
+        raise RecoveryVerificationError("recovery:v5-registry-digest")
+    return dict(value)
+
+
+def _v5_registry_projection(registry_material: Mapping[str, object]) -> list[list[object]]:
+    profiles = registry_material["profiles"]
+    if not isinstance(profiles, list):
+        raise RecoveryVerificationError("recovery:v5-registry")
+    return [
+        [item["profile_id"], item["version"], item["profile_digest"]]
+        for item in profiles
+        if isinstance(item, dict)
+    ]
+
+
+def _v5_config_material(value: object, *, expected_profile_registry_digest: str | None = None) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != V5_CONFIG_KEYS:
+        raise RecoveryVerificationError("recovery:v5-config")
+    if value["schema"] != V5_SCHEMA or value["schema_version"] != V5_SCHEMA_VERSION or value["flags"] != FIXED_FLAGS:
+        raise RecoveryVerificationError("recovery:v5-config")
+    for key in ("database_id", "chain_id", "ingress_database_id", "core_database_id"):
+        _opaque(value[key], "recovery:v5-config")
+    for key in (
+        "profile_digest", "custody_id_digest", "storage_id_digest",
+        "ingress_config_digest", "core_config_digest", "profile_registry_digest",
+    ):
+        _hex(value[key], "recovery:v5-config")
+    if value["core_schema"] != V5_CORE_SCHEMA or value["core_schema_version"] != V5_CORE_SCHEMA_VERSION:
+        raise RecoveryVerificationError("recovery:v5-config-core")
+    if expected_profile_registry_digest is not None and value["profile_registry_digest"] != expected_profile_registry_digest:
+        raise RecoveryVerificationError("recovery:v5-config-profile")
+    if type(value["max_bundle_bytes"]) is not int or not 1024 <= value["max_bundle_bytes"] <= MAX_BUNDLE_BYTES:
+        raise RecoveryVerificationError("recovery:v5-config-range")
+    return dict(value)
+
+
+def _v5_parse_material(raw: object, label: str, maximum: int) -> dict[str, object]:
+    if type(raw) is not bytes:
+        raise RecoveryVerificationError(label)
+    return _parse(raw, label, max_bytes=maximum)
+
+
+def _verify_v5_meta(
+    connection: sqlite3.Connection,
+    expected_database_id: str | None,
+    expected_config_digest: str | None,
+    expected_profile_registry_digest: str | None,
+    expected_profile_registry_material: Mapping[str, object] | bytes | None,
+) -> tuple[sqlite3.Row, dict[str, object], dict[str, object]]:
+    row = connection.execute("SELECT * FROM recovery_meta WHERE meta_id=1").fetchone()
+    if row is None or tuple(row.keys()) != V5_META_COLUMNS or row["meta_id"] != 1 or row["schema"] != V5_SCHEMA or row["schema_version"] != V5_SCHEMA_VERSION:
+        raise RecoveryVerificationError("recovery:v5-schema")
+    if expected_database_id is not None and row["database_id"] != expected_database_id:
+        raise RecoveryVerificationError("recovery:v5-database-id")
+    if expected_config_digest is not None and row["config_digest"] != expected_config_digest:
+        raise RecoveryVerificationError("recovery:v5-config")
+    for key in ("config_digest", "head_root", "profile_digest", "key_custody_id_digest", "storage_id_digest", "profile_registry_digest"):
+        _hex(row[key], "recovery:v5-meta")
+    for key in ("database_id", "chain_id", "ingress_database_id", "core_database_id", "core_schema"):
+        _opaque(row[key], "recovery:v5-meta")
+    if row["core_schema"] != V5_CORE_SCHEMA or row["core_schema_version"] != V5_CORE_SCHEMA_VERSION:
+        raise RecoveryVerificationError("recovery:v5-core")
+    if type(row["sequence"]) is not int or row["sequence"] < 0 or type(row["current_generation"]) is not int or row["current_generation"] < 0:
+        raise RecoveryVerificationError("recovery:v5-sequence")
+    if row["current_generation"] > MAX_RECOVERY_POINTS:
+        raise RecoveryVerificationError("recovery:v5-capacity")
+    config_raw = row["config_material"]
+    registry_raw = row["profile_registry_material"]
+    if type(config_raw) is not bytes or len(config_raw) > V5_MAX_CONFIG_BYTES or type(registry_raw) is not bytes or len(registry_raw) > V5_MAX_PROFILE_REGISTRY_BYTES:
+        raise RecoveryVerificationError("recovery:v5-material")
+    config = _v5_config_material(
+        _v5_parse_material(config_raw, "recovery:v5-config", V5_MAX_CONFIG_BYTES),
+        expected_profile_registry_digest=expected_profile_registry_digest,
+    )
+    registry = _v5_registry_material(_v5_parse_material(registry_raw, "recovery:v5-registry", V5_MAX_PROFILE_REGISTRY_BYTES))
+    if _v5_digest("config", config) != row["config_digest"] or config["profile_registry_digest"] != registry["profile_registry_digest"]:
+        raise RecoveryVerificationError("recovery:v5-config-digest")
+    if row["profile_registry_digest"] != registry["profile_registry_digest"] or row["profile_registry_digest"] != config["profile_registry_digest"]:
+        raise RecoveryVerificationError("recovery:v5-profile")
+    if row["profile_digest"] != config["profile_digest"] or row["key_custody_id_digest"] != config["custody_id_digest"] or row["storage_id_digest"] != config["storage_id_digest"]:
+        raise RecoveryVerificationError("recovery:v5-owner")
+    for key in ("database_id", "chain_id", "ingress_database_id", "core_database_id", "core_schema", "core_schema_version"):
+        if row[key] != config[key]:
+            raise RecoveryVerificationError("recovery:v5-config-binding")
+    if expected_profile_registry_digest is not None and registry["profile_registry_digest"] != expected_profile_registry_digest:
+        raise RecoveryVerificationError("recovery:v5-profile")
+    if expected_profile_registry_material is not None:
+        expected = expected_profile_registry_material
+        if isinstance(expected, bytes):
+            expected = _v5_parse_material(expected, "recovery:v5-registry", V5_MAX_PROFILE_REGISTRY_BYTES)
+        if not isinstance(expected, Mapping) or dict(expected) != registry:
+            raise RecoveryVerificationError("recovery:v5-profile")
+    return row, config, registry
+
+
+def _v5_verify_event(
+    row: sqlite3.Row,
+    meta: sqlite3.Row,
+    config_material: Mapping[str, object],
+    registry_material: Mapping[str, object],
+    previous: str,
+    points: dict[str, dict[str, object]],
+    receipts: dict[str, bytes],
+    image_claims: dict[str, dict[str, object]],
+    publication_claims: dict[str, dict[str, object]],
+) -> str:
+    raw_value = row["event_raw"]
+    if type(raw_value) is not bytes or not raw_value or len(raw_value) > MAX_EVENT_BYTES:
+        raise RecoveryVerificationError("recovery:v5-event")
+    raw = raw_value
+    value = _parse(raw, "recovery:v5-event")
+    if set(value) != _EVENT_RAW_KEYS or tuple(row.keys()) != V5_EVENT_COLUMNS:
+        raise RecoveryVerificationError("recovery:v5-event-binding")
+    if any(value[key] != row[key] for key in _EVENT_COLUMNS if key in value):
+        raise RecoveryVerificationError("recovery:v5-event-binding")
+    if value["schema"] != V5_SCHEMA or value["schema_version"] != V5_SCHEMA_VERSION or value["database_id"] != meta["database_id"] or value["chain_id"] != meta["chain_id"] or value["stream_kind"] != "POINT" or value["stream_id"] != value["point_id"] or value["event_kind"] not in EVENT_KINDS or value["before_root"] != previous or type(value["attempt"]) is not int or value["attempt"] != 0:
+        raise RecoveryVerificationError("recovery:v5-event-order")
+    for key in ("event_id", "point_id", "operation_id", "request_digest", "before_root", "after_root", "material_digest", "payload_digest"):
+        _hex(value[key], "recovery:v5-event-identity")
+    if type(value["sequence"]) is not int or value["sequence"] <= 0 or type(value["payload_length"]) is not int or not 0 <= value["payload_length"] <= MAX_BUNDLE_BYTES + MAX_CUSTODY_OVERHEAD_BYTES:
+        raise RecoveryVerificationError("recovery:v5-event-range")
+    if value["event_id"] != _v5_digest("event-id", {key: value[key] for key in _EVENT_RAW_KEYS if key not in {"event_id", "after_root"}}) or value["material_digest"] != _v5_digest("material", value["material"]) or row["receipt_digest"] != _v5_raw_digest("receipt", raw):
+        raise RecoveryVerificationError("recovery:v5-event-digest")
+    if value["after_root"] != _v5_event_root(value["sequence"], previous, value["event_id"], value["event_kind"], value["point_id"], value["next_state"], value["material_digest"], value["stream_kind"], value["stream_id"]):
+        raise RecoveryVerificationError("recovery:v5-event-root")
+    kind = value["event_kind"]
+    if kind == "PREPARE":
+        if value["prior_state"] != "NONE" or value["next_state"] != "PREPARED" or value["point_id"] in points:
+            raise RecoveryVerificationError("recovery:v5-event-transition")
+        point = _v5_prepare_point(value["material"], value, meta, config_material, registry_material)
+        if value["operation_id"] != point["operation_id"] or value["request_digest"] != point["request_digest"] or value["payload_digest"] != point["bundle_digest"] or value["payload_length"] != point["bundle_length"]:
+            raise RecoveryVerificationError("recovery:v5-prepare-binding")
+        prepare_material = value["material"]
+        image_claims[value["point_id"]] = {
+            "ingress_image_digest": prepare_material["ingress"]["image_digest"],
+            "ingress_image_length": prepare_material["ingress"]["image_length"],
+            "core_image_digest": prepare_material["core"]["image_digest"],
+            "core_image_length": prepare_material["core"]["image_length"],
+        }
+        points[value["point_id"]] = point
+    else:
+        point = points.get(value["point_id"])
+        if point is None or value["operation_id"] != point["operation_id"] or value["request_digest"] != point["request_digest"]:
+            raise RecoveryVerificationError("recovery:v5-event-point")
+        allowed = {"OBJECT_PENDING": ("PREPARED", "OBJECT_PENDING"), "VERIFIED": ("OBJECT_PENDING", "VERIFIED"), "PUBLICATION_PENDING": ("VERIFIED", "PUBLICATION_PENDING"), "PUBLISHED": ("PUBLICATION_PENDING", "PUBLISHED"), "INVALIDATED": ("OBJECT_PENDING", "INVALIDATED")}
+        if (value["prior_state"], value["next_state"]) != allowed[kind] or point["state"] != value["prior_state"]:
+            raise RecoveryVerificationError("recovery:v5-event-transition")
+        if value["point_id"] not in image_claims:
+            raise RecoveryVerificationError("recovery:v5-publication-image")
+        _v5_transition_material(kind, value["material"], point, image_claims[value["point_id"]], publication_claims, value, value["payload_digest"], value["payload_length"])
+        point["state"] = value["next_state"]
+        point["updated_sequence"] = value["sequence"]
+    receipts[value["point_id"]] = raw
+    return value["after_root"]
+
+
+def _v5_verify_snapshot(
+    connection: sqlite3.Connection,
+    *,
+    expected_database_id: str | None,
+    expected_config_digest: str | None,
+    expected_profile_registry_digest: str | None,
+    expected_profile_registry_material: Mapping[str, object] | bytes | None,
+) -> tuple[dict[str, object], dict[str, dict[str, object]], dict[str, bytes]]:
+    tables = ("recovery_meta", "recovery_points", "recovery_events")
+    if _tables(connection) != tuple(sorted(tables)):
+        raise RecoveryVerificationError("recovery:v5-tables")
+    expected = {"recovery_meta": V5_META_COLUMNS, "recovery_points": V5_POINT_COLUMNS, "recovery_events": V5_EVENT_COLUMNS}
+    for table, columns in expected.items():
+        if _columns(connection, table) != columns:
+            raise RecoveryVerificationError("recovery:v5-columns")
+    explicit_indexes = tuple(sorted(row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name").fetchall()))
+    if explicit_indexes != ("recovery_events_chain_idx", "recovery_events_operation_idx", "recovery_points_state_idx"):
+        raise RecoveryVerificationError("recovery:v5-indexes")
+    meta, config_material, registry_material = _verify_v5_meta(
+        connection,
+        expected_database_id,
+        expected_config_digest,
+        expected_profile_registry_digest,
+        expected_profile_registry_material,
+    )
+    persisted_rows = connection.execute("SELECT * FROM recovery_points ORDER BY generation,point_id").fetchall()
+    if len(persisted_rows) > MAX_RECOVERY_POINTS:
+        raise RecoveryVerificationError("recovery:v5-capacity")
+    persisted = {row["point_id"]: row for row in persisted_rows}
+    if len(persisted) != len(persisted_rows):
+        raise RecoveryVerificationError("recovery:v5-point-duplicate")
+    for row in persisted_rows:
+        _validate_v5_point_shape(row, meta, config_material)
+    points: dict[str, dict[str, object]] = {}
+    receipts: dict[str, bytes] = {}
+    image_claims: dict[str, dict[str, object]] = {}
+    publication_claims: dict[str, dict[str, object]] = {}
+    events = connection.execute("SELECT * FROM recovery_events ORDER BY sequence").fetchall()
+    previous = GENESIS_ROOT
+    for expected_sequence, row in enumerate(events, start=1):
+        if row["sequence"] != expected_sequence:
+            raise RecoveryVerificationError("recovery:v5-event-sequence")
+        previous = _v5_verify_event(row, meta, config_material, registry_material, previous, points, receipts, image_claims, publication_claims)
+    if len(points) != len(persisted):
+        raise RecoveryVerificationError("recovery:v5-point-missing")
+    for point_id, point in points.items():
+        row = persisted.get(point_id)
+        if row is None or dict(row) != point:
+            raise RecoveryVerificationError("recovery:v5-point-reconstruction")
+    pending_points = [point for point in points.values() if point["state"] == "OBJECT_PENDING"]
+    if len(pending_points) > 1:
+        raise RecoveryVerificationError("recovery:v5-pending-count")
+    object_pending_generation = None
+    if pending_points:
+        object_pending_generation = int(pending_points[0]["generation"])
+        if object_pending_generation != int(meta["current_generation"]):
+            raise RecoveryVerificationError("recovery:v5-pending-generation")
+    expected_generation = 1
+    prior_point: Mapping[str, object] | None = None
+    for point in sorted(points.values(), key=lambda item: int(item["generation"])):
+        if point["generation"] != expected_generation:
+            raise RecoveryVerificationError("recovery:v5-point-chain")
+        if point["prior_point_id"] is None:
+            if prior_point is not None or point["generation"] != 1 or point["prior_root"] != GENESIS_ROOT:
+                raise RecoveryVerificationError("recovery:v5-point-chain")
+        else:
+            prior = points.get(point["prior_point_id"])
+            if prior is None or prior is not prior_point or prior["generation"] != expected_generation - 1:
+                raise RecoveryVerificationError("recovery:v5-point-chain")
+        prior_point = point
+        expected_generation += 1
+    if meta["current_generation"] != max((int(point["generation"]) for point in points.values()), default=0) or meta["sequence"] != len(events) or meta["head_root"] != previous:
+        raise RecoveryVerificationError("recovery:v5-meta-root")
+    summary = {
+        "accepted": True, "schema": V5_SCHEMA, "schema_version": V5_SCHEMA_VERSION, "verifier_id": V5_VERIFIER_ID,
+        "database_id": meta["database_id"], "chain_id": meta["chain_id"], "config_digest": meta["config_digest"], "profile_digest": meta["profile_digest"],
+        "key_custody_id_digest": meta["key_custody_id_digest"], "storage_id_digest": meta["storage_id_digest"], "sequence": meta["sequence"], "head_root": meta["head_root"],
+        "point_count": len(points), "event_count": len(events), "current_generation": meta["current_generation"],
+        "object_pending_generation": object_pending_generation,
+        "states": {key: sum(1 for point in points.values() if point["state"] == key) for key in STATES}, "flags": dict(FIXED_FLAGS),
+        "core_schema": meta["core_schema"], "core_schema_version": meta["core_schema_version"],
+        "profile_registry_digest": meta["profile_registry_digest"],
+        "config_material": dict(config_material),
+        "profile_registry_material": dict(registry_material),
+        "v5_prepare_count": sum(1 for row in events if row["event_kind"] == "PREPARE"),
+    }
+    return summary, points, receipts
+
+
+def verify_database_v5(
+    path: str | Path,
+    *,
+    expected_database_id: str | None = None,
+    expected_config_digest: str | None = None,
+    expected_profile_registry_digest: str | None = None,
+    expected_profile_registry_material: Mapping[str, object] | bytes | None = None,
+) -> dict[str, object]:
+    """Reconstruct a native V5 recovery catalog from its own grammar."""
+
+    connection = _open(path)
+    try:
+        result, _points, _receipts = _v5_verify_snapshot(
+            connection,
+            expected_database_id=expected_database_id,
+            expected_config_digest=expected_config_digest,
+            expected_profile_registry_digest=expected_profile_registry_digest,
+            expected_profile_registry_material=expected_profile_registry_material,
+        )
+        return result
+    except RecoveryVerificationError:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        raise RecoveryVerificationError("recovery:database") from None
+    finally:
+        try:
+            connection.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        connection.close()
+
+
 def select_point(path: str | Path, *, point_id: str | None = None, generation: int | None = None, expected_database_id: str | None = None, expected_config_digest: str | None = None, allowed_states: tuple[str, ...] = STATES) -> dict[str, object]:
     if (point_id is None) == (generation is None):
         raise RecoveryVerificationError("recovery:selector")
@@ -619,6 +1275,57 @@ def select_point(path: str | Path, *, point_id: str | None = None, generation: i
         connection.close()
 
 
+def select_point_v5(
+    path: str | Path,
+    *,
+    point_id: str | None = None,
+    generation: int | None = None,
+    expected_database_id: str | None = None,
+    expected_config_digest: str | None = None,
+    expected_profile_registry_digest: str | None = None,
+    expected_profile_registry_material: Mapping[str, object] | bytes | None = None,
+    allowed_states: tuple[str, ...] = STATES,
+) -> dict[str, object]:
+    if (point_id is None) == (generation is None):
+        raise RecoveryVerificationError("recovery:v5-selector")
+    if point_id is not None:
+        _hex(point_id, "recovery:v5-selector")
+    if generation is not None and (type(generation) is not int or not 1 <= generation <= MAX_RECOVERY_POINTS):
+        raise RecoveryVerificationError("recovery:v5-selector")
+    if any(state not in STATES for state in allowed_states):
+        raise RecoveryVerificationError("recovery:v5-selector")
+    connection = _open(path)
+    try:
+        summary, points, receipts = _v5_verify_snapshot(
+            connection,
+            expected_database_id=expected_database_id,
+            expected_config_digest=expected_config_digest,
+            expected_profile_registry_digest=expected_profile_registry_digest,
+            expected_profile_registry_material=expected_profile_registry_material,
+        )
+        selected_id = point_id
+        if selected_id is None:
+            matches = [key for key, point in points.items() if point["generation"] == generation]
+            if len(matches) != 1:
+                raise RecoveryVerificationError("recovery:v5-point-missing")
+            selected_id = matches[0]
+        point = points.get(selected_id)
+        if point is None or point["state"] not in allowed_states:
+            raise RecoveryVerificationError("recovery:v5-point-state")
+        receipt = bytes(receipts[selected_id])
+        return {"summary": dict(summary), "point": dict(point), "receipt": receipt, "event": dict(_parse(receipt, "recovery:v5-receipt"))}
+    except RecoveryVerificationError:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        raise RecoveryVerificationError("recovery:v5-database") from None
+    finally:
+        try:
+            connection.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        connection.close()
+
+
 def parse_bootstrap(raw: bytes) -> dict[str, object]:
     value = _parse(raw, "recovery:bootstrap", max_bytes=MAX_BOOTSTRAP_BYTES)
     required = {"schema", "schema_version", "verifier_id", "bootstrap_id", "catalog_id", "point_id", "generation", "object_id", "bundle_digest", "bundle_length", "key_id", "key_epoch", "storage_id", "ingress_database_id", "core_database_id", "ingress_head_root", "core_head_root", "ingress_watermark", "core_watermark", "publication_receipt_digest", "flags"}
@@ -635,6 +1342,25 @@ def parse_bootstrap(raw: bytes) -> dict[str, object]:
     return value
 
 
+def parse_bootstrap_v5(raw: bytes, *, expected_profile_registry_digest: str | None = None) -> dict[str, object]:
+    value = _parse(raw, "recovery:bootstrap-v5", max_bytes=MAX_BOOTSTRAP_BYTES)
+    required = {"schema", "schema_version", "verifier_id", "bootstrap_id", "catalog_id", "point_id", "generation", "object_id", "bundle_digest", "bundle_length", "key_id", "key_epoch", "storage_id_digest", "ingress_database_id", "core_database_id", "ingress_head_root", "core_head_root", "ingress_watermark", "core_watermark", "publication_receipt_digest", "core_schema", "core_schema_version", "profile_registry_digest", "flags"}
+    if set(value) != required or value["schema"] != "mirror-recovery-bootstrap-v5" or value["schema_version"] != 5 or value["verifier_id"] != V5_VERIFIER_ID or value["flags"] != FIXED_FLAGS:
+        raise RecoveryVerificationError("recovery:bootstrap-v5")
+    for key in ("bootstrap_id", "catalog_id", "point_id", "object_id", "bundle_digest", "ingress_head_root", "core_head_root", "publication_receipt_digest", "profile_registry_digest"):
+        _hex(value[key], "recovery:bootstrap-v5-id")
+    _hex(value["storage_id_digest"], "recovery:bootstrap-v5-identity")
+    for key in ("key_id", "ingress_database_id", "core_database_id"):
+        _opaque(value[key], "recovery:bootstrap-v5-identity")
+    if value["core_schema"] != V5_CORE_SCHEMA or value["core_schema_version"] != V5_CORE_SCHEMA_VERSION or expected_profile_registry_digest is not None and value["profile_registry_digest"] != expected_profile_registry_digest:
+        raise RecoveryVerificationError("recovery:bootstrap-v5-profile")
+    if type(value["generation"]) is not int or not 1 <= value["generation"] <= MAX_RECOVERY_POINTS or type(value["bundle_length"]) is not int or not 0 < value["bundle_length"] <= MAX_BUNDLE_BYTES or type(value["key_epoch"]) is not int or value["key_epoch"] < 0 or type(value["ingress_watermark"]) is not int or value["ingress_watermark"] < 0 or type(value["core_watermark"]) is not int or value["core_watermark"] < 0:
+        raise RecoveryVerificationError("recovery:bootstrap-v5-range")
+    if value["bootstrap_id"] != _v5_digest("bootstrap-id", {key: value[key] for key in value if key not in {"bootstrap_id", "flags"}}):
+        raise RecoveryVerificationError("recovery:bootstrap-v5-id")
+    return value
+
+
 def logical_export(result: Mapping[str, object]) -> bytes:
     return _canonical({
         "schema": "mirror-recovery-logical-export-v3", "schema_version": 3, "verifier_id": VERIFIER_ID,
@@ -643,4 +1369,17 @@ def logical_export(result: Mapping[str, object]) -> bytes:
     })
 
 
-__all__ = ["SCHEMA", "SCHEMA_VERSION", "VERIFIER_ID", "STATES", "EVENT_KINDS", "FIXED_FLAGS", "GENESIS_ROOT", "MAX_DATABASE_BYTES", "MAX_EVENT_BYTES", "MAX_BOOTSTRAP_BYTES", "MAX_BUNDLE_BYTES", "MAX_CUSTODY_OVERHEAD_BYTES", "MAX_RECOVERY_POINTS", "RecoveryVerificationError", "verify_database", "select_point", "parse_bundle", "logical_export", "parse_bootstrap", "_canonical", "_digest", "_raw_digest", "_event_root", "_parse"]
+def logical_export_v5(result: Mapping[str, object]) -> bytes:
+    return _canonical({
+        "schema": "mirror-recovery-logical-export-v5", "schema_version": 5, "verifier_id": V5_VERIFIER_ID,
+        "database_id": result["database_id"], "chain_id": result["chain_id"], "config_digest": result["config_digest"],
+        "config_material": result["config_material"], "profile_digest": result["profile_digest"],
+        "profile_registry_digest": result["profile_registry_digest"], "profile_registry_material": result["profile_registry_material"],
+        "sequence": result["sequence"], "head_root": result["head_root"], "point_count": result["point_count"],
+        "event_count": result["event_count"], "current_generation": result["current_generation"],
+        "states": result["states"], "core_schema": V5_CORE_SCHEMA, "core_schema_version": V5_CORE_SCHEMA_VERSION,
+        "flags": dict(FIXED_FLAGS),
+    })
+
+
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "VERIFIER_ID", "V5_SCHEMA", "V5_SCHEMA_VERSION", "V5_VERIFIER_ID", "V5_DOMAIN", "STATES", "EVENT_KINDS", "FIXED_FLAGS", "GENESIS_ROOT", "MAX_DATABASE_BYTES", "MAX_EVENT_BYTES", "MAX_BOOTSTRAP_BYTES", "MAX_BUNDLE_BYTES", "MAX_CUSTODY_OVERHEAD_BYTES", "MAX_RECOVERY_POINTS", "RecoveryVerificationError", "verify_database", "verify_database_v5", "select_point", "select_point_v5", "parse_bundle", "parse_bundle_v5", "logical_export", "logical_export_v5", "parse_bootstrap", "parse_bootstrap_v5", "_canonical", "_digest", "_raw_digest", "_v5_digest", "_v5_raw_digest", "_event_root", "_v5_event_root", "_parse", "V5_BUNDLE_SCHEMA", "V5_BUNDLE_VERSION", "V5_CORE_SCHEMA", "V5_CORE_SCHEMA_VERSION", "V5_META_COLUMNS", "V5_POINT_COLUMNS", "V5_EVENT_COLUMNS", "V5_PROFILE_REGISTRY_SCHEMA", "V5_PROFILE_REGISTRY_VERSION", "V5_MAX_CONFIG_BYTES", "V5_MAX_PROFILE_REGISTRY_BYTES"]

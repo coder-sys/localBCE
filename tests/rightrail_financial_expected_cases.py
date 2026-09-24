@@ -44,6 +44,27 @@ class PopulationItemExpectation:
 
 
 @dataclass(frozen=True, slots=True)
+class PopulationManifestExpectation:
+    manifest_id: str
+    manifest_version: int
+    scope: ScopeExpectation
+    pack_id: str
+    cutoff_ms: int
+    inclusion_rules: tuple[str, ...]
+    source_owner_id: str
+    authority_id: str
+    authority_epoch: int
+    approved_by: str
+    approval_ref: str
+    source_id: str
+    source_version: str
+    source_digest_hex: str
+    member_ids: tuple[str, ...]
+    supersedes_manifest_id: str | None = None
+    supersedes_digest_hex: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class EvidenceExpectation:
     evidence_id: str
     item_id: str
@@ -58,6 +79,30 @@ class EvidenceExpectation:
     amount_cents: int | None = None
     reversal_of: str | None = None
     supersedes: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecipientPaymentExpectation:
+    item_id: str
+    payment_id: str
+    evidence_id: str
+    common_origin_id: str
+    amount_cents: int
+    source_id: str
+    source_version: str
+    local_ref: str
+    event_at_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class FundingReceiptExpectation:
+    receipt_id: str
+    scope: ScopeExpectation
+    source_record_ref: str
+    amount_cents: int
+    event_at_ms: int
+    confirmation_class: str
+    evidence_status: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,13 +256,39 @@ CORRECTION_PAYMENT_CENTS = 300_000
 CONFLICTING_P2_CENTS = 300_001
 
 H_OBLIGATION_ID = "obligation:item-h:period-01"
+H_CASE_ID = "case:obligation:item-h:period-01"
+H_CLAIM_ID = "claim:obligation-item-h:offset-v1"
+H_INITIAL_PAYMENT_ID = "payment:h:cash"
+H_ACKNOWLEDGMENT_REF = "ack:correction:h:v1"
 ACTION_OFFSET_ID = "action:obligation-item-h:offset-v1"
 ACTION_CORRECTION_ID = "action:obligation-item-h:correction-v1"
 P2_EVIDENCE_ID = "evidence:payment-h:p2"
 P2_REVERSAL_EVIDENCE_ID = "evidence:payment-h:p2-reversal"
-
+FIRST_SERVICE_JOURNEY_ID = "first-service:provider-payment:period-01:v1"
+PARTIAL_OTHER_RECIPIENT_CASH_CENTS = 84_600_000  # 18 recipients x 4,700,000 cents.
+DECISION_PACKAGE_EXPECTATION = {
+    "recipient_count": 20,
+    "program_owed_cents": 100_000_000,
+    "program_owed_dollars": 1_000_000,
+    "item_h_owed_cents": 10_000_000,
+    "item_h_initial_cash_cents": 9_700_000,
+    "item_h_shortfall_cents": 300_000,
+    "item_h_correction_cents": 300_000,
+    "item_h_cash_after_correction_cents": 10_000_000,
+}
 PERIOD_ONE_SCOPE = ScopeExpectation(STATE_ID, DEPLOYMENT_ID, PROGRAM_ID, PERIOD_ONE_ID, CURRENCY)
 PERIOD_TWO_SCOPE = ScopeExpectation(STATE_ID, DEPLOYMENT_ID, PROGRAM_ID, PERIOD_TWO_ID, CURRENCY)
+
+# Fictional synthetic evidence only; no source bytes, authentication, or State approval is asserted.
+PROGRAM_FUNDING_RECEIPT = FundingReceiptExpectation(
+    "funding-receipt:state:period-01:v1",
+    PERIOD_ONE_SCOPE,
+    "state-payment-record:period-01:original-001",
+    100_000_000,
+    CASH_EVENT_MS,
+    "STATE_PAYMENT_RECORD",
+    "SYNTHETIC_UNAPPROVED",
+)
 
 PROGRAM_ITEMS = (
     PopulationItemExpectation(POPULATION_ONE_ID, H_ITEM_ID, "Synthetic recipient H", H_OWED_CENTS, H_DUE_AT_MS),
@@ -242,6 +313,41 @@ PROGRAM_ITEMS = (
     PopulationItemExpectation(POPULATION_ONE_ID, "item-19", "Synthetic recipient 19", FINAL_OTHER_ITEM_CENTS, H_DUE_AT_MS),
 )
 
+OTHER_RECIPIENT_PAYMENTS = tuple(
+    RecipientPaymentExpectation(
+        item_id=item_id,
+        payment_id=f"payment:{item_id}:allocation-v1",
+        evidence_id=f"evidence:payment:{item_id}:allocation-v1",
+        common_origin_id=f"origin:payment:{item_id}:allocation-v1",
+        amount_cents=amount_cents,
+        source_id="fixture-payment-file",
+        source_version="allocation-v1",
+        local_ref=f"ref:payment:{item_id}:allocation-v1",
+        event_at_ms=CASH_EVENT_MS,
+    )
+    for item_id, amount_cents in (
+        ("item-01", 4_700_000),
+        ("item-02", 4_700_000),
+        ("item-03", 4_700_000),
+        ("item-04", 4_700_000),
+        ("item-05", 4_700_000),
+        ("item-06", 4_700_000),
+        ("item-07", 4_700_000),
+        ("item-08", 4_700_000),
+        ("item-09", 4_700_000),
+        ("item-10", 4_700_000),
+        ("item-11", 4_700_000),
+        ("item-12", 4_700_000),
+        ("item-13", 4_700_000),
+        ("item-14", 4_700_000),
+        ("item-15", 4_700_000),
+        ("item-16", 4_700_000),
+        ("item-17", 4_700_000),
+        ("item-18", 4_700_000),
+        ("item-19", 5_400_000),
+    )
+)
+
 CONTROL_PACK_V1 = ControlPackExpectation(
     "control-pack:fixture-2026-01:v1", PERIOD_ONE_SCOPE, 1,
     ("fixture-source:approved-schedule:v1",), PERIOD_ONE_START_MS, PERIOD_ONE_END_MS,
@@ -258,6 +364,30 @@ CONTROL_PACK_V2 = ControlPackExpectation(
     ("period-02-uses-rule-v2", "period-01-evaluation-preserved", "retrospective-authority-required"),
 )
 CONTROL_PACKS = (CONTROL_PACK_V1, CONTROL_PACK_V2)
+
+# Hand-authored separately from PROGRAM_ITEMS: this is the expected source roster,
+# not a projection of the imported detail feed.
+POPULATION_MANIFEST_MEMBER_IDS = (
+    "item-01", "item-02", "item-03", "item-04", "item-05", "item-06", "item-07",
+    "item-08", "item-09", "item-10", "item-11", "item-12", "item-13", "item-14",
+    "item-15", "item-16", "item-17", "item-18", "item-19", "item-h",
+)
+POPULATION_MANIFEST_V1 = PopulationManifestExpectation(
+    "population-manifest:fixture-2026-01:v1", 1, PERIOD_ONE_SCOPE,
+    CONTROL_PACK_V1.pack_id, PERIOD_ONE_START_MS, ("included:synthetic",),
+    "source-owner:fixture-state-finance-v1", "synthetic-authority-v1", 1,
+    "synthetic-official", "synthetic-approval:population-roster:2026-01:v1",
+    "fixture-source:population-roster", "roster-v1",
+    "0123456789ABCDEF" * 8, POPULATION_MANIFEST_MEMBER_IDS,
+)
+POPULATION_MANIFEST_V2 = PopulationManifestExpectation(
+    "population-manifest:fixture-2026-02:v1", 1, PERIOD_TWO_SCOPE,
+    CONTROL_PACK_V2.pack_id, PERIOD_TWO_START_MS, ("included:synthetic",),
+    "source-owner:fixture-state-finance-v1", "synthetic-authority-v1", 1,
+    "synthetic-official", "synthetic-approval:population-roster:2026-02:v1",
+    "fixture-source:population-roster", "roster-v1",
+    "89ABCDEF01234567" * 8, POPULATION_MANIFEST_MEMBER_IDS,
+)
 
 OTHER_SUPPORT_EVIDENCE = (
     EvidenceExpectation("evidence:support:item-01", "item-01", "SUPPORT", "origin:support:01", "fixture-source", "support-v1", "ref:support:01", SUPPORT_EVENT_MS, SUPPORT_EVENT_MS, SUPPORT_EVENT_MS),
@@ -339,7 +469,7 @@ INTERRUPTION_EXPECTATIONS = (
     InterruptionExpectation("RECOVERY", "reopen-reads-last-committed-state", True, True, "none"),
 )
 CONTINUITY = ContinuityExpectation(
-    "RR/FINANCIAL/CONTINUITY/v5", CASE_11.case_id, "SHADOW", False, False,
+    "RR/FINANCIAL/CONTINUITY/v7", CASE_11.case_id, "SHADOW", False, False,
     ("control_packs", "populations", "obligations", "evidence_references", "evaluations", "cases", "determinations", "actions", "outbox_state"),
     ("raw_evidence_bytes", "secrets", "private_proof_material", "external_payment_credentials"), True, True, 0,
 )
@@ -352,15 +482,17 @@ BOUNDARY_EXPECTATIONS = BoundaryExpectation(
 ACCEPTANCE_CASES = (CASE_01, CASE_02, CASE_03, CASE_04, CASE_05, CASE_06, CASE_07, CASE_08, CASE_09, CASE_10, CASE_11, CASE_12)
 
 __all__ = (
-    "ScopeExpectation", "ControlPackExpectation", "PopulationItemExpectation", "EvidenceExpectation",
-    "BalanceExpectation", "ActionExpectation", "RejectionExpectation", "RevisionRaceExpectation",
-    "InterruptionExpectation", "ContinuityExpectation", "BoundaryExpectation", "AcceptanceCase",
+    "ScopeExpectation", "ControlPackExpectation", "PopulationItemExpectation", "PopulationManifestExpectation", "EvidenceExpectation",
+    "RecipientPaymentExpectation", "BalanceExpectation", "ActionExpectation", "RejectionExpectation", "RevisionRaceExpectation",
+    "InterruptionExpectation", "ContinuityExpectation", "BoundaryExpectation", "AcceptanceCase", "FundingReceiptExpectation",
     "STATE_ID", "DEPLOYMENT_ID", "PROGRAM_ID", "CURRENCY", "PERIOD_ONE_ID", "PERIOD_TWO_ID",
-    "POPULATION_ONE_ID", "POPULATION_TWO_ID", "PERIOD_ONE_START_MS", "PERIOD_ONE_END_MS",
+    "POPULATION_ONE_ID", "POPULATION_TWO_ID", "POPULATION_MANIFEST_MEMBER_IDS", "POPULATION_MANIFEST_V1", "POPULATION_MANIFEST_V2", "PERIOD_ONE_START_MS", "PERIOD_ONE_END_MS",
     "PERIOD_TWO_START_MS", "PERIOD_TWO_END_MS", "H_DUE_AT_MS", "H_ITEM_ID", "OTHER_ITEM_IDS",
     "ITEM_IDS", "H_OWED_CENTS", "OTHER_ITEM_CENTS", "FINAL_OTHER_ITEM_CENTS", "OTHER_TOTAL_CENTS",
     "PROGRAM_TOTAL_CENTS", "H_CASH_CENTS", "UNAPPROVED_OFFSET_CENTS", "CORRECTION_PAYMENT_CENTS",
-    "CONFLICTING_P2_CENTS", "PERIOD_ONE_SCOPE", "PERIOD_TWO_SCOPE", "PROGRAM_ITEMS",
+    "CONFLICTING_P2_CENTS", "H_CASE_ID", "H_CLAIM_ID", "H_INITIAL_PAYMENT_ID", "H_ACKNOWLEDGMENT_REF",
+    "FIRST_SERVICE_JOURNEY_ID", "PARTIAL_OTHER_RECIPIENT_CASH_CENTS", "DECISION_PACKAGE_EXPECTATION", "PROGRAM_FUNDING_RECEIPT", "PERIOD_ONE_SCOPE", "PERIOD_TWO_SCOPE", "PROGRAM_ITEMS",
+    "OTHER_RECIPIENT_PAYMENTS",
     "CONTROL_PACK_V1", "CONTROL_PACK_V2", "CONTROL_PACKS", "OTHER_SUPPORT_EVIDENCE", "H_EVIDENCE",
     "H_CASH_EVIDENCE", "OFFSET_CLAIM_EVIDENCE", "OFFSET_SUPPORT_EVIDENCE", "OFFSET_APPROVAL_EVIDENCE",
     "CORRECTION_AUTH_EVIDENCE", "ACTION_ACK_EVIDENCE", "P2_PAYMENT_EVIDENCE", "P2_CONFIRMATION_EVIDENCE",

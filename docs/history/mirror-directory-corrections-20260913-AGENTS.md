@@ -1,0 +1,260 @@
+# Agent instructions for Blind Ledger
+
+## Current RightRail project direction
+
+This is a separate Mirror research checkout with completed synthetic
+observation work; it is not the financial writer or production clearance
+authority. Read Driver `../../AGENTS.md` and `../../WORKSPACE_MAP.md`
+explicitly because this child Git root does not inherit them automatically.
+The founder's final architecture directive is
+`C:/Users/neers/.codex/attachments/1a177062-91e1-4045-bb92-388b6acb9a55/Pasted text.txt`;
+the project-wide enforcement supplement is
+`C:/Users/neers/.codex/attachments/897ee774-10c4-4b5c-9603-6dcd4944516f/Pasted text.txt`.
+The financial checkout maintains the full-stack target in
+`docs/RIGHTRAIL_FULL_STACK_TARGET.md`. Verify this checkout's
+`CURRENT_TASK.md`, `STATE.md`, and actual Git identity before new work.
+
+Blind Ledger is RightRail's database-backed payment-clearance system. Treat proof, policy, state,
+signature, custody, clearance-transition, and downstream payment-interface code as trust-critical.
+
+## Before editing
+
+1. Work from this repository root.
+2. Read `docs/DATABASE_ZK_ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
+   `docs/LEAN_FORMAL_KERNEL.md`, and `docs/IMPLEMENTATION_ROADMAP.md`.
+   For Mirror work, also read `docs/MIRROR_ARCHITECTURE.md`.
+3. After context loss, re-read this file, `CURRENT_TASK.md`, and `STATE.md`. A published source
+   archive may omit workspace-only authority records; in that archive, use the current root
+   documents and `RELEASE_FILE_MANIFEST.json`.
+4. Use existing Python, Rust, and CUDA installations. Keep generated outputs outside release archives.
+5. For work that changes a gate, proof claim, or continuation decision, also read
+   `docs/DESIGN_IDEOLOGY.md` and `docs/IMPLEMENTATION_ROADMAP.md` before acting.
+
+## Current architecture boundary
+
+- The application database is the operational source of truth for Blind Ledger clearance state; the
+  official state payment system remains the source of truth for actual funds movement.
+- An undisclosed payment-relevant assertion crossing the clearance trust boundary and affecting
+  automation requires a mandatory application ZK proof. Evidence already lawfully held in plaintext by the state
+  clearance service uses the same inspectable deterministic rule and atomic state machine without
+  purposeless ZK ceremony.
+- The verifier-owned automatic control set fixes the evidence mode and evaluator identity before
+  admission. A caller cannot select `DIRECT_STATE_OWNED`, and a failed `PRIVATE_ZK` request cannot
+  downgrade to it.
+- The native verifier must accept before one atomic private-path database transaction can consume
+  nullifiers and update clearance state. Proof acceptance never defaults to `CLEAR`.
+- The later mandatory target gives an executable Lean kernel authority over clearance semantics and
+  legal state transitions. It is not active now: Rust retains cryptographic proof acceptance and
+  the database retains durability/concurrency until the kernel is linked and every theorem/build
+  gate passes.
+- The fixed directives are `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and
+  `EXCEPTION_APPROVED`; the last requires a governed signed state authorization.
+- Government and oracle signatures authenticate provenance and authority; they do not prove that the underlying facts are true.
+- No L2, rollup, sequencer, bridge, public data-availability layer, or Solidity settlement contract is part of the current design.
+- Ethereum is a committed later L1 checkpoint capability, not a Phase 0-2 dependency, settlement
+  role, or fixed-cadence requirement.
+- The executable chronology is strict: `rule_effective < event < observation < decision`. The same
+  four times are bound across the request, decision, receipt, and exact retry.
+- The database boundary admits one decision and exactly two accesses indexed `[0,1]`: `decision_index=0`,
+  `access_count=2`, and each access carries the matching `decision_id`. Reads use observation time;
+  the clearance-state write uses decision time.
+
+## Document precedence
+
+`AGENTS.md` owns execution and safety rules. `CURRENT_TASK.md` owns only the current bounded
+objective and blockers. `STATE.md` owns verified implementation evidence and nonclaims.
+`ARCHITECTURE.md` owns system boundaries and component ownership. The active `docs/` authorities
+own their named technical boundaries, and `docs/DESIGN_IDEOLOGY.md` remains an independent design
+contract. Retired or compatibility documents cannot override any of these authorities.
+
+## Protected trust-critical paths
+
+Do not edit these unless the owner explicitly authorizes the exact change:
+
+- `app/minimal_clearance_verification_queue.py`
+- `app/minimal_clearance_verification_queue_independent.py`
+- `app/minimal_clearance_composition.py`
+- `app/minimal_clearance_composition_independent.py`
+- `experiments/longfellow_v09_native_v3/`
+- `app/mirror/`
+- `app/oracle_attestation.py`
+- `app/public_inputs.py`
+- `app/canonical_encoding.py`
+
+## Protected-path delegation status
+
+The protected list above is the active default and remains owner-gated. The four bounded Mirror
+grants issued on 2026-09-05 and consumed by the immutable `0607a275bb5158dd4b4c70dfcd95d0967c80b839`
+base are closed historical permissions; their exact scopes and evidence remain in Git history. The
+driver-reviewed Mirror patch `46a4c965464ea2cd72a3205d82652ddbf8ae51f6`, approved under the
+owner-delegated engineering authority and integrated here as local commit
+`57e5f1f938ff7346880c6fd6a01138cecd575712`, is limited to the exact deleted adapter/test files,
+`app/mirror/source_admission.py`, and `tests/test_mirror_state_source_contract.py`. The
+nonprotected source-only cleanup `6df4578aa5c98ca23ba38b563b74a075a504c483`, integrated here as
+`47eb2309e08d17913bb2fc99ffb33e02dc9bffaa`, removes only unused governance aliases. These are
+completed reviewed changes, not open permission; future protected changes need a new owner
+delegation from the owner, or a driver-issued packet within an existing owner delegation, naming
+the exact paths, tests, invariants, and evidence. This child neither extends nor revokes a separate
+owner packet in another task.
+
+The separately approved source-only deletion `d50f0f28134e40fc5a6a04028ef401f801d6596e`, integrated
+here as local commit `c230aa518f95397f2dac0af8592aae93796c2b53`, removes exactly the two obsolete
+Native throughput/runner wrappers and their obsolete test; no replacement Queue/runtime,
+source-auth, Profile 11, or protected-path implementation was changed by that deletion.
+
+The completed Mirror boundary remains governed by these invariants: independent Core/Ingress
+reconstruction is fail-closed; every native and service release result is checked; partial release
+retains exact ownership; an ambiguous POSIX descriptor is never retried; Windows unlock/handle
+failures are observable and retryable only while handle identity is safe; constructor failures
+release every acquired resource; and WriterAuthority is not reported closed until physical release
+is resolved. The read-only export bridge selects only the independently verified current Core
+`SOURCE_OBSERVATION`, rebinds it to the exact current Ingress artifact/receipt/profile, keeps the
+existing exporter as sole response producer, and fails closed without mutation or raw-data leakage.
+Native-release fault injection, normal close/reopen, scope/concurrency lifecycle, constructor and
+close-retry regressions, independent Core/Ingress diagnostics, and export/privacy checks remain the
+required evidence for any future delegated change.
+
+## Operational authority
+
+`ops/` is canonical. `tools/ops_authority.py` freezes its exact regular-file set, lengths, and SHA3-512 identities. Never change policy bytes merely to make a check pass.
+This protects the canonical byte identity; it does not freeze documented gate predicates. Evolve a
+gate through the explicit policy record below, not by mutating authoritative bytes until a check
+passes.
+
+## Claims
+
+The repository is nonactivating. `proofSuiteId` remains null and `production_usable=false`. Do not
+claim production readiness, a deployed formally verified kernel, independent audit acceptance,
+real-PHI safety, real-payment authorization, or Ethereum settlement without current raw evidence.
+
+## Gate governance and continued execution
+
+Gates are executable controls derived from invariants; they are not sacred text. A gate predicate
+can be stale, incorrect, over-broad, non-applicable to the current profile, or contradicted by
+current executable behavior. When current evidence demonstrates that condition, an explicitly
+authorized change may weaken, disable, suspend, replace, or relabel the gate. That is gate
+evolution, not a silent bypass.
+
+Before proceeding under a changed gate, record all of the following in the active run or design
+record:
+
+1. the gate name/version and exact predicate;
+2. the invariant and failure mode the predicate was intended to protect;
+3. the raw evidence showing that the predicate is stale, incorrect, over-broad, or non-applicable;
+4. the disposition: retain, replace, weaken, disable, suspend, or relabel;
+5. the replacement or compensating control, or an explicit statement that none exists;
+6. the exact scope, profile, and duration of the disposition; and
+7. the resulting claim, credit, qualification, and activation consequences.
+
+Never change policy bytes, falsify telemetry, delete failures, hide warnings, or call a failed
+predicate a pass merely to make a run succeed. A relaxed or disabled gate may support diagnosis,
+synthetic exploration, or an explicitly labelled nonqualifying lane, but it cannot silently retain
+the old assurance. It cannot qualify production, authorize a payment, advance `proofSuiteId`, or
+enable activation unless a separately evidenced policy restores those claims. Changing a gate is
+not permission to accept malformed proofs, skip independent verification, bypass atomic mutation,
+exceed a physical safety limit, use real PHI or payments, or suppress an unresolved security fact.
+
+When implementation, test, or run work is authorized, continue through successful substeps and
+recoverable failures until the authorized objective is complete. A passing test, completed
+document section, preflight result, compile, or discovered launch blocker is a phase boundary, not
+an automatic end to the task. After each boundary, re-anchor to current repository evidence,
+identify the next dependency, make the smallest correct change or run the next safe check, verify
+it, and continue. Do not return a status-only handoff while requested work remains.
+
+Classify a blocker precisely:
+
+- A blocked launch means the named run cannot start; safe implementation, test, evidence, and
+  replacement-gate work may continue.
+- A blocked claim means current evidence cannot support the named claim; nonactivating work may
+  continue under an honest lower claim.
+- A blocked task means no safe, in-scope work remains, or an unresolved authority, protected-path,
+  destructive-action, or resource-safety decision requires the owner.
+
+Stop the affected operation rather than guess when a trust-critical fact is unresolved. Stop the
+entire task only for explicit user stop, completion, an unsafe resource/identity condition, a
+protected-path or destructive-action conflict requiring approval, or an unresolved ambiguity after
+safe alternatives and gate review have been exhausted. An outdated gate is an investigation and
+policy-evolution task, not by itself a reason to abandon the authorized objective.
+
+## Git and source-archive continuity
+
+Use Git continuously as the repository's change ledger. At the start and end of every phase,
+before and after every run, before an archive refresh, and after archive publication, inspect and
+record at minimum:
+
+```powershell
+git rev-parse HEAD
+git status --short
+git diff --check
+git diff --name-status
+```
+
+Use `git diff`, `git diff --stat`, and targeted file reads to understand the actual change. Preserve
+the dirty worktree: never use `git reset`, `git clean`, destructive checkout/revert, or broad
+autofix to erase unrelated work. Do not stage or commit unrelated changes. A Git commit identifier
+alone does not describe a dirty worktree; record the commit plus the relevant worktree diff or
+staged-source identity for every run and archive.
+
+For a successful archive refresh, the three retained source-archive roles are one Downloads copy,
+one Desktop-root copy, and one nested Desktop source-backup copy of
+`Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip`. Discover them before each successful refresh;
+never assume a remembered path or accept only the first three matches:
+
+```powershell
+$archiveName = 'Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip'
+$userRoot = [Environment]::GetFolderPath('UserProfile')
+$targets = @(Get-ChildItem -LiteralPath $userRoot -Filter $archiveName -File -Recurse -ErrorAction SilentlyContinue | Sort-Object FullName)
+if ($targets.Count -ne 3) { throw "expected exactly 3 retained source archives; found $($targets.Count)" }
+$identities = foreach ($target in $targets) {
+    $hash = Get-FileHash -LiteralPath $target.FullName -Algorithm SHA256
+    [pscustomobject]@{ Path = $target.FullName; Bytes = $target.Length; SHA256 = $hash.Hash }
+}
+$identities | Format-Table -AutoSize
+if (@($identities.Bytes | Sort-Object -Unique).Count -ne 1 -or @($identities.SHA256 | Sort-Object -Unique).Count -ne 1) {
+    throw 'the three retained source archives are not byte-identical'
+}
+```
+
+The exact current role paths are discovery results, not portable policy. During a successful refresh,
+if the scan finds zero, more than three, a missing role, differing lengths, or differing hashes,
+classify archive custody as blocked and preserve the raw inventory; do not silently choose, delete,
+or overwrite a target.
+Unrelated dependency, toolchain, and research ZIPs are not source-archive targets.
+
+Only a successful, verified run enters the source-archive refresh lifecycle. A failed, timed-out,
+cancelled, or preflight-blocked run must not refresh or publish source archives and must not create
+a builder receipt for that failed outcome; retain its raw evidence and Git checkpoint instead.
+For a successful refresh, the archive contains only the reviewed source and documentation allowlist;
+it must never contain proof outputs, generated build trees, private run artifacts,
+workspace-only continuation records, real PHI, payments, or credentials. The required sequence is:
+
+1. complete and retain the run's raw evidence and Git checkpoint;
+2. create or refresh the exact reviewed `APP_RELEASE_FILE_MANIFEST.json` in a bounded staged source
+   root, including every intended publishable source/documentation change and excluding generated or
+   private artifacts;
+3. build one fresh archive outside that source root with the deterministic builder and its exact
+   readback:
+
+   ```powershell
+   py -3.14 -B -m tools.build_release_archive `
+     --source-root <bounded-staged-source-root> `
+     --manifest <bounded-staged-source-root>\APP_RELEASE_FILE_MANIFEST.json `
+     --output <fresh-output-directory>\Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip
+   ```
+
+   The checked-in builder is create-only and rejects an existing output. Resolve the staged source
+   root and manifest from the current release-manifest authority; never invent an allowlist or point
+   the builder directly at an existing publication target.
+
+4. publish the verified fresh bytes to exactly the three discovered targets using the bounded
+   same-directory temporary/backup publisher; retain rollback copies until all replacements pass;
+5. independently read back all three targets and require equal byte length, equal SHA-256, canonical
+   ZIP/CRC readback, no duplicate or unexpected entries, zero temporary publication artifacts, and
+   `three_way_byte_identical=true`; and
+6. retain the builder receipt, source/manifest identity, Git identity, target inventory, hashes,
+   readback result, cleanup result, and any failure or skipped step with its reason.
+
+If a successful archive refresh is attempted but the staging, manifest-generation, or three-target
+publication seam is missing, do not claim the archive was refreshed. Continue implementing or
+repairing that seam as the next safe dependency; the run may remain nonactivating and lower-claim
+while this is resolved.

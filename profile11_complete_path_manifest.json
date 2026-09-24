@@ -119,6 +119,11 @@
       "path": "C:\\Users\\neers\\Documents\\Codex\\2026-09-01\\blind-zkbpp-c-profile11-extmu-v1-prod-msvc\\Release\\blind_range100_cdg_direct_v1.lib",
       "bytes": 109342,
       "sha256": "1B190B727D612CCC53C37E211BDC04C7BB1EA971D9E694FDD9B97C67549A7C30"
+    },
+    "source_host": {
+      "path": "C:\\Users\\neers\\Documents\\Codex\\2026-08-29\\e2e-v2\\work\\semantic-kernel-integration-20260906\\experiments\\profile11_source_host\\target\\release\\profile11_source_host.exe",
+      "bytes": 480768,
+      "sha256": "3D2C0A468303E68AA63B2A6A52BA922422231695D589ED1562E4F1CA3A8F5562"
     }
   },
   "synthetic_key": {

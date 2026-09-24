@@ -1024,10 +1024,6 @@ def build_report(raw_input: bytes, *, profile: object | None = None) -> tuple[by
     return raw, {"artifact_bytes": len(raw), "wall_time_ns": time.perf_counter_ns() - start, "process_tree_peak_bytes": max(peak_values) if peak_values else None, "process_tree_scope": "single-process; no child processes", "proof_performance_claim": False}
 
 
-def build_demo_report(case: str = "confirmed") -> tuple[bytes, dict[str, object]]:
-    return build_report(canonical_input(demo_input(case)))
-
-
 def _read_bounded(path: str | Path, maximum: int) -> bytes:
     try:
         file_path = Path(path)

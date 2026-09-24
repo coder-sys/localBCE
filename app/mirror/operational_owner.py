@@ -19,6 +19,7 @@ from app.mirror import core_v2 as core
 from app.mirror import core_v2_independent as core_independent
 from app.mirror import ingress_v2 as ingress
 from app.mirror import ingress_v2_independent as ingress_independent
+from app.mirror import profile_governance_v1 as profile_governance
 from app.mirror import provider_evidence_export_v1 as provider_export
 from app.mirror import recovery_v2 as recovery
 from app.mirror import recovery_v2_independent as recovery_independent
@@ -82,6 +83,36 @@ class OperationalConfigV1:
             ):
                 raise OperationalOwnerError("mirror:operational-config")
         if type(self.max_due) is not int or not 1 <= self.max_due <= 16:
+            raise OperationalOwnerError("mirror:operational-config")
+
+
+@dataclass(frozen=True)
+class OperationalConfigV5:
+    """Acquisition identity plus the selected public Core V5 profile."""
+
+    acquisition_identity: str
+    external_policy_digest: str
+    profile_digest: str
+    profile_id: str
+    profile_version: int
+    max_due: int = 16
+
+    def __post_init__(self) -> None:
+        OperationalConfigV1(
+            self.acquisition_identity,
+            self.external_policy_digest,
+            self.profile_digest,
+            self.max_due,
+        )
+        if type(self.profile_id) is not str or not self.profile_id or len(self.profile_id) > 256:
+            raise OperationalOwnerError("mirror:operational-config")
+        try:
+            encoded = self.profile_id.encode("ascii")
+        except UnicodeEncodeError:
+            raise OperationalOwnerError("mirror:operational-config") from None
+        if any(byte < 0x21 or byte > 0x7E for byte in encoded):
+            raise OperationalOwnerError("mirror:operational-config")
+        if type(self.profile_version) is not int or self.profile_version <= 0:
             raise OperationalOwnerError("mirror:operational-config")
 
 
@@ -194,36 +225,77 @@ class MirrorOperationalOwnerV1:
         self,
         root: str | Path,
         ingress_config: ingress.IngressConfigV2,
-        core_config: core.CoreConfigV2,
-        recovery_config: recovery.RecoveryConfigV2,
+        core_config: core.CoreConfigV2 | core.CoreConfigV5,
+        recovery_config: recovery.RecoveryConfigV2 | recovery.RecoveryConfigV5,
         acquisition_port: AcquisitionPort,
         custody: recovery.KeyCustodyPort,
         storage: recovery.RecoveryStoragePort,
         *,
         clock: Callable[[], int],
-        operational_config: OperationalConfigV1,
+        operational_config: OperationalConfigV1 | OperationalConfigV5,
+        profile_registry: Mapping[str, object] | None = None,
     ) -> None:
         if not callable(clock):
             raise OperationalOwnerError("mirror:operational-config")
-        if type(operational_config) is not OperationalConfigV1:
+        v5 = (
+            type(core_config) is core.CoreConfigV5
+            or type(recovery_config) is recovery.RecoveryConfigV5
+            or type(operational_config) is OperationalConfigV5
+        )
+        if type(ingress_config) is not ingress.IngressConfigV2:
             raise OperationalOwnerError("mirror:operational-config")
+        if v5 and not (
+            type(core_config) is core.CoreConfigV5
+            and type(recovery_config) is recovery.RecoveryConfigV5
+            and type(operational_config) is OperationalConfigV5
+            and isinstance(profile_registry, Mapping)
+            and bool(profile_registry)
+        ):
+            raise OperationalOwnerError("mirror:operational-config")
+        if not v5 and not (
+            type(core_config) is core.CoreConfigV2
+            and type(recovery_config) is recovery.RecoveryConfigV2
+            and type(operational_config) is OperationalConfigV1
+        ):
+            raise OperationalOwnerError("mirror:operational-config")
+        if v5:
+            try:
+                if profile_governance.profile_registry_digest(profile_registry) != core_config.profile_registry_digest:
+                    raise OperationalOwnerError("mirror:operational-config")
+            except OperationalOwnerError:
+                raise
+            except Exception:
+                raise OperationalOwnerError("mirror:operational-config") from None
         try:
             root_path = writer_authority.safe_root(root)
         except writer_authority.WriterAuthorityError:
             raise OperationalOwnerError("mirror:operational-root") from None
-        if type(ingress_config) is not ingress.IngressConfigV2 or type(core_config) is not core.CoreConfigV2 or type(recovery_config) is not recovery.RecoveryConfigV2:
-            raise OperationalOwnerError("mirror:operational-config")
-        if (
-            core_config.ingress_database_id != ingress_config.database_id
-            or core_config.ingress_chain_id != ingress_config.chain_id
-            or core_config.ingress_config_digest != ingress_config.digest
-            or core_config.runtime_profile_digest != ingress_config.source_contract_digest
-            or recovery_config.ingress_database_id != ingress_config.database_id
-            or recovery_config.core_database_id != core_config.database_id
-            or recovery_config.ingress_config_digest != ingress_config.digest
-            or recovery_config.core_config_digest != core_config.digest
-            or operational_config.profile_digest != ingress_config.source_contract_digest
-        ):
+        common_binding = (
+            core_config.ingress_database_id == ingress_config.database_id
+            and core_config.ingress_chain_id == ingress_config.chain_id
+            and core_config.ingress_config_digest == ingress_config.digest
+            and recovery_config.ingress_database_id == ingress_config.database_id
+            and recovery_config.core_database_id == core_config.database_id
+            and recovery_config.ingress_config_digest == ingress_config.digest
+            and recovery_config.core_config_digest == core_config.digest
+            and operational_config.profile_digest == ingress_config.source_contract_digest
+        )
+        if type(core_config) is core.CoreConfigV2:
+            common_binding = common_binding and core_config.runtime_profile_digest == ingress_config.source_contract_digest
+        else:
+            try:
+                selected_profile = profile_registry.get(operational_config.profile_id) if isinstance(profile_registry, Mapping) else None
+                selected_version = int(getattr(selected_profile, "version"))
+            except Exception:
+                selected_profile = None
+                selected_version = -1
+            common_binding = common_binding and (
+                core_config.profile_registry_digest == recovery_config.profile_registry_digest
+                and recovery_config.core_profile_registry_digest == core_config.profile_registry_digest
+                and selected_profile is not None
+                and selected_version == operational_config.profile_version
+            )
+        if not common_binding:
             raise OperationalOwnerError("mirror:operational-config")
         try:
             acquisition_identity = getattr(acquisition_port, "acquisition_identity")
@@ -262,6 +334,11 @@ class MirrorOperationalOwnerV1:
         self.storage = storage
         self.clock = clock
         self.operational_config = operational_config
+        self._v5 = v5
+        try:
+            self.profile_registry = dict(profile_registry or {})
+        except Exception:
+            raise OperationalOwnerError("mirror:operational-config") from None
         self._closed = False
         self._closing = False
         self._close_in_progress = False
@@ -269,8 +346,8 @@ class MirrorOperationalOwnerV1:
         self._lifecycle_changed = threading.Condition(threading.RLock())
         self._authority: writer_authority.WriterAuthority | None = None
         self.ingress: ingress.IngressServiceV2 | None = None
-        self.core: core.CoreServiceV2 | None = None
-        self.recovery: recovery.RecoveryServiceV2 | None = None
+        self.core: core.CoreServiceV2 | core.CoreServiceV5 | None = None
+        self.recovery: recovery.RecoveryServiceV2 | recovery.RecoveryServiceV5 | None = None
         try:
             self._authority = writer_authority.WriterAuthority(root_path)
             initial_layout = self._authority.layout(allow_missing_stores=True)
@@ -287,7 +364,17 @@ class MirrorOperationalOwnerV1:
             self._assert_root_lock_identity()
             before_core = self._authority.layout(allow_missing_stores=True)
             self._assert_root_lock_identity()
-            self.core = core.CoreServiceV2(self.core_path, core_config, clock=self._authority.current_run_time, authority=self._authority)
+            if self._v5:
+                self.core = core.CoreServiceV5(
+                    self.core_path,
+                    core_config,
+                    profile_registry=self.profile_registry,
+                    ingress_path=self.ingress_path,
+                    clock=self._authority.current_run_time,
+                    authority=self._authority,
+                )
+            else:
+                self.core = core.CoreServiceV2(self.core_path, core_config, clock=self._authority.current_run_time, authority=self._authority)
             after_core = self._authority.layout(allow_missing_stores=True)
             self._assert_layout_transition(before_core, after_core)
             if after_core["core.sqlite"] is None:
@@ -295,7 +382,17 @@ class MirrorOperationalOwnerV1:
             self._assert_root_lock_identity()
             before_recovery = self._authority.layout(allow_missing_stores=True)
             self._assert_root_lock_identity()
-            self.recovery = recovery.RecoveryServiceV2(self.recovery_path, recovery_config, custody, storage, authority=self._authority)
+            if self._v5:
+                self.recovery = recovery.RecoveryServiceV5(
+                    self.recovery_path,
+                    recovery_config,
+                    custody,
+                    storage,
+                    profile_registry=self.profile_registry,
+                    authority=self._authority,
+                )
+            else:
+                self.recovery = recovery.RecoveryServiceV2(self.recovery_path, recovery_config, custody, storage, authority=self._authority)
             after_recovery = self._authority.layout(allow_missing_stores=True)
             self._assert_layout_transition(before_recovery, after_recovery)
             if after_recovery["recovery.sqlite"] is None:
@@ -459,18 +556,48 @@ class MirrorOperationalOwnerV1:
                 expected_config_digest=self.ingress_config.digest,
             )
             self._assert_owner_identity()
-            core_result = core_independent.verify_database(
-                self.core_path,
-                expected_database_id=self.core_config.database_id,
-                expected_config_digest=self.core_config.digest,
-                ingress_path=self.ingress_path,
-            )
+            if self._v5:
+                core_result = core_independent.verify_database_v5(
+                    self.core_path,
+                    expected_database_id=self.core_config.database_id,
+                    expected_config_digest=self.core_config.digest,
+                    profile_registry=self.profile_registry,
+                    ingress_path=self.ingress_path,
+                )
+            else:
+                core_result = core_independent.verify_database(
+                    self.core_path,
+                    expected_database_id=self.core_config.database_id,
+                    expected_config_digest=self.core_config.digest,
+                    ingress_path=self.ingress_path,
+                )
             self._assert_owner_identity()
             if ingress_result.get("database_id") != self.ingress_config.database_id or core_result.get("ingress_bound") is not True:
                 raise ValueError("mirror:reconciliation-binding")
             quarantined = self.ingress._operational_quarantined_artifact_ids(self.ingress_config.max_slots)
             self._assert_owner_identity()
-            represented = self.core._operational_represented_ingress_artifact_ids(self.ingress_config.max_slots)
+            if self._v5:
+                bindings = core_result.get("observation_bindings")
+                if type(bindings) is not tuple:
+                    raise ValueError("mirror:reconciliation-bindings")
+                represented_ids: set[str] = set()
+                for binding in bindings:
+                    if (
+                        type(binding) is not tuple
+                        or len(binding) != 10
+                        or type(binding[0]) is not str
+                        or type(binding[1]) is not int
+                        or type(binding[2]) is not str
+                        or type(binding[3]) is not str
+                        or len(binding[3]) != 128
+                        or any(char not in _HEX for char in binding[3])
+                    ):
+                        raise ValueError("mirror:reconciliation-bindings")
+                    if binding[0] == self.operational_config.profile_id and binding[1] == self.operational_config.profile_version:
+                        represented_ids.add(binding[3])
+                represented = tuple(value for value in quarantined if value in represented_ids)
+            else:
+                represented = self.core._operational_represented_ingress_artifact_ids(self.ingress_config.max_slots)
             self._assert_owner_identity()
         except Exception:
             raise OperationalOwnerError("mirror:operational-indeterminate") from None
@@ -489,11 +616,19 @@ class MirrorOperationalOwnerV1:
 
         self._assert_owner_identity()
         try:
-            result = recovery_independent.verify_database(
-                self.recovery_path,
-                expected_database_id=self.recovery_config.database_id,
-                expected_config_digest=self.recovery_config.digest,
-            )
+            if self._v5:
+                result = recovery_independent.verify_database_v5(
+                    self.recovery_path,
+                    expected_database_id=self.recovery_config.database_id,
+                    expected_config_digest=self.recovery_config.digest,
+                    expected_profile_registry_digest=self.recovery_config.profile_registry_digest,
+                )
+            else:
+                result = recovery_independent.verify_database(
+                    self.recovery_path,
+                    expected_database_id=self.recovery_config.database_id,
+                    expected_config_digest=self.recovery_config.digest,
+                )
         except Exception:
             raise OperationalOwnerError("mirror:operational-indeterminate") from None
         self._assert_owner_identity()
@@ -570,6 +705,49 @@ class MirrorOperationalOwnerV1:
         counts["admitted"] += 1
         counts["processed"] += 1
 
+    def _ingest_core_artifacts(self, artifact_ids: tuple[str, ...]) -> None:
+        assert self.core is not None
+        if self._v5:
+            for artifact_id in artifact_ids:
+                self.core.ingest_observation_from_ingress(
+                    self.ingress_path,
+                    artifact_id,
+                    profile_id=self.operational_config.profile_id,
+                    profile_version=self.operational_config.profile_version,
+                )
+        else:
+            self.core.ingest_sources(self.ingress_path, artifact_ids)
+
+    def admit_profile_artifact(self, raw: bytes) -> core.CoreReceiptV5:
+        """Admit one public V5 governance artifact through the locked owner."""
+
+        if not self._v5 or self.core is None:
+            raise OperationalOwnerError("mirror:operational-v5-required")
+        try:
+            authority = self._current_authority()
+            self._assert_owner_identity()
+            with authority.run_scope():
+                with authority.external_scope():
+                    try:
+                        now = self.clock()
+                    except Exception:
+                        raise OperationalOwnerError("mirror:operational-clock") from None
+                    if type(now) is not int or now < 0:
+                        raise OperationalOwnerError("mirror:operational-clock")
+                    authority.set_run_time(now)
+                self._assert_owner_identity()
+                receipt = self.core.admit_profile_artifact(raw)
+                self._assert_owner_identity()
+        except core.CoreConflictError:
+            raise OperationalOwnerError("mirror:operational-input") from None
+        except core.CoreError:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+        finally:
+            self._maybe_finish_close()
+        if type(receipt) is not core.CoreReceiptV5:
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        return receipt
+
     def _verify_all(self) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
         assert self._authority is not None
         try:
@@ -580,18 +758,35 @@ class MirrorOperationalOwnerV1:
                 expected_config_digest=self.ingress_config.digest,
             )
             self._assert_owner_identity()
-            core_result = core_independent.verify_database(
-                self.core_path,
-                expected_database_id=self.core_config.database_id,
-                expected_config_digest=self.core_config.digest,
-                ingress_path=self.ingress_path,
-            )
+            if self._v5:
+                core_result = core_independent.verify_database_v5(
+                    self.core_path,
+                    expected_database_id=self.core_config.database_id,
+                    expected_config_digest=self.core_config.digest,
+                    profile_registry=self.profile_registry,
+                    ingress_path=self.ingress_path,
+                )
+            else:
+                core_result = core_independent.verify_database(
+                    self.core_path,
+                    expected_database_id=self.core_config.database_id,
+                    expected_config_digest=self.core_config.digest,
+                    ingress_path=self.ingress_path,
+                )
             self._assert_owner_identity()
-            recovery_result = recovery_independent.verify_database(
-                self.recovery_path,
-                expected_database_id=self.recovery_config.database_id,
-                expected_config_digest=self.recovery_config.digest,
-            )
+            if self._v5:
+                recovery_result = recovery_independent.verify_database_v5(
+                    self.recovery_path,
+                    expected_database_id=self.recovery_config.database_id,
+                    expected_config_digest=self.recovery_config.digest,
+                    expected_profile_registry_digest=self.recovery_config.profile_registry_digest,
+                )
+            else:
+                recovery_result = recovery_independent.verify_database(
+                    self.recovery_path,
+                    expected_database_id=self.recovery_config.database_id,
+                    expected_config_digest=self.recovery_config.digest,
+                )
             if core_result.get("ingress_bound") is not True:
                 raise ValueError("core-bound")
             ingress_latest = ingress_result.get("latest_observed_at")
@@ -620,6 +815,8 @@ class MirrorOperationalOwnerV1:
         """Select one exact current Core source bound to the current Ingress artifact."""
 
         assert self._authority is not None
+        if self._v5:
+            return self._current_provider_observation_selection_v5()
         try:
             self._assert_owner_identity()
             ingress_result = ingress_independent.verify_database(
@@ -734,6 +931,107 @@ class MirrorOperationalOwnerV1:
             authorization_evidence=provider_export.SYNTHETIC_SELECTION_AUTHORIZATION,
         )
 
+    def _current_provider_observation_selection_v5(
+        self,
+    ) -> provider_export.ProviderEvidenceObservationSelectionV1:
+        """Select the current Ingress pair only when Core V5 stores its binding."""
+
+        assert self._authority is not None
+        try:
+            self._assert_owner_identity()
+            ingress_result = ingress_independent.verify_database(
+                self.ingress_path,
+                expected_database_id=self.ingress_config.database_id,
+                expected_config_digest=self.ingress_config.digest,
+                include_observation=True,
+            )
+            self._assert_owner_identity()
+            core_result = core_independent.verify_database_v5(
+                self.core_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                profile_registry=self.profile_registry,
+                ingress_path=self.ingress_path,
+            )
+            self._assert_owner_identity()
+        except OperationalOwnerError:
+            raise
+        except Exception:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+
+        if (
+            ingress_result.get("accepted") is not True
+            or ingress_result.get("schema") != ingress_independent.SCHEMA
+            or ingress_result.get("schema_version") != ingress_independent.SCHEMA_VERSION
+            or core_result.get("structural_valid") is not True
+            or core_result.get("schema") != core_independent.V5_SCHEMA
+            or core_result.get("schema_version") != core_independent.V5_SCHEMA_VERSION
+            or ingress_result.get("flags") != ingress_independent.FIXED_FLAGS
+            or core_result.get("flags") != core_independent.V5_FIXED_FLAGS
+            or core_result.get("ingress_bound") is not True
+        ):
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        ingress_artifact_id = ingress_result.get("current_artifact_id")
+        ingress_artifact = ingress_result.get("current_artifact")
+        if (
+            type(ingress_artifact_id) is not str
+            or not isinstance(ingress_artifact, dict)
+            or ingress_artifact.get("artifact_id") != ingress_artifact_id
+            or ingress_artifact.get("terminal_state") != "QUARANTINED"
+            or ingress_artifact.get("terminal_event_kind") != "ADMIT"
+        ):
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+
+        bindings = core_result.get("observation_bindings")
+        if type(bindings) is not tuple:
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        matches = [
+            binding for binding in bindings
+            if (
+                type(binding) is tuple
+                and len(binding) == 10
+                and binding[0] == self.operational_config.profile_id
+                and binding[1] == self.operational_config.profile_version
+                and binding[3] == ingress_artifact_id
+            )
+        ]
+        if len(matches) != 1:
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        binding = matches[0]
+        if (
+            binding[4] != ingress_artifact.get("observation_id")
+            or binding[5] != ingress_artifact.get("event_sequence")
+            or binding[6] != ingress_artifact.get("event_prefix_root")
+            or binding[7] != ingress_artifact.get("event_after_root")
+            or binding[8] != ingress_artifact.get("event_after_root")
+        ):
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+
+        observation_raw = ingress_artifact.get("observation")
+        receipt_raw = ingress_artifact.get("verification_receipt")
+        if type(observation_raw) is not bytes or type(receipt_raw) is not bytes:
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        try:
+            checked = ingress_independent.verify_observation_pair(
+                observation_raw,
+                receipt_raw,
+                expected_profile_id=ingress_independent.NC_MEDICAID_PROFILE.source_profile_id,
+                expected_profile_version=3,
+            )
+            if (
+                core_independent._canonical(checked["observation"]) != observation_raw
+                or core_independent._canonical(checked["verification_receipt"]) != receipt_raw
+                or checked["observation_id"] != ingress_artifact.get("observation_id")
+            ):
+                raise ValueError("observation-binding")
+        except Exception:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+        return provider_export.ProviderEvidenceObservationSelectionV1(
+            observation=observation_raw,
+            verification_receipt=receipt_raw,
+            authorization_evidence=provider_export.SYNTHETIC_SELECTION_AUTHORIZATION,
+        )
+
     def export_provider_evidence(self, request_raw: bytes) -> bytes:
         """Export one bounded aggregate from the independently verified current stores."""
 
@@ -839,7 +1137,7 @@ class MirrorOperationalOwnerV1:
         if recovered:
             self._assert_owner_identity()
             try:
-                self.core.ingest_sources(self.ingress_path, tuple(recovered))
+                self._ingest_core_artifacts(tuple(recovered))
             except Exception:
                 raise OperationalOwnerError("mirror:operational-indeterminate") from None
             self._assert_owner_identity()
@@ -879,7 +1177,7 @@ class MirrorOperationalOwnerV1:
                 raise OperationalOwnerError("mirror:operational-indeterminate")
             self._assert_owner_identity()
             try:
-                self.core.ingest_sources(self.ingress_path, tuple(admitted))
+                self._ingest_core_artifacts(tuple(admitted))
             except Exception:
                 raise OperationalOwnerError("mirror:operational-indeterminate") from None
             self._assert_owner_identity()
@@ -992,6 +1290,11 @@ class MirrorOperationalOwnerV1:
         self.close()
 
 
+# The V5 constructor is the same locked owner with an explicit profile
+# registry; the alias keeps the V1 lifecycle surface and exporter unchanged.
+MirrorOperationalOwnerV5 = MirrorOperationalOwnerV1
+
+
 __all__ = [
     "SCHEMA",
     "SCHEMA_VERSION",
@@ -999,8 +1302,10 @@ __all__ = [
     "OUTCOME_KEYS",
     "OperationalOwnerError",
     "OperationalConfigV1",
+    "OperationalConfigV5",
     "AcquisitionPort",
     "SanitizedObservationPayloadV1",
     "OperationalAggregateV1",
     "MirrorOperationalOwnerV1",
+    "MirrorOperationalOwnerV5",
 ]

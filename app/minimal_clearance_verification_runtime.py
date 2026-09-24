@@ -25,6 +25,13 @@ from app.minimal_clearance_verification_queue import (
     VolatileProofHandoff,
     _QueueRuntimeOwnership,
     _VerificationQueueStore,
+    LeanAdmissionKernel,
+    LeanAdmissionError,
+    _SYNTHETIC_REFERENCE_ADMISSION,
+)
+from app.minimal_clearance_verification_queue_independent import (
+    IndependentIssueRequestLookup,
+    resolve_issue_request,
 )
 from app.minimal_clearance_composition import (
     ClearanceCompositionStoreV2,
@@ -160,12 +167,24 @@ class MinimalClearanceVerificationRuntime:
     """One owner, one synchronous worker, one batch handoff."""
 
     @classmethod
+    def for_synthetic_reference(cls, **kwargs: object) -> "MinimalClearanceVerificationRuntime":
+        """Construct the kernel-free reference route used only by tests."""
+        if "admission_kernel" in kwargs:
+            _fixed("runtime_admission_kernel")
+        kwargs["admission_kernel"] = _SYNTHETIC_REFERENCE_ADMISSION
+        return cls(**kwargs)  # type: ignore[arg-type]
+
+    @classmethod
     def from_source_auth(cls, *, root: Path, source_auth_config: "SourceAuthVerifierConfig", state_disposition_port: StateDispositionPort | None = None, composition_config: CompositionConfigV2 | None = None, receiver: OfficialStateReceiverPort | None = None, lookup: OfficialStateReceiverLookupPort | None = None, clock: QueueClock | None = None) -> "MinimalClearanceVerificationRuntime":
         from app.minimal_clearance_source_auth_verifier_adapter import MinimalClearanceSourceAuthVerifierAdapter, SourceAuthVerifierConfig
         if type(source_auth_config) is not SourceAuthVerifierConfig:
             _fixed("runtime_configuration")
+        try:
+            admission_kernel = LeanAdmissionKernel()
+        except LeanAdmissionError:
+            _fixed("runtime_admission_kernel")
         verifier = MinimalClearanceSourceAuthVerifierAdapter(source_auth_config)
-        kwargs: dict[str, object] = {"root": root, "verifier": verifier, "config": source_auth_config.queue_config, "state_disposition_port": state_disposition_port, "composition_config": composition_config}
+        kwargs: dict[str, object] = {"root": root, "verifier": verifier, "config": source_auth_config.queue_config, "state_disposition_port": state_disposition_port, "composition_config": composition_config, "admission_kernel": admission_kernel}
         if receiver is not None:
             kwargs["receiver"] = receiver
         if lookup is not None:
@@ -174,11 +193,13 @@ class MinimalClearanceVerificationRuntime:
             kwargs["clock"] = clock
         return cls(**kwargs)  # type: ignore[arg-type]
 
-    def __init__(self, *, root: Path, verifier: object | None = None, config: QueueConfig | None = None, state_disposition_port: StateDispositionPort | None = None, composition_config: CompositionConfigV2 | None = None, receiver: OfficialStateReceiverPort | None = None, lookup: OfficialStateReceiverLookupPort | None = None, clock: QueueClock | None = None) -> None:
+    def __init__(self, *, root: Path, verifier: object | None = None, config: QueueConfig | None = None, state_disposition_port: StateDispositionPort | None = None, composition_config: CompositionConfigV2 | None = None, receiver: OfficialStateReceiverPort | None = None, lookup: OfficialStateReceiverLookupPort | None = None, clock: QueueClock | None = None, admission_kernel: object | None = None) -> None:
         if not isinstance(root, Path) or not root.is_absolute() or not root.is_dir():
             _fixed("runtime_configuration")
         if verifier is None:
             _fixed("runtime_backend_unqualified")
+        if admission_kernel is None:
+            _fixed("runtime_admission_kernel")
         if clock is not None and not callable(getattr(clock, "now_ms", None)):
             _fixed("runtime_configuration")
         if receiver is not None and (not callable(getattr(receiver, "identity_sha256", None)) or not callable(getattr(receiver, "epoch", None)) or not callable(getattr(receiver, "dispatch", None))):
@@ -223,7 +244,7 @@ class MinimalClearanceVerificationRuntime:
             if lookup is not None and not _lookup_is_bound(composition_config, lookup):
                 _fixed("runtime_acknowledgment_profile")
             owner = _QueueRuntimeOwnership(lock_path=database.with_name(database.name + ".runtime-lock"), parent=root)
-            store = _VerificationQueueStore(path=database, config=config, owner=owner, clock=clock, composition_config=composition_config)
+            store = _VerificationQueueStore(path=database, config=config, owner=owner, clock=clock, composition_config=composition_config, admission_kernel=admission_kernel)
             composition_store = ClearanceCompositionStoreV2(path=database, config=composition_config, clock=store.clock)
         except VerificationRuntimeError as error:
             fail_startup(str(error))
@@ -242,6 +263,7 @@ class MinimalClearanceVerificationRuntime:
         self._database_path = database
         self._database_owner = owner
         self._store = store
+        self._admission_kernel = admission_kernel
         self._composition_store = composition_store
         self._verifier = verifier
         self._state_disposition_port = state_disposition_port
@@ -342,8 +364,7 @@ class MinimalClearanceVerificationRuntime:
 
     def run(self, *, max_batches: int = 1, dispatch_batches: int = 0, reconciliation_batches: int = 0) -> RuntimeRunResult:
         with self._operation():
-            if type(max_batches) is not int or not 1 <= max_batches <= 256:
-                _fixed("runtime_max_batches")
+            self._validate_outbox_limit(max_batches, "runtime_max_batches")
             self._validate_outbox_limit(dispatch_batches, "runtime_dispatch_max_batches", allow_zero=True)
             self._validate_outbox_limit(reconciliation_batches, "runtime_reconciliation_max_batches", allow_zero=True)
             if dispatch_batches:
@@ -383,6 +404,28 @@ class MinimalClearanceVerificationRuntime:
     def issue_batch(self, *, template: OperationTemplate) -> IssuedVerificationBatch:
         with self._operation():
             return self._store.issue_batch(template=template)
+
+    def issue_batch_v1(self, *, request_id: bytes, template: OperationTemplate) -> IssuedVerificationBatch:
+        """Issue or recover the exact schema-13 batch for one opaque request ID v1."""
+
+        with self._operation():
+            return self._store.issue_batch_v1(request_id=request_id, template=template)
+
+    def resolve_issue_request_v1(
+        self,
+        *,
+        request_id: bytes,
+        template: OperationTemplate,
+    ) -> IndependentIssueRequestLookup:
+        """Read-only independent lookup for the exact durable issue request v1."""
+
+        with self._operation():
+            return resolve_issue_request(
+                self._database_path,
+                request_id=request_id,
+                expected_template=template.as_json,
+                expected_config=self._store.config.as_json,
+            )
 
     def submit_batch_handoff(self, *, issued_batch: IssuedVerificationBatch, proof_stream: VolatileProofHandoff) -> IssuedVerificationBatch:
         with self._operation():

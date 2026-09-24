@@ -1892,3 +1892,719 @@ class CoreServiceV2:
 
 
 __all__ = ["CoreConfigV2", "CoreReceipt", "CoreError", "CoreConflictError", "CoreBusyError", "CoreIndeterminateError", "CoreServiceV2", "SCHEMA", "SCHEMA_VERSION", "TABLES", "ARTIFACT_KINDS", "FIXED_FLAGS", "MAX_DATABASE_BYTES", "MAX_ARTIFACT_BYTES", "MAX_EVENT_BYTES"]
+
+
+# ---------------------------------------------------------------------------
+# Core V5 clean-break multi-profile owner
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass as _dataclass
+
+from app.mirror import profile_governance_v1 as _profile_governance
+
+
+V5_SCHEMA = independent.V5_SCHEMA
+V5_SCHEMA_VERSION = independent.V5_SCHEMA_VERSION
+V5_TABLES = independent.V5_TABLES
+V5_FIXED_FLAGS = dict(independent.V5_FIXED_FLAGS)
+
+
+@_dataclass(frozen=True)
+class CoreConfigV5:
+    database_id: str
+    chain_id: str
+    ingress_database_id: str
+    ingress_chain_id: str
+    ingress_config_digest: str
+    profile_registry_digest: str
+    max_sessions: int = 8
+    max_slots_per_session: int = 16
+    cadence_seconds: int = 60
+
+    def __post_init__(self) -> None:
+        for value in (self.database_id, self.chain_id, self.ingress_database_id, self.ingress_chain_id):
+            _safe_identifier(value, "core-v5:config")
+        for value in (self.ingress_config_digest, self.profile_registry_digest):
+            if type(value) is not str or len(value) != 128 or any(char not in "0123456789abcdef" for char in value):
+                raise CoreError("core-v5:config")
+        if type(self.max_sessions) is not int or not 1 <= self.max_sessions <= 64 or type(self.max_slots_per_session) is not int or not 1 <= self.max_slots_per_session <= 256 or type(self.cadence_seconds) is not int or self.cadence_seconds <= 0:
+            raise CoreError("core-v5:config")
+
+    def material(self) -> dict[str, object]:
+        return {
+            "schema": V5_SCHEMA, "schema_version": V5_SCHEMA_VERSION,
+            "database_id": self.database_id, "chain_id": self.chain_id,
+            "ingress_database_id": self.ingress_database_id,
+            "ingress_chain_id": self.ingress_chain_id,
+            "ingress_config_digest": self.ingress_config_digest,
+            "profile_registry_digest": self.profile_registry_digest,
+            "max_sessions": self.max_sessions,
+            "max_slots_per_session": self.max_slots_per_session,
+            "cadence_seconds": self.cadence_seconds, "flags": dict(V5_FIXED_FLAGS),
+        }
+
+    @property
+    def digest(self) -> str:
+        return independent._v5_digest("config", self.material())
+
+
+@_dataclass(frozen=True)
+class CoreReceiptV5:
+    raw: bytes
+    operation_id: str
+    event_id: str
+    profile_id: str
+    session_id: str
+    next_state: str
+    sequence: int
+    after_root: str
+
+
+def _v5_sqlite_error(exc: sqlite3.Error, *, busy: bool = False) -> None:
+    error_name = getattr(exc, "sqlite_errorname", "")
+    if error_name in {"SQLITE_FULL", "SQLITE_TOOBIG"}:
+        raise_redacted(CoreError, "core-v5:capacity")
+    if busy and error_name in {"SQLITE_BUSY", "SQLITE_LOCKED"}:
+        raise_redacted(CoreBusyError, "core-v5:busy")
+    raise_redacted(CoreError, "core-v5:database")
+
+
+def _v5_init(path: Path, config: CoreConfigV5, profile_registry: Mapping[str, object], *, ingress_path: str | Path | None = None) -> tuple[int, int]:
+    existing = _path_identity(path, allow_missing=True)
+    if existing is not None:
+        try:
+            independent.verify_database_v5(
+                path,
+                expected_database_id=config.database_id,
+                expected_config_digest=config.digest,
+                profile_registry=profile_registry,
+                ingress_path=ingress_path,
+            )
+        except independent.CoreVerificationError:
+            # The read-only verifier ran before any writable SQLite connection;
+            # an old V4/legacy file is therefore byte-preserved on rejection.
+            _require_path_identity(path, existing)
+            raise CoreError("core-v5:legacy-schema")
+        _require_path_identity(path, existing)
+        return existing
+
+    connection = _connection(path, create=True)
+    try:
+        initial_identity = _path_identity(path, allow_missing=False)
+    except CoreError:
+        _finalize_core_connection(connection, transactional=False, cleanup_code="core-v5:database-open")
+        raise
+    if initial_identity is None:
+        _finalize_core_connection(connection, transactional=False, cleanup_code="core-v5:database-open")
+        raise CoreError("core-v5:database-open")
+    commit_attempted = False
+    commit_succeeded = False
+
+    def _postcommit_identity() -> None:
+        _require_path_identity(path, initial_identity)
+
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("CREATE TABLE core_meta(meta_id INTEGER PRIMARY KEY CHECK(meta_id=1),schema TEXT NOT NULL,schema_version INTEGER NOT NULL,database_id TEXT NOT NULL,chain_id TEXT NOT NULL,config_digest TEXT NOT NULL,config_raw BLOB NOT NULL,sequence INTEGER NOT NULL,head_root TEXT NOT NULL,ingress_database_id TEXT NOT NULL,ingress_watermark INTEGER NOT NULL)")
+        connection.execute("CREATE TABLE core_profile_artifacts(artifact_id TEXT PRIMARY KEY,profile_id TEXT NOT NULL,profile_version INTEGER NOT NULL,profile_digest TEXT NOT NULL,kind TEXT NOT NULL,raw BLOB NOT NULL,current_state TEXT NOT NULL,created_event_sequence INTEGER NOT NULL)")
+        connection.execute("CREATE TABLE core_profile_heads(stream_kind TEXT NOT NULL,profile_id TEXT NOT NULL,profile_version INTEGER NOT NULL,head_ref TEXT NOT NULL,head_root TEXT NOT NULL,event_sequence INTEGER NOT NULL,PRIMARY KEY(stream_kind,profile_id,profile_version))")
+        connection.execute("CREATE TABLE core_sessions_v5(session_id TEXT PRIMARY KEY,state TEXT NOT NULL,profile_id TEXT NOT NULL,profile_version INTEGER NOT NULL,profile_digest TEXT NOT NULL,governance_artifact_id TEXT NOT NULL,observation_artifact_id TEXT NOT NULL,head_root TEXT NOT NULL,last_slot INTEGER NOT NULL)")
+        connection.execute("CREATE TABLE core_slots_v5(session_id TEXT NOT NULL,slot_number INTEGER NOT NULL,result_digest TEXT NOT NULL,result_raw BLOB NOT NULL,PRIMARY KEY(session_id,slot_number),FOREIGN KEY(session_id) REFERENCES core_sessions_v5(session_id))")
+        connection.execute("CREATE TABLE core_events_v5(sequence INTEGER PRIMARY KEY,event_id TEXT NOT NULL UNIQUE,event_kind TEXT NOT NULL,operation_id TEXT NOT NULL UNIQUE,profile_id TEXT NOT NULL,session_id TEXT NOT NULL,event_raw BLOB NOT NULL,receipt_digest TEXT NOT NULL)")
+        connection.execute("CREATE INDEX core_profile_artifacts_profile_kind_event_idx ON core_profile_artifacts(profile_id,kind,created_event_sequence)")
+        connection.execute("INSERT INTO core_meta(meta_id,schema,schema_version,database_id,chain_id,config_digest,config_raw,sequence,head_root,ingress_database_id,ingress_watermark) VALUES(1,?,?,?,?,?,?,?,?,?,?)", (V5_SCHEMA, V5_SCHEMA_VERSION, config.database_id, config.chain_id, config.digest, _canonical(config.material()), 0, independent.GENESIS_ROOT, config.ingress_database_id, 0))
+        commit_attempted = True
+        connection.commit()
+        commit_succeeded = True
+    except CoreError:
+        _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True)
+        raise
+    except sqlite3.OperationalError as exc:
+        _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True)
+        _v5_sqlite_error(exc, busy=True)
+    except sqlite3.Error as exc:
+        _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True)
+        _v5_sqlite_error(exc)
+    finally:
+        _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=_postcommit_identity, cleanup_code="core-v5:database-initialize")
+    _require_path_identity(path, initial_identity)
+    try:
+        independent.verify_database_v5(path, expected_database_id=config.database_id, expected_config_digest=config.digest, profile_registry=profile_registry, ingress_path=ingress_path)
+    except independent.CoreVerificationError:
+        _require_path_identity(path, initial_identity)
+        raise CoreError("core-v5:database")
+    _require_path_identity(path, initial_identity)
+    return initial_identity
+
+
+class CoreServiceV5:
+    """Core-owned V5 state for independently verified public profiles."""
+
+    def __init__(self, path: str | Path, config: CoreConfigV5, *, profile_registry: Mapping[str, object], ingress_path: str | Path | None = None, clock: object | None = None, authority: writer_authority.WriterAuthority) -> None:
+        if not isinstance(config, CoreConfigV5) or not isinstance(profile_registry, Mapping) or not profile_registry:
+            raise CoreError("core-v5:composition")
+        try:
+            registry_digest = _profile_governance.profile_registry_digest(profile_registry)
+        except Exception:
+            raise_redacted(CoreError, "core-v5:composition")
+        if registry_digest != config.profile_registry_digest:
+            raise CoreError("core-v5:profile-registry")
+        if not isinstance(authority, writer_authority.WriterAuthority):
+            raise CoreError("core-v5:authority")
+        self.path = Path(path)
+        self.config = config
+        self.profile_registry = dict(profile_registry)
+        if ingress_path is not None and not isinstance(ingress_path, (str, Path)):
+            raise CoreError("core-v5:ingress")
+        self.ingress_path = None if ingress_path is None else Path(ingress_path)
+        self._authority = authority
+        self.clock = clock if clock is not None else time.time_ns
+        self._identity = _v5_init(self.path, self.config, self.profile_registry, ingress_path=self.ingress_path)
+
+    def _assert_database_identity(self) -> None:
+        _require_path_identity(self.path, self._identity)
+
+    def _open(self) -> sqlite3.Connection:
+        return _connection(self.path, expected_identity=self._identity)
+
+    def _now(self, connection: sqlite3.Connection) -> int:
+        self._authority.assert_live()
+        try:
+            value = self.clock()
+        except Exception:
+            raise_redacted(CoreError, "core-v5:clock")
+        if type(value) is not int or value < 0:
+            raise CoreError("core-v5:clock")
+        row = connection.execute("SELECT event_raw FROM core_events_v5 ORDER BY sequence DESC LIMIT 1").fetchone()
+        if row is not None:
+            latest = independent._v5_parse(row[0], "core-v5:event-raw")["observed_at"]
+            if type(latest) is not int or value < latest:
+                raise CoreConflictError("core-v5:clock-rewind")
+        return value
+
+    @staticmethod
+    def _event(connection: sqlite3.Connection, operation_id: str) -> bytes | None:
+        row = connection.execute("SELECT event_raw FROM core_events_v5 WHERE operation_id=?", (operation_id,)).fetchone()
+        if row is None:
+            return None
+        if type(row[0]) is not bytes or len(row[0]) > independent.V5_MAX_EVENT_BYTES:
+            raise CoreError("core-v5:receipt")
+        return bytes(row[0])
+
+    @staticmethod
+    def _receipt(raw: bytes) -> CoreReceiptV5:
+        value = independent._v5_parse(raw, "core-v5:receipt")
+        return CoreReceiptV5(raw=raw, operation_id=str(value["operation_id"]), event_id=str(value["event_id"]), profile_id=str(value["profile_id"]), session_id=str(value["session_id"]), next_state=str(value["next_state"]), sequence=int(value["sequence"]), after_root=str(value["after_root"]))
+
+    @staticmethod
+    def _profile_key(profile_id: str, profile_version: int) -> str:
+        return profile_id + ":" + str(profile_version)
+
+    def _profile(self, profile_id: str, profile_version: int) -> object:
+        if type(profile_id) is not str or profile_id not in self.profile_registry or type(profile_version) is not int:
+            raise CoreConflictError("core-v5:profile")
+        profile = self.profile_registry[profile_id]
+        if int(getattr(profile, "version", -1)) != profile_version:
+            raise CoreConflictError("core-v5:profile")
+        return profile
+
+    def _head(self, connection: sqlite3.Connection, stream_kind: str, profile_id: str, profile_version: int) -> sqlite3.Row | None:
+        return connection.execute("SELECT * FROM core_profile_heads WHERE stream_kind=? AND profile_id=? AND profile_version=?", (stream_kind, profile_id, profile_version)).fetchone()
+
+    def profile_head(self, profile_id: str, profile_version: int, *, stream_kind: str = "GOVERNANCE") -> dict[str, object] | None:
+        self._profile(profile_id, profile_version)
+        if stream_kind not in {"GOVERNANCE", "OBSERVATION"}:
+            raise CoreConflictError("core-v5:head")
+        connection = self._open()
+        try:
+            row = self._head(connection, stream_kind, profile_id, profile_version)
+            return dict(row) if row is not None else None
+        finally:
+            _finalize_core_connection(connection, transactional=False, cleanup_code="core-v5:database")
+
+    def _append(self, connection: sqlite3.Connection, *, event_kind: str, operation_id: str, profile_id: str, session_id: str, request_digest: str, prior_state: str, next_state: str, observed_at: int, material: Mapping[str, object], payload_digest: str, payload_length: int, stream_kind: str, stream_id: str, head_ref: str | None = None) -> bytes:
+        meta = connection.execute("SELECT * FROM core_meta WHERE meta_id=1").fetchone()
+        if meta is None:
+            raise CoreError("core-v5:meta")
+        latest = connection.execute("SELECT event_raw FROM core_events_v5 ORDER BY sequence DESC LIMIT 1").fetchone()
+        if latest is not None and observed_at < independent._v5_parse(latest[0], "core-v5:event-raw")["observed_at"]:
+            raise CoreConflictError("core-v5:clock-rewind")
+        sequence = int(meta["sequence"]) + 1
+        prior = connection.execute("SELECT event_raw FROM core_events_v5 WHERE sequence=?", (sequence - 1,)).fetchone()
+        before_root = independent.GENESIS_ROOT if prior is None else str(independent._v5_parse(prior[0], "core-v5:event-raw")["after_root"])
+        stream_row = connection.execute("SELECT event_raw FROM core_events_v5 WHERE event_kind IN ('PROFILE_ARTIFACT','OBSERVATION_ARTIFACT','SESSION_OPEN','SESSION_START','OBSERVATION','SESSION_PAUSE') ORDER BY sequence DESC").fetchall()
+        stream_before = independent.GENESIS_ROOT
+        for row in stream_row:
+            event = independent._v5_parse(row[0], "core-v5:event-raw")
+            if event["stream_kind"] == stream_kind and event["stream_id"] == stream_id:
+                stream_before = str(event["stream_after_root"])
+                break
+        body: dict[str, object] = {
+            "schema": V5_SCHEMA, "schema_version": V5_SCHEMA_VERSION,
+            "database_id": self.config.database_id, "chain_id": self.config.chain_id,
+            "sequence": sequence, "event_id": "", "event_kind": event_kind,
+            "stream_kind": stream_kind, "stream_id": stream_id,
+            "operation_id": operation_id, "profile_id": profile_id,
+            "session_id": session_id, "request_digest": request_digest,
+            "prior_state": prior_state, "next_state": next_state, "attempt": 0,
+            "observed_at": observed_at, "material": dict(material),
+            "material_digest": independent._v5_digest("material", material),
+            "payload_digest": payload_digest, "payload_length": payload_length,
+            "before_root": before_root, "after_root": "",
+            "stream_before_root": stream_before, "stream_after_root": "",
+        }
+        body["event_id"] = independent._v5_digest("event-id", {key: body[key] for key in independent.V5_EVENT_KEYS if key not in {"event_id", "after_root", "stream_after_root"}})
+        body["after_root"] = independent._v5_event_root(body)
+        body["stream_after_root"] = independent._v5_stream_root(body)
+        raw = _canonical(body)
+        if len(raw) > independent.V5_MAX_EVENT_BYTES:
+            raise CoreConflictError("core-v5:capacity")
+        connection.execute("INSERT INTO core_events_v5(sequence,event_id,event_kind,operation_id,profile_id,session_id,event_raw,receipt_digest) VALUES(?,?,?,?,?,?,?,?)", (sequence, body["event_id"], event_kind, operation_id, profile_id, session_id, raw, independent._v5_raw_digest("receipt", raw)))
+        connection.execute("UPDATE core_meta SET sequence=?,head_root=? WHERE meta_id=1", (sequence, body["after_root"]))
+        if stream_kind in {"GOVERNANCE", "OBSERVATION"}:
+            connection.execute("INSERT INTO core_profile_heads(stream_kind,profile_id,profile_version,head_ref,head_root,event_sequence) VALUES(?,?,?,?,?,?) ON CONFLICT(stream_kind,profile_id,profile_version) DO UPDATE SET head_ref=excluded.head_ref,head_root=excluded.head_root,event_sequence=excluded.event_sequence", (stream_kind, profile_id, int(getattr(self.profile_registry[profile_id], "version")), head_ref or "", body["stream_after_root"], sequence))
+        return raw
+
+    def _governance_value(self, raw: bytes) -> dict[str, object]:
+        try:
+            from app.mirror import profile_governance_v1_independent as verifier
+            verifier.verify_bytes(raw, self.profile_registry)
+            return verifier._parse(raw)
+        except Exception:
+            raise CoreConflictError("core-v5:governance") from None
+
+    @staticmethod
+    def _governance_stage(value: Mapping[str, object]) -> Mapping[str, object]:
+        if value.get("schema") == _profile_governance.WITHDRAWAL_SCHEMA:
+            return {"stage_kind": _profile_governance.ACTION_WITHDRAWN, "stage_id": value.get("withdrawal_id"), "stage_root": value.get("withdrawal_root")}
+        stages = value.get("stages")
+        if not isinstance(stages, list) or not stages or not isinstance(stages[-1], dict):
+            raise CoreConflictError("core-v5:governance")
+        return stages[-1]
+
+    def _admit_profile_artifact_inner(self, connection: sqlite3.Connection, raw: bytes, now: int) -> CoreReceiptV5:
+        if type(raw) is not bytes or not raw or len(raw) > MAX_ARTIFACT_BYTES:
+            raise CoreConflictError("core-v5:artifact")
+        value = self._governance_value(raw)
+        if value.get("schema") == _profile_governance.WITHDRAWAL_SCHEMA:
+            profile_value = value.get("profile")
+            kind = "WITHDRAWAL"
+            state = _profile_governance.ACTION_WITHDRAWN
+        else:
+            profile_value = value.get("profile")
+            kind = "GOVERNANCE"
+            state = value.get("current_stage_kind")
+        if not isinstance(profile_value, dict):
+            raise CoreConflictError("core-v5:governance")
+        profile_id = str(profile_value.get("profile_id")); profile_version = profile_value.get("version"); profile_digest = profile_value.get("profile_digest")
+        profile = self._profile(profile_id, profile_version if type(profile_version) is int else -1)
+        if profile_digest != _profile_governance.profile_descriptor(profile)["profile_digest"]:
+            raise CoreConflictError("core-v5:profile")
+        raw_digest = independent._v5_raw_digest("artifact-bytes", raw)
+        operation_id = independent._v5_digest("profile-artifact-operation", {"profile_id": profile_id, "profile_version": profile_version, "kind": kind, "raw_digest": raw_digest})
+        request_digest = independent._v5_digest("profile-artifact-request", {"profile_id": profile_id, "profile_version": profile_version, "kind": kind, "raw_digest": raw_digest})
+        existing_event = self._event(connection, operation_id)
+        artifact_id = independent._v5_digest("artifact-row-id", {"profile_id": profile_id, "profile_version": profile_version, "profile_digest": profile_digest, "kind": kind, "raw": raw_digest, "current_state": state})
+        material = {"artifact_id": artifact_id, "kind": kind, "raw_digest": raw_digest, "raw_length": len(raw), "profile_id": profile_id, "profile_version": profile_version, "profile_digest": profile_digest, "current_state": state, "prior_head_ref": None, "prior_head_root": None}
+        head = self._head(connection, "GOVERNANCE", profile_id, int(profile_version))
+        if existing_event is not None:
+            event = independent._v5_parse(existing_event, "core-v5:event-raw")
+            existing_material = event.get("material")
+            if event.get("event_kind") != "PROFILE_ARTIFACT" or not isinstance(existing_material, dict) or any(existing_material.get(key) != material[key] for key in ("artifact_id", "kind", "raw_digest", "raw_length", "profile_id", "profile_version", "profile_digest", "current_state")):
+                raise CoreConflictError("core-v5:operation-conflict")
+            return self._receipt(existing_event)
+        if head is not None:
+            prior_value_row = connection.execute("SELECT raw,current_state FROM core_profile_artifacts WHERE artifact_id=?", (head["head_ref"],)).fetchone()
+            if prior_value_row is None:
+                raise CoreError("core-v5:head")
+            prior_raw = bytes(prior_value_row["raw"])
+            prior_value = self._governance_value(prior_raw)
+            prior_state = self._governance_stage(prior_value)
+            if prior_state.get("stage_kind") == _profile_governance.ACTION_WITHDRAWN:
+                raise CoreConflictError("core-v5:governance-withdrawn")
+            new_stage = self._governance_stage(value)
+            if kind == "GOVERNANCE":
+                if new_stage.get("prior_stage_id") != prior_state.get("stage_id") or new_stage.get("prior_stage_root") != prior_state.get("stage_root"):
+                    raise CoreConflictError("core-v5:stale-head")
+            elif kind == "WITHDRAWAL":
+                # Core's row key is an opaque storage identity derived from
+                # the admitted bytes.  Governance binds a withdrawal to the
+                # intrinsic artifact_id carried by the approved artifact, so
+                # compare against the parsed predecessor rather than the
+                # opaque row key.
+                if (
+                    prior_state.get("stage_kind") != _profile_governance.STAGE_APPROVED
+                    or value.get("approved_artifact_id") != prior_value.get("artifact_id")
+                ):
+                    raise CoreConflictError("core-v5:stale-head")
+            material["prior_head_ref"] = head["head_ref"]
+            material["prior_head_root"] = head["head_root"]
+        if head is None and (kind != "GOVERNANCE" or state != _profile_governance.STAGE_CANDIDATE):
+            raise CoreConflictError("core-v5:governance-stage")
+        if kind == "GOVERNANCE" and state not in _profile_governance.STAGE_KINDS:
+            raise CoreConflictError("core-v5:governance-stage")
+        if kind == "WITHDRAWAL" and state != _profile_governance.ACTION_WITHDRAWN:
+            raise CoreConflictError("core-v5:governance-stage")
+        connection.execute("INSERT INTO core_profile_artifacts(artifact_id,profile_id,profile_version,profile_digest,kind,raw,current_state,created_event_sequence) VALUES(?,?,?,?,?,?,?,0)", (artifact_id, profile_id, profile_version, profile_digest, kind, raw, state))
+        event_raw = self._append(connection, event_kind="PROFILE_ARTIFACT", operation_id=operation_id, profile_id=profile_id, session_id="", request_digest=request_digest, prior_state="NONE" if head is None else str(head["head_ref"]), next_state=str(state), observed_at=now, material=material, payload_digest=artifact_id, payload_length=len(raw), stream_kind="GOVERNANCE", stream_id=self._profile_key(profile_id, int(profile_version)), head_ref=artifact_id)
+        sequence = independent._v5_parse(event_raw, "core-v5:event-raw")["sequence"]
+        connection.execute("UPDATE core_profile_artifacts SET created_event_sequence=? WHERE artifact_id=?", (sequence, artifact_id))
+        return self._receipt(event_raw)
+
+    @_mutation
+    def admit_profile_artifact(self, raw: bytes) -> CoreReceiptV5:
+        connection = self._open(); commit_attempted = False; commit_succeeded = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now = self._now(connection)
+            receipt = self._admit_profile_artifact_inner(connection, raw, now)
+            commit_attempted = True; connection.commit(); commit_succeeded = True
+            return receipt
+        except (CoreError, CoreConflictError):
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); raise
+        except sqlite3.OperationalError as exc:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _v5_sqlite_error(exc, busy=True)
+        except sqlite3.Error as exc:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _v5_sqlite_error(exc)
+        finally:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core-v5:database")
+        raise CoreError("core-v5:database")
+
+    def _stored_observation_value(self, artifact: Mapping[str, object], profile_id: str, profile_version: int) -> tuple[bytes, str, int, int]:
+        try:
+            profile = self._profile(profile_id, profile_version)
+            profile_digest = _profile_governance.profile_descriptor(profile)["profile_digest"]
+            observation_raw = artifact["observation"]
+            verification_receipt_raw = artifact["verification_receipt"]
+            if type(observation_raw) is not bytes or type(verification_receipt_raw) is not bytes:
+                raise ValueError
+            checked = ingress.verify_observation_pair(
+                observation_raw,
+                verification_receipt_raw,
+                expected_profile_id=ingress.NC_MEDICAID_PROFILE.source_profile_id,
+                expected_profile_version=3,
+            )
+            if (
+                artifact.get("terminal_state") != "QUARANTINED"
+                or artifact.get("terminal_event_kind") != "ADMIT"
+                or artifact.get("artifact_id") is None
+                or artifact.get("observation_id") != checked["observation_id"]
+                or artifact.get("event_sequence") != artifact.get("terminal_event_sequence")
+                or artifact.get("event_after_root") != artifact.get("head_root")
+                or artifact.get("database_id") != self.config.ingress_database_id
+                or artifact.get("chain_id") != self.config.ingress_chain_id
+                or artifact.get("config_digest") != self.config.ingress_config_digest
+                or type(artifact.get("event_sequence")) is not int
+                or int(artifact["event_sequence"]) <= 0
+            ):
+                raise ValueError
+            envelope = {
+                "schema": independent.V5_OBSERVATION_SCHEMA,
+                "schema_version": 1,
+                "kind": "OBSERVATION",
+                "profile_id": profile_id,
+                "profile_version": profile_version,
+                "profile_digest": profile_digest,
+                "observation": checked["observation"],
+                "verification_receipt": checked["verification_receipt"],
+                "observation_digest": independent._v5_raw_digest("sanitized-observation", observation_raw),
+                "ingress_database_id": artifact["database_id"],
+                "ingress_chain_id": artifact["chain_id"],
+                "ingress_config_digest": artifact["config_digest"],
+                "ingress_artifact_id": artifact["artifact_id"],
+                "ingress_observation_id": checked["observation_id"],
+                "ingress_event_sequence": artifact["event_sequence"],
+                "ingress_prefix_root": artifact["event_prefix_root"],
+                "ingress_after_root": artifact["event_after_root"],
+                "ingress_head_root": artifact["head_root"],
+                "flags": dict(V5_FIXED_FLAGS),
+            }
+            raw = _canonical(envelope)
+            independent._v5_verify_observation(raw, profile_id, profile_version)
+            return raw, profile_id, profile_version, int(checked["observation"]["observation_time"])
+        except CoreConflictError:
+            raise
+        except Exception:
+            raise CoreConflictError("core-v5:ingress") from None
+
+    def _ingest_observation_envelope_inner(self, connection: sqlite3.Connection, envelope_raw: bytes, now: int) -> CoreReceiptV5:
+        try:
+            envelope = independent._v5_parse(envelope_raw, "core-v5:observation")
+            profile_id = str(envelope["profile_id"])
+            profile_version = int(envelope["profile_version"])
+            profile_digest = str(envelope["profile_digest"])
+            independent._v5_verify_observation(envelope_raw, profile_id, profile_version)
+            observation_time = int(envelope["observation"]["observation_time"])
+        except Exception:
+            raise CoreConflictError("core-v5:observation") from None
+        if observation_time > now:
+            raise CoreConflictError("core-v5:observation-future")
+        raw_digest = independent._v5_raw_digest("artifact-bytes", envelope_raw)
+        artifact_id = independent._v5_digest("artifact-row-id", {"profile_id": profile_id, "profile_version": profile_version, "profile_digest": profile_digest, "kind": "OBSERVATION", "raw": raw_digest, "current_state": "OBSERVED"})
+        operation_id = independent._v5_digest("observation-artifact-operation", {"profile_id": profile_id, "profile_version": profile_version, "raw_digest": raw_digest})
+        request_digest = independent._v5_digest("observation-artifact-request", {"profile_id": profile_id, "profile_version": profile_version, "raw_digest": raw_digest})
+        existing_event = self._event(connection, operation_id)
+        head = self._head(connection, "OBSERVATION", profile_id, profile_version)
+        material = {"artifact_id": artifact_id, "kind": "OBSERVATION", "raw_digest": raw_digest, "raw_length": len(envelope_raw), "profile_id": profile_id, "profile_version": profile_version, "profile_digest": profile_digest, "observation_time": observation_time, "prior_head_ref": None, "prior_head_root": None}
+        if existing_event is not None:
+            event = independent._v5_parse(existing_event, "core-v5:event-raw")
+            existing_material = event.get("material")
+            if event.get("event_kind") != "OBSERVATION_ARTIFACT" or not isinstance(existing_material, dict) or any(existing_material.get(key) != material[key] for key in ("artifact_id", "kind", "raw_digest", "raw_length", "profile_id", "profile_version", "profile_digest", "observation_time")):
+                raise CoreConflictError("core-v5:operation-conflict")
+            return self._receipt(existing_event)
+        if head is not None:
+            prior_row = connection.execute("SELECT raw FROM core_profile_artifacts WHERE artifact_id=?", (head["head_ref"],)).fetchone()
+            if prior_row is None:
+                raise CoreError("core-v5:head")
+            prior = independent._v5_parse(prior_row[0], "core-v5:observation")
+            prior_time = int(prior["observation"]["observation_time"])
+            if observation_time <= prior_time:
+                raise CoreConflictError("core-v5:observation-chronology")
+            material["prior_head_ref"] = head["head_ref"]; material["prior_head_root"] = head["head_root"]
+        connection.execute("INSERT INTO core_profile_artifacts(artifact_id,profile_id,profile_version,profile_digest,kind,raw,current_state,created_event_sequence) VALUES(?,?,?,?,?,?,?,0)", (artifact_id, profile_id, profile_version, profile_digest, "OBSERVATION", envelope_raw, "OBSERVED"))
+        event_raw = self._append(connection, event_kind="OBSERVATION_ARTIFACT", operation_id=operation_id, profile_id=profile_id, session_id="", request_digest=request_digest, prior_state="NONE" if head is None else str(head["head_ref"]), next_state="OBSERVED", observed_at=now, material=material, payload_digest=artifact_id, payload_length=len(envelope_raw), stream_kind="OBSERVATION", stream_id=self._profile_key(profile_id, profile_version), head_ref=artifact_id)
+        sequence = independent._v5_parse(event_raw, "core-v5:event-raw")["sequence"]
+        connection.execute("UPDATE core_profile_artifacts SET created_event_sequence=? WHERE artifact_id=?", (sequence, artifact_id))
+        ingress_event_sequence = int(envelope["ingress_event_sequence"])
+        connection.execute("UPDATE core_meta SET ingress_watermark=MAX(ingress_watermark,?) WHERE meta_id=1", (ingress_event_sequence,))
+        return self._receipt(event_raw)
+
+    @_mutation
+    def ingest_observation(self, observation_raw: bytes, verification_receipt_raw: bytes, *, profile_digest: str) -> CoreReceiptV5:
+        del observation_raw, verification_receipt_raw, profile_digest
+        raise CoreConflictError("core-v5:ingress-required")
+
+    @_mutation
+    def ingest_observation_from_ingress(
+        self,
+        ingress_path: str | Path,
+        artifact_id: str,
+        *,
+        profile_id: str,
+        profile_version: int,
+    ) -> CoreReceiptV5:
+        if not isinstance(ingress_path, (str, Path)):
+            raise CoreConflictError("core-v5:ingress")
+        self._profile(profile_id, profile_version)
+        try:
+            result = ingress.verify_database(
+                ingress_path,
+                expected_database_id=self.config.ingress_database_id,
+                expected_config_digest=self.config.ingress_config_digest,
+                include_observation=True,
+                artifact_id=artifact_id,
+            )
+            artifact = result.get("current_artifact")
+            if (
+                result.get("current_artifact_id") != artifact_id
+                or not isinstance(artifact, Mapping)
+            ):
+                raise ValueError
+            artifact = dict(artifact)
+            artifact.update({
+                "database_id": result["database_id"],
+                "chain_id": result["chain_id"],
+                "config_digest": result["config_digest"],
+                "head_root": artifact.get("event_after_root"),
+            })
+            envelope_raw, _profile_id, _profile_version, _observation_time = self._stored_observation_value(artifact, profile_id, profile_version)
+        except CoreConflictError:
+            raise
+        except Exception:
+            raise CoreConflictError("core-v5:ingress") from None
+        self.ingress_path = Path(ingress_path)
+        connection = self._open(); commit_attempted = False; commit_succeeded = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now = self._now(connection)
+            receipt = self._ingest_observation_envelope_inner(connection, envelope_raw, now)
+            commit_attempted = True; connection.commit(); commit_succeeded = True
+            return receipt
+        except (CoreError, CoreConflictError):
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); raise
+        except sqlite3.Error as exc:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _v5_sqlite_error(exc)
+        finally:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core-v5:database")
+        raise CoreError("core-v5:database")
+
+    def _session(self, connection: sqlite3.Connection, session_id: str) -> sqlite3.Row:
+        row = connection.execute("SELECT * FROM core_sessions_v5 WHERE session_id=?", (session_id,)).fetchone()
+        if row is None:
+            raise CoreConflictError("core-v5:session")
+        return row
+
+    def _authority_staleness(self, connection: sqlite3.Connection, row: sqlite3.Row, now: int) -> tuple[str | None, sqlite3.Row | None, sqlite3.Row | None]:
+        gov = self._head(connection, "GOVERNANCE", str(row["profile_id"]), int(row["profile_version"]))
+        obs = self._head(connection, "OBSERVATION", str(row["profile_id"]), int(row["profile_version"]))
+        if gov is None or obs is None:
+            return "AUTHORITY_SUPERSEDED", gov, obs
+        if obs["head_ref"] != row["observation_artifact_id"]:
+            return "AUTHORITY_SUPERSEDED", gov, obs
+        gov_row = connection.execute("SELECT raw,current_state FROM core_profile_artifacts WHERE artifact_id=?", (gov["head_ref"],)).fetchone()
+        if gov_row is None:
+            return "AUTHORITY_MISSING", gov, obs
+        value = self._governance_value(gov_row["raw"])
+        if value.get("schema") == _profile_governance.WITHDRAWAL_SCHEMA:
+            return "AUTHORITY_WITHDRAWN", gov, obs
+        if gov["head_ref"] != row["governance_artifact_id"]:
+            return "AUTHORITY_SUPERSEDED", gov, obs
+        stage = self._governance_stage(value)
+        if stage.get("stage_kind") != _profile_governance.STAGE_APPROVED:
+            return "AUTHORITY_NOT_APPROVED", gov, obs
+        if now < int(stage["effective_start"]):
+            return "AUTHORITY_NOT_EFFECTIVE", gov, obs
+        if now >= int(stage["effective_end"]):
+            return "AUTHORITY_EXPIRED", gov, obs
+        return None, gov, obs
+
+    def _append_pause(self, connection: sqlite3.Connection, row: sqlite3.Row, *, operation_id: str, request_digest: str, trigger: str, now: int, slot_number: int | None = None, observation_digest: str | None = None) -> CoreReceiptV5:
+        reason, gov, obs = self._authority_staleness(connection, row, now)
+        if reason is None:
+            raise CoreConflictError("core-v5:pause-current")
+        material = {"state": "PAUSED", "reason": reason, "trigger": trigger, "current_governance_artifact_id": None if gov is None else gov["head_ref"], "current_observation_artifact_id": None if obs is None else obs["head_ref"], "slot_number": slot_number, "observation_digest": observation_digest}
+        event_raw = self._append(connection, event_kind="SESSION_PAUSE", operation_id=operation_id, profile_id=str(row["profile_id"]), session_id=str(row["session_id"]), request_digest=request_digest, prior_state=str(row["state"]), next_state="PAUSED", observed_at=now, material=material, payload_digest=independent._v5_digest("pause-reason", {"reason": reason}), payload_length=0, stream_kind="SESSION", stream_id=str(row["session_id"]))
+        event = independent._v5_parse(event_raw, "core-v5:event-raw")
+        connection.execute("UPDATE core_sessions_v5 SET state=?,head_root=? WHERE session_id=?", ("PAUSED", event["stream_after_root"], row["session_id"]))
+        return self._receipt(event_raw)
+
+    @_mutation
+    def open_session(self, profile_id: str, profile_version: int, *, observation_artifact_id: str | None = None) -> CoreReceiptV5:
+        profile = self._profile(profile_id, profile_version)
+        connection = self._open(); commit_attempted = False; commit_succeeded = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now = self._now(connection)
+            gov = self._head(connection, "GOVERNANCE", profile_id, profile_version); obs = self._head(connection, "OBSERVATION", profile_id, profile_version)
+            if gov is None or obs is None or observation_artifact_id is not None and obs["head_ref"] != observation_artifact_id:
+                raise CoreConflictError("core-v5:authority-head")
+            gov_row = connection.execute("SELECT raw FROM core_profile_artifacts WHERE artifact_id=?", (gov["head_ref"],)).fetchone()
+            if gov_row is None:
+                raise CoreConflictError("core-v5:authority-missing")
+            gov_value = self._governance_value(gov_row["raw"]); stage = self._governance_stage(gov_value)
+            if stage.get("stage_kind") != _profile_governance.STAGE_APPROVED:
+                raise CoreConflictError("core-v5:governance-not-approved")
+            if now < int(stage["stage_time"]) or now < int(stage["effective_start"]) or now >= int(stage["effective_end"]):
+                raise CoreConflictError("core-v5:governance-expired")
+            session_id = independent._v5_digest("session-id", {"profile_id": profile_id, "profile_version": profile_version, "profile_digest": _profile_governance.profile_descriptor(profile)["profile_digest"], "governance_artifact_id": gov["head_ref"], "observation_artifact_id": obs["head_ref"], "config_digest": self.config.profile_registry_digest})
+            operation_id = independent._v5_digest("session-operation", {"session_id": session_id, "action": "OPEN"})
+            existing = self._event(connection, operation_id)
+            if existing is not None:
+                commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(existing)
+            count = int(connection.execute("SELECT COUNT(*) FROM core_sessions_v5").fetchone()[0])
+            if count >= self.config.max_sessions:
+                raise CoreConflictError("core-v5:capacity")
+            connection.execute("INSERT INTO core_sessions_v5(session_id,state,profile_id,profile_version,profile_digest,governance_artifact_id,observation_artifact_id,head_root,last_slot) VALUES(?,?,?,?,?,?,?,?,?)", (session_id, "OPEN", profile_id, profile_version, _profile_governance.profile_descriptor(profile)["profile_digest"], gov["head_ref"], obs["head_ref"], independent.GENESIS_ROOT, -1))
+            event_raw = self._append(connection, event_kind="SESSION_OPEN", operation_id=operation_id, profile_id=profile_id, session_id=session_id, request_digest=independent._v5_digest("session-request", {"session_id": session_id, "action": "OPEN"}), prior_state="NONE", next_state="OPEN", observed_at=now, material={"session_id": session_id, "state": "OPEN", "governance_artifact_id": gov["head_ref"], "observation_artifact_id": obs["head_ref"], "last_slot": -1}, payload_digest=session_id, payload_length=0, stream_kind="SESSION", stream_id=session_id)
+            event = independent._v5_parse(event_raw, "core-v5:event-raw")
+            connection.execute("UPDATE core_sessions_v5 SET head_root=? WHERE session_id=?", (event["stream_after_root"], session_id))
+            commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(event_raw)
+        except (CoreError, CoreConflictError):
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); raise
+        except sqlite3.Error as exc:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _v5_sqlite_error(exc)
+        finally:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core-v5:database")
+        raise CoreError("core-v5:database")
+
+    @_mutation
+    def start_session(self, session_id: str) -> CoreReceiptV5:
+        connection = self._open(); commit_attempted = False; commit_succeeded = False
+        try:
+            connection.execute("BEGIN IMMEDIATE"); row = self._session(connection, session_id)
+            operation_id = independent._v5_digest("session-operation", {"session_id": session_id, "action": "START"}); existing = self._event(connection, operation_id)
+            if existing is not None:
+                commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(existing)
+            if row["state"] == "PAUSED":
+                raise CoreConflictError("core-v5:session-paused")
+            if row["state"] != "OPEN":
+                raise CoreConflictError("core-v5:session-state")
+            now = self._now(connection); reason, _gov, _obs = self._authority_staleness(connection, row, now)
+            if reason is not None:
+                receipt = self._append_pause(connection, row, operation_id=operation_id, request_digest=independent._v5_digest("session-request", {"session_id": session_id, "action": "START"}), trigger="START", now=now); commit_attempted = True; connection.commit(); commit_succeeded = True; return receipt
+            event_raw = self._append(connection, event_kind="SESSION_START", operation_id=operation_id, profile_id=str(row["profile_id"]), session_id=session_id, request_digest=independent._v5_digest("session-request", {"session_id": session_id, "action": "START"}), prior_state="OPEN", next_state="RUNNING", observed_at=now, material={"state": "RUNNING"}, payload_digest=session_id, payload_length=0, stream_kind="SESSION", stream_id=session_id)
+            event = independent._v5_parse(event_raw, "core-v5:event-raw"); connection.execute("UPDATE core_sessions_v5 SET state=?,head_root=? WHERE session_id=?", ("RUNNING", event["stream_after_root"], session_id)); commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(event_raw)
+        except (CoreError, CoreConflictError):
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); raise
+        except sqlite3.Error as exc:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _v5_sqlite_error(exc)
+        finally:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core-v5:database")
+        raise CoreError("core-v5:database")
+
+    @_mutation
+    def observe(self, session_id: str, slot_number: int, result: str, *, counts: Mapping[str, int] | None = None) -> CoreReceiptV5:
+        if type(slot_number) is not int or slot_number < 0 or slot_number >= self.config.max_slots_per_session or result not in independent.OBSERVATION_RESULTS:
+            raise CoreConflictError("core-v5:observation-input")
+        values = dict(counts or {"observed": 0, "changed": 0})
+        if set(values) != {"observed", "changed"} or any(type(item) is not int or item < 0 or item > 64 for item in values.values()):
+            raise CoreConflictError("core-v5:observation-input")
+        body = {"schema": "mirror-core-v5-observation-result-v1", "schema_version": 1, "session_id": session_id, "slot_number": slot_number, "result": result, "counts": {"changed": values["changed"], "observed": values["observed"]}, "flags": dict(V5_FIXED_FLAGS)}
+        body["result_digest"] = independent._v5_digest("observation-result", {key: body[key] for key in body if key != "result_digest"})
+        result_raw = _canonical(body); operation_id = independent._v5_digest("observation-operation", {"session_id": session_id, "slot_number": slot_number})
+        connection = self._open(); commit_attempted = False; commit_succeeded = False
+        try:
+            connection.execute("BEGIN IMMEDIATE"); existing = self._event(connection, operation_id)
+            if existing is not None:
+                event = independent._v5_parse(existing, "core-v5:event-raw")
+                if event.get("event_kind") != "OBSERVATION" or event.get("material", {}).get("observation") != body:
+                    raise CoreConflictError("core-v5:observation-conflict")
+                commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(existing)
+            row = self._session(connection, session_id)
+            if row["state"] == "PAUSED":
+                raise CoreConflictError("core-v5:session-paused")
+            if row["state"] != "RUNNING" or slot_number != int(row["last_slot"]) + 1:
+                raise CoreConflictError("core-v5:observation-order")
+            now = self._now(connection); reason, _gov, _obs = self._authority_staleness(connection, row, now)
+            if reason is not None:
+                receipt = self._append_pause(connection, row, operation_id=operation_id, request_digest=independent._v5_digest("observation-request", {"session_id": session_id, "slot_number": slot_number}), trigger="OBSERVATION", now=now, slot_number=slot_number, observation_digest=body["result_digest"]); commit_attempted = True; connection.commit(); commit_succeeded = True; return receipt
+            if int(row["last_slot"]) >= 0:
+                previous = connection.execute("SELECT event_raw FROM core_events_v5 WHERE event_kind='OBSERVATION' AND session_id=? ORDER BY sequence DESC LIMIT 1", (session_id,)).fetchone()
+                if previous is None or now < int(independent._v5_parse(previous[0], "core-v5:event-raw")["observed_at"]) + self.config.cadence_seconds:
+                    raise CoreConflictError("core-v5:observation-cadence")
+            connection.execute("INSERT INTO core_slots_v5(session_id,slot_number,result_digest,result_raw) VALUES(?,?,?,?)", (session_id, slot_number, body["result_digest"], result_raw))
+            event_raw = self._append(connection, event_kind="OBSERVATION", operation_id=operation_id, profile_id=str(row["profile_id"]), session_id=session_id, request_digest=independent._v5_digest("observation-request", {"session_id": session_id, "slot_number": slot_number}), prior_state="RUNNING", next_state="RUNNING", observed_at=now, material={"observation": body}, payload_digest=body["result_digest"], payload_length=len(result_raw), stream_kind="SESSION", stream_id=session_id)
+            event = independent._v5_parse(event_raw, "core-v5:event-raw"); connection.execute("UPDATE core_sessions_v5 SET last_slot=?,head_root=? WHERE session_id=?", (slot_number, event["stream_after_root"], session_id)); commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(event_raw)
+        except (CoreError, CoreConflictError):
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); raise
+        except sqlite3.Error as exc:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _v5_sqlite_error(exc)
+        finally:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core-v5:database")
+        raise CoreError("core-v5:database")
+
+    @_mutation
+    def pause_if_stale(self, session_id: str) -> CoreReceiptV5:
+        connection = self._open(); commit_attempted = False; commit_succeeded = False
+        try:
+            connection.execute("BEGIN IMMEDIATE"); row = self._session(connection, session_id); operation_id = independent._v5_digest("pause-operation", {"session_id": session_id, "trigger": "RECONCILE"}); existing = self._event(connection, operation_id)
+            if existing is not None:
+                commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(existing)
+            if row["state"] == "PAUSED":
+                raise CoreConflictError("core-v5:session-paused")
+            now = self._now(connection); receipt = self._append_pause(connection, row, operation_id=operation_id, request_digest=independent._v5_digest("pause-request", {"session_id": session_id, "trigger": "RECONCILE"}), trigger="RECONCILE", now=now); commit_attempted = True; connection.commit(); commit_succeeded = True; return receipt
+        except (CoreError, CoreConflictError):
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); raise
+        except sqlite3.Error as exc:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _v5_sqlite_error(exc)
+        finally:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core-v5:database")
+        raise CoreError("core-v5:database")
+
+    def verify(self) -> dict[str, object]:
+        self._assert_database_identity()
+        try:
+            result = independent.verify_database_v5(self.path, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, profile_registry=self.profile_registry, ingress_path=self.ingress_path)
+        except independent.CoreVerificationError:
+            self._assert_database_identity(); raise
+        self._assert_database_identity(); return result
+
+    def logical_export(self) -> bytes:
+        return independent.logical_export_v5(self.verify())
+
+    def support(self) -> dict[str, object]:
+        result = self.verify()
+        return {"schema": "mirror-core-support-v5", "artifact_count": result["artifact_count"], "profile_head_count": result["profile_head_count"], "session_count": result["session_count"], "slot_count": result["slot_count"], "event_count": result["event_count"], "profiles": [list(item) for item in result["profiles"]], "structural_valid": result["structural_valid"], "flags": dict(V5_FIXED_FLAGS)}
+
+
+__all__ += ["CoreConfigV5", "CoreReceiptV5", "CoreServiceV5", "V5_SCHEMA", "V5_SCHEMA_VERSION", "V5_TABLES", "V5_FIXED_FLAGS"]

@@ -22,8 +22,11 @@ from app.minimal_clearance_source_auth_verifier_adapter import (
 import app.minimal_clearance_verification_queue as queue_module
 import app.minimal_clearance_verification_runtime as runtime_module
 from app.minimal_clearance_composition import CompositionConfigV2, StateDispositionControl, build_synthetic_acknowledgment
-from app.minimal_clearance_verification_queue import BatchVerifierResult, OperationTemplate, QueueConfig, VolatileProofHandoff, _RUNTIME_LOCK_RELEASED_MARKER
+from app.minimal_clearance_verification_queue import BatchVerifierResult, OperationTemplate, QueueConfig, QueueIndeterminateError, VolatileProofHandoff, _RUNTIME_LOCK_RELEASED_MARKER
 from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime, RuntimeOutboxResult, VerificationRuntimeError
+
+# Direct constructor fixtures use this visibly separate reference-only route.
+SyntheticReferenceRuntime = MinimalClearanceVerificationRuntime.for_synthetic_reference
 
 
 _STARTUP_CLEANUP_CHILD_SOURCE = r'''
@@ -37,6 +40,7 @@ import app.minimal_clearance_verification_queue as queue_module
 import app.minimal_clearance_verification_runtime as runtime_module
 from app.minimal_clearance_verification_queue import QueueConfig, _RUNTIME_LOCK_RELEASED_MARKER
 from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime
+SyntheticReferenceRuntime = MinimalClearanceVerificationRuntime.for_synthetic_reference
 
 root = Path(sys.argv[1])
 config = QueueConfig("startup-native-cleanup", 100)
@@ -56,7 +60,7 @@ else:
     cleanup_patch = patch.object(queue_module._QueueRuntimeOwnership, "_write_marker", new=fail_cleanup_marker)
 with cleanup_patch, patch.object(runtime_module, "ClearanceCompositionStoreV2", side_effect=composition.CompositionError("composition_schema")):
     try:
-        MinimalClearanceVerificationRuntime(root=root, verifier=object(), config=config)
+        SyntheticReferenceRuntime(root=root, verifier=object(), config=config)
     except BaseException as error:
         print(json.dumps({"type": type(error).__name__, "message": str(error)}), flush=True)
     else:
@@ -249,6 +253,16 @@ def _source_auth_config(root: Path, queue_id: str) -> SourceAuthVerifierConfig:
 
 class RuntimeV12Tests(unittest.TestCase):
 
+    def test_operational_constructor_without_admission_kernel_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(VerificationRuntimeError, "runtime_admission_kernel"):
+                MinimalClearanceVerificationRuntime(
+                    root=root,
+                    verifier=object(),
+                    config=QueueConfig("runtime-missing-admission", 100),
+                )
+
     def test_from_source_auth_passes_the_state_port_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -293,13 +307,87 @@ class RuntimeV12Tests(unittest.TestCase):
             finally:
                 runtime.close()
 
+    def test_runtime_issue_request_v1_replays_after_lost_commit_response_and_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clock = _Clock()
+            config = QueueConfig("runtime-issue-request-v1", 100)
+            request_id = bytes([0x73]) * 32
+            template = OperationTemplate(
+                "runtime-issue-request-recovery",
+                1,
+                config.profile_version,
+                clock.now - 100,
+                clock.now + 60_000,
+            )
+            runtime = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config)
+
+            def fail_after_commit(label: str) -> None:
+                if label == "after_issue_commit":
+                    raise RuntimeError("injected-after-issue-commit")
+
+            try:
+                runtime._store._after_commit_fault = fail_after_commit
+                with self.assertRaisesRegex(QueueIndeterminateError, "issue_result_indeterminate"):
+                    runtime.issue_batch_v1(request_id=request_id, template=template)
+                first_resolution = runtime.resolve_issue_request_v1(
+                    request_id=request_id,
+                    template=template,
+                )
+                self.assertIsNotNone(first_resolution.batch)
+                assert first_resolution.batch is not None
+                self.assertEqual(first_resolution.batch.request_version, 1)
+            finally:
+                runtime.close()
+
+            restarted = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config)
+            try:
+                after_restart_before_retry = restarted.resolve_issue_request_v1(
+                    request_id=request_id,
+                    template=template,
+                )
+                self.assertIsNotNone(after_restart_before_retry.batch)
+                assert after_restart_before_retry.batch is not None
+                self.assertEqual(after_restart_before_retry.batch.status, "HELD")
+                recovered = restarted.issue_batch_v1(request_id=request_id, template=template)
+                final_resolution = restarted.resolve_issue_request_v1(
+                    request_id=request_id,
+                    template=template,
+                )
+            finally:
+                restarted.close()
+
+            self.assertIsNotNone(final_resolution.batch)
+            assert final_resolution.batch is not None
+            self.assertEqual(recovered.batch_id, first_resolution.batch.batch_id)
+            self.assertEqual(recovered.batch_root, first_resolution.batch.batch_root)
+            self.assertEqual(recovered.session_ref, first_resolution.batch.session_ref)
+            self.assertEqual(recovered.operation_refs, first_resolution.batch.operation_refs)
+            self.assertEqual(recovered.public_coin, first_resolution.batch.public_coin)
+            self.assertEqual(recovered.proof_context, first_resolution.batch.proof_context)
+            self.assertEqual(recovered.identity_digest, first_resolution.batch.identity_digest)
+            self.assertEqual(final_resolution.batch.status, "HELD")
+            with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_batches").fetchone()[0], 1)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM queue_members").fetchone()[0], 100)
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT reservation_before,reservation_after,proof_attempts FROM queue_attempts"
+                    ).fetchone(),
+                    (0, 101, 101),
+                )
+                self.assertEqual(
+                    connection.execute("SELECT proof_attempts_used,source_u_used FROM queue_metadata WHERE id=1").fetchone(),
+                    (101, 1),
+                )
+
     def test_runtime_uses_state_port_only_after_accepted_verifier_fact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = QueueConfig("runtime-v10", 100)
             verifier = _Verifier(config)
             port = _DispositionPort()
-            with MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config, state_disposition_port=port) as runtime:
+            with SyntheticReferenceRuntime(root=root, verifier=verifier, config=config, state_disposition_port=port) as runtime:
                 now = int(time.time() * 1000)
                 batch = runtime.issue_batch(template=OperationTemplate("shared-runtime", 1, config.profile_version, now - 100, now + 60_000))
                 runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"runtime-proof")))
@@ -318,7 +406,7 @@ class RuntimeV12Tests(unittest.TestCase):
             config = QueueConfig("runtime-delivery", 100)
             composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32, lease_seconds=1, reconciliation_lease_seconds=1)
             receiver = _Receiver(composition_config, clock)
-            with MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=receiver, lookup=receiver, clock=clock) as runtime:
+            with SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=receiver, lookup=receiver, clock=clock) as runtime:
                 batch = runtime.issue_batch(template=OperationTemplate("runtime-delivery", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
                 runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"runtime-proof")))
                 result = runtime.run(dispatch_batches=1)
@@ -346,7 +434,7 @@ class RuntimeV12Tests(unittest.TestCase):
             config = QueueConfig("runtime-reentry", 100)
             composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32, lease_seconds=1, reconciliation_lease_seconds=1)
             receiver = _ReentrantReceiver(composition_config, clock)
-            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=receiver, lookup=receiver, clock=clock)
+            runtime = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=receiver, lookup=receiver, clock=clock)
             receiver.runtime = runtime
             try:
                 batch = runtime.issue_batch(template=OperationTemplate("runtime-reentry", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
@@ -368,7 +456,7 @@ class RuntimeV12Tests(unittest.TestCase):
             config = QueueConfig("runtime-concurrent", 100)
             composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32, lease_seconds=1, reconciliation_lease_seconds=1)
             receiver = _BlockingReceiver(composition_config, clock)
-            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=receiver, lookup=receiver, clock=clock)
+            runtime = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=receiver, lookup=receiver, clock=clock)
             primary_result: list[RuntimeOutboxResult] = []
             primary_errors: list[BaseException] = []
             concurrent_results: dict[str, str] = {}
@@ -432,7 +520,7 @@ class RuntimeV12Tests(unittest.TestCase):
             original_close = runtime_module._VerificationQueueStore._close
             with patch.object(runtime_module._VerificationQueueStore, "_close", autospec=True, side_effect=original_close) as store_close, patch.object(runtime_module, "ClearanceCompositionStoreV2", side_effect=composition.CompositionError("composition_schema")):
                 with self.assertRaisesRegex(VerificationRuntimeError, "composition_schema"):
-                    MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
+                    SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config)
             self.assertEqual(store_close.call_count, 1)
             self.assertTrue((root / "state.sqlite").exists())
             if os.name == "nt":
@@ -462,7 +550,7 @@ class RuntimeV12Tests(unittest.TestCase):
                 cleanup_patch = patch.object(queue_module._QueueRuntimeOwnership, "_write_marker", new=fail_write_marker)
             with cleanup_patch, patch.object(runtime_module, "ClearanceCompositionStoreV2", side_effect=composition.CompositionError("composition_schema")):
                 with self.assertRaisesRegex(VerificationRuntimeError, "runtime_startup"):
-                    MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
+                    SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config)
             self.assertTrue(lock.exists())
 
     def test_startup_cleanup_releases_native_lock_for_next_process_after_marker_failure(self) -> None:
@@ -494,7 +582,7 @@ class RuntimeV12Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = QueueConfig("runtime-owner-close-retry", 100)
-            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
+            runtime = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config)
             lock = root / "state.sqlite.runtime-lock"
             failures = 0
             try:
@@ -549,7 +637,7 @@ class RuntimeV12Tests(unittest.TestCase):
                 reconciliation_lease_seconds=1,
             )
             receiver = _Receiver(composition_config, clock)
-            runtime = MinimalClearanceVerificationRuntime(
+            runtime = SyntheticReferenceRuntime(
                 root=root,
                 verifier=_Verifier(config),
                 config=config,
@@ -605,7 +693,7 @@ class RuntimeV12Tests(unittest.TestCase):
             composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32)
             receiver = _Receiver(composition_config, _Clock(), identity_value=bytes([8]) * 32)
             with self.assertRaisesRegex(VerificationRuntimeError, "runtime_receiver_binding"):
-                MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=receiver)
+                SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=receiver)
             self.assertFalse((root / "state.sqlite").exists())
 
     def test_runtime_public_delivery_recovery_and_reconciliation_survive_restart(self) -> None:
@@ -616,7 +704,7 @@ class RuntimeV12Tests(unittest.TestCase):
             composition_config = CompositionConfigV2(config.queue_id, config.digest, receiver_identity=bytes([7]) * 32, lease_seconds=1, reconciliation_lease_seconds=1)
             external_acks: dict[bytes, bytes] = {}
             crashing = _Receiver(composition_config, clock, modes=("valid",) * 99 + ("crash",), acks=external_acks)
-            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=crashing, lookup=crashing, clock=clock)
+            runtime = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort(), composition_config=composition_config, receiver=crashing, lookup=crashing, clock=clock)
             batch = runtime.issue_batch(template=OperationTemplate("runtime-recovery", 1, config.profile_version, clock.now - 100, clock.now + 60_000))
             runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"runtime-proof")))
             self.assertEqual(runtime.run().accepted_operation_count, 100)
@@ -629,7 +717,7 @@ class RuntimeV12Tests(unittest.TestCase):
             self.assertEqual(runtime.support_summary()["outbox_counts"]["LEASED"], 100)
             runtime.close()
 
-            before_expiry = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=crashing, lookup=crashing, clock=clock)
+            before_expiry = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=crashing, lookup=crashing, clock=clock)
             before_direct = before_expiry.dispatch_outbox()
             before_reconciliation = before_expiry.reconcile_outbox()
             self.assertEqual((before_direct.outcome, before_direct.batch_count, before_reconciliation.outcome, before_reconciliation.batch_count, len(crashing.dispatch_calls), len(crashing.lookup_calls)), ("EMPTY", 0, "EMPTY", 0, 100, 0))
@@ -637,7 +725,7 @@ class RuntimeV12Tests(unittest.TestCase):
 
             clock.advance(composition_config.lease_seconds * 1000)
             retry_receiver = _Receiver(composition_config, clock, modes=("missing",), acks=external_acks)
-            after_expiry = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=retry_receiver, lookup=retry_receiver, clock=clock)
+            after_expiry = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=retry_receiver, lookup=retry_receiver, clock=clock)
             retry = after_expiry.dispatch_outbox()
             self.assertEqual((retry.outcome, retry.batch_count, retry.attempted_operation_count, retry.acknowledged_operation_count, retry.unconfirmed_operation_count, retry_receiver.side_effects, tuple(key for _operation, key in retry_receiver.dispatch_calls)), ("PROCESSED", 1, 100, 0, 100, 0, original_keys))
             with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:
@@ -645,7 +733,7 @@ class RuntimeV12Tests(unittest.TestCase):
             after_expiry.close()
 
             lookup = _Receiver(composition_config, clock, modes=("valid",), directives=directives)
-            reconciler = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=retry_receiver, lookup=lookup, clock=clock)
+            reconciler = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, composition_config=composition_config, receiver=retry_receiver, lookup=lookup, clock=clock)
             reconciliation_run = reconciler.run(reconciliation_batches=1)
             self.assertEqual((reconciliation_run.outcome, reconciliation_run.outbox_processed), ("PROCESSED", 1))
             reconciliation = reconciliation_run.reconciliation
@@ -662,7 +750,7 @@ class RuntimeV12Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = QueueConfig("runtime-close-retry", 100)
-            runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
+            runtime = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config)
             exported = None
             try:
                 now = int(time.time() * 1000)
@@ -698,7 +786,7 @@ class RuntimeV12Tests(unittest.TestCase):
                 legacy.write_bytes(original)
                 config = QueueConfig("runtime-v10", 100)
                 with self.assertRaisesRegex(VerificationRuntimeError, "legacy_database_unsupported"):
-                    MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config)
+                    SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config)
                 self.assertEqual(legacy.read_bytes(), original)
                 self.assertFalse((root / "state.sqlite").exists())
                 self.assertFalse((root / "state.sqlite.runtime-lock").exists())
@@ -707,10 +795,10 @@ class RuntimeV12Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = QueueConfig("runtime-v10-owner", 100)
-            first = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort())
+            first = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort())
             try:
                 with self.assertRaisesRegex(VerificationRuntimeError, "runtime_already_owned"):
-                    MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort())
+                    SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort())
                 self.assertTrue((root / "state.sqlite.runtime-lock").exists())
             finally:
                 first.close()
@@ -730,7 +818,7 @@ class RuntimeV12Tests(unittest.TestCase):
             def create_runtime() -> None:
                 barrier.wait()
                 try:
-                    runtime = MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort())
+                    runtime = SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort())
                 except BaseException as error:
                     context = error.__context__
                     cause = error.__cause__
@@ -775,7 +863,7 @@ class RuntimeV12Tests(unittest.TestCase):
             config = QueueConfig("runtime-v10-failure", 100)
             port = _DispositionPort()
             verifier = _FailingVerifier()
-            with MinimalClearanceVerificationRuntime(root=root, verifier=verifier, config=config, state_disposition_port=port) as runtime:
+            with SyntheticReferenceRuntime(root=root, verifier=verifier, config=config, state_disposition_port=port) as runtime:
                 now = int(time.time() * 1000)
                 batch = runtime.issue_batch(template=OperationTemplate("failure", 1, config.profile_version, now - 100, now + 60_000))
                 runtime.submit_batch_handoff(issued_batch=batch, proof_stream=VolatileProofHandoff(bytearray(b"failure-proof")))
@@ -821,7 +909,7 @@ store._complete_batch(work, status="REJECTED", verifier_result=result, error_cod
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_transactions").fetchone()[0], 0)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_outbox").fetchone()[0], 0)
             config = QueueConfig("runtime-v10-crash", 100)
-            with MinimalClearanceVerificationRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort()) as runtime:
+            with SyntheticReferenceRuntime(root=root, verifier=_Verifier(config), config=config, state_disposition_port=_DispositionPort()) as runtime:
                 self.assertEqual(runtime._recovered_leases, 1)
                 self.assertEqual(runtime.run().outcome, "EMPTY")
             with closing(sqlite3.connect(str(root / "state.sqlite"))) as connection:

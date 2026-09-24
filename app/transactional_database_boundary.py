@@ -32,6 +32,7 @@ _AUDIT_EVENT_DOMAIN = b"BL/PQ512/V2/DATABASE-AUDIT-EVENT/v1\x00"
 _AUDIT_HEAD_DOMAIN = b"BL/PQ512/V2/DATABASE-AUDIT-HEAD/v1\x00"
 _DOMAIN_COMMITMENT_DOMAIN = b"BL/PQ512/V2/DATABASE-DOMAIN/v1\x00"
 _DIRECT_OPERATION_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-OPERATION/v1\x00"
+_DIRECT_STATE_OPERATION_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-OPERATION/STATE-V1\x00"
 _DIRECT_OPERATION_SEAL_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-SEAL/v1\x00"
 _DIRECT_REPLAY_ROOT_DOMAIN = b"BL/DIRECT-STATE-OWNED/REPLAY-ROOT/v1\x00"
 _DIRECT_CLEARANCE_ROOT_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-ROOT/v1\x00"
@@ -347,12 +348,12 @@ class AntiRollbackReference(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class DirectStateOwnedOperationV1:
-    """Independent semantic result sealed for the direct database boundary.
+    """Lean-bound semantic result sealed for the direct database boundary.
 
     This is not a proof envelope and contains no private source bytes.  The
-    direct adapter constructs it only from a successful independent bundle
-    parse; the database authenticates the value with a store-bound key before
-    opening its transaction.
+    direct adapter constructs it only from an accepted versioned State result
+    while the database transaction is open; the database authenticates the
+    value with a store-bound key before applying its transition.
     """
 
     bundle_id: bytes
@@ -386,6 +387,7 @@ class DirectStateOwnedOperationV1:
     continuity_after_audit_head: bytes
     continuity_before_root: bytes
     continuity_after_root: bytes
+    clearance_advanced: bool | None = None
     seal: bytes | None = None
 
     def __post_init__(self) -> None:
@@ -440,8 +442,7 @@ class DirectStateOwnedOperationV1:
             raise ProductionBoundaryError("direct_chronology_invalid")
         if (
             self.continuity_epoch != 7
-            or self.continuity_sequence_before != 0
-            or self.continuity_sequence_after != 1
+            or self.continuity_sequence_after != self.continuity_sequence_before + 1
         ):
             raise ProductionBoundaryError("direct_continuity_state_shape_invalid")
         expected_empty_audit = _direct_continuity_sha(
@@ -452,18 +453,18 @@ class DirectStateOwnedOperationV1:
             _DIRECT_CONTINUITY_ROOT_DOMAIN,
             b"empty",
         )
-        if (
+        if self.continuity_sequence_before == 0 and (
             self.continuity_before_audit_head != expected_empty_audit
             or self.continuity_before_root != expected_empty_root
-            or self.continuity_before_state_id
-            != _direct_continuity_state_id(
-                profile_id=self.profile_id,
-                mode_id=self.mode_id,
-                sequence=0,
-                row_count=0,
-                audit_head=self.continuity_before_audit_head,
-                continuity_root=self.continuity_before_root,
-            )
+        ):
+            raise ProductionBoundaryError("direct_continuity_before_state_invalid")
+        if self.continuity_before_state_id != _direct_continuity_state_id(
+            profile_id=self.profile_id,
+            mode_id=self.mode_id,
+            sequence=self.continuity_sequence_before,
+            row_count=self.continuity_sequence_before,
+            audit_head=self.continuity_before_audit_head,
+            continuity_root=self.continuity_before_root,
         ):
             raise ProductionBoundaryError("direct_continuity_before_state_invalid")
         expected_after_audit = _direct_continuity_sha(
@@ -485,13 +486,18 @@ class DirectStateOwnedOperationV1:
             != _direct_continuity_state_id(
                 profile_id=self.profile_id,
                 mode_id=self.mode_id,
-                sequence=1,
-                row_count=1,
+                sequence=self.continuity_sequence_after,
+                row_count=self.continuity_sequence_after,
                 audit_head=self.continuity_after_audit_head,
                 continuity_root=self.continuity_after_root,
             )
         ):
             raise ProductionBoundaryError("direct_continuity_after_state_invalid")
+        if self.clearance_advanced is not None and (
+            type(self.clearance_advanced) is not bool
+            or self.clearance_advanced != (self.effective_directive in (1, 5))
+        ):
+            raise ProductionBoundaryError("direct_clearance_decision_invalid")
         if self.seal is not None:
             _wide("direct_operation_seal", self.seal)
 
@@ -598,6 +604,30 @@ class DirectClearanceStateSnapshotV1:
             _wide("direct_clearance_last_operation", self.last_operation_digest)
 
 
+@dataclass(frozen=True, slots=True)
+class DirectStateOwnedCommitContextV1:
+    """Authoritative state and retry row read under the owner's write lock."""
+
+    epoch: int
+    global_sequence: int
+    anti_rollback_epoch: int
+    global_state_binding: bytes
+    global_audit_head: bytes
+    nullifier_root: bytes
+    payment_root: bytes
+    global_settled_batch_count: int
+    governance_commitment: bytes
+    direct_count: int
+    direct_state: DirectClearanceStateSnapshotV1
+    continuity_sequence: int
+    continuity_row_count: int
+    continuity_state_id: bytes
+    continuity_audit_head: bytes
+    continuity_root: bytes
+    prior_operation_digest: bytes | None
+    prior_operation: DirectStateOwnedOperationV1 | None
+
+
 def _direct_operation_parts(operation: DirectStateOwnedOperationV1) -> tuple[bytes, ...]:
     return (
         operation.bundle_id,
@@ -635,7 +665,21 @@ def _direct_operation_parts(operation: DirectStateOwnedOperationV1) -> tuple[byt
 
 
 def _direct_operation_digest(operation: DirectStateOwnedOperationV1) -> bytes:
-    return _digest(_DIRECT_OPERATION_DOMAIN, *_direct_operation_parts(operation))
+    if operation.clearance_advanced is None:
+        return _digest(_DIRECT_OPERATION_DOMAIN, *_direct_operation_parts(operation))
+    return _digest(
+        _DIRECT_STATE_OPERATION_DOMAIN,
+        *_direct_operation_parts(operation),
+        bytes((int(operation.clearance_advanced),)),
+    )
+
+
+def _direct_operation_clearance_advanced(
+    operation: DirectStateOwnedOperationV1,
+) -> bool:
+    if operation.clearance_advanced is None:
+        return operation.effective_directive in (1, 5)
+    return operation.clearance_advanced
 
 
 def _direct_operation_seal(
@@ -1043,7 +1087,7 @@ def _direct_audit_payload(
         "sequence_after": sequence_after,
         "policy_result": operation.policy_result,
         "effective_directive": operation.effective_directive,
-        "clearance_advanced": int(operation.effective_directive in (1, 5)),
+        "clearance_advanced": int(_direct_operation_clearance_advanced(operation)),
         "event_time": operation.event_time,
         "observation_time": operation.observation_time,
         "rule_effective_time": operation.rule_effective_time,
@@ -1202,7 +1246,7 @@ def _direct_operation_from_record(
         for value in row
     )
     try:
-        return DirectStateOwnedOperationV1(
+        legacy = DirectStateOwnedOperationV1(
             bundle_id=normalized[1],  # type: ignore[arg-type]
             receipt_id=normalized[2],  # type: ignore[arg-type]
             request_id=normalized[3],  # type: ignore[arg-type]
@@ -1235,6 +1279,16 @@ def _direct_operation_from_record(
             continuity_before_root=normalized[30],  # type: ignore[arg-type]
             continuity_after_root=normalized[31],  # type: ignore[arg-type]
         )
+        if _direct_operation_digest(legacy) == normalized[0]:
+            return legacy
+        if type(normalized[40]) is not int or normalized[40] not in (0, 1):
+            raise ProductionBoundaryError("database_direct_operation_version_invalid")
+        state_operation = replace(legacy, clearance_advanced=bool(normalized[40]))
+        if _direct_operation_digest(state_operation) == normalized[0]:
+            return state_operation
+        raise ProductionBoundaryError("database_direct_operation_digest_invalid")
+    except ProductionBoundaryError:
+        raise
     except (TypeError, ValueError) as exc:
         raise ProductionBoundaryError(
             "database_direct_operation_record_invalid"
@@ -2342,14 +2396,41 @@ class SQLiteSettlementStoreV2:
 
     def _commit_direct_state_owned(
         self,
-        operation: DirectStateOwnedOperationV1,
-    ) -> DirectStateOwnedDatabaseReceiptV1:
-        """Commit one direct clearance without entering the settlement lane."""
+        prepare_operation: Callable[
+            [DirectStateOwnedCommitContextV1], DirectStateOwnedOperationV1
+        ],
+        *,
+        retry_lookup_ids: tuple[tuple[str, bytes], ...],
+    ) -> tuple[DirectStateOwnedDatabaseReceiptV1, DirectStateOwnedOperationV1]:
+        """Evaluate and commit one direct clearance under the same write lock."""
 
-        operation_digest = self._validate_direct_operation(operation)
-        operation_values = _direct_operation_record_values(operation)
+        if not callable(prepare_operation):
+            raise ProductionBoundaryError("database_direct_prepare_required")
+        if type(retry_lookup_ids) is not tuple or not retry_lookup_ids:
+            raise ProductionBoundaryError("database_direct_retry_lookup_required")
+        allowed_retry_columns = {"bundle_id", "attempt_id"}
+        if any(
+            type(item) is not tuple
+            or len(item) != 2
+            or type(item[0]) is not str
+            or item[0] not in allowed_retry_columns
+            or type(item[1]) is not bytes
+            or len(item[1]) != 64
+            or not any(item[1])
+            for item in retry_lookup_ids
+        ):
+            raise ProductionBoundaryError("database_direct_retry_lookup_invalid")
+        retry_lookup_ids = tuple(dict.fromkeys(retry_lookup_ids))
+        if (
+            len(retry_lookup_ids) != 2
+            or {column for column, _ in retry_lookup_ids} != allowed_retry_columns
+        ):
+            raise ProductionBoundaryError("database_direct_retry_lookup_invalid")
         next_binding: bytes | None = None
         next_anti_epoch: int | None = None
+        operation: DirectStateOwnedOperationV1 | None = None
+        operation_digest: bytes | None = None
+        receipt: DirectStateOwnedDatabaseReceiptV1 | None = None
         with closing(self._connect()) as connection:
             began = False
             try:
@@ -2404,6 +2485,110 @@ class SQLiteSettlementStoreV2:
                     direct_state,
                     direct_count,
                 )
+                if direct_count == 0:
+                    continuity_sequence = 0
+                    continuity_row_count = 0
+                    continuity_audit_head = _direct_continuity_sha(
+                        _DIRECT_CONTINUITY_AUDIT_HEAD_DOMAIN,
+                        b"empty",
+                    )
+                    continuity_root = _direct_continuity_sha(
+                        _DIRECT_CONTINUITY_ROOT_DOMAIN,
+                        b"empty",
+                    )
+                    continuity_state_id = _direct_continuity_state_id(
+                        profile_id=self._profile_id,
+                        mode_id=self._direct_mode_id,
+                        sequence=continuity_sequence,
+                        row_count=continuity_row_count,
+                        audit_head=continuity_audit_head,
+                        continuity_root=continuity_root,
+                    )
+                else:
+                    continuity_row = connection.execute(
+                        "SELECT continuity_sequence_after, continuity_after_state_id, "
+                        "continuity_after_audit_head, continuity_after_root "
+                        "FROM direct_clearance_requests WHERE sequence_after=?",
+                        (row[1],),
+                    ).fetchone()
+                    if continuity_row is None:
+                        raise ProductionBoundaryError("database_direct_continuity_head_missing")
+                    continuity_sequence = continuity_row[0]
+                    continuity_row_count = direct_count
+                    continuity_state_id = bytes(continuity_row[1])
+                    continuity_audit_head = bytes(continuity_row[2])
+                    continuity_root = bytes(continuity_row[3])
+                    expected_continuity_id = _direct_continuity_state_id(
+                        profile_id=self._profile_id,
+                        mode_id=self._direct_mode_id,
+                        sequence=continuity_sequence,
+                        row_count=continuity_row_count,
+                        audit_head=continuity_audit_head,
+                        continuity_root=continuity_root,
+                    )
+                    if (
+                        continuity_sequence != row[1]
+                        or continuity_state_id != expected_continuity_id
+                    ):
+                        raise ProductionBoundaryError("database_direct_continuity_head_invalid")
+
+                lookup_sql = " OR ".join(
+                    f"{column}=?" for column, _ in retry_lookup_ids
+                )
+                prior_rows = connection.execute(
+                    "SELECT * FROM direct_clearance_requests WHERE " + lookup_sql,
+                    tuple(sqlite3.Binary(value) for _, value in retry_lookup_ids),
+                ).fetchall()
+                if len(prior_rows) > 1:
+                    raise ProductionBoundaryError("database_direct_conflicting_retry")
+                prior_operation: DirectStateOwnedOperationV1 | None = None
+                prior_operation_digest: bytes | None = None
+                if prior_rows:
+                    prior_row = tuple(
+                        value if type(value) is int else bytes(value)
+                        for value in prior_rows[0]
+                    )
+                    if len(prior_row) != 48:
+                        raise ProductionBoundaryError("database_direct_operation_record_shape_invalid")
+                    prior_operation = _direct_operation_from_record(prior_row[:41])
+                    prior_operation_digest = prior_row[0]  # type: ignore[assignment]
+                    if (
+                        prior_operation.bundle_id
+                        != dict(retry_lookup_ids)["bundle_id"]
+                        or prior_operation.attempt_id
+                        != dict(retry_lookup_ids)["attempt_id"]
+                    ):
+                        raise ProductionBoundaryError("database_direct_conflicting_retry")
+                context = DirectStateOwnedCommitContextV1(
+                    epoch=row[0],  # type: ignore[arg-type]
+                    global_sequence=row[1],  # type: ignore[arg-type]
+                    anti_rollback_epoch=row[7],  # type: ignore[arg-type]
+                    global_state_binding=bytes(row[4]),
+                    global_audit_head=bytes(row[5]),
+                    nullifier_root=bytes(row[2]),
+                    payment_root=bytes(row[3]),
+                    global_settled_batch_count=row[8],  # type: ignore[arg-type]
+                    governance_commitment=bytes(row[6]),
+                    direct_count=direct_count,
+                    direct_state=direct_state,
+                    continuity_sequence=continuity_sequence,
+                    continuity_row_count=continuity_row_count,
+                    continuity_state_id=continuity_state_id,
+                    continuity_audit_head=continuity_audit_head,
+                    continuity_root=continuity_root,
+                    prior_operation_digest=prior_operation_digest,
+                    prior_operation=prior_operation,
+                )
+                prepared = prepare_operation(context)
+                if type(prepared) is not DirectStateOwnedOperationV1:
+                    raise ProductionBoundaryError("database_direct_prepare_result_invalid")
+                operation = self._seal_direct_state_owned(prepared)
+                operation_digest = self._validate_direct_operation(operation)
+                if operation is None or operation_digest is None:
+                    raise ProductionBoundaryError("database_direct_operation_missing")
+                operation_values = _direct_operation_record_values(operation)
+                if context.prior_operation is None and operation.clearance_advanced is None:
+                    raise ProductionBoundaryError("database_direct_legacy_operation_not_new")
                 pending_anchor = self._reconcile_anti_rollback_state(
                     epoch=row[7],  # type: ignore[arg-type]
                     state_binding=bytes(row[4]),
@@ -2413,15 +2598,7 @@ class SQLiteSettlementStoreV2:
                     ),
                 )
                 existing = connection.execute(
-                    "SELECT operation_digest, bundle_id, receipt_id, request_id, attempt_id, "
-                    "decision_id, join_id, source_root, profile_id, schema_id, program_id, "
-                    "mode_id, evaluator_id, control_set_id, rule_id, phase0_receipt_binding, "
-                    "exception_id, policy_result, effective_directive, event_time, "
-                    "observation_time, rule_effective_time, decision_time, continuity_epoch, "
-                    "continuity_sequence_before, continuity_sequence_after, "
-                    "continuity_before_state_id, continuity_after_state_id, "
-                    "continuity_before_audit_head, continuity_after_audit_head, "
-                    "continuity_before_root, continuity_after_root "
+                    "SELECT * "
                     "FROM direct_clearance_requests "
                     "WHERE operation_digest=? OR bundle_id=? OR receipt_id=? OR request_id=? "
                     "OR attempt_id=? OR decision_id=? OR join_id=?",
@@ -2444,7 +2621,13 @@ class SQLiteSettlementStoreV2:
                         value if type(value) is int else bytes(value)
                         for value in existing[0]
                     )
-                    if observed[0] != operation_digest or observed[1:] != operation_values:
+                    if (
+                        len(observed) != 48
+                        or observed[0] != operation_digest
+                        or observed[1:32] != operation_values
+                        or observed[40]
+                        != int(_direct_operation_clearance_advanced(operation))
+                    ):
                         raise ProductionBoundaryError(
                             "database_direct_conflicting_retry"
                         )
@@ -2464,28 +2647,44 @@ class SQLiteSettlementStoreV2:
                         raise ProductionBoundaryError("database_direct_receipt_missing")
                     receipt = _direct_receipt_from_row(receipt_row)
                     if (
-                        receipt.clearance_root_after != direct_state.clearance_root
-                        or receipt.clearance_count_after != direct_state.clearance_count
-                        or receipt.payment_root_after != direct_state.payment_root
-                        or receipt.settled_batch_count_after != direct_state.settled_batch_count
-                        or receipt.state_binding != bytes(row[4])
-                        or receipt.audit_head != bytes(row[5])
+                        receipt.operation_digest != operation_digest
+                        or receipt.bundle_id != operation.bundle_id
+                        or receipt.receipt_id != operation.receipt_id
+                        or receipt.decision_id != operation.decision_id
+                        or receipt.join_id != operation.join_id
+                        or receipt.sequence_before != operation.continuity_sequence_before
+                        or receipt.sequence_after != operation.continuity_sequence_after
+                        or receipt.nullifier_root_before != bytes(existing[0][34])
+                        or receipt.nullifier_root_after != bytes(existing[0][35])
+                        or receipt.effective_directive != operation.effective_directive
+                        or receipt.clearance_advanced
+                        != _direct_operation_clearance_advanced(operation)
+                        or receipt.clearance_root_before != bytes(existing[0][41])
+                        or receipt.clearance_root_after != bytes(existing[0][42])
+                        or receipt.clearance_count_before != existing[0][43]
+                        or receipt.clearance_count_after != existing[0][44]
+                        or receipt.payment_root_before != bytes(existing[0][36])
+                        or receipt.payment_root_after != bytes(existing[0][37])
+                        or receipt.settled_batch_count_before != existing[0][46]
+                        or receipt.settled_batch_count_after != existing[0][47]
+                        or receipt.state_binding != bytes(existing[0][38])
+                        or receipt.audit_head != bytes(existing[0][39])
                     ):
                         raise ProductionBoundaryError(
-                            "database_direct_clearance_state_mismatch"
+                            "database_direct_retry_receipt_mismatch"
                         )
                     connection.execute("COMMIT")
                     began = False
-                    return receipt
+                    return receipt, operation
 
                 if (
-                    row[1] != 0
-                    or direct_count != 0
-                    or direct_state.sequence != 0
-                    or direct_state.clearance_count != 0
-                    or direct_state.clearance_root != self._initial_direct_clearance_root
-                    or bytes(row[3]) != self._initial_payment_root
-                    or row[8] != 0
+                    row[1] >= (2**63 - 1)
+                    or row[7] >= (2**63 - 1)
+                    or row[1] != operation.continuity_sequence_before
+                    or direct_state.sequence != row[1]
+                    or direct_count != row[1]
+                    or direct_state.clearance_count != direct_count
+                    or operation.continuity_sequence_after != row[1] + 1
                 ):
                     raise ProductionBoundaryError("database_direct_sequence_stale")
                 nullifier_before = bytes(row[2])
@@ -2507,7 +2706,7 @@ class SQLiteSettlementStoreV2:
                 ).fetchone()
                 if duplicate is not None:
                     raise ProductionBoundaryError("database_direct_replay")
-                clearance_advanced = operation.effective_directive in (1, 5)
+                clearance_advanced = _direct_operation_clearance_advanced(operation)
                 clearance_after = (
                     _digest(
                         _DIRECT_CLEARANCE_ROOT_DOMAIN,
@@ -2764,7 +2963,9 @@ class SQLiteSettlementStoreV2:
                 raise ProductionBoundaryError(
                     "database_direct_transition_committed_anchor_pending"
                 ) from exc
-        return receipt
+        if receipt is None or operation is None:
+            raise ProductionBoundaryError("database_direct_receipt_missing")
+        return receipt, operation
 
     def _verify_integrity_single_epoch(self) -> None:
         with closing(self._connect()) as connection:
@@ -2881,6 +3082,7 @@ class SQLiteSettlementStoreV2:
                 governance_commitment=snapshot.governance_commitment,
             )
             previous_settled_batch_count = 0
+            previous_continuity: tuple[int, bytes, bytes, bytes] | None = None
             direct_rows = connection.execute(
                 "SELECT operation_digest, bundle_id, receipt_id, request_id, attempt_id, "
                 "decision_id, join_id, source_root, profile_id, schema_id, program_id, "
@@ -2904,7 +3106,106 @@ class SQLiteSettlementStoreV2:
                     value if type(value) is int else bytes(value)
                     for value in raw_direct
                 )
+                if (
+                    len(direct) != 48
+                    or type(direct[5]) is not bytes
+                    or type(direct[7]) is not bytes
+                    or type(direct[8]) is not bytes
+                    or type(direct[11]) is not bytes
+                    or type(direct[18]) is not int
+                    or direct[18] not in (1, 2, 3, 4, 5)
+                    or type(direct[25]) is not int
+                    or not 0 < direct[25] <= 0xFFFF_FFFF
+                    or type(direct[27]) is not bytes
+                    or type(direct[28]) is not bytes
+                    or type(direct[29]) is not bytes
+                    or type(direct[30]) is not bytes
+                    or type(direct[31]) is not bytes
+                ):
+                    raise ProductionBoundaryError(
+                        "database_direct_continuity_transition_mismatch"
+                    )
+                # Recompute before row deserialization; do not certify via the producer helper.
+                expected_continuity_after_audit = _direct_continuity_sha(
+                    _DIRECT_CONTINUITY_AUDIT_HEAD_DOMAIN,
+                    direct[28],
+                    direct[5],
+                    bytes((direct[18],)),
+                )
+                expected_continuity_after_root = _direct_continuity_sha(
+                    _DIRECT_CONTINUITY_ROOT_DOMAIN,
+                    direct[30],
+                    direct[7],
+                    direct[5],
+                )
+                continuity_context = _direct_continuity_sha(
+                    _DIRECT_CONTINUITY_STATE_CONTEXT_DOMAIN,
+                    direct[8],
+                    direct[11],
+                )
+                continuity_after_state_material = b"".join(
+                    (
+                        _DIRECT_CONTINUITY_STATE_MAGIC,
+                        _DIRECT_CONTINUITY_STATE_VERSION.to_bytes(2, "big"),
+                        b"\0\0",
+                        continuity_context,
+                        direct[25].to_bytes(8, "big"),
+                        direct[25].to_bytes(4, "big"),
+                        b"\0" * 4,
+                        expected_continuity_after_audit,
+                        expected_continuity_after_root,
+                    )
+                )
+                expected_continuity_after_state_id = _direct_continuity_sha(
+                    _DIRECT_CONTINUITY_STATE_ID_DOMAIN,
+                    continuity_after_state_material,
+                )
+                if (
+                    direct[27] != expected_continuity_after_state_id
+                    or direct[29] != expected_continuity_after_audit
+                    or direct[31] != expected_continuity_after_root
+                ):
+                    raise ProductionBoundaryError(
+                        "database_direct_continuity_transition_mismatch"
+                    )
                 direct_operation = _direct_operation_from_record(direct[:41])
+                if previous_continuity is None:
+                    empty_audit_head = _direct_continuity_sha(
+                        _DIRECT_CONTINUITY_AUDIT_HEAD_DOMAIN,
+                        b"empty",
+                    )
+                    empty_root = _direct_continuity_sha(
+                        _DIRECT_CONTINUITY_ROOT_DOMAIN,
+                        b"empty",
+                    )
+                    expected_continuity_before = (
+                        0,
+                        _direct_continuity_state_id(
+                            profile_id=direct_operation.profile_id,
+                            mode_id=direct_operation.mode_id,
+                            sequence=0,
+                            row_count=0,
+                            audit_head=empty_audit_head,
+                            continuity_root=empty_root,
+                        ),
+                        empty_audit_head,
+                        empty_root,
+                    )
+                else:
+                    expected_continuity_before = previous_continuity
+                if (
+                    (
+                        direct_operation.continuity_sequence_before,
+                        direct_operation.continuity_before_state_id,
+                        direct_operation.continuity_before_audit_head,
+                        direct_operation.continuity_before_root,
+                    )
+                    != expected_continuity_before
+                    or direct_operation.continuity_sequence_after != expected_sequence
+                ):
+                    raise ProductionBoundaryError(
+                        "database_direct_continuity_chain_broken"
+                    )
                 operation_digest = direct[0]
                 if (
                     _direct_operation_digest(direct_operation) != operation_digest
@@ -2916,7 +3217,7 @@ class SQLiteSettlementStoreV2:
                     or direct[33] != expected_sequence
                     or direct[34] != previous_nullifier
                     or direct[36] != previous_payment
-                    or direct[40] != int(direct_operation.effective_directive in (1, 5))
+                    or direct[40] != int(_direct_operation_clearance_advanced(direct_operation))
                     or direct[41] != previous_clearance_root
                     or direct[43] != previous_clearance_count
                     or direct[46] != previous_settled_batch_count
@@ -2951,7 +3252,7 @@ class SQLiteSettlementStoreV2:
                         direct_operation.decision_id,
                         bytes((direct_operation.effective_directive,)),
                     )
-                    if direct_operation.effective_directive in (1, 5)
+                    if _direct_operation_clearance_advanced(direct_operation)
                     else previous_clearance_root
                 )
                 expected_clearance_count = previous_clearance_count + 1
@@ -3120,6 +3421,12 @@ class SQLiteSettlementStoreV2:
                 previous_clearance_count = direct[44]  # type: ignore[assignment]
                 previous_clearance_binding = direct[45]  # type: ignore[assignment]
                 previous_settled_batch_count = direct[47]  # type: ignore[assignment]
+                previous_continuity = (
+                    direct_operation.continuity_sequence_after,
+                    direct_operation.continuity_after_state_id,
+                    direct_operation.continuity_after_audit_head,
+                    direct_operation.continuity_after_root,
+                )
                 expected_sequence += 1
             if (
                 expected_sequence - 1 != snapshot.sequence

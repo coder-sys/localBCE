@@ -1,0 +1,19 @@
+name = "blind_ledger_admission_kernel"
+version = "0.1.0"
+defaultTargets = ["blind_ledger_admission_kernel", "blind_ledger_admission_checker"]
+
+[[lean_lib]]
+name = "Admission"
+
+[[lean_lib]]
+name = "BlindLedger"
+
+[[lean_exe]]
+name = "blind_ledger_admission_kernel"
+root = "Admission.Main"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+[[lean_exe]]
+name = "blind_ledger_admission_checker"
+root = "Admission.Checker"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]

@@ -9,11 +9,13 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from app import right_rail_financial_engine as financial_engine
 from app import right_rail_financial_owner as owner
 from app.right_rail_financial_mirror import (
     FinancialMirror,
     FinancialMirrorContinuityError,
     FinancialMirrorDispatchError,
+    FinancialMirrorInputError,
     MAX_PACKAGE_BYTES,
 )
 from tests.rightrail_financial_expected_cases import (
@@ -22,9 +24,11 @@ from tests.rightrail_financial_expected_cases import (
     H_ITEM_ID,
     H_OWED_CENTS,
     PERIOD_ONE_SCOPE,
+    POPULATION_MANIFEST_V1,
     PROGRAM_ITEMS,
     UNAPPROVED_OFFSET_CENTS,
 )
+from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
 
 
 class _Clock:
@@ -56,6 +60,9 @@ class FinancialMirrorTests(unittest.TestCase):
             config=self.config,
             trusted_authority=self.authority,
             clock=self.clock,
+            correction_transition_release=_correction_transition_test_release(
+                workspace=self.root / "correction-engine-workspace"
+            ),
         )
         self._populate_owner()
         self.mirror = FinancialMirror(self.store)
@@ -80,6 +87,30 @@ class FinancialMirrorTests(unittest.TestCase):
             expected_tests=CONTROL_PACK_V1.expected_tests,
         )
         self.store.publish_control_pack(pack)
+        manifest_fixture = POPULATION_MANIFEST_V1
+        manifest = owner.PopulationManifest(
+            manifest_id=manifest_fixture.manifest_id,
+            manifest_version=manifest_fixture.manifest_version,
+            state_id=manifest_fixture.scope.state_id,
+            deployment_id=manifest_fixture.scope.deployment_id,
+            program_id=manifest_fixture.scope.program_id,
+            period_id=manifest_fixture.scope.period_id,
+            currency=manifest_fixture.scope.currency,
+            pack_id=manifest_fixture.pack_id,
+            cutoff_ms=manifest_fixture.cutoff_ms,
+            inclusion_rules=manifest_fixture.inclusion_rules,
+            source_owner_id=manifest_fixture.source_owner_id,
+            authority_id=self.authority.authority_id,
+            authority_epoch=self.authority.epoch,
+            authority_digest=self.authority.digest,
+            approved_by=manifest_fixture.approved_by,
+            approval_ref=manifest_fixture.approval_ref,
+            source_id=manifest_fixture.source_id,
+            source_version=manifest_fixture.source_version,
+            source_digest=bytes.fromhex(manifest_fixture.source_digest_hex),
+            member_ids=manifest_fixture.member_ids,
+        )
+        self.store.register_population_manifest(manifest)
         items = tuple(
             owner.PopulationItem(
                 population_id=item.population_id,
@@ -93,9 +124,10 @@ class FinancialMirrorTests(unittest.TestCase):
         )
         self.store.stage_population(
             population_id=items[0].population_id,
+            manifest_id=manifest.manifest_id,
             pack_id=pack.pack_id,
             cutoff_ms=CONTROL_PACK_V1.effective_start_ms,
-            inclusion_rules=("fixture-inclusion-v1",),
+            inclusion_rules=manifest_fixture.inclusion_rules,
             expected_count=len(items),
             items=items,
         )
@@ -133,6 +165,56 @@ class FinancialMirrorTests(unittest.TestCase):
             evaluation_result_digest=receipt["result_digest"],
         )
 
+    def test_correction_followup_outputs_resume_and_reopen_through_mirror(self) -> None:
+        self._prepare_action()
+
+        current = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        self.assertEqual(current["followup_status"], "CURRENT")
+        self.assertEqual(current["resource"], "correction_followup")
+        explanation = current["mirror_explanation"]
+        report = current["state_report"]
+        self.assertEqual(
+            explanation["decision_package"],
+            report["decision_package"],
+        )
+        self.assertEqual(explanation["decision_package"]["current_action"]["status"], "READY")
+        support = current["corporate_support"]
+        self.assertEqual(
+            set(support),
+            {
+                "contract",
+                "status",
+                "component",
+                "artifact",
+                "failure_stage",
+                "error_class",
+                "reproduction",
+            },
+        )
+        self.assertEqual(support["status"], "CURRENT")
+        self.assertEqual(
+            support["artifact"]["sha256"],
+            financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper(),
+        )
+        support_json = json.dumps(support, sort_keys=True)
+        for private_value in (
+            H_ITEM_ID,
+            "action:correction:h",
+            "obligation:",
+            "evidence:",
+        ):
+            self.assertNotIn(private_value, support_json)
+
+        self.mirror.acknowledge_action("action:correction:h", "ack:correction:h:followup")
+        reopened = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        self.assertEqual(reopened["followup_status"], "REOPENED")
+        self.assertEqual(reopened["corporate_support"]["error_class"], "STALE_DEPENDENCY")
+        drained = self.mirror.drain_correction_followups(limit=1)
+        self.assertEqual(drained["count"], 1)
+        self.assertEqual(drained["items"][0]["followup_status"], "REOPENED")
+        self.assertFalse(drained["has_more"])
+        self.assertEqual(drained["skipped"], {"count": 0, "reasons": {}})
+
     def test_queries_are_bounded_and_return_references_without_raw_payloads(self) -> None:
         first = self.mirror.list_obligations(status="ALL", limit=5, offset=0)
         second = self.mirror.list_obligations(status="ALL", limit=5, offset=5)
@@ -158,6 +240,87 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertNotIn("payload", action)
         self.assertNotIn("payload_json", action)
         self.assertEqual(action["payload_fields"]["amount_cents"], UNAPPROVED_OFFSET_CENTS)
+
+    def test_c05_decision_package_is_sanitized_bounded_and_ack_is_not_cash(self) -> None:
+        self._prepare_action()
+        self.mirror.acknowledge_action("action:correction:h", "ack:correction:h:v1")
+        sequence_after_ack = self.mirror.summary()["sequence"]
+        durable_snapshot_before = self.store.export_continuity()
+
+        owner_receipt = self.store.current_evaluation_receipt(H_ITEM_ID)
+        self.assertIn("input_snapshot_digest", owner_receipt)
+        mirror_receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
+        self.assertEqual(mirror_receipt["input_snapshot_digest"], owner_receipt["input_snapshot_digest"])
+        owner_package = self.store.decision_package(H_ITEM_ID, limit=1, offset=0)
+        self.assertIn("input_snapshot_digest", owner_package["evaluation_receipt"])
+
+        first = self.mirror.decision_package(H_ITEM_ID, limit=1, offset=0)
+        second = self.mirror.decision_package(H_ITEM_ID, limit=1, offset=1)
+        self.assertEqual(first["schema"], "RR/FINANCIAL/MIRROR/v1")
+        self.assertEqual(first["resource"], "decision_package")
+        self.assertEqual(first["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v2")
+        self.assertEqual(first["cash"]["recorded_received_cash_cents"], H_CASH_CENTS)
+        self.assertEqual(first["cash"]["shortfall_cents"], UNAPPROVED_OFFSET_CENTS)
+        self.assertEqual(first["current_action"]["status"], "ACKNOWLEDGED")
+        self.assertEqual(first["current_action"]["acknowledgment"]["cash_effect_cents"], 0)
+        self.assertEqual(first["conclusions"]["action_acknowledgment"]["cash_effect_cents"], 0)
+        self.assertNotIn("input_snapshot_digest", first["evaluation_receipt"])
+        self.assertEqual(
+            first["population_binding"],
+            {
+                "status": "PUBLISHED",
+                "completeness": "EXACT",
+                "source_complete": True,
+                "manifest_version": 1,
+                "member_count": len(PROGRAM_ITEMS),
+            },
+        )
+        self.assertNotIn("population_id", first["obligation"])
+        self.assertNotIn("population_id", self.mirror.list_obligations()["items"][0])
+        self.assertNotIn("population_id", self.mirror.obligation_detail(H_ITEM_ID))
+        first_ids = {row["evidence_id"] for row in first["references"]["evidence"]["items"]}
+        second_ids = {row["evidence_id"] for row in second["references"]["evidence"]["items"]}
+        self.assertEqual(first["references"]["evidence"]["next_offset"], 1)
+        self.assertEqual(second["references"]["evidence"]["offset"], 1)
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+        self.assertEqual(self.mirror.summary()["sequence"], sequence_after_ack)
+        self.assertEqual(self.store.export_continuity(), durable_snapshot_before)
+
+        def collect_keys(value: object) -> set[str]:
+            if type(value) is dict:
+                return {str(key) for key in value} | set().union(*(collect_keys(item) for item in value.values()))
+            if type(value) is list:
+                return set().union(*(collect_keys(item) for item in value)) if value else set()
+            return set()
+
+        forbidden = {
+            "payload",
+            "payload_json",
+            "input_snapshot",
+            "input_snapshot_json",
+            "input_snapshot_digest",
+            "content_digest",
+            "display_label",
+            "population_id",
+            "manifest_id",
+            "manifest_digest",
+            "member_id",
+            "member_ids",
+            "member_digest",
+            "source_digest",
+            "source_owner_id",
+            "approval_ref",
+        }
+        self.assertFalse(forbidden.intersection(collect_keys(first)))
+        population_history = [
+            row
+            for row in self.mirror.history(limit=200)["items"]
+            if row.get("aggregate_type") in {"POPULATION", "POPULATION_MANIFEST"}
+        ]
+        self.assertTrue(population_history)
+        self.assertTrue(all("aggregate_id" not in row for row in population_history))
+        with self.assertRaisesRegex(FinancialMirrorInputError, "decision_package_page"):
+            self.mirror.decision_package(H_ITEM_ID, limit=201)
 
     def test_commands_delegate_revision_and_authority_fences(self) -> None:
         self._prepare_claim()
@@ -483,12 +646,60 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
         self.mirror.verify_integrity()
 
+    def test_population_status_reports_manifest_completeness_without_roster(self) -> None:
+        status = self.mirror.population_status(PROGRAM_ITEMS[0].population_id)
+        self.assertEqual(status["schema"], "RR/FINANCIAL/MIRROR/v1")
+        self.assertEqual(status["resource"], "population_status")
+        self.assertEqual(status["status"], "PUBLISHED")
+        self.assertEqual(status["imported_count"], len(PROGRAM_ITEMS))
+        self.assertEqual(status["expected_count"], len(PROGRAM_ITEMS))
+        self.assertEqual(status["validated_count"], len(PROGRAM_ITEMS))
+        self.assertEqual(status["manifest_status"], "CURRENT")
+        self.assertEqual(status["completeness"], "EXACT")
+        self.assertTrue(status["source_complete"])
+        self.assertEqual(status["manifest_version"], 1)
+        self.assertEqual(
+            set(status),
+            {
+                "schema",
+                "resource",
+                "status",
+                "imported_count",
+                "expected_count",
+                "validated_count",
+                "manifest_status",
+                "completeness",
+                "source_complete",
+                "manifest_version",
+            },
+        )
+        self.assertFalse(
+            {
+                "population_id",
+                "manifest_id",
+                "manifest_digest",
+                "member_id",
+                "member_ids",
+                "member_digest",
+                "members",
+                "source_digest",
+                "source_owner_id",
+                "approval_ref",
+            }
+            & set(status)
+        )
+
     def test_continuity_export_validate_restore_restart_and_readback(self) -> None:
         self._prepare_action()
         package = self.mirror.export_continuity()
+        with self.store._read_snapshot() as connection:
+            self.assertEqual(
+                self.store._continuity_admission_package_size(connection),
+                len(package),
+            )
         metadata = self.mirror.validate_continuity_package(package)
-        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v5")
-        self.assertEqual(metadata["version"], 5)
+        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v7")
+        self.assertEqual(metadata["version"], 7)
         self.assertEqual(metadata["scope"]["state_id"], self.config.state_id)
         self.assertIn("financial_meta", metadata["table_counts"])
         self.assertFalse(metadata["dispatch_enabled"])

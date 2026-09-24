@@ -25,6 +25,7 @@ from app.minimal_clearance_verification_queue import (
     SOURCE_ADMISSION_RETRY_LIMIT,
     QueueBackpressureError,
     QueueConfig,
+    QueueIndeterminateError,
     QueueIntegrityError,
     QueueHeldError,
     QueueLeaseError,
@@ -419,7 +420,7 @@ class Profile12StateTests(unittest.TestCase):
 
         self.store._before_fault = None
         self.store._after_commit_fault = lambda label: (_ for _ in ()).throw(RuntimeError("issue postcommit")) if label == "after_issue_commit" else None
-        with self.assertRaisesRegex(RuntimeError, "issue postcommit"):
+        with self.assertRaisesRegex(QueueIndeterminateError, "issue_result_indeterminate"):
             self.store.issue_batch(template=self._template())
         with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
             self.assertEqual(connection.execute("SELECT status FROM queue_batches").fetchone()[0], "AWAITING_HANDOFF")
@@ -835,7 +836,7 @@ class Profile12StateTests(unittest.TestCase):
 
     def test_hold_at_issue_burns_reservation_without_refund(self) -> None:
         batch = self.store.issue_batch(template=self._template())
-        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+        with closing(self.store._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self.store._hold_batch_locked(connection, batch_id=batch.batch_id, now=self.clock.now_ms(), code="fresh_handoff_required")
             connection.commit()
@@ -1137,7 +1138,7 @@ class Profile12StateTests(unittest.TestCase):
 
     def test_receipt_flags_and_orphan_results_are_closed(self) -> None:
         batch = self.store.issue_batch(template=self._template())
-        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+        with closing(self.store._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self.store._hold_batch_locked(connection, batch_id=batch.batch_id, now=self.clock.now_ms(), code="fresh_handoff_required")
             connection.commit()
@@ -1578,7 +1579,7 @@ class Profile12StateTests(unittest.TestCase):
             held_store.submit_batch_handoff(issued_batch=held_batch, proof_stream=VolatileProofHandoff(bytearray(b"proof")))
             self.assertIsNotNone(held_store._claim_next_batch())
             held_clock.now += 60_000
-            with closing(sqlite3.connect(str(held_root / "state.sqlite"))) as connection:
+            with closing(held_store._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 held_store._hold_batch_locked(connection, batch_id=held_batch.batch_id, now=held_clock.now, code="lease_expired")
                 connection.commit()
@@ -1655,7 +1656,8 @@ class Profile12StateTests(unittest.TestCase):
         expired_owner = _QueueRuntimeOwnership(lock_path=expired_root / "state.sqlite.runtime-lock", parent=expired_root)
         expired_store = _VerificationQueueStore(path=expired_root / "state.sqlite", config=expired_config, owner=expired_owner, clock=expired_clock, composition_config=CompositionConfigV2(expired_config.queue_id, expired_config.digest, capacity=100))
         try:
-            expired_batch = expired_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, expired_config.profile_version, expired_clock.now - 100, expired_clock.now - 1))
+            expired_batch = expired_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, expired_config.profile_version, expired_clock.now - 100, expired_clock.now + 60_000))
+            expired_clock.now += 60_000
             with self.assertRaisesRegex(Exception, "validity_expired"):
                 expired_store.submit_batch_handoff(issued_batch=expired_batch, proof_stream=VolatileProofHandoff(bytearray(b"expired-handoff")))
             verify_database(expired_root / "state.sqlite", expected_config=expired_config.as_json)
@@ -1674,9 +1676,9 @@ class Profile12StateTests(unittest.TestCase):
         queued_owner = _QueueRuntimeOwnership(lock_path=queued_root / "state.sqlite.runtime-lock", parent=queued_root)
         queued_store = _VerificationQueueStore(path=queued_root / "state.sqlite", config=queued_config, owner=queued_owner, clock=queued_clock, composition_config=CompositionConfigV2(queued_config.queue_id, queued_config.digest, capacity=100))
         try:
-            queued_batch = queued_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, queued_config.profile_version, queued_clock.now - 100, queued_clock.now + 100))
+            queued_batch = queued_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, queued_config.profile_version, queued_clock.now - 100, queued_clock.now + 60_000))
             queued_store.submit_batch_handoff(issued_batch=queued_batch, proof_stream=VolatileProofHandoff(bytearray(b"queued-expiry")))
-            queued_clock.now += 101
+            queued_clock.now += 60_001
             self.assertIsNone(queued_store._claim_next_batch())
             verify_database(queued_root / "state.sqlite", expected_config=queued_config.as_json)
             with closing(sqlite3.connect(str(queued_root / "state.sqlite"))) as connection:
@@ -1694,7 +1696,7 @@ class Profile12StateTests(unittest.TestCase):
         recovery_owner = _QueueRuntimeOwnership(lock_path=recovery_root / "state.sqlite.runtime-lock", parent=recovery_root)
         recovery_store = _VerificationQueueStore(path=recovery_root / "state.sqlite", config=recovery_config, owner=recovery_owner, clock=recovery_clock, composition_config=CompositionConfigV2(recovery_config.queue_id, recovery_config.digest, capacity=100))
         try:
-            recovery_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, recovery_config.profile_version, recovery_clock.now - 100, recovery_clock.now + 10))
+            recovery_store.issue_batch(template=OperationTemplate("profile12-assertion", 1, recovery_config.profile_version, recovery_clock.now - 100, recovery_clock.now + 60_000))
             recovery_store._close()
             recovery_owner.close()
             recovery_clock.now += 100_000
@@ -1714,7 +1716,7 @@ class Profile12StateTests(unittest.TestCase):
             recovery_temp.cleanup()
 
         batch = self.store.issue_batch(template=self._template())
-        with closing(sqlite3.connect(str(self.root / "state.sqlite"))) as connection:
+        with closing(self.store._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self.store._hold_batch_locked(connection, batch_id=batch.batch_id, now=self.clock.now, code="fresh_handoff_required")
             connection.commit()
@@ -1829,7 +1831,7 @@ class Profile12StateTests(unittest.TestCase):
             path = self.root / f"timestamp-{field}.sqlite"
             path.write_bytes(base)
             if field == "event":
-                self._set_event_time(path, 4, self.clock.now + 1)
+                self._set_event_time(path, 4, self.clock.now - 1)
                 expected = "timestamp_binding"
             else:
                 mutate(path, field)

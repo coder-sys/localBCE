@@ -24,3 +24,9 @@ l2/deployments/
 /_handoff_support/
 **/_handoff_support/
 /work/
+
+# Lean build output and guarded-run outputs (trunk layout)
+.lake/
+**/.lake/
+native/guard/acceleration-correction/
+native/guard/guarded-*.log

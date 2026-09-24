@@ -1,0 +1,16 @@
+[package]
+name = "blind-ledger-admission-adapter"
+version = "0.1.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[dependencies]
+sha2 = "0.10"
+
+[build-dependencies]
+sha2 = "0.10"
+
+[[bin]]
+name = "blind_ledger_admission_adapter"
+path = "src/main.rs"

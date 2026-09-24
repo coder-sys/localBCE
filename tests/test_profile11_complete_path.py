@@ -532,6 +532,11 @@ runpy.run_path(sys.argv[0], run_name="__main__")
                     "bytes": screen.C_RANGE_LIBRARY_SIZE_BYTES,
                     "sha256": screen.C_RANGE_LIBRARY_SHA256,
                 },
+                "source_host": {
+                    "path": str(screen.SOURCE_HOST),
+                    "bytes": screen.SOURCE_HOST_SIZE_BYTES,
+                    "sha256": screen.SOURCE_HOST_SHA256.hex().upper(),
+                },
             },
         )
         self.assertEqual(
@@ -568,6 +573,64 @@ runpy.run_path(sys.argv[0], run_name="__main__")
             report = screen.validate_dependencies(source_workspace=source, verifier_workspace=verifier, state_workspace=state)
         self.assertTrue(report.ready, (report.missing, report.mismatched))
         self.assertEqual(report.failure_count, 0)
+
+    def test_source_host_pin_is_exact_and_preflight_failures_are_distinct(self) -> None:
+        pin = next(pin for pin in screen._file_pins() if pin.code == "source_host")
+        self.assertEqual(pin.path, screen.SOURCE_HOST)
+        self.assertEqual(pin.size_bytes, screen.SOURCE_HOST_SIZE_BYTES)
+        self.assertEqual(pin.sha256, screen.SOURCE_HOST_SHA256.hex().upper())
+        with tempfile.TemporaryDirectory(prefix="profile11-source-host-pin-") as directory:
+            root = Path(directory)
+            valid = root / "source_host.exe"
+            valid.write_bytes(b"pinned-source-host")
+            valid_pin = screen.FilePin("source_host", valid, len(b"pinned-source-host"), screen._sha256_file(valid))
+            missing: list[str] = []
+            mismatched: list[str] = []
+            screen._check_file_pin(valid_pin, missing, mismatched)
+            self.assertEqual((missing, mismatched), ([], []))
+
+            missing.clear()
+            mismatched.clear()
+            screen._check_file_pin(screen.FilePin("source_host", root / "missing.exe", valid_pin.size_bytes, valid_pin.sha256), missing, mismatched)
+            self.assertEqual((missing, mismatched), (["source_host"], []))
+
+            wrong_hash = screen.FilePin("source_host", valid, valid_pin.size_bytes, "0" * 64)
+            missing.clear()
+            mismatched.clear()
+            screen._check_file_pin(wrong_hash, missing, mismatched)
+            self.assertEqual((missing, mismatched), ([], ["source_host"]))
+
+            wrong_size = screen.FilePin("source_host", valid, valid_pin.size_bytes + 1, valid_pin.sha256)
+            missing.clear()
+            mismatched.clear()
+            screen._check_file_pin(wrong_size, missing, mismatched)
+            self.assertEqual((missing, mismatched), ([], ["source_host"]))
+
+            symlink = root / "source_host-link.exe"
+            try:
+                symlink.symlink_to(valid)
+            except OSError:
+                with mock.patch.object(screen.Path, "is_symlink", side_effect=lambda path: Path(path) == symlink):
+                    missing.clear()
+                    mismatched.clear()
+                    screen._check_file_pin(screen.FilePin("source_host", symlink, valid_pin.size_bytes, valid_pin.sha256), missing, mismatched)
+            else:
+                missing.clear()
+                mismatched.clear()
+                screen._check_file_pin(screen.FilePin("source_host", symlink, valid_pin.size_bytes, valid_pin.sha256), missing, mismatched)
+            self.assertEqual((missing, mismatched), (["source_host"], []))
+
+    def test_source_host_dependency_failure_precedes_batch_issuance(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="profile11-source-host-preflight-") as directory:
+            root = Path(directory)
+            for name in ("source-workspace", "verifier-workspace", "state"):
+                (root / name).mkdir()
+            report = screen.DependencyReport(("source_host",), ())
+            with mock.patch.object(screen, "_QUEUE_SOURCE_BOUND", True), mock.patch.object(screen, "validate_dependencies", return_value=report), mock.patch.object(screen, "QueueConfig", side_effect=AssertionError("batch issuance must not start")):
+                result = screen._run_coordinator(root)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_code"], "dependency_unavailable")
+        self.assertEqual(result["completed_samples"], 0)
 
     def test_topology_is_exactly_one_proof_and_100_operations(self) -> None:
         screen.validate_topology(proof_count=1, operation_count=100, frame_count=1, verifier_batch_count=1, ack_count=100)

@@ -1,0 +1,64 @@
+{
+  "receipt_version": 1,
+  "build_id": "BL-SECURITY-ARITHMETIC-20260913-V1",
+  "schema_id": "BLSECAR01/v1",
+  "toolchain": "leanprover/lean4:v4.33.1",
+  "binary": {
+    "relative_path": "formal/lean/.lake/build/bin/blind_security_arithmetic.exe",
+    "sha256": "588c07ec80f5bcb05ddaa0a1b00048cfd06651dec86e28a45b68da8229e8cd55",
+    "size": 108998144
+  },
+  "source_sha256": {
+    "formal/lean/BlindLedger.lean": "9681d6ac383245540082df96d162ac8fcdc1bcfb7e22b7e5d0e318f09085e631",
+    "formal/lean/BlindLedger/Arithmetic.lean": "bd6970ba2a0555380c911fd7efbe84810b8460282dbc782cd4bc30ade6e9815c",
+    "formal/lean/BlindLedger/RowBoundsSupport.lean": "9f0973303d4bbc832c966c7d767fe7e1455679f3f8994eaa97928f96f575198f",
+    "formal/lean/BlindLedger/RowBoundsTerms.lean": "27a85b33309b47c0e181935a4bc887244275c09dee4c1e38e2511539f54d7e81",
+    "formal/lean/BlindLedger/RowBoundsH0.lean": "333418df40d5c237766258ced4c424a1f78c84cd17b4df98d36d2fe3a82c8583",
+    "formal/lean/BlindLedger/RowBoundsH1.lean": "cfb5de4b496f0e4acdd54ad09826275dc3fe9745366f09099fd138e2ce12f4f6",
+    "formal/lean/BlindLedger/RowBoundsH1Outer.lean": "89be64d05abac279d08337a6356800c5b622fafaa246e8d706fc9d314fba4262",
+    "formal/lean/BlindLedger/RowBoundsFS1.lean": "062d2ff75d3327f146069eed3950cb7fa12b90bace19d4e433467ca872e47f72",
+    "formal/lean/BlindLedger/RowBoundsFS2.lean": "46ac656e036548f25665c7db5476858947a4e35e46bcfb7ba8860be1cd263632",
+    "formal/lean/BlindLedger/RowBoundsFS3.lean": "cb8eed71a8f11defba0de8572268248bf00ab6e71e08852e9f6965646732c137",
+    "formal/lean/BlindLedger/RowBoundsZero.lean": "5d56fdd29e8c874b318f69a27948e58897c1fba9b9d9ef82883791e73077db2f",
+    "formal/lean/BlindLedger/RowBounds.lean": "e272764b36a2e11de51cc68d407341a868b08f7d3ade407e2548572a9c3243c7",
+    "formal/lean/BlindLedger/WidthBoundsDefinitions.lean": "c9b38585b3ca5d91d8ce957480e4ea6bb071782ae12de8792d60de1db2091cff",
+    "formal/lean/BlindLedger/WidthBoundsCaps.lean": "89e2baa43552327d8540a2b4e15a635c6def40bff457f792191d0ff944b6575e",
+    "formal/lean/BlindLedger/WidthBounds.lean": "86ae84dcad4961c09e99dacdebd797247034cad42d19b800001bca7c5e9a2f1a",
+    "formal/lean/BlindLedger/AxiomCheck.lean": "641364595b600201722a3414f1f152e39e51095a5e2099cc565d5a2cdceb5313",
+    "formal/lean/BlindLedger/SecurityExecutable.lean": "641d783425f2f664f71637ceb89063ce00d69195b421e842bfb4d3ebceb948d7",
+    "formal/lean/BlindLedger/Theorems.lean": "083aba59f39116cc0a1597d0d5727e901076dc7228ca3e0c5022104058320cca",
+    "formal/lean/lean-toolchain": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71",
+    "formal/lean/lakefile.toml": "fb058a315cf1f4de94afd41b5c73aad7c40984b3e5a5fda902993b07041b2e0b",
+    "formal/lean/lake-manifest.json": "d7b02610fcc036e8341854bd167c70cdd52488aa186ddcc5157841558c83de33",
+    "tools/direct_mask_contract/manifest_v2.json": "52ad258ec47a3163bd884768e350b033de37d2f92b17bb2cef0d0330fcefa5a7"
+  },
+  "guard": {
+    "relative_path": "../pq-wide-seed-native-20260913/build-filter-native/run_guarded_v3.ps1",
+    "sha256": "a9d3496e3789f16182d3f6946860bc7454f86aec407fb9bffe352d1f4fed7fe1",
+    "mutex_name": "Local\\BlindLedgerDirectMaskBuild20260907",
+    "physical_reserve_bytes": 3221225472,
+    "process_tree_cap_bytes": 2000000000
+  },
+  "tools": {
+    "lean": {
+      "sha256": "af49bacfabaa1fea71332ca0feae0fa1a60912219d5902291adc79f905bffb8d",
+      "size": 83456
+    },
+    "lake": {
+      "sha256": "565c3976275d79e104421014b6229f4fcf4a8c8edfe164a43b344c91af6f496c",
+      "size": 87552
+    },
+    "pwsh": {
+      "sha256": "362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139",
+      "size": 301368
+    }
+  },
+  "build_lock": {
+    "binary_relative_path": "formal/lean/.lake/build/bin/blind_security_arithmetic.exe",
+    "source_root": "formal/lean",
+    "source_file_count": 22,
+    "guard_mode": "Command",
+    "guard_mutex": "Local\\BlindLedgerDirectMaskBuild20260907",
+    "max_output_bytes": 2000000
+  }
+}
