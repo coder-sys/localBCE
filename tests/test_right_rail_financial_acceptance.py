@@ -4948,12 +4948,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self._make_owner(path=tampered)
         self.assertEqual(tampered.read_bytes(), tampered_bytes)
         # Review 466178b finding 4: a same-length acknowledgment edit passes the size cache, but
-        # every history (v7 included) names the reference its acknowledgment event accepted.
+        # every history (v7 included) names the reference its acknowledgment event accepted. This fixture's
+        # events still carry their v8 rows, so the opening balance contradicting them is caught first
+        # (final review fix 4); a genuine v7 history carries none and reaches replay:acknowledgment.
         tampered.write_bytes(v7_bytes)
         with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
             connection.execute("UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'")
         tampered_bytes = tampered.read_bytes()
-        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:acknowledgment$"):
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:opening-balance$"):
             self._make_owner(path=tampered)
         self.assertEqual(tampered.read_bytes(), tampered_bytes)
 
@@ -5293,6 +5295,25 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     self.assertEqual(connection.execute(statement).rowcount, 1)
                 with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
                     verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+
+    def test_an_opening_balance_cannot_launder_a_row_history_carried(self) -> None:
+        # Final review of 75a5517, finding 4: an opening balance appended to a native store restarted
+        # replay from rows of the writer's choosing. This edit is inside every bound but replay's.
+        store = self._build_base_for_correction()
+        self._prepare_acknowledged(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            self.assertEqual(connection.execute("UPDATE action_outbox SET updated_at_ms=updated_at_ms-1 WHERE status='ACKNOWLEDGED'").rowcount, 1)
+        with closing(store._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            images = [{"table": table, "row": {column: store._export_value(row[column]) for column in owner._TABLE_COLUMNS[table]}} for table in owner._CAPTURED_TABLES for row in connection.execute(f"SELECT * FROM {table}")]
+            last = int(connection.execute("SELECT max(committed_at_ms) FROM financial_events").fetchone()[0])
+            store._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=last)
+            store._rebuild_continuity_admission(connection)
+            connection.execute("COMMIT")
+        with self.assertRaisesRegex(IndependentFinancialError, "^replay:opening-balance$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:opening-balance$"):
+            self._make_owner(path=store.path)
 
     def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:
         # Final review of 75a5517, finding 5: publish opened the case after the first evaluation,
