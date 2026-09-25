@@ -4220,7 +4220,6 @@ def _verify_connection(
         _fail(f"foreign-keys:{orphan[0]}")
     meta = _verify_meta(connection, identity, schema_version)
     events = _verify_events(connection, meta)
-    _verify_history_tables(connection, events)
     packs = _verify_packs(connection, meta)
     manifest_state = _verify_population_manifest_rows(
         manifest_rows=[dict(row) for row in _bounded_rows(connection, "population_manifests")],
@@ -4268,6 +4267,7 @@ def _verify_connection(
     for key, obligation in obligations.items():
         _verify_exact_input(connection, obligation, _evaluation_input_snapshot(current[key]["input_snapshot_json"], "evaluation:input"))
     _verify_replayed_rows(connection, events)  # after the specific checks, so their diagnoses come first
+    _verify_history_tables(connection, events)  # bookkeeping last: a replay finding is the sharper diagnosis
     package_result: dict[str, object] | None = None
     if current_snapshot_package is not None and restore_source_package is not None:
         _fail("continuity:duplicate-input")
