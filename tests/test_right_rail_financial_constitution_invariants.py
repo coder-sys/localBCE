@@ -33,8 +33,8 @@ and the standing claims ``proofSuiteId=null``, ``production_usable=false``,
 
 Pinned Engine artifact.  Every test here builds its owner through
 ``_build_base_for_correction``, which requires the pinned correction Engine in
-``artifacts/engine-correction-e911`` (built from an older source; see its
-``PROVENANCE.md``).  The ``_requires_pinned_correction_engine`` marker on each
+``artifacts/engine-correction`` (built from the current ``lean/`` source;
+see its ``PROVENANCE.md``).  The ``_requires_pinned_correction_engine`` marker on each
 test states whether the binary is actually executed or only its identity is
 hashed.  A missing or mismatched artifact is a hard failure, never a skip
 (VI.3).
@@ -75,7 +75,7 @@ _TestMethod = TypeVar("_TestMethod", bound=Callable[..., Any])
 
 
 def _requires_pinned_correction_engine(usage: str) -> Callable[[_TestMethod], _TestMethod]:
-    """Mark a test that needs ``artifacts/engine-correction-e911``.
+    """Mark a test that needs ``artifacts/engine-correction``.
 
     ``usage`` says whether the pinned binary is executed or only hashed.  The
     marker never skips: a missing artifact fails the test (VI.3).

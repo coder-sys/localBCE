@@ -56,10 +56,10 @@ from tests import rightrail_financial_expected_cases as expected
 
 
 _CORRECTION_ENGINE_PATH = (
-    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction-e911" / "blind_financial_correction.exe"
+    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "blind_financial_correction.exe"
 )
 _CORRECTION_VECTOR_DIR = (
-    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction-e911" / "vectors"
+    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
 )
 _EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_245_376
 _EXPECTED_CORRECTION_ARTIFACT_SHA256 = bytes.fromhex(

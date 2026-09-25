@@ -23,7 +23,7 @@ EXPECTED_OFFSET_CENTS = semantic_tests.EXPECTED_OFFSET_CENTS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# The digest-pinned snapshot evaluator (blind_financial.exe, not the E911 correction
+# The digest-pinned snapshot evaluator (blind_financial.exe, not the pinned correction
 # program). Repo-relative by default; RIGHTRAIL_ACCEPTED_ENGINE_PATH may point
 # elsewhere, but the size and SHA-256 pins below still decide acceptance.
 ACCEPTED_ENGINE_PATH = Path(

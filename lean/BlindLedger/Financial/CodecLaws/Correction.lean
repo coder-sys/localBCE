@@ -21,10 +21,15 @@ theorem length_encodeSizedBytes (value : Bytes) :
     (encodeSizedBytes value).length = 4 + value.length := by
   simp [encodeSizedBytes, length_natBE]
 
+theorem length_le_of_append_sized (pre value : Bytes) {bound : Nat}
+    (h : (pre ++ encodeSizedBytes value).length ≤ bound) : value.length ≤ bound := by
+  simp only [List.length_append, length_encodeSizedBytes] at h
+  omega
+
 theorem isPrefixOf_append_self (magic rest : Bytes) : magic.isPrefixOf (magic ++ rest) = true := by
   induction magic with
   | nil => simp
-  | cons byte magic ih => simp [List.isPrefixOf, ih]
+  | cons byte magic ih => simp [ih]
 
 theorem readSizedBytes_encodeSizedBytes_append (value rest : Bytes)
     (hValue : value.length ≤ maxCorrectionTransitionBytes) :
@@ -348,6 +353,7 @@ theorem readOptionalDigest_append (value : Option Bytes) (rest : Bytes)
       have hDigest : digestWireAdmissible digest := h
       simp [readOptional, encodeOptional, readDigest_wire_append _ _ hDigest]
 
+set_option maxHeartbeats 1000000 in
 theorem readOwnerEvaluationResult_append (result : OwnerEvaluationResult) (rest : Bytes)
     (h : ownerResultWireAdmissible result) :
     readOwnerEvaluationResult (encodeOwnerEvaluationResult result ++ rest) =
@@ -359,8 +365,14 @@ theorem readOwnerEvaluationResult_append (result : OwnerEvaluationResult) (rest 
         some (result.evidenceIds, tail) :=
     fun tail => readList_encodeString_append _ tail hCount.1 hIds
   simp [readOwnerEvaluationResult, encodeOwnerEvaluationResult, List.append_assoc,
-    readString_encodeString_append, readNat8_natBE_append, readBool_encodeBool_append, hIdsRead,
-    h1, h2, h3, h4, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16]
+    readString_encodeString_append _ _ h1, readString_encodeString_append _ _ h2,
+    readNat8_natBE_append _ _ h3, readNat8_natBE_append _ _ h4, hIdsRead,
+    readString_encodeString_append _ _ h6, readNat8_natBE_append _ _ h7,
+    readNat8_natBE_append _ _ h8, readNat8_natBE_append _ _ h9, readNat8_natBE_append _ _ h10,
+    readNat8_natBE_append _ _ h11, readNat8_natBE_append _ _ h12,
+    readNat8_natBE_append _ _ h13, readBool_encodeBool_append,
+    readString_encodeString_append _ _ h14, readString_encodeString_append _ _ h15,
+    readString_encodeString_append _ _ h16]
 
 set_option maxHeartbeats 1000000 in
 theorem readEvaluationReceipt_append (receipt : EvaluationReceipt) (rest : Bytes)
@@ -381,10 +393,17 @@ theorem readDependencyFacts_append (facts : CorrectionDependencyFacts) (rest : B
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18,
     h19, h20, h21⟩ := h
   simp [readDependencyFacts, encodeDependencyFacts, List.append_assoc,
-    readString_encodeString_append, readNat8_natBE_append, readDigest_wire_append,
+    readString_encodeString_append _ _ h1, readNat8_natBE_append _ _ h2,
+    readString_encodeString_append _ _ h3, readNat8_natBE_append _ _ h4,
+    readDigest_wire_append _ _ h5, readString_encodeString_append _ _ h6,
+    readNat8_natBE_append _ _ h7, readDigest_wire_append _ _ h8,
+    readString_encodeString_append _ _ h9, readDigest_wire_append _ _ h10,
+    readNat8_natBE_append _ _ h11, readNat8_natBE_append _ _ h12,
+    readDigest_wire_append _ _ h13, readNat8_natBE_append _ _ h14,
+    readNat8_natBE_append _ _ h15, readNat8_natBE_append _ _ h16,
     decodeClaim_encodeClaim_append _ _ h17, readEvidenceBindings_append _ _ h18,
-    readQueryObservations_append _ _ h19, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12,
-    h13, h14, h15, h16, h20, h21]
+    readQueryObservations_append _ _ h19, readNat8_natBE_append _ _ h20,
+    readDigest_wire_append _ _ h21]
 
 theorem readFollowUps_append (followUps : CorrectionFollowUps) (rest : Bytes)
     (h : followUpsWireAdmissible followUps) :
@@ -406,7 +425,7 @@ theorem readExplanation_append (explanation : TransitionExplanation) (rest : Byt
       readOptionalRequirement_append, readOptionString_encodeOptionString_append,
       readOptionNat_encodeOptionNat_append, h1, h2, h3, h4, h5]
 
-set_option maxHeartbeats 1000000 in
+set_option maxHeartbeats 4000000 in
 theorem readOptionalMutation_of_encode (mutation : Option CorrectionMutation) (bytes rest : Bytes)
     (hMutation : optionalMutationWireAdmissible mutation)
     (hEncode : encodeOptionalMutation mutation = some bytes) :
@@ -415,7 +434,7 @@ theorem readOptionalMutation_of_encode (mutation : Option CorrectionMutation) (b
   | none =>
       simp [encodeOptionalMutation] at hEncode
       subst hEncode
-      simp [readOptionalMutation, readByte]
+      first | rfl | simp [readOptionalMutation, readByte]
   | some mutation =>
       have hAdmissible : mutationWireAdmissible mutation := hMutation
       obtain ⟨hEffects, hDependencies, hFollowUps, hInput, hResult, hDetermination, hAction,
@@ -435,10 +454,14 @@ theorem readOptionalMutation_of_encode (mutation : Option CorrectionMutation) (b
         decodeFinancialInput_rawEncode _ hInput, decodeFinancialResult_rawEncode _ hResult,
         decodeDetermination_encodeDetermination_append _ _ hDetermination,
         decodeAction_encodeAction_append _ _ hAction, decodeCase_encodeCase_append _ _ hCase,
-        readString_encodeString_append, readBool_encodeBool_append, readNat8_natBE_append,
-        readOptionString_encodeOptionString_append, readDigest_wire_append,
-        decodeActionStatus_encodeActionStatus, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18,
-        h19, h20, h21]
+        readString_encodeString_append _ _ h9, readBool_encodeBool_append,
+        readString_encodeString_append _ _ h10, decodeActionStatus_encodeActionStatus,
+        readNat8_natBE_append _ _ h11, readOptionString_encodeOptionString_append _ _ h12,
+        readNat8_natBE_append _ _ h13, readNat8_natBE_append _ _ h14,
+        readDigest_wire_append _ _ h15, readString_encodeString_append _ _ h16,
+        readString_encodeString_append _ _ h17, readString_encodeString_append _ _ h18,
+        readNat8_natBE_append _ _ h19, readNat8_natBE_append _ _ h20,
+        readNat8_natBE_append _ _ h21]
 
 /-! Whole-wire laws.  The parse lemmas read an encoding followed by any tail. -/
 
@@ -456,25 +479,36 @@ theorem parseCorrectionTransitionRequest_of_encode (request : CorrectionTransiti
   have hReceiptRead : readEvaluationReceipt (encodeEvaluationReceipt request.currentReceipt) =
       some (request.currentReceipt, []) := by
     simpa using readEvaluationReceipt_append request.currentReceipt [] hReceipt
-  unfold encodeCorrectionTransitionRequest encodeInputBody at hEncode
-  cases hCommandWellFormed : commandWellFormed request.command
-  · simp [hCommandWellFormed] at hEncode
-  cases hReceiptWellFormed : evaluationReceiptWellFormed request.currentReceipt
-  · simp [hCommandWellFormed, hReceiptWellFormed] at hEncode
-  simp [hCommandWellFormed, hReceiptWellFormed, hInput.1, length_encodeSizedBytes,
-    encodeFinancialInput_rawEncode _ hInput] at hEncode
+  unfold encodeCorrectionTransitionRequest at hEncode
+  rcases hBody : encodeInputBody request with _ | body
+  · simp [hBody] at hEncode
+  simp [hBody] at hEncode
   obtain ⟨hLength, rfl⟩ := hEncode
-  have hReceiptLength : (encodeEvaluationReceipt request.currentReceipt).length ≤
-      maxCorrectionTransitionBytes := by omega
-  refine ⟨by simpa [length_encodeSizedBytes] using hLength, ?_⟩
+  refine ⟨hLength, ?_⟩
+  unfold encodeInputBody at hBody
+  cases hCommandWellFormed : commandWellFormed request.command
+  · simp [hCommandWellFormed] at hBody
+  cases hReceiptWellFormed : evaluationReceiptWellFormed request.currentReceipt
+  · simp [hCommandWellFormed, hReceiptWellFormed] at hBody
+  -- Keep the appends left-nested so the receipt field stays the last operand.
+  simp [-List.append_assoc, hCommandWellFormed, hReceiptWellFormed, hInput.1,
+    encodeFinancialInput_rawEncode _ hInput] at hBody
+  subst hBody
+  have hReceiptLength := length_le_of_append_sized _ _ hLength
   simp [parseCorrectionTransitionRequest, List.append_assoc, isPrefixOf_append_self,
-    List.drop_left, readNatBE_natBE_append 2 1 _ (by decide), readString_encodeString_append,
-    correctionTransitionContract_wireAdmissible, readNat8_natBE_append, readDigest_wire_append,
+    readNatBE_natBE_append 2 1 _ (by decide),
+    readString_encodeString_append _ _ correctionTransitionContract_wireAdmissible,
+    readString_encodeString_append _ _ h1, readString_encodeString_append _ _ h2,
+    readString_encodeString_append _ _ h3, readString_encodeString_append _ _ h4,
+    readString_encodeString_append _ _ h5, readString_encodeString_append _ _ h6,
+    readNat8_natBE_append _ _ h7, readDigest_wire_append _ _ h8, readNat8_natBE_append _ _ h9,
+    readString_encodeString_append _ _ h10, readDigest_wire_append _ _ h11,
+    readNat8_natBE_append _ _ h12, readNat8_natBE_append _ _ h13,
     readActionLookup_append _ _ h14, readQueryObservations_append _ _ h15,
+    readNat8_natBE_append _ _ h16, readDigest_wire_append _ _ h17,
     readSizedBytes_encodeSizedBytes_append _ _ hInputLength,
     readSizedBytes_encodeSizedBytes_append _ _ hReceiptLength,
-    decodeFinancialInput_rawEncode _ hInput, hReceiptRead, h1, h2, h3, h4, h5, h6, h7, h8, h9,
-    h10, h11, h12, h13, h16, h17]
+    decodeFinancialInput_rawEncode _ hInput, hReceiptRead]
 
 set_option maxHeartbeats 2000000 in
 theorem parseCorrectionTransitionResult_of_encode (result : CorrectionTransitionResult)
@@ -498,7 +532,7 @@ theorem parseCorrectionTransitionResult_of_encode (result : CorrectionTransition
       dsimp only at hExplanation hActionId hDeterminationId hMutationRead
       cases status <;>
         simp [parseCorrectionTransitionResult, List.append_assoc, isPrefixOf_append_self,
-          List.drop_left, readNatBE_natBE_append 2 2 _ (by decide), readByte,
+          readNatBE_natBE_append 2 2 _ (by decide), readByte,
           readString_encodeString_append, correctionTransitionContract_wireAdmissible,
           readOptionalRejectReason_append, readExplanation_append _ _ hExplanation,
           readOptionString_encodeOptionString_append, hActionId, hDeterminationId,

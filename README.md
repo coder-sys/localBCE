@@ -35,7 +35,7 @@ $3,000 short. Expected cents are derived by hand, never by the code under test.
 | --- | --- |
 | `app/` | Financial owner, independent checker, Mirror, Switch, Engine port, staff server; direct-state-owned clearance seam; `app/mirror/` Provider Trust Graph |
 | `lean/` | The one Lake workspace (package `RightRail`, library `BlindLedger`): financial semantics, the correction transition, the semantic kernel |
-| `artifacts/engine-correction-e911/` | The pinned correction executable and its `PROVENANCE.md` |
+| `artifacts/engine-correction/` | The pinned correction executable and its `PROVENANCE.md` |
 | `tools/` | CLI, offline service kit, Continuity v7 receiver, privacy scanner |
 | `tests/` | Product tests (`pytest` default run) |
 | `provider_app/` | Provider App pre-submission checker (separate product) |
@@ -72,7 +72,7 @@ means acquiring and reviewing new wheels, re-pinning their hashes and updating
 
 ```powershell
 python -m app.right_rail_financial_staff_server --port 8765 --workspace <dir> `
-  --correction-transition-executable <absolute path to artifacts\engine-correction-e911\blind_financial_correction.exe> `
+  --correction-transition-executable <absolute path to artifacts\engine-correction\blind_financial_correction.exe> `
   --correction-transition-workspace <absolute empty dir>
 ```
 

@@ -64,6 +64,6 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 10. After a guarded Lean rebuild: BLFIN02 becomes the live evaluator; more transitions move to Lean.
 
 Protected throughout (V.4): `tests/rightrail_financial_expected_cases.py`, Lean KAT/vector
-files, `artifacts/engine-correction-e911/vectors/`, the E911 pin, wire formats and digest
+files, `artifacts/engine-correction/vectors/`, the correction engine pin, wire formats and digest
 domains, theorem statements, `tests/test_right_rail_financial_constitution_invariants.py`,
 and the v7 contract while v7 is accepted.
