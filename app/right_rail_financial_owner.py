@@ -168,6 +168,7 @@ _EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 _EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
 _CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v8\x00"
 _COMMAND_DOMAIN = b"RR/FINANCIAL/COMMAND/v1\x00"
+_OPENING_BALANCE_DOMAIN = b"RR/FINANCIAL/OPENING-BALANCE/v1\x00"  # CONSTITUTION V.4: the v7 conversion's sealed rows
 _POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 _POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
 _POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
@@ -292,6 +293,8 @@ _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
 }
 _TABLES: Final[frozenset[str]] = frozenset(_TABLE_COLUMNS)
 _PACKAGE_TABLES: Final[frozenset[str]] = _TABLES - {"commands"}  # the command log is derived, never exported
+# Every write to these rows is carried in the next event's ``rows`` (step 6): the chain holds their full facts.
+_CAPTURED_TABLES: Final = ("action_outbox", "cases", "claimed_adjustments", "evidence", "financial_conflicts")
 
 # The command log (Art. III.3): one row per request the Owner accepted, keyed by
 # the caller's natural key and bound to the history event that request produced.
@@ -1934,11 +1937,9 @@ class FinancialOwner:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
-            connection.create_function(
-                "rr_continuity_row_bytes",
-                -1,
-                self._continuity_row_bytes_for_sql,
-            )
+            connection.create_function("rr_continuity_row_bytes", -1, self._continuity_row_bytes_for_sql)
+            connection.create_function("rr_captured_row", -1, self._captured_row_for_sql)
+            connection.execute("CREATE TEMP TABLE rr_captured_rows(image TEXT NOT NULL)")
             if admission_triggers:
                 self._install_continuity_admission_triggers(connection)
             return connection
@@ -1959,6 +1960,16 @@ class FinancialOwner:
             return len(_canonical(row))
         except (FinancialContinuityError, TypeError, ValueError, OverflowError):
             return -1
+
+    def _captured_row_for_sql(self, table: str, *values: object) -> str | None:
+        """One row image for the next event: an insert's full row, or an update's changed columns."""
+        columns = _TABLE_COLUMNS[table]
+        new = {column: self._export_value(value) for column, value in zip(columns, values)}
+        if len(values) == len(columns):
+            return _canonical({"table": table, "row": new}).decode("ascii")
+        old = {column: self._export_value(value) for column, value in zip(columns, values[len(columns):])}
+        changed = {column: value for column, value in new.items() if old[column] != value}
+        return _canonical({"table": table, "key": old[columns[0]], "set": changed}).decode("ascii") if changed else None
 
     def _install_continuity_admission_triggers(self, connection: sqlite3.Connection) -> None:
         helper = connection.execute(
@@ -1993,6 +2004,18 @@ class FinancialOwner:
                 f"UPDATE {_CONTINUITY_ADMISSION_TABLE} "
                 f"SET row_count=row_count-1,row_bytes=row_bytes-{row_bytes_old} "
                 f"WHERE table_name='{table}'; END"
+            )
+        for table in _CAPTURED_TABLES:
+            new_values = ",".join(f'NEW."{column}"' for column in self._table_columns[table])
+            old_values = ",".join(f'OLD."{column}"' for column in self._table_columns[table])
+            connection.execute(
+                f"CREATE TEMP TRIGGER rr_capture_{table}_insert AFTER INSERT ON main.\"{table}\" BEGIN "
+                f"INSERT INTO rr_captured_rows(image) VALUES (rr_captured_row('{table}',{new_values})); END"
+            )
+            connection.execute(
+                f"CREATE TEMP TRIGGER rr_capture_{table}_update AFTER UPDATE ON main.\"{table}\" BEGIN "
+                f"INSERT INTO rr_captured_rows(image) SELECT image FROM (SELECT rr_captured_row('{table}',{new_values},{old_values}) AS image) "
+                f"WHERE image IS NOT NULL; END"
             )
 
     def _continuity_admission_table_shape(self, connection: sqlite3.Connection) -> None:
@@ -2099,6 +2122,10 @@ class FinancialOwner:
                     tuple(values[column] for column in columns),
                 )
         self._derive_command_log(connection)
+        # CONSTITUTION V.4: one sealed opening balance holds the converted rows the v7 history did not carry.
+        last = connection.execute("SELECT committed_at_ms FROM financial_events ORDER BY event_sequence DESC LIMIT 1").fetchone()
+        images = [{"table": table, "row": {column: self._export_value(row[column]) for column in _TABLE_COLUMNS[table]}} for table in _CAPTURED_TABLES for row in rows[table]]
+        self._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=0 if last is None else int(last[0]))
         self._rebuild_continuity_admission(connection)
 
     def _rebuild_continuity_admission(self, connection: sqlite3.Connection) -> None:
@@ -2282,6 +2309,8 @@ class FinancialOwner:
                     # without serializing rows that this transaction did not touch.
                     if self._continuity_admission_package_size(connection) > _MAX_PACKAGE_BYTES:
                         _fail(FinancialContinuityError, "continuity_package_size")
+                if connection.execute("SELECT 1 FROM temp.rr_captured_rows").fetchone() is not None:
+                    _fail(FinancialIntegrityError, "captured_rows_without_event")  # refused, never stranded
                 connection.execute("COMMIT")
             except BaseException:
                 if connection.in_transaction:
@@ -2374,8 +2403,12 @@ class FinancialOwner:
                     "evaluation_receipt_digest": _hex(bytes(evaluation["receipt_digest"])),
                 }
             )
+        captured = connection.execute("SELECT image FROM temp.rr_captured_rows ORDER BY rowid").fetchall()
+        if captured:
+            event_payload["rows"] = [json.loads(row[0]) for row in captured]
+            connection.execute("DELETE FROM temp.rr_captured_rows")
         payload_bytes = _canonical(event_payload)
-        payload_digest = _digest(_EVENT_DOMAIN, payload_bytes)
+        payload_digest = _digest(_OPENING_BALANCE_DOMAIN if kind == "OPENING_BALANCE" else _EVENT_DOMAIN, payload_bytes)
         meta = self._meta(connection)
         if int(meta["sequence"]) >= _MAX_ROWS:
             _fail(FinancialIntegrityError, "history_capacity")
@@ -3893,7 +3926,7 @@ class FinancialOwner:
                     or actual_event_fields != expected_event_payload
                     # _append_event binds every obligation event that names an
                     # evaluation to that evaluation's input/result/receipt digests.
-                    or set(event_payload) != (
+                    or set(event_payload) - {"rows"} != (
                         set(expected_event_payload)
                         | {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
                     )
@@ -7081,6 +7114,7 @@ class FinancialOwner:
                         if len(values) != len(columns):
                             _fail(FinancialContinuityError, "continuity_columns")
                         connection.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})", tuple(values))
+                connection.execute("DELETE FROM temp.rr_captured_rows")  # the imported history already carries them
                 owner._derive_command_log(connection)
             # The restore-source verification below is strictly stronger than the open replay.
             owner._verify_open_identity(verify_history=False)

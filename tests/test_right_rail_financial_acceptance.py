@@ -572,6 +572,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 store._continuity_admission_package_size(connection),
                 owner._MAX_PACKAGE_BYTES,
             )
+            connection.execute("DELETE FROM temp.rr_captured_rows")  # plan-only rows: no event carries them
         return rows_per_table
 
     def _assert_private_index_schema(self, path: Path) -> None:
@@ -4945,9 +4946,27 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "^continuity_admission_mismatch$"):
             self._make_owner(path=tampered)
         self.assertEqual(tampered.read_bytes(), tampered_bytes)
+        # Review 466178b finding 4: a same-length acknowledgment edit passes the size cache, but
+        # every history (v7 included) names the reference its acknowledgment event accepted.
+        tampered.write_bytes(v7_bytes)
+        with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+            connection.execute("UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'")
+        tampered_bytes = tampered.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:acknowledgment$"):
+            self._make_owner(path=tampered)
+        self.assertEqual(tampered.read_bytes(), tampered_bytes)
 
         converted = self._make_owner(path=v7_path)
-        self.assertEqual(converted.export_continuity(), package)
+        # CONSTITUTION V.4: conversion appends one sealed opening balance holding the converted rows
+        # whose writes the v7 history did not carry; everything else is unchanged.
+        native, after = (json.loads(raw.decode("ascii"))["tables"] for raw in (package, converted.export_continuity()))
+        opening = after["financial_events"].pop()
+        self.assertEqual((opening["aggregate_type"], opening["kind"]), ("OPENING_BALANCE", "OPENING_BALANCE"))
+        self.assertEqual(
+            sorted(json.dumps(image, sort_keys=True) for image in json.loads(opening["payload_json"])["rows"]),
+            sorted(json.dumps({"table": table, "row": row}, sort_keys=True) for table in owner._CAPTURED_TABLES for row in native[table]),
+        )
+        self.assertEqual({table: rows for table, rows in after.items() if table != "financial_meta"}, {table: rows for table, rows in native.items() if table != "financial_meta"})
         with closing(sqlite3.connect(str(v7_path))) as connection:
             self.assertEqual(
                 connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall(),
@@ -4955,7 +4974,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
             meta = connection.execute("SELECT schema_version,schema FROM financial_meta").fetchone()
         self.assertEqual(meta, (8, "RR/FINANCIAL/OWNER/v8"))
-        self._assert_verified(converted, current_snapshot_package=package)
+        self._assert_verified(converted, current_snapshot_package=converted.export_continuity())
 
     def test_v7_package_stays_verifiable_but_restores_only_through_a_v7_store(self) -> None:
         store = self._build_base_for_correction()
@@ -5043,6 +5062,63 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
             with self.assertRaisesRegex(sqlite3.IntegrityError, "command_immutable"):
                 connection.execute("DELETE FROM commands")
+
+    def test_a_row_write_without_its_event_is_refused_before_commit(self) -> None:
+        store = self._build_base()
+        before = store.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^captured_rows_without_event$"):
+            with store._write() as connection:
+                connection.execute("UPDATE cases SET due_at_ms=due_at_ms+1")
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
+
+    def test_row_edits_the_history_does_not_explain_are_refused(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        self._assert_verified(store)
+        source = store.path.read_bytes()
+        # Review 466178b finding 4: same-length edits, with the command log and the size cache
+        # rewritten to match, passed both checkers; every write is now replayed from the chain.
+        reversal = expected.P2_REVERSAL_EVIDENCE
+        orphan = store._new_evidence(
+            evidence_id="evidence:orphan-reversal", item_id=reversal.item_id, kind="PAYMENT_REVERSAL",
+            common_origin_id="origin:orphan-reversal", source_id="synthetic-payment-source", source_version="fixture-v1",
+            local_ref="reversal:orphan", applicable_at_ms=reversal.event_at_ms, event_at_ms=reversal.event_at_ms,
+            received_at_ms=reversal.event_at_ms, amount_cents=reversal.amount_cents, reversal_of="payment:h:p2",
+        )
+        tampers = (
+            ("replay:claimed_adjustments", lambda c: c.execute("UPDATE claimed_adjustments SET deadline_ms=deadline_ms+1")),
+            ("replay:action_outbox", lambda c: c.execute(
+                "UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'")),
+            # Review 466178b: a second reversal's evidence row, digest-valid, that no event names.
+            ("replay:evidence", lambda c: store._insert_evidence(c, orphan)),
+            ("replay:cases", lambda c: c.execute("UPDATE cases SET due_at_ms=due_at_ms+1")),
+            ("replay:financial_conflicts", lambda c: c.execute("UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1")),
+            # Not carried as rows: bound to their evaluation, their population's history, and the only epoch.
+            ("projection:updated-at", lambda c: c.execute("UPDATE obligations SET updated_at_ms=updated_at_ms+1")),
+            ("history:population-updated-at", lambda c: c.execute("UPDATE population_imports SET updated_at_ms=updated_at_ms+1")),
+            ("meta:continuity-epoch", lambda c: c.execute("UPDATE financial_meta SET continuity_epoch=2")),
+        )
+        for code, tamper in tampers:
+            with self.subTest(code=code):
+                tampered = self._path(f"row-edit-{code.replace(':', '-')}.sqlite")
+                tampered.write_bytes(source)
+                with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+                    connection.row_factory = sqlite3.Row
+                    connection.execute("DROP TRIGGER command_update_immutable")
+                    connection.execute("DROP TRIGGER command_delete_immutable")
+                    tamper(connection)
+                    connection.execute("DELETE FROM commands")
+                    store._derive_command_log(connection)
+                    store._rebuild_continuity_admission(connection)
+                    connection.execute(f"CREATE TRIGGER command_update_immutable {_COMMAND_TRIGGER_BODY.format('UPDATE')}")
+                    connection.execute(f"CREATE TRIGGER command_delete_immutable {_COMMAND_TRIGGER_BODY.format('DELETE')}")
+                tampered_bytes = tampered.read_bytes()
+                with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
+                    verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+                with self.assertRaisesRegex(FinancialIntegrityError, f"^open_verification:{code}$"):
+                    self._make_owner(path=tampered)
+                self.assertEqual(tampered.read_bytes(), tampered_bytes)
 
     def test_retries_are_answered_from_the_command_log(self) -> None:
         store = self._build_base_for_correction()

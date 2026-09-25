@@ -128,6 +128,7 @@ EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
 CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v8\x00"
 COMMAND_DOMAIN = b"RR/FINANCIAL/COMMAND/v1\x00"
+OPENING_BALANCE_DOMAIN = b"RR/FINANCIAL/OPENING-BALANCE/v1\x00"
 POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
 POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
@@ -266,6 +267,8 @@ TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 TABLES = frozenset(_TABLE_DEFS)
 PACKAGE_TABLES = TABLES - {"commands"}  # the command log is derived from history, never exported
+# Rows whose every write the next event carries in ``rows``; they must equal replay of the chain.
+CAPTURED_TABLES = ("action_outbox", "cases", "claimed_adjustments", "evidence", "financial_conflicts")
 
 # Package versions: (continuity schema, owner schema, digest domain).
 _PACKAGE_FORMATS: dict[int, tuple[str, str, bytes]] = {
@@ -381,6 +384,7 @@ _TRIGGER_DEFS = {
 }
 
 _EVENT_KINDS = {
+    "OPENING_BALANCE": {"OPENING_BALANCE"},
     "CONTROL_PACK": {"CONTROL_PACK_PUBLISHED"},
     "POPULATION": {
         "POPULATION_IMPORT_OPENED",
@@ -1183,7 +1187,7 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
             _fail(f"meta:scope:{key}")
     sequence = _integer(row["sequence"], "meta:sequence", maximum=MAX_ROWS)
     history_head = _blob64(row["history_head"], "meta:history-head")
-    continuity_epoch = _integer(row["continuity_epoch"], "meta:continuity-epoch", minimum=1, maximum=MAX_CENTS)
+    continuity_epoch = _integer(row["continuity_epoch"], "meta:continuity-epoch", minimum=1, maximum=1)  # no writer advances it
     if _flag(row["dispatch_enabled"], "meta:dispatch") != 0 or _flag(row["egress_enabled"], "meta:egress") != 0:
         _fail("meta:nonactivating")
     mode = row["mode"]
@@ -1271,12 +1275,12 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
         if after < before:
             _fail("history:revision-order")
         payload_raw = row["payload_json"]
-        payload = _parse_json(payload_raw, "history:payload")
+        payload = _parse_json(payload_raw, "history:payload", max_bytes=MAX_PACKAGE_BYTES)  # rows can outgrow 1 MiB; the package cap bounds them
         if not isinstance(payload, dict):
             _fail("history:payload-object")
         payload_bytes = _canonical(payload, "history:payload")
         payload_digest = _blob64(row["payload_digest"], "history:payload-digest")
-        expected_payload_digest = _digest(EVENT_DOMAIN, payload_bytes)
+        expected_payload_digest = _digest(OPENING_BALANCE_DOMAIN if kind == "OPENING_BALANCE" else EVENT_DOMAIN, payload_bytes)
         if payload_digest != expected_payload_digest:
             _fail("history:payload-digest")
         committed_at_ms = _time(row["committed_at_ms"], "history:committed-at")
@@ -1309,6 +1313,46 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
         if anchor_sequence > len(rows) or bytes(rows[anchor_sequence - 1]["head"]) != identity["anchor_head"]:
             _fail("identity:history-anchor")
     return rows
+
+
+def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.Row]) -> None:
+    """Replay every event's ``rows`` (an opening balance restarts from its own) and require the result exactly."""
+
+    state: dict[str, dict[str, dict[str, object]]] = {table: {} for table in CAPTURED_TABLES}
+    opened = False
+    acknowledged: dict[object, object] = {}  # every history, v7 included, names the accepted reference
+    for event in events:
+        payload = _parse_json(event["payload_json"], "replay:payload", max_bytes=MAX_PACKAGE_BYTES)
+        images = payload.get("rows")
+        if event["kind"] == "ACTION_ACKNOWLEDGED":
+            acknowledged[payload.get("action_id")] = payload.get("acknowledgment_ref")
+        if event["kind"] == "OPENING_BALANCE":
+            if opened or set(payload) != {"rows"} or event["aggregate_id"] != "opening-balance" or (event["before_revision"], event["after_revision"]) != (0, 0):
+                _fail("replay:opening-balance")
+            opened = True
+            state = {table: {} for table in CAPTURED_TABLES}
+        elif images is None:
+            continue
+        if not isinstance(images, list) or not images and event["kind"] != "OPENING_BALANCE":
+            _fail("replay:rows")
+        for image in images:
+            table = image.get("table") if isinstance(image, dict) else None
+            if table not in state:
+                _fail("replay:image")
+            columns = TABLE_COLUMNS[table]
+            rows = state[table]
+            row, key, changes = image.get("row"), image.get("key"), image.get("set")
+            if set(image) == {"table", "row"} and isinstance(row, dict) and set(row) == set(columns) and type(row[columns[0]]) is str and row[columns[0]] not in rows:
+                rows[row[columns[0]]] = {column: _package_import_value(row[column], f"replay:{table}") for column in columns}
+            elif set(image) == {"table", "key", "set"} and type(key) is str and key in rows and isinstance(changes, dict) and changes and set(changes) <= set(columns[1:]):
+                rows[key].update({column: _package_import_value(value, f"replay:{table}") for column, value in changes.items()})
+            else:
+                _fail(f"replay:image:{table}")
+    for table in CAPTURED_TABLES:
+        if {str(row[0]): dict(row) for row in _bounded_rows(connection, table)} != state[table]:
+            _fail(f"replay:{table}")
+    if {row["action_id"]: row["acknowledgment_ref"] for row in _bounded_rows(connection, "action_outbox") if row["acknowledgment_ref"] is not None} != acknowledged:
+        _fail("replay:acknowledgment")
 
 
 def _verify_correction_followup_records(
@@ -2352,6 +2396,7 @@ def _verify_population_history(
         and isinstance(superseded_at, dict)
     ):
         _fail("history:population-manifest-state")
+    last_committed_at: dict[str, int | None] = {}
     for population_id, population in populations.items():
         expected = _integer(population["expected_count"], "history:population-expected", minimum=1, maximum=MAX_ROWS)
         binding = bindings.get(population_id)
@@ -2402,9 +2447,10 @@ def _verify_population_history(
             previous_committed_at = committed_at
             before = _integer(event["before_revision"], "history:population-before", maximum=MAX_ROWS)
             after = _integer(event["after_revision"], "history:population-after", maximum=MAX_ROWS)
-            payload = _parse_json(event["payload_json"], "history:population-payload")
+            payload = _parse_json(event["payload_json"], "history:population-payload", max_bytes=MAX_PACKAGE_BYTES)
             if not isinstance(payload, dict):
                 _fail("history:population-payload")
+            payload.pop("rows", None)  # the rows it wrote, checked by replay
             kind = str(event["kind"])
             if kind != "POPULATION_IMPORT_OPENED" and not opened:
                 _fail("history:population-open-order")
@@ -2555,6 +2601,9 @@ def _verify_population_history(
         elif status == "PUBLISHED":
             if not validated or not published:
                 _fail("history:population-status-order")
+        last_committed_at[population_id] = previous_committed_at
+    if any(populations[population_id]["updated_at_ms"] != at for population_id, at in last_committed_at.items()):
+        _fail("history:population-updated-at")
 
 
 def _verify_evidence(
@@ -3608,6 +3657,8 @@ def _verify_projections(
         current = max(history, key=lambda row: row["revision"])
         if obligation["current_evaluation_id"] != current["evaluation_id"] or current["revision"] != obligation["revision"]:
             _fail("projection:current-evaluation")
+        if obligation["updated_at_ms"] != current["evaluated_at_ms"]:
+            _fail("projection:updated-at")
         for key in (
             "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents",
             "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely",
@@ -4075,6 +4126,7 @@ def _verify_connection(
     assert isinstance(manifest_records, dict)
     _verify_event_references(events, packs, populations, obligations, funding_receipt_ids, set(manifest_records))
     projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, cases, determinations, actions, conflicts, evaluations)
+    _verify_replayed_rows(connection, events)  # after the specific checks, so their diagnoses come first
     package_result: dict[str, object] | None = None
     if current_snapshot_package is not None and restore_source_package is not None:
         _fail("continuity:duplicate-input")
