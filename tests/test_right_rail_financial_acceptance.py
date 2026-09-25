@@ -5346,6 +5346,39 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT kind FROM financial_events ORDER BY event_sequence DESC LIMIT 1").fetchone(), ("PAYMENT_DUPLICATE_EVIDENCE",))
         self._assert_verified(store)
 
+    def test_a_new_claim_does_not_hide_an_outstanding_correction(self) -> None:
+        # B1: a later claim reset the case to OPEN with the claimant's owner and deadline while the correction was READY.
+        claim_b = {"item_id": expected.H_ITEM_ID, "claim_id": "claim:obligation-item-h:offset-b", "amount_cents": 1000,
+                   "evidence_id": "evidence:offset-h:claim-b", "owner_role": "RECEIVER", "deadline_ms": expected.H_DUE_AT_MS + 86_400_000}
+        query = "SELECT reason,next_action_owner,due_at_ms,status FROM cases WHERE obligation_id=?"
+
+        def corrected() -> FinancialOwner:
+            store = self._build_base_for_correction()
+            self._record_cash(store)
+            self._reject(store, self._record_claim(store))
+            self._advance_clock(store, expected.CORRECTION_AUTH_MS + 60_000)
+            return store
+
+        store = corrected()
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            before = connection.execute(query, (expected.H_OBLIGATION_ID,)).fetchone()
+        self.assertEqual((before[0], before[3]), ("CORRECTION_REQUIRED", "CORRECTION_REQUIRED"))
+        self.assertEqual(store.record_offset_claim(**claim_b)["status"], "CLAIMED")
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            self.assertEqual(connection.execute(query, (expected.H_OBLIGATION_ID,)).fetchone(), before)
+            self.assertEqual(connection.execute("SELECT status FROM claimed_adjustments WHERE claim_id=?", (claim_b["claim_id"],)).fetchone(), ("CLAIMED",))
+            self.assertEqual(connection.execute("SELECT status FROM actions WHERE action_id=?", (expected.ACTION_CORRECTION_ID,)).fetchone(), ("READY",))
+        self._assert_verified(store)
+
+        def reset(_owner, connection, *, obligation_id, reason, owner, due_at_ms, status, now_ms):  # the old rule
+            connection.execute("UPDATE cases SET reason=?,next_action_owner=?,due_at_ms=?,status=?,updated_at_ms=? WHERE obligation_id=?", (reason, owner, due_at_ms, status, now_ms, obligation_id))
+
+        hidden = corrected()
+        with patch.object(FinancialOwner, "_ensure_case", reset):
+            hidden.record_offset_claim(**claim_b)
+        with self.assertRaisesRegex(IndependentFinancialError, "^evaluation:input-projection:case_status$"):
+            self._assert_verified(hidden)
+
     def test_retries_are_answered_from_the_command_log(self) -> None:
         store = self._build_base_for_correction()
         claim_id = self._prepare_acknowledged(store)

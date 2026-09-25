@@ -2807,11 +2807,12 @@ _CASE_CONDITIONS = '{"amount_satisfied":true,"delivery_acknowledged_or_not_requi
 
 
 def _claim_acts(connection: sqlite3.Connection, obligation_id: str | None = None) -> list[sqlite3.Row]:
-    """Claim and decision events in history order: (obligation_id, kind, claim_id, committed_at_ms)."""
+    """Claim and decision events in history order: (obligation_id, kind, claim_id, committed_at_ms, prior case status)."""
 
     sql = (
-        "SELECT e.aggregate_id,e.kind,COALESCE(json_extract(e.payload_json,'$.claim_id'),d.claim_id),e.committed_at_ms FROM financial_events e "
+        "SELECT e.aggregate_id,e.kind,COALESCE(json_extract(e.payload_json,'$.claim_id'),d.claim_id),e.committed_at_ms,p.case_status FROM financial_events e "
         "LEFT JOIN determinations d ON d.determination_id=json_extract(e.payload_json,'$.determination_id') "
+        "LEFT JOIN evaluations p ON p.evaluation_id='evaluation:'||e.aggregate_id||':r'||e.before_revision "
         "WHERE e.aggregate_type='OBLIGATION' AND e.kind IN ('OFFSET_CLAIMED','OFFSET_AUTHORIZED','OFFSET_REJECTED_CORRECTION_AUTHORIZED')"
     )
     if obligation_id is None:
@@ -2820,9 +2821,9 @@ def _claim_acts(connection: sqlite3.Connection, obligation_id: str | None = None
 
 
 def _verify_cases(connection: sqlite3.Connection, obligations: Mapping[str, Mapping[str, Any]], current: Mapping[str, Mapping[str, Any]], obligation_id: str | None = None) -> None:
-    """Each obligation has one case, recomputed from its latest claim or decision and its current evaluation."""
+    """Each obligation has one case, from its latest claim or decision (an outstanding correction outlasts later ones) and current evaluation."""
 
-    acts = {str(act[0]): act for act in _claim_acts(connection, obligation_id)}
+    acts = {str(act[0]): act for act in _claim_acts(connection, obligation_id) if act[4] != "CORRECTION_REQUIRED" or act[1] == "OFFSET_REJECTED_CORRECTION_AUTHORIZED"}
     if obligation_id is None:
         rows = _bounded_rows(connection, "cases")
     else:
@@ -3293,7 +3294,7 @@ def _evaluation_input_snapshot(raw: object, code: str) -> dict[str, object]:
 # The case status an evaluation starts from is set by the history that produced it, never
 # read back from the stored case (a correction writes Lean's answer there): publishing and a
 # claim open the case, a decision latches its own status, and any other evaluation continues
-# the previous evaluation's status.
+# the previous evaluation's status. An outstanding correction outlasts a later claim or decision.
 _CASE_LATCHES = {"OFFSET_CLAIMED": "OPEN", "OFFSET_AUTHORIZED": "AUTHORIZED", "OFFSET_REJECTED_CORRECTION_AUTHORIZED": "CORRECTION_REQUIRED"}
 
 
@@ -3499,11 +3500,11 @@ def _verify_evaluation_row(
         if conflict is None or conflict["obligation_id"] != obligation_id:
             _fail("evaluation:input-conflict")
     latch = "OPEN" if revision == 0 else _CASE_LATCHES.get(event_kinds.get(evaluation_id, ""))
-    if latch is None:
+    if revision and latch != "CORRECTION_REQUIRED":
         previous = connection.execute("SELECT case_status FROM evaluations WHERE evaluation_id=?", (f"evaluation:{obligation_id}:r{revision - 1}",)).fetchone()
         if previous is None:
             _fail("evaluation:revision-chain")
-        latch = str(previous[0])
+        latch = str(previous[0]) if latch is None or previous[0] == "CORRECTION_REQUIRED" else latch
     input_projection = _evaluation_projection_from_input(
         snapshot,
         evaluation=row,

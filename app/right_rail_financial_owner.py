@@ -3667,11 +3667,11 @@ class FinancialOwner:
 
     def _ensure_case(self, connection: sqlite3.Connection, *, obligation_id: str, reason: str, owner: str, due_at_ms: int, status: str, now_ms: int) -> None:
         case_id = f"case:{obligation_id}"
-        existing = connection.execute("SELECT case_id FROM cases WHERE case_id=?", (case_id,)).fetchone()
+        existing = connection.execute("SELECT status FROM cases WHERE case_id=?", (case_id,)).fetchone()
         conditions = _canonical({"amount_satisfied": True, "reporting_complete": True, "delivery_acknowledged_or_not_required": True}).decode("ascii")
         if existing is None:
             connection.execute("INSERT INTO cases VALUES (?,?,?,?,?,?,?, ?,?)", (case_id, obligation_id, reason, "PROGRAM_ACCOUNTABILITY", owner, due_at_ms, conditions, status, now_ms))
-        else:
+        elif existing[0] != "CORRECTION_REQUIRED":  # an outstanding correction keeps its case, owner and due date
             connection.execute("UPDATE cases SET reason=?,next_action_owner=?,due_at_ms=?,status=?,updated_at_ms=? WHERE case_id=?", (reason, owner, due_at_ms, status, now_ms, case_id))
 
     def publish_population(self, population_id: str) -> dict[str, Any]:
