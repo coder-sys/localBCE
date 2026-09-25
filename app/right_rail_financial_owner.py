@@ -3957,7 +3957,13 @@ class FinancialOwner:
             or type(input_binding.get("evaluation_id")) is not str
             or not all(
                 _is_upper_hex128(input_binding.get(key))
-                for key in ("evaluation_result_digest", "input_snapshot_digest", "receipt_digest")
+                for key in ("evaluation_result_digest", "receipt_digest")
+            )
+            # Staff views never carry the input snapshot digest (the Mirror redacts it); the
+            # receipt digest commits to it, so null is the staff form and a value must match.
+            or not (
+                input_binding.get("input_snapshot_digest") is None
+                or _is_upper_hex128(input_binding.get("input_snapshot_digest"))
             )
         ):
             malformed()
@@ -3999,7 +4005,11 @@ class FinancialOwner:
         expected_input = {
             "evaluation_id": str(evaluation["evaluation_id"]),
             "evaluation_result_digest": _hex(bytes(evaluation["result_digest"])),
-            "input_snapshot_digest": _hex(bytes(evaluation["input_snapshot_digest"])),
+            "input_snapshot_digest": (
+                None
+                if input_binding["input_snapshot_digest"] is None
+                else _hex(bytes(evaluation["input_snapshot_digest"]))
+            ),
             "receipt_digest": _hex(bytes(evaluation["receipt_digest"])),
         }
         if (

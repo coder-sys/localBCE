@@ -411,7 +411,7 @@
       input: {
         evaluation_id: receipt.evaluation_id,
         evaluation_result_digest: receipt.evaluation_result_digest,
-        input_snapshot_digest: receipt.input_snapshot_digest,
+        input_snapshot_digest: receipt.input_snapshot_digest ?? null,
         receipt_digest: receipt.receipt_digest,
       },
     };

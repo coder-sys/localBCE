@@ -25,6 +25,7 @@ from app.right_rail_financial_mirror import (
 from app.right_rail_financial_owner import (
     FinancialConflictError,
     FinancialDispatchError,
+    FinancialInputError,
     FinancialOwner,
     FinancialRevisionError,
 )
@@ -735,6 +736,30 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             workflow.reject_offset_and_authorize_correction(stale)
         self.assertEqual(str(stale_snapshot.exception), "obligation_revision_conflict")
         self.assertEqual(owner.export_continuity(), after_unrelated_change)
+
+    def test_staff_binding_carries_redacted_input_snapshot_and_binds_through_receipt(self) -> None:
+        workflow = self._workflow()
+        self.addCleanup(workflow.close)
+        owner = workflow.mirror.owner
+        body = self._review_body(workflow)
+        # The Mirror never shows staff the input snapshot digest; the staff binding carries null.
+        self.assertIsNone(body["read_binding"]["input"]["input_snapshot_digest"])
+        self.assertNotIn("input_snapshot_digest", workflow.decision_view()["decision_package"]["evaluation_receipt"])
+
+        altered_receipt = self._review_body(workflow)
+        altered_receipt["read_binding"]["input"]["receipt_digest"] = "F" * 128
+        before = owner.export_continuity()
+        with self.assertRaises(FinancialRevisionError) as changed_receipt:
+            workflow.reject_offset_and_authorize_correction(altered_receipt)
+        self.assertEqual(str(changed_receipt.exception), "obligation_revision_conflict")
+        self.assertEqual(owner.export_continuity(), before)
+
+        malformed_input = self._review_body(workflow)
+        malformed_input["read_binding"]["input"]["input_snapshot_digest"] = "not-a-digest"
+        with self.assertRaises(FinancialInputError) as malformed:
+            workflow.reject_offset_and_authorize_correction(malformed_input)
+        self.assertEqual(str(malformed.exception), "staff_command_binding")
+        self.assertEqual(owner.export_continuity(), before)
 
     def test_workspace_uses_one_verified_snapshot_and_has_no_item_detail_fanout(self) -> None:
         workflow = self._workflow(with_correction_release=True)
