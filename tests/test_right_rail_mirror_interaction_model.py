@@ -11,14 +11,14 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
-from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
 from tools import right_rail_scorecard as scorecard
 
 _WORKSPACE = Path(__file__).resolve().parents[1] / "app" / "staff_workspace"
 _MODEL = json.loads((_WORKSPACE / "interaction-model.json").read_text(encoding="utf-8"))
 _HTML = (_WORKSPACE / "index.html").read_text(encoding="utf-8")
-
 
 class InteractionModelStructureTests(unittest.TestCase):
     """Static graph checks: every pathway the model declares is coherent."""
@@ -43,8 +43,7 @@ class InteractionModelStructureTests(unittest.TestCase):
                 self.assertIn(screen, _MODEL["screens"], f"{role}/{screen}")
         reachable = {screen for screens in _MODEL["role_screens"].values() for screen in screens}
         for name, screen in _MODEL["screens"].items():
-            if screen.get("entry"):
-                continue
+            if screen.get("entry"): continue
             self.assertIn(name, reachable, f"orphan screen: {name}")
             if not screen["home"]:
                 self.assertIn(screen["back"], _MODEL["screens"], f"trap screen (no way back): {name}")
@@ -62,6 +61,17 @@ class InteractionModelStructureTests(unittest.TestCase):
                 if outcome["screen"] == "unavailable":
                     self.assertIn("reload", outcome["message"].lower(), f"{name}/{response}")
 
+    def test_every_rejected_transition_code_is_named_in_the_model(self) -> None:
+        """Every code the Lean correction-transition can reject with (Art. XIII.4.d)."""
+        owner_src = (Path(__file__).resolve().parents[1] / "app" / "right_rail_financial_owner.py").read_text(encoding="utf-8")
+        start = owner_src.index("def reject_offset_and_authorize_correction")
+        body = owner_src[start:owner_src.index("\n    def ", start + 40)]
+        codes = set(re.findall(r'_fail\(\s*\w+\s*,\s*"([a-z_]+)"', body))
+        codes |= set(re.findall(r'"[A-Z_]+":\s*\([A-Za-z]+,\s*"([a-z_]+)"\)', body))
+        declared = set(_MODEL["controls"]["reject-offset"]["responses"])
+        self.assertTrue(codes, "scanner found nothing: check the source has moved")
+        missing = codes - declared
+        self.assertFalse(missing, f"server can emit {missing} but the model does not name it")
 
 class InteractionModelPageTests(unittest.TestCase):
     """The served page must offer exactly what the model declares, nothing else."""
@@ -76,7 +86,6 @@ class InteractionModelPageTests(unittest.TestCase):
         for role, screens in _MODEL["role_screens"].items():
             self.assertEqual("decision" in screens, role in open_roles, role)
 
-
 class InteractionModelBrowserCrawlTests(unittest.TestCase):
     """Drive the real staff.js against the real server, one role at a time."""
 
@@ -88,7 +97,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(prefix="rr-mirror-xiii-crawl-")
         owner_dir = Path(cls.temp.name) / "owner"
         owner_dir.mkdir()
-        release = _correction_transition_test_release(workspace=Path(cls.temp.name) / "engine-work")
+        engine_dir = Path(cls.temp.name) / "engine-work"
+        engine_dir.mkdir()
+        release = scorecard.financial_engine.load_correction_transition_release(scorecard.ENGINE_PATH.resolve(), engine_dir)
         cls.workflow = scorecard.staff.StaffWorkflow(owner_dir, correction_transition_release=release)
         cls.server = scorecard.staff._LoopbackServer(("127.0.0.1", 0), scorecard.staff._handler_for(cls.workflow))
         cls.thread = threading.Thread(target=cls.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
@@ -129,6 +140,57 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         self.assertFalse(view["hidden"].get("role-picker", False))
         self.assertTrue(view["hidden"].get("workspace-root", False))
 
+    def _check_state(self, pkg: dict[str, Any], test_mode: bool) -> None:
+        ns = _state(pkg, test_mode)
+        for role in _DECISION_ROLES:
+            browser = self._open(role)
+            browser.click("open-package")
+            view = browser.view()
+            for name, control in _MODEL["controls"].items():
+                if control["screen"] != "decision":
+                    continue
+                button = view["buttons"].get(name)
+                if role not in control["roles"]:
+                    self.assertTrue(button is None or button["hidden"], f"{role}/{name}"); continue
+                self.assertIsNotNone(button, f"{role}/{name}")
+                self.assertFalse(button["hidden"], f"{role}/{name}")
+                self.assertEqual(not button["disabled"], eval(control["enabled_when"], {"__builtins__": {}}, ns), f"{role}/{name}: state={ns}")
+
+    def test_walk_every_reachable_state_and_transition(self) -> None:
+        truth = lambda: self.workflow.decision_view()["decision_package"]  # noqa: E731
+        test_mode = False
+        self._check_state(truth(), test_mode)
+        for role, name in _JOURNEY:
+            control = _MODEL["controls"][name]
+            browser = self._open(role)
+            browser.click("open-package")
+            self.assertTrue(browser.action(name), f"{name}: enabled but not clickable")
+            status = browser.last_view["texts"].get("command-status", "")
+            expected = control["responses"]["success"]["message"].split(".")[0]
+            self.assertIn(expected, status, f"{name}: {status}")
+            if name == "restore-test":
+                self.assertGreater(truth()["obligation"]["shortfall_cents"], 0, "restore-test must be proven while H's shortfall is still open")
+                test_mode = True
+            self._check_state(truth(), test_mode)
+
+# restore-test runs after reject-offset/acknowledge, not first: a guarded repro
+# confirmed the real Owner's restore path rebuilds the Owner without the
+# engine's correction_transition_release, so any reject-offset attempted after
+# a restore permanently fails (escalated separately as an owner-layer gap, not
+# a model or test defect). This order still proves restore-test succeeds while
+# H's shortfall is open, without walking into the disabled engine afterward.
+_JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"), ("operator", "restore-test"),
+            ("analyst", "record-cash"), ("analyst", "record-report"))
+_DECISION_ROLES = ("analyst", "approver", "auditor", "operator")
+
+def _state(pkg: dict[str, Any], test_mode: bool) -> dict[str, Any]:
+    action = pkg.get("current_action") or {}
+    return {
+        "reviewed": True, "command_pending": False, "test_mode": test_mode,
+        "decided": pkg.get("current_determination") is not None,
+        "action": SimpleNamespace(status=action.get("status")), "shortfall": pkg["obligation"]["shortfall_cents"],
+        "reporting_complete": bool(pkg["obligation"]["reporting_complete"]),
+    }
 
 if __name__ == "__main__":
     unittest.main()

@@ -922,13 +922,14 @@
       const result = await postJson(route, body);
       if (name === "reject-offset") unresolvedCorrectionBody = null;
       if (name === "record-cash") unresolvedCashBody = null;
-      let description = (result.command && result.command.status) || "Command recorded";
+      const declared = model.controls[name] && model.controls[name].responses.success.message;
+      let description = declared || "Command recorded";
       if (name === "acknowledge") {
-        description += ". Cash before: " + asMoney(result.cash_before_cents) + "; after: " + asMoney(result.cash_after_cents) + "; cash effect: " + asMoney(result.cash_effect_cents) + ".";
+        description += " Cash before: " + asMoney(result.cash_before_cents) + "; after: " + asMoney(result.cash_after_cents) + "; cash effect: " + asMoney(result.cash_effect_cents) + ".";
       }
-      if (name === "record-cash") description += ". Synthetic evidence only; money movement: false.";
-      if (name === "record-report") description += ". Reporting source: synthetic and unverified.";
-      if (name === "restore-test") description = "Continuity TEST restore verified. H decision package equality: " + String(result.continuity.decision_package_equal) + ".";
+      if (name === "record-cash") description += " Synthetic evidence only; money movement: false.";
+      if (name === "record-report") description += " Reporting source: synthetic and unverified.";
+      if (name === "restore-test") description += " H decision package equality: " + String(result.continuity.decision_package_equal) + ".";
       const applied = applyCommandSnapshot(result.workspace, startedAt);
       commandMessage(description + (applied ? " The package below now shows the result." : " Reopen the package to review the new Owner sequence."), "success");
       if (applied) {
