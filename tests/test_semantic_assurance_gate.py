@@ -279,6 +279,37 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             self._axiom_message({0: "propext, Classical.choice, Quot.sound", 1: "propext"})
         )
 
+    def test_wrapped_axiom_output_is_parsed_and_still_strict(self) -> None:
+        # `#print axioms` wraps long lists onto indented continuation lines.
+        declarations = tuple(expectation.name for expectation in self.manifest.declarations)
+        namespace = self._namespace()
+        allowed = self.manifest.allowed_axioms
+        lines = []
+        for index, name in enumerate(declarations):
+            qualified = f"{namespace}.{name}"
+            if index == 0:
+                lines.append(
+                    f"'{qualified}' depends on axioms: [propext,\n Classical.choice,\n Quot.sound,\n sorryAx]"
+                )
+            elif index == 1:
+                lines.append(f"'{qualified}' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]")
+            else:
+                lines.append(f"'{qualified}' does not depend on any axioms")
+        raw = ("\n".join(lines) + "\n").encode("ascii")
+        records = gate._parse_axiom_output(raw, declarations, allowed, namespace)
+        self.assertEqual(len(declarations), len(records))
+        self.assertEqual(["Classical.choice", "Quot.sound", "propext"], records[1]["axioms"])
+        self.assertEqual([], records[1]["unapproved"])
+        self.assertEqual(["sorryAx"], records[0]["unapproved"])
+        message = gate._axiom_violation_message(records, allowed)
+        self.assertIsNotNone(message)
+        self.assertIn(f"1 of {len(declarations)} declarations", message)
+        self.assertIn(f"{declarations[0]} uses unapproved ['sorryAx']", message)
+        with self.assertRaisesRegex(gate.AssuranceError, "starts with a continuation"):
+            gate._parse_axiom_output(b" propext]\n" + raw, declarations, allowed, namespace)
+        with self.assertRaisesRegex(gate.AssuranceError, "line count mismatch"):
+            gate._parse_axiom_output(raw + b"'extra' does not depend on any axioms\n", declarations, allowed, namespace)
+
     def test_manifest_cannot_allow_a_forbidden_axiom(self) -> None:
         raw = gate.MANIFEST_PATH.read_text(encoding="utf-8")
         allowed = '"Quot.sound"\n  ],'
