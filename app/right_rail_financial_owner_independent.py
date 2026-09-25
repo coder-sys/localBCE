@@ -339,6 +339,31 @@ _COMMAND_EVENT_KINDS: dict[str, tuple[str, str | None]] = {
     "REPORTING_CORRECTION_RECORDED": ("REPORT", "evidence_id"),
 }
 
+# The rows each request kind wrote ("alias=table.column", keyed by the command key
+# or by "<alias.column" of an earlier row) and its request fields ("[name=]alias.column").
+_COMMAND_SOURCES: dict[str, tuple[str, str]] = {
+    "CONTROL_PACK": ("r=control_packs.pack_id", "r.pack_digest"),
+    "POPULATION_MANIFEST": ("r=population_manifests.manifest_id", "r.manifest_digest"),
+    "FUNDING_RECEIPT": ("r=program_funding_receipts.receipt_id", "r.receipt_digest"),
+    "SUPPORT_EVIDENCE": ("r=evidence.evidence_id", "r.item_id r.record_digest"),
+    "REPORT": ("r=evidence.evidence_id", "r.item_id r.record_digest"),
+    "PAYMENT_REVERSAL": ("r=evidence.evidence_id", "r.item_id payment_id=r.reversal_of r.record_digest"),
+    "PAYMENT": (
+        "r=payments.payment_id e=evidence.evidence_id<r.evidence_id",
+        "r.item_id r.evidence_id r.common_origin_id r.amount_cents r.event_at_ms e.source_id e.source_version e.local_ref",
+    ),
+    "OFFSET_CLAIM": (
+        "r=claimed_adjustments.claim_id o=obligations.obligation_id<r.obligation_id",
+        "o.item_id r.evidence_id r.amount_cents r.owner_role r.deadline_ms",
+    ),
+    "OFFSET_DECISION": (
+        "r=actions.action_id d=determinations.determination_id<r.determination_id o=obligations.obligation_id<r.obligation_id",
+        "o.item_id d.claim_id d.decision d.actor_id d.actor_role d.expected_revision d.decided_at_ms "
+        "evaluation_id=d.input_evaluation_id evaluation_result_digest=d.input_evaluation_result_digest",
+    ),
+    "ACTION_ACKNOWLEDGMENT": ("r=action_outbox.action_id", "r.acknowledgment_ref"),
+}
+
 _TRIGGER_DEFS = {
     "action_payload_immutable": "CREATE TRIGGER action_payload_immutable BEFORE UPDATE OF action_id,obligation_id,determination_id,kind,revision,payload_json,payload_digest,idempotency_key,created_at_ms ON actions BEGIN SELECT RAISE(ABORT,'action_payload_immutable'); END",
     "action_outbox_payload_immutable": "CREATE TRIGGER action_outbox_payload_immutable BEFORE UPDATE OF action_id,payload_digest ON action_outbox BEGIN SELECT RAISE(ABORT,'action_outbox_payload_immutable'); END",
@@ -2186,8 +2211,6 @@ def _verify_populations(
         _ = scope
     for row in items:
         population_id = _id(row["population_id"], "item:population-id")
-        if population_id not in populations:
-            _fail("item:population")
         item_id = _id(row["item_id"], "item:id")
         existing = item_by_id.get(item_id)
         if existing is not None:
@@ -2630,9 +2653,7 @@ def _verify_evidence(
             continue
         if supersedes is None:
             _fail("evidence:report-supersedes-required")
-        prior = evidence.get(str(supersedes))
-        if prior is None:
-            _fail("evidence:report-supersedes-missing")
+        prior = evidence[str(supersedes)]
         if prior["item_id"] != row["item_id"]:
             _fail("evidence:report-supersedes-item")
         if prior["kind"] not in {"REPORT", "REPORT_CORRECTION"}:
@@ -2709,8 +2730,6 @@ def _verify_adjustments(
             _fail("claim:duplicate")
         claims[claim_id] = row
         obligation_id = _id(row["obligation_id"], "claim:obligation")
-        if obligation_id not in obligations:
-            _fail("claim:obligation")
         evidence_id = _id(row["evidence_id"], "claim:evidence")
         ev = evidence.get(evidence_id)
         if ev is None or ev["kind"] != "OFFSET_CLAIM" or ev["item_id"] != obligations[obligation_id]["item_id"] or ev["common_origin_id"] != claim_id or ev["amount_cents"] != row["amount_cents"]:
@@ -2736,8 +2755,6 @@ def _verify_cases(connection: sqlite3.Connection, obligations: dict[str, sqlite3
     for row in rows:
         case_id = _id(row["case_id"], "case:id")
         obligation_id = _id(row["obligation_id"], "case:obligation")
-        if obligation_id not in obligations:
-            _fail("case:orphan")
         _text(row["reason"], "case:reason")
         _text(row["contractual_accountability"], "case:accountability")
         _role(row["next_action_owner"], "case:owner")
@@ -2781,13 +2798,9 @@ def _verify_determinations(
             _fail("determination:duplicate")
         result[determination_id] = row
         obligation_id = _id(row["obligation_id"], "determination:obligation")
-        if obligation_id not in obligations:
-            _fail("determination:obligation")
         claim_id = row["claim_id"]
         if claim_id is not None:
             claim_id = _id(claim_id, "determination:claim-id")
-            if claim_id not in claims:
-                _fail("determination:claim")
         actor_id = _id(row["actor_id"], "determination:actor")
         actor_role = _role(row["actor_role"], "determination:role")
         if actor_role not in actors.get(actor_id, frozenset()):
@@ -2822,7 +2835,7 @@ def _verify_determinations(
         if input_result_digest != bytes(input_evaluation["result_digest"]):
             _fail("determination:evaluation-digest")
         supporting = _evaluation_bindings_json(row["supporting_evidence_json"], "determination:evidence")
-        if claim_id is None or len(supporting) != len(_evidence_ids_json(input_evaluation["evidence_ids_json"], "determination:evaluation-evidence")) or claim_id not in claims:
+        if claim_id is None or len(supporting) != len(_evidence_ids_json(input_evaluation["evidence_ids_json"], "determination:evaluation-evidence")):
             _fail("determination:evidence-binding")
         supporting_ids = [binding["evidence_id"] for binding in supporting]
         if str(claims[str(claim_id)]["evidence_id"]) not in supporting_ids:
@@ -2885,8 +2898,6 @@ def _verify_actions(
             _fail("action:duplicate")
         actions[action_id] = row
         obligation_id = _id(row["obligation_id"], "action:obligation")
-        if obligation_id not in obligations:
-            _fail("action:obligation")
         determination_id = _id(row["determination_id"], "action:determination")
         determination = determinations.get(determination_id)
         if determination is None or determination["obligation_id"] != obligation_id:
@@ -2906,9 +2917,7 @@ def _verify_actions(
         if not isinstance(payload, dict):
             _fail("action:payload-object")
         claim_id = determination["claim_id"]
-        claim = claims.get(str(claim_id)) if claim_id is not None else None
-        if claim is None:
-            _fail("action:claim")
+        claim = claims[str(claim_id)]
         expected_payload = {
             "action_id": action_id,
             "obligation_id": obligation_id,
@@ -2969,8 +2978,6 @@ def _verify_conflicts(
             _fail("conflict:duplicate")
         conflicts[conflict_id] = row
         obligation_id = _id(row["obligation_id"], "conflict:obligation")
-        if obligation_id not in obligations:
-            _fail("conflict:obligation")
         common_origin_id = _id(row["common_origin_id"], "conflict:common-origin")
         candidate_id = _id(row["candidate_evidence_id"], "conflict:candidate")
         candidate = evidence.get(candidate_id)
@@ -3301,9 +3308,7 @@ def _verify_evaluations(
     for row in rows:
         evaluation_id = _id(row["evaluation_id"], "evaluation:id")
         obligation_id = _id(row["obligation_id"], "evaluation:obligation")
-        obligation = obligations.get(obligation_id)
-        if obligation is None:
-            _fail("evaluation:orphan")
+        obligation = obligations[obligation_id]
         revision = _integer(row["revision"], "evaluation:revision")
         if evaluation_id != f"evaluation:{obligation_id}:r{revision}":
             _fail("evaluation:id-binding")
@@ -3671,35 +3676,7 @@ def continuity_package_digest(payload: Mapping[str, object]) -> str:
 def _verify_commands(rows: Mapping[str, Sequence[Mapping[str, object]]], code: str) -> None:
     """Recompute the command log from the history and the rows each request wrote."""
 
-    def index(table: str, key: str) -> dict[object, Mapping[str, object]]:
-        return {row[key]: row for row in rows[table]}
-
-    tables = {
-        "packs": index("control_packs", "pack_id"),
-        "manifests": index("population_manifests", "manifest_id"),
-        "receipts": index("program_funding_receipts", "receipt_id"),
-        "evidence": index("evidence", "evidence_id"),
-        "payments": index("payments", "payment_id"),
-        "claims": index("claimed_adjustments", "claim_id"),
-        "obligations": index("obligations", "obligation_id"),
-        "determinations": index("determinations", "determination_id"),
-        "actions": index("actions", "action_id"),
-        "outbox": index("action_outbox", "action_id"),
-    }
-
-    def row(table: str, key: object) -> Mapping[str, object]:
-        found = tables[table].get(key)
-        if found is None:
-            _fail(f"{code}:source")
-        return found
-
-    def hex_of(value: object) -> object:
-        if value is None:
-            return None
-        if type(value) is not bytes:
-            _fail(f"{code}:digest")
-        return value.hex().upper()
-
+    indexes: dict[tuple[str, str], dict[object, Mapping[str, object]]] = {}
     expected: dict[str, tuple[str, str, bytes, int]] = {}
     for event in sorted(rows["financial_events"], key=lambda event: int(event["event_sequence"])):
         spec = _COMMAND_EVENT_KINDS.get(str(event["kind"]))
@@ -3713,46 +3690,25 @@ def _verify_commands(rows: Mapping[str, Sequence[Mapping[str, object]]], code: s
             key = payload.get(field) if isinstance(payload, dict) else None
         if type(key) is not str:
             _fail(f"{code}:key")
-        if kind == "CONTROL_PACK":
-            fields = {"pack_digest": hex_of(row("packs", key)["pack_digest"])}
-        elif kind == "POPULATION_MANIFEST":
-            fields = {"manifest_digest": hex_of(row("manifests", key)["manifest_digest"])}
-        elif kind == "FUNDING_RECEIPT":
-            fields = {"receipt_digest": hex_of(row("receipts", key)["receipt_digest"])}
-        elif kind in {"SUPPORT_EVIDENCE", "REPORT"}:
-            evidence = row("evidence", key)
-            fields = {"item_id": evidence["item_id"], "record_digest": hex_of(evidence["record_digest"])}
-        elif kind == "PAYMENT_REVERSAL":
-            evidence = row("evidence", key)
-            fields = {
-                "item_id": evidence["item_id"],
-                "payment_id": evidence["reversal_of"],
-                "record_digest": hex_of(evidence["record_digest"]),
-            }
-        elif kind == "PAYMENT":
-            payment = row("payments", key)
-            evidence = row("evidence", payment["evidence_id"])
-            fields = {
-                **{name: payment[name] for name in ("item_id", "evidence_id", "common_origin_id", "amount_cents", "event_at_ms")},
-                **{name: evidence[name] for name in ("source_id", "source_version", "local_ref")},
-            }
-        elif kind == "OFFSET_CLAIM":
-            claim = row("claims", key)
-            fields = {
-                "item_id": row("obligations", claim["obligation_id"])["item_id"],
-                **{name: claim[name] for name in ("evidence_id", "amount_cents", "owner_role", "deadline_ms")},
-            }
-        elif kind == "OFFSET_DECISION":
-            action = row("actions", key)
-            determination = row("determinations", action["determination_id"])
-            fields = {
-                "item_id": row("obligations", action["obligation_id"])["item_id"],
-                **{name: determination[name] for name in ("claim_id", "decision", "actor_id", "actor_role", "expected_revision", "decided_at_ms")},
-                "evaluation_id": determination["input_evaluation_id"],
-                "evaluation_result_digest": hex_of(determination["input_evaluation_result_digest"]),
-            }
-        else:
-            fields = {"acknowledgment_ref": row("outbox", key)["acknowledgment_ref"]}
+        joins, columns = _COMMAND_SOURCES[kind]
+        found: dict[str, Mapping[str, object]] = {}
+        for join in joins.split():
+            alias, _, target = join.partition("=")
+            source, _, via = target.partition("<")
+            table, _, column = source.partition(".")
+            if (table, column) not in indexes:
+                indexes[(table, column)] = {row[column]: row for row in rows[table]}
+            via_alias, _, via_column = via.partition(".")
+            row = indexes[(table, column)].get(found[via_alias][via_column] if via else key)
+            if row is None:
+                _fail(f"{code}:source")
+            found[alias] = row
+        fields: dict[str, object] = {}
+        for entry in columns.split():
+            name, _, source = entry.rpartition("=")
+            alias, _, column = source.partition(".")
+            value = found[alias][column]
+            fields[name or column] = value.hex().upper() if type(value) is bytes else value
         command_id = f"{kind}:{key}"
         if command_id in expected:
             _fail(f"{code}:duplicate")
@@ -3762,12 +3718,7 @@ def _verify_commands(rows: Mapping[str, Sequence[Mapping[str, object]]], code: s
     for command in rows["commands"]:
         if command["command_id"] in actual:
             _fail(f"{code}:duplicate")
-        actual[command["command_id"]] = (
-            command["kind"],
-            command["request_json"],
-            command["request_digest"],
-            command["event_sequence"],
-        )
+        actual[command["command_id"]] = (command["kind"], command["request_json"], command["request_digest"], command["event_sequence"])
     if actual != expected:
         _fail(f"{code}:mismatch")
 
@@ -4078,6 +4029,12 @@ def _verify_connection(
     restore_source_package: bytes | None,
 ) -> dict[str, object]:
     schema_version = _verify_schema(connection)
+    try:
+        orphan = connection.execute("PRAGMA foreign_key_check").fetchone()
+    except sqlite3.Error:
+        _fail("foreign-keys:read")
+    if orphan is not None:
+        _fail(f"foreign-keys:{orphan[0]}")
     meta = _verify_meta(connection, identity, schema_version)
     events = _verify_events(connection, meta)
     packs = _verify_packs(connection, meta)
@@ -4168,12 +4125,6 @@ def _verify_connection(
         {table: [dict(row) for row in _bounded_rows(connection, table)] for table in sorted(TABLES)},
         "commands",
     )
-    try:
-        orphan = connection.execute("PRAGMA foreign_key_check").fetchone()
-    except sqlite3.Error:
-        _fail("foreign-keys:read")
-    if orphan is not None:
-        _fail(f"foreign-keys:{orphan[0]}")
     _verify_continuity_admission(connection, schema_version, meta)
     result = {
         "schema": SCHEMA,

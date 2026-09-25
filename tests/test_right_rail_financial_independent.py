@@ -992,7 +992,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                     ("evidence:report:H:original",),
                 )
 
-        self._assert_rejected_without_repair(target, tamper, "evidence:report-supersedes-missing")
+        # The declared foreign key (evidence.supersedes) refuses it before any per-table check.
+        self._assert_rejected_without_repair(target, tamper, "foreign-keys:evidence")
 
     def test_reporting_supersedes_fork_fails_closed_without_repair(self) -> None:
         target = self._copy_database("reporting-lineage-fork.sqlite")

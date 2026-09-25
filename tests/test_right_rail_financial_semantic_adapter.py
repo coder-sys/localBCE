@@ -989,7 +989,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         with closing(sqlite3.connect(str(tampered_evidence))) as connection:
             connection.execute("DELETE FROM evidence WHERE evidence_id=?", (expected.H_CASH_EVIDENCE.evidence_id,))
             connection.commit()
-        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:payment:evidence"):
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:foreign-keys:payments"):
             self._snapshot_on_tampered_path(tampered_evidence, store)
 
         tampered_role = self._copy_store(store, "tampered-role.sqlite")
@@ -1006,7 +1006,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         with closing(sqlite3.connect(str(tampered_status))) as connection:
             connection.execute("DELETE FROM determinations WHERE determination_id=?", (f"determination:{expected.ACTION_OFFSET_ID}",))
             connection.commit()
-        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:evaluation:input-determination"):
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:foreign-keys:actions"):
             self._snapshot_on_tampered_path(tampered_status, store)
 
         overflow = self._copy_store(store, "tampered-overflow.sqlite")
