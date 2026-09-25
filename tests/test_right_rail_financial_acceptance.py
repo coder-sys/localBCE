@@ -5026,6 +5026,60 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(sqlite3.IntegrityError, "command_immutable"):
                 connection.execute("DELETE FROM commands")
 
+    def test_retries_are_answered_from_the_command_log(self) -> None:
+        store = self._build_base_for_correction()
+        claim_id = self._prepare_acknowledged(store)
+        receipt = self._funding_receipt()
+        self.assertEqual(store.record_program_funding_receipt(receipt)["status"], "RECORDED")
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        manifest = self._population_manifest()
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            decision = json.loads(connection.execute(
+                "SELECT request_json FROM commands WHERE command_id=?",
+                (f"OFFSET_DECISION:{expected.ACTION_CORRECTION_ID}",),
+            ).fetchone()[0])
+
+        def reject(**changes: object) -> dict[str, object]:
+            request = {
+                "item_id": expected.H_ITEM_ID,
+                "claim_id": claim_id,
+                "action_id": expected.ACTION_CORRECTION_ID,
+                "actor_id": decision["actor_id"],
+                "actor_role": decision["actor_role"],
+                "expected_revision": decision["expected_revision"],
+                "decision_at_ms": decision["decided_at_ms"],
+                "evaluation_id": decision["evaluation_id"],
+                "evaluation_result_digest": decision["evaluation_result_digest"],
+            }
+            return store.reject_offset_and_authorize_correction(**{**request, **changes})
+
+        cases = (
+            ("control-pack", lambda: store.publish_control_pack(pack),
+             lambda: store.publish_control_pack(replace(pack, recorded_at_ms=pack.recorded_at_ms - 1)),
+             "control_pack_identity_conflict"),
+            ("manifest", lambda: store.register_population_manifest(manifest),
+             lambda: store.register_population_manifest(replace(manifest, source_digest=bytes.fromhex("FF" * 64))),
+             "population_manifest_identity_conflict"),
+            ("funding", lambda: store.record_program_funding_receipt(receipt),
+             lambda: store.record_program_funding_receipt(replace(receipt, amount_cents=receipt.amount_cents + 1)),
+             "program_funding_receipt_identity_conflict"),
+            ("acknowledgment", lambda: store.acknowledge_action(expected.ACTION_CORRECTION_ID, "ack:correction:h:v1"),
+             lambda: store.acknowledge_action(expected.ACTION_CORRECTION_ID, "ack:correction:h:other"),
+             "acknowledgment_conflict"),
+            ("decision", reject,
+             lambda: reject(decision_at_ms=decision["decided_at_ms"] + 1),
+             "determination_request_conflict"),
+        )
+        package = store.export_continuity()
+        for label, retry, changed, code in cases:
+            with self.subTest(label=label):
+                self.assertEqual(retry()["status"], "DUPLICATE")
+                self.assertEqual(store.export_continuity(), package)
+                with self.assertRaisesRegex(FinancialConflictError, f"^{code}$"):
+                    changed()
+                self.assertEqual(store.export_continuity(), package)
+        self._assert_verified(store)
+
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:
         self.assertEqual(tuple(case.number for case in expected.ACCEPTANCE_CASES), tuple(range(1, 13)))
         fixture_source = Path(expected.__file__).read_text(encoding="utf-8")

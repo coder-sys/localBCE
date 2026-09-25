@@ -2435,6 +2435,24 @@ class FinancialOwner:
             (command_id, command_kind, request_json.decode("ascii"), _digest(_COMMAND_DOMAIN, request_json), sequence),
         )
 
+    def _replayed_command(
+        self,
+        connection: sqlite3.Connection,
+        kind: str,
+        key: str,
+        request: Mapping[str, Any],
+        conflict_code: str,
+    ) -> bool:
+        """The one retry rule: True if ``kind:key`` is logged with every supplied (non-None) field; False if new."""
+
+        row = connection.execute("SELECT request_json FROM commands WHERE command_id=?", (f"{kind}:{key}",)).fetchone()
+        if row is None:
+            return False
+        logged = _stored_object(row[0], "command_request")
+        if any(value is not None and logged.get(field) != value for field, value in request.items()):
+            _fail(FinancialConflictError, conflict_code)
+        return True
+
     def _assert_actionable(self) -> None:
         if self.mode == "SHADOW":
             _fail(FinancialDispatchError, "shadow_owner_read_only")
@@ -2698,11 +2716,8 @@ class FinancialOwner:
             expected_tests=pack.expected_tests,
         )
         with self._write() as connection:
-            existing = connection.execute("SELECT pack_digest FROM control_packs WHERE pack_id=?", (pack.pack_id,)).fetchone()
-            if existing is not None:
-                if bytes(existing[0]) == pack.digest:
-                    return {"status": "DUPLICATE", "pack_id": pack.pack_id, "digest": _hex(pack.digest)}
-                _fail(FinancialConflictError, "control_pack_identity_conflict")
+            if self._replayed_command(connection, "CONTROL_PACK", pack.pack_id, {"pack_digest": _hex(pack.digest)}, "control_pack_identity_conflict"):
+                return {"status": "DUPLICATE", "pack_id": pack.pack_id, "digest": _hex(pack.digest)}
             for row in connection.execute("SELECT version,effective_start_ms,effective_end_ms FROM control_packs WHERE program_id=? AND period_id=? AND status='APPROVED'", (pack.program_id, pack.period_id)):
                 if int(row[0]) == pack.version or max(pack.effective_start_ms, int(row[1])) < min(pack.effective_end_ms, int(row[2])):
                     _fail(FinancialConflictError, "control_pack_effective_overlap")
@@ -2917,17 +2932,11 @@ class FinancialOwner:
         )
         with self._write() as connection:
             self._require_manifest_pack(connection, manifest)
-            existing = connection.execute(
-                "SELECT manifest_digest FROM population_manifests WHERE manifest_id=?",
-                (manifest.manifest_id,),
-            ).fetchone()
             head, latest = self._manifest_head_rows(connection, manifest)
             if (head is None) != (latest is None) or (head is not None and tuple(head) != tuple(latest)):
                 _fail(FinancialIntegrityError, "population_manifest_head")
-            if existing is not None:
+            if self._replayed_command(connection, "POPULATION_MANIFEST", manifest.manifest_id, {"manifest_digest": _hex(manifest_digest)}, "population_manifest_identity_conflict"):
                 stored_manifest, _stored_row = self._load_population_manifest(connection, manifest.manifest_id)
-                if stored_manifest.digest != manifest_digest:
-                    _fail(FinancialConflictError, "population_manifest_identity_conflict")
                 if stored_manifest.member_ids != manifest.member_ids:
                     _fail(FinancialIntegrityError, "population_manifest_integrity")
                 return {
@@ -4030,8 +4039,6 @@ class FinancialOwner:
             if payload is not None and _canonical(dict(payload)) != _canonical(stored_payload):
                 _fail(FinancialConflictError, "action_payload_immutable")
             obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (action["obligation_id"],)).fetchone()
-            if obligation is None:
-                _fail(FinancialIntegrityError, "obligation_missing")
             return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
 
     def _authority_action(self, connection: sqlite3.Connection, obligation_id: str, actor_id: str, actor_role: str) -> None:
@@ -4304,34 +4311,30 @@ class FinancialOwner:
         actor_id: str,
         actor_role: str,
         decision: str,
-        kind: str,
         evaluation_id: str | None,
         evaluation_result_digest: str | bytes | None,
         expected_revision: int | None,
         decision_at_ms: int | None,
     ) -> dict[str, Any]:
-        determination = connection.execute("SELECT * FROM determinations WHERE determination_id=?", (action["determination_id"],)).fetchone()
-        if determination is None:
-            _fail(FinancialIntegrityError, "determination_missing")
-        if str(action["obligation_id"]) != str(obligation["obligation_id"]) or str(determination["obligation_id"]) != str(obligation["obligation_id"]):
-            _fail(FinancialConflictError, "determination_request_conflict")
-        if str(action["kind"]) != kind or str(determination["decision"]) != decision or str(determination["claim_id"]) != claim_id:
-            _fail(FinancialConflictError, "determination_request_conflict")
-        if str(determination["actor_id"]) != actor_id or str(determination["actor_role"]) != actor_role:
-            _fail(FinancialConflictError, "determination_request_conflict")
-        if evaluation_id is not None and str(determination["input_evaluation_id"]) != evaluation_id:
-            _fail(FinancialConflictError, "determination_request_conflict")
-        if evaluation_result_digest is not None and bytes(determination["input_evaluation_result_digest"]) != _digest_input(evaluation_result_digest, "evaluation_result_digest"):
-            _fail(FinancialConflictError, "determination_request_conflict")
         if expected_revision is not None and type(expected_revision) is not int:
             _fail(FinancialInputError, "expected_revision")
-        if expected_revision is not None and int(determination["expected_revision"]) != expected_revision:
-            _fail(FinancialConflictError, "determination_request_conflict")
         if decision_at_ms is not None:
             _time(decision_at_ms, "decision_time")
-            if int(determination["decided_at_ms"]) != decision_at_ms:
-                _fail(FinancialConflictError, "determination_request_conflict")
-        if (str(determination["authority_id"]), int(determination["authority_epoch"]), bytes(determination["authority_digest"])) != (self.trusted_authority.authority_id, self.trusted_authority.epoch, self.trusted_authority.digest):
+        request = {
+            "item_id": str(obligation["item_id"]),
+            "claim_id": claim_id,
+            "decision": decision,
+            "actor_id": actor_id,
+            "actor_role": actor_role,
+            "evaluation_id": evaluation_id,
+            "evaluation_result_digest": None if evaluation_result_digest is None else _hex(_digest_input(evaluation_result_digest, "evaluation_result_digest")),
+            "expected_revision": expected_revision,
+            "decided_at_ms": decision_at_ms,
+        }
+        if not self._replayed_command(connection, "OFFSET_DECISION", str(action["action_id"]), request, "determination_request_conflict"):
+            _fail(FinancialConflictError, "determination_request_conflict")
+        authority = connection.execute("SELECT authority_id,authority_epoch,authority_digest FROM determinations WHERE determination_id=?", (action["determination_id"],)).fetchone()
+        if (str(authority[0]), int(authority[1]), bytes(authority[2])) != (self.trusted_authority.authority_id, self.trusted_authority.epoch, self.trusted_authority.digest):
             _fail(FinancialAuthorityError, "determination_authority_stale")
         return {"status": "DUPLICATE", "action_id": str(action["action_id"]), "determination_id": str(action["determination_id"]), **self._projection_for_row(obligation)}
 
@@ -4818,7 +4821,6 @@ class FinancialOwner:
                     actor_id=actor_id,
                     actor_role=actor_role,
                     decision="OFFSET_AUTHORIZED",
-                    kind="OFFSET_AUTHORIZATION",
                     evaluation_id=evaluation_id,
                     evaluation_result_digest=evaluation_result_digest,
                     expected_revision=expected_revision,
@@ -4932,7 +4934,6 @@ class FinancialOwner:
                     actor_id=actor_id,
                     actor_role=actor_role,
                     decision="OFFSET_REJECTED_CORRECTION_AUTHORIZED",
-                    kind="CORRECTION_PAYMENT_REQUEST",
                     evaluation_id=evaluation_id,
                     evaluation_result_digest=evaluation_result_digest,
                     expected_revision=expected_revision,
@@ -5127,16 +5128,12 @@ class FinancialOwner:
             if action is None:
                 _fail(FinancialIntegrityError, "action_missing")
             obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (action["obligation_id"],)).fetchone()
-            if obligation is None:
-                _fail(FinancialIntegrityError, "obligation_missing")
             self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
             outbox = connection.execute("SELECT * FROM action_outbox WHERE action_id=?", (action_id,)).fetchone()
             if outbox is None:
                 _fail(FinancialIntegrityError, "action_outbox_missing")
-            if str(action["status"]) == "ACKNOWLEDGED":
-                if str(outbox["acknowledgment_ref"]) == acknowledgment_ref:
-                    return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
-                _fail(FinancialConflictError, "acknowledgment_conflict")
+            if self._replayed_command(connection, "ACTION_ACKNOWLEDGMENT", action_id, {"acknowledgment_ref": acknowledgment_ref}, "acknowledgment_conflict"):
+                return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
             self._check_revision(obligation, expected_revision)
             if str(action["status"]) != "READY":
                 _fail(FinancialConflictError, "action_not_acknowledgeable")
@@ -6264,13 +6261,8 @@ class FinancialOwner:
         """Persist one validated, scoped receipt while the caller holds BEGIN IMMEDIATE."""
 
         receipt_digest = receipt.digest
-        existing = connection.execute(
-            "SELECT * FROM program_funding_receipts WHERE receipt_id=?",
-            (receipt.receipt_id,),
-        ).fetchone()
-        if existing is not None:
-            if bytes(existing["receipt_digest"]) != receipt_digest:
-                _fail(FinancialConflictError, "program_funding_receipt_identity_conflict")
+        if self._replayed_command(connection, "FUNDING_RECEIPT", receipt.receipt_id, {"receipt_digest": _hex(receipt_digest)}, "program_funding_receipt_identity_conflict"):
+            existing = connection.execute("SELECT * FROM program_funding_receipts WHERE receipt_id=?", (receipt.receipt_id,)).fetchone()
             return "DUPLICATE", self._funding_row_value(existing)
 
         current = connection.execute(
