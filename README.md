@@ -41,7 +41,6 @@ $3,000 short. Expected cents are derived by hand, never by the code under test.
 | `provider_app/` | Provider App pre-submission checker (separate product) |
 | `native/guard/` | Guarded runner for every heavy build or test |
 | `parked/` | Parked work, off the critical path (`parked/README.md`) |
-| `docs/history/` | Frozen copies of the old per-checkout status files |
 
 ## How to run
 
