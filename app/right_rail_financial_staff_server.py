@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -20,7 +19,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from app import minimal_clearance_verifier_process as engine_process
 from app import right_rail_financial_engine as financial_engine
 from app.right_rail_financial_mirror import (
     FinancialMirror,
@@ -107,17 +105,8 @@ _HEX_DIGEST = re.compile(r"^[0-9A-F]{128}$")
 _EVALUATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
-def _is_reparse_path(path: Path) -> bool:
-    if path.is_symlink():
-        return True
-    try:
-        attributes = getattr(path.lstat(), "st_file_attributes", 0)
-    except FileNotFoundError:
-        return False
-    if attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT on Windows.
-        return True
-    is_junction = getattr(path, "is_junction", None)
-    return bool(is_junction()) if callable(is_junction) else False
+# One reparse-point check, shared with the Engine release loader.
+_is_reparse_path = financial_engine._is_reparse_path
 
 
 class _DemoClock:
@@ -280,7 +269,12 @@ class StaffWorkflow:
             or type(history_head) is not str
             or not _HEX_DIGEST.fullmatch(history_head)
             or owner.mode != "TEST"
-            or summary.get("mode") != "TEST"
+            # The owner summary has no ``mode`` key (mode is bound above by
+            # the checker result and the open owner); a ``summary["mode"]``
+            # test could never pass. It binds the nonactivation flags instead.
+            or summary.get("production_usable") is not False
+            or summary.get("activation") is not False
+            or summary.get("proof_suite_id") is not None
             or summary.get("dispatch_enabled") is not False
             or summary.get("egress_enabled") is not False
             or summary.get("obligation_count") != len(ITEM_IDS)
@@ -679,11 +673,10 @@ class StaffWorkflow:
         input_binding = {
             "evaluation_id": receipt.get("evaluation_id"),
             "evaluation_result_digest": receipt.get("evaluation_result_digest"),
-            "input_snapshot_digest": receipt.get("input_snapshot_digest"),
             "receipt_digest": receipt.get("receipt_digest"),
         }
         return {
-            "contract": "RR/FINANCIAL/STAFF-COMMAND-BINDING/v1",
+            "contract": "RR/FINANCIAL/STAFF-COMMAND-BINDING/v2",
             "snapshot": snapshot,
             "item_binding": dict(item_binding),
             "authority": dict(authority),
@@ -777,56 +770,6 @@ def _request_allowed(peer: str, host: str, origin: str | None, port: int, *, mut
     if mutation and origin != expected_origin:
         return False
     return True
-
-
-def _load_correction_transition_release(
-    executable_path: Path,
-    workspace_path: Path,
-) -> financial_engine.FinancialCorrectionTransitionRelease:
-    """Bind the demo's correction path to State's exact Engine artifact pins."""
-
-    if (
-        not isinstance(executable_path, Path)
-        or not executable_path.is_absolute()
-        or _is_reparse_path(executable_path)
-        or not executable_path.is_file()
-        or not isinstance(workspace_path, Path)
-        or not workspace_path.is_absolute()
-        or _is_reparse_path(workspace_path)
-        or not workspace_path.is_dir()
-    ):
-        raise ValueError("correction_transition_paths")
-    try:
-        executable_size = executable_path.stat().st_size
-        digest = hashlib.sha256()
-        with executable_path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except OSError as error:
-        raise ValueError("correction_transition_artifact_unavailable") from error
-    executable_sha256 = digest.digest()
-    if (
-        executable_size != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES
-        or executable_sha256 != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256
-    ):
-        raise ValueError("correction_transition_artifact_identity")
-    release = financial_engine.FinancialCorrectionTransitionRelease(
-        executable=executable_path,
-        executable_size_bytes=executable_size,
-        executable_sha256=executable_sha256,
-        request_vector_sha256=financial_engine.CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256,
-        result_vector_sha256=financial_engine.CORRECTION_TRANSITION_RESULT_VECTOR_SHA256,
-        timeout_seconds=30.0,
-        input_max_bytes=financial_engine.MAX_CORRECTION_TRANSITION_BYTES,
-        output_max_bytes=financial_engine.MAX_CORRECTION_TRANSITION_BYTES,
-        stderr_max_bytes=engine_process.MAX_STDERR_BYTES,
-        workspace=workspace_path,
-        job_memory_cap_bytes=min(
-            financial_engine.MAX_ENGINE_JOB_MEMORY_CAP_BYTES,
-            engine_process.ADMISSION_CAP_BYTES,
-        ),
-    )
-    return financial_engine.require_correction_transition_v1(release)
 
 
 def _validate_workspace_directory(
@@ -1063,7 +1006,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         release = None
         if has_executable and has_engine_workspace:
-            release = _load_correction_transition_release(
+            release = financial_engine.load_correction_transition_release(
                 args.correction_transition_executable,
                 args.correction_transition_workspace,
             )

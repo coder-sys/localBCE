@@ -6,6 +6,9 @@ commands accept a verified SHADOW package and result records without opening
 an Owner database. The CLI has no network, payment, or direct-SQLite path.
 Every command takes its trusted authority (including the actor roster) from an
 explicit ``--authority-file``; there is no built-in default authority.
+Correction commands run only through the pinned Engine release named by
+``--correction-transition-executable`` and ``--correction-transition-workspace``;
+without both, the Owner fails closed with ``correction_transition_unavailable``.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from app import right_rail_financial_engine as financial_engine
 from app.right_rail_financial_mirror import (
     FinancialMirror,
     FinancialMirrorDispatchError,
@@ -63,6 +67,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="trusted authority JSON: authority_id, epoch, digest and actors roster (required)",
     )
+    parser.add_argument(
+        "--correction-transition-executable",
+        type=Path,
+        help="pinned correction Engine executable; without it correction commands fail closed",
+    )
+    parser.add_argument("--correction-transition-workspace", type=Path, help="empty Engine workspace directory")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("summary")
@@ -227,10 +237,27 @@ def _trusted_authority(args: argparse.Namespace) -> SyntheticTrustedAuthority:
     return authority
 
 
+def _correction_release(args: argparse.Namespace) -> object | None:
+    """The explicit correction release, or None (the Owner then fails closed)."""
+
+    executable = args.correction_transition_executable
+    workspace = args.correction_transition_workspace
+    if executable is None and workspace is None:
+        return None
+    if executable is None or workspace is None:
+        raise ValueError("correction_transition_paths")
+    return financial_engine.load_correction_transition_release(executable, workspace)
+
+
 def _owner(args: argparse.Namespace) -> FinancialOwner:
     database = _existing_database(args.database)
     config = FinancialOwnerConfig(**_scope(args))
-    return FinancialOwner(path=database, config=config, trusted_authority=_trusted_authority(args))
+    return FinancialOwner(
+        path=database,
+        config=config,
+        trusted_authority=_trusted_authority(args),
+        correction_transition_release=_correction_release(args),
+    )
 
 
 def _read_package(path: Path) -> bytes:
@@ -611,7 +638,14 @@ def main(argv: list[str] | None = None) -> int:
     except FinancialMirrorDispatchError as error:
         print(f"ERROR:{error}", file=sys.stderr)
         return 3
-    except (FinancialMirrorError, FinancialSwitchError, FinancialError, OSError, ValueError) as error:
+    except (
+        FinancialMirrorError,
+        FinancialSwitchError,
+        FinancialError,
+        financial_engine.FinancialEngineError,
+        OSError,
+        ValueError,
+    ) as error:
         if args.command == "switch-compare":
             report = _switch_compare_error(error)
             print(_json(report))

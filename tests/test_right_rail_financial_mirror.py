@@ -590,9 +590,13 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(cli_receipt["evaluation_id"], receipt["evaluation_id"])
         self.assertEqual(cli_receipt["result_digest"], receipt["result_digest"])
 
+        cli_engine_workspace = self.root / "cli-correction-engine-workspace"
+        cli_engine_workspace.mkdir()
         status, command, stderr = invoke(
             common
             + [
+                "--correction-transition-executable", str(self.store.correction_transition_release.executable),
+                "--correction-transition-workspace", str(cli_engine_workspace),
                 "reject-offset-and-authorize-correction",
                 "--item-id", H_ITEM_ID,
                 "--claim-id", "claim:offset:h",

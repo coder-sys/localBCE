@@ -2889,7 +2889,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             expected.PARTIAL_OTHER_RECIPIENT_CASH_CENTS,
         )
 
-        store = self._build_base(schema_version=7)
+        # The journey authorizes a correction, which runs only through the pinned
+        # Lean release (Art. V.2); an owner without one fails closed.
+        store = self._build_base_for_correction(schema_version=7)
         mirror = FinancialMirror(store)
         funding_fixture = expected.PROGRAM_FUNDING_RECEIPT
         funding_record = self._funding_receipt()
@@ -3233,6 +3235,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         completion["after_revision"] += 1
         body = dict(package)
         del body["package_digest"]
+        # Recompute the digest under the (only) v7 package domain, so the digest
+        # check passes and the restore integrity check must reject.
+        self.assertEqual(package["version"], 7)
         package["package_digest"] = owner._hex(owner._digest(owner._CONTINUITY_DOMAIN, owner._canonical(body)))
         tampered = owner._canonical(package)
         destination = self._path("tampered-continuity.sqlite")

@@ -31,6 +31,7 @@ from app.right_rail_financial_owner import (
     SyntheticTrustedAuthority,
 )
 from tests import rightrail_financial_expected_cases as expected
+from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
 
 
 EXPECTED_PROGRAM_TOTAL_CENTS = 100_000_000
@@ -73,6 +74,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         clock: _Clock | None = None,
         mode: str = "LIVE",
         owner_id: str = "financial-owner-v1",
+        correction_transition_release: object | None = None,
     ) -> FinancialOwner:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
@@ -88,6 +90,16 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             clock=clock or _Clock(),
             mode=mode,
             owner_id=owner_id,
+            correction_transition_release=correction_transition_release,
+        )
+
+    def _correction_release(self) -> financial_engine.FinancialCorrectionTransitionRelease:
+        # The Owner fails closed without a release (Art. V.2); success-path
+        # correction histories run the pinned E911 release, each in its own
+        # empty workspace, exactly like the acceptance fixtures.
+        self.path_counter += 1
+        return _correction_transition_test_release(
+            workspace=Path(self.temp_dir.name) / f"correction-engine-workspace-{self.path_counter}",
         )
 
     @staticmethod
@@ -124,8 +136,11 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             for item in expected.PROGRAM_ITEMS
         )
 
-    def _build_base(self, *, path: Path | None = None) -> FinancialOwner:
-        store = self._make_owner(path=path)
+    def _build_base(self, *, path: Path | None = None, correction: bool = False) -> FinancialOwner:
+        store = self._make_owner(
+            path=path,
+            correction_transition_release=self._correction_release() if correction else None,
+        )
         pack_expectation = expected.CONTROL_PACK_V1
         pack = self._pack(pack_expectation)
         store.publish_control_pack(pack)
@@ -463,6 +478,33 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         store = self._make_owner(path=path)
         return self._snapshot(store, context=context)
 
+    def _snapshot_on_tampered_path(self, path: Path, source: FinancialOwner) -> adapter.LockedSemanticSnapshot:
+        # Layer 1: Owner open recomputes the v7 continuity admission cache
+        # (per-table row count and canonical bytes) and rejects a raw row edit
+        # that changed either before any read (Art. III.5). The cache is a size
+        # admission bound, not a content digest: a same-length edit passes it.
+        with closing(sqlite3.connect(str(path))) as connection:
+            connection.row_factory = sqlite3.Row
+            rebuilt = source._recompute_continuity_admission(connection)
+            stored = {
+                str(row["table_name"]): (int(row["row_count"]), int(row["row_bytes"]))
+                for row in connection.execute(
+                    "SELECT table_name,row_count,row_bytes FROM right_rail_continuity_admission"
+                )
+            }
+        if rebuilt != stored:
+            with self.assertRaisesRegex(owner.FinancialIntegrityError, "continuity_admission_mismatch"):
+                self._make_owner(path=path)
+            # Layer 2: an attacker who also rewrites the cache still reaches the
+            # adapter's independent verifier, which must reject the tampered facts.
+            with closing(sqlite3.connect(str(path))) as connection:
+                connection.executemany(
+                    "UPDATE right_rail_continuity_admission SET row_count=?,row_bytes=? WHERE table_name=?",
+                    ((count, size, table) for table, (count, size) in rebuilt.items()),
+                )
+                connection.commit()
+        return self._snapshot_on_path(path)
+
     def test_cash_claim_snapshot_is_locked_canonical_and_read_only(self) -> None:
         store = self._build_base()
         self._record_cash(store)
@@ -548,7 +590,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(authorized_data["obligation"]["received_cash_cents"], EXPECTED_H_CASH_CENTS)
         self.assertEqual(authorized_data["obligation"]["lawful_adjustment_cents"], EXPECTED_OFFSET_CENTS)
 
-        rejected = self._build_base()
+        rejected = self._build_base(correction=True)
         self._record_cash(rejected)
         rejected_claim = self._record_claim(rejected)
         self._reject(rejected, rejected_claim)
@@ -559,7 +601,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(rejected_data["cases"][-1]["status"], "CORRECTION_REQUIRED")
         self.assertEqual(rejected_data["obligation"]["lawful_adjustment_cents"], 0)
 
-        acknowledged = self._build_base()
+        acknowledged = self._build_base(correction=True)
         self._prepare_acknowledged(acknowledged)
         acknowledged_data = self._snapshot(acknowledged).data
         self.assertEqual(acknowledged_data["actions"][0]["status"], "ACKNOWLEDGED")
@@ -568,7 +610,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertNotIn("evidence:correction-h:cash", {row["evidence_id"] for row in acknowledged_data["evidence"]})
 
     def test_delivery_projection_uses_latest_action_creation_time_not_action_id(self) -> None:
-        store = self._build_base()
+        store = self._build_base(correction=True)
         self._record_cash(store)
         first_claim = self._record_claim(store)
         self._record_h_support(store)
@@ -693,7 +735,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         )
 
     def test_duplicate_conflict_reversal_replacement_and_reporting_are_real_facts(self) -> None:
-        store = self._build_base()
+        store = self._build_base(correction=True)
         self._prepare_acknowledged(store)
         payment = expected.P2_PAYMENT_EVIDENCE
         self._advance_clock(store, payment.event_at_ms)
@@ -735,6 +777,17 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self._assert_no_source_mutation(store, before_hash)
 
     def test_real_owner_histories_conform_to_fresh_engine(self) -> None:
+        # Environment prerequisite, not a product result: with no Engine handoff
+        # configured at all, the conformance is reported as UNEXECUTED (a skip,
+        # counted and listed; never a pass). A partial or wrong handoff still fails
+        # in _fresh_engine_executable.
+        if not os.environ.get(ENGINE_EXECUTABLE_ENV, "").strip() and not os.environ.get(
+            ENGINE_EXECUTABLE_SHA256_ENV, ""
+        ).strip():
+            self.skipTest(
+                "real_engine_conformance_unexecuted: no fresh guarded Engine handoff "
+                f"({ENGINE_EXECUTABLE_ENV}/{ENGINE_EXECUTABLE_SHA256_ENV} unset)"
+            )
         authorized = self._build_base()
         self._record_cash(authorized)
         authorized_claim = self._record_claim(authorized)
@@ -772,7 +825,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             completion_at_ms=expected.OFFSET_DECISION_MS,
         )
 
-        acknowledged = self._build_base()
+        acknowledged = self._build_base(correction=True)
         self._prepare_acknowledged(acknowledged)
         self._assert_fresh_engine_history_result(
             acknowledged,
@@ -780,7 +833,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             completion_at_ms=None,
         )
 
-        final = self._build_base()
+        final = self._build_base(correction=True)
         self._prepare_final(final)
         self._record_duplicate_conflict_reversal_replacement(final)
         self._assert_fresh_engine_history_result(
@@ -909,21 +962,24 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             connection.execute("DELETE FROM evidence WHERE evidence_id=?", (expected.H_CASH_EVIDENCE.evidence_id,))
             connection.commit()
         with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:payment:evidence"):
-            self._snapshot_on_path(tampered_evidence)
+            self._snapshot_on_tampered_path(tampered_evidence, store)
 
         tampered_role = self._copy_store(store, "tampered-role.sqlite")
         with closing(sqlite3.connect(str(tampered_role))) as connection:
             connection.execute("UPDATE determinations SET actor_role='REPORTING_EDITOR' WHERE determination_id=?", (f"determination:{expected.ACTION_OFFSET_ID}",))
             connection.commit()
-        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:determination:digest"):
-            self._snapshot_on_path(tampered_role)
+        # Since 62f1671 the checker's actor-role gate always fires against the
+        # digest-bound roster (it was fail-open before), so a role the actor
+        # does not hold is rejected ahead of the determination digest check.
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:determination:actor-role"):
+            self._snapshot_on_tampered_path(tampered_role, store)
 
         tampered_status = self._copy_store(store, "tampered-status.sqlite")
         with closing(sqlite3.connect(str(tampered_status))) as connection:
             connection.execute("DELETE FROM determinations WHERE determination_id=?", (f"determination:{expected.ACTION_OFFSET_ID}",))
             connection.commit()
         with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:evaluation:input-determination"):
-            self._snapshot_on_path(tampered_status)
+            self._snapshot_on_tampered_path(tampered_status, store)
 
         overflow = self._copy_store(store, "tampered-overflow.sqlite")
         with closing(sqlite3.connect(str(overflow))) as connection:
@@ -959,7 +1015,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             )
             connection.commit()
         with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "owner_verifier:projection:cash:overflow"):
-            self._snapshot_on_path(overflow)
+            self._snapshot_on_tampered_path(overflow, store)
 
         deeply_nested = "0"
         for _ in range(40):

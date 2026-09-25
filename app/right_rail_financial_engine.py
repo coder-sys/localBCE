@@ -638,6 +638,71 @@ def encode_correction_transition_request(
     return encoded
 
 
+def _is_reparse_path(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    try:
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    except FileNotFoundError:
+        return False
+    if attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT on Windows.
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    return bool(is_junction()) if callable(is_junction) else False
+
+
+def load_correction_transition_release(
+    executable_path: Path,
+    workspace_path: Path,
+) -> FinancialCorrectionTransitionRelease:
+    """Bind an operator-named executable and workspace to the pinned v1 release.
+
+    The one loader for the operator entry points (staff server, CLI).  The
+    caller names the paths; identity comes only from the pins in this module,
+    never from the environment.  Any mismatch raises ``ValueError``.
+    """
+
+    if (
+        not isinstance(executable_path, Path)
+        or not executable_path.is_absolute()
+        or _is_reparse_path(executable_path)
+        or not executable_path.is_file()
+        or not isinstance(workspace_path, Path)
+        or not workspace_path.is_absolute()
+        or _is_reparse_path(workspace_path)
+        or not workspace_path.is_dir()
+    ):
+        raise ValueError("correction_transition_paths")
+    try:
+        executable_size = executable_path.stat().st_size
+        digest = hashlib.sha256()
+        with executable_path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise ValueError("correction_transition_artifact_unavailable") from error
+    executable_sha256 = digest.digest()
+    if (
+        executable_size != CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES
+        or executable_sha256 != CORRECTION_TRANSITION_ARTIFACT_SHA256
+    ):
+        raise ValueError("correction_transition_artifact_identity")
+    release = FinancialCorrectionTransitionRelease(
+        executable=executable_path,
+        executable_size_bytes=executable_size,
+        executable_sha256=executable_sha256,
+        request_vector_sha256=CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256,
+        result_vector_sha256=CORRECTION_TRANSITION_RESULT_VECTOR_SHA256,
+        timeout_seconds=30.0,
+        input_max_bytes=MAX_CORRECTION_TRANSITION_BYTES,
+        output_max_bytes=MAX_CORRECTION_TRANSITION_BYTES,
+        stderr_max_bytes=process.MAX_STDERR_BYTES,
+        workspace=workspace_path,
+        job_memory_cap_bytes=min(MAX_ENGINE_JOB_MEMORY_CAP_BYTES, process.ADMISSION_CAP_BYTES),
+    )
+    return require_correction_transition_v1(release)
+
+
 def require_correction_transition_v1(release: object | None) -> FinancialCorrectionTransitionRelease:
     """Require the immutable v1 release bound to the pinned artifact and vectors."""
 
@@ -1541,6 +1606,13 @@ def run_correction_transition_v1(
     """Run only the fully pinned transition through the contained lane."""
 
     configured = require_correction_transition_v1(release)
+    # The launcher dereferences the release, so it fails closed here on
+    # anything that is not the pinned release type, even if the gate above was
+    # bypassed; never an AttributeError (Art. V.2, XI.10).
+    if configured is None:
+        raise FinancialEngineTransitionUnavailable("engine_correction_transition_release_required")
+    if type(configured) is not FinancialCorrectionTransitionRelease:
+        raise FinancialEngineConfigError("engine_correction_transition_release_type")
     if (
         type(request) is not bytes
         or not request.startswith(b"BLFCMD01")
@@ -1585,6 +1657,7 @@ __all__ = (
     "MAX_ENGINE_JOB_MEMORY_CAP_BYTES",
     "evaluate_financial_snapshot",
     "encode_correction_transition_request",
+    "load_correction_transition_release",
     "decode_correction_transition_result",
     "require_correction_transition_v1",
     "run_correction_transition_v1",
