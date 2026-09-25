@@ -2770,6 +2770,9 @@ def _verify_adjustments(
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "claimed_adjustments")
     claims: dict[str, sqlite3.Row] = {}
+    acts: dict[str, list[tuple[str, int]]] = {}
+    for act in _claim_acts(connection):
+        acts.setdefault(str(act[2]), []).append((str(act[1]), act[3]))
     used_evidence: set[str] = set()
     for row in rows:
         claim_id = _id(row["claim_id"], "claim:id")
@@ -2785,36 +2788,57 @@ def _verify_adjustments(
             _fail("claim:evidence-duplicate")
         used_evidence.add(evidence_id)
         _cents(row["amount_cents"], "claim:amount", positive=True)
-        _role(row["owner_role"], "claim:owner")
+        if _role(row["owner_role"], "claim:owner") not in _CONTROL_PACK_ALLOWED_ROLES:
+            _fail("claim:owner")
         _time(row["deadline_ms"], "claim:deadline")
         if row["status"] not in _CLAIM_STATUSES:
             _fail("claim:status")
-        created = _time(row["created_at_ms"], "claim:created")
-        updated = _time(row["updated_at_ms"], "claim:updated")
-        if updated < created:
+        history = acts.get(claim_id, [])
+        if [kind for kind, _ in history] != _CLAIM_ACTS[row["status"]] or (row["created_at_ms"], row["updated_at_ms"]) != (history[0][1], history[-1][1]):
             _fail("claim:chronology")
     return claims
 
 
-def _verify_cases(connection: sqlite3.Connection, obligations: dict[str, sqlite3.Row]) -> dict[str, list[sqlite3.Row]]:
-    rows = _bounded_rows(connection, "cases")
-    cases: dict[str, list[sqlite3.Row]] = {}
-    for row in rows:
-        case_id = _id(row["case_id"], "case:id")
-        obligation_id = _id(row["obligation_id"], "case:obligation")
-        _text(row["reason"], "case:reason")
-        _text(row["contractual_accountability"], "case:accountability")
-        _role(row["next_action_owner"], "case:owner")
-        _time(row["due_at_ms"], "case:due")
-        conditions = _parse_json(row["completion_conditions_json"], "case:conditions")
-        if conditions != {"amount_satisfied": True, "delivery_acknowledged_or_not_required": True, "reporting_complete": True}:
-            _fail("case:conditions")
-        if row["status"] not in _CASE_STATUSES:
-            _fail("case:status")
-        _time(row["updated_at_ms"], "case:updated")
-        cases.setdefault(obligation_id, []).append(row)
-        _ = case_id
-    return cases
+# A claim's own events, in order, for each claim status.
+_CLAIM_ACTS = {"CLAIMED": ["OFFSET_CLAIMED"], "AUTHORIZED": ["OFFSET_CLAIMED", "OFFSET_AUTHORIZED"], "REJECTED": ["OFFSET_CLAIMED", "OFFSET_REJECTED_CORRECTION_AUTHORIZED"]}
+_CASE_ACTS = {"OFFSET_CLAIMED": "UNSUPPORTED_OFFSET", "OFFSET_AUTHORIZED": "OFFSET_AUTHORIZED", "OFFSET_REJECTED_CORRECTION_AUTHORIZED": "CORRECTION_REQUIRED"}
+_CASE_CONDITIONS = '{"amount_satisfied":true,"delivery_acknowledged_or_not_required":true,"reporting_complete":true}'
+
+
+def _claim_acts(connection: sqlite3.Connection, obligation_id: str | None = None) -> list[sqlite3.Row]:
+    """Claim and decision events in history order: (obligation_id, kind, claim_id, committed_at_ms)."""
+
+    sql = (
+        "SELECT e.aggregate_id,e.kind,COALESCE(json_extract(e.payload_json,'$.claim_id'),d.claim_id),e.committed_at_ms FROM financial_events e "
+        "LEFT JOIN determinations d ON d.determination_id=json_extract(e.payload_json,'$.determination_id') "
+        "WHERE e.aggregate_type='OBLIGATION' AND e.kind IN ('OFFSET_CLAIMED','OFFSET_AUTHORIZED','OFFSET_REJECTED_CORRECTION_AUTHORIZED')"
+    )
+    if obligation_id is None:
+        return connection.execute(sql + " ORDER BY e.event_sequence").fetchall()
+    return connection.execute(sql + " AND e.aggregate_id=? ORDER BY e.event_sequence", (obligation_id,)).fetchall()
+
+
+def _verify_cases(connection: sqlite3.Connection, obligations: Mapping[str, Mapping[str, Any]], current: Mapping[str, Mapping[str, Any]], obligation_id: str | None = None) -> None:
+    """Each obligation has one case, recomputed from its latest claim or decision and its current evaluation."""
+
+    acts = {str(act[0]): act for act in _claim_acts(connection, obligation_id)}
+    if obligation_id is None:
+        rows = _bounded_rows(connection, "cases")
+    else:
+        rows = connection.execute("SELECT * FROM cases WHERE obligation_id=?", (obligation_id,)).fetchall()
+    expected = set()
+    for key, obligation in obligations.items():
+        act = acts.get(key)
+        claim = None if act is None else connection.execute("SELECT owner_role,deadline_ms FROM claimed_adjustments WHERE claim_id=? AND obligation_id=?", (act[2], key)).fetchone()
+        if act is None:
+            reason, owner, due = "INITIAL_ACCOUNTABILITY", "CASE_OWNER", obligation["due_at_ms"]
+        elif claim is None:
+            _fail("case:derived")
+        else:
+            reason, owner, due = _CASE_ACTS[act[1]], claim[0] if act[1] == "OFFSET_CLAIMED" else "CASE_OWNER", claim[1]
+        expected.add((f"case:{key}", key, reason, "PROGRAM_ACCOUNTABILITY", owner, due, _CASE_CONDITIONS, current[key]["case_status"], current[key]["evaluated_at_ms"]))
+    if len(rows) != len(expected) or {tuple(row) for row in rows} != expected:
+        _fail("case:derived")
 
 
 def _verify_determinations(
@@ -2936,6 +2960,7 @@ def _verify_actions(
     rows = _bounded_rows(connection, "actions")
     outbox_rows = _bounded_rows(connection, "action_outbox")
     outbox = {str(row["action_id"]): row for row in outbox_rows}
+    acks = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.action_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='ACTION_ACKNOWLEDGED'")}
     if len(outbox) != len(outbox_rows):
         _fail("outbox:duplicate")
     actions: dict[str, sqlite3.Row] = {}
@@ -2994,17 +3019,14 @@ def _verify_actions(
             _fail("outbox:missing")
         if box["status"] != row["status"] or _blob64(box["payload_digest"], "outbox:payload-digest") != payload_digest:
             _fail("outbox:binding")
-        _integer(box["attempt"], "outbox:attempt")
         acknowledgment = box["acknowledgment_ref"]
-        if row["status"] == "READY" and acknowledgment is not None:
-            _fail("outbox:ready-ack")
+        updated = _time(box["updated_at_ms"], "outbox:updated")
+        if row["status"] == "READY" and (acknowledgment is not None or box["attempt"] != 0 or updated != created or action_id in acks):
+            _fail("outbox:ready")
         if row["status"] == "ACKNOWLEDGED":
-            if acknowledgment is None:
-                _fail("outbox:ack-missing")
             _id(acknowledgment, "outbox:ack")
-            if box["attempt"] < 1:
-                _fail("outbox:ack-attempt")
-        _time(box["updated_at_ms"], "outbox:updated")
+            if box["attempt"] != 1 or updated > acks.get(action_id, -1):
+                _fail("outbox:acknowledged")
     if set(outbox) != set(actions):
         _fail("outbox:orphan")
     return actions
@@ -3018,6 +3040,7 @@ def _verify_conflicts(
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "financial_conflicts")
     conflicts: dict[str, sqlite3.Row] = {}
+    visible = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.conflict_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_CONFLICT_VISIBLE'")}
     keys: set[tuple[str, str, str]] = set()
     for row in rows:
         conflict_id = _id(row["conflict_id"], "conflict:id")
@@ -3042,7 +3065,8 @@ def _verify_conflicts(
             _fail("conflict:amount")
         if row["reason"] != "CONFLICTING_COMMON_ORIGIN_AMOUNT":
             _fail("conflict:reason")
-        _time(row["visible_at_ms"], "conflict:visible")
+        if not candidate["received_at_ms"] <= _time(row["visible_at_ms"], "conflict:visible") <= visible.get(conflict_id, -1):
+            _fail("conflict:visible")
         key = (obligation_id, common_origin_id, candidate_id)
         if key in keys:
             _fail("conflict:key")
@@ -3522,7 +3546,6 @@ _EXACT_INPUT_SQL = {
     "payments": "SELECT payment_id,amount_cents,event_at_ms,active FROM payments WHERE obligation_id=? ORDER BY payment_id",
     "claims": "SELECT claim_id,amount_cents,status FROM claimed_adjustments WHERE obligation_id=? ORDER BY claim_id",
     "determinations": "SELECT determination_id,decision,amount_cents,decided_at_ms FROM determinations WHERE obligation_id=? ORDER BY determination_id",
-    "cases": "SELECT case_id,status FROM cases WHERE obligation_id=? ORDER BY case_id",
     "actions": "SELECT action_id,status,created_at_ms FROM actions WHERE obligation_id=? ORDER BY action_id",
     "conflicts": "SELECT conflict_id FROM financial_conflicts WHERE obligation_id=? ORDER BY conflict_id",
 }
@@ -3568,6 +3591,7 @@ def verify_obligation_connection(connection: sqlite3.Connection, obligation_id: 
         for key, value in current.items():
             if snapshot[key] != value:
                 _fail(f"obligation:exact-input:{key}")
+        _verify_cases(connection, {obligation_id: obligation}, {obligation_id: row}, obligation_id)
         for key in ("revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
             if obligation[key] != row[key]:
                 _fail(f"obligation:projection:{key}")
@@ -3680,7 +3704,6 @@ def _verify_projections(
     evidence: dict[str, sqlite3.Row],
     payments: dict[str, sqlite3.Row],
     claims: dict[str, sqlite3.Row],
-    cases: dict[str, list[sqlite3.Row]],
     determinations: dict[str, sqlite3.Row],
     actions: dict[str, sqlite3.Row],
     conflicts: dict[str, sqlite3.Row],
@@ -3720,16 +3743,7 @@ def _verify_projections(
         delivery = "NONE" if not action_rows else str(
             max(action_rows, key=lambda row: (row["revision"], row["action_id"]))["status"]
         )
-        case_rows = cases.get(obligation_id, [])
-        prior_case = "OPEN" if not case_rows else str(max(case_rows, key=lambda row: row["case_id"])["status"])
-        if amount_satisfied and reporting_complete:
-            case_status = "RESOLVED"
-        elif amount_satisfied:
-            case_status = "ACTIONED"
-        elif prior_case in {"CORRECTION_REQUIRED", "AUTHORIZED"}:
-            case_status = prior_case
-        else:
-            case_status = "OPEN"
+        current = max(evaluations.get(obligation_id, []), key=lambda row: row["revision"])
         expected = {
             "revision": obligation["revision"],
             "owed_cents": owed,
@@ -3743,15 +3757,13 @@ def _verify_projections(
             "timely": timely,
             "reporting_complete": reporting_complete,
             "verification_status": verification,
-            "case_status": case_status,
+            "case_status": current["case_status"],
             "delivery_status": delivery,
             "current_evaluation_id": obligation["current_evaluation_id"],
         }
         for key, value in expected.items():
             if obligation[key] != value:
                 _fail(f"projection:{key}")
-        history = evaluations.get(obligation_id, [])
-        current = max(history, key=lambda row: row["revision"])
         if obligation["current_evaluation_id"] != current["evaluation_id"] or current["revision"] != obligation["revision"]:
             _fail("projection:current-evaluation")
         if obligation["updated_at_ms"] != current["evaluated_at_ms"]:
@@ -4202,8 +4214,8 @@ def _verify_connection(
     evidence = _verify_evidence(connection, items, obligations)
     payments = _verify_payments(connection, obligations, items, evidence)
     claims = _verify_adjustments(connection, obligations, evidence)
-    cases = _verify_cases(connection, obligations)
     evaluations = _verify_evaluations(connection, meta, obligations, populations, packs, evidence)
+    _verify_cases(connection, obligations, {key: max(history, key=lambda row: row["revision"]) for key, history in evaluations.items()})
     _verify_evaluation_history_events(events, populations, obligations, evaluations)
     determinations = _verify_determinations(
         connection,
@@ -4222,7 +4234,7 @@ def _verify_connection(
     manifest_records = manifest_state["manifests"]
     assert isinstance(manifest_records, dict)
     _verify_event_references(events, packs, populations, obligations, funding_receipt_ids, set(manifest_records))
-    projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, cases, determinations, actions, conflicts, evaluations)
+    projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, determinations, actions, conflicts, evaluations)
     _verify_replayed_rows(connection, events)  # after the specific checks, so their diagnoses come first
     package_result: dict[str, object] | None = None
     if current_snapshot_package is not None and restore_source_package is not None:

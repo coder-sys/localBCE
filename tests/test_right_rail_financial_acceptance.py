@@ -5088,12 +5088,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             received_at_ms=reversal.event_at_ms, amount_cents=reversal.amount_cents, reversal_of="payment:h:p2",
         )
         tampers = (
-            ("replay:claimed_adjustments", lambda c: c.execute("UPDATE claimed_adjustments SET deadline_ms=deadline_ms+1")),
+            # Final review 75a5517 finding 3: the case row is now recomputed before replay, so these fail there first.
+            ("case:derived", lambda c: c.execute("UPDATE claimed_adjustments SET deadline_ms=deadline_ms+1")),
             ("replay:action_outbox", lambda c: c.execute(
                 "UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'")),
             # Review 466178b: a second reversal's evidence row, digest-valid, that no event names.
             ("replay:evidence", lambda c: store._insert_evidence(c, orphan)),
-            ("replay:cases", lambda c: c.execute("UPDATE cases SET due_at_ms=due_at_ms+1")),
+            ("case:derived", lambda c: c.execute("UPDATE cases SET due_at_ms=due_at_ms+1")),
             ("replay:financial_conflicts", lambda c: c.execute("UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1")),
             # Not carried as rows: bound to their evaluation, their population's history, and the only epoch.
             ("projection:updated-at", lambda c: c.execute("UPDATE obligations SET updated_at_ms=updated_at_ms+1")),
@@ -5181,7 +5182,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             tampers = (
                 # The current evaluation was computed from a state that is not the one being committed.
                 ("obligation:exact-input:claims", "UPDATE claimed_adjustments SET status='CLAIMED' WHERE obligation_id=:o AND status='REJECTED'"),
-                ("obligation:exact-input:cases", "UPDATE cases SET status='OPEN' WHERE obligation_id=:o"),
+                ("case:derived", "UPDATE cases SET status='OPEN' WHERE obligation_id=:o"),
                 ("obligation:exact-input:actions", "UPDATE actions SET status='CANCELLED' WHERE obligation_id=:o"),
                 # A row the evaluation never saw.
                 ("obligation:exact-input:evidence", lambda c: store._insert_evidence(c, store._new_evidence(
@@ -5209,6 +5210,37 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(IndependentFinancialError, "^obligation:missing$"):
                 verify_obligation_connection(connection, "obligation:absent", expected_config=store.config, expected_authority=self.authority)
         self._assert_verified(store)
+
+    def test_rows_history_does_not_carry_are_recomputed_or_bounded(self) -> None:
+        # Final review of 75a5517, finding 3: same-length edits to these fields passed v7 conversion
+        # and were sealed. The checker (run before replay) now recomputes each one or bounds it by history
+        # (an acknowledgment or a conflict no later than its event; the gap is the one edit room left).
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        ack = "(SELECT committed_at_ms FROM financial_events WHERE kind='ACTION_ACKNOWLEDGED')"
+        tampers = (
+            ("case:derived", "UPDATE cases SET reason='CORRECTION_REQUIREE' WHERE reason='CORRECTION_REQUIRED'"),
+            ("case:derived", "UPDATE cases SET reason='INITIAL_ACCOUNTABILITZ' WHERE rowid=1"),
+            ("case:derived", "UPDATE cases SET contractual_accountability='PROGRAM_ACCOUNTABILITZ' WHERE rowid=1"),
+            ("case:derived", "UPDATE cases SET next_action_owner='CASE_OWNES' WHERE rowid=1"),
+            ("case:derived", "UPDATE cases SET due_at_ms=due_at_ms+1 WHERE rowid=1"),
+            ("case:derived", "UPDATE cases SET updated_at_ms=updated_at_ms+1 WHERE rowid=1"),
+            ("case:derived", "UPDATE claimed_adjustments SET deadline_ms=deadline_ms+1"),
+            ("claim:owner", "UPDATE claimed_adjustments SET owner_role='CASE_OWNES'"),
+            ("claim:chronology", "UPDATE claimed_adjustments SET created_at_ms=created_at_ms+1"),
+            ("claim:chronology", "UPDATE claimed_adjustments SET updated_at_ms=updated_at_ms+1"),
+            ("outbox:acknowledged", f"UPDATE action_outbox SET updated_at_ms={ack}+1 WHERE status='ACKNOWLEDGED'"),
+            ("outbox:acknowledged", "UPDATE action_outbox SET attempt=2 WHERE status='ACKNOWLEDGED'"),
+            ("conflict:visible", "UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1000"),
+        )
+        tampered = self._path("rows-tampered.sqlite")
+        for index, (code, statement) in enumerate(tampers):
+            with self.subTest(index=index, code=code):
+                tampered.write_bytes(store.path.read_bytes())
+                with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+                    self.assertEqual(connection.execute(statement).rowcount, 1)
+                with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
+                    verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
 
     def test_retries_are_answered_from_the_command_log(self) -> None:
         store = self._build_base_for_correction()
