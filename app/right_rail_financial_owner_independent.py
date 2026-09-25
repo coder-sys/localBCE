@@ -2953,7 +2953,7 @@ def _verify_determinations(
 def _verify_actions(
     connection: sqlite3.Connection,
     meta: dict[str, object],
-    obligations: dict[str, sqlite3.Row],
+    evaluations: dict[str, list[sqlite3.Row]],
     claims: dict[str, sqlite3.Row],
     determinations: dict[str, sqlite3.Row],
 ) -> dict[str, sqlite3.Row]:
@@ -2989,11 +2989,9 @@ def _verify_actions(
         if not isinstance(payload, dict):
             _fail("action:payload-object")
         claim_id = determination["claim_id"]
-        claim = claims[str(claim_id)]
-        amount = claim["amount_cents"]
+        amount = claims[str(claim_id)]["amount_cents"]
         if kind == "CORRECTION_PAYMENT_REQUEST":  # B2: only the input evaluation's unpaid balance
-            balance = connection.execute("SELECT shortfall_cents FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (determination["input_evaluation_id"], obligation_id)).fetchone()
-            amount = min(amount, _cents(balance[0] if balance else None, "action:input-shortfall", positive=True))
+            amount = min(amount, _cents(next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["evaluation_id"] == determination["input_evaluation_id"]), None), "action:input-shortfall", positive=True))
         expected_payload = {
             "action_id": action_id,
             "obligation_id": obligation_id,
@@ -4242,7 +4240,7 @@ def _verify_connection(
         evaluations,
         actors=identity["actors"],
     )
-    actions = _verify_actions(connection, meta, obligations, claims, determinations)
+    actions = _verify_actions(connection, meta, evaluations, claims, determinations)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
     funding, funding_receipt_ids = _verify_program_funding(connection, meta, events)
     manifest_records = manifest_state["manifests"]

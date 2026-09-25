@@ -1,6 +1,7 @@
 import BlindLedger.Financial.Executable
 import BlindLedger.Financial.CodecLaws
 import BlindLedger.Financial.CodecLawsCheck
+import BlindLedger.Financial.CodecLaws.Correction
 import BlindLedger.Financial.CorrectionTransition.Theorems
 
 namespace BlindLedger.Financial
@@ -65,6 +66,12 @@ namespace BlindLedger.Financial
 #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations
 #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_local_permission_matches_denial
 #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_never_permits_external_dispatch
+#print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionRequest_of_encode
+#print axioms BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionRequest_of_decode
+#print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionRequest_rejects_trailing
+#print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_of_encode
+#print axioms BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionResult_of_decode
+#print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_rejects_trailing
 
 def main : IO Unit := do
   IO.println "FINANCIAL_AXIOM_CHECK=SOURCE_PRINTED"

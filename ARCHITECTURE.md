@@ -64,9 +64,11 @@ digest-bound roster.
 - **Correction transition** (`RR/FINANCIAL/CORRECTION-TRANSITION/v1`).
   `FinancialOwner.reject_offset_and_authorize_correction` encodes a `BLFCMD01`
   request, runs the pinned Lean executable through the contained process runner
-  (`app/minimal_clearance_verifier_process.py`), decodes the `BLFCRES1` result,
-  checks the accepted delta against its own reconstructed post-transition
-  snapshot, and commits it inside its existing transaction. The release is an
+  (`app/minimal_clearance_verifier_process.py`), decodes the `BLFCRES2` result,
+  computes every storage digest itself, checks the accepted delta against its
+  own reconstructed post-transition snapshot, and commits it inside its
+  existing transaction. A zero shortfall is rejected with no mutation; the
+  action amount is the lesser of the claim and the unpaid balance. The release is an
   explicit immutable `FinancialCorrectionTransitionRelease`; without one, the
   command fails closed. There is no Python fallback decision.
 - **Pinned executable:** `artifacts/engine-correction-e911/`. It was built from

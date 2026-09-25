@@ -552,9 +552,7 @@ def readOptionalMutation (bytes : Bytes) : Option (Option CorrectionMutation × 
   else if tag.toNat ≠ 1 then none
   else do
     let (transition, rest) ← readTransitionKind rest
-    let (orderedEffects, rest) ← readList (fun bytes => do
-      let (effect, tail) ← readCorrectionEffect bytes
-      pure (effect, tail)) rest
+    let (orderedEffects, rest) ← readList readCorrectionEffect rest
     let (dependencies, rest) ← readDependencyFacts rest
     let (followUps, rest) ← readFollowUps rest
     let (inputBytes, rest) ← readSizedBytes maxCorrectionTransitionBytes rest
