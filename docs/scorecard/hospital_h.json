@@ -13,6 +13,10 @@
       "facts_found_on": {},
       "facts_unanswered": [],
       "requests": [
+        "GET /role/analyst -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
         "GET /api/decision-package -> 200",
@@ -48,6 +52,10 @@
       },
       "facts_unanswered": [],
       "requests": [
+        "GET /role/analyst -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200"
       ],
@@ -71,6 +79,10 @@
       },
       "facts_unanswered": [],
       "requests": [
+        "GET /role/approver -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
         "GET /api/decision-package -> 200",
@@ -101,6 +113,10 @@
       },
       "facts_unanswered": [],
       "requests": [
+        "GET /role/auditor -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
         "GET /api/decision-package -> 200"
@@ -143,6 +159,10 @@
       },
       "facts_unanswered": [],
       "requests": [
+        "GET /role/director -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200"
       ],
@@ -169,6 +189,10 @@
       },
       "facts_unanswered": [],
       "requests": [
+        "GET /role/operator -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
         "GET /api/decision-package -> 200",
@@ -204,7 +228,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 2
+        "value": 6
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -318,7 +342,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 12
+        "value": 16
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -394,7 +418,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 3
+        "value": 7
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -489,7 +513,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 6
+        "value": 10
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -508,7 +532,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 2
+        "value": 6
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -603,7 +627,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 3
+        "value": 7
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -698,7 +722,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 6
+        "value": 10
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
