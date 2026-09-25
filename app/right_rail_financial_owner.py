@@ -3704,6 +3704,7 @@ class FinancialOwner:
             for item_id, _label, owed_cents, due_at_ms, currency in items:
                 obligation_id = self._obligation_id(str(item_id), str(pack["period_id"]))
                 connection.execute("INSERT INTO obligations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (obligation_id, population_id, str(item_id), str(pack["period_id"]), str(currency), int(owed_cents), int(due_at_ms), int(pack["version"]), 0, 0, 0, 0, int(owed_cents), 0, 0, 0, 0, 0, "MISSING_EVIDENCE", "OPEN", "NONE", f"evaluation:{obligation_id}:r0", now_ms))
+                self._ensure_case(connection, obligation_id=obligation_id, reason="INITIAL_ACCOUNTABILITY", owner="CASE_OWNER", due_at_ms=int(due_at_ms), status="OPEN", now_ms=now_ms)
                 initial_evaluation = self._insert_initial_evaluation(
                     connection,
                     obligation_id=obligation_id,
@@ -3720,7 +3721,6 @@ class FinancialOwner:
                         "receipt_digest": str(initial_evaluation["receipt_digest"]),
                     }
                 )
-                self._ensure_case(connection, obligation_id=obligation_id, reason="INITIAL_ACCOUNTABILITY", owner="CASE_OWNER", due_at_ms=int(due_at_ms), status="OPEN", now_ms=now_ms)
             connection.execute("UPDATE population_imports SET status='PUBLISHED',updated_at_ms=? WHERE population_id=?", (now_ms, population_id))
             self._append_event(
                 connection,

@@ -3551,6 +3551,27 @@ _EXACT_INPUT_SQL = {
 }
 
 
+def _verify_exact_input(connection: sqlite3.Connection, obligation: Mapping[str, Any], snapshot: Mapping[str, Any]) -> None:
+    """The current evaluation saw exactly the obligation's rows as they are now; a repeated payment
+    confirmation its own event names is stored without a new evaluation (it changes no value)."""
+    current: dict[str, object] = {
+        "pre_revision": snapshot["pre_revision"],
+        "obligation": {**{key: obligation[key] for key in ("obligation_id", "item_id", "rule_version", "owed_cents", "due_at_ms", "reporting_complete")}, "revision": snapshot["pre_revision"]},
+    }
+    repeats = {str(row[0]) for row in connection.execute("SELECT json_extract(payload_json,'$.candidate_evidence_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_DUPLICATE_EVIDENCE' AND aggregate_id=?", (obligation["obligation_id"],))}
+    for key, sql in _EXACT_INPUT_SQL.items():
+        values = [dict(value) for value in connection.execute(sql, (obligation["item_id" if key == "evidence" else "obligation_id"],))]
+        for value in values:
+            if "record_digest" in value:
+                value["record_digest"] = bytes(value["record_digest"]).hex().upper()
+        if key == "evidence":
+            values = [value for value in values if value in snapshot["evidence"] or value["evidence_id"] not in repeats]
+        current[key] = [value["conflict_id"] for value in values] if key == "conflicts" else values
+    for key, value in current.items():
+        if snapshot[key] != value:
+            _fail(f"obligation:exact-input:{key}")
+
+
 def verify_obligation_connection(connection: sqlite3.Connection, obligation_id: str, **expected: Any) -> dict[str, object]:
     """Per-obligation mode, run before COMMIT: the current evaluation was computed
     from exactly the obligation's rows as they are now, recomputes to its values,
@@ -3578,19 +3599,7 @@ def verify_obligation_connection(connection: sqlite3.Connection, obligation_id: 
         packs = {} if pack is None else {str(pack["pack_id"]): pack}
         evidence = {str(value["evidence_id"]): value for value in connection.execute("SELECT * FROM evidence WHERE item_id=?", (obligation["item_id"],))}
         _, snapshot = _verify_evaluation_row(connection, meta, row, {obligation_id: obligation}, populations, packs, evidence, _evaluation_event_kinds(connection, obligation_id))
-        current: dict[str, object] = {
-            "pre_revision": snapshot["pre_revision"],
-            "obligation": {**{key: obligation[key] for key in ("obligation_id", "item_id", "rule_version", "owed_cents", "due_at_ms", "reporting_complete")}, "revision": snapshot["pre_revision"]},
-        }
-        for key, sql in _EXACT_INPUT_SQL.items():
-            values = [dict(value) for value in connection.execute(sql, (obligation["item_id" if key == "evidence" else "obligation_id"],))]
-            for value in values:
-                if "record_digest" in value:
-                    value["record_digest"] = bytes(value["record_digest"]).hex().upper()
-            current[key] = [value["conflict_id"] for value in values] if key == "conflicts" else values
-        for key, value in current.items():
-            if snapshot[key] != value:
-                _fail(f"obligation:exact-input:{key}")
+        _verify_exact_input(connection, obligation, snapshot)
         _verify_cases(connection, {obligation_id: obligation}, {obligation_id: row}, obligation_id)
         for key in ("revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
             if obligation[key] != row[key]:
@@ -4215,7 +4224,8 @@ def _verify_connection(
     payments = _verify_payments(connection, obligations, items, evidence)
     claims = _verify_adjustments(connection, obligations, evidence)
     evaluations = _verify_evaluations(connection, meta, obligations, populations, packs, evidence)
-    _verify_cases(connection, obligations, {key: max(history, key=lambda row: row["revision"]) for key, history in evaluations.items()})
+    current = {key: max(history, key=lambda row: row["revision"]) for key, history in evaluations.items()}
+    _verify_cases(connection, obligations, current)
     _verify_evaluation_history_events(events, populations, obligations, evaluations)
     determinations = _verify_determinations(
         connection,
@@ -4235,6 +4245,8 @@ def _verify_connection(
     assert isinstance(manifest_records, dict)
     _verify_event_references(events, packs, populations, obligations, funding_receipt_ids, set(manifest_records))
     projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, determinations, actions, conflicts, evaluations)
+    for key, obligation in obligations.items():
+        _verify_exact_input(connection, obligation, _evaluation_input_snapshot(current[key]["input_snapshot_json"], "evaluation:input"))
     _verify_replayed_rows(connection, events)  # after the specific checks, so their diagnoses come first
     package_result: dict[str, object] | None = None
     if current_snapshot_package is not None and restore_source_package is not None:

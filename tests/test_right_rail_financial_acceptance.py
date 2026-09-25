@@ -5093,7 +5093,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             ("replay:action_outbox", lambda c: c.execute(
                 "UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'")),
             # Review 466178b: a second reversal's evidence row, digest-valid, that no event names.
-            ("replay:evidence", lambda c: store._insert_evidence(c, orphan)),
+            # Final review 75a5517 finding 5: every current evaluation is now compared with the rows first.
+            ("obligation:exact-input:evidence", lambda c: store._insert_evidence(c, orphan)),
             ("case:derived", lambda c: c.execute("UPDATE cases SET due_at_ms=due_at_ms+1")),
             ("replay:financial_conflicts", lambda c: c.execute("UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1")),
             # Not carried as rows: bound to their evaluation, their population's history, and the only epoch.
@@ -5241,6 +5242,37 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     self.assertEqual(connection.execute(statement).rowcount, 1)
                 with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
                     verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+
+    def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:
+        # Final review of 75a5517, finding 5: publish opened the case after the first evaluation,
+        # and only the per-obligation mode compared a current evaluation with the current rows.
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            obligation_id, snapshot = connection.execute(
+                "SELECT obligation_id,input_snapshot_json FROM evaluations WHERE revision=0 ORDER BY obligation_id LIMIT 1"
+            ).fetchone()
+        self.assertEqual(json.loads(snapshot)["cases"], [{"case_id": f"case:{obligation_id}", "status": "OPEN"}])
+        tampered = self._path("unseen-evidence.sqlite")
+        tampered.write_bytes(store.path.read_bytes())
+        with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            store._insert_evidence(connection, store._new_evidence(
+                evidence_id="evidence:unseen", item_id=expected.H_ITEM_ID, kind="SUPPORT", common_origin_id="origin:unseen",
+                source_id="synthetic-support-source", source_version="fixture-v1", local_ref="support:unseen",
+                applicable_at_ms=1, event_at_ms=1, received_at_ms=1))
+        with self.assertRaisesRegex(IndependentFinancialError, "^obligation:exact-input:evidence$"):
+            verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+        # A repeated payment confirmation is stored without a new evaluation and stays verifiable.
+        repeat = expected.P2_CONFIRMATION_EVIDENCE
+        self.assertEqual(store.record_payment_evidence(
+            item_id=repeat.item_id, payment_id="payment:h:p2-repeat", common_origin_id=repeat.common_origin_id,
+            amount_cents=repeat.amount_cents or 0, evidence_id="evidence:p2-repeat", event_at_ms=repeat.event_at_ms,
+            source_id=repeat.source_id, source_version=repeat.source_version, local_ref="ref:p2-repeat",
+        )["status"], "DUPLICATE")
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            self.assertEqual(connection.execute("SELECT kind FROM financial_events ORDER BY event_sequence DESC LIMIT 1").fetchone(), ("PAYMENT_DUPLICATE_EVIDENCE",))
+        self._assert_verified(store)
 
     def test_retries_are_answered_from_the_command_log(self) -> None:
         store = self._build_base_for_correction()
