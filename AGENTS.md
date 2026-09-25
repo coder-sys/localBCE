@@ -26,4 +26,5 @@ Working rules (details in the constitution):
 - Never destroy uncommitted work, raw evidence, keys or the only copy of
   anything. No `git reset --hard`, `git clean`, or force pushes.
 
-Previous per-checkout instructions are archived in `docs/history/`.
+Previous per-checkout instructions are archived in
+`work/_retired-research-20260924/trunk-docs-history-20260924/` (outside the trunk; also in Git history before 2026-09-24's removal commit).

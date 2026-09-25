@@ -320,49 +320,48 @@ _FOREIGN_KEY_DEFS: dict[str, frozenset[tuple[tuple[str, ...], str, tuple[str, ..
     }.items()
 }
 
-# Command log: the event kind that each accepted request produced, the request
-# kind, and the payload field naming its key (None: the aggregate id).
-_COMMAND_EVENT_KINDS: dict[str, tuple[str, str | None]] = {
-    "CONTROL_PACK_PUBLISHED": ("CONTROL_PACK", None),
-    "POPULATION_MANIFEST_REGISTERED": ("POPULATION_MANIFEST", None),
-    "POPULATION_MANIFEST_SUPERSEDED": ("POPULATION_MANIFEST", None),
-    "FUNDING_RECEIPT_RECORDED": ("FUNDING_RECEIPT", None),
-    "FUNDING_RECEIPT_SUPERSEDED": ("FUNDING_RECEIPT", None),
-    "SUPPORT_EVIDENCE_RECORDED": ("SUPPORT_EVIDENCE", "evidence_id"),
-    "PAYMENT_RECEIVED": ("PAYMENT", "payment_id"),
-    "PAYMENT_REVERSED": ("PAYMENT_REVERSAL", "evidence_id"),
-    "OFFSET_CLAIMED": ("OFFSET_CLAIM", "claim_id"),
-    "OFFSET_AUTHORIZED": ("OFFSET_DECISION", "action_id"),
-    "OFFSET_REJECTED_CORRECTION_AUTHORIZED": ("OFFSET_DECISION", "action_id"),
-    "ACTION_ACKNOWLEDGED": ("ACTION_ACKNOWLEDGMENT", "action_id"),
-    "REPORTING_EVIDENCE_RECORDED": ("REPORT", "evidence_id"),
-    "REPORTING_CORRECTION_RECORDED": ("REPORT", "evidence_id"),
-}
-
-# The rows each request kind wrote ("alias=table.column", keyed by the command key
-# or by "<alias.column" of an earlier row) and its request fields ("[name=]alias.column").
-_COMMAND_SOURCES: dict[str, tuple[str, str]] = {
-    "CONTROL_PACK": ("r=control_packs.pack_id", "r.pack_digest"),
-    "POPULATION_MANIFEST": ("r=population_manifests.manifest_id", "r.manifest_digest"),
-    "FUNDING_RECEIPT": ("r=program_funding_receipts.receipt_id", "r.receipt_digest"),
-    "SUPPORT_EVIDENCE": ("r=evidence.evidence_id", "r.item_id r.record_digest"),
-    "REPORT": ("r=evidence.evidence_id", "r.item_id r.record_digest"),
-    "PAYMENT_REVERSAL": ("r=evidence.evidence_id", "r.item_id payment_id=r.reversal_of r.record_digest"),
+# Command log, per request kind: the events it produced; the payload field naming
+# its key (None: the event's aggregate id); the rows it wrote ("alias=table.column",
+# matched to the key or to "<alias.column" of an earlier row); its request fields
+# ("[name=]alias.column").
+_COMMAND_SOURCES: dict[str, tuple[str, str | None, str, str]] = {
+    "CONTROL_PACK": ("CONTROL_PACK_PUBLISHED", None, "r=control_packs.pack_id", "r.pack_digest"),
+    "POPULATION_MANIFEST": (
+        "POPULATION_MANIFEST_REGISTERED POPULATION_MANIFEST_SUPERSEDED", None,
+        "r=population_manifests.manifest_id", "r.manifest_digest",
+    ),
+    "FUNDING_RECEIPT": (
+        "FUNDING_RECEIPT_RECORDED FUNDING_RECEIPT_SUPERSEDED", None,
+        "r=program_funding_receipts.receipt_id", "r.receipt_digest",
+    ),
+    "SUPPORT_EVIDENCE": ("SUPPORT_EVIDENCE_RECORDED", "evidence_id", "r=evidence.evidence_id", "r.item_id r.record_digest"),
+    "REPORT": (
+        "REPORTING_EVIDENCE_RECORDED REPORTING_CORRECTION_RECORDED", "evidence_id",
+        "r=evidence.evidence_id", "r.item_id r.record_digest",
+    ),
+    "PAYMENT_REVERSAL": (
+        "PAYMENT_REVERSED", "evidence_id",
+        "r=evidence.evidence_id", "r.item_id payment_id=r.reversal_of r.record_digest",
+    ),
     "PAYMENT": (
+        "PAYMENT_RECEIVED", "payment_id",
         "r=payments.payment_id e=evidence.evidence_id<r.evidence_id",
         "r.item_id r.evidence_id r.common_origin_id r.amount_cents r.event_at_ms e.source_id e.source_version e.local_ref",
     ),
     "OFFSET_CLAIM": (
+        "OFFSET_CLAIMED", "claim_id",
         "r=claimed_adjustments.claim_id o=obligations.obligation_id<r.obligation_id",
         "o.item_id r.evidence_id r.amount_cents r.owner_role r.deadline_ms",
     ),
     "OFFSET_DECISION": (
+        "OFFSET_AUTHORIZED OFFSET_REJECTED_CORRECTION_AUTHORIZED", "action_id",
         "r=actions.action_id d=determinations.determination_id<r.determination_id o=obligations.obligation_id<r.obligation_id",
         "o.item_id d.claim_id d.decision d.actor_id d.actor_role d.expected_revision d.decided_at_ms "
         "evaluation_id=d.input_evaluation_id evaluation_result_digest=d.input_evaluation_result_digest",
     ),
-    "ACTION_ACKNOWLEDGMENT": ("r=action_outbox.action_id", "r.acknowledgment_ref"),
+    "ACTION_ACKNOWLEDGMENT": ("ACTION_ACKNOWLEDGED", "action_id", "r=action_outbox.action_id", "r.acknowledgment_ref"),
 }
+_COMMAND_EVENT_KINDS = {event: kind for kind, spec in _COMMAND_SOURCES.items() for event in spec[0].split()}
 
 _TRIGGER_DEFS = {
     "action_payload_immutable": "CREATE TRIGGER action_payload_immutable BEFORE UPDATE OF action_id,obligation_id,determination_id,kind,revision,payload_json,payload_digest,idempotency_key,created_at_ms ON actions BEGIN SELECT RAISE(ABORT,'action_payload_immutable'); END",
@@ -3679,10 +3678,10 @@ def _verify_commands(rows: Mapping[str, Sequence[Mapping[str, object]]], code: s
     indexes: dict[tuple[str, str], dict[object, Mapping[str, object]]] = {}
     expected: dict[str, tuple[str, str, bytes, int]] = {}
     for event in sorted(rows["financial_events"], key=lambda event: int(event["event_sequence"])):
-        spec = _COMMAND_EVENT_KINDS.get(str(event["kind"]))
-        if spec is None:
+        kind = _COMMAND_EVENT_KINDS.get(str(event["kind"]))
+        if kind is None:
             continue
-        kind, field = spec
+        _events, field, joins, columns = _COMMAND_SOURCES[kind]
         if field is None:
             key = event["aggregate_id"]
         else:
@@ -3690,7 +3689,6 @@ def _verify_commands(rows: Mapping[str, Sequence[Mapping[str, object]]], code: s
             key = payload.get(field) if isinstance(payload, dict) else None
         if type(key) is not str:
             _fail(f"{code}:key")
-        joins, columns = _COMMAND_SOURCES[kind]
         found: dict[str, Mapping[str, object]] = {}
         for join in joins.split():
             alias, _, target = join.partition("=")

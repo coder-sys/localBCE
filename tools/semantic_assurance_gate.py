@@ -795,7 +795,18 @@ def _parse_axiom_output(
     raw: bytes, declarations: Sequence[str], allowed: frozenset[str], namespace: str
 ) -> tuple[dict[str, Any], ...]:
     text = _decode(raw, "axiom closure")
-    lines = [line for line in text.splitlines() if line.strip()]
+    # Lean wraps a long axiom list onto indented continuation lines; each
+    # declaration's record starts at column 0 with its quoted name.
+    lines: list[str] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if line[0] in " \t":
+            if not lines:
+                raise AssuranceError(f"axiom closure output starts with a continuation: {text!r}")
+            lines[-1] = f"{lines[-1]} {line.strip()}"
+        else:
+            lines.append(line)
     if len(lines) != len(declarations):
         raise AssuranceError(
             f"axiom closure line count mismatch: expected={len(declarations)} got={len(lines)} raw={text!r}"
