@@ -1,19 +1,31 @@
 """Build and check the live financial correction transition proofs.
 
-The candidate is a clean, read-only checkout of the rightrail-main trunk at the
-pinned commit; its one Lake workspace is `candidate.lean_root` (`lean/`).  This
-gate binds that checkout to the reviewed commit/tree, extracts that commit's
-Lake workspace into fresh build roots, checks the pinned theorem statements of
-the financial correction transition (`candidate.namespace`) and their proof
-bodies with the pinned Lean toolchain, checks the axiom closure, checks the
+The candidate is a clean, read-only checkout of the rightrail-main trunk; its
+one Lake workspace is `candidate.lean_root` (`lean/`).  This gate records the
+commit/tree it verified in its receipt (and, with `--expected-head`, refuses any
+other commit), extracts that commit's Lake workspace into a fresh build root,
+builds `build.targets` (the native diagnostic and the target that compiles the
+theorem module), checks the pinned theorem statements of the financial
+correction transition (`candidate.namespace`) and their proof bodies with the
+pinned Lean toolchain, checks the axiom closure of every declaration, checks the
 independent Lean checker, and fingerprints the freshly built native diagnostic
 artifact (`blind_financial --correction-transition-kat`) before and after
 execution.  The native diagnostic output is conformance evidence only; it is
-never used as proof evidence.
+never used as proof evidence.  An unapproved axiom does not stop the run: every
+check still runs and the gate then fails, naming each declaration and each
+unapproved axiom it depends on.
 
 Manifest v2 (2026-09-24, Constitution XI.2) retargeted this gate from the
 retired Kernel-series clearance kernel, whose theorem source no longer exists,
 to the Lean that actually runs.  It inherits none of the old gate's assurance.
+Manifest v3 (2026-09-24) replaced the fixed commit pin (which could never equal
+the commit that carries the manifest) with a recorded commit, builds the theorem
+module that v2's `blind_financial` build never produced, and allows Lean's three
+standard axioms.  Engineering decision (2026-09-24, lead engineer, founder
+deferred): allow Lean's three standard axioms; they underlie Lean's own logic;
+sorry/custom/native axioms remain forbidden.  `STANDARD_LEAN_AXIOMS` bounds the
+manifest, so `sorryAx`, `Lean.ofReduceBool`, `Lean.trustCompiler`,
+`native_decide` auxiliary axioms and project axioms can never be allowed.
 
 This gate does not establish refinement to Rust, database durability,
 cryptographic soundness, source truth, deployment, payment movement, or
@@ -46,7 +58,10 @@ COMMAND_TIMEOUT_SECONDS = 180.0
 CHECK_TIMEOUT_SECONDS = 90.0
 NATIVE_TIMEOUT_SECONDS = 15.0
 
-REQUIRED_MANIFEST_SHA256 = "079f36a5e8eeb65ea3c8e7412233b79abb122212d4e4964679883c75198d971f"
+REQUIRED_MANIFEST_SHA256 = "2672f01c169a75fb1ef566515e540ccd153ce18cb70784a3614a136bb95858d6"
+
+# The only axioms a manifest may allow: the ones Lean's own logic rests on.
+STANDARD_LEAN_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
 
 THEOREM_DECLARATION_RE = re.compile(
     r"(?ms)^theorem\s+(?P<name>[A-Za-z0-9_']+)\s+(?P<header>.*?)\s*:=\s*by\b"
@@ -60,6 +75,14 @@ LEAN_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\
 
 class AssuranceError(RuntimeError):
     """A fail-closed semantic assurance setup or verification error."""
+
+
+class AxiomClosureFailure(AssuranceError):
+    """Every check ran, but declarations depend on unapproved axioms."""
+
+    def __init__(self, message: str, receipt: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.receipt = receipt
 
 
 @dataclass(frozen=True)
@@ -181,9 +204,9 @@ def _load_manifest() -> Manifest:
         },
         "manifest",
     )
-    if value["schema"] != "blind_ledger_semantic_assurance_manifest_v2":
+    if value["schema"] != "blind_ledger_semantic_assurance_manifest_v3":
         raise AssuranceError(f"unsupported manifest schema: {value['schema']!r}")
-    if value["manifest_version"] != 2:
+    if value["manifest_version"] != 3:
         raise AssuranceError(f"unsupported manifest version: {value['manifest_version']!r}")
 
     candidate = value["candidate"]
@@ -192,8 +215,6 @@ def _load_manifest() -> Manifest:
     _exact_keys(
         candidate,
         {
-            "required_head",
-            "required_tree",
             "lean_root",
             "namespace",
             "module",
@@ -203,8 +224,6 @@ def _load_manifest() -> Manifest:
         },
         "candidate",
     )
-    _git_hex(candidate["required_head"], "candidate.required_head")
-    _git_hex(candidate["required_tree"], "candidate.required_tree")
     _relative_path(candidate["lean_root"], "candidate.lean_root")
     namespace = _string(candidate["namespace"], "candidate.namespace")
     if LEAN_NAME_RE.fullmatch(namespace) is None:
@@ -248,8 +267,15 @@ def _load_manifest() -> Manifest:
     build = value["build"]
     if type(build) is not dict:
         raise AssuranceError("build record must be an object")
-    _exact_keys(build, {"target", "root_module", "artifact"}, "build")
-    _string(build["target"], "build.target")
+    _exact_keys(build, {"targets", "root_module", "artifact"}, "build")
+    targets = build["targets"]
+    if (
+        type(targets) is not list
+        or not targets
+        or any(type(item) is not str or not item or item.startswith("-") for item in targets)
+        or len(set(targets)) != len(targets)
+    ):
+        raise AssuranceError("build.targets must be a non-empty list of unique target names")
     _string(build["root_module"], "build.root_module")
     artifact = build["artifact"]
     if type(artifact) is not dict:
@@ -334,6 +360,11 @@ def _load_manifest() -> Manifest:
     ):
         raise AssuranceError("allowed_axioms must be a non-empty list of unique strings")
     allowed_axioms = frozenset(allowed_axioms_value)
+    if not allowed_axioms <= STANDARD_LEAN_AXIOMS:
+        raise AssuranceError(
+            "allowed_axioms may only name Lean's standard axioms "
+            f"{sorted(STANDARD_LEAN_AXIOMS)!r}; got {sorted(allowed_axioms - STANDARD_LEAN_AXIOMS)!r}"
+        )
 
     forbidden_value = value["forbidden_source_tokens"]
     if (
@@ -777,12 +808,27 @@ def _parse_axiom_output(
         axioms = tuple(
             sorted(item.strip() for item in (match.group("axioms") or "").split(",") if item.strip())
         )
-        if set(axioms) - allowed:
-            raise AssuranceError(
-                f"unapproved axiom dependency for {expected_name}: {axioms!r}; allowed={sorted(allowed)!r}"
-            )
-        records.append({"name": expected_name, "axioms": list(axioms), "raw": line})
+        unapproved = sorted(set(axioms) - allowed)
+        records.append(
+            {"name": expected_name, "axioms": list(axioms), "unapproved": unapproved, "raw": line}
+        )
     return tuple(records)
+
+
+def _axiom_violation_message(
+    records: Sequence[Mapping[str, Any]], allowed: frozenset[str]
+) -> str | None:
+    """None when every declaration is approved; otherwise one exact entry per failure."""
+    failures = [record for record in records if record["unapproved"]]
+    if not failures:
+        return None
+    details = "; ".join(
+        f"{record['name']} uses unapproved {record['unapproved']!r}" for record in failures
+    )
+    return (
+        f"unapproved axiom dependency: {len(failures)} of {len(records)} declarations; "
+        f"allowed={sorted(allowed)!r}; {details}"
+    )
 
 
 def _check_declaration_output(raw: bytes, declarations: Sequence[str], namespace: str) -> str:
@@ -797,21 +843,20 @@ def _check_declaration_output(raw: bytes, declarations: Sequence[str], namespace
     return text
 
 
-def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any]:
+def _verify_candidate(
+    candidate_root: Path, manifest: Manifest, expected_head: str | None = None
+) -> dict[str, Any]:
     candidate_root = candidate_root.resolve()
     if not candidate_root.is_dir() or not (candidate_root / ".git").exists():
         raise AssuranceError(f"candidate root is not a Git checkout: {candidate_root}")
     before_status, before_status_count, before_status_sha256 = _worktree_identity(candidate_root)
     if before_status:
         raise AssuranceError(f"candidate checkout is dirty:\n{before_status}")
-    expected_head = str(manifest.candidate["required_head"]).lower()
-    expected_tree = str(manifest.candidate["required_tree"]).lower()
-    head = _git(candidate_root, "rev-parse", "HEAD").lower()
-    tree = _git(candidate_root, "rev-parse", "HEAD^{tree}").lower()
-    if head != expected_head or tree != expected_tree:
+    head = _git_hex(_git(candidate_root, "rev-parse", "HEAD"), "candidate HEAD")
+    tree = _git_hex(_git(candidate_root, "rev-parse", "HEAD^{tree}"), "candidate tree")
+    if expected_head is not None and head != _git_hex(expected_head, "expected head"):
         raise AssuranceError(
-            f"candidate Git identity mismatch: expected head/tree={expected_head}/{expected_tree} "
-            f"got={head}/{tree}"
+            f"candidate Git identity mismatch: expected head={expected_head.lower()} got={head}"
         )
     lean_root = str(manifest.candidate["lean_root"])
     namespace = str(manifest.candidate["namespace"])
@@ -855,7 +900,11 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
         lean_dir, source_files, manifest.forbidden_tokens
     )
     tool_paths, tool_identities = _toolchain_paths(manifest)
-    build_command = [str(tool_paths["lake"]), "build", str(manifest.build["target"])]
+    build_command = [
+        str(tool_paths["lake"]),
+        "build",
+        *(str(item) for item in manifest.build["targets"]),
+    ]
     declarations = tuple(item.name for item in manifest.declarations)
 
     with tempfile.TemporaryDirectory(prefix="blind-ledger-semantic-assurance-") as temporary:
@@ -863,7 +912,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
         build_root = temporary_root / "build"
         # Extract only the pinned commit's Lake workspace (`<head>:<lean_root>`),
         # so the build root is the workspace root.
-        _extract_git_tree(candidate_root, f"{expected_head}:{lean_root}", build_root)
+        _extract_git_tree(candidate_root, f"{head}:{lean_root}", build_root)
         environment = _clean_environment(tool_paths)
         build = _run(
             build_command,
@@ -946,6 +995,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
         axiom_records = _parse_axiom_output(
             axiom_check.stdout, declarations, manifest.allowed_axioms, namespace
         )
+        axiom_failure = _axiom_violation_message(axiom_records, manifest.allowed_axioms)
 
         independent_check = _run(
             [str(tool_paths["leanchecker"]), str(manifest.candidate["module"])],
@@ -1002,9 +1052,10 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
         print(_decode(native.stdout, "native semantic diagnostic", encoding="ascii"), end="")
         print("NATIVE_OUTPUT_END")
 
-        return {
-            "schema": "blind_ledger_semantic_assurance_receipt_v2",
-            "status": "PASS",
+        receipt = {
+            "schema": "blind_ledger_semantic_assurance_receipt_v3",
+            "status": "PASS" if axiom_failure is None else "FAIL",
+            "failures": [] if axiom_failure is None else [axiom_failure],
             "claim": "FINANCIAL_CORRECTION_TRANSITION_PROOFS_NONACTIVATING",
             "manifest": {
                 "path": str(MANIFEST_PATH),
@@ -1025,7 +1076,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             },
             "toolchain": {**tool_identities, "identity_unchanged": True},
             "build": {
-                "target": manifest.build["target"],
+                "targets": list(manifest.build["targets"]),
                 "root_module": manifest.build["root_module"],
                 "command": build_command,
                 "exit": build.returncode,
@@ -1043,6 +1094,12 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
                 },
                 "axiom_closure": {
                     "exit": axiom_check.returncode,
+                    "status": "PASS" if axiom_failure is None else "FAIL",
+                    "unapproved": [
+                        {"name": record["name"], "unapproved": record["unapproved"]}
+                        for record in axiom_records
+                        if record["unapproved"]
+                    ],
                     "records": list(axiom_records),
                     "output": axiom_output,
                 },
@@ -1061,7 +1118,7 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
             },
             "qualification": {
                 "modeled": "PASS",
-                "proved": "PASS",
+                "proved": "PASS" if axiom_failure is None else "FAIL",
                 "compiled": "PASS",
                 "runtime_linked": "NOT_ESTABLISHED",
                 "deployment_qualified": "NOT_ESTABLISHED",
@@ -1070,11 +1127,14 @@ def _verify_candidate(candidate_root: Path, manifest: Manifest) -> dict[str, Any
                 "proofSuiteId": None,
             },
         }
+        if axiom_failure is not None:
+            raise AxiomClosureFailure(axiom_failure, receipt)
+        return receipt
 
 
-def verify(candidate_root: Path) -> dict[str, Any]:
+def verify(candidate_root: Path, expected_head: str | None = None) -> dict[str, Any]:
     manifest = _load_manifest()
-    return _verify_candidate(candidate_root, manifest)
+    return _verify_candidate(candidate_root, manifest, expected_head)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1083,7 +1143,12 @@ def _parser() -> argparse.ArgumentParser:
         "--candidate-root",
         type=Path,
         required=True,
-        help="a clean checkout of rightrail-main at candidate.required_head",
+        help="a clean checkout of rightrail-main; the receipt records its commit and tree",
+    )
+    parser.add_argument(
+        "--expected-head",
+        default=None,
+        help="optional full commit id; any other candidate HEAD is refused",
     )
     return parser
 
@@ -1095,7 +1160,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.reconfigure(encoding="utf-8", errors="strict")
     args = _parser().parse_args(argv)
     try:
-        receipt = verify(args.candidate_root)
+        receipt = verify(args.candidate_root, args.expected_head)
+    except AxiomClosureFailure as exc:
+        for record in exc.receipt["build"]["axiom_closure"]["unapproved"]:
+            print(
+                f"AXIOM_CLOSURE_FAIL name={record['name']} "
+                f"unapproved={','.join(record['unapproved'])}"
+            )
+        print(
+            "SEMANTIC_ASSURANCE_RECEIPT="
+            + json.dumps(exc.receipt, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        )
+        print(f"SEMANTIC_ASSURANCE_GATE=FAIL {exc}", file=sys.stderr)
+        return 1
     except AssuranceError as exc:
         print(f"SEMANTIC_ASSURANCE_GATE=FAIL {exc}", file=sys.stderr)
         return 1
@@ -1109,6 +1186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(
         "SEMANTIC_ASSURANCE_GATE=PASS "
+        f"head={receipt['candidate']['head']} tree={receipt['candidate']['tree']} "
         f"property_count={receipt['manifest']['property_count']} "
         f"declaration_count={receipt['manifest']['declaration_count']} "
         f"artifact_bytes={receipt['build']['artifact']['bytes']} "

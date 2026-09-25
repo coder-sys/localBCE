@@ -16,6 +16,18 @@ from unittest.mock import patch
 from tools import semantic_assurance_gate as gate
 
 
+# Axioms that must never be approved, whatever the manifest says: `sorry`,
+# the compiler-trust axioms behind `native_decide`/`ofReduceBool`, a
+# `native_decide` auxiliary axiom, and a project-declared axiom.
+FORBIDDEN_AXIOM_EXAMPLES = (
+    "sorryAx",
+    "Lean.ofReduceBool",
+    "Lean.trustCompiler",
+    "BlindLedger.Financial.CorrectionTransition.example._native.native_decide.ax_1_1",
+    "BlindLedger.injected_custom_axiom",
+)
+
+
 class SemanticAssuranceGateNegativeTests(unittest.TestCase):
     CANDIDATE_ENVIRONMENT_VARIABLE = "BLIND_LEDGER_SEMANTIC_CANDIDATE"
 
@@ -35,14 +47,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             "",
             self._git_command(candidate, "status", "--porcelain", "--untracked-files=all"),
             f"actual candidate is dirty: {candidate}",
-        )
-        self.assertEqual(
-            self.manifest.candidate["required_head"],
-            self._git_command(candidate, "rev-parse", "HEAD"),
-        )
-        self.assertEqual(
-            self.manifest.candidate["required_tree"],
-            self._git_command(candidate, "rev-parse", "HEAD^{tree}"),
         )
         return candidate
 
@@ -122,6 +126,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 str(actual),
                 str(root),
             )
+            self.actual_head = self._git_command(root, "rev-parse", "HEAD")
             mutation(root)
             head = self._git_command(root, "rev-parse", "HEAD")
             tree = self._git_command(root, "rev-parse", "HEAD^{tree}")
@@ -139,15 +144,11 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
 
     def _test_manifest_for(
         self,
-        head: str,
-        tree: str,
         *,
         source_files: tuple[str, ...] | None = None,
         forbidden_tokens: tuple[str, ...] | None = None,
     ) -> gate.Manifest:
         candidate_record = dict(self.manifest.candidate)
-        candidate_record["required_head"] = head
-        candidate_record["required_tree"] = tree
         if source_files is not None:
             candidate_record["source_files"] = list(source_files)
         return replace(
@@ -161,10 +162,11 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
         )
 
     def _assert_production_identity_rejection(self, candidate: Path) -> str:
+        """A mutated commit is refused when the reviewed head is required."""
         with self.assertRaisesRegex(gate.AssuranceError, "candidate Git identity mismatch") as raised:
-            gate.verify(candidate)
+            gate.verify(candidate, expected_head=self.actual_head)
         reason = str(raised.exception)
-        print(f"PRODUCTION_MANIFEST_REJECTION={reason}")
+        print(f"PINNED_HEAD_REJECTION={reason}")
         return reason
 
     def _lean_dir(self, root: Path) -> Path:
@@ -223,24 +225,76 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 self._synthetic_source(expectations, change=changed), expectations
             )
 
-    def test_unapproved_transitive_axiom_reaches_axiom_closure_check(self) -> None:
+    def _axiom_message(self, per_declaration: dict[int, str]) -> str | None:
         declarations = tuple(expectation.name for expectation in self.manifest.declarations)
         lines = []
         for index, name in enumerate(declarations):
             qualified = f"{self._namespace()}.{name}"
-            if index == 0:
-                lines.append(
-                    f"'{qualified}' depends on axioms: [propext, BlindLedger.injected_custom_axiom]"
-                )
+            if index in per_declaration:
+                lines.append(f"'{qualified}' depends on axioms: [{per_declaration[index]}]")
             else:
                 lines.append(f"'{qualified}' does not depend on any axioms")
-        with self.assertRaisesRegex(gate.AssuranceError, "unapproved axiom dependency"):
-            gate._parse_axiom_output(
-                ("\n".join(lines) + "\n").encode("ascii"),
-                declarations,
-                self.manifest.allowed_axioms,
-                self._namespace(),
-            )
+        records = gate._parse_axiom_output(
+            ("\n".join(lines) + "\n").encode("ascii"),
+            declarations,
+            self.manifest.allowed_axioms,
+            self._namespace(),
+        )
+        return gate._axiom_violation_message(records, self.manifest.allowed_axioms)
+
+    def test_unapproved_transitive_axiom_reaches_axiom_closure_check(self) -> None:
+        first = self.manifest.declarations[0].name
+        message = self._axiom_message({0: "propext, BlindLedger.injected_custom_axiom"})
+        self.assertIsNotNone(message)
+        self.assertRegex(
+            message,
+            rf"^unapproved axiom dependency: 1 of {len(self.manifest.declarations)} declarations; "
+            rf".*{first} uses unapproved \['BlindLedger\.injected_custom_axiom'\]$",
+        )
+
+    def test_every_forbidden_axiom_is_rejected_and_named(self) -> None:
+        count = len(self.manifest.declarations)
+        per_declaration = {
+            index: f"propext, Classical.choice, Quot.sound, {axiom}"
+            for index, axiom in enumerate(FORBIDDEN_AXIOM_EXAMPLES)
+        }
+        message = self._axiom_message(per_declaration)
+        self.assertIsNotNone(message)
+        self.assertIn(
+            f"unapproved axiom dependency: {len(FORBIDDEN_AXIOM_EXAMPLES)} of {count} declarations",
+            message,
+        )
+        for index, axiom in enumerate(FORBIDDEN_AXIOM_EXAMPLES):
+            name = self.manifest.declarations[index].name
+            self.assertIn(f"{name} uses unapproved [{axiom!r}]", message)
+        for standard in ("propext", "Classical.choice", "Quot.sound"):
+            self.assertNotIn(f"[{standard!r}]", message)
+
+    def test_standard_axioms_alone_are_approved(self) -> None:
+        self.assertEqual(
+            frozenset({"propext", "Classical.choice", "Quot.sound"}),
+            self.manifest.allowed_axioms,
+        )
+        self.assertIsNone(
+            self._axiom_message({0: "propext, Classical.choice, Quot.sound", 1: "propext"})
+        )
+
+    def test_manifest_cannot_allow_a_forbidden_axiom(self) -> None:
+        raw = gate.MANIFEST_PATH.read_text(encoding="utf-8")
+        allowed = '"Quot.sound"\n  ],'
+        self.assertEqual(1, raw.count(allowed))
+        for axiom in FORBIDDEN_AXIOM_EXAMPLES:
+            widened = raw.replace(allowed, f'"Quot.sound",\n    "{axiom}"\n  ],', 1).encode("utf-8")
+            with tempfile.TemporaryDirectory(prefix="semantic-gate-manifest-axiom-") as temporary:
+                path = Path(temporary) / "manifest.json"
+                path.write_bytes(widened)
+                with patch.object(gate, "MANIFEST_PATH", path), patch.object(
+                    gate, "REQUIRED_MANIFEST_SHA256", gate.hashlib.sha256(widened).hexdigest()
+                ):
+                    with self.assertRaisesRegex(
+                        gate.AssuranceError, "allowed_axioms may only name Lean's standard axioms"
+                    ):
+                        gate._load_manifest()
 
     def test_changed_candidate_source_identity_reaches_identity_check(self) -> None:
         before = (
@@ -345,12 +399,12 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
 
         with self._fresh_candidate(mutate) as (candidate, head, tree):
             production_reason = self._assert_production_identity_rejection(candidate)
-            test_manifest = self._test_manifest_for(head, tree)
+            test_manifest = self._test_manifest_for()
             with self.assertRaisesRegex(
                 gate.AssuranceError,
                 rf"required theorem declaration missing: \['{expectation.name}'\]",
             ) as raised:
-                gate._verify_candidate(candidate, test_manifest)
+                gate._verify_candidate(candidate, test_manifest, head)
             print(
                 "INTEGRATION_NEGATIVE "
                 f"stage=declaration_presence mutation=removed_theorem name={expectation.name} "
@@ -376,9 +430,9 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
 
         with self._fresh_candidate(mutate) as (candidate, head, tree):
             production_reason = self._assert_production_identity_rejection(candidate)
-            test_manifest = self._test_manifest_for(head, tree)
+            test_manifest = self._test_manifest_for()
             with self.assertRaisesRegex(gate.AssuranceError, "theorem statement changed") as raised:
-                gate._verify_candidate(candidate, test_manifest)
+                gate._verify_candidate(candidate, test_manifest, head)
             print(
                 "INTEGRATION_NEGATIVE "
                 f"stage=declaration_statement mutation=changed_theorem name={expectation.name} "
@@ -426,8 +480,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 token for token in self.manifest.forbidden_tokens if token != "axiom"
             )
             test_manifest = self._test_manifest_for(
-                head,
-                tree,
                 source_files=source_files,
                 forbidden_tokens=forbidden_tokens,
             )
@@ -435,11 +487,13 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 gate, "_parse_axiom_output", wraps=gate._parse_axiom_output
             ) as parser_spy:
                 with self.assertRaisesRegex(
-                    gate.AssuranceError,
-                    "unapproved axiom dependency for "
-                    "canonicalActionPayload_dispatch_is_synthetic_record_only",
+                    gate.AxiomClosureFailure,
+                    r"unapproved axiom dependency: 1 of \d+ declarations; .*"
+                    r"canonicalActionPayload_dispatch_is_synthetic_record_only uses unapproved "
+                    rf"\['{re.escape(self._namespace())}\.injected_custom_axiom'\]",
                 ) as raised:
-                    gate._verify_candidate(candidate, test_manifest)
+                    gate._verify_candidate(candidate, test_manifest, head)
+            self.assertEqual("FAIL", raised.exception.receipt["status"])
             self.assertIsNotNone(parser_spy.call_args)
             axiom_output = parser_spy.call_args.args[0].decode("utf-8")
             self.assertIn(f"{self._namespace()}.injected_custom_axiom", axiom_output)
@@ -451,6 +505,40 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             print("REAL_LEAN_AXIOM_OUTPUT_BEGIN")
             print(axiom_output, end="" if axiom_output.endswith("\n") else "\n")
             print("REAL_LEAN_AXIOM_OUTPUT_END")
+
+    def test_real_sorry_reaches_containing_axiom_gate(self) -> None:
+        def mutate(root: Path) -> None:
+            source_path = self._lean_dir(root) / self.manifest.candidate["theorem_source"]
+            source = source_path.read_text(encoding="utf-8")
+            proof = "      .SYNTHETIC_RECORD_ONLY := by\n  rfl\n"
+            self.assertEqual(1, source.count(proof))
+            source_path.write_text(
+                source.replace(proof, "      .SYNTHETIC_RECORD_ONLY := by\n  sorry\n", 1),
+                encoding="utf-8",
+            )
+            self._commit_fixture(root, "replace a proof with sorry for verifier test")
+
+        with self._fresh_candidate(mutate) as (candidate, head, tree):
+            # Drop the source-token scan for `sorry`, so the axiom closure itself
+            # must catch it.
+            test_manifest = self._test_manifest_for(
+                forbidden_tokens=tuple(
+                    token for token in self.manifest.forbidden_tokens if token != "sorry"
+                ),
+            )
+            with self.assertRaisesRegex(
+                gate.AxiomClosureFailure,
+                r"unapproved axiom dependency: 1 of \d+ declarations; .*"
+                r"canonicalActionPayload_dispatch_is_synthetic_record_only uses unapproved "
+                r"\['sorryAx'\]",
+            ) as raised:
+                gate._verify_candidate(candidate, test_manifest, head)
+            self.assertEqual("FAIL", raised.exception.receipt["status"])
+            print(
+                "INTEGRATION_NEGATIVE "
+                f"stage=axiom_closure mutation=sorry head={head} tree={tree} "
+                f"containing={str(raised.exception)!r}"
+            )
 
     def test_real_source_change_during_verification_reaches_containing_identity_gate(self) -> None:
         def mutate(root: Path) -> None:

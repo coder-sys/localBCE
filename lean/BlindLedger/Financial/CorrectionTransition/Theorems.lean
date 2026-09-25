@@ -4,6 +4,7 @@ namespace BlindLedger.Financial.CorrectionTransition
 
 open BlindLedger.Financial
 open BlindLedger.Semantic
+open BlindLedger.Financial.DecisionPackage (EvaluationReceipt)
 
 theorem canonicalActionPayload_dispatch_is_synthetic_record_only
     (request : CorrectionTransitionRequest) (determinationId : String)
@@ -34,6 +35,7 @@ theorem applyCorrectionTransition_mutation_links
       | duplicate =>
           simp [hPreflight, duplicate] at hMutation
       | ready currentResult claim inputRevisionMatches =>
+          dsimp only
           cases hBuild : buildAccepted request currentResult claim with
           | error reason =>
               simp [hPreflight, hBuild, reject] at hMutation
@@ -136,7 +138,8 @@ theorem assessCorrectionReuse_calculation_independent_of_approval_and_execution_
   cases hStatus : request.acceptedResult.status <;>
     cases hMutation : request.acceptedResult.mutation <;>
       simp [assessCorrectionReuse, assessAcceptedCorrectionReuse, calculationReason,
-        hStatus, hMutation]
+        hStatus, hMutation] <;>
+      rfl
 
 theorem assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations
     (request : CorrectionReuseRequest) (currentInput : FinancialInput)
@@ -151,7 +154,8 @@ theorem assessCorrectionReuse_approval_independent_of_calculation_and_execution_
   cases hStatus : request.acceptedResult.status <;>
     cases hMutation : request.acceptedResult.mutation <;>
       simp [assessCorrectionReuse, assessAcceptedCorrectionReuse, approvalReason,
-        hStatus, hMutation]
+        hStatus, hMutation] <;>
+      rfl
 
 theorem assessCorrectionReuse_local_permission_matches_denial
     (request : CorrectionReuseRequest) :
