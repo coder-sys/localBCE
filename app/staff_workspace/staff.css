@@ -102,7 +102,9 @@ h3 { font-size: 1.02rem; margin-bottom: 0.45rem; }
 .primary:hover:not(:disabled) { background: #0f3b52; }
 .secondary { border-color: #86a1ad; color: #143b50; }
 
-.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
+.answer-first { border-left: 5px solid var(--blue); background: var(--blue-light); padding: 0.75rem 1rem; margin-bottom: 1rem; border-radius: 0.35rem; }
+.answer-first p { margin: 0; font-weight: 650; }
 .metric { border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.85rem; background: #fbfdfe; }
 .metric h3 { color: var(--muted); font-size: 0.85rem; font-weight: 650; }
 .metric p { font-size: clamp(1.2rem, 2.4vw, 1.75rem); font-weight: 750; margin: 0 0 0.15rem; font-variant-numeric: tabular-nums; }

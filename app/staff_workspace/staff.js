@@ -343,6 +343,31 @@
     return Number.isSafeInteger(ms) ? new Date(ms).toISOString().replace("T", " ").replace(".000Z", " UTC") : "Unknown";
   }
 
+  // Owner codes in plain words (CASE_OWNER -> case owner); dates without the clock.
+  function words(code) {
+    return code === null || code === undefined ? "unknown" : String(code).toLowerCase().replaceAll("_", " ");
+  }
+
+  function day(ms) {
+    return Number.isSafeInteger(ms) ? utc(ms).slice(0, 10) : "unknown";
+  }
+
+  // Answer first (Art. XIII.1): what is happening with H, who owns it, the gap, the next step.
+  function attentionText(value) {
+    const pkg = value.h.decision_package;
+    const item = value.items.find((row) => row.item_id === "item-h");
+    const kase = pkg.case;
+    const resolution = (pkg.conclusions || {}).case_resolution;
+    const missing = resolution && Array.isArray(resolution.missing_requirements) ? resolution.missing_requirements : [];
+    const parts = [(item ? item.label : "H") + " (H): case " + (kase ? words(kase.status) : "not opened"),
+      "shortfall " + asMoney(pkg.obligation.shortfall_cents)];
+    if (kase) parts.push("next step owner: " + words(kase.next_action_owner) + ", due " + day(kase.due_at_ms));
+    parts.push(missing.length
+      ? "still needed: " + missing.map(words).join(", ")
+      : "Owner assessment: " + words(resolution ? resolution.assessment : null) + ", nothing outstanding");
+    return parts.join(" · ") + ".";
+  }
+
   function shown(value) {
     return value === null || value === undefined ? "Unknown" : String(value);
   }
@@ -463,10 +488,12 @@
     snapshot = value;
     ownerAvailable = true;
     lastSuccessfulRead = Date.now();
-    const h = currentH();
     setText("population-count", value.summary.obligation_count + " / " + value.population.expected_count);
     setText("program-total", asMoney(value.summary.owed_cents));
-    setText("h-shortfall", asMoney(h ? h.shortfall_cents : null));
+    setText("program-cash", asMoney(value.summary.received_cash_cents));
+    setText("program-shortfall", asMoney(value.summary.shortfall_cents));
+    setText("open-items", value.summary.open_count);
+    setText("h-attention", attentionText(value));
     setText("roster-status", value.population.completeness + " · " + value.population.imported_count + "/" + value.population.expected_count);
     setText("source-status", value.source_assessment.status + " — " + value.source_assessment.reason);
     setText("freshness-status", value.freshness.status + " — " + value.freshness.reason);
@@ -589,8 +616,30 @@
     const pack = pkg.control_pack || {};
     const conclusions = pkg.conclusions || {};
     const facts = byId("case-facts");
+    const bindings = byId("binding-facts");
     facts.replaceChildren();
-    const fact = (label, value) => appendFact(facts, label, value);
+    bindings.replaceChildren();
+    const plain = (label, value) => appendFact(facts, label, value);
+    const fact = (label, value) => appendFact(bindings, label, value);
+    const claimPage = pkg.references && pkg.references.claims;
+    const claims = claimPage && Array.isArray(claimPage.items) ? claimPage.items : [];
+    const support = decisionView.source_assessment.h_support_status === "MISSING" ? "no supporting evidence" : "support recorded, unverified";
+    plain("Amount owed", asMoney(h.owed_cents));
+    plain("Cash received", asMoney(h.received_cash_cents));
+    plain("Offset claimed", claims.length
+      ? claims.map((claim) => asMoney(claim.amount_cents) + " · claim " + words(claim.status) + " · " + support).join("; ")
+      : "None");
+    plain("Case", pkg.case
+      ? words(pkg.case.status) + " · " + words(pkg.case.reason) + " · next step owner: " + words(pkg.case.next_action_owner)
+        + " · due " + day(pkg.case.due_at_ms)
+      : "No case opened");
+    const determination = pkg.current_determination;
+    plain("Current determination", determination
+      ? words(determination.decision) + " · decided by " + words(determination.actor_role) + " · " + utc(determination.decided_at_ms)
+        + " · evidence " + (determination.supporting_evidence || []).map((row) => (isRecord(row) ? row.evidence_id : row)).join(", ")
+      : "None yet");
+    plain("Rules", [pack.calculation_rule_id, pack.adjustment_rule_id].filter(Boolean).join(" · "));
+    plain("Continuity", snapshot && snapshot.continuity ? snapshot.continuity.mode : "Unknown");
     fact("Decision package contract", pkg.contract);
     fact("Owner sequence reviewed", decisionView.sequence);
     fact("Read snapshot", decisionView.read_envelope.snapshot_id);
@@ -601,16 +650,13 @@
     fact("Evaluation result digest", receipt.result_digest);
     fact("Scope", JSON.stringify(pkg.scope));
     fact("Control Pack", [pack.pack_id, "v" + String(pack.version), pack.digest].filter(Boolean).join(" · "));
-    fact("Rules", [pack.calculation_rule_id, pack.adjustment_rule_id].filter(Boolean).join(" · "));
     fact("Trusted authority", receipt.authority
       ? [receipt.authority.authority_id, "epoch " + String(receipt.authority.epoch), receipt.authority.digest].join(" · ")
       : "Unknown");
     // The Mirror withholds input_snapshot_digest from staff; the receipt digest binds it.
     fact("Input state", "receipt " + String(receipt.receipt_digest));
-    fact("Case", pkg.case ? pkg.case.case_id + " · " + pkg.case.status + " · " + pkg.case.reason : "No case reference");
-    fact("Current determination", pkg.current_determination ? pkg.current_determination.decision : "None");
+    fact("Case reference", pkg.case ? pkg.case.case_id : "No case reference");
     fact("Source evidence", decisionView.source_assessment.status + " · H support " + decisionView.source_assessment.h_support_status);
-    fact("Continuity", snapshot && snapshot.continuity ? snapshot.continuity.mode : "Unknown");
     const durable = correctionFollowup && correctionFollowup.followup;
     const followupUnavailable = Boolean(correctionFollowup && correctionFollowup.status === "UNAVAILABLE");
     fact("Durable correction follow-up", correctionFollowup ? correctionFollowup.status : "UNAVAILABLE");
@@ -620,12 +666,12 @@
         ? "Follow-up read unavailable: " + correctionFollowup.reason
         : "No accepted correction event has created durable follow-up.";
     if (durable) {
-      const support = durable.corporate_support;
-      const artifact = support.artifact;
+      const corporate = durable.corporate_support;
+      const artifact = corporate.artifact;
       fact("Follow-up event", durable.source_event_sequence + " · " + durable.followup_status);
       fact("State report", durable.state_report.contract + " · " + durable.state_report.followup_status);
-      fact("Allowlisted support", support.contract + " · " + support.status
-        + " · " + support.failure_stage + " / " + support.error_class
+      fact("Allowlisted support", corporate.contract + " · " + corporate.status
+        + " · " + corporate.failure_stage + " / " + corporate.error_class
         + (artifact ? " · artifact v" + artifact.version + " " + artifact.sha256 : ""));
     } else if (followupUnavailable) {
       fact("Follow-up read", correctionFollowup.reason);
@@ -647,10 +693,14 @@
 
     const unresolved = [
       "Source authenticity is UNKNOWN: the manifest digest and evidence references are synthetic caller assertions.",
-      "H has no supporting source evidence for its $3,000 offset claim; the claim is not an approved adjustment.",
       "No feed watermark or source-specific freshness rule is available, so source freshness remains UNKNOWN.",
       "An action ACK records delivery only and contributes $0 to cash.",
     ];
+    for (const claim of claims) {
+      if (claim.status === "CLAIMED") {
+        unresolved.push("H's " + asMoney(claim.amount_cents) + " offset claim has " + support + "; it is not an approved adjustment until decided.");
+      }
+    }
     if (cash && cash.missing_cents > 0) unresolved.push("Cash shortfall remains " + asMoney(cash.missing_cents) + ".");
     if (reporting && reporting.result !== "SUPPORTED") unresolved.push("Reporting completion remains " + reporting.result + ".");
     const resolution = conclusions.case_resolution;
@@ -695,6 +745,7 @@
         packageAvailable = false;
         packageStale = true;
         banner("package-staleness", "stale", "STALE READ — the package and overview do not describe the same Owner snapshot. Refresh and reopen the package.");
+        if (!decisionOpen) commandMessage("The package changed while it was loading. The overview is refreshing; open the package again.", "error");
         updateActions();
         await refreshOverview();
         return;
@@ -709,6 +760,7 @@
       if (requestGeneration !== decisionRequestGeneration) return;
       packageAvailable = false;
       banner("package-staleness", "unavailable", "UNAVAILABLE — decision package read failed (" + error.message + ").");
+      if (!decisionOpen) commandMessage("The decision package could not be loaded. Refresh the overview and try again.", "error");
       if (decisionView) packageStale = true;
       updateActions();
     }
@@ -758,6 +810,7 @@
     const decided = Boolean(pkg && pkg.current_determination);
     const testMode = Boolean(snapshot && snapshot.continuity && snapshot.continuity.mode === "TEST");
     const canRetry = ownerAvailable && !commandPending;
+    byId("refresh-button").disabled = commandPending;
     const correctionRetry = Boolean(unresolvedCorrectionBody && canRetry);
     const cashRetry = Boolean(unresolvedCashBody && canRetry);
     setButton("wrong-role", !reviewed || decided);
@@ -833,6 +886,7 @@
     commandPending = true;
     updateActions();
     let refreshAfter = false;
+    let reopenAfter = false;
     try {
       const result = await postJson(route, body);
       if (name === "reject-offset") unresolvedCorrectionBody = null;
@@ -849,9 +903,12 @@
         if (name === "record-cash") description += ". Synthetic evidence only; money movement: false.";
         if (name === "record-report") description += ". Reporting source: synthetic and unverified.";
         if (name === "restore-test") description = "Continuity TEST restore verified. H decision package equality: " + String(result.continuity.decision_package_equal) + ".";
-        commandMessage(description + " Reopen the package to review the new Owner sequence.", "success");
-        if (applyCommandSnapshot(result.workspace, startedAt)) await refreshCorrectionFollowup(workspaceRequestGeneration);
-        else refreshAfter = true;
+        const applied = applyCommandSnapshot(result.workspace, startedAt);
+        commandMessage(description + (applied ? " The package below now shows the result." : " Reopen the package to review the new Owner sequence."), "success");
+        if (applied) {
+          await refreshCorrectionFollowup(workspaceRequestGeneration);
+          reopenAfter = decisionOpen;
+        } else refreshAfter = true;
       }
     } catch (error) {
       if (!UNCERTAIN_OUTCOMES.includes(error.message)) {
@@ -873,6 +930,7 @@
       detectPackageStaleness();
       renderDecision();
       if (refreshAfter) await refreshOverview();
+      else if (reopenAfter) await openPackage();
     }
   }
 

@@ -37,10 +37,16 @@
         </div>
         <button id="refresh-button" class="secondary" type="button">Refresh overview</button>
       </div>
+      <div class="answer-first">
+        <h3>Needs attention now</h3>
+        <p id="h-attention">Waiting for the first Owner read.</p>
+      </div>
       <div class="metric-grid" aria-label="Program totals">
         <article class="metric"><h3>Population</h3><p id="population-count">—</p><span>owner obligations</span></article>
         <article class="metric"><h3>Total owed</h3><p id="program-total">—</p><span>synthetic USD</span></article>
-        <article class="metric"><h3>H shortfall</h3><p id="h-shortfall">—</p><span>current Owner projection</span></article>
+        <article class="metric"><h3>Cash recorded</h3><p id="program-cash">—</p><span>all hospitals</span></article>
+        <article class="metric"><h3>Program shortfall</h3><p id="program-shortfall">—</p><span>owed minus cash and approved adjustments</span></article>
+        <article class="metric"><h3>Open items</h3><p id="open-items">—</p><span>hospitals not yet paid in full</span></article>
         <article class="metric"><h3>Roster check</h3><p id="roster-status">—</p><span>internal manifest only</span></article>
       </div>
       <div class="split-note">
@@ -112,6 +118,10 @@
       </div>
       <p id="package-staleness" class="status-banner pending" role="status" aria-live="polite">Open the package to review the current Owner state.</p>
       <dl id="case-facts" class="facts-grid"></dl>
+      <details class="package-details">
+        <summary>Technical bindings (snapshot, digests, receipts)</summary>
+        <dl id="binding-facts" class="facts-grid"></dl>
+      </details>
 
       <div class="three-columns">
         <article class="fact-card">
