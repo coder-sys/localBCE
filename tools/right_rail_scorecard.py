@@ -54,7 +54,7 @@ SCREEN_ORDER = ("overview", "decision_package", "raw:package-json", "raw:followu
 DRIVER_JS = r"""
 "use strict";
 const http = require("http"), readline = require("readline"), vm = require("vm");
-let port = 0, script = "", page = null, pending = 0;
+let port = 0, script = "", page = null, pending = 0, navPath = "/";
 class El {
   constructor(tag, id = "") { Object.assign(this, { tagName: tag, id, children: [], parent: null, _text: "", className: "", hidden: false, disabled: false, dataset: {}, listeners: {}, colSpan: 1 }); }
   get textContent() { return this.children.length ? this.children.map((c) => c.textContent).join("\n") : this._text; }
@@ -112,8 +112,13 @@ function newPage(elements, actions) {
       if (m) return buttons.get(m[1]) || null;
       throw new Error("unsupported_selector:" + sel);
     },
+    querySelectorAll: (sel) => {
+      if (sel === "[data-action]") return [...grid.children];
+      throw new Error("unsupported_selector:" + sel);
+    },
   };
   const context = { document, fetch: browserFetch, TextEncoder, console,
+    location: { pathname: navPath },
     crypto: { subtle: { digest: (a, b) => track(globalThis.crypto.subtle.digest(a, b)) } },
     setInterval: (_f, ms) => intervals.push(ms) };
   context.window = context;
@@ -130,13 +135,13 @@ function view() {
     if (el.children.length) tables[id] = el.children.map((r) => (r.children.length ? r.children.map((c) => c.textContent) : [r.textContent]));
     if (el.hidden) hidden[id] = true;
   }
-  for (const [name, b] of page.buttons) buttons[name] = { disabled: b.disabled };
+  for (const [name, b] of page.buttons) buttons[name] = { disabled: b.disabled, hidden: Boolean(b.hidden) };
   return { texts, tables, hidden, buttons, intervals: page.intervals.slice() };
 }
 async function handle(m) {
   if (m.op === "navigate") {
-    port = m.port; page = null;
-    const html = await (await browserFetch("/")).text();
+    port = m.port; page = null; navPath = m.path || "/";
+    const html = await (await browserFetch(navPath)).text();
     await browserFetch("/staff.css");
     script = await (await browserFetch("/staff.js")).text();
     return { html };
@@ -270,7 +275,9 @@ def _metered_handler(workflow: staff.StaffWorkflow, meter: _Meter) -> type:
 
     class Metered(staff._handler_for(workflow)):  # type: ignore[misc]
         def do_GET(self) -> None:
-            self._record = meter.begin("GET", self.path)
+            # A friction "request" is a read the role's task triggered, not the
+            # one-time static page/asset load the browser does on every open.
+            self._record = meter.begin("GET", self.path) if self.path.startswith("/api/") else None
             super().do_GET()
 
         def do_POST(self) -> None:
@@ -282,7 +289,8 @@ def _metered_handler(workflow: staff.StaffWorkflow, meter: _Meter) -> type:
             return value
 
         def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8") -> None:
-            self._record["status"] = status
+            if self._record is not None:
+                self._record["status"] = status
             super()._respond(status, value, content_type)
 
     return Metered
@@ -321,8 +329,8 @@ class _Browser:
             self.last_view = reply["view"]
         return reply
 
-    def open(self) -> None:
-        self.page = _PageMap(self.call({"op": "navigate", "port": self.port})["html"])
+    def open(self, path: str = "/") -> None:
+        self.page = _PageMap(self.call({"op": "navigate", "port": self.port, "path": path})["html"])
         elements = {key: {"tag": spec["tag"], "text": spec["text"], "hidden": spec["hidden"]} for key, spec in self.page.elements.items()}
         self.call({"op": "boot", "elements": elements, "actions": self.page.actions})
 
@@ -487,7 +495,7 @@ def _auditor_facts(truth: dict[str, Any]) -> list[Fact]:
         Fact("decided_at", "H", re.escape(_utc(int(determination["decided_at_ms"]), "%Y-%m-%d %H:%M")), r"determination|decision|decided|" + re.escape(decision), ("current_determination", "decided_at_ms")),
         Fact("supporting_evidence", "H", re.escape(str(evidence_id)), r"evidence", ("current_determination", "supporting_evidence")),
         Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule", ("control_pack", "adjustment_rule_id")),
-        Fact("chronology", "H", r"DETERMIN|OFFSET_REJECTED|CORRECTION", r"Chronology|event|sequence", ("current_determination", "determination_id")),
+        Fact("chronology", "H", r"(?i:determin|offset[_ ]rejected|correction)", r"Chronology|event|sequence", ("current_determination", "determination_id")),
         Fact("cash_reconciles", "H", _money(int(obligation["received_cash_cents"])) + r".*" + _money(int(obligation["shortfall_cents"])), r"cash|received", ("obligation", "received_cash_cents")),
     ]
 
@@ -622,11 +630,18 @@ def _open_rows(view: dict[str, Any]) -> int:
     return sum(1 for cells in rows if (m := re.search(r"Case ([A-Z_]+)", " ".join(cells))) and m.group(1) != "RESOLVED")
 
 
+# Each task tag names the role it is performed as (Art. XIII.4: roles are
+# real, so the journey now opens each task's page as that role would).
+_TASK_ROLE = {"director": "director", "analyst": "analyst", "approver": "approver",
+              "auditor": "auditor", "replacement": "operator"}
+
+
 class _Task:
     """One role doing one task in a fresh browser tab."""
 
     def __init__(self, journey: _Journey, tag: str) -> None:
         self.journey, self.tag = journey, tag
+        self.role = _TASK_ROLE[tag.split(".")[0]]
         self.browser = _Browser(journey.port, journey.driver)
         self.steps: list[str] = []
         self.ui_actions = 0
@@ -666,7 +681,7 @@ class _Task:
         self.values[name] = int(value)
 
     def open(self) -> None:
-        self.browser.open()
+        self.browser.open(f"/role/{self.role}")
         self.steps.append("open workspace page")
         self.screens.append("overview")
 

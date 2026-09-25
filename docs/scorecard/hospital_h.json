@@ -9,15 +9,10 @@
   },
   "journeys": {
     "analyst.correction_followthrough": {
-      "enabled_commands_at_end": [
-        "restore-test"
-      ],
+      "enabled_commands_at_end": [],
       "facts_found_on": {},
       "facts_unanswered": [],
       "requests": [
-        "GET / -> 200",
-        "GET /staff.css -> 200",
-        "GET /staff.js -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
         "GET /api/decision-package -> 200",
@@ -53,9 +48,6 @@
       },
       "facts_unanswered": [],
       "requests": [
-        "GET / -> 200",
-        "GET /staff.css -> 200",
-        "GET /staff.js -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200"
       ],
@@ -67,10 +59,7 @@
       ]
     },
     "approver.prepare_decision": {
-      "enabled_commands_at_end": [
-        "acknowledge",
-        "record-report"
-      ],
+      "enabled_commands_at_end": [],
       "facts_found_on": {
         "adjustment_rule": "decision_package",
         "amount_owed": "overview",
@@ -78,13 +67,10 @@
         "claim_status": "decision_package",
         "deadline": "overview",
         "offset_claimed": "decision_package",
-        "offset_support": "overview"
+        "offset_support": "decision_package"
       },
       "facts_unanswered": [],
       "requests": [
-        "GET / -> 200",
-        "GET /staff.css -> 200",
-        "GET /staff.js -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
         "GET /api/decision-package -> 200",
@@ -103,9 +89,7 @@
       ]
     },
     "auditor.answer_auditor": {
-      "enabled_commands_at_end": [
-        "restore-test"
-      ],
+      "enabled_commands_at_end": [],
       "facts_found_on": {
         "adjustment_rule": "decision_package",
         "cash_reconciles": "overview",
@@ -117,9 +101,6 @@
       },
       "facts_unanswered": [],
       "requests": [
-        "GET / -> 200",
-        "GET /staff.css -> 200",
-        "GET /staff.js -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
         "GET /api/decision-package -> 200"
@@ -145,10 +126,10 @@
       "h_first_cash_committed_utc": "2026-03-30 00:00",
       "h_resolved_committed_utc": "2026-04-01 00:00",
       "program_final": {
-        "open_count": 19,
+        "open_count": 0,
         "owed_cents": 100000000,
-        "received_cash_cents": 10000000,
-        "shortfall_cents": 90000000
+        "received_cash_cents": 100000000,
+        "shortfall_cents": 0
       }
     },
     "director.weekly_review": {
@@ -162,9 +143,6 @@
       },
       "facts_unanswered": [],
       "requests": [
-        "GET / -> 200",
-        "GET /staff.css -> 200",
-        "GET /staff.js -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200"
       ],
@@ -191,9 +169,6 @@
       },
       "facts_unanswered": [],
       "requests": [
-        "GET / -> 200",
-        "GET /staff.css -> 200",
-        "GET /staff.js -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
         "GET /api/decision-package -> 200",
@@ -229,7 +204,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 5
+        "value": 2
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -324,7 +299,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 20
+        "value": 0
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -343,7 +318,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 15
+        "value": 12
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -419,7 +394,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 6
+        "value": 3
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -514,7 +489,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 9
+        "value": 6
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -533,7 +508,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 5
+        "value": 2
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -609,7 +584,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 20
+        "value": 0
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -628,7 +603,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 6
+        "value": 3
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -723,7 +698,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 9
+        "value": 6
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -856,7 +831,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 19
+        "value": 0
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
