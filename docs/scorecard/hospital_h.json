@@ -1,0 +1,952 @@
+{
+  "claims": {
+    "activation": false,
+    "payment": false,
+    "phi": false,
+    "production_usable": false,
+    "proofSuiteId": null,
+    "synthetic": true
+  },
+  "journeys": {
+    "analyst.correction_followthrough": {
+      "enabled_commands_at_end": [
+        "restore-test"
+      ],
+      "facts_found_on": {},
+      "facts_unanswered": [],
+      "requests": [
+        "GET / -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /api/workspace -> 200",
+        "GET /api/correction-followup -> 200",
+        "GET /api/decision-package -> 200",
+        "POST /api/action/acknowledge -> 200",
+        "GET /api/correction-followup -> 200",
+        "GET /api/decision-package -> 200",
+        "POST /api/correction/record-cash -> 200",
+        "GET /api/correction-followup -> 200",
+        "GET /api/decision-package -> 200",
+        "POST /api/reporting/record -> 200",
+        "GET /api/correction-followup -> 200",
+        "GET /api/decision-package -> 200"
+      ],
+      "screens": [
+        "overview",
+        "decision_package"
+      ],
+      "steps": [
+        "open workspace page",
+        "click: open H decision package",
+        "click: acknowledge",
+        "click: record-cash",
+        "click: record-report"
+      ]
+    },
+    "analyst.monday_reconciliation": {
+      "enabled_commands_at_end": [],
+      "facts_found_on": {
+        "amount_gap": "overview",
+        "next_action": "overview",
+        "owner": "overview",
+        "status": "overview"
+      },
+      "facts_unanswered": [],
+      "requests": [
+        "GET / -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /api/workspace -> 200",
+        "GET /api/correction-followup -> 200"
+      ],
+      "screens": [
+        "overview"
+      ],
+      "steps": [
+        "open workspace page"
+      ]
+    },
+    "approver.prepare_decision": {
+      "enabled_commands_at_end": [
+        "acknowledge",
+        "record-report"
+      ],
+      "facts_found_on": {
+        "adjustment_rule": "decision_package",
+        "amount_owed": "overview",
+        "cash_received": "overview",
+        "claim_status": "decision_package",
+        "deadline": "overview",
+        "offset_claimed": "decision_package",
+        "offset_support": "overview"
+      },
+      "facts_unanswered": [],
+      "requests": [
+        "GET / -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /api/workspace -> 200",
+        "GET /api/correction-followup -> 200",
+        "GET /api/decision-package -> 200",
+        "POST /api/decision/reject-offset -> 200",
+        "GET /api/correction-followup -> 200",
+        "GET /api/decision-package -> 200"
+      ],
+      "screens": [
+        "overview",
+        "decision_package"
+      ],
+      "steps": [
+        "open workspace page",
+        "click: open H decision package",
+        "click: reject-offset"
+      ]
+    },
+    "auditor.answer_auditor": {
+      "enabled_commands_at_end": [
+        "restore-test"
+      ],
+      "facts_found_on": {
+        "adjustment_rule": "decision_package",
+        "cash_reconciles": "overview",
+        "chronology": "decision_package",
+        "decided_at": "decision_package",
+        "decided_by_role": "decision_package",
+        "decision": "decision_package",
+        "supporting_evidence": "decision_package"
+      },
+      "facts_unanswered": [],
+      "requests": [
+        "GET / -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /api/workspace -> 200",
+        "GET /api/correction-followup -> 200",
+        "GET /api/decision-package -> 200"
+      ],
+      "screens": [
+        "overview",
+        "decision_package"
+      ],
+      "steps": [
+        "open workspace page",
+        "click: open H decision package"
+      ]
+    },
+    "case": {
+      "clock_note": "Synthetic demo clock; the fixture sets these times, so UI changes cannot move them.",
+      "h_due_utc": "2026-03-31 00:00",
+      "h_final": {
+        "owed_cents": 10000000,
+        "received_cash_cents": 10000000,
+        "shortfall_cents": 0,
+        "timely": false
+      },
+      "h_first_cash_committed_utc": "2026-03-30 00:00",
+      "h_resolved_committed_utc": "2026-04-01 00:00",
+      "program_final": {
+        "open_count": 19,
+        "owed_cents": 100000000,
+        "received_cash_cents": 10000000,
+        "shortfall_cents": 90000000
+      }
+    },
+    "director.weekly_review": {
+      "enabled_commands_at_end": [],
+      "facts_found_on": {
+        "cash_recorded": "overview",
+        "open_items": "overview",
+        "population": "overview",
+        "program_shortfall": "overview",
+        "total_owed": "overview"
+      },
+      "facts_unanswered": [],
+      "requests": [
+        "GET / -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /api/workspace -> 200",
+        "GET /api/correction-followup -> 200"
+      ],
+      "screens": [
+        "overview"
+      ],
+      "steps": [
+        "open workspace page"
+      ]
+    },
+    "repeat_message": {
+      "http_status": 200,
+      "outcome": "DUPLICATE"
+    },
+    "replacement.continue_from_continuity": {
+      "enabled_commands_at_end": [],
+      "facts_found_on": {
+        "amount_gap": "overview",
+        "continuity_test_mode": "decision_package",
+        "next_action": "overview",
+        "owner": "overview",
+        "package_equal": "overview",
+        "status": "overview"
+      },
+      "facts_unanswered": [],
+      "requests": [
+        "GET / -> 200",
+        "GET /staff.css -> 200",
+        "GET /staff.js -> 200",
+        "GET /api/workspace -> 200",
+        "GET /api/correction-followup -> 200",
+        "GET /api/decision-package -> 200",
+        "POST /api/continuity/restore-test -> 200",
+        "GET /api/correction-followup -> 200",
+        "GET /api/decision-package -> 200"
+      ],
+      "screens": [
+        "overview",
+        "decision_package"
+      ],
+      "steps": [
+        "open workspace page",
+        "click: open H decision package",
+        "click: restore-test"
+      ]
+    }
+  },
+  "method": {
+    "comparison": "tests/test_right_rail_scorecard.py fails if any 'after' value is worse than this file in its direction",
+    "counting": "deterministic: server-side requests, clicks and screens per role task; synthetic clock; timers recorded, not run",
+    "path": "real loopback staff server over HTTP; real served staff.js under Node against the served index.html; Owner + Mirror + pinned Lean correction release",
+    "screens": [
+      "overview",
+      "decision_package",
+      "raw:package-json",
+      "raw:followup-json"
+    ]
+  },
+  "scenario": "Hospital H: $1,000,000 across 20 synthetic hospitals; H is owed $100,000, $97,000 arrives, Plan A claims an unsupported $3,000 offset; the approver rejects it, a $3,000 correction arrives, reporting follows, and a replacement operator restores the case in Continuity TEST.",
+  "schema": "RR/FINANCIAL/FELT-VALUE-SCORECARD/v1",
+  "units": [
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 5
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 6
+      },
+      "direction": "lower",
+      "id": "analyst.monday_reconciliation.requests_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "Monday: what is happening with H, who owns it, the gap, the next step",
+      "role": "state analyst",
+      "unit": "HTTP requests until every needed fact is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 2
+      },
+      "direction": "lower",
+      "id": "analyst.monday_reconciliation.ui_actions_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "Monday: what is happening with H, who owns it, the gap, the next step",
+      "role": "state analyst",
+      "unit": "clicks until every needed fact is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 1
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 3
+      },
+      "direction": "lower",
+      "id": "analyst.monday_reconciliation.screens_to_answer",
+      "manual_before": {
+        "evidence": "assumption (source: plan \u00a74: the analyst joins the approved schedule, the state payment record, Plan A's distribution file and the case correspondence by hand; one document each)",
+        "value": 4
+      },
+      "moment": "Monday: what is happening with H, who owns it, the gap, the next step",
+      "role": "state analyst",
+      "unit": "screens looked at"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 1
+      },
+      "direction": "lower",
+      "id": "analyst.monday_reconciliation.facts_only_in_raw_json",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "Monday: what is happening with H, who owns it, the gap, the next step",
+      "role": "state analyst",
+      "unit": "needed facts visible only in raw JSON"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 0
+      },
+      "direction": "lower",
+      "id": "analyst.monday_reconciliation.facts_unanswered",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "Monday: what is happening with H, who owns it, the gap, the next step",
+      "role": "state analyst",
+      "unit": "needed facts nowhere on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 20
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 20
+      },
+      "direction": "lower",
+      "id": "analyst.monday_reconciliation.rows_flagged_open",
+      "manual_before": {
+        "evidence": "assumption (source: plan \u00a74: 20 hospitals; with no shared status each row is checked by hand)",
+        "value": 20
+      },
+      "moment": "Monday: what is happening with H, who owns it, the gap, the next step",
+      "role": "state analyst",
+      "unit": "hospital rows shown as open"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 15
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 14
+      },
+      "direction": "lower",
+      "id": "analyst.correction_followthrough.requests",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "following the correction through: delivery ACK, $3,000 cash, report",
+      "role": "state analyst",
+      "unit": "HTTP requests for the whole task"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 4
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 6
+      },
+      "direction": "lower",
+      "id": "analyst.correction_followthrough.ui_actions",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "following the correction through: delivery ACK, $3,000 cash, report",
+      "role": "state analyst",
+      "unit": "clicks for the whole task"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 2
+      },
+      "direction": "lower",
+      "id": "analyst.correction_followthrough.forced_package_reopens",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "following the correction through: delivery ACK, $3,000 cash, report",
+      "role": "state analyst",
+      "unit": "times the package had to be reopened before the next button worked"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 0
+      },
+      "direction": "lower",
+      "id": "analyst.correction_followthrough.evidence_resubmissions",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "following the correction through: delivery ACK, $3,000 cash, report",
+      "role": "state analyst",
+      "unit": "evidence entered twice"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 6
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 6
+      },
+      "direction": "lower",
+      "id": "approver.prepare_decision.requests_to_prepare",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "deciding on the unsupported $3,000 offset",
+      "role": "finance approver",
+      "unit": "HTTP requests until every decision input is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 1
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 2
+      },
+      "direction": "lower",
+      "id": "approver.prepare_decision.ui_actions_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "deciding on the unsupported $3,000 offset",
+      "role": "finance approver",
+      "unit": "clicks until every needed fact is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 2
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 3
+      },
+      "direction": "lower",
+      "id": "approver.prepare_decision.screens_to_answer",
+      "manual_before": {
+        "evidence": "assumption (source: plan \u00a74: approved amount, payment evidence, Plan A's offset claim, the missing approval and the method rule; one document each)",
+        "value": 5
+      },
+      "moment": "deciding on the unsupported $3,000 offset",
+      "role": "finance approver",
+      "unit": "screens looked at"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 2
+      },
+      "direction": "lower",
+      "id": "approver.prepare_decision.facts_only_in_raw_json",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "deciding on the unsupported $3,000 offset",
+      "role": "finance approver",
+      "unit": "needed facts visible only in raw JSON"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 0
+      },
+      "direction": "lower",
+      "id": "approver.prepare_decision.facts_unanswered",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "deciding on the unsupported $3,000 offset",
+      "role": "finance approver",
+      "unit": "needed facts nowhere on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 9
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 8
+      },
+      "direction": "lower",
+      "id": "approver.prepare_decision.requests_including_decision",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "deciding on the unsupported $3,000 offset",
+      "role": "finance approver",
+      "unit": "HTTP requests from opening the page through the recorded decision"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 5
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 6
+      },
+      "direction": "lower",
+      "id": "director.weekly_review.requests_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "weekly program review: population, owed, cash, shortfall, open items",
+      "role": "director",
+      "unit": "HTTP requests until every needed fact is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 3
+      },
+      "direction": "lower",
+      "id": "director.weekly_review.ui_actions_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "weekly program review: population, owed, cash, shortfall, open items",
+      "role": "director",
+      "unit": "clicks until every needed fact is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 3
+      },
+      "direction": "lower",
+      "id": "director.weekly_review.facts_unanswered",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "weekly program review: population, owed, cash, shortfall, open items",
+      "role": "director",
+      "unit": "needed facts nowhere on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 20
+      },
+      "direction": "lower",
+      "id": "director.weekly_review.rows_to_add_by_hand",
+      "manual_before": {
+        "evidence": "assumption (source: plan \u00a74: $1M across 20 hospitals, summed by hand)",
+        "value": 20
+      },
+      "moment": "weekly program review: population, owed, cash, shortfall, open items",
+      "role": "director",
+      "unit": "rows to add up by hand for a missing total"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 20
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 20
+      },
+      "direction": "lower",
+      "id": "director.weekly_review.rows_flagged_open",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "weekly program review: population, owed, cash, shortfall, open items",
+      "role": "director",
+      "unit": "hospital rows shown as open"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 6
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 6
+      },
+      "direction": "lower",
+      "id": "auditor.answer_auditor.requests_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "who decided, when, on what evidence and rule",
+      "role": "auditor",
+      "unit": "HTTP requests until every needed fact is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 1
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 2
+      },
+      "direction": "lower",
+      "id": "auditor.answer_auditor.ui_actions_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "who decided, when, on what evidence and rule",
+      "role": "auditor",
+      "unit": "clicks until every needed fact is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 2
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 3
+      },
+      "direction": "lower",
+      "id": "auditor.answer_auditor.screens_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "who decided, when, on what evidence and rule",
+      "role": "auditor",
+      "unit": "screens looked at"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 2
+      },
+      "direction": "lower",
+      "id": "auditor.answer_auditor.facts_only_in_raw_json",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "who decided, when, on what evidence and rule",
+      "role": "auditor",
+      "unit": "needed facts visible only in raw JSON"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 0
+      },
+      "direction": "lower",
+      "id": "auditor.answer_auditor.facts_unanswered",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "who decided, when, on what evidence and rule",
+      "role": "auditor",
+      "unit": "needed facts nowhere on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 9
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 8
+      },
+      "direction": "lower",
+      "id": "replacement.continue_from_continuity.requests_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "taking over H from Continuity TEST",
+      "role": "replacement operator",
+      "unit": "HTTP requests until every needed fact is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 2
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 3
+      },
+      "direction": "lower",
+      "id": "replacement.continue_from_continuity.ui_actions_to_answer",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "taking over H from Continuity TEST",
+      "role": "replacement operator",
+      "unit": "clicks until every needed fact is on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 1
+      },
+      "direction": "lower",
+      "id": "replacement.continue_from_continuity.facts_only_in_raw_json",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "taking over H from Continuity TEST",
+      "role": "replacement operator",
+      "unit": "needed facts visible only in raw JSON"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 0
+      },
+      "direction": "lower",
+      "id": "replacement.continue_from_continuity.facts_unanswered",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "taking over H from Continuity TEST",
+      "role": "replacement operator",
+      "unit": "needed facts nowhere on screen"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 48
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 48
+      },
+      "direction": "lower",
+      "id": "case.h_unresolved_age_hours",
+      "manual_before": {
+        "evidence": "unknown (plan gives no manual resolution time; \u00a714 says to measure it beside the current process)",
+        "value": null
+      },
+      "moment": "H's $3,000 gap stays open",
+      "role": "state analyst, director",
+      "unit": "synthetic-clock hours from H's short payment to resolution"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 24
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 24
+      },
+      "direction": "lower",
+      "id": "case.h_hours_past_due_at_resolution",
+      "manual_before": {
+        "evidence": "unknown (plan \u00a72 cites NY Comptroller 2025-F-10: recoveries lost to passed deadlines; no per-case figure)",
+        "value": null
+      },
+      "moment": "H is paid late",
+      "role": "director, auditor",
+      "unit": "synthetic-clock hours past H's due date at resolution (stays on record)"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 19
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 19
+      },
+      "direction": "lower",
+      "id": "program.unresolved_items_at_end",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "end of the journey",
+      "role": "director",
+      "unit": "hospitals still unresolved"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 19
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 19
+      },
+      "direction": "lower",
+      "id": "program.open_amount_items_at_end",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "end of the journey",
+      "role": "director",
+      "unit": "hospitals still short of their amount"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 0
+      },
+      "direction": "lower",
+      "id": "accuracy.correction_error_cents",
+      "manual_before": {
+        "evidence": "unknown (plan \u00a72 cites audit populations, e.g. NY 2021-S-24; no per-correction error rate)",
+        "value": null
+      },
+      "moment": "after the correction",
+      "role": "finance approver, auditor",
+      "unit": "cents by which H's correction misses its $100,000"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 0
+      },
+      "direction": "lower",
+      "id": "accuracy.reconciliation_error_cents",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "after the correction",
+      "role": "director, auditor",
+      "unit": "cents by which the 20 rows miss the program totals"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 0
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 0
+      },
+      "direction": "lower",
+      "id": "accuracy.repeat_message_double_count_cents",
+      "manual_before": {
+        "evidence": "unknown (plan \u00a74 names the double-count risk; no rate given)",
+        "value": null
+      },
+      "moment": "the $3,000 payment message arrives twice",
+      "role": "state analyst, auditor",
+      "unit": "cents counted twice"
+    },
+    {
+      "after": {
+        "evidence": "measured (this harness)",
+        "value": 1
+      },
+      "demo_baseline": {
+        "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
+        "value": 1
+      },
+      "direction": "higher",
+      "id": "evidence.repeat_message_absorbed",
+      "manual_before": {
+        "evidence": "unknown (no manual figure in the plan)",
+        "value": null
+      },
+      "moment": "the $3,000 payment message arrives twice",
+      "role": "state analyst",
+      "unit": "1 if the repeat was absorbed (higher is better)"
+    }
+  ]
+}
