@@ -584,8 +584,6 @@ def _validate_source(
     expected = (view.source_kinds[role_index], view.authority_ids[role_index], view.provenance_ids[role_index])
     if (source_kind, item["coverage_authority_id"], provenance["provenance_id"]) != expected:
         raise ProviderTrustGraphError("source:authority-or-provenance")
-    if source_kind != view.source_kinds[role_index]:
-        raise ProviderTrustGraphError("source:kind-id-mismatch")
     if _text(item["coverage_scope"], "source:scope") != view.scope:
         raise ProviderTrustGraphError("source:scope")
     coverage_observation = _int(item["coverage_observation_time"], "source:coverage-observation")

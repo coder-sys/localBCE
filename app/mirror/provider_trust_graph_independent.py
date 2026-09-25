@@ -61,7 +61,6 @@ FINDING_KINDS = (
     FINDING_CONFLICT,
     FINDING_STALE,
 )
-MAX_INPUT_BYTES = 262_144
 MAX_ARTIFACT_BYTES = 262_144
 MAX_SOURCES = 2
 MAX_RECORDS_PER_SOURCE = 8
@@ -122,7 +121,6 @@ OUTPUT_KEYS = {
 PROFILE_KEYS = {"profile_id", "version", "profile_digest"}
 V2_OUTPUT_KEYS = OUTPUT_KEYS | {"profile"}
 V2_IDENTITY_KEYS = IDENTITY_KEYS | PROFILE_KEYS
-INPUT_SCHEMA_V2 = "mirror-provider-trust-graph-input-v2"
 _RE_HEX = re.compile(r"^[0-9a-f]{128}$")
 _RE_RECORD = re.compile(r"^SYNTH_(CREDENTIAL|ENROLLMENT)_RECORD_00[1-8]$")
 
@@ -165,8 +163,6 @@ class _VerifiedGraphArtifactV2:
     value: dict[str, object]
     profile: _GraphProfile
     summary: dict[str, object]
-    raw_digest: str
-    raw_length: int
 
 
 def _profile_material(profile: object) -> dict[str, object]:
@@ -379,10 +375,6 @@ def _digest(label: str, value: object, *, profile: _GraphProfile | None = None) 
     return h.hexdigest()
 
 
-def _raw_digest(raw: bytes) -> str:
-    return hashlib.sha3_512(raw).hexdigest()
-
-
 def _expect_keys(value: object, expected: set[str], label: str) -> dict[str, object]:
     if not isinstance(value, dict) or set(value) != expected:
         raise IndependentProviderTrustGraphError(f"{label}:schema")
@@ -523,10 +515,9 @@ def _validate_source(
     observation_time: int,
     *,
     profile: _GraphProfile | None = None,
-    output: bool = True,
 ) -> dict[str, object]:
     view = _profile_view(profile)
-    source = _expect_keys(value, SOURCE_OUTPUT_KEYS if output else SOURCE_INPUT_KEYS, "source")
+    source = _expect_keys(value, SOURCE_OUTPUT_KEYS, "source")
     source_id = _text(source["source_id"], "source:id")
     source_kind = _text(source["source_kind"], "source:kind")
     if source_id not in view.source_roles or source_kind not in view.source_kinds:
@@ -536,8 +527,6 @@ def _validate_source(
     provenance = _expect_keys(source["provenance"], PROVENANCE_KEYS, "source:provenance")
     if (source_kind, source["coverage_authority_id"], provenance["provenance_id"]) != expected:
         raise IndependentProviderTrustGraphError("source:authority-or-provenance")
-    if source_kind != view.source_kinds[role_index]:
-        raise IndependentProviderTrustGraphError("source:kind-id-mismatch")
     if _text(source["coverage_scope"], "source:scope") != view.scope:
         raise IndependentProviderTrustGraphError("source:scope")
     if _int(source["coverage_observation_time"], "source:coverage-observation") != observation_time:
@@ -564,8 +553,7 @@ def _validate_source(
         raise IndependentProviderTrustGraphError("source:record-order-or-duplicate")
     _text(provenance["provenance_id"], "source:provenance-id")
     _hex(provenance["integrity_digest"], "source:integrity")
-    if output:
-        _hex(source["source_root"], "source:root")
+    _hex(source["source_root"], "source:root")
     return source
 
 
@@ -582,12 +570,11 @@ def _validate_sources(
     observation_time: int,
     *,
     profile: _GraphProfile | None = None,
-    output: bool = True,
 ) -> list[dict[str, object]]:
     view = _profile_view(profile)
     if not isinstance(sources, list) or len(sources) != len(view.source_roles):
         raise IndependentProviderTrustGraphError("sources:exact-count")
-    items = [_validate_source(source, observation_time, profile=view, output=output) for source in sources]
+    items = [_validate_source(source, observation_time, profile=view) for source in sources]
     ids = [source["source_id"] for source in items]
     if ids != list(view.source_roles) or ids != sorted(ids):
         raise IndependentProviderTrustGraphError("sources:identity-or-order")
@@ -598,15 +585,10 @@ def _validate_sources(
     for source in items:
         if source["provenance"]["integrity_digest"] != _integrity_digest(source, profile=view):  # type: ignore[index]
             raise IndependentProviderTrustGraphError("source:integrity-mismatch")
-        if output:
-            without_root = {key: value for key, value in source.items() if key != "source_root"}
-            if source["source_root"] != _source_root(without_root, profile=view):
-                raise IndependentProviderTrustGraphError("source:root-mismatch")
+        without_root = {key: value for key, value in source.items() if key != "source_root"}
+        if source["source_root"] != _source_root(without_root, profile=view):
+            raise IndependentProviderTrustGraphError("source:root-mismatch")
     return items
-
-
-def _findings_root(findings: Sequence[Mapping[str, object]], *, profile: _GraphProfile | None = None) -> str:
-    return _digest("findings-root", {"findings": list(findings)}, profile=profile)
 
 
 def verify_file(path: str | Path) -> dict[str, object]:
@@ -654,8 +636,6 @@ def verify_file(path: str | Path) -> dict[str, object]:
     return verify_bytes(raw)
 
 
-_NEW_INPUT_KEYS_V1 = {"schema", "provider_graph_subject", "scope", "observation_time", "sources"}
-_NEW_INPUT_KEYS_V2 = {"schema", "profile_id", "profile_version", "profile_digest", "provider_graph_subject", "scope", "observation_time", "sources"}
 _NEW_OUTPUT_KEYS_V1 = {"schema", "subject", "observation_snapshot", "source_coverage", "findings", "discrepancies", "report", "authority"}
 _NEW_OUTPUT_KEYS_V2 = _NEW_OUTPUT_KEYS_V1 | {"profile"}
 _NEW_IDENTITY_KEYS_V1 = {"provider_graph_subject", "scope", "observation_time", "snapshot_id", "snapshot_root", "source_coverage_root", "findings_root", "discrepancies_root"}
@@ -701,24 +681,6 @@ def _new_evaluate(sources: Sequence[Mapping[str, object]], observation_time: int
     return [_new_finding(FINDING_CONTINUITY, snapshot_id, refs, profile=profile)], []
 
 
-def _new_validate_input(value: object, *, profile: _GraphProfile) -> dict[str, object]:
-    expected = _NEW_INPUT_KEYS_V2 if profile.v2 else _NEW_INPUT_KEYS_V1
-    item = _expect_keys(value, expected, "input")
-    if item["schema"] != INPUT_SCHEMA_V2:
-        raise IndependentProviderTrustGraphError("input:schema")
-    if item["provider_graph_subject"] != profile.subject:
-        raise IndependentProviderTrustGraphError("input:subject")
-    if item["scope"] != profile.scope:
-        raise IndependentProviderTrustGraphError("input:scope")
-    if profile.v2 and (item["profile_id"], item["profile_version"], item["profile_digest"]) != (profile.profile_id, profile.version, profile.profile_digest):
-        raise IndependentProviderTrustGraphError("input:profile")
-    observation = _int(item["observation_time"], "input:observation-time", minimum=1)
-    if profile.v2 and not profile.observation_start <= observation < profile.observation_end:  # type: ignore[operator]
-        raise IndependentProviderTrustGraphError("input:observation-window")
-    _validate_sources(item["sources"], observation, profile=profile, output=False)
-    return item
-
-
 def _new_validate_artifact(value: object, *, profile: _GraphProfile) -> dict[str, object]:
     expected = _NEW_OUTPUT_KEYS_V2 if profile.v2 else _NEW_OUTPUT_KEYS_V1
     item = _expect_keys(value, expected, "artifact")
@@ -735,7 +697,7 @@ def _new_validate_artifact(value: object, *, profile: _GraphProfile) -> dict[str
     observation = _int(snapshot["observation_time"], "snapshot:time", minimum=1)
     if profile.v2 and not profile.observation_start <= observation < profile.observation_end:  # type: ignore[operator]
         raise IndependentProviderTrustGraphError("snapshot:observation-window")
-    sources = _validate_sources(item["source_coverage"], observation, profile=profile, output=True)
+    sources = _validate_sources(item["source_coverage"], observation, profile=profile)
     expected_snapshot_root = _digest("snapshot-root", {"provider_graph_subject": profile.subject, "scope": profile.scope, "observation_time": observation, "source_roots": [source["source_root"] for source in sources]}, profile=profile)
     if snapshot_root != expected_snapshot_root or snapshot_id != _digest("snapshot-id", {"snapshot_root": snapshot_root, "observation_time": observation}, profile=profile):
         raise IndependentProviderTrustGraphError("snapshot:binding")
@@ -806,30 +768,7 @@ def _new_graph_checked(raw: bytes, registry: Mapping[str, object]) -> _VerifiedG
         raise IndependentProviderTrustGraphError("profile:artifact-not-authority")
     item = _new_validate_artifact(artifact, profile=view)
     summary = {"report_id": item["report"]["report_id"], "finding_kinds": [finding["kind"] for finding in item["findings"]], "artifact_bytes": len(raw), "profile_id": view.profile_id, "profile_version": view.version, "profile_digest": view.profile_digest, "accepted": True}
-    return _VerifiedGraphArtifactV2(value=item, profile=view, summary=summary, raw_digest=_raw_digest(raw), raw_length=len(raw))
-
-
-def _new_input_value(raw: bytes, profile: _GraphProfile) -> dict[str, object]:
-    if type(raw) is not bytes or not raw or len(raw) > MAX_INPUT_BYTES:
-        raise IndependentProviderTrustGraphError("input:byte-cap")
-    return _new_validate_input(_parse(raw), profile=profile)
-
-
-def _new_bind_input(graph_input_raw: bytes, artifact_raw: bytes, *, verified: _VerifiedGraphArtifactV2) -> dict[str, object]:
-    if type(artifact_raw) is not bytes or not artifact_raw or len(artifact_raw) > MAX_ARTIFACT_BYTES or verified.raw_length != len(artifact_raw) or verified.raw_digest != _raw_digest(artifact_raw):
-        raise IndependentProviderTrustGraphError("artifact:verification-binding")
-    input_value = _new_input_value(graph_input_raw, verified.profile)
-    artifact = verified.value
-    subject = artifact["subject"]
-    if subject != {"provider_graph_subject": input_value["provider_graph_subject"], "scope": input_value["scope"]}:
-        raise IndependentProviderTrustGraphError("input:artifact-subject")
-    snapshot = artifact["observation_snapshot"]
-    if snapshot["observation_time"] != input_value["observation_time"]:
-        raise IndependentProviderTrustGraphError("input:artifact-time")
-    projected = [{key: value for key, value in source.items() if key != "source_root"} for source in artifact["source_coverage"]]
-    if projected != input_value["sources"]:
-        raise IndependentProviderTrustGraphError("input:artifact-sources")
-    return dict(verified.summary)
+    return _VerifiedGraphArtifactV2(value=item, profile=view, summary=summary)
 
 
 def verify_bytes(raw: bytes) -> dict[str, object]:
@@ -845,10 +784,6 @@ def verify_artifact_v2(raw: bytes, profile_registry: Mapping[str, object]) -> _V
 
 def verify_bytes_v2(raw: bytes, profile_registry: Mapping[str, object]) -> dict[str, object]:
     return dict(_new_graph_checked(raw, profile_registry).summary)
-
-
-def verify_input_binding_v2(graph_input_raw: bytes, artifact_raw: bytes, profile_registry: Mapping[str, object]) -> dict[str, object]:
-    return _new_bind_input(graph_input_raw, artifact_raw, verified=_new_graph_checked(artifact_raw, profile_registry))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

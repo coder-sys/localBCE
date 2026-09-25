@@ -75,14 +75,6 @@ class SyntheticFhirTransport:
         return response
 
 
-class LiveFhirTransport:
-    """Live-shaped port blocked before network I/O."""
-
-    def fetch(self, request_url: str, *, timeout_seconds: int, attempt: int) -> FhirTransportResponse:
-        del request_url, timeout_seconds, attempt
-        raise FhirTransportError("live-transport-disabled")
-
-
 def canonical_json(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
@@ -331,7 +323,7 @@ def fixture_response(bundle: Mapping[str, object], request_url: str, *, status: 
 
 __all__ = [
     "ENVELOPE_SCHEMA", "ENVELOPE_SCHEMA_VERSION", "FAILURE_CODES", "FhirTransport", "FhirTransportError",
-    "FhirTransportResponse", "LiveFhirTransport", "NcMedicaidFhirError", "SOURCE_STATUSES",
+    "FhirTransportResponse", "NcMedicaidFhirError", "SOURCE_STATUSES",
     "SyntheticFhirTransport", "build_fixture_envelope", "canonical_json", "fixture_response",
     "_digest", "_raw_digest", "_request_identity",
 ]
