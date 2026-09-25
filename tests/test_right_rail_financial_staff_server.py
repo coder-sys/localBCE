@@ -743,6 +743,60 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(str(stale_snapshot.exception), "obligation_revision_conflict")
         self.assertEqual(owner.export_continuity(), after_unrelated_change)
 
+    def test_staff_mutations_require_revision_and_never_take_an_actor_from_the_request(self) -> None:
+        workflow = self._workflow()
+        self.addCleanup(workflow.close)
+        bodies = {
+            workflow.reject_offset_and_authorize_correction: self._review_body(workflow),
+            workflow.acknowledge_correction_action: self._revision_body(workflow),
+            workflow.record_cash_correction: self._cash_body(workflow),
+            workflow.record_reporting_evidence: self._revision_body(workflow),
+        }
+        position = workflow._owner_position()
+        for handler, body in bodies.items():
+            missing = {key: value for key, value in body.items() if key != "revision"}
+            with self.assertRaisesRegex(ValueError, r"\Arequest_shape\Z", msg=handler.__name__):
+                handler(missing)
+            for field in ("actor_id", "actor_role"):
+                with self.assertRaisesRegex(ValueError, r"\Arequest_shape\Z", msg=handler.__name__):
+                    handler({**body, field: "synthetic-official"})
+        self.assertEqual(workflow._owner_position(), position)
+
+        # Every staff command handler passes its actor and the reviewed revision
+        # to the Mirror explicitly; none relies on a library default.
+        import ast
+        import inspect
+        from app import right_rail_financial_staff_server as staff_server
+
+        tree = ast.parse(inspect.getsource(staff_server.StaffWorkflow))
+        actor_commands = {"reject_offset_and_authorize_correction", "acknowledge_action", "record_reporting_evidence"}
+        handlers = {
+            "_gate_attempt",
+            "reject_offset_and_authorize_correction",
+            "acknowledge_correction_action",
+            "record_cash_correction",
+            "record_reporting_evidence",
+        }
+        seen = set()
+        for function in ast.walk(tree):
+            if not isinstance(function, ast.FunctionDef) or function.name not in handlers:
+                continue
+            for call in ast.walk(function):
+                if not (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Attribute)
+                    and call.func.value.attr == "_mirror"
+                    and call.func.attr in actor_commands | {"record_payment_evidence"}
+                ):
+                    continue
+                keywords = {keyword.arg for keyword in call.keywords}
+                self.assertIn("expected_revision", keywords, function.name)
+                if call.func.attr in actor_commands:
+                    self.assertTrue({"actor_id", "actor_role"} <= keywords, function.name)
+                seen.add(function.name)
+        self.assertEqual(seen, handlers)
+
     def test_staff_binding_v2_withholds_input_snapshot_and_refuses_the_v1_shape(self) -> None:
         workflow = self._workflow()
         self.addCleanup(workflow.close)
