@@ -279,16 +279,12 @@ class TrustedAuthorityContext:
             source=source,
         )
 
-    def has_role(self, actor_id: str, actor_role: str) -> bool:
-        return any(actor.actor_id == actor_id and actor_role in actor.roles for actor in self.actors)
-
     @property
     def actor_roles(self) -> list[dict[str, Any]]:
         return [
             {"actor_id": actor.actor_id, "roles": list(actor.roles)}
             for actor in self.actors
         ]
-
 
     @property
     def authority(self) -> owner.SyntheticTrustedAuthority:
@@ -336,21 +332,6 @@ class LockedSemanticSnapshot:
         object.__setattr__(self, "pre_evaluation_revision", pre_evaluation_revision)
         object.__setattr__(self, "evaluation_time_ms", evaluation_time_ms)
         object.__setattr__(self, "_validation_token", _SNAPSHOT_VALIDATION_TOKEN)
-        if type(self.canonical_bytes) is not bytes or not self.canonical_bytes:
-            _fail(SemanticAdapterCodecError, "snapshot_bytes")
-        if len(self.canonical_bytes) > MAX_SNAPSHOT_BYTES:
-            _fail(SemanticAdapterCodecError, "snapshot_size")
-        _blob(self.snapshot_digest, "snapshot_digest")
-        _id(self.obligation_id, "snapshot_obligation")
-        if type(self.pre_evaluation_revision) is not int or not 0 <= self.pre_evaluation_revision <= owner._MAX_ROWS:
-            _fail(SemanticAdapterCodecError, "snapshot_revision")
-        _time(self.evaluation_time_ms, "snapshot_time")
-        body, digest, obligation_id, revision, evaluation_time = _decode_snapshot_body(self.canonical_bytes)
-        del body
-        if digest != self.snapshot_digest:
-            _fail(SemanticAdapterCodecError, "snapshot_digest")
-        if obligation_id != self.obligation_id or revision != self.pre_evaluation_revision or evaluation_time != self.evaluation_time_ms:
-            _fail(SemanticAdapterCodecError, "snapshot_binding")
 
     @property
     def data(self) -> dict[str, Any]:
@@ -363,78 +344,6 @@ def _require_validated_snapshot(snapshot: object, label: str = "snapshot_type") 
     if snapshot._validation_token is not _SNAPSHOT_VALIDATION_TOKEN:
         _fail(SemanticAdapterAuthorityError, "snapshot_unverified")
     return snapshot
-
-
-def _decode_canonical_object(payload: bytes, *, max_bytes: int, error_type: type[SemanticAdapterError], prefix: str) -> dict[str, Any]:
-    if type(payload) is not bytes or not payload or len(payload) > max_bytes:
-        _fail(error_type, f"{prefix}_size")
-    try:
-        text = payload.decode("ascii")
-        value = json.loads(text)
-    except (RecursionError, UnicodeDecodeError, json.JSONDecodeError):
-        _fail(error_type, f"{prefix}_json")
-    if type(value) is not dict:
-        _fail(error_type, f"{prefix}_shape")
-    try:
-        _validate_json_tree(value)
-        if _canonical(value) != payload:
-            _fail(error_type, f"{prefix}_canonical")
-    except SemanticAdapterError:
-        raise
-    except (RecursionError, UnicodeEncodeError, TypeError, ValueError, OverflowError):
-        _fail(error_type, f"{prefix}_canonical")
-    return value
-
-
-def _decode_snapshot_body(payload: bytes) -> tuple[dict[str, Any], bytes, str, int, int]:
-    body = _decode_canonical_object(
-        payload,
-        max_bytes=MAX_SNAPSHOT_BYTES,
-        error_type=SemanticAdapterCodecError,
-        prefix="snapshot",
-    )
-    required = {
-        "schema",
-        "version",
-        "scope",
-        "owner",
-        "authority",
-        "evaluation_time_ms",
-        "pre_evaluation",
-        "population",
-        "population_item",
-        "control_pack",
-        "obligation",
-        "evidence",
-        "payments",
-        "claims",
-        "determinations",
-        "cases",
-        "actions",
-        "action_outbox",
-        "conflicts",
-        "evaluations",
-        "current_evaluation",
-        "snapshot_digest",
-    }
-    if set(body) != required or body["schema"] != SEMANTIC_INPUT_SCHEMA or body["version"] != SEMANTIC_INPUT_VERSION:
-        _fail(SemanticAdapterCodecError, "snapshot_contract")
-    snapshot_digest = _digest(body["snapshot_digest"], "snapshot_digest")
-    unsigned = dict(body)
-    del unsigned["snapshot_digest"]
-    expected = owner._digest(_SNAPSHOT_DOMAIN, _canonical(unsigned))
-    if snapshot_digest != expected or body["snapshot_digest"] != _hex(expected):
-        _fail(SemanticAdapterCodecError, "snapshot_digest")
-    pre = body["pre_evaluation"]
-    if type(pre) is not dict or set(pre) != {"obligation_id", "item_id", "revision"}:
-        _fail(SemanticAdapterCodecError, "snapshot_pre_evaluation")
-    obligation_id = _id(pre["obligation_id"], "snapshot_obligation")
-    if type(pre["revision"]) is not int or not 0 <= pre["revision"] <= owner._MAX_ROWS:
-        _fail(SemanticAdapterCodecError, "snapshot_revision")
-    evaluation_time = _time(body["evaluation_time_ms"], "snapshot_time")
-    if type(pre["item_id"]) is not str:
-        _fail(SemanticAdapterCodecError, "snapshot_item")
-    return body, snapshot_digest, obligation_id, pre["revision"], evaluation_time
 
 
 BLFIN02_MAGIC: Final[bytes] = b"BLFIN02"
@@ -833,11 +742,8 @@ def _write_determinations(writer: _WireWriter, determinations: object) -> None:
         writer.digest(_wire_hex_digest(determination["authority_digest"], f"{label}_authority_digest"), f"{label}_authority_digest")
         _write_tag(writer, _DECISION_TAGS, determination["decision"], f"{label}_decision")
         writer.nat(determination["amount_cents"], f"{label}_amount")
-        bindings = determination["supporting_evidence"]
-        if type(bindings) is not list:
-            _fail(SemanticAdapterCodecError, f"{label}_supporting_evidence")
         writer.list(
-            bindings,
+            determination["supporting_evidence"],
             f"{label}_supporting_evidence",
             lambda binding, binding_label: writer.identifier(
                 _wire_mapping(binding, binding_label, {"evidence_id", "record_digest"})["evidence_id"],
@@ -885,7 +791,6 @@ def _write_conflicts(writer: _WireWriter, conflicts: object) -> None:
         writer.nat(conflict["candidate_amount_cents"], f"{label}_candidate_amount")
         writer.string(conflict["reason"], f"{label}_reason")
         writer.nat(conflict["visible_at_ms"], f"{label}_visible_at")
-
 
     writer.list(conflicts, "conflicts", encode_conflict)
 
@@ -1991,17 +1896,28 @@ def _load_determinations(
 
 
 def _make_snapshot(body: dict[str, Any]) -> LockedSemanticSnapshot:
-    unsigned = dict(body)
-    unsigned_bytes = _canonical(unsigned)
+    """The only snapshot constructor: the Owner loader and the Engine's rebound
+    bodies both come through here, so the bounds are checked once, here."""
+
+    unsigned_bytes = _canonical(body)
+    _validate_json_tree(json.loads(unsigned_bytes))
+    pre = body["pre_evaluation"]
+    obligation_id = _id(pre["obligation_id"], "snapshot_obligation")
+    revision = pre["revision"]
+    if type(revision) is not int or not 0 <= revision <= owner._MAX_ROWS:
+        _fail(SemanticAdapterCodecError, "snapshot_revision")
+    evaluation_time = _time(body["evaluation_time_ms"], "snapshot_time")
     digest = owner._digest(_SNAPSHOT_DOMAIN, unsigned_bytes)
     body["snapshot_digest"] = _hex(digest)
     encoded = _canonical(body)
+    if len(encoded) > MAX_SNAPSHOT_BYTES:
+        _fail(SemanticAdapterCodecError, "snapshot_size")
     return LockedSemanticSnapshot(
         encoded,
         digest,
-        str(body["pre_evaluation"]["obligation_id"]),
-        int(body["pre_evaluation"]["revision"]),
-        int(body["evaluation_time_ms"]),
+        obligation_id,
+        revision,
+        evaluation_time,
         _validation_token=_SNAPSHOT_VALIDATION_TOKEN,
     )
 
