@@ -3350,124 +3350,9 @@ def _verify_evaluations(
     packs: dict[str, sqlite3.Row],
     evidence: dict[str, sqlite3.Row],
 ) -> dict[str, list[sqlite3.Row]]:
-    rows = _bounded_rows(connection, "evaluations")
     by_obligation: dict[str, list[sqlite3.Row]] = {}
-    for row in rows:
-        evaluation_id = _id(row["evaluation_id"], "evaluation:id")
-        obligation_id = _id(row["obligation_id"], "evaluation:obligation")
-        obligation = obligations[obligation_id]
-        revision = _integer(row["revision"], "evaluation:revision")
-        if evaluation_id != f"evaluation:{obligation_id}:r{revision}":
-            _fail("evaluation:id-binding")
-        if row["rule_version"] != obligation["rule_version"]:
-            _fail("evaluation:rule")
-        population = populations.get(str(obligation["population_id"]))
-        if population is None:
-            _fail("evaluation:population")
-        pack = packs.get(str(population["pack_id"]))
-        if pack is None or row["control_pack_id"] != pack["pack_id"] or row["control_pack_version"] != pack["version"] or _blob64(row["control_pack_digest"], "evaluation:pack-digest") != bytes(pack["pack_digest"]):
-            _fail("evaluation:control-pack")
-        if row["contract_version"] != EVALUATION_RECEIPT_CONTRACT:
-            _fail("evaluation:contract")
-        scope = _parse_json(row["scope_json"], "evaluation:scope")
-        if not isinstance(scope, dict) or scope != meta["scope"]:
-            _fail("evaluation:scope")
-        evidence_ids = _evidence_ids_json(row["evidence_ids_json"], "evaluation:evidence")
-        for evidence_id in evidence_ids:
-            if evidence_id not in evidence or evidence[evidence_id]["item_id"] != obligation["item_id"]:
-                _fail("evaluation:evidence-binding")
-        evidence_bindings = _evaluation_bindings_json(row["evidence_bindings_json"], "evaluation:evidence-bindings")
-        if [binding["evidence_id"] for binding in evidence_bindings] != evidence_ids:
-            _fail("evaluation:evidence-bindings")
-        for binding in evidence_bindings:
-            if binding["record_digest"] != bytes(evidence[binding["evidence_id"]]["record_digest"]).hex().upper():
-                _fail("evaluation:evidence-bindings")
-        authority_id = _id(row["authority_id"], "evaluation:authority-id")
-        authority_epoch = _integer(row["authority_epoch"], "evaluation:authority-epoch", minimum=1, maximum=MAX_CENTS)
-        authority_digest = _blob64(row["authority_digest"], "evaluation:authority-digest")
-        if (authority_id, authority_epoch, authority_digest) != (meta["authority_id"], meta["authority_epoch"], meta["authority_digest"]):
-            _fail("evaluation:authority")
-        evaluated_at_ms = _time(row["evaluated_at_ms"], "evaluation:time")
-        snapshot = _evaluation_input_snapshot(row["input_snapshot_json"], "evaluation:input")
-        input_snapshot_digest = _blob64(row["input_snapshot_digest"], "evaluation:input-digest")
-        if input_snapshot_digest != _digest(EVALUATION_INPUT_DOMAIN, _canonical(snapshot, "evaluation:input-digest-input")):
-            _fail("evaluation:input-digest")
-        snapshot_obligation = snapshot["obligation"]
-        assert isinstance(snapshot_obligation, dict)
-        expected_pre_revision = revision if revision == 0 else revision - 1
-        if snapshot["pre_revision"] != expected_pre_revision or snapshot_obligation["obligation_id"] != obligation_id or snapshot_obligation["item_id"] != obligation["item_id"] or snapshot_obligation["rule_version"] != obligation["rule_version"] or snapshot_obligation["owed_cents"] != obligation["owed_cents"] or snapshot_obligation["due_at_ms"] != obligation["due_at_ms"]:
-            _fail("evaluation:input-binding")
-        snapshot_evidence = snapshot["evidence"]
-        assert isinstance(snapshot_evidence, list)
-        if [str(item["evidence_id"]) for item in snapshot_evidence] != evidence_ids:
-            _fail("evaluation:input-evidence")
-        for item in snapshot_evidence:
-            evidence_row = evidence.get(str(item["evidence_id"]))
-            if evidence_row is None or evidence_row["item_id"] != obligation["item_id"] or str(item["record_digest"]) != bytes(evidence_row["record_digest"]).hex().upper() or int(item["event_at_ms"]) != int(evidence_row["event_at_ms"]) or int(item["received_at_ms"]) != int(evidence_row["received_at_ms"]):
-                _fail("evaluation:input-evidence")
-            if int(item["received_at_ms"]) > evaluated_at_ms:
-                _fail("evaluation:evidence-chronology")
-        for item in snapshot["payments"]:
-            payment = connection.execute("SELECT obligation_id,amount_cents,event_at_ms FROM payments WHERE payment_id=?", (item["payment_id"],)).fetchone()
-            if payment is None or payment["obligation_id"] != obligation_id or int(payment["amount_cents"]) != int(item["amount_cents"]) or int(payment["event_at_ms"]) != int(item["event_at_ms"]):
-                _fail("evaluation:input-payment")
-        for item in snapshot["claims"]:
-            claim = connection.execute("SELECT obligation_id,amount_cents FROM claimed_adjustments WHERE claim_id=?", (item["claim_id"],)).fetchone()
-            if claim is None or claim["obligation_id"] != obligation_id or int(claim["amount_cents"]) != int(item["amount_cents"]):
-                _fail("evaluation:input-claim")
-        for item in snapshot["determinations"]:
-            determination = connection.execute("SELECT obligation_id,decision,amount_cents,decided_at_ms FROM determinations WHERE determination_id=?", (item["determination_id"],)).fetchone()
-            if determination is None or determination["obligation_id"] != obligation_id or determination["decision"] != item["decision"] or int(determination["amount_cents"]) != int(item["amount_cents"]) or int(determination["decided_at_ms"]) != int(item["decided_at_ms"]):
-                _fail("evaluation:input-determination")
-        for item in snapshot["cases"]:
-            case = connection.execute("SELECT obligation_id FROM cases WHERE case_id=?", (item["case_id"],)).fetchone()
-            if case is None or case["obligation_id"] != obligation_id:
-                _fail("evaluation:input-case")
-        snapshot_action_revisions: dict[str, int] = {}
-        for item in snapshot["actions"]:
-            action = connection.execute("SELECT obligation_id,created_at_ms,revision FROM actions WHERE action_id=?", (item["action_id"],)).fetchone()
-            if action is None or action["obligation_id"] != obligation_id or int(action["created_at_ms"]) != int(item["created_at_ms"]):
-                _fail("evaluation:input-action")
-            snapshot_action_revisions[str(item["action_id"])] = _integer(
-                action["revision"], "evaluation:input-action-revision"
-            )
-        for conflict_id in snapshot["conflicts"]:
-            conflict = connection.execute("SELECT obligation_id FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone()
-            if conflict is None or conflict["obligation_id"] != obligation_id:
-                _fail("evaluation:input-conflict")
-        input_projection = _evaluation_projection_from_input(
-            snapshot,
-            evaluation=row,
-            action_revisions=snapshot_action_revisions,
-        )
-        if evidence_ids != input_projection["evidence_ids"]:
-            _fail("evaluation:input-projection:evidence_ids")
-        for key in ("revision", "rule_version", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
-            if row[key] != input_projection[key]:
-                _fail(f"evaluation:input-projection:{key}")
-        for key in ("owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents"):
-            _cents(row[key], f"evaluation:{key}")
-        for key in ("cash_satisfied", "amount_satisfied", "timely", "reporting_complete"):
-            _flag(row[key], f"evaluation:{key}")
-        if row["verification_status"] not in _EVALUATION_VERIFICATION or row["case_status"] not in _CASE_STATUSES or row["delivery_status"] not in _DELIVERY_STATUSES:
-            _fail("evaluation:status")
-        expected_digest = _digest(EVALUATION_RESULT_DOMAIN, _canonical(_evaluation_result(row, evidence_ids), "evaluation:digest-input"))
-        if _blob64(row["result_digest"], "evaluation:digest") != expected_digest:
-            _fail("evaluation:digest")
-        receipt_body = _evaluation_receipt_body(
-            row=row,
-            evidence_ids=evidence_ids,
-            evidence_bindings=evidence_bindings,
-            scope=scope,
-            control_pack_id=str(pack["pack_id"]),
-            control_pack_version=int(pack["version"]),
-            control_pack_digest=bytes(pack["pack_digest"]),
-            authority_epoch=authority_epoch,
-            authority_digest=authority_digest,
-            input_snapshot_digest=input_snapshot_digest,
-        )
-        if _blob64(row["receipt_digest"], "evaluation:receipt-digest") != _digest(EVALUATION_RECEIPT_DOMAIN, _canonical(receipt_body, "evaluation:receipt-input")):
-            _fail("evaluation:receipt-digest")
+    for row in _bounded_rows(connection, "evaluations"):
+        obligation_id, _snapshot = _verify_evaluation_row(connection, meta, row, obligations, populations, packs, evidence)
         by_obligation.setdefault(obligation_id, []).append(row)
     for obligation_id, obligation in obligations.items():
         values = sorted(by_obligation.get(obligation_id, []), key=lambda row: row["revision"])
@@ -3479,6 +3364,196 @@ def _verify_evaluations(
         if initial["owed_cents"] != obligation["owed_cents"] or initial["claimed_adjustment_cents"] != 0 or initial["lawful_adjustment_cents"] != 0 or initial["received_cash_cents"] != 0 or initial["shortfall_cents"] != obligation["owed_cents"] or initial["overage_cents"] != 0 or initial["cash_satisfied"] != 0 or initial["amount_satisfied"] != 0 or initial["timely"] != 0 or initial["reporting_complete"] != 0 or initial["verification_status"] != "MISSING_EVIDENCE" or initial["case_status"] != "OPEN" or initial["delivery_status"] != "NONE":
             _fail("evaluation:initial")
     return by_obligation
+
+
+def _verify_evaluation_row(
+    connection: sqlite3.Connection,
+    meta: dict[str, object],
+    row: sqlite3.Row,
+    obligations: Mapping[str, sqlite3.Row],
+    populations: Mapping[str, sqlite3.Row],
+    packs: Mapping[str, sqlite3.Row],
+    evidence: Mapping[str, sqlite3.Row],
+) -> tuple[str, dict[str, object]]:
+    """One evaluation receipt: its input binds to the rows it names and recomputes to its values."""
+    evaluation_id = _id(row["evaluation_id"], "evaluation:id")
+    obligation_id = _id(row["obligation_id"], "evaluation:obligation")
+    obligation = obligations[obligation_id]
+    revision = _integer(row["revision"], "evaluation:revision")
+    if evaluation_id != f"evaluation:{obligation_id}:r{revision}":
+        _fail("evaluation:id-binding")
+    if row["rule_version"] != obligation["rule_version"]:
+        _fail("evaluation:rule")
+    population = populations.get(str(obligation["population_id"]))
+    if population is None:
+        _fail("evaluation:population")
+    pack = packs.get(str(population["pack_id"]))
+    if pack is None or row["control_pack_id"] != pack["pack_id"] or row["control_pack_version"] != pack["version"] or _blob64(row["control_pack_digest"], "evaluation:pack-digest") != bytes(pack["pack_digest"]):
+        _fail("evaluation:control-pack")
+    if row["contract_version"] != EVALUATION_RECEIPT_CONTRACT:
+        _fail("evaluation:contract")
+    scope = _parse_json(row["scope_json"], "evaluation:scope")
+    if not isinstance(scope, dict) or scope != meta["scope"]:
+        _fail("evaluation:scope")
+    evidence_ids = _evidence_ids_json(row["evidence_ids_json"], "evaluation:evidence")
+    for evidence_id in evidence_ids:
+        if evidence_id not in evidence or evidence[evidence_id]["item_id"] != obligation["item_id"]:
+            _fail("evaluation:evidence-binding")
+    evidence_bindings = _evaluation_bindings_json(row["evidence_bindings_json"], "evaluation:evidence-bindings")
+    if [binding["evidence_id"] for binding in evidence_bindings] != evidence_ids:
+        _fail("evaluation:evidence-bindings")
+    for binding in evidence_bindings:
+        if binding["record_digest"] != bytes(evidence[binding["evidence_id"]]["record_digest"]).hex().upper():
+            _fail("evaluation:evidence-bindings")
+    authority_id = _id(row["authority_id"], "evaluation:authority-id")
+    authority_epoch = _integer(row["authority_epoch"], "evaluation:authority-epoch", minimum=1, maximum=MAX_CENTS)
+    authority_digest = _blob64(row["authority_digest"], "evaluation:authority-digest")
+    if (authority_id, authority_epoch, authority_digest) != (meta["authority_id"], meta["authority_epoch"], meta["authority_digest"]):
+        _fail("evaluation:authority")
+    evaluated_at_ms = _time(row["evaluated_at_ms"], "evaluation:time")
+    snapshot = _evaluation_input_snapshot(row["input_snapshot_json"], "evaluation:input")
+    input_snapshot_digest = _blob64(row["input_snapshot_digest"], "evaluation:input-digest")
+    if input_snapshot_digest != _digest(EVALUATION_INPUT_DOMAIN, _canonical(snapshot, "evaluation:input-digest-input")):
+        _fail("evaluation:input-digest")
+    snapshot_obligation = snapshot["obligation"]
+    assert isinstance(snapshot_obligation, dict)
+    expected_pre_revision = revision if revision == 0 else revision - 1
+    if snapshot["pre_revision"] != expected_pre_revision or snapshot_obligation["obligation_id"] != obligation_id or snapshot_obligation["item_id"] != obligation["item_id"] or snapshot_obligation["rule_version"] != obligation["rule_version"] or snapshot_obligation["owed_cents"] != obligation["owed_cents"] or snapshot_obligation["due_at_ms"] != obligation["due_at_ms"]:
+        _fail("evaluation:input-binding")
+    snapshot_evidence = snapshot["evidence"]
+    assert isinstance(snapshot_evidence, list)
+    if [str(item["evidence_id"]) for item in snapshot_evidence] != evidence_ids:
+        _fail("evaluation:input-evidence")
+    for item in snapshot_evidence:
+        evidence_row = evidence.get(str(item["evidence_id"]))
+        if evidence_row is None or evidence_row["item_id"] != obligation["item_id"] or str(item["record_digest"]) != bytes(evidence_row["record_digest"]).hex().upper() or int(item["event_at_ms"]) != int(evidence_row["event_at_ms"]) or int(item["received_at_ms"]) != int(evidence_row["received_at_ms"]):
+            _fail("evaluation:input-evidence")
+        if int(item["received_at_ms"]) > evaluated_at_ms:
+            _fail("evaluation:evidence-chronology")
+    for item in snapshot["payments"]:
+        payment = connection.execute("SELECT obligation_id,amount_cents,event_at_ms FROM payments WHERE payment_id=?", (item["payment_id"],)).fetchone()
+        if payment is None or payment["obligation_id"] != obligation_id or int(payment["amount_cents"]) != int(item["amount_cents"]) or int(payment["event_at_ms"]) != int(item["event_at_ms"]):
+            _fail("evaluation:input-payment")
+    for item in snapshot["claims"]:
+        claim = connection.execute("SELECT obligation_id,amount_cents FROM claimed_adjustments WHERE claim_id=?", (item["claim_id"],)).fetchone()
+        if claim is None or claim["obligation_id"] != obligation_id or int(claim["amount_cents"]) != int(item["amount_cents"]):
+            _fail("evaluation:input-claim")
+    for item in snapshot["determinations"]:
+        determination = connection.execute("SELECT obligation_id,decision,amount_cents,decided_at_ms FROM determinations WHERE determination_id=?", (item["determination_id"],)).fetchone()
+        if determination is None or determination["obligation_id"] != obligation_id or determination["decision"] != item["decision"] or int(determination["amount_cents"]) != int(item["amount_cents"]) or int(determination["decided_at_ms"]) != int(item["decided_at_ms"]):
+            _fail("evaluation:input-determination")
+    for item in snapshot["cases"]:
+        case = connection.execute("SELECT obligation_id FROM cases WHERE case_id=?", (item["case_id"],)).fetchone()
+        if case is None or case["obligation_id"] != obligation_id:
+            _fail("evaluation:input-case")
+    snapshot_action_revisions: dict[str, int] = {}
+    for item in snapshot["actions"]:
+        action = connection.execute("SELECT obligation_id,created_at_ms,revision FROM actions WHERE action_id=?", (item["action_id"],)).fetchone()
+        if action is None or action["obligation_id"] != obligation_id or int(action["created_at_ms"]) != int(item["created_at_ms"]):
+            _fail("evaluation:input-action")
+        snapshot_action_revisions[str(item["action_id"])] = _integer(
+            action["revision"], "evaluation:input-action-revision"
+        )
+    for conflict_id in snapshot["conflicts"]:
+        conflict = connection.execute("SELECT obligation_id FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone()
+        if conflict is None or conflict["obligation_id"] != obligation_id:
+            _fail("evaluation:input-conflict")
+    input_projection = _evaluation_projection_from_input(
+        snapshot,
+        evaluation=row,
+        action_revisions=snapshot_action_revisions,
+    )
+    if evidence_ids != input_projection["evidence_ids"]:
+        _fail("evaluation:input-projection:evidence_ids")
+    for key in ("revision", "rule_version", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
+        if row[key] != input_projection[key]:
+            _fail(f"evaluation:input-projection:{key}")
+    for key in ("owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents"):
+        _cents(row[key], f"evaluation:{key}")
+    for key in ("cash_satisfied", "amount_satisfied", "timely", "reporting_complete"):
+        _flag(row[key], f"evaluation:{key}")
+    if row["verification_status"] not in _EVALUATION_VERIFICATION or row["case_status"] not in _CASE_STATUSES or row["delivery_status"] not in _DELIVERY_STATUSES:
+        _fail("evaluation:status")
+    expected_digest = _digest(EVALUATION_RESULT_DOMAIN, _canonical(_evaluation_result(row, evidence_ids), "evaluation:digest-input"))
+    if _blob64(row["result_digest"], "evaluation:digest") != expected_digest:
+        _fail("evaluation:digest")
+    receipt_body = _evaluation_receipt_body(
+        row=row,
+        evidence_ids=evidence_ids,
+        evidence_bindings=evidence_bindings,
+        scope=scope,
+        control_pack_id=str(pack["pack_id"]),
+        control_pack_version=int(pack["version"]),
+        control_pack_digest=bytes(pack["pack_digest"]),
+        authority_epoch=authority_epoch,
+        authority_digest=authority_digest,
+        input_snapshot_digest=input_snapshot_digest,
+    )
+    if _blob64(row["receipt_digest"], "evaluation:receipt-digest") != _digest(EVALUATION_RECEIPT_DOMAIN, _canonical(receipt_body, "evaluation:receipt-input")):
+        _fail("evaluation:receipt-digest")
+    return obligation_id, snapshot
+
+
+# The obligation's rows as an evaluation input names them, read now (same order and form).
+_EXACT_INPUT_SQL = {
+    "evidence": "SELECT evidence_id,record_digest,event_at_ms,received_at_ms FROM evidence WHERE item_id=? ORDER BY evidence_id",
+    "payments": "SELECT payment_id,amount_cents,event_at_ms,active FROM payments WHERE obligation_id=? ORDER BY payment_id",
+    "claims": "SELECT claim_id,amount_cents,status FROM claimed_adjustments WHERE obligation_id=? ORDER BY claim_id",
+    "determinations": "SELECT determination_id,decision,amount_cents,decided_at_ms FROM determinations WHERE obligation_id=? ORDER BY determination_id",
+    "cases": "SELECT case_id,status FROM cases WHERE obligation_id=? ORDER BY case_id",
+    "actions": "SELECT action_id,status,created_at_ms FROM actions WHERE obligation_id=? ORDER BY action_id",
+    "conflicts": "SELECT conflict_id FROM financial_conflicts WHERE obligation_id=? ORDER BY conflict_id",
+}
+
+
+def verify_obligation_connection(connection: sqlite3.Connection, obligation_id: str, **expected: Any) -> dict[str, object]:
+    """Per-obligation mode, run before COMMIT: the current evaluation was computed
+    from exactly the obligation's rows as they are now, recomputes to its values,
+    and the obligation's projection equals it. Takes verify_database's expected_*
+    keywords; the whole-database mode stays the open and audit check."""
+
+    keys = ("expected_config", "expected_scope", "expected_authority", "expected_mode", "expected_owner_id", "expected_continuity_epoch")
+    if not isinstance(connection, sqlite3.Connection):
+        _fail("database:connection")
+    if not set(expected) <= set(keys):
+        _fail("identity:expectation")
+    identity = _identity(**{key: expected.get(key) for key in keys})
+
+    def check() -> dict[str, object]:
+        meta = _verify_meta(connection, identity, _verify_schema(connection))
+        obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (_id(obligation_id, "obligation:id"),)).fetchone()
+        if obligation is None:
+            _fail("obligation:missing")
+        row = connection.execute("SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (obligation["current_evaluation_id"], obligation_id)).fetchone()
+        if row is None:
+            _fail("obligation:current-evaluation")
+        population = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (obligation["population_id"],)).fetchone()
+        populations = {} if population is None else {str(population["population_id"]): population}
+        pack = None if population is None else connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (population["pack_id"],)).fetchone()
+        packs = {} if pack is None else {str(pack["pack_id"]): pack}
+        evidence = {str(value["evidence_id"]): value for value in connection.execute("SELECT * FROM evidence WHERE item_id=?", (obligation["item_id"],))}
+        _, snapshot = _verify_evaluation_row(connection, meta, row, {obligation_id: obligation}, populations, packs, evidence)
+        current: dict[str, object] = {
+            "pre_revision": snapshot["pre_revision"],
+            "obligation": {**{key: obligation[key] for key in ("obligation_id", "item_id", "rule_version", "owed_cents", "due_at_ms", "reporting_complete")}, "revision": snapshot["pre_revision"]},
+        }
+        for key, sql in _EXACT_INPUT_SQL.items():
+            values = [dict(value) for value in connection.execute(sql, (obligation["item_id" if key == "evidence" else "obligation_id"],))]
+            for value in values:
+                if "record_digest" in value:
+                    value["record_digest"] = bytes(value["record_digest"]).hex().upper()
+            current[key] = [value["conflict_id"] for value in values] if key == "conflicts" else values
+        for key, value in current.items():
+            if snapshot[key] != value:
+                _fail(f"obligation:exact-input:{key}")
+        for key in ("revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
+            if obligation[key] != row[key]:
+                _fail(f"obligation:projection:{key}")
+        if obligation["updated_at_ms"] != row["evaluated_at_ms"]:
+            _fail("obligation:projection:updated_at_ms")
+        return {"obligation_id": obligation_id, "revision": int(row["revision"]), "evaluation_id": str(row["evaluation_id"]), "result_digest": bytes(row["result_digest"]).hex().upper()}
+
+    return _mapped(check)
 
 
 def _verify_evaluation_history_events(
@@ -4215,13 +4290,17 @@ def _verify_mapped(
     current_snapshot_package: bytes | None,
     restore_source_package: bytes | None,
 ) -> dict[str, object]:
+    return _mapped(lambda: _verify_connection(
+        connection,
+        identity=identity,
+        current_snapshot_package=current_snapshot_package,
+        restore_source_package=restore_source_package,
+    ))
+
+
+def _mapped(check: Any) -> dict[str, object]:
     try:
-        return _verify_connection(
-            connection,
-            identity=identity,
-            current_snapshot_package=current_snapshot_package,
-            restore_source_package=restore_source_package,
-        )
+        return check()
     except IndependentFinancialError:
         raise
     except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):

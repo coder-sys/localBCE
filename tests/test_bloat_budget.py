@@ -19,7 +19,7 @@ MARKDOWN_BYTES = 180_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
     "app/right_rail_financial_owner.py": 7_231,
-    "app/right_rail_financial_owner_independent.py": 4_844,
+    "app/right_rail_financial_owner_independent.py": 4_923,
     "app/right_rail_financial_semantic_adapter.py": 2_250,
     "app/right_rail_financial_mirror.py": 1_750,
     "app/right_rail_financial_engine.py": 1_700,

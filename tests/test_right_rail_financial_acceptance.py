@@ -49,6 +49,7 @@ from app.right_rail_financial_owner_independent import (
     verify_database,
     verify_decision_package,
     verify_continuity_package,
+    verify_obligation_connection,
 )
 from tests import rightrail_financial_expected_cases as expected
 
@@ -5119,6 +5120,52 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(FinancialIntegrityError, f"^open_verification:{code}$"):
                     self._make_owner(path=tampered)
                 self.assertEqual(tampered.read_bytes(), tampered_bytes)
+
+    def test_per_obligation_mode_checks_the_exact_current_inputs(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            obligation_ids = [str(row[0]) for row in connection.execute("SELECT obligation_id FROM obligations ORDER BY obligation_id")]
+            self.assertGreater(len(obligation_ids), 1)
+            for obligation_id in obligation_ids:
+                self.assertEqual(
+                    verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)["obligation_id"],
+                    obligation_id,
+                )
+            corrected = str(connection.execute("SELECT obligation_id FROM claimed_adjustments WHERE status='REJECTED'").fetchone()[0])
+            current = "(SELECT current_evaluation_id FROM obligations WHERE obligation_id=:o)"
+            tampers = (
+                # The current evaluation was computed from a state that is not the one being committed.
+                ("obligation:exact-input:claims", "UPDATE claimed_adjustments SET status='CLAIMED' WHERE obligation_id=:o AND status='REJECTED'"),
+                ("obligation:exact-input:cases", "UPDATE cases SET status='OPEN' WHERE obligation_id=:o"),
+                ("obligation:exact-input:actions", "UPDATE actions SET status='CANCELLED' WHERE obligation_id=:o"),
+                # A row the evaluation never saw.
+                ("obligation:exact-input:evidence", lambda c: store._insert_evidence(c, store._new_evidence(
+                    evidence_id="evidence:unseen", item_id=str(c.execute("SELECT item_id FROM obligations WHERE obligation_id=?", (corrected,)).fetchone()[0]),
+                    kind="PAYMENT_REVERSAL", common_origin_id="origin:unseen", source_id="synthetic-payment-source",
+                    source_version="fixture-v1", local_ref="reversal:unseen", applicable_at_ms=1, event_at_ms=1, received_at_ms=1,
+                    amount_cents=1, reversal_of="payment:h:p2"))),
+                # Values that the exact inputs do not produce.
+                ("evaluation:input-projection:claimed_adjustment_cents", f"UPDATE evaluations SET claimed_adjustment_cents=claimed_adjustment_cents+1 WHERE evaluation_id={current}"),
+                ("obligation:projection:shortfall_cents", "UPDATE obligations SET shortfall_cents=shortfall_cents+1 WHERE obligation_id=:o"),
+                ("obligation:projection:updated_at_ms", "UPDATE obligations SET updated_at_ms=updated_at_ms+1 WHERE obligation_id=:o"),
+            )
+            for code, statement in tampers:
+                with self.subTest(code=code):
+                    connection.execute("BEGIN IMMEDIATE")
+                    try:
+                        if callable(statement):
+                            statement(connection)
+                        else:
+                            self.assertGreaterEqual(connection.execute(statement, {"o": corrected}).rowcount, 1)
+                        with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
+                            verify_obligation_connection(connection, corrected, expected_config=store.config, expected_authority=self.authority)
+                    finally:
+                        connection.execute("ROLLBACK")
+            with self.assertRaisesRegex(IndependentFinancialError, "^obligation:missing$"):
+                verify_obligation_connection(connection, "obligation:absent", expected_config=store.config, expected_authority=self.authority)
+        self._assert_verified(store)
 
     def test_retries_are_answered_from_the_command_log(self) -> None:
         store = self._build_base_for_correction()
