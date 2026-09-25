@@ -1,974 +1,436 @@
-# RightRail full-stack production target
+# RightRail full-stack target: the payment gate
 
-Updated: 2026-09-24
-Owner: target architecture for the complete RightRail government service,
-including its data, decision, operations, supplier, and exit boundaries.
+Updated: 2026-09-25. Owner: the target architecture for the complete RightRail
+government service and, within it, Blind Ledger as an inline payment gate.
 
-The founder's final full-stack architecture directive (2026-09-23) governs the
-intended end state; its runtime-convergence supplement defines the shared
-operation pattern. The final directive supersedes earlier architecture
-direction. `CONSTITUTION.md` is supreme; this document elaborates it and
-cannot weaken it. It is the single detailed map of the target;
-[`ARCHITECTURE.md`](../ARCHITECTURE.md) describes how today's code fits
-together, and [`STATUS.md`](../STATUS.md) is the only status record. This
-document holds no status. It does not select a state, program, deployment
-profile, evidence mode, authority level, receiver, vendor, or live cutover.
+`CONSTITUTION.md` is supreme; this document elaborates it and cannot weaken
+it. [`ARCHITECTURE.md`](../ARCHITECTURE.md) describes how today's code fits
+together; [`STATUS.md`](../STATUS.md) is the only status record. This
+document holds no status and selects no state, program, deployment profile,
+evidence mode, authority level, or receiver. It draws on two design notes
+held with the founder outside this repository's markdown budget, cited by
+name rather than copied: `gate-design.md` (the gate's transport, signing,
+failover and audit design, 2026-09-25) and `fv-plan.md` (the formal-
+verification plan, 2026-09-25), both reviewed by three 2026-09-25 red-team
+passes (crypto/ZK, engineering, policy/market) whose corrections this
+document folds in. Everything below the state of `STATUS.md` is design, not
+built, run, or approved: `proofSuiteId=null`, `production_usable=false`,
+`activation=false`.
 
-The owner plan proposes the first government financial service as one
-complete, recurring financial responsibility. It keeps the approved
-requirements and population, reconciles incoming evidence, tracks disputes and
-corrections, and prepares supported decisions for human approval. Existing
-official payment systems retain money-movement authority. The read-only
-Provider Trust Graph is a separate first commercial Mirror wedge, not a
-substitute for this service. Its engagement and launch sequence are separate;
-no common engagement or shared launch sequence is selected.
+## 1. The end state
 
-## 1. Product values and invariants
+Every Medicaid payment a state routes through RightRail — fee-for-service and
+managed care alike — passes Blind Ledger before money goes out, at full state
+scale (New York's eMedNY cycle is the sizing reference: about 12.6M claims
+and $1.8B paid per weekly cycle, audited by the NY Comptroller). RightRail
+still never moves money (Constitution I.4): the state's own payment system
+checks the gate's decision and remains the party that holds or releases.
+No legal precedent exists for a private vendor to hold the 42 CFR 455.23
+suspension trigger itself, so every document and interface says "the gate
+produces the determination the state's system consults," never "the gate
+holds the payment."
 
-1. **Finish the defined responsibility.** Define the period, starting
-   population, approved rules, evidence requirements, allowed adjustments,
-   decision owner, correction process, and completion evidence before saying
-   work is complete. A clean-looking report cannot establish that omitted
-   items do not exist.
-2. **Keep state authority explicit.** The state owns its policy, source
-   permissions, population definition, approvers, exceptions, official
-   consequences, and selection of any profile. RightRail prepares and records
-   work within that grant.
-3. **Use one financial writer.** One owner commits the financial history,
-   current projection, and action/outbox identity atomically. A user interface,
-   connector, proof verifier, candidate operator, or restore process never
-   creates a second live writer.
-4. **Keep facts distinct.** Evidence, an evaluation, an official
-   determination, an authorized action, dispatch, receiver acknowledgment,
-   cash movement, and reporting completion are different facts. A receipt or
-   acknowledgment proves only what its issuer and contract attest; neither is
-   cash confirmation.
-5. **Prove completeness at the source boundary.** Bind every population to
-   its source, scope, period, cutoff, inclusion rules, change history, and
-   completeness evidence. An incomplete or ambiguous feed cannot establish
-   absence. Two copies derived from one source are not independent
-   corroboration.
-6. **Bind each result to its authority and version.** Evaluations and actions
-   identify the exact responsibility, Control Pack version, owner revision,
-   evidence references, source authority, and effective interval. A caller
-   cannot choose a weaker evidence mode, policy version, or fallback.
-7. **Make retries and recovery deterministic.** Commands carry an explicit
-   identity, expected revision, canonical input identity, and retry rule.
-   Exact retry is idempotent; changed input conflicts. Recovery covers exits
-   before commit and after commit when the response is lost.
-8. **Fail closed without losing work.** Missing, stale, malformed,
-   unauthorized, over-limit, or contradictory input creates no partial
-   financial transition. The unresolved work and its owner remain visible.
-9. **Minimize data and custody.** Sensitive records, source payloads, and
-   state keys stay in their approved state, provider, or payer boundary.
-   Corporate support, analytics, monitoring, and external tools receive no
-   PHI or persistent linkable claim fingerprint.
-10. **Make operation replaceable.** The state retains practical rights to its
-     approved rules, history, configurations, interfaces, tests, and handoff.
-     Conformance tools and vendor interfaces are usable without a proprietary
-     toll. Commercial value does not depend on denials, recoveries, penalties,
-     or savings.
+Gating is **off by default**. A state turns on only the authority it grants,
+per flow, through a state-signed `AUTHORITY-GRANT` (section 3). Nothing here
+selects a state, a flow, or a go-live date.
 
-### Governing acceptance predicates
+## 2. Gate points and rollout order
 
-These predicates make the [design ideology](DESIGN_IDEOLOGY.md) enforceable
-at each boundary. The linked document governs the full rationale and
-invariant definitions.
+The gated unit is one payment: one payee, one amount, one release, with
+claim or member-month lines underneath it.
 
-- **Invariant-first evidence and gate changes:** Every gate names the
-  invariant and protected failure mode and is supported by raw, reproducible
-  evidence. For a stale, over-broad, or non-applicable gate, record its exact
-  predicate, protected failure mode, raw reason, replacement control, scope,
-  duration, and claim consequence before changing it. Any changed or weakened
-  gate receives no prior qualification credit until its documented replacement
-  is requalified.
-- **Small, single-writer trusted core:** Keep one canonical financial owner
-  and narrow, versioned interfaces. Each module declares what it owns,
-  receives, may mutate, and which evidence supports that mutation; independent
-  checks reconstruct results at the boundary. No connector, verifier, UI,
-  restore, or sidecar creates a second ledger or live writer.
-- **Separate facts and authority:** Type and preserve source evidence,
-  official determination, authorized action, dispatch, receiver acknowledgment,
-  cash movement, and reporting completion as distinct facts. A receipt or ACK
-  cannot stand in for official cash evidence.
-- **Exact retries and both recovery sides:** Bind each command to identity,
-  expected revision, canonical payload, and retry rule. An exact retry is a
-  duplicate; changed input conflicts. Evidence covers process exit before
-  COMMIT and committed state with a lost response, including concurrency and
-  recovery.
-- **Deterministic money and hostile-source negatives:** Use integer cents,
-  versioned schemas, stable ordering, bounded parsing, and manually derived
-  expected cents. Source tests include omission, duplication, replay, stale
-  revision, wrong scope, wrong period, wrong mode, and incomplete or ambiguous
-  inputs; failures cannot create partial transitions.
-- **Executable formal semantics with deployed linkage:** Implement executable
-  Lean semantics where the contract is realistically formalizable. Treat Lean
-  as non-authoritative until a pinned artifact is linked through reviewed
-  refinement and the deployed adapter to the owner, with theorem, mutation,
-  known-answer, and resource evidence. No runtime authority switch follows
-  from a standalone proof or port.
-- **Zero corporate PHI and state custody:** Corporate support, monitoring,
-  analytics, and external tools receive zero PHI and no persistent linkable
-  claim fingerprint. The state retains usable custody and control of its
-  rules, data, keys, histories, interfaces, tests, and continuity materials.
-- **Free replacement and neutral economics:** State and replacement operators
-  can use documented interfaces, conformance tests, and handoff materials
-  without a proprietary toll. Economics do not depend on denials, recoveries,
-  penalties, or savings; every product claim stays within the raw evidence
-  recorded in `STATUS.md`.
+| Flow | Payment unit | Lines under it | Gate point |
+| --- | --- | --- | --- |
+| FFS weekly cycle (`FFS_CYCLE`) | Per-provider EFT/check | Claim lines | Cycle close, about 5 days before issue |
+| FFS per-claim (`FFS_CLAIM`) | Adjudicated claim | Itself | At adjudication |
+| Capitation release (`CAP_820`) | Per-plan capitation payment | Member-month lines | Monthly release |
+| Directed payment (`SDP`) | Disbursement | Provider lines | Preprint schedule |
+| Plan-to-provider (`PLAN_PAY`) | Plan payment to a provider | Claim lines | Needs a contract clause; no precedent today |
 
-## 2. System boundary and data flow
+Rollout order: **FFS weekly cycle first, then FFS per-claim; managed care
+capitation release first, then directed payments, then plan-to-provider.**
+Pharmacy stays retrospective through PBMs and is never gated inline. This
+order follows feasibility and existing measurement, not fraud exposure: GAO
+found CMS does not measure plan-to-provider payments at all (GAO-25-107770),
+so gating capitation before plan-to-provider risks moving fraud into the one
+channel nobody watches. Pairing early capitation gating with a plan-to-
+provider sampling commitment is a named mitigation, not yet designed.
 
-The production data plane runs in an environment approved for the selected
-state responsibility. That may be state-operated or another explicitly
-approved environment; local hosting alone does not settle privacy, custody,
-contract, or access questions. Common product engineering and cross-state
-reuse receive only material approved for sharing.
+## 3. Authority ladder
 
-The target runtime pattern is authenticated/versioned inputs → executable Lean
-operation → precise rejection or typed permitted transition → atomic commit by
-the responsible owner → durable receipt/history, captured dependencies, and
-follow-up identity → approved projections and reports. Reuse this pattern only
-where meanings match; Financial, Queue/Composition, direct State clearance,
-Mirror Ingress/Core/Recovery, and provider-local operation retain distinct
-owners, stores, and authority. Typed interfaces grant minimum capabilities;
-use process isolation where privilege or resource boundaries require it, not a
-service per logical module.
+A state-signed `AUTHORITY-GRANT` sets one of three levels per flow. Levels
+move up only by a new grant, never automatically:
 
-Reads record the identity, version, and watermark for consulted records, rules,
-sources, software, authority, and time. Supported collection, range, and
-absence queries also return a dependency that detects a later relevant
-insertion. The accepted transition durably records required follow-up work;
-projection, report, export, and reconciliation workers may run after commit
-and must resume with exact idempotent retries. Unsupported dependency meaning
-forces re-evaluation. Do not generalize these shared mechanics until the
-financial correction slice and one genuinely different nonfinancial/read-only
-workflow have passed, preferably an existing Provider Trust Graph or Mirror
-discrepancy path.
+1. **OBSERVE.** The gate checks nothing; RightRail assembles evidence and
+   prepares a decision package for a human. This is the intended first
+   posture for any new flow.
+2. **HOLD.** Narrow automation: the gate may return a non-ALLOW outcome only
+   for the rules the grant names; any other finding stays advisory, carried
+   as an ALLOW reason. Everything else the gate finds is a lead, not a hold.
+3. **TRANSFER.** The full control set applies and every in-scope payment
+   needs a token (section 5).
 
-```mermaid
-flowchart LR
-  GOV[State policy, finance, security, privacy, procurement] --> CP[Approved Control Pack]
-  SRC[State, plan, processor, and reporting sources] --> CONN[Authorized source connectors]
-  CP --> OWNER[Single financial owner]
-  CONN --> OWNER
-  OWNER <--> DB[(Qualified state-scoped persistence)]
-  OWNER --> CHECK[Independent read-only checker]
-  MIRROR[Mirror staff workspace] --> OWNER
-  OWNER --> MIRROR
-  PTG[Provider Trust Graph read-only wedge] --> MIRROR
-  OWNER --> OUTBOX[Authorized action outbox]
-  OUTBOX --> RC[Approved receiver connector]
-  RC --> RECEIVER[Official receiver and payment systems]
-  RECEIVER --> ACK[Receiver acknowledgment]
-  ACK --> OWNER
-  PAYSYS[Official payment and cash records] --> CASH[Cash evidence]
-  REPORTSYS[Official reporting system] --> REPORT[Reporting evidence]
-  CASH --> CONN
-  REPORT --> CONN
-  OWNER --> EXPORT[Continuity export]
-  EXPORT --> RESTORE[Isolated independent restore exercise]
-  EXPORT --> SWITCH[Switch shadow comparison]
-  SWITCH --> ALT[Alternative operator candidate]
-  OWNER -->|authenticated, versioned inputs| LEAN[Shared Lean operation runtime]
-  LEAN -->|typed transition or rejection| OWNER
-  APP[Provider App in provider environment] --- PROVIDER[Provider systems and local rules]
-```
+The grant also carries the flow's fail policy (section 6). Progression is
+never automatic and passing a comparison or proof gate does not itself grant
+the next level.
 
-The diagram is a logical target, not a selected vendor topology. The source
-connector authenticates and records what arrived. The financial owner applies
-the approved rules and owns the state transition. The receiver connector
-delivers only an already-authorized action. Independent cash and reporting
-records return as separate evidence. The checker reconstructs results without
-writing the owner's state. Mirror uses the owner, and continuity and shadow
-copies cannot dispatch.
+## 4. Decide, token, and the payer's checks
 
-## 3. Versioned interface contracts
+One schema runs over synchronous HTTPS (hybrid ML-KEM TLS, mutual auth) and
+batch SFTP for cycle and 820 runs. A decide call takes 1 to 1,000 items and
+answers each independently, keyed by the payer's idempotency key
+(`command_key`), so an exact retry returns `DUPLICATE` and never decides
+twice. The response status is `DECIDED`, `DUPLICATE`, `REJECTED` (malformed
+input or a reused key with different bytes), or `UNAVAILABLE` (with a retry
+time; a full batch commits atomically or not at all). `outcome` is ALLOW,
+HOLD, HUMAN_REVIEW, or BLOCK — the engine's existing `CLEAR`/non-`CLEAR`
+distinction, unchanged.
 
-Existing local contract names are `RR/FINANCIAL/OWNER/v5`,
-`RR/FINANCIAL/CONTINUITY/v5` (with v6/v7 successors), and
-`RR/FINANCIAL/EVALUATION-RECEIPT/v1`. Production schemas
-remain owned and versioned at their actual boundary; breaking a contract
-requires a new version, explicit migration, and independent acceptance.
+Before releasing money, the payer runs nine ordered checks against the
+token: canonical parse and domain, epoch certificate chain and signature,
+checkpoint signature and Merkle path, epoch at or above the payer's fence,
+not expired, payment fields match exactly, outcome is ALLOW, `rule_version`
+and `engine_release` are on the payer's approved list, and the payment has
+not already been released. These nine checks are one Lean predicate
+(`verifyToken`), proved to accept only when all nine hold, and published to
+payers as a reference verifier with conformance vectors. A release with no
+token and no bypass is a payer-side violation visible in Mirror.
 
-Every interface carries a contract identity and version plus the identity of
-the responsibility it concerns. A mutable owner command also binds a command
-ID, authenticated principal and authorization reference, Control Pack
-identity, expected owner revision, and canonical payload identity. A factual
-source event binds source authority and schema/version, source record and
-version, event identity, applicable scope and period, source/effective time,
-receive time, and its completeness or correction relationship. Raw payloads
-and any identifying digest remain inside the approved data boundary.
+## 5. Batch signing, checkpoints, and inclusion tokens
 
-The following are the minimum logical contracts. They define ownership and
-meaning without asserting that these names or field layouts are implemented
-wire schemas.
+**Batching is a hard invariant, not a tuning option.** One SQLite commit and
+one ML-DSA-87 checkpoint signature cover an entire batch (up to 1,000 items,
+closing at a 150 ms window). A per-payment token is a Merkle-inclusion path
+of a few hundred bytes against that checkpoint's `token_root`, not a
+separately signed token.
 
-| Interface | Producer -> consumer | Required binding and authority effect |
-| --- | --- | --- |
-| Control Pack reference | State approver -> financial owner | Pack ID/version/content digest, responsibility scope, effective interval, source/rule/test references, and approval identity. Selects approved meaning; does not itself establish source completeness. |
-| Population manifest | Source owner/authorized connector -> financial owner | Source and scope, period/cutoff, inclusion and exclusion rules, expected/received counts, rejects/changes, watermarks, and supporting completeness references. A boolean or count alone cannot establish completeness. |
-| Evidence envelope | Authorized connector -> financial owner | Source authority and schema, record/version, event/delivery identity, scope, source/effective/received times, correction relationship, and state-local payload reference. Authentication establishes origin/integrity, not truth. |
-| Owner command | Mirror or authorized service -> financial owner | Command identity, principal/role/approval reference, scope, Control Pack, expected revision, and canonical payload identity. Only the owner may commit a financial transition. |
-| Evaluation receipt | Financial owner -> Mirror/checker | `RR/FINANCIAL/EVALUATION-RECEIPT/v1` binds evaluation/obligation/revision, Control Pack, sorted evidence references/digests, authority/epoch, time, result fields, and digests. It is not a determination or payment authority. |
-| Action outbox | Financial owner -> approved receiver connector | Authorized decision, action identity, scope, destination, payload identity, and retry key. The connector cannot invent or broaden an action. |
-| Receiver acknowledgment | Official receiver -> financial owner | Receiver identity, acknowledgment event, action correlation, status, and time. Confirms only the receiver's contracted acknowledgment, not cash or reporting completion. |
-| Cash/reporting event | Official financial/reporting source -> authorized connector -> owner | Independent source and record identity, scope, period, event time, and correction lineage. Maintains cash and reporting as separate statuses. |
-| Continuity package | Owner export -> isolated importer | Owner/schema/control versions, scope, sequence/time, counts, digest, histories, open work, outbox state, evidence references, and migration lineage. It cannot carry live credentials or grant writer authority. |
-| Shadow result | Candidate operator -> independent comparer | Candidate/software and rule versions, identical input identity, output and difference set, resource/failure result, and evidence that no live side effect occurred. It grants no cutover authority. |
-| Cutover grant | State approver -> old/new owner boundary | Exact responsibility scope, old/new operator, effective time, approvals, fenced writer epoch, in-flight treatment, and rollback reference. It is separate from shadow acceptance. |
+This corrects an earlier design that signed every token individually. At New
+York's volume, signing 12.6M tokens a week individually costs roughly
+45–90 TB over 7 years of retention and exhausts a shared HSM/KMS signing
+quota (a documented AWS KMS default is 1,000 requests/second per account,
+shared with every other use of that account's keys) — the crypto and
+engineering red-teams independently reached the same correction. Batch
+signing turns that into on the order of hundreds to a few thousand HSM
+signatures a week, with per-payment cost reduced to a Merkle path and a hash
+comparison.
 
-### Control Pack and population manifest
+Every batch commit produces a checkpoint (tenant, program, sequence range,
+epoch, previous-checkpoint digest, event-chain head, token/evidence/
+projection roots, count, time), signed with the epoch's ML-DSA-87 key.
+Checkpoints stream to an independent witness — a separate state agency or
+auditor, outside the database administrator's control — which cosigns only
+after checking sequence monotonicity, epoch monotonicity, and that no two
+checkpoints share a sequence with different digests; a mismatch raises a
+fork alarm. The witness is asynchronous; payers never wait for it. History
+is sealed into segments (per day or per 1,000,000 events, whichever comes
+first) bound to the checkpoint that closes them, replacing the current
+10,000-row Continuity package cap. Records are retained 7 years (Pub 1075
+AU-11) in WORM storage, onshore, in the state tenant. A daily anchor
+checkpoint carries an additional LMS/XMSS signature so a 7-year-old record
+stays verifiable under hash-based assumptions alone.
 
-The Control Pack interface to the owner binds:
+## 6. Hold, release, fail policy, and bypass
 
-- a pack ID, version, canonical content digest, responsibility scope, and
-  effective interval;
-- each governing source, source version, approved interpretation, and the
-  method used to calculate or adjust an obligation;
-- the population definition, required evidence, deadlines, exception roles,
-  authorized actions, and tests with independently derived expected values;
-- state approver identity, approval reference, approval time, and any
-  superseded pack or withdrawal plan.
+**States.** `PENDING -> ALLOWED | HELD | REVIEW | BLOCKED`, and
+`HELD | REVIEW | BLOCKED -> RELEASED | DENIED` only by a determination: a new
+decision revision with a new token. Holds are monotone — adding only adverse
+facts never moves a decision toward ALLOW. Only named state officials,
+authenticated through the state IdP with phishing-resistant MFA, may release
+or deny: one releaser distinct from the raiser for HOLD/REVIEW, a releaser
+plus a program-integrity supervisor (both distinct from the raiser) for
+BLOCK. **RightRail staff hold no release or deny role in any tenant.** SLA
+timers follow the flow's clock — the 42 CFR 447.45 prompt-pay budget for
+non-fraud FFS holds, the 42 CFR 455.23 5-day suspension clock for fraud
+reasons, before-the-next-820 for capitation, contract terms for plan-to-
+provider — and Mirror is the exception queue holding every non-ALLOW item.
 
-A separate population manifest identifies its source and source owner,
-responsibility, period, cutoff, inclusion and exclusion rules, expected and
-received counts, rejects, replacements and late changes, watermarks, and the
-receipts or independent references supporting completeness. A count or
-source-supplied `complete` flag alone is insufficient. The state approves the
-population before evaluation; uncovered or unexplained items stay unresolved.
-Historical results retain the Control Pack version that governed them.
+**Fail policy.** Each flow's grant sets `FAIL_CLOSED` (the default for the
+weekly cycle, capitation, and directed payments — a payer holds the
+payments, and the weekly cycle has about 5 days of slack before issue) or
+`FAIL_OPEN` (allowed only where a state explicitly chooses it, for
+real-time flows, as a standing pre-signed bypass that activates only while
+the gate is down — the analogue of NCPDP Reject 92 with a 420-DK=13
+override). There is no other fallback: Constitution III.5 makes fail-closed
+the universal default, and a stand-in-processing outage can still produce a
+hard 0%-approval outcome in practice even when the fallback path is designed
+to degrade gracefully (Visa STIP's documented February 2019 outage is the
+cited precedent) — an inline block on a $1.8B weekly cycle is a provider
+cash-flow crisis, not an abstract SLA miss.
 
-### Source evidence envelope
+**Emergency bypass.** Two distinct state officials — the payment authority
+and a program-integrity or CIO official — sign a `BYPASS-GRANT` with keys
+held in the state's own HSM; RightRail cannot issue, extend, or countersign
+one. The grant names its tenant, program, flows, amount ceiling, payee
+exclusions, reason, and expiry, capped at 72 hours and enforced by the
+payer's own check; the payer stops bypassing when the ceiling is reached.
+Every bypassed payment is logged as its own release record and, once the
+gate recovers, re-decided post hoc against the rule version in force at
+release time: ALLOW closes it, anything else opens a recoupment case in
+Mirror, and every bypassed payment is reconciled within 5 business days with
+a signed summary to the state.
 
-The source connector preserves a source-local raw reference and emits only
-the minimum typed evidence needed by the owner. Its envelope identifies source
-authority, schema/version, record ID/version, event or delivery ID, scope,
-source and effective times, receipt time, correction/replacement links, and
-the applicable population-manifest or completeness evidence. Authentication
-establishes origin and integrity under that source contract; it does not prove
-the source told the truth. Independent records or counts are required where
-the conclusion depends on completeness or corroboration.
+Fail-closed is proved today as an unconditional invariant (`outcome ≠
+Accepted → delta = ∅`, fv-plan's T1). A time-boxed, bounded, logged Bypass
+outcome needs its own theorem — that a bypass cannot outlive its
+authorization and cannot be exercised silently — so that T1 becomes
+conditional on the absence of an active bypass grant rather than being
+weakened. This theorem and the bypass path are designed, not built.
 
-Adapters are allow-listed, bounded, versioned, and permissioned for the
-specific state. They preserve rejects, watermarks, and reconciliation
-references; they do not discard source history, turn parse success into
-acceptance, or make a policy decision. Connector outage, gap, schema change,
-or late data is visible to the state and cannot silently close the population.
+## 7. Primary, fenced standby, and the operational runbook
 
-### Owner command and evaluation receipt
+The 99.8%-monthly availability target (about 87.6 minutes of allowed
+downtime a month, matching a real state Medicaid MCO SLA exhibit) is met by
+one primary and one synchronous standby — no consensus cluster. A fencer in
+the state tenant is the sole writer of the epoch, using an HSM monotonic
+counter plus a short primary lease; safety never depends on clocks, only on
+when to promote. A stale primary cannot forge a valid token for three
+independent reasons: it cannot commit (no standby of its own epoch will
+acknowledge it), it cannot sign (its epoch key is disabled in the HSM), and
+payers refuse it (a payer that has seen the higher epoch rejects the old
+one). A TLA+ model (`gate_failover.tla`) checks these properties —
+`NoConflictingTokens`, `NoFencedTokenAccepted`, `AtMostOnceRelease`,
+`NoLostDecision`, `StaleCannotSign`, `EpochMonotone`,
+`BypassEventuallyReconciled` — as bounded state-space search, not proof;
+finding a counterexample interleaving is worth more here than a proof that
+covers only the model. The bounds have not yet been run.
 
-The owner accepts typed commands only through its versioned contract. Each
-command binds identity, caller authority, scope, expected revision, approved
-Control Pack, and canonical input. The owner alone decides whether an exact
-retry is a duplicate or changed input is a conflict. It commits the history,
-projection, and any authorized outbox row together.
+This architecture makes 99.8% achievable; it does not make it automatic. The
+engineering red-team's finding stands: the trunk today has no CI, no on-call
+rotation, and no tested failover drill, and fencing systems fail in practice
+when a watchdog is disabled during maintenance or the failover path itself
+is degraded. **A tested failover drill and an operational runbook (source
+outage, database outage, key loss, corrupted package, partial release,
+receiver timeout, operator exit) are acceptance prerequisites for claiming
+99.8%, not a property that falls out of the primary/standby architecture by
+itself.**
 
-The existing `RR/FINANCIAL/EVALUATION-RECEIPT/v1` binds scope,
-evaluation/obligation/revision, Control Pack ID/version/digest, sorted unique
-evidence ID/record-digest bindings, trusted authority ID/epoch/digest,
-timestamp, result fields, result digest, and receipt digest. It carries
-references and digests, not raw evidence or signatures. An evaluation receipt
-is not an official determination or authority to pay.
+## 8. Sharding by member key
 
-### Action, receiver acknowledgment, cash, and reporting
+Data shards by person/member key, never by program or plan. Sharding by
+program or plan would blind the one cross-boundary check the gate exists to
+do — catching the same person double-billed across FFS and managed care, or
+across two plans — by scattering one member's payments across shards with
+only an asynchronous, staleness-bounded reconciliation pass to catch them.
+Sharding by member key keeps cross-program and cross-plan duplicate
+detection inside one shard instead. No Postgres migration and no
+multi-region work happen before a measured SQLite ceiling shows the need; a
+warm-worker throughput benchmark (branch `load-test`) is the first thing to
+measure, not the last (Constitution IX.3).
 
-An authorized action is a separate owner record linked to its decision,
-approving role, exact scope, action identity, destination route, and payload
-identity. A durable outbox passes that exact action to a state-approved
-receiver connector. The receiver response identifies its own event and the
-accepted or rejected command; replay uses the same idempotency identity.
+## 9. The proof boundary: prove the interpreter, version the rule data
 
-Cash and reporting arrive through distinct official records. A receiver
-acknowledgment means the receiver acknowledged the message under its contract;
-it does not establish that money moved, that a recipient received it, or that
-reporting reconciled. Closure follows the evidence and completion test in the
-Control Pack. A cash correction can be complete while its reporting
-correction remains open.
+Formal verification goes where a defect can release, withhold, or misstate
+money, or forge or replay authority — concentrated in four places: the
+decision function, the bytes into and out of it, the replay checker, and the
+signed token. Those are Lean, with proofs; interleavings (crash, failover,
+fencing) get TLA+ model checking instead; everything else gets tests.
 
-## 4. Authority and evidence are independent dimensions
+**Core invariants are proved once, over the interpreter, never over one
+rule's content.** `step`/`batch` (a pure `ReadSet -> Command -> Outcome`
+function) carries eleven universal theorems: fail-closed, revision
+discipline, idempotence and retry identity, conservation of amounts, a
+single completion-time definition proved permutation-invariant, no double
+release, monotone holds, authority against a versioned roster, bounded
+arithmetic, evidence-mode fixity (a missing or wrong evidence mode rejects
+rather than silently downgrading), and non-dispatch. **Fee schedules, NCCI
+edit pairs, and per-state coverage tables ship as versioned, hash-pinned,
+test-vectored data, with no theorem review per update.** This split is the
+answer to a real risk the engineering red-team named: Medicaid rule content
+changes on independent cadences (NCCI quarterly, fee schedules ad hoc, SPAs
+continuously), and gating every content change behind a founder-reviewed
+theorem change would make ordinary rule maintenance too slow to be usable.
+`CAP-REL`, the capitation-release relation, is written as data-shaped Lean
+evaluated by the interpreter (section 10), not baked into a bespoke theorem,
+so it stays on the interpreter's proof, not a new one.
 
-Authority describes what RightRail may do. Evidence mode describes how a
-fact is supported across a boundary. Neither dimension selects the other, and
-no caller may promote evidence acceptance into a decision or action.
+Today, of 14 command types, Lean decides exactly one —
+`reject_offset_and_authorize_correction` — and the live command codec
+(`BLFCMD01`/`BLFCRES1`) carries zero codec laws, while a comparison-only
+codec that nothing decides with has full ones; the pinned decision binary
+was built from source that can no longer be recovered. Closing that gap —
+proof hygiene, a reproducible rebuild, codec parity, then the live
+evaluator, then the remaining thirteen commands, then the signed token and
+checkpoint predicates, then a Lean checker — is `fv-plan.md`'s ordered
+roadmap; its first four steps remove most of the risk in the fewest weeks.
 
-### Authority progression
-
-1. **Observation and human decision.** The service assembles evidence,
-   identifies uncertainty, tracks a case, and prepares a decision package.
-   An authorized state official decides matters requiring judgment and
-   approves any consequential action. This is the intended first-service
-   posture.
-2. **Narrow automation.** A state may separately approve a specific
-   deterministic check with named scope, rule version, valid time, input
-   requirements, limits, override, review, monitoring, and fallback. A
-   failure, missing fact, or ambiguity cannot turn into an adverse decision
-   through a default.
-3. **Transfer or cutover.** A state may later approve a precisely bounded
-   function for another operator. Transfer has its own authority, active
-   writer fence, reconciliation, and rollback plan; passing a comparison or
-   proof gate does not grant transfer authority.
-
-Progression is never automatic. Each step requires state approval and its own
-acceptance evidence. The current documentation selects no authority level.
-
-### Evidence modes
-
-The governed profile, once one is approved, selects the permitted evidence
-mode for its exact facts and scope:
+## 10. Evidence modes: the non-ZK path ships first
 
 - **`DIRECT_STATE_OWNED`** uses canonical facts lawfully held in the state
-  boundary. It does not need a cryptographic proof wrapper merely because a
-  fact is sensitive. Source authority, completeness, rule interpretation, and
-  state determination remain independently governed.
-- **`AUTHORITATIVE_ASSERTION`** uses a narrowly scoped assertion from a
-  qualified source. Its signature can bind issuer, provenance, version,
-  operation, and validity interval; signature acceptance alone does not prove
-  factual truth, population completeness, or state disposition.
-- **`PRIVATE_ZK`** is conditional on a need to verify a source-bound hidden
-  predicate without disclosing its inputs. The exact relation, source binding,
-  privacy claim, soundness assumptions, resource profile, verifier, and
-  receipt must qualify together. Proof acceptance is evidence only, never a
-  directive or payment action. Its soundness gates apply only if this mode is
-  selected.
-
-Evidence mode is fixed by an approved profile, not by a request, source,
-provider, caller, or failed fallback. A missing or mismatched mode fails
-closed. These modes are orthogonal to observation, automation, and transfer;
-none is selected here. The parked `PRIVATE_ZK` trust boundaries are in
-[`parked/private_zk/docs/DATABASE_ZK_ARCHITECTURE.md`](../parked/private_zk/docs/DATABASE_ZK_ARCHITECTURE.md)
-and
-[`parked/private_zk/docs/NATIVE_V3_ARCHITECTURE.md`](../parked/private_zk/docs/NATIVE_V3_ARCHITECTURE.md).
-The three evidence modes do not imply three permanent application runtimes;
-they remain separate ways to establish evidence under one shared operation
-pattern.
-
-## 5. The five product parts
-
-### 5.1 State Control Pack
-
-The Control Pack is the state-approved, versioned implementation record for
-one responsibility. It connects each requirement to its source, effective
-period, approved interpretation, deterministic rule where possible, required
-evidence, exception path, accountable role, and conformance test. It records
-judgment as an authorized decision path instead of hiding it in executable
-code. Artificial intelligence may help draft an analysis or test; only the
-state-approved version is executable.
-
-Rule changes are staged against the population and periods they affect. Old
-versions remain available for historical explanation. Tests cover the old
-and new effective intervals and any required correction of earlier work.
-Approval and withdrawal are explicit and auditable.
-
-### 5.2 Blind Ledger financial owner
-
-The financial owner is the one writer for obligations, typed evidence
-references, evaluations, cases, determinations, corrections, balances,
-authorized actions, and action/outbox identity. It checks the exact
-Control Pack, population, source references, authority, and expected revision.
-It atomically records history, current projection, and an authorized outbox
-transition. It uses integer amounts, deterministic ordering, bounded
-decoding, and explicit retry behavior.
-
-The owner does not create official policy, decide source truth, move funds,
-or treat dispatch as settlement. It records the state determination and
-descriptive cash/reporting facts separately. It can close only under the
-completion rule approved for the responsibility. A `HOLD`, `HUMAN_REVIEW`,
-`BLOCK`, or unsupported result cannot advance an economic state.
-
-Lean is the default for executed application logic wherever practical. Keep
-storage, identity, source, network, and cryptographic effects behind narrow
-interfaces, and preserve working implementations during migration. Use the
-existing SQLite store for the first migration with explicit durability
-settings; replace it only when measured contention, deployment, or recovery
-needs justify that change. Avoid a custom database, generic workflow engine,
-service per module, or second policy implementation.
-
-The first Lean-controlled operation is
-`FinancialOwner.reject_offset_and_authorize_correction`: Lean decides the
-transition and the owner's atomic adapter commits it. Retries require the
-evaluation identity and digest, expected revision, decision time, and
-deterministic determination ID. The request binds authenticated principal and
-scope, approved rule context, current-state dependencies, evaluation receipt,
-expected revision, and durable command identity. The transition returns its
-allowed mutation, ordered events, structured explanation, and authorized
-follow-up; the adapter revalidates the read set and commits the decision,
-history, projection, and action/outbox identity atomically. Exact retries are
-duplicates, changed meaning conflicts, and runtime or adapter disagreement
-fails closed. Determination, action, ACK, cash, and reporting remain separate;
-the operation does not move funds.
-
-Enforce export bounds without constructing a full Continuity package inside
-each changed transaction. Remove any such
-per-write full export or full-history verification only after every safety
-condition has an equivalent control. Use bounded journal segments, verified
-snapshots, resumable publication, and checked incremental projections; prove
-incremental results agree with recomputation, including reversals, late
-arrivals, replacements, duplicate evidence, rounding, and exceptional
-adjustments. Keep full reconstruction for audits and recovery exercises.
-
-Consequential reads must be authenticated against the current accepted state
-commitment. A history hash alone does not prove that a query returned the latest
-value, complete collection, or genuine empty result. Start with narrow proofs
-for point values, membership/absence, and checked aggregates using a small
-versioned index or equivalent mechanism whose updates match the same accepted
-transition. Test deletion, missing keys, stale proofs, and omitted rows. Retain
-independent checkpoints outside the database administrator's control under
-approved custody; define freshness, conflicting branches, uncertain
-finalization, key rotation, recovery, and bounded witness-outage behavior.
-This is not a universal verifiable-SQL engine.
-
-### 5.3 Mirror staff workspace
-
-Mirror is the authenticated staff workspace over the same owner history. It
-shows the obligation, applicable rules and dates, supporting evidence
-references, differences, uncertainty, case owner, next action, deadline,
-decision history, and separate cash and reporting statuses. Staff can drill
-into records only through the approved state route.
-
-Read commands use bounded, paginated owner queries. Decision and correction
-commands return to the owner with the authenticated role, approval reference,
-command identity, and expected revision. Mirror has no direct financial table
-writes, independent policy store, hidden decision cache, or power to clear,
-pay, or suppress a finding. Accessibility, role design, and human review
-are part of acceptance, not an alternative authority path.
-
-Mirror derives correction follow-up explanations, state reports, and
-recipient-safe support from one current decision package. An event-backed
-drain is bounded and repeatable; acknowledgment changes the follow-up status
-without changing cash.
-
-Provider Trust Graph is a separate, read-only commercial Mirror wedge for
-source and provider evidence. It may expose an operational observation with
-provenance; it cannot create a financial determination, clearance,
-source-completeness claim, or action. The financial first service does not
-depend on the wedge, and no shared engagement or launch sequence is selected.
-
-### 5.4 Continuity State and independently reproducible exit
-
-Continuity creates a bounded, versioned handoff from the same owner. Its
-manifest binds the owner and schema versions, responsibility and Control Pack
-identities, export sequence and time, record counts, package digest, evidence
-references, migration lineage, and test bundle. Its content preserves the
-authorized history and current work needed to continue: obligations,
-decisions, receipts, corrections, balances, open cases, deadlines, pending
-actions, outbox identities, receiver acknowledgments, and separate cash and
-reporting status.
-
-The state-approved package either carries source data it has a right to
-transfer or carries resolvable references and permissions to the authoritative
-source. A digest without access to the underlying evidence is not a
-reproducible handoff. Secrets and private keys are not embedded in the
-package; state-controlled key identifiers and an approved reauthorization
-procedure preserve custody.
-
-Restore first occurs in an isolated attempt. The importer validates the full
-manifest, schemas, identity, dependencies, bounds, and cross-record
-references, then independently reconstructs selected completed results and
-open work. Publication is atomic and no-replace. SHADOW is query-only; TEST
-is isolated and non-live. Neither may dispatch, egress, promote itself to a
-live writer, replace a foreign destination, or change a source. Cleanup and
-restore failures remain visible.
-
-An exit exercise is independently run while the incumbent service still
-works. A replacement receives state-authorized data and interface access,
-reproduces expected results, reopens unresolved cases, continues a
-representative cycle, and reports remaining gaps. The state verifies its
-access, tools, permissions, references, approvals, and rollback path. An
-export that parses but cannot be operated is not an accepted exit.
-
-### 5.5 Switch: shadow comparison before any transfer
-
-Switch replays synthetic, historical, or separately approved copies into an
-alternative calculation or operator. The current official operator remains
-the only live operator during shadow. Each candidate result binds the same
-inputs, Control Pack, period, version, and test identity; the comparison
-reports matches, expected differences, unexplained differences, resource
-use, and unresolved compatibility questions. It does not treat incumbent
-behavior as correct by default.
-
-Cutover is a later state decision, separate from shadow acceptance. It names
-the exact function, period, cases, old and new operators, effective time,
-approvers, data and authority transfer, and completion test. The handoff
-drains or accounts for pending commands and outbox work, verifies receiver
-and cash/reporting state, fences the old writer, imports and independently
-checks the new owner's state, and grants one new scoped writer epoch. No
-interval permits both owners to mutate the same obligation.
-
-Rollback is a new controlled transfer, not a database rewind. It fences new
-work, reconciles actions already sent or acknowledged, preserves completed
-cash and reporting facts, exports any new history, restores the prior
-operator into an isolated attempt, independently checks it, and grants the
-single active writer only after approval. Every retry across the boundary
-retains its command identity.
-
-## 6. Lean semantics and runtime correspondence
-
-Use Lean for pure, deterministic semantics wherever it is realistically
-useful across components: canonical decoding, control selection, rule order,
-chronology, evidence/result interpretation, exception eligibility, replay,
-retry, and allowed state transitions. Share proved semantics only through
-reviewed versioned interfaces. Lean does not replace the owner, source
-connectors, database transaction guarantees, user interface, operating
-system, cryptographic backend, official receiver, custody, or operational
-evidence.
-
-The owner may call a Lean-produced runtime only after all of these are bound
-to the exact candidate release:
-
-1. pinned Lean toolchain, dependencies, source hashes, theorem manifest,
-   executable artifact identity, and admitted-axiom inventory;
-2. independent kernel/theorem checks and reviewed theorem statements;
-3. canonical known-answer vectors and negative, mutation, replay, and
-   malformed-input coverage consumed by an independent implementation;
-4. a reviewed refinement/linkage argument from the proved definitions and
-   canonical bytes through the deployed adapter to the owner's result;
-5. fail-closed behavior for version, decode, result, timeout, resource, or
-   runtime disagreement; and
-6. bounded end-to-end resource and recovery evidence for the selected
-   deployment profile.
-
-The theorem manifest fails the build if a theorem disappears, its statement
-changes without explicit review, or an unapproved axiom enters its dependency
-closure; kernel checks, including an independent checker such as
-`lean4checker`, run from a clean pinned build. The preferred deployment is a
-Lean-compiled native artifact behind a narrow boundary: the adapter passes
-exact canonical bytes and receives one typed result or a fail-closed error. An
-adapter parser may reject malformed transport earlier but never replaces the
-Lean decode or result. A primitive that cannot run inside the Lean artifact
-needs a narrow external specification, independent known-answer tests, an
-explicit trust assumption, and a demonstration that no semantic authority
-moved; performance alone never justifies a separate unproved evaluator.
-Lean proves the business relation and allowed transition; it does not make a
-cryptographic backend sound, a source truthful, a policy lawful, or a database
-durable. Database serializability and recovery need their own evidence.
-
-For the clearance kernel the theorem statements may be refined as types
-freeze, but these properties may not be weakened: evaluation is
-deterministic; proof or session acceptance alone never implies `CLEAR`; a
-read-only observation cannot create an operative clearance or economic
-mutation; absence requires authoritative completeness; the underlying policy
-result survives exception handling; an exception is valid only for the exact
-role, subject, rule, amount or bound, reason, scope, interval and underlying
-result; `HOLD`, `HUMAN_REVIEW` and `BLOCK` cannot advance economic state; a
-mismatched control set cannot evaluate; chronology is strict; replay,
-conflicting retry or a wrong before-state cannot advance state; every access
-joins exactly one decision; canonical encoding round-trips and is injective;
-and the audit checkpoint chain is append-only with no operational authority.
-
-The first operation is accepted only when the pinned executable artifact, theorem
-and axiom review, independent checks, known-answer and failure coverage,
-reviewed refinement through the State adapter, and bounded recovery/resource
-evidence bind to the exact candidate. Lean failure cannot invoke a duplicate
-Python decision path. This is an implementation milestone, not a production
-authority switch.
-
-The vertical slice must also make the accepted result drive its durable
-dependencies and follow-up, the same-state Mirror explanation, a state-internal
-report, and a recipient-safe support output. Demonstrate that an unrelated
-change preserves a still-valid result, a relevant new fact invalidates or
-reopens the correct work, and a crash after the financial commit leaves
-resumable follow-up. Remove whole-Continuity-package work from the normal write
-path only after equivalent bounds, recovery, and retry protections are proven.
-Then exercise these mechanics in one distinct nonfinancial/read-only workflow
-before generalizing them.
-
-## 7. Connectors, receiver, and separate product lanes
-
-### State and contractor connectors
-
-Connectors are enabled only for named sources the state can lawfully access.
-Each specifies owner, direction, permitted fields, authentication, schema
-and version, schedule or event trigger, cutoff and watermark, record identity,
-retry and replay behavior, rejects, retention, correction duty, outage
-escalation, and completeness evidence. Ingestion is read-only by default.
-Any command or write connector has a separate state-approved scope and routes
-through the owner's durable outbox.
-
-State contracts must provide practical access to the records, receipts,
-rejects, adjustments, relevant subcontractor equivalents, and payment
-evidence required by the selected responsibility. Delegation does not erase
-the state's rights or the accountable party's obligations. Connector
-acceptance verifies partial delivery, late records, repeats, corrections,
-revocation, schema drift, upstream omission, and recovery without duplicate
-financial mutation.
-
-### Official receiver and payment systems
-
-The official receiver is external to RightRail. The state and receiver owner
-approve the destination, action grammar, authentication, idempotency, signing
-or acknowledgment meaning, timeout, reject, and escalation behavior. The
-receiver connector cannot create an action the owner did not authorize. The
-existing official payment system remains the money-movement authority.
-Receiver acknowledgment, official cash evidence, and required reporting are
-separately reconciled before the approved completion test passes.
-
-### Provider App
-
-Provider App is a separate provider-side product build track in an approved
-provider environment. It offers local pre-submission checks against available
-rules and supporting records. Claims use their normal approved submission
-channel; clinical judgment, unavailable payer facts, and payment decisions
-remain with their responsible parties. App outputs stay local unless a
-specific state-approved sharing route exists. Government service scope, data,
-procurement, and fees do not depend on provider adoption.
-
-## 8. Cross-state reuse and vendor interfaces
-
-The shared layer is a versioned, non-sensitive profile of interface schemas,
-conformance requirements, public or synthetic test vectors, export formats,
-supported software versions, and adapter behavior. It may identify evidence
-that another authorized buyer could review; it does not contain a state's
-provider list, rate, population, source records, local tests, case details,
-policy interpretation, keys, or sensitive findings.
-
-Each state separately approves the artifacts it may share, decides what
-another state's evidence supports, evaluates local differences, and approves
-its own Control Pack, source access, deployment, and release. A reused
-connector or test reduces repeat work only where its version, conditions, and
-local applicability are demonstrated. Evidence for an old vendor release is
-not silently inherited by a new release.
-
-Vendor interfaces and conformance kits are versioned, documented, and
-available without a toll. Suppliers may implement against the same public
-tests and submit their own results. RightRail does not control procurement,
-exclude alternatives through private formats, charge an exit fee, or take a
-share of denials, recoveries, penalties, sanctions, or savings. Independent
-review remains separate from a vendor's own consequential delivery work.
-
-Cross-state learning uses synthetic reproduction or explicitly authorized,
-reviewed non-sensitive artifacts. There is no transfer of sensitive data
-between states. Distribution can fail or be withdrawn without preventing a
-state from operating its last locally approved version.
-
-## 9. Production operations and control plane
-
-### Environment, identity, and custody
-
-Every deployment has separate state-scoped identity, network routes, data
-stores, access policy, key references, and release configuration. The state
-approves administrators, staff roles, contractors, service identities,
-break-glass limits, retention, audit access, and revocation. Least privilege
-is enforced at the API and storage boundary; a front-end role check alone is
-not a security boundary. Every release pins each verifier, artifact, schema,
-policy, governance, receiver, and custody identity by exact length and digest;
-a missing, changed, duplicated, or downgraded identity blocks the release.
-
-The state controls production keys through an approved KMS/HSM or equivalent
-custody arrangement. Key generation, access, rotation, backup, revocation,
-recovery, signing, and separation of duties are evidenced at deployment.
-Documentation of an interface or algorithm is not HSM, FIPS, or key-custody
-qualification. Keys are not carried in Continuity exports or ordinary
-support packages. Signatures authenticate provenance and authority, not the
-truth of what is signed. Rotation proposes old root, new root, successor epoch
-and reason; collects the configured signatures and timelock; dry-runs
-verification, replay, recovery, rollback, and export/restore on synthetic data;
-publishes the new root and epoch atomically, rejecting partial or downgraded
-records; and keeps the prior root read-only until its retention and recovery
-duties end. A compromise pauses new state advances, preserves safe evidence,
-rotates custody, and opens a non-PHI incident record.
-
-### Release and configuration
-
-Each release binds source revision, dependency lock, build provenance,
-artifact hash, vulnerability review, test and theorem identities where
-applicable, Control Pack compatibility, migration, and rollback artifact.
-Signed releases move through state-approved environments with separation of
-authoring, approval, and production deployment. A Control Pack change is
-reviewed and versioned independently from a code release. A change cannot
-silently reinterpret historical work.
-
-Rules, semantic modules, adapters, codecs, conformance suites, migrations,
-recipient-specific reports, and recovery formats use a small immutable
-identity: stable ID, version, content digest, dependencies, compatibility,
-provenance where applicable, attached evidence, and withdrawal/supersession
-status. A state deployment selects approved artifacts, and historical
-operations retain the identities used. Assemble and validate a versioned
-deployment bundle with existing typed manifests and build tools; report
-missing permissions, unresolved requirements, incompatibilities, tests,
-resource envelope, migration, and withdrawal instructions without creating a
-generic compiler service.
-
-Roll back code only through a compatible, reviewed release plan. Restore data
-from a qualified backup or continuity process; do not reverse committed
-financial history by replacing a database file. New corrections are explicit
-owner transitions linked to the original decision.
-
-### Privacy, support, and incidents
-
-State, provider, or approved payer environments retain sensitive inputs and
-state keys. Corporate support and shared tooling receive zero PHI and no
-persistent linkable claim fingerprint. Error messages, filenames, logs,
-hashes, aggregates, dumps, and timestamps are treated as potentially
-sensitive until reviewed. External AI tools do not receive raw or identifying
-material.
-
-Default support packages contain approved software and rule versions, a
-bounded failure stage, fixed error code, and a synthetic reproducer when
-possible. The state-side reviewer removes or approves every field before
-release. If a defect cannot be reproduced safely outside the state, diagnosis
-remains inside its approved environment. Employee access to live sensitive
-data is disabled by default; any future emergency-access path requires
-separate legal, state-security, contract, time-limit, monitoring, and
-revocation approval before it can exist.
-
-Incidents have an accountable on-call owner, severity and notification
-rules, containment steps, evidence-preservation rules, recovery plan, and
-state escalation route. State-visible service health includes source lag,
-rejects, unresolved work age, retries, outbox state, receiver responses,
-cash/report differences, owner errors, and failed restores without exposing
-raw records. Monitoring itself is access-controlled and retention-limited.
-Events carry only a fixed class, release and authority digests, epoch,
-sanitized status, and a non-linkable correlation digest. Raw proofs, sources,
-receipts, claims, provider identities, stable fingerprints, amounts, nonces,
-credentials, keys, paths, host identifiers, stdout/stderr, payloads, and
-exception text never appear in events, metrics, logs, exports, support, or
-dashboards. Monitoring never selects a verifier, mutates state, or delivers
-anything; an indeterminate event stays visible until independently resolved.
-
-### Recovery, rollback, and capacity
-
-The state approves recovery objectives, backup locations, retention, and
-recovery roles for its service. Backups are encrypted under state-approved
-custody and are restore-tested in an isolated environment. Recovery proves
-owner identity, schema and rule versions, complete history, projections,
-pending actions, exact retries, and no duplicate dispatch. Runbooks include
-source outage, database outage, key loss, corrupted package, partial release,
-receiver timeout, and an operator exit.
-
-Capacity is measured over the complete admitted path: source ingestion,
-independent checking, owner transaction, durable commit, Mirror query, outbox,
-receiver acknowledgment, recovery, and support. Each stage has explicit
-record/package, memory, process, timeout, queue, retention, and concurrency
-bounds. Over-limit work is rejected or quarantined without partial mutation.
-The state accepts workload assumptions and service objectives before a
-production claim. Component benchmarks do not establish a system SLA. Any
-selected `PRIVATE_ZK` profile retains the separate requirements in
-[`parked/private_zk/docs/NATIVE_V3_ARCHITECTURE.md`](../parked/private_zk/docs/NATIVE_V3_ARCHITECTURE.md);
-those are not a universal requirement for other evidence modes.
-
-### Independent assurance and procurement
-
-Independent reviewers receive direct, appropriately protected access to the
-consequential requirements, test methods, retained results, defects, and
-remediation evidence. A supplier does not solely certify its own consequential
-work. Review covers the state policy mapping, population completeness,
-independent expected answers, access controls, release, incident response,
-recovery, continuity, exit, and any selected proof or native boundary.
-
-Procurement defines one responsibility, permitted actions, data and interface
-rights, source cooperation, service levels, deliverables, acceptance tests,
-change scope, cost cap, remedies, support, independent review, renewal,
-replacement, and tested exit. The state and its advisors control the
-specification and evaluation; conflicts and pre-procurement assistance receive
-legal review. Funding classification, security review, privacy roles, records
-retention, and applicable approvals are confirmed for the actual deployment.
-
-The founder-authorized commercial direction is approximately $2M annual
-operations including implementation and covered changes, marginal 10/7/5
-basis-point flow tiers with a 5-basis-point floor, and separate $5–$10 Provider
-App economics. No outcome-linked share of denials, recoveries, penalties,
-sanctions, or savings is permitted. These are direction-setting terms, not a
-customer quote or contract approval; exact scope, denominator, covered-change
-boundary, and contract pricing still require approval. Billing stays outside
-operational authorization. No specific procurement route, law, or funding
-treatment is selected here.
-
-Comparable suppliers receive the same synthetic exercise: an omitted item, a
-wrong rule version, a partial payment, a disputed adjustment, an incomplete
-correction, a repeated message, an outage, and a restored export. Evaluation
-records each supplier's supported answer, uncertainty, staff workload,
-independent checks, and handoff usability; it does not require one vendor's
-private format.
-
-## 10. Component acceptance gates
-
-Each entry is the acceptance gate a component must pass for a production
-release. They are contracts, not statuses; results live in `STATUS.md`.
-
-### Project-wide acceptance entry point
-
-Extend existing build, test, review, and task tools into one documented
-acceptance command. Discover modules, entry points, release
-artifacts, and connections from repository configuration; any unclassified
-addition remains incomplete until applicability is reviewed. Bind affected
-requirements to implementation and exact source/build/configuration identities,
-including dirty files and cross-project dependencies, plus their proof, test,
-measurement, or authorized review. Unknown impact runs broader relevant checks.
-Separate fast development checks, integration acceptance, and release
-qualification; empty, missing, stale, or skipped runs remain incomplete.
-
-Protect requirements, consequential specifications, theorem statements and
-definitions, independent expected answers, gate selectors, required tests,
-exception records, and approved resource budgets. Changes require explicit
-review; a proposer cannot self-authorize a weaker requirement or certify its
-own exception. Isolated synthetic fixtures must detect bypassed Lean logic,
-forbidden output, changed retry identity, stale evidence, a disabled required
-check, an unclassified module, and an unauthorized protected-requirement
-change; a valid ordinary change must pass without unnecessary founder
-intervention. Use trusted repository/release controls where available, no live
-credentials or sensitive production data, and report which controls are
-advisory or block integration/release. If stronger infrastructure is
-unavailable, retain local controls and state the specific remaining setup
-action once.
-
-### State authority, Control Pack, and population
-
-The state approves a versioned Control Pack and
-population definition; the named source owner attests its manifest under
-contract; source and independent count evidence reconcile; every rule maps to
-expected tests; effective dates, correction scope, decision roles, and
-completion evidence are reviewed; missing coverage remains visible.
-
-### Source adapters and evidence modes
-
-A named source owner and state approver accept the exact
-scope, schema, authority, receipt, completeness, replay, correction, and
-retention contract. Each admitted fact can be traced to its source and time;
-an incomplete or ambiguous feed cannot establish absence. Only the
-state-approved evidence mode is accepted.
-
-### Financial owner and persistence
-
-Independent checks reconstruct the governed inputs and
-results; adversarial tests cover duplicate, changed, stale, cross-scope,
-partial, concurrent, pre-commit, post-commit/lost-response, and recovery
-cases; one writer atomically commits history, projection, and outbox; the
-state accepts durability and recovery evidence.
-
-### Mirror staff workspace
-
-Authorized staff can trace every displayed status to
-owner history and evidence, make only role-approved owner commands, review
-uncertainty and due work, and distinguish decisions, actions, acknowledgments,
-cash, and reporting. A denied command cannot mutate state, and every supported
-action has a tested human fallback.
-
-### Continuity and exit
-
-A party other than the package producer restores into an
-isolated target, validates the manifest and identity, independently
-reconstructs completed results, reopens and continues representative work,
-verifies pending actions and evidence access, and proves that the restore
-cannot dispatch or create a second live writer. The state accepts the
-exercise and a remediation/retest process.
-
-### Switch and operator transfer
-
-State-approved shadow runs produce reproducible
-candidate inputs and explanations for all differences without side effects.
-A separate cutover decision names scope, time, old/new operator, authority
-epoch, pending action treatment, completion and rollback criteria. Tests prove
-one active writer, idempotent retries, no duplicate action, and recovery of
-all newly created state before authority changes.
-
-### Lean, Native, and formal evidence
-
-The exact production build binds theorem manifest,
-dependencies, binary identity, canonical bytes, and reviewed refinement;
-known-answer, mutation, differential, retry, recovery, malformed-input,
-resource, and independent-verification gates pass for the selected contract.
-No proof result supplies a policy decision, authority, or payment. A
-`PRIVATE_ZK` soundness/privacy gate is conditional on selecting that mode.
-
-### Official receiver, payment, and reporting
-
-The state and receiver owners approve and test the exact
-action contract, recipient and scope controls, command identity, retry,
-timeout, rejection, acknowledgment, reconciliation, and incident path.
-Independent official records distinguish message acceptance from money
-movement and reporting completion.
-
-### Production security, custody, privacy, and support
-
-State security, privacy, legal, and data owners approve
-the actual environment, roles, routes, keys, telemetry, logs, support
-packages, retention, incident duties, and recovery. Adversarial tests show
-sensitive data and stable identifiers do not escape approved boundaries;
-access is revocable and independently auditable.
-
-### Monitoring, disaster recovery, and capacity
-
-End-to-end load and fault exercises cover source gaps,
-bursts, storage limits, contention, receiver delay, process and database
-failure, restore, and return to service. Results include per-stage resource
-and latency measurements, duplicate/omission checks, recovery evidence, and
-approved state RPO/RTO and capacity thresholds. No SLA is claimed before
-acceptance.
-
-### Independent audit and procurement
-
-The state and independent advisor approve the comparison
-exercise, evaluator separation, access and record rights, actual scope,
-acceptance tests, security/privacy terms, cost ceiling, escalation and exit.
-Funding and procurement decisions are recorded by their state owners.
-
-### Cross-state profiles and vendors
-
-Each state separately approves the reusable artifact
-and its local delta, tests its own population and Control Pack, and records
-the release it accepts. Shared material contains no sensitive state data;
-release withdrawal and continued operation of the last local approval are
-tested.
-
-### Provider App
-
-Provider checks stay in the approved provider
-environment, identify checked rule/source/software versions, report
-uncertainty, and do not imply payer authorization or payment. No PHI is sent
-to corporate support and the government service works without the app.
-
-## 11. Parallel build tracks and external launch gates
-
-Build the complete product and operating capabilities before the VC pitch.
-These construction commitments proceed in parallel; a narrowly scoped first
-sale may change deployed scope but does not make the full target complete. They
-describe work tracks, not a release sequence; the government service's release
-gates remain in Section 12.
-
-| Track | BUILD direction | Separate external launch gate |
-| --- | --- | --- |
-| First government financial service | Build toward one complete, recurring financial responsibility and its full data, decision, operations, supplier, and exit boundaries. No state, program, profile, or deployment is selected here. | The service follows its own release-gate sequence in Section 12. |
-| Provider App | Committed full-stack BUILD track under the current owner instruction, in parallel with core construction and in the approved provider environment. | Actual provider adoption is a separate external gate for this track and is not a prerequisite for the first government service. |
-| Non-sensitive cross-state conformance | Committed full-stack BUILD track in parallel with core construction for public/versioned interfaces, conformance requirements, and public or synthetic vectors; sensitive state data remains local. | A second state's acceptance is a separate external gate for cross-state use and is not a prerequisite for the first government service. |
-| Provider Trust Graph | Separate, read-only first commercial Mirror wedge. | Its engagement and launch sequence remain separate; no common engagement or shared launch sequence is selected. |
-
-Provider adoption and second-state acceptance gate their respective external
-launches only. Neither is a launch prerequisite for the first government
-service, and parallel BUILD work does not imply external adoption or approval.
-
-## 12. Release order
-
-1. Agree the full responsibility, accountable state owner, source rights,
-   procurement/funding path, privacy boundary, human decision roles, and
-   completion definition.
-2. Approve and test the Control Pack, complete population, sources, and
-   independently derived expected answers with synthetic data.
-3. Reconstruct an approved historical period, resolve interpretation
-   differences, and accept the evidence, owner, and staff workflow.
-4. Run an approved parallel observation cycle beside the official process.
-   The official operator remains authoritative; acceptance measures evidence
-   gaps, unresolved work, corrections, staff effort, and failures.
-5. Accept security, privacy, custody, monitoring, recovery, support,
-   capacity, independent review, receiver, connectors, and exit for the
-   actual deployment environment.
-6. Operate the defined service with human-approved decisions and official
-   payment systems. Retire only specifically accepted duplicate work.
-7. Consider any narrow automation only through its own state approval and
-   safety case.
-8. Shadow an alternative with state-approved copies and tests. Consider
-   transfer only through a separate cutover decision and single-writer,
-   reconciliation, rollback, and continuity acceptance.
-
-This sequence specifies gates, not a selected state or promised calendar.
-Each actual acceptance result is recorded in `STATUS.md`. The first pilot may be narrow in deployment size, but it
-must still complete one whole recurring financial responsibility.
+  boundary directly; a fact does not need a cryptographic wrapper merely
+  because it is sensitive.
+- **`AUTHORITATIVE_ASSERTION`** uses a narrowly scoped, signed assertion from
+  a qualified source; signature acceptance proves provenance, not truth,
+  population completeness, or state disposition.
+- **`PRIVATE_ZK`** stays parked and conditional (Constitution IX.4): it
+  verifies a source-bound hidden predicate without disclosing its inputs.
+
+**The non-ZK evidence path ships first, as the whole answer for most
+auditors:** signed batch checkpoints, the independent witness cosign chain,
+Merkle inclusion proofs for selective disclosure, and a reproducible Lean
+checker an auditor reruns in the state's own tenant. GAGAS auditors already
+work this way with IT-generated evidence, and no CMS, OIG, GAO, or state
+auditor guidance accepts ZK proofs as audit evidence as of this writing —
+the policy red-team found no precedent anywhere. This path alone gets an
+estimated 90% of the value a full ZK design would add.
+
+`PRIVATE_ZK` is a **parallel add-on**, not a prerequisite, scoped narrowly:
+the crypto red-team's correction is that ZK's marginal value is not
+"anyone can verify," since the state and the entity signing the roots ZK
+proves against are the same side. Its real value is the cross-organizational
+case with an unmotivated verifier — for example, proving to an MCO or a
+federal partner that no member in a release is on a death-match file,
+without disclosing the eligibility list. The cheap, useful step now is
+writing `CAP-REL-v1` (the capitation-release relation) as a plain Lean
+predicate evaluated directly — useful today as `DIRECT_STATE_OWNED`
+evidence — so that if a state, CMS, or OIG later asks for a hidden-input
+proof, the circuit has an exact specification to be proved against rather
+than a new one invented at that point. Circuit and verifier proofs stay
+research-grade work (a corrected 20–35 engineer-weeks for the circuit,
+40–80 for a verified verifier) and are not scheduled.
+
+If `PRIVATE_ZK` is ever selected, its parameters come from one canonical
+source, `zk-spike/params.md`'s P128-R set (128-bit classical soundness,
+about 64-bit under a quantum random oracle, 100-bit under the
+conjecture-free unique-decoding bound), superseding two earlier,
+inconsistent parameter drafts. Salt sizing, custody, and the choice between
+7-year retained salts and scheduled destruction are open (section 12).
+
+## 11. Post-quantum cryptography
+
+- **ML-DSA-87**, through AWS-LC in a FIPS 140-3 HSM in the state tenant,
+  signs batch and checkpoint bytes — one signature per batch, not per
+  payment (section 5).
+- **Long-lived root and anchor keys use LMS/XMSS** (SP 800-208), not
+  SLH-DSA: no FIPS-140-3-validated cloud HSM offers SLH-DSA today, while
+  LMS/XMSS is HSM-backed now (for example, Thales Luna T7, FIPS 140-3 Level
+  3 certificate #5450, announced 2026-07-29, covering ML-DSA, ML-KEM, and
+  LMS). SLH-DSA stays available as an optional software-verified second
+  signature, never the only one on a root key. LMS/XMSS keys are stateful
+  and need the SP 800-208 no-backup-restore operational discipline.
+- **SHA3-512, domain-separated, through AWS-LC** — not the hand-written Lean
+  implementation, which is not constant-time and not reviewed like a crypto
+  library.
+- **Hybrid ML-KEM TLS (X25519MLKEM768)** protects the gate-to-payer and
+  gate-to-standby channels. Confirmed available on AWS GovCloud
+  load-balancer policies as of late 2025; Azure Government's support is
+  unconfirmed as of this writing, so the design terminates TLS on the
+  gate's own backend (AWS-LC or OpenSSL 3.5+) behind an ordinary L4 load
+  balancer where a PQ-capable managed front end is not available.
+
+We verify none of these primitives ourselves; we consume AWS-LC's
+machine-checked proofs (HOL Light and CBMC, for ML-KEM and, as it lands,
+ML-DSA), run ACVP/KAT vectors in CI against the exact library build, and
+prove only the binding — that signed bytes name exactly one decision. ML-DSA
+integration into AWS-LC's FIPS-validated path was still landing as of the
+most recent research pass; a non-PQ fallback signature for token and
+checkpoint signing until that validation completes is open (section 12).
+
+## 12. What exists today vs. the target
+
+Labelled honestly, per Constitution VI and XI.11. See `STATUS.md` for the
+current source of truth on anything marked measured.
+
+- **Measured.** The Lean-controlled correction transition (9 of 9 focused
+  tests passed) — but the pinned binary it runs was built from Lean source
+  that can no longer be recovered, so no proof today covers the binary that
+  actually runs. Continuity admission and correction follow-up through
+  Mirror. The felt-value scorecard and the Article XIII interaction-model
+  crawl.
+- **Designed, not built.** The gate API (decide/decide-batch), the token and
+  checkpoint formats, the independent witness, batch signing, segmented
+  Continuity, member-key sharding, the fenced primary/standby protocol, the
+  Bypass outcome and its theorem, and all thirteen remaining command ports
+  into Lean. `gate-design.md` states this explicitly: nothing in it is
+  built, run, or approved.
+- **Not yet run.** The single most important missing measurement, named by
+  both `fv-plan.md` and the engineering red-team: a warm-worker Lean
+  evaluator benchmark against a batch of synthetic decisions, with no
+  process spawn. Every throughput number in this document (the batch
+  window, the worker pool sizing, the "about 0.66 s" per-batch latency
+  budget) is a target, not a measurement, until that benchmark exists. The
+  TLA+ failover model is written but not checked. The `PRIVATE_ZK` spike's
+  corrected speed estimate (about 150–350 ms p50, up to about 500 ms p95,
+  per 2^11–2^12-line segment, roughly 3x the original estimate) is itself
+  unmeasured and carries an explicit ±2–3x uncertainty band until a spike
+  runs it.
+
+## 13. Path
+
+The ordered path removes the most risk per week first (`fv-plan.md`'s
+roadmap, steps 1–4 first): proof hygiene on the existing theorem manifest
+and a reproducible rebuild of the pinned binary from current source; codec
+laws for the live command path; the existing `evaluate` proof made the live
+evaluator; the remaining thirteen command types ported in order of money
+impact. In parallel: the warm-worker throughput benchmark and the owner
+throughput harness (branch `load-test`), which must exist before any claim
+about batch sizing or worker-pool count is more than a guess. Signed token,
+checkpoint, and segment formats, the Lean checker, and the TLA+ failover
+model follow, each gated on founder approval where it touches a protected
+format (Constitution V.4). `CAP-REL` as a plain Lean rule and the X12/NCPDP
+tokenizer are scheduled with the adapter build, not ahead of it. `PRIVATE_ZK`
+work stays parked (Constitution IX.4) until a state, CMS, or OIG asks for a
+hidden-input proof.
+
+## 14. PENDING FOUNDER DECISION
+
+None of the following is decided. Each needs an explicit founder call before
+it is built, under Constitution V.4 (protected formats) or IX.4 (parked
+work):
+
+1. **The 13 new gate wire and storage formats** named in `gate-design.md`
+   (decide-request/response, token, checkpoint, key-cert, authority-grant,
+   bypass-grant, release-record, witness-cosig, segment, the Lean worker
+   batch frame, three digest domains, and the CAP-REL evidence entry) —
+   named only; none is built.
+2. **Un-parking `PRIVATE_ZK` under Constitution IX.4**, and where its work
+   lives (a separate proof/Lake workspace, never the product library with
+   its zero external dependencies).
+3. **A non-PQ fallback signature** for tokens and checkpoints, to use until
+   a FIPS-140-3-validated ML-DSA implementation is confirmed available in a
+   consumable library.
+4. **The default fail policy**, and which flows may offer `FAIL_OPEN` at
+   all — a real addition to Constitution III.5's unconditional fail-closed
+   invariant, not a tuning knob, per the engineering red-team.
+5. **Salt custody for any future `PRIVATE_ZK` use**: a 7-year HSM-wrapped
+   salt vault (which itself becomes a PHI-equivalent asset) versus scheduled
+   destruction (which drops the 7-year selective-disclosure promise). Not
+   both.
+6. **Segmented Continuity as a new store/package version** (day- or
+   million-event-sealed segments bound to checkpoints, replacing the
+   current 10,000-row cap) — a protected format change.
+7. **Dropping v7 store-version compatibility, the `OPENING_BALANCE`
+   migration path, and `tools/continuity_successor_v7.py`**, and starting
+   the gate's store fresh from genesis instead, per the recommendation that
+   this carries real cost (about 2,800 lines) for a migration path no real
+   v7 store will ever use, since all current data is synthetic.
+
+## 15. Beyond the gate
+
+The gate sits inside the same five-part product described in
+`ARCHITECTURE.md`: the state-approved Control Pack, the Blind Ledger owner
+as the one financial writer, the Mirror staff workspace as the exception
+queue and audit surface, Continuity as the state's exit path, and Switch as
+the pre-cutover shadow comparator. None of those roles changes: the owner
+still commits atomically with integer cents and explicit retry identity: a
+UI, connector, verifier, or shadow copy never becomes a second writer.
+Connectors stay allow-listed, bounded, and read-only by default; the
+official receiver and payment system keep money-movement authority; Provider
+App remains a separate provider-side product that does not gate on the
+government service. Cross-state reuse stays limited to versioned,
+non-sensitive interface schemas and conformance vectors — no state's
+population, rates, or findings cross to another state.
+
+Commercial terms are unchanged from the founder's direction: about $2M/year
+operations plus the marginal 10/7/5-basis-point covered-flow schedule with a
+5-basis-point floor, Provider App priced separately, and no share of
+denials, recoveries, penalties, sanctions, or savings (Constitution VIII).
+Nothing here selects a procurement route, funding classification, or go-live
+date.
 
 ## Related documents
 
 - [Constitution](../CONSTITUTION.md)
 - [Status](../STATUS.md)
-- [Product entry point](../README.md)
 - [How the code fits together](../ARCHITECTURE.md)
 - [Design ideology](DESIGN_IDEOLOGY.md)
 - [Provider App](../provider_app/README.md)
