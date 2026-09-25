@@ -863,10 +863,12 @@
     node.className = "command-status " + kind;
   }
 
-  function describeError(code) {
+  function describeError(code, name) {
     if (UNCERTAIN_OUTCOMES.includes(code)) {
       return "Command outcome is unavailable and may have committed. Refresh the overview, reopen the package, and inspect Owner state before retrying.";
     }
+    const declared = name && model.controls[name] && model.controls[name].responses[code];
+    if (declared && declared.message) return declared.message;
     return {
       authority_actor_not_authorized: "Owner denied the command because the fixed synthetic reporter role cannot make a financial decision.",
       obligation_revision_conflict: "Owner rejected the stale revision. Reopen the H package and review the current revision.",
@@ -944,7 +946,7 @@
       if (error.message === "owner_read_unavailable") {
         showOwnerUnavailable();
       } else {
-        commandMessage(describeError(error.message), "error");
+        commandMessage(describeError(error.message, name), "error");
         if (error.message === "obligation_revision_conflict") {
           packageStale = true;
           banner("package-staleness", "stale", "STALE REVIEW — Owner rejected the package binding. Reload the overview and reopen H before continuing.");

@@ -95,34 +95,44 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             raise unittest.SkipTest("correction_engine_artifact_absent")
         scorecard._node_path()
         cls.temp = tempfile.TemporaryDirectory(prefix="rr-mirror-xiii-crawl-")
-        owner_dir = Path(cls.temp.name) / "owner"
-        owner_dir.mkdir()
         engine_dir = Path(cls.temp.name) / "engine-work"
         engine_dir.mkdir()
-        release = scorecard.financial_engine.load_correction_transition_release(scorecard.ENGINE_PATH.resolve(), engine_dir)
-        cls.workflow = scorecard.staff.StaffWorkflow(owner_dir, correction_transition_release=release)
-        cls.server = scorecard.staff._LoopbackServer(("127.0.0.1", 0), scorecard.staff._handler_for(cls.workflow))
-        cls.thread = threading.Thread(target=cls.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
-        cls.thread.start()
+        cls.release = scorecard.financial_engine.load_correction_transition_release(scorecard.ENGINE_PATH.resolve(), engine_dir)
         cls.driver_path = Path(cls.temp.name) / "browser.js"
         cls.driver_path.write_text(scorecard.DRIVER_JS, encoding="utf-8")
+        cls.workflow, cls.server, cls.thread = cls._start_workflow(Path(cls.temp.name) / "owner")
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.server.shutdown()
-        cls.thread.join(30)
-        cls.server.server_close()
-        cls.workflow.close()
+        cls._stop_workflow(cls.workflow, cls.server, cls.thread)
         cls.temp.cleanup()
 
-    def _open_path(self, path: str) -> scorecard._Browser:
-        browser = scorecard._Browser(self.server.server_address[1], self.driver_path)
+    @classmethod
+    def _start_workflow(cls, owner_dir: Path):
+        """A fresh workflow + server on the same real engine release."""
+        owner_dir.mkdir()
+        workflow = scorecard.staff.StaffWorkflow(owner_dir, correction_transition_release=cls.release)
+        server = scorecard.staff._LoopbackServer(("127.0.0.1", 0), scorecard.staff._handler_for(workflow))
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        return workflow, server, thread
+
+    @classmethod
+    def _stop_workflow(cls, workflow, server, thread) -> None:
+        server.shutdown()
+        thread.join(30)
+        server.server_close()
+        workflow.close()
+
+    def _open_path(self, path: str, server: Any = None) -> scorecard._Browser:
+        server = server or self.server
+        browser = scorecard._Browser(server.server_address[1], self.driver_path)
         self.addCleanup(browser.close)
         browser.open(path)
         return browser
 
-    def _open(self, role: str) -> scorecard._Browser:
-        return self._open_path(f"/role/{role}")
+    def _open(self, role: str, server: Any = None) -> scorecard._Browser:
+        return self._open_path(f"/role/{role}", server)
 
     def test_each_role_sees_exactly_its_declared_controls(self) -> None:
         for role in _MODEL["roles"]:
@@ -140,10 +150,10 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         self.assertFalse(view["hidden"].get("role-picker", False))
         self.assertTrue(view["hidden"].get("workspace-root", False))
 
-    def _check_state(self, pkg: dict[str, Any], test_mode: bool) -> None:
+    def _check_state(self, pkg: dict[str, Any], test_mode: bool, server: Any = None) -> None:
         ns = _state(pkg, test_mode)
         for role in _DECISION_ROLES:
-            browser = self._open(role)
+            browser = self._open(role, server)
             browser.click("open-package")
             view = browser.view()
             for name, control in _MODEL["controls"].items():
@@ -156,30 +166,80 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 self.assertFalse(button["hidden"], f"{role}/{name}")
                 self.assertEqual(not button["disabled"], eval(control["enabled_when"], {"__builtins__": {}}, ns), f"{role}/{name}: state={ns}")
 
-    def test_walk_every_reachable_state_and_transition(self) -> None:
-        truth = lambda: self.workflow.decision_view()["decision_package"]  # noqa: E731
-        test_mode = False
-        self._check_state(truth(), test_mode)
-        for role, name in _JOURNEY:
-            control = _MODEL["controls"][name]
-            browser = self._open(role)
-            browser.click("open-package")
-            self.assertTrue(browser.action(name), f"{name}: enabled but not clickable")
-            status = browser.last_view["texts"].get("command-status", "")
-            expected = control["responses"]["success"]["message"].split(".")[0]
-            self.assertIn(expected, status, f"{name}: {status}")
-            if name == "restore-test":
-                self.assertGreater(truth()["obligation"]["shortfall_cents"], 0, "restore-test must be proven while H's shortfall is still open")
-                test_mode = True
-            self._check_state(truth(), test_mode)
+    def _run_step(self, workflow, server, role: str, name: str, response: str = "success", before_click=None) -> None:
+        control = _MODEL["controls"][name]
+        browser = self._open(role, server)
+        browser.click("open-package")
+        if before_click is not None:
+            before_click()
+        self.assertTrue(browser.action(name), f"{name}: enabled but not clickable")
+        status = browser.last_view["texts"].get("command-status", "")
+        expected = control["responses"][response]["message"]
+        self.assertIn(expected.split(".")[0] if response == "success" else expected, status, f"{name}: {status}")
 
-# restore-test runs after reject-offset/acknowledge, not first: a guarded repro
-# confirmed the real Owner's restore path rebuilds the Owner without the
-# engine's correction_transition_release, so any reject-offset attempted after
-# a restore permanently fails (escalated separately as an owner-layer gap, not
-# a model or test defect). This order still proves restore-test succeeds while
-# H's shortfall is open, without walking into the disabled engine afterward.
-_JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"), ("operator", "restore-test"),
+    def _walk(self, workflow, server, sequence, position=None) -> None:
+        truth = lambda: workflow.decision_view()["decision_package"]  # noqa: E731
+        test_mode = cash_recorded = False
+        self._check_state(truth(), test_mode, server)
+        for role, name in sequence:
+            self._run_step(workflow, server, role, name)
+            if name == "restore-test":
+                if not cash_recorded:
+                    self.assertGreater(truth()["obligation"]["shortfall_cents"], 0, f"position={position}: restore-test must be proven while H's shortfall is still open")
+                test_mode = True
+            cash_recorded = cash_recorded or name == "record-cash"
+            self._check_state(truth(), test_mode, server)
+
+    def test_walk_every_reachable_state_and_transition(self) -> None:
+        """Linear journey, no restore-test: state must match the model throughout."""
+        self._walk(self.workflow, self.server, _JOURNEY)
+
+    def test_restore_test_at_every_position_still_completes_the_journey(self) -> None:
+        """restore-test is the only non-linear control (Art. XIII.4): insert it at
+        every position in a fresh journey and confirm every later step and
+        enabled-state still matches the model, covering every reachable state."""
+        for position in range(len(_JOURNEY) + 1):
+            with self.subTest(restore_test_position=position):
+                sequence = _JOURNEY[:position] + (("operator", "restore-test"),) + _JOURNEY[position:]
+                workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"owner-restore-at-{position}")
+                try:
+                    self._walk(workflow, server, sequence, position)
+                finally:
+                    self._stop_workflow(workflow, server, thread)
+
+    def test_stale_revision_conflict_shows_the_declared_message_on_every_command(self) -> None:
+        """One stale-snapshot failure (Art. XIII.4.d), every command: an
+        unrelated support-evidence write moves the Owner behind the open
+        page's back (it never mutates on conflict), then a click must show
+        the model's own per-control words, not a raw code or another
+        control's wording."""
+        owner_dir = Path(self.temp.name) / "owner-stale-probe"
+        workflow, server, thread = self._start_workflow(owner_dir)
+        probe = [0]
+
+        def make_stale() -> None:
+            probe[0] += 1
+            workflow.mirror.owner.record_support_evidence(
+                item_id=scorecard.staff.H_ITEM_ID,
+                evidence_id=f"evidence:stale-probe:{probe[0]}",
+                common_origin_id=f"origin:stale-probe:{probe[0]}",
+            )
+
+        def check_stale(role: str, name: str) -> None:
+            with self.subTest(control=name):
+                self._run_step(workflow, server, role, name, "obligation_revision_conflict", make_stale)
+
+        table = (("operator", "restore-test", False), ("approver", "reject-offset", True),
+                 ("analyst", "acknowledge", True), ("analyst", "record-cash", True), ("analyst", "record-report", False))
+        try:
+            for role, name, advance in table:
+                check_stale(role, name)
+                if advance:
+                    self._run_step(workflow, server, role, name)
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
+_JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
             ("analyst", "record-cash"), ("analyst", "record-report"))
 _DECISION_ROLES = ("analyst", "approver", "auditor", "operator")
 
