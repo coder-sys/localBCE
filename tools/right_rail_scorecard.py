@@ -275,9 +275,7 @@ def _metered_handler(workflow: staff.StaffWorkflow, meter: _Meter) -> type:
 
     class Metered(staff._handler_for(workflow)):  # type: ignore[misc]
         def do_GET(self) -> None:
-            # A friction "request" is a read the role's task triggered, not the
-            # one-time static page/asset load the browser does on every open.
-            self._record = meter.begin("GET", self.path) if self.path.startswith("/api/") else None
+            self._record = meter.begin("GET", self.path)
             super().do_GET()
 
         def do_POST(self) -> None:
@@ -289,8 +287,7 @@ def _metered_handler(workflow: staff.StaffWorkflow, meter: _Meter) -> type:
             return value
 
         def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8") -> None:
-            if self._record is not None:
-                self._record["status"] = status
+            self._record["status"] = status
             super()._respond(status, value, content_type)
 
     return Metered
