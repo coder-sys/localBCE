@@ -1,8 +1,8 @@
 //! ML-DSA-87 (FIPS 204) over AWS-LC for RR/GATE/CHECKPOINT/v1. Binary stdin, no files.
 //!   public-key : seed(32)                       -> public key (2592)
 //!   sign       : seed(32) || message            -> signature (4627)
-//!   verify     : pk(2592) || sig(4627) || message -> exit 0 valid, exit 1 invalid
-//! Any malformed input exits 2. Messages are bounded at 64 KiB.
+//!   verify     : pk(2592) || sig(4627) || message -> one byte, 1 valid or 0 invalid
+//! Success exits 0; any malformed input exits 2. Messages are bounded at 64 KiB.
 use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, UnparsedPublicKey, ML_DSA_87, ML_DSA_87_SIGNING};
 use std::io::{Read, Write};
 
@@ -46,8 +46,7 @@ fn main() {
         }
         _ => {
             let (public_key, signature) = head.split_at(PUBLIC_KEY);
-            let valid = UnparsedPublicKey::new(&ML_DSA_87, public_key).verify(message, signature).is_ok();
-            fail(if valid { 0 } else { 1 })
+            vec![UnparsedPublicKey::new(&ML_DSA_87, public_key).verify(message, signature).is_ok() as u8]
         }
     };
     if std::io::stdout().write_all(&output).is_err() {
