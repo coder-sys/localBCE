@@ -45,7 +45,6 @@ from app.right_rail_financial_staff_server import (
     _request_allowed,
 )
 
-
 class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="rightrail-staff-workspace-test-")
@@ -976,7 +975,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(gate["gate"]["code"], "authority_actor_not_authorized")
         self.assertTrue(gate["gate"]["state_unchanged"])
-
 
 if __name__ == "__main__":
     unittest.main()

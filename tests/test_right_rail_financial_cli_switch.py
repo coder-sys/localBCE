@@ -14,7 +14,6 @@ from app.right_rail_financial_switch import decode_replay_input, inspect_shadow_
 from tests import rightrail_financial_expected_cases as expected
 from tools import right_rail_financial_cli as financial_cli
 
-
 def _json_bytes(value: object) -> bytes:
     return json.dumps(
         value,
@@ -23,7 +22,6 @@ def _json_bytes(value: object) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("ascii")
-
 
 class FinancialSwitchCliTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -370,7 +368,6 @@ class FinancialSwitchCliTests(unittest.TestCase):
         self.assertEqual(self.package_path.read_bytes(), b"not-a-continuity-package")
         self.package_path.write_bytes(original_package)
         self._assert_owner_packages_unchanged()
-
 
 if __name__ == "__main__":
     unittest.main()

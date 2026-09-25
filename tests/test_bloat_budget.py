@@ -33,18 +33,15 @@ FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 PRODUCT_DIRS = ("app", "tools", os.path.join("provider_app", "provider_app"))
 DUPLICATED_WINDOWS = 865
 
-
 def _live_files():
     for dirpath, dirnames, filenames in os.walk(ROOT):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for name in filenames:
             yield os.path.join(dirpath, name)
 
-
 def _lines(path):
     with open(path, "rb") as handle:
         return handle.read().count(b"\n")
-
 
 class BloatBudgetTest(unittest.TestCase):
     def test_live_code_stays_under_ceiling(self):
@@ -100,7 +97,6 @@ class BloatBudgetTest(unittest.TestCase):
                             windows[text] = windows.get(text, 0) + 1
         repeated = sum(count for count in windows.values() if count > 1)
         self.assertLessEqual(repeated, DUPLICATED_WINDOWS)
-
 
 if __name__ == "__main__":
     unittest.main()

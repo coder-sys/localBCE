@@ -14,7 +14,6 @@ import unittest
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
 
-
 class _Clock:
     def __init__(self) -> None:
         self.value = 1_000
@@ -22,7 +21,6 @@ class _Clock:
     def now_ms(self) -> int:
         self.value += 1
         return self.value
-
 
 class IndependentFinancialCheckerTests(unittest.TestCase):
     def setUp(self) -> None:

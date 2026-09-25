@@ -15,7 +15,6 @@ from unittest.mock import patch
 
 from tools import semantic_assurance_gate as gate
 
-
 # Axioms that must never be approved, whatever the manifest says: `sorry`,
 # the compiler-trust axioms behind `native_decide`/`ofReduceBool`, a
 # `native_decide` auxiliary axiom, and a project-declared axiom.
@@ -26,7 +25,6 @@ FORBIDDEN_AXIOM_EXAMPLES = (
     "BlindLedger.Financial.CorrectionTransition.example._native.native_decide.ax_1_1",
     "BlindLedger.injected_custom_axiom",
 )
-
 
 class SemanticAssuranceGateNegativeTests(unittest.TestCase):
     CANDIDATE_ENVIRONMENT_VARIABLE = "BLIND_LEDGER_SEMANTIC_CANDIDATE"
@@ -765,7 +763,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                     f"head={head} tree={tree} before={evidence['before']!r} "
                     f"after={evidence['after']!r} containing={str(raised.exception)!r}"
                 )
-
 
 if __name__ == "__main__":
     unittest.main()

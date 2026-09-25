@@ -5,16 +5,13 @@ from pathlib import Path
 import re
 import unittest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 PINNED_LINE = re.compile(r"[a-z0-9][a-z0-9._-]*==[0-9][0-9A-Za-z.]* --hash=sha256:[0-9a-f]{64}")
 DEVELOPMENT_PACKAGES = {"colorama", "iniconfig", "packaging", "pluggy", "pygments", "pytest"}
 
-
 def _install_lines(name: str) -> list[str]:
     text = (ROOT / name).read_text(encoding="utf-8")
     return [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
-
 
 class PythonSupplyChainAttackTests(unittest.TestCase):
     def test_development_requirements_are_exact_and_hash_pinned(self) -> None:
@@ -50,7 +47,6 @@ class PythonSupplyChainAttackTests(unittest.TestCase):
         for command in commands:
             for option in ("--no-index", "--require-hashes", "--only-binary=:all:", "--no-deps", "-r requirements-dev.txt"):
                 self.assertIn(option, command)
-
 
 if __name__ == "__main__":
     unittest.main()

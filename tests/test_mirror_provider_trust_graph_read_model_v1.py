@@ -17,10 +17,8 @@ from app.mirror import provider_trust_graph_read_model_v1 as read_model
 from app.mirror.source_admission import SourceAdmissionService
 from tests.test_nc_medicaid_fhir_source import _envelope
 
-
 def _canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
-
 
 def _request(operation_ref: str = "a" * 64) -> bytes:
     return _canonical(
@@ -36,13 +34,11 @@ def _request(operation_ref: str = "a" * 64) -> bytes:
         }
     )
 
-
 def _admission():
     return SourceAdmissionService(
         profile.NC_MEDICAID_GRAPH_PROFILE,
         fhir_independent.NcMedicaidFhirVerifier(),
     ).admit(_envelope())
-
 
 def _read(artifact: bytes, *, profile_id: str | None = None, profile_version: int = 3) -> bytes:
     selected_profile_id = profile_id or profile.NC_MEDICAID_GRAPH_PROFILE.profile_id
@@ -56,7 +52,6 @@ def _read(artifact: bytes, *, profile_id: str | None = None, profile_version: in
         now=7_000,
     )
 
-
 def _selection(artifact: bytes, operation_ref: str = "a" * 64) -> read_model.ProviderTrustGraphReadSelectionV1:
     return read_model.ProviderTrustGraphReadSelectionV1(
         graph_artifact=artifact,
@@ -66,7 +61,6 @@ def _selection(artifact: bytes, operation_ref: str = "a" * 64) -> read_model.Pro
         export_request_raw=_request(operation_ref),
         expected_operation_ref=operation_ref,
     )
-
 
 def _stale_artifact(admission) -> bytes:
     value = json.loads(admission.graph_input.decode("ascii"))
@@ -83,7 +77,6 @@ def _stale_artifact(admission) -> bytes:
     )
     return artifact
 
-
 def _walk(value: object):
     if isinstance(value, dict):
         for key, child in value.items():
@@ -92,7 +85,6 @@ def _walk(value: object):
     elif isinstance(value, list):
         for child in value:
             yield from _walk(child)
-
 
 class ProviderTrustGraphReadModelV1Tests(unittest.TestCase):
     def test_read_is_bounded_deterministic_transient_and_identifier_free(self) -> None:
@@ -311,7 +303,6 @@ class ProviderTrustGraphReadModelV1Tests(unittest.TestCase):
             self.assertEqual("", compare_stderr.getvalue())
             compare_value = json.loads(compare_stdout.getvalue())
             self.assertEqual("COMPARE", compare_value["view"])
-
 
 if __name__ == "__main__":
     unittest.main()

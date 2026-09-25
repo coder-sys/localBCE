@@ -14,7 +14,6 @@ from tools.right_rail_financial_service_kit import (
     _strict_canonical_json,
 )
 
-
 class FinancialServiceKitManifestTests(unittest.TestCase):
     def setUp(self) -> None:
         self.interpreter_size = 1_234_567
@@ -63,7 +62,6 @@ class FinancialServiceKitManifestTests(unittest.TestCase):
             _manifest_files({"claims": {**KIT_CLAIMS, "activation": 0}, "files": [entry], "schema": KIT_SCHEMA})
         with self.assertRaisesRegex(KitError, "kit_manifest_entry_value"):
             _manifest_files({"claims": KIT_CLAIMS, "files": [{**entry, "size_bytes": True}], "schema": KIT_SCHEMA})
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,18 +13,14 @@ from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror.source_admission import SourceAdmissionService
 
-
 def _practitioner() -> dict[str, object]:
     return profile.synthetic_resource("Practitioner")
-
 
 def _role() -> dict[str, object]:
     return profile.synthetic_resource("PractitionerRole")
 
-
 def _location(variant: str = "baseline") -> dict[str, object]:
     return profile.synthetic_resource("Location", variant=variant)
-
 
 def _bundle(page: int = 0, *, resources: list[dict[str, object]] | None = None, next_page: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED, location_variant: str = "baseline") -> dict[str, object]:
     if resources is None:
@@ -52,7 +48,6 @@ def _bundle(page: int = 0, *, resources: list[dict[str, object]] | None = None, 
         value["meta"] = {"lastUpdated": last_updated}
     return value
 
-
 def _transport(*bundles: dict[str, object], retries: dict[tuple[str, int], fhir.FhirTransportResponse] | None = None) -> fhir.SyntheticFhirTransport:
     responses: dict[tuple[str, int], fhir.FhirTransportResponse] = {}
     for index, bundle in enumerate(bundles):
@@ -62,14 +57,12 @@ def _transport(*bundles: dict[str, object], retries: dict[tuple[str, int], fhir.
         responses.update(retries)
     return fhir.SyntheticFhirTransport(responses)
 
-
 def _envelope(*, two_pages: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED, location_variant: str = "baseline") -> bytes:
     if not two_pages:
         return fhir.build_fixture_envelope(_transport(_bundle(total=total, last_updated=last_updated, location_variant=location_variant)))
     first = _bundle(0, resources=[_practitioner(), _role()], next_page=True, total=total, last_updated=last_updated)
     second = _bundle(1, resources=[_location(location_variant)], total=total, last_updated=last_updated)
     return fhir.build_fixture_envelope(_transport(first, second))
-
 
 def _rebind(value: dict[str, object]) -> bytes:
     context_value = value["capture_context"]
@@ -111,7 +104,6 @@ def _rebind(value: dict[str, object]) -> bytes:
     body.pop("envelope_id")
     value["envelope_id"] = fhir._digest("envelope-id", body)
     return fhir.canonical_json(value)
-
 
 class NcMedicaidFhirSourceTests(unittest.TestCase):
     def test_fixed_profile_and_contract_digest_are_verifier_owned(self) -> None:

@@ -14,7 +14,6 @@ from tools import privacy_primitives
 from tools.privacy_artifact_scan import main as privacy_scan_main
 from tools.privacy_artifact_scan import scan_artifacts
 
-
 def _synthetic_envelope(**overrides: object) -> dict[str, object]:
     envelope: dict[str, object] = {
         "schema_version": 2,
@@ -40,7 +39,6 @@ def _synthetic_envelope(**overrides: object) -> dict[str, object]:
         json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     return envelope
-
 
 class PrivacyArtifactScanTests(unittest.TestCase):
     def test_artifact_scanner_uses_the_shared_privacy_primitives(self) -> None:
@@ -326,7 +324,6 @@ class PrivacyArtifactScanTests(unittest.TestCase):
         self.assertNotIn(sensitive_key, rendered)
         self.assertIn("opaque_file_not_privacy_scanned", rendered)
         self.assertIn("sensitive_plaintext_assignment", rendered)
-
 
 if __name__ == "__main__":
     unittest.main()

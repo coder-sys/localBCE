@@ -18,17 +18,14 @@ from app.mirror.source_admission import (
     VerifiedSourceCoverage,
 )
 
-
 ADAPTER_SCHEMA = "mirror-test-source-adapter-v1"
 PROFILE_ID = "SYNTHETIC_TEST_PROVIDER_PROFILE_V1"
 VERIFIER_ID = "SYNTHETIC_TEST_SOURCE_VERIFIER_V1"
 VERIFIER_EPOCH = 1
 SUPPORTED_CASES = {"confirmed", "absent", "expired", "terminated", "conflict"}
 
-
 class SyntheticTestVerificationError(ValueError):
     """Fixture-only verifier failure; no production source authentication."""
-
 
 class SyntheticTestSourceVerifier:
     """Explicit test verifier backed by existing graph fixtures only."""
@@ -78,7 +75,6 @@ class SyntheticTestSourceVerifier:
             graph_input=graph_input,
         )
 
-
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     value: dict[str, object] = {}
     for key, item in pairs:
@@ -87,11 +83,9 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
         value[key] = item
     return value
 
-
 def _adapter(case: str = "confirmed", **extra: object) -> bytes:
     value: dict[str, object] = {"schema": ADAPTER_SCHEMA, "case": case, **extra}
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
-
 
 def _profile(**overrides: object) -> SourceProfile:
     values: dict[str, object] = {
@@ -111,10 +105,8 @@ def _profile(**overrides: object) -> SourceProfile:
     values.update(overrides)
     return SourceProfile(**values)  # type: ignore[arg-type]
 
-
 def _service(verifier: object | None = None, profile: SourceProfile | None = None) -> SourceAdmissionService:
     return SourceAdmissionService(profile or _profile(), verifier or SyntheticTestSourceVerifier())  # type: ignore[arg-type]
-
 
 class MirrorSourceAdmissionTests(unittest.TestCase):
     def test_configured_verifier_drives_admission_and_graph_is_independent(self) -> None:
@@ -401,7 +393,6 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
             _profile(evidence_mode="production")
         with self.assertRaisesRegex(ValueError, "profile:source-roles"):
             _profile(source_roles=list(graph.SOURCE_IDS))
-
 
 if __name__ == "__main__":
     unittest.main()
