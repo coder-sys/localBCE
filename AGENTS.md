@@ -25,10 +25,16 @@ Working rules (details in the constitution):
   `production_usable=false`, `activation=false`.
 - Helpers are matched to the work (founder, 2026-09-25; definitions in
   `~/.claude/agents/`). Helpers do their own work and never spawn helpers.
-  - `rr-core` (Opus, high effort): money logic, formats, proofs, crypto,
-    security, hard debugging.
+  - `rr-core` (Opus, high effort): designing or changing money logic, new
+    formats and digests, new non-trivial proofs, crypto, security, undiagnosed
+    failures.
+  - `rr-eng` (Opus, medium): clear-spec work near the core that existing
+    tests or proofs will catch: performance, finishing a planned track,
+    build/pin plumbing, mechanical proof migrations. Escalates to rr-core.
   - `rr-review` (Opus, extra-high, read-only): the final bug-hunt before any
-    money-logic or storage-format change merges.
+    money-logic, storage-format or crypto change merges.
+  - `rr-check` (Opus, medium, read-only): pre-merge review for everything
+    else (UI, tooling, tests, docs).
   - `rr-analyst` (Opus, high): red-teams, judgment research, sizing calls.
   - `rr-build` (Sonnet, medium): screens, harnesses, clear-spec refactors.
   - `rr-research` (Sonnet, medium): plain sourced lookups.
