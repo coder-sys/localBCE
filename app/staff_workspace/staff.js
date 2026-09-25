@@ -40,8 +40,6 @@
     "command_outcome_uncertain", "command_response_unverified",
   ];
   const ROUTES = {
-    "wrong-role": "/api/attempt/wrong-role",
-    "stale-revision": "/api/attempt/stale-revision",
     "reject-offset": "/api/decision/reject-offset",
     acknowledge: "/api/action/acknowledge",
     "record-cash": "/api/correction/record-cash",
@@ -49,6 +47,46 @@
     "restore-test": "/api/continuity/restore-test",
   };
   const encoder = new TextEncoder();
+  let model = null;
+  let role = null;
+  const allowedActions = new Set();
+
+  // Art. XIII.4: role is resolved from the path (never a query string, which
+  // the server rejects outright) so a disallowed control is absent from the
+  // DOM for that role, not merely disabled.
+  function resolveRole() {
+    const match = /^\/role\/([a-z]+)$/.exec(location.pathname);
+    return match ? match[1] : null;
+  }
+
+  function renderRolePicker() {
+    const list = byId("role-links");
+    list.replaceChildren();
+    for (const [id, label] of Object.entries(model.roles)) {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = "/role/" + id;
+      link.textContent = label;
+      item.appendChild(link);
+      list.appendChild(item);
+    }
+  }
+
+  function applyRoleGating() {
+    for (const button of document.querySelectorAll("[data-action]")) {
+      const name = button.dataset.action;
+      const control = model.controls[name];
+      const allowed = Boolean(control && control.roles.includes(role));
+      button.hidden = !allowed;
+      if (allowed) allowedActions.add(name);
+      else button.disabled = true;
+    }
+    const screens = model.role_screens[role] || [];
+    byId("workflow-section").hidden = !screens.includes("decision");
+    const status = byId("role-status");
+    status.replaceChildren(Object.assign(document.createElement("span"), { textContent: "Role: " + model.roles[role] + " · " }));
+    status.appendChild(Object.assign(document.createElement("a"), { href: "/", textContent: "Switch role" }));
+  }
 
   function assert(condition, code) {
     if (!condition) throw new Error(code);
@@ -497,8 +535,8 @@
     setText("roster-status", value.population.completeness + " · " + value.population.imported_count + "/" + value.population.expected_count);
     setText("source-status", value.source_assessment.status + " — " + value.source_assessment.reason);
     setText("freshness-status", value.freshness.status + " — " + value.freshness.reason);
-    byId("read-as-of").textContent = "Verified local snapshot read at " + new Date(value.read_at).toLocaleString()
-      + " · snapshot " + value.read_envelope.snapshot_id.slice(0, 16)
+    byId("read-as-of").textContent = "Verified as of " + new Date(value.read_at).toLocaleString() + ".";
+    byId("read-detail").textContent = "Snapshot " + value.read_envelope.snapshot_id.slice(0, 16)
       + " · one SQLite connection · " + costText(value.read_envelope.read_cost)
       + " · local consistency digest only; external freshness checkpoint UNKNOWN.";
     renderTable("population-rows", value.items, 6, "No obligation rows returned.", (tbody, item) => {
@@ -509,16 +547,13 @@
         [asMoney(item.received_cash_cents), "number"],
         [asMoney(item.shortfall_cents), "number"],
         [[
-          "Verification " + item.verification_status,
-          "Case " + item.case_status,
-          "Delivery " + item.delivery_status,
+          "Verification " + words(item.verification_status),
+          "Case " + words(item.case_status),
+          "Delivery " + words(item.delivery_status),
           "Reporting " + (item.reporting_complete ? "complete" : "pending"),
         ].join(" · ")],
-        [item.source_status.replaceAll("_", " "), "state-label " + (item.source_status.includes("MISSING") ? "missing" : "unverified")],
+        [words(item.source_status), "state-label " + (item.source_status.includes("MISSING") ? "missing" : "unverified")],
       ], isH ? "highlight" : "");
-    });
-    renderTable("gate-rows", value.gate_checks, 4, "No gate attempts recorded.", (tbody, check) => {
-      addRow(tbody, [[check.name], [check.status], [check.code], [check.state_unchanged ? "No" : "Unknown"]]);
     });
     const ownerMode = value.integrity.mode === "LIVE" ? "SYNTHETIC LOCAL (Owner native mode LIVE)" : value.integrity.mode;
     banner("connection-status", "disabled", "Owner snapshot VERIFIED · " + ownerMode + " · sequence " + value.summary.sequence
@@ -540,10 +575,10 @@
     byId("read-as-of").textContent = snapshot
       ? "Last successful read: " + new Date(snapshot.read_at).toLocaleString() + " (stale while service is unavailable)."
       : "No successful read yet.";
-    markViewUnusable("unavailable", snapshot
+    markViewUnusable("unavailable", (snapshot
       ? "UNAVAILABLE — showing the last successful local view; it is stale and commands are disabled."
-      : "UNAVAILABLE — no Owner snapshot loaded; commands are disabled.",
-    "UNAVAILABLE — the displayed decision package is retained but stale; refresh the Owner read and reopen it before any command.");
+      : "UNAVAILABLE — no Owner snapshot loaded; commands are disabled.") + " Reload this page to check again.",
+    "UNAVAILABLE — the displayed decision package is retained but stale; refresh the Owner read and reopen it before any command. Reload this page to check again.");
   }
 
   async function fetchJson(url) {
@@ -714,7 +749,7 @@
     const timeline = renderTable("timeline-rows", decisionView.timeline, 4, "No H chronology returned.", (tbody, event) => {
       addRow(tbody, [
         [event.event_sequence],
-        [event.kind],
+        [words(event.kind)],
         [event.after_revision === null || event.after_revision === undefined
           ? "—"
           : String(event.before_revision) + " → " + String(event.after_revision)],
@@ -795,6 +830,7 @@
   }
 
   function setButton(name, disabled, retryLabel) {
+    if (!allowedActions.has(name)) return; // absent for this role: stays hidden and disabled
     const button = document.querySelector('[data-action="' + name + '"]');
     if (!button) return;
     if (!button.dataset.defaultLabel) button.dataset.defaultLabel = button.textContent;
@@ -813,14 +849,12 @@
     byId("refresh-button").disabled = commandPending;
     const correctionRetry = Boolean(unresolvedCorrectionBody && canRetry);
     const cashRetry = Boolean(unresolvedCashBody && canRetry);
-    setButton("wrong-role", !reviewed || decided);
-    setButton("stale-revision", !reviewed || decided);
     setButton("reject-offset", correctionRetry ? false : !reviewed || decided, correctionRetry && "Retry exact correction command");
     setButton("acknowledge", !reviewed || !action || action.status !== "READY");
     setButton("record-cash", cashRetry ? false : !reviewed || !action || action.status !== "ACKNOWLEDGED" || !h || h.shortfall_cents <= 0,
       cashRetry && "Retry exact cash evidence command");
-    setButton("record-report", !reviewed || !h || h.reporting_complete);
-    setButton("restore-test", !reviewed || testMode || !h || h.shortfall_cents > 0);
+    setButton("record-report", !reviewed || !h || h.reporting_complete || h.shortfall_cents > 0);
+    setButton("restore-test", !reviewed || testMode || !h);
   }
 
   function commandMessage(text, kind) {
@@ -838,7 +872,7 @@
       obligation_revision_conflict: "Owner rejected the stale revision. Reopen the H package and review the current revision.",
       evaluation_revision_conflict: "Owner rejected the evaluation binding because it no longer matches the current package.",
       loopback_origin_required: "The service accepts this action only from its exact loopback browser origin.",
-    }[code] || "Command result is unresolved (" + code + "). Refresh the overview and reopen the package before any retry.";
+    }[code] || "Command result is unresolved (" + words(code) + "). Refresh the overview and reopen the package before any retry.";
   }
 
   async function postJson(url, body) {
@@ -864,9 +898,6 @@
     try {
       assert(isRecord(value) && isRecord(value.workspace), "command_workspace_missing");
       await validateStaffRead(value.workspace, "workspace");
-      if (url === ROUTES["wrong-role"] || url === ROUTES["stale-revision"]) {
-        assert(isRecord(value.gate) && value.workspace.gate_checks.some((gate) => sameJson(gate, value.gate)), "read_gate_result_binding");
-      }
     } catch (_error) {
       throw new Error("command_response_unverified");
     }
@@ -891,25 +922,19 @@
       const result = await postJson(route, body);
       if (name === "reject-offset") unresolvedCorrectionBody = null;
       if (name === "record-cash") unresolvedCashBody = null;
-      if (name === "wrong-role" || name === "stale-revision") {
-        const gate = result.gate;
-        commandMessage(gate.name + " rejected by Owner: " + gate.code + ". Owner state unchanged: " + String(gate.state_unchanged) + ".", "error");
-        refreshAfter = !applyCommandSnapshot(result.workspace, startedAt);
-      } else {
-        let description = (result.command && result.command.status) || "Command recorded";
-        if (name === "acknowledge") {
-          description += ". Cash before: " + asMoney(result.cash_before_cents) + "; after: " + asMoney(result.cash_after_cents) + "; cash effect: " + asMoney(result.cash_effect_cents) + ".";
-        }
-        if (name === "record-cash") description += ". Synthetic evidence only; money movement: false.";
-        if (name === "record-report") description += ". Reporting source: synthetic and unverified.";
-        if (name === "restore-test") description = "Continuity TEST restore verified. H decision package equality: " + String(result.continuity.decision_package_equal) + ".";
-        const applied = applyCommandSnapshot(result.workspace, startedAt);
-        commandMessage(description + (applied ? " The package below now shows the result." : " Reopen the package to review the new Owner sequence."), "success");
-        if (applied) {
-          await refreshCorrectionFollowup(workspaceRequestGeneration);
-          reopenAfter = decisionOpen;
-        } else refreshAfter = true;
+      let description = (result.command && result.command.status) || "Command recorded";
+      if (name === "acknowledge") {
+        description += ". Cash before: " + asMoney(result.cash_before_cents) + "; after: " + asMoney(result.cash_after_cents) + "; cash effect: " + asMoney(result.cash_effect_cents) + ".";
       }
+      if (name === "record-cash") description += ". Synthetic evidence only; money movement: false.";
+      if (name === "record-report") description += ". Reporting source: synthetic and unverified.";
+      if (name === "restore-test") description = "Continuity TEST restore verified. H decision package equality: " + String(result.continuity.decision_package_equal) + ".";
+      const applied = applyCommandSnapshot(result.workspace, startedAt);
+      commandMessage(description + (applied ? " The package below now shows the result." : " Reopen the package to review the new Owner sequence."), "success");
+      if (applied) {
+        await refreshCorrectionFollowup(workspaceRequestGeneration);
+        reopenAfter = decisionOpen;
+      } else refreshAfter = true;
     } catch (error) {
       if (!UNCERTAIN_OUTCOMES.includes(error.message)) {
         if (name === "reject-offset") unresolvedCorrectionBody = null;
@@ -941,13 +966,31 @@
     if (button && !button.disabled) performAction(button.dataset.action);
   });
 
-  refreshOverview();
-  window.setInterval(refreshOverview, 15000);
-  window.setInterval(() => {
-    if (lastSuccessfulRead && Date.now() - lastSuccessfulRead > 30000 && ownerAvailable) {
-      markViewUnusable("stale",
-        "STALE LOCAL VIEW — no successful Owner read in 30 seconds; source freshness remains UNKNOWN and commands are disabled.",
-        "STALE LOCAL VIEW — the open package is retained but cannot authorize a command.");
+  async function boot() {
+    try {
+      model = await fetchJson("/interaction-model.json");
+    } catch (_error) {
+      showOwnerUnavailable();
+      return;
     }
-  }, 5000);
+    role = resolveRole();
+    if (!role || !model.roles[role]) {
+      byId("role-picker").hidden = false;
+      renderRolePicker();
+      return;
+    }
+    byId("workspace-root").hidden = false;
+    applyRoleGating();
+    refreshOverview();
+    window.setInterval(refreshOverview, 15000);
+    window.setInterval(() => {
+      if (lastSuccessfulRead && Date.now() - lastSuccessfulRead > 30000 && ownerAvailable) {
+        markViewUnusable("stale",
+          "STALE LOCAL VIEW — no successful Owner read in 30 seconds; source freshness remains UNKNOWN and commands are disabled.",
+          "STALE LOCAL VIEW — the open package is retained but cannot authorize a command.");
+      }
+    }, 5000);
+  }
+
+  boot();
 })();

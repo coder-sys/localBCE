@@ -165,3 +165,19 @@ footer { max-width: 1320px; margin: 0 auto; padding: 0 1rem 1.5rem; color: var(-
   .metric-grid, .split-note, .action-grid { grid-template-columns: 1fr; }
   .layout { margin-top: 0.75rem; }
 }
+
+/* Art. XIII.3: same restrained system, both themes, WCAG AA contrast kept. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ink: #e7eef2; --muted: #9fb2bd; --line: #33474f; --surface: #17242c; --canvas: #0e171c;
+    --blue: #7fc4e8; --blue-light: #16303d; --amber: #e8b96a; --amber-light: #3a2c10;
+    --red: #f0938d; --red-light: #3a1e1c; --green: #8fd6ab; --green-light: #163828;
+  }
+  a { color: #7fc4e8; }
+  .skip-link, button { background: var(--surface); border-color: #4c6a76; }
+  .primary { color: #06222f; }
+  caption, th, tbody tr:nth-child(even), .metric, .fact-card, .command-status, pre { background: #16232a; }
+  tbody tr.highlight { background: #3a3115; }
+  .split-note > div { background: #2c2611; }
+}
