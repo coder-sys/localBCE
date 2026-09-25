@@ -18,8 +18,9 @@ Working rules (details in the constitution):
 - The pinned engine binary in `artifacts/engine-correction-e911/` was built
   from an older source; see its `PROVENANCE.md`. Never describe it as built
   from the current `lean/` source.
-- Parked work (private zero-knowledge / Profile 11-12 native track) is not on
-  the critical path.
+- Private zero-knowledge is an active prototype track (Constitution IX.4). It
+  is evidence only and never blocks core or gate work. The old code under
+  `parked/` stays reference material.
 - Update `STATUS.md` in a few lines per change. Raw logs stay in log files.
 - Standing claims: synthetic, non-PHI, nonpayment, `proofSuiteId=null`,
   `production_usable=false`, `activation=false`.

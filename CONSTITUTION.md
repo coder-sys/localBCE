@@ -116,9 +116,11 @@ operational authority.
 3. Ordinary work scales with the change, not with total history. Every input,
    queue, report, export and proof has explicit bounds. Measure before
    claiming performance.
-4. Build what the plan needs now. Research tracks that the plan marks
-   conditional (the private zero-knowledge evidence mode) are **parked** until a
-   customer need selects them; parked work does not consume the critical path.
+4. Build what the plan needs now. The private zero-knowledge evidence mode
+   (PRIVATE_ZK) is an active prototype track (founder, 2026-09-25). It produces
+   evidence only, never a hold or payment directive. It never blocks core, gate
+   or product work, and the non-ZK evidence path ships first. No PRIVATE_ZK
+   claim is made before a third-party audit.
 
 ## Article X — Lean process
 
@@ -313,3 +315,6 @@ never an amendment.
   feel expensive, restrained and intuitive, and every control and pathway is
   proven over a declared interaction model with no dead buttons, orphan
   screens, traps, dead connections or illogical paths.
+- 2026-09-25 — Article IX.4 amended at the founder's direction: private
+  zero-knowledge is un-parked as an active, evidence-only prototype track that
+  never blocks core or gate work.
