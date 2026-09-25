@@ -96,10 +96,10 @@
           <p class="eyebrow">H case workflow</p>
           <h2 id="workflow-title">Review, command, and recover</h2>
         </div>
-        <button id="open-package" class="primary" type="button" aria-controls="decision-panel">Open H exact decision package</button>
+        <button id="open-package" class="primary" type="button" aria-controls="decision-panel" aria-expanded="false">Open H exact decision package</button>
       </div>
       <p class="explanation">The overview rereads the Owner every 15 seconds. Opening a package captures its verified snapshot, scope, obligation revision, Control Pack, authority, and evaluation input. A correction command carries those exact displayed bindings. If a response is lost, retry sends the same command identity and bindings.</p>
-      <div id="command-status" class="command-status" role="status" aria-live="assertive">No operator command sent.</div>
+      <div id="command-status" class="command-status" role="status" aria-live="assertive" tabindex="-1">No operator command sent.</div>
       <div class="action-grid" aria-label="Synthetic workflow commands">
         <button type="button" data-action="reject-offset" disabled>Reject unsupported offset and authorize correction request</button>
         <button type="button" data-action="acknowledge" disabled>Record action delivery ACK</button>
@@ -114,7 +114,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">Same-owner Mirror view</p>
-          <h2 id="decision-title">H decision package</h2>
+          <h2 id="decision-title" tabindex="-1">H decision package</h2>
         </div>
         <p id="package-revision" class="revision-chip">Package not opened</p>
       </div>
