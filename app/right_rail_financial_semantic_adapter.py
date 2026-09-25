@@ -2018,12 +2018,15 @@ def build_locked_semantic_snapshot(
     expected_owner_id: str,
     expected_continuity_epoch: int | None = None,
     max_fact_rows: int = MAX_FACT_ROWS,
+    verified_by: LockedSemanticSnapshot | None = None,
 ) -> LockedSemanticSnapshot:
     """Produce a bounded authenticated snapshot from one owner transaction.
 
     This function performs SELECT/PRAGMA work only.  It intentionally does not
     call ``sqlite3.connect`` or any owner command, and it never commits or
-    rolls back the caller's transaction.
+    rolls back the caller's transaction. ``verified_by``, a snapshot this same
+    transaction verified before its own writes, supplies scope and owner instead
+    of verifying the whole database again (the writer's pre-COMMIT check follows).
     """
 
     connection = _require_connection(connection)
@@ -2036,16 +2039,19 @@ def build_locked_semantic_snapshot(
     if type(max_fact_rows) is not int or not 1 <= max_fact_rows <= MAX_FACT_ROWS:
         _fail(SemanticAdapterInputError, "fact_row_bound")
     try:
-        verification = _verify_owner_connection(
-            connection,
-            expected_config=expected_config,
-            expected_scope=expected_scope,
-            authority_context=authority_context,
-            expected_mode=expected_mode,
-            expected_owner_id=expected_owner_id,
-            expected_continuity_epoch=expected_continuity_epoch,
-        )
-        scope, identity = _read_verified_meta(connection, verification)
+        if verified_by is not None:
+            verified = _require_validated_snapshot(verified_by).data
+            scope, identity = dict(verified["scope"]), dict(verified["owner"])
+        else:
+            scope, identity = _read_verified_meta(connection, _verify_owner_connection(
+                connection,
+                expected_config=expected_config,
+                expected_scope=expected_scope,
+                authority_context=authority_context,
+                expected_mode=expected_mode,
+                expected_owner_id=expected_owner_id,
+                expected_continuity_epoch=expected_continuity_epoch,
+            ))
         obligation_row, obligation_body = _load_obligation(
             connection,
             obligation_id=obligation_id,

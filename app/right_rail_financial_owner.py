@@ -4393,6 +4393,7 @@ class FinancialOwner:
         previous_history_head: bytes,
         transition_result: Mapping[str, Any],
         financial_engine: Any,
+        snapshot: Any,
     ) -> dict[str, Any]:
         """Bind and atomically apply one accepted Engine correction delta.
 
@@ -4638,6 +4639,22 @@ class FinancialOwner:
             "acknowledgment_ref": None,
             "updated_at_ms": mutation_time,
         })
+        # Lean's declared post-state input and result context are the ones these writes produced.
+        from app import right_rail_financial_semantic_adapter as semantic
+        try:
+            post = semantic.build_locked_semantic_snapshot(
+                connection, obligation_id=obligation_id, authority_context=semantic.TrustedAuthorityContext.from_authority(authority),
+                evaluation_time_ms=mutation_time, expected_config=self.config, expected_scope=self._scope_value(),
+                expected_mode=self.mode, expected_owner_id=self.owner_id, verified_by=snapshot,
+            )
+        except semantic.SemanticAdapterError:
+            _fail(FinancialIntegrityError, "correction_resulting_input")
+        require_binding(semantic.encode_blfin02_input(post) == mutation["resulting_input_wire"], "correction_resulting_input")
+        require_binding(
+            (financial_result.provenance, financial_result.population_id, financial_result.item_id, financial_result.completion_at_ms)
+            == (post.data["owner"]["provenance"], obligation["population_id"], obligation["item_id"], semantic._completion_time_from_snapshot(post.data)),
+            "correction_result_context",
+        )
 
         evaluation_receipt = self._insert_evaluation(
             connection,
@@ -5130,6 +5147,7 @@ class FinancialOwner:
                 previous_history_head=previous_history_head,
                 transition_result=transition_result,
                 financial_engine=financial_engine,
+                snapshot=snapshot,
             )
 
     def acknowledge_action(
