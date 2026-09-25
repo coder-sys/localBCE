@@ -777,6 +777,17 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self._assert_no_source_mutation(store, before_hash)
 
     def test_real_owner_histories_conform_to_fresh_engine(self) -> None:
+        # Environment prerequisite, not a product result: with no Engine handoff
+        # configured at all, the conformance is reported as UNEXECUTED (a skip,
+        # counted and listed; never a pass). A partial or wrong handoff still fails
+        # in _fresh_engine_executable.
+        if not os.environ.get(ENGINE_EXECUTABLE_ENV, "").strip() and not os.environ.get(
+            ENGINE_EXECUTABLE_SHA256_ENV, ""
+        ).strip():
+            self.skipTest(
+                "real_engine_conformance_unexecuted: no fresh guarded Engine handoff "
+                f"({ENGINE_EXECUTABLE_ENV}/{ENGINE_EXECUTABLE_SHA256_ENV} unset)"
+            )
         authorized = self._build_base()
         self._record_cash(authorized)
         authorized_claim = self._record_claim(authorized)

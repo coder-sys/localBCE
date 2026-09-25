@@ -472,6 +472,11 @@ class RightRailFinancialEngineTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "accepted Engine requires Windows Job Object containment")
     def test_bounded_actual_accepted_engine_execution_preserves_cents_and_database(self) -> None:
+        # Environment prerequisite, not a product result: the pinned 398E artifact
+        # is not in this checkout, so the execution is reported UNEXECUTED (a skip,
+        # never a pass). A present file is still held to the size/SHA-256 pins.
+        if not ACCEPTED_ENGINE_PATH.exists():
+            self.skipTest(f"accepted_engine_execution_unexecuted: pinned artifact absent at {ACCEPTED_ENGINE_PATH}")
         self.assertTrue(ACCEPTED_ENGINE_PATH.is_file(), ACCEPTED_ENGINE_PATH)
         store = self.fixture._build_base()
         self.fixture._record_cash(store)
