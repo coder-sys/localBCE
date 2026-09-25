@@ -36,6 +36,7 @@ MAX_DETAIL_PAGE: Final[int] = 200
 MAX_OFFSET: Final[int] = 10_000
 STAFF_READ_ENVELOPE_CONTRACT: Final[str] = "RR/FINANCIAL/STAFF-READ-ENVELOPE/v1"
 OWNER_VERIFIED_STAFF_SNAPSHOT_CONTRACT: Final[str] = "RR/FINANCIAL/OWNER-VERIFIED-STAFF-SNAPSHOT/v1"
+STAFF_SNAPSHOT_ID_CONTRACT: Final[str] = "RR/FINANCIAL/STAFF-SNAPSHOT-ID/v1"
 
 _DROP_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -451,7 +452,7 @@ class FinancialMirror:
         ):
             _fail(FinancialMirrorContinuityError, "staff_snapshot_identity")
         snapshot_base = {key: snapshot[key] for key in snapshot_keys if key != "snapshot_id"}
-        if snapshot["snapshot_id"] != _staff_json_digest(snapshot_base):
+        if snapshot["snapshot_id"] != _staff_json_digest({"contract": STAFF_SNAPSHOT_ID_CONTRACT, **snapshot_base}):
             _fail(FinancialMirrorContinuityError, "staff_snapshot_digest")
 
         verification = raw["verification"]

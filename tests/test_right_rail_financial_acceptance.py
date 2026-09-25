@@ -1294,6 +1294,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_snapshot(store, expected.H_ACKNOWLEDGED)
         self._assert_verified(store)
 
+    def test_corrupt_stored_action_payload_fails_closed_with_typed_error(self) -> None:
+        for corrupt in ("not-json", "[]"):
+            with self.subTest(corrupt=corrupt):
+                store = self._build_base_for_correction()
+                self._prepare_rejected(store)
+                with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+                    connection.execute("DROP TRIGGER action_payload_immutable")
+                    connection.execute(
+                        "UPDATE actions SET payload_json=? WHERE action_id=?",
+                        (corrupt, expected.ACTION_CORRECTION_ID),
+                    )
+                with self.assertRaisesRegex(FinancialIntegrityError, "action_payload_integrity"):
+                    store.action_payload(expected.ACTION_CORRECTION_ID)
+                with self.assertRaisesRegex(FinancialIntegrityError, "action_payload_integrity"):
+                    store.retry_action(expected.ACTION_CORRECTION_ID)
+
     def test_case_06_late_payment_and_report_correction(self) -> None:
         self.assertEqual(expected.CASE_06.number, 6)
         store = self._build_base_for_correction()

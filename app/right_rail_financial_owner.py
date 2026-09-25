@@ -76,6 +76,7 @@ _MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 _MAX_DECISION_PACKAGE_BYTES: Final[int] = _MAX_PACKAGE_BYTES - 512
 _MAX_CORRECTION_FOLLOWUP_BYTES: Final[int] = 3 * _MAX_DECISION_PACKAGE_BYTES + 64 * 1024
 _VERIFIED_STAFF_SNAPSHOT_CONTRACT: Final[str] = "RR/FINANCIAL/OWNER-VERIFIED-STAFF-SNAPSHOT/v1"
+_STAFF_SNAPSHOT_ID_CONTRACT: Final[str] = "RR/FINANCIAL/STAFF-SNAPSHOT-ID/v1"
 _STAFF_WORKSPACE_QUERY: Final[str] = "workspace"
 _STAFF_DECISION_PACKAGE_QUERY: Final[str] = "decision_package"
 _MAX_CORRECTION_FOLLOWUP_PAGE_BYTES: Final[int] = 32 * 1024 * 1024
@@ -116,6 +117,7 @@ _TEST_OWNER_ID: Final[str] = "continuity-test-owner-v1"
 _SHADOW_OWNER_ID: Final[str] = "continuity-shadow-owner-v1"
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _UPPER_HEX128 = re.compile(r"[0-9A-F]{128}\Z")
+_UPPER_HEX64 = re.compile(r"[0-9A-F]{64}\Z")
 _ROLE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _KIND = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _WILDCARD_PERIODS: Final[frozenset[str]] = frozenset({"PROGRAM", "ALL"})
@@ -372,6 +374,18 @@ def _stored_values(raw: object, code: str) -> tuple[Any, ...]:
     return tuple(value["values"])
 
 
+def _stored_object(raw: object, code: str) -> dict[str, Any]:
+    """Decode one persisted JSON object column or fail closed with ``code``."""
+
+    try:
+        value = json.loads(str(raw))
+    except (TypeError, ValueError):
+        _fail(FinancialIntegrityError, code)
+    if type(value) is not dict:
+        _fail(FinancialIntegrityError, code)
+    return value
+
+
 def _population_validation_digest(rows: Iterable[Any]) -> bytes:
     """Digest of ordered (item_id, display_label, owed_cents, due_at_ms, currency) rows."""
 
@@ -396,9 +410,13 @@ def _is_upper_hex128(value: object) -> bool:
 
 
 def _staff_snapshot_id(fields: Mapping[str, Any]) -> str:
-    """SHA-256 identity of one staff-visible Owner snapshot (fields exclude ``snapshot_id``)."""
+    """Versioned SHA-256 identity of one staff-visible Owner snapshot (fields exclude ``snapshot_id``).
 
-    encoded = json.dumps(dict(fields), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    SHA-256 because the browser recomputes it with WebCrypto, which has no SHA3.
+    """
+
+    material = {"contract": _STAFF_SNAPSHOT_ID_CONTRACT, **dict(fields)}
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest().upper()
 
 
@@ -716,13 +734,10 @@ def _control_pack_policy(
 def _control_pack_from_row(row: Mapping[str, Any]) -> ControlPack:
     """Rebuild one persisted control pack; malformed JSON columns fail closed."""
 
+    source_refs = _stored_values(row["source_refs_json"], "control_pack_binding")
+    authorized_roles = _stored_values(row["authorized_roles_json"], "control_pack_binding")
+    expected_tests = _stored_values(row["expected_tests_json"], "control_pack_binding")
     try:
-        source_refs = json.loads(str(row["source_refs_json"]))
-        authorized_roles = json.loads(str(row["authorized_roles_json"]))
-        expected_tests = json.loads(str(row["expected_tests_json"]))
-        for value in (source_refs, authorized_roles, expected_tests):
-            if not isinstance(value, dict) or set(value) != {"values"}:
-                _fail(FinancialIntegrityError, "control_pack_binding")
         return ControlPack(
             pack_id=str(row["pack_id"]),
             state_id=str(row["state_id"]),
@@ -730,15 +745,15 @@ def _control_pack_from_row(row: Mapping[str, Any]) -> ControlPack:
             program_id=str(row["program_id"]),
             period_id=str(row["period_id"]),
             version=int(row["version"]),
-            source_refs=tuple(source_refs["values"]),
+            source_refs=source_refs,
             effective_start_ms=int(row["effective_start_ms"]),
             effective_end_ms=int(row["effective_end_ms"]),
             recorded_at_ms=int(row["recorded_at_ms"]),
             approved_at_ms=int(row["approved_at_ms"]),
             calculation_rule_id=str(row["calculation_rule_id"]),
             adjustment_rule_id=str(row["adjustment_rule_id"]),
-            authorized_roles=tuple(authorized_roles["values"]),
-            expected_tests=tuple(expected_tests["values"]),
+            authorized_roles=authorized_roles,
+            expected_tests=expected_tests,
         )
     except (TypeError, ValueError):
         _fail(FinancialIntegrityError, "control_pack_binding")
@@ -2496,9 +2511,7 @@ class FinancialOwner:
         if row is None:
             _fail(FinancialIntegrityError, "population_manifest_missing")
         try:
-            encoded_rules = json.loads(str(row["inclusion_rules_json"]))
-            if type(encoded_rules) is not dict or set(encoded_rules) != {"values"} or type(encoded_rules["values"]) is not list:
-                _fail(FinancialIntegrityError, "population_manifest_integrity")
+            inclusion_rules = _stored_values(row["inclusion_rules_json"], "population_manifest_integrity")
             member_rows = connection.execute(
                 "SELECT position,member_id FROM population_manifest_members WHERE manifest_id=? ORDER BY position",
                 (manifest_id,),
@@ -2513,7 +2526,7 @@ class FinancialOwner:
                 currency=str(row["currency"]),
                 pack_id=str(row["pack_id"]),
                 cutoff_ms=int(row["cutoff_ms"]),
-                inclusion_rules=tuple(encoded_rules["values"]),
+                inclusion_rules=inclusion_rules,
                 source_owner_id=str(row["source_owner_id"]),
                 authority_id=str(row["authority_id"]),
                 authority_epoch=int(row["authority_epoch"]),
@@ -3621,11 +3634,8 @@ class FinancialOwner:
                 ).fetchall()
                 original_event = None
                 for event in payment_events:
-                    try:
-                        payload = json.loads(str(event["payload_json"]))
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        _fail(FinancialIntegrityError, "payment_retry_event")
-                    if type(payload) is dict and payload.get("payment_id") == payment_id:
+                    payload = _stored_object(event["payload_json"], "payment_retry_event")
+                    if payload.get("payment_id") == payment_id:
                         original_event = (event, payload)
                         break
                 if original_event is None:
@@ -3796,7 +3806,7 @@ class FinancialOwner:
             action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_id,)).fetchone()
             if action is None:
                 _fail(FinancialIntegrityError, "action_missing")
-            stored_payload = json.loads(str(action["payload_json"]))
+            stored_payload = _stored_object(action["payload_json"], "action_payload_integrity")
             if payload is not None and _canonical(dict(payload)) != _canonical(stored_payload):
                 _fail(FinancialConflictError, "action_payload_immutable")
             obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (action["obligation_id"],)).fetchone()
@@ -3903,7 +3913,8 @@ class FinancialOwner:
             or type(snapshot["sequence"]) is not int
             or snapshot["sequence"] < 0
             or not _is_upper_hex128(snapshot["history_head"])
-            or not _is_upper_hex128(snapshot["snapshot_id"])
+            or type(snapshot["snapshot_id"]) is not str
+            or _UPPER_HEX64.match(snapshot["snapshot_id"]) is None
         ):
             malformed()
         if snapshot["snapshot_id"] != _staff_snapshot_id({key: snapshot[key] for key in snapshot_fields if key != "snapshot_id"}):
@@ -4032,11 +4043,8 @@ class FinancialOwner:
             ).fetchall()
             matched_event = None
             for event in events:
-                try:
-                    event_payload = json.loads(str(event["payload_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "staff_command_binding_event")
-                if type(event_payload) is dict and event_payload.get("action_id") == action_id:
+                event_payload = _stored_object(event["payload_json"], "staff_command_binding_event")
+                if event_payload.get("action_id") == action_id:
                     matched_event = event
                     if (
                         int(event["event_sequence"]) == snapshot["sequence"] + 1
@@ -5225,16 +5233,13 @@ class FinancialOwner:
                 }
 
             def case_ref(row: sqlite3.Row) -> dict[str, Any]:
-                try:
-                    conditions = json.loads(str(row["completion_conditions_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "decision_package_case")
+                conditions = _stored_object(row["completion_conditions_json"], "decision_package_case")
                 required_conditions = {
                     "amount_satisfied",
                     "delivery_acknowledged_or_not_required",
                     "reporting_complete",
                 }
-                if type(conditions) is not dict or set(conditions) != required_conditions or any(type(conditions[key]) is not bool for key in required_conditions):
+                if set(conditions) != required_conditions or any(type(conditions[key]) is not bool for key in required_conditions):
                     _fail(FinancialIntegrityError, "decision_package_case")
                 return {
                     "case_id": str(row["case_id"]),
@@ -5274,11 +5279,8 @@ class FinancialOwner:
                 }
 
             def determination_ref(row: sqlite3.Row) -> dict[str, Any]:
-                try:
-                    supporting = json.loads(str(row["supporting_evidence_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "decision_package_determination")
-                bindings = supporting.get("bindings") if type(supporting) is dict and set(supporting) == {"bindings"} else None
+                supporting = _stored_object(row["supporting_evidence_json"], "decision_package_determination")
+                bindings = supporting.get("bindings") if set(supporting) == {"bindings"} else None
                 if type(bindings) is not list or any(
                     type(value) is not dict
                     or set(value) != {"evidence_id", "record_digest"}
@@ -5319,12 +5321,7 @@ class FinancialOwner:
             )
 
             def action_ref(row: sqlite3.Row) -> dict[str, Any]:
-                try:
-                    payload = json.loads(str(row["payload_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "decision_package_action")
-                if type(payload) is not dict:
-                    _fail(FinancialIntegrityError, "decision_package_action")
+                payload = _stored_object(row["payload_json"], "decision_package_action")
                 payload_fields: dict[str, Any] = {}
                 for key in action_fields:
                     if key not in payload:
@@ -5630,11 +5627,8 @@ class FinancialOwner:
                 (obligation_id,),
             )
             for row in rows:
-                try:
-                    payload = json.loads(str(row["payload_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "correction_followup_event")
-                if type(payload) is not dict or payload.get("action_id") != action_id:
+                payload = _stored_object(row["payload_json"], "correction_followup_event")
+                if payload.get("action_id") != action_id:
                     continue
                 if found is not None:
                     _fail(FinancialIntegrityError, "correction_followup_duplicate")
@@ -5936,11 +5930,8 @@ class FinancialOwner:
             selected = events[:limit]
             requests: list[tuple[int, str, str]] = []
             for event in selected:
-                try:
-                    payload = json.loads(str(event["payload_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "correction_followup_event")
-                if type(payload) is not dict or type(payload.get("action_id")) is not str:
+                payload = _stored_object(event["payload_json"], "correction_followup_event")
+                if type(payload.get("action_id")) is not str:
                     _fail(FinancialIntegrityError, "correction_followup_event")
                 item = connection.execute(
                     "SELECT item_id FROM obligations WHERE obligation_id=?",
@@ -6519,7 +6510,7 @@ class FinancialOwner:
             row = connection.execute("SELECT payload_json,payload_digest FROM actions WHERE action_id=?", (action_id,)).fetchone()
             if row is None:
                 _fail(FinancialIntegrityError, "action_missing")
-            return {"action_id": action_id, "payload": json.loads(str(row[0])), "payload_digest": _hex(bytes(row[1]))}
+            return {"action_id": action_id, "payload": _stored_object(row[0], "action_payload_integrity"), "payload_digest": _hex(bytes(row[1]))}
 
     @staticmethod
     def _export_value(value: Any) -> Any:

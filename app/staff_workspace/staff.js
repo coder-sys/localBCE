@@ -32,6 +32,7 @@
     local_ref: "ref:payment:h:p2",
   });
   const READ_ENVELOPE = "RR/FINANCIAL/STAFF-READ-ENVELOPE/v1";
+  const SNAPSHOT_ID_CONTRACT = "RR/FINANCIAL/STAFF-SNAPSHOT-ID/v1";
   const OWNER_DIGEST = /^[0-9A-F]{128}$/;
   const SHA256_DIGEST = /^[0-9A-F]{64}$/;
   // A command whose response was lost or unverifiable may have committed: keep the exact body for retry.
@@ -223,7 +224,8 @@
       && count(envelope.continuity_epoch)
       && count(envelope.sequence),
     "read_identity");
-    assert(await digest(snapshotFields(envelope)) === envelope.snapshot_id, "read_snapshot_digest");
+    assert(await digest({ contract: SNAPSHOT_ID_CONTRACT, ...snapshotFields(envelope) }) === envelope.snapshot_id,
+      "read_snapshot_digest");
 
     const identityKeys = ["schema", "schema_version", "mode", "owner_id", "continuity_epoch", "sequence", "history_head"];
     const verification = envelope.verification;
