@@ -193,8 +193,6 @@ def _utc(value: object, code: str, allow_none: bool = False) -> datetime | None:
         parsed = datetime.fromisoformat(value[:-1] + "+00:00")
     except ValueError:
         raise InputError(code) from None
-    if not is_utc_timestamp(parsed):
-        raise InputError(code)
     return parsed.astimezone(timezone.utc)
 
 

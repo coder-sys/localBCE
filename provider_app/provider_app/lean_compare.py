@@ -605,12 +605,9 @@ def compare_bytes(request_bytes: bytes, bundle_bytes: bytes) -> LeanProjection:
     Raw JSON is parsed by the existing strict Python codec and never reaches
     the child process. The return value contains only the Lean model projection.
     """
-    try:
-        request = parse_request_bytes(request_bytes)
-        bundle = parse_bundle_bytes(bundle_bytes)
-        python_result = preflight_bytes(request_bytes, bundle_bytes)
-    except (TypeError, ValueError):
-        raise
+    request = parse_request_bytes(request_bytes)
+    bundle = parse_bundle_bytes(bundle_bytes)
+    python_result = preflight_bytes(request_bytes, bundle_bytes)
     differences = check_result(request_bytes, bundle_bytes, python_result)
     if differences:
         raise LeanCompareError("PYTHON_CHECKER_DISAGREEMENT")
