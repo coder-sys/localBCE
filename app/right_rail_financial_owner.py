@@ -1705,7 +1705,23 @@ class FinancialOwner:
             correction_transition_release=correction_transition_release,
             identity_contract=None,
         )
-        self._verify_open_identity()
+        self._verify_open_identity(verify_history=True)
+
+    def _verify_history_in_transaction(self, connection: sqlite3.Connection) -> None:
+        """Replay the stored history against its projections before any use (Art. III.5).
+
+        The admission cache only bounds row counts and sizes, so a same-length raw
+        edit passes it. The independent checker recomputes the hash chain and the
+        history-to-projection bindings on this uncommitted open transaction; on a
+        mismatch the open (and any migration in it) rolls back, so the Owner never
+        writes on top of state its own history does not explain.
+        """
+        from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database_connection
+
+        try:
+            verify_database_connection(connection, **self._checker_expectations())
+        except IndependentFinancialError as error:
+            _fail(FinancialIntegrityError, f"open_verification:{error}")
 
     @classmethod
     def _open_restore_destination(
@@ -1945,7 +1961,7 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "continuity_admission_tables")
         return values
 
-    def _ensure_continuity_admission(self, connection: sqlite3.Connection) -> None:
+    def _ensure_continuity_admission(self, connection: sqlite3.Connection, *, verify_history: bool) -> None:
         try:
             connection.execute("BEGIN IMMEDIATE")
             meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
@@ -1974,10 +1990,13 @@ class FinancialOwner:
                 self._continuity_admission_table_shape(connection)
             else:
                 _fail(FinancialIntegrityError, "schema_tables")
-            if not private_indexes_current and tables == expected_tables:
+            if tables == expected_tables and (verify_history or not private_indexes_current):
+                # The cheap size cache first, then (below) the replay it cannot replace.
                 self._verify_continuity_admission_cache(connection)
             _install_private_index_set(connection)
             _install_history_append_only(connection)
+            if verify_history:
+                self._verify_history_in_transaction(connection)
             connection.execute("COMMIT")
         except BaseException:
             if connection.in_transaction:
@@ -1992,10 +2011,10 @@ class FinancialOwner:
         if self._continuity_admission_package_size(connection) > _MAX_PACKAGE_BYTES:
             _fail(FinancialContinuityError, "continuity_package_size")
 
-    def _verify_open_identity(self) -> None:
+    def _verify_open_identity(self, *, verify_history: bool) -> None:
         try:
             with closing(self._connect()) as connection:
-                self._ensure_continuity_admission(connection)
+                self._ensure_continuity_admission(connection, verify_history=verify_history)
                 row = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
                 if row is None:
                     _fail(FinancialIntegrityError, "schema_meta")
@@ -2006,7 +2025,9 @@ class FinancialOwner:
                 if tables != expected_tables:
                     _fail(FinancialIntegrityError, "schema_tables")
                 self._verify_meta_identity(connection, row)
-                self._verify_continuity_admission_cache(connection)
+                if not verify_history:
+                    # A verified open already checked the cache inside its transaction.
+                    self._verify_continuity_admission_cache(connection)
         except sqlite3.DatabaseError:
             _fail(FinancialIntegrityError, "schema_read")
 
@@ -6879,7 +6900,8 @@ class FinancialOwner:
                         if len(values) != len(columns):
                             _fail(FinancialContinuityError, "continuity_columns")
                         connection.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})", tuple(values))
-            owner._verify_open_identity()
+            # The restore-source verification below is strictly stronger than the open replay.
+            owner._verify_open_identity(verify_history=False)
             from app.right_rail_financial_owner_independent import verify_database
 
             verify_database(

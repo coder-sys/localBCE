@@ -478,7 +478,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         store = self._make_owner(path=path)
         return self._snapshot(store, context=context)
 
-    def _snapshot_on_tampered_path(self, path: Path, source: FinancialOwner) -> adapter.LockedSemanticSnapshot:
+    def _snapshot_on_tampered_path(self, path: Path, source: FinancialOwner) -> None:
         # Layer 1: Owner open recomputes the v7 continuity admission cache
         # (per-table row count and canonical bytes) and rejects a raw row edit
         # that changed either before any read (Art. III.5). The cache is a size
@@ -495,15 +495,43 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         if rebuilt != stored:
             with self.assertRaisesRegex(owner.FinancialIntegrityError, "continuity_admission_mismatch"):
                 self._make_owner(path=path)
-            # Layer 2: an attacker who also rewrites the cache still reaches the
-            # adapter's independent verifier, which must reject the tampered facts.
+            # An attacker who also rewrites the cache reaches the layers below.
             with closing(sqlite3.connect(str(path))) as connection:
                 connection.executemany(
                     "UPDATE right_rail_continuity_admission SET row_count=?,row_bytes=? WHERE table_name=?",
                     ((count, size, table) for table, (count, size) in rebuilt.items()),
                 )
                 connection.commit()
-        return self._snapshot_on_path(path)
+        # Layer 2: Owner open replays the history against the projections and
+        # refuses the tampered facts before any read or write.
+        before_open = path.read_bytes()
+        with self.assertRaises(owner.FinancialIntegrityError) as refused:
+            self._make_owner(path=path)
+        self.assertEqual(path.read_bytes(), before_open)
+        open_code = str(refused.exception)
+        self.assertTrue(open_code.startswith("open_verification:"), open_code)
+        # Layer 3: the adapter's own verifier, reading the file with no Owner at
+        # all, must reject the same facts for the same reason.
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN")
+            try:
+                adapter.build_locked_semantic_snapshot(
+                    connection,
+                    obligation_id=expected.H_OBLIGATION_ID,
+                    authority_context=adapter.TrustedAuthorityContext.from_authority(source.trusted_authority),
+                    evaluation_time_ms=2**63 - 2,
+                    expected_config=source.config,
+                    expected_scope=source.config,
+                    expected_mode=source.mode,
+                    expected_owner_id=source.owner_id,
+                )
+            except adapter.SemanticAdapterIntegrityError as error:
+                self.assertEqual(str(error), "owner_verifier:" + open_code.removeprefix("open_verification:"))
+                raise
+            finally:
+                connection.rollback()
+        self.fail("the adapter accepted a tampered store")
 
     def test_cash_claim_snapshot_is_locked_canonical_and_read_only(self) -> None:
         store = self._build_base()

@@ -2130,6 +2130,51 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_private_index_schema(restored_path)
         restored.verify_integrity()
 
+    def test_owner_open_replays_history_and_refuses_same_length_projection_edit(self) -> None:
+        store = self._build_base()
+        self._assert_verified(store)
+        tampered_path = self._path("open-replay-projection-tamper.sqlite")
+        tampered_path.write_bytes(store.path.read_bytes())
+        with closing(sqlite3.connect(str(tampered_path), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute(
+                "UPDATE obligations SET owed_cents=owed_cents+1 WHERE obligation_id=?",
+                (expected.H_OBLIGATION_ID,),
+            )
+            # Same length: the admission size cache still matches, so only a replay can see the edit.
+            cached = {
+                str(row["table_name"]): (int(row["row_count"]), int(row["row_bytes"]))
+                for row in connection.execute("SELECT table_name,row_count,row_bytes FROM right_rail_continuity_admission")
+            }
+            self.assertEqual(store._recompute_continuity_admission(connection), cached)
+        with self.assertRaises(IndependentFinancialError) as checker:
+            verify_database(tampered_path, expected_config=store.config, expected_authority=self.authority)
+        expected_code = f"open_verification:{checker.exception}"
+        tampered_bytes = tampered_path.read_bytes()
+        with self.assertRaises(FinancialIntegrityError) as refused:
+            self._make_owner(path=tampered_path)
+        self.assertEqual(str(refused.exception), expected_code)
+        self.assertEqual(tampered_path.read_bytes(), tampered_bytes)
+
+        # The same edit in a store written before the history triggers existed:
+        # the refused open rolls back its migration too, so nothing is written.
+        legacy_path = self._path("open-replay-projection-tamper-legacy.sqlite")
+        legacy_path.write_bytes(tampered_bytes)
+        with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+            for name in owner._HISTORY_APPEND_ONLY_TRIGGERS:
+                connection.execute(f"DROP TRIGGER {name}")
+        legacy_bytes = legacy_path.read_bytes()
+        with self.assertRaises(FinancialIntegrityError) as legacy_refused:
+            self._make_owner(path=legacy_path)
+        self.assertEqual(str(legacy_refused.exception), expected_code)
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+        with closing(sqlite3.connect(str(legacy_path))) as connection:
+            triggers = {
+                str(row[0])
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'")
+            }
+        self.assertTrue(triggers.isdisjoint(owner._HISTORY_APPEND_ONLY_TRIGGERS))
+
     def test_financial_history_is_append_only_in_new_and_migrated_stores(self) -> None:
         store = self._build_base()
         package = store.export_continuity()

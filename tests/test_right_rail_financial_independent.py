@@ -700,13 +700,15 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             _restore_history_triggers(connection)
         tampered_bytes = target.read_bytes()
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:event-id"):
-            reopened = owner.FinancialOwner(
+            self._verify(target)
+        # Owner open replays the history and refuses before any read or write.
+        with self.assertRaisesRegex(owner.FinancialIntegrityError, r"\Aopen_verification:history:event-id\Z"):
+            owner.FinancialOwner(
                 path=target,
                 config=self.config,
                 trusted_authority=self.authority,
                 clock=self.clock,
             )
-            reopened.verify_integrity()
         self.assertEqual(target.read_bytes(), tampered_bytes)
 
     def test_rehashed_population_history_rejects_invalid_completion_lifecycle(self) -> None:
@@ -794,10 +796,10 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             else:
                 self.fail(f"variant={variant} was accepted")
 
-            # Owner open recomputes the continuity admission cache (per-table
+            # Owner open first recomputes the continuity admission cache (per-table
             # row count and canonical bytes) and rejects a rewrite that changed
-            # either before any read (Art. III.5). It is a size admission bound,
-            # not a content digest, so the same-length "reduced" rewrite passes it.
+            # either before any read (Art. III.5). It is only a size bound; the
+            # same-length "reduced" rewrite passes it and is stopped by the open replay.
             with closing(sqlite3.connect(target)) as connection:
                 connection.row_factory = sqlite3.Row
                 rebuilt = reopened._recompute_continuity_admission(connection)
@@ -816,7 +818,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                         clock=_Clock(),
                     )
                 # An attacker who also rewrites the cache must still be stopped
-                # by the independent history binding below.
+                # by the open replay of the history below.
                 with closing(sqlite3.connect(target)) as connection:
                     connection.executemany(
                         "UPDATE right_rail_continuity_admission SET row_count=?,row_bytes=? WHERE table_name=?",
@@ -826,18 +828,35 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             elif variant == "removed":
                 self.fail("removing a history event must change the admission row count")
 
-            tampered_owner = owner.FinancialOwner(
+            # Owner open replays the history against the projections and refuses
+            # the tampered store without writing to it, whatever the cache says.
+            tampered_bytes = target.read_bytes()
+            with self.assertRaisesRegex(
+                owner.FinancialIntegrityError,
+                r"\Aopen_verification:history:population-imported-binding\Z",
+                msg=f"variant={variant}",
+            ):
+                owner.FinancialOwner(
+                    path=target,
+                    config=self.config,
+                    trusted_authority=self.authority,
+                    clock=_Clock(),
+                )
+            self.assertEqual(target.read_bytes(), tampered_bytes, f"variant={variant}")
+            # The package path must reject such a store too. No Owner can open it,
+            # so export through a handle that skipped open verification, as a
+            # compromised writer would.
+            tampered_owner = owner.FinancialOwner.__new__(owner.FinancialOwner)
+            tampered_owner._initialize(
                 path=target,
                 config=self.config,
                 trusted_authority=self.authority,
                 clock=_Clock(),
+                mode="LIVE",
+                owner_id="financial-owner-v1",
+                correction_transition_release=None,
+                identity_contract=None,
             )
-            try:
-                tampered_owner.verify_integrity()
-            except independent.IndependentFinancialError as error:
-                self.assertEqual(str(error), "history:population-imported-binding", f"variant={variant}")
-            else:
-                self.fail(f"variant={variant} was accepted by owner verification")
             tampered_package = tampered_owner.export_continuity()
             with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-imported-binding"):
                 independent.verify_continuity_package(
