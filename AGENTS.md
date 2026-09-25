@@ -23,6 +23,13 @@ Working rules (details in the constitution):
 - Update `STATUS.md` in a few lines per change. Raw logs stay in log files.
 - Standing claims: synthetic, non-PHI, nonpayment, `proofSuiteId=null`,
   `production_usable=false`, `activation=false`.
+- Helpers are matched to the work (founder, 2026-09-24; definitions in
+  `~/.claude/agents/`):
+  - `rr-core` (Opus, high effort): money logic, formats, proofs, security,
+    pre-merge review.
+  - `rr-build` (Sonnet, high): screens, harnesses, clear-spec refactors.
+  - `rr-research` (Sonnet, medium): sourced research.
+  - `rr-chore` (Haiku, low): mechanically checkable chores only.
 - Never destroy uncommitted work, raw evidence, keys or the only copy of
   anything. No `git reset --hard`, `git clean`, or force pushes.
 
