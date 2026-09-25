@@ -299,8 +299,7 @@ class _PinnedExecutable:
     """Single owner for the final files and every pinned ancestor directory."""
 
     __slots__ = (
-        "canonical_path", "canonical_parent", "volume_guid_path", "nt_path",
-        "native_volume_prefix", "dos_drive",
+        "canonical_path", "nt_path", "native_volume_prefix", "dos_drive",
         "_handles", "_closed",
     )
 
@@ -308,16 +307,12 @@ class _PinnedExecutable:
         self,
         *,
         canonical_path: str,
-        canonical_parent: str,
-        volume_guid_path: str,
         nt_path: str,
         native_volume_prefix: str,
         dos_drive: str,
         handles: list[_PinnedExecutableHandle],
     ) -> None:
         self.canonical_path = canonical_path
-        self.canonical_parent = canonical_parent
-        self.volume_guid_path = volume_guid_path
         self.nt_path = nt_path
         self.native_volume_prefix = native_volume_prefix
         self.dos_drive = dos_drive
@@ -728,12 +723,9 @@ def _open_pinned_directory(
         ):
             raise VerifierProcessError("verifier_executable_directory_not_regular")
         return pinned
-    except BaseException as primary_error:
-        try:
-            pinned.close()
-        except BaseException:
-            raise
-        raise primary_error
+    except BaseException:
+        pinned.close()
+        raise
 
 
 def _open_pinned_executable(
@@ -784,7 +776,7 @@ def _open_pinned_executable(
             flags=_FILE_NAME_NORMALIZED | _VOLUME_NAME_DOS,
             label="verifier_executable_dos_path",
         )
-        dos_path, canonical_parent, dos_drive = _canonical_dos_path(dos_path)
+        dos_path, _dos_parent, dos_drive = _canonical_dos_path(dos_path)
         for directory_path in directory_paths:
             handles.append(_open_pinned_directory(kernel32=kernel32, path=directory_path))
         reopened = _open_executable_file_handle(
@@ -808,27 +800,20 @@ def _open_pinned_executable(
         )
         return _PinnedExecutable(
             canonical_path=dos_path,
-            canonical_parent=canonical_parent,
-            volume_guid_path=volume_guid_path,
             nt_path=nt_path,
             native_volume_prefix=native_volume_prefix,
             dos_drive=dos_drive,
             handles=handles,
         )
-    except BaseException as primary_error:
-        try:
-            _PinnedExecutable(
-                canonical_path="",
-                canonical_parent="",
-                volume_guid_path="",
-                nt_path="",
-                native_volume_prefix="",
-                dos_drive="",
-                handles=handles,
-            ).close()
-        except BaseException:
-            raise
-        raise primary_error
+    except BaseException:
+        _PinnedExecutable(
+            canonical_path="",
+            nt_path="",
+            native_volume_prefix="",
+            dos_drive="",
+            handles=handles,
+        ).close()
+        raise
 
 
 def _quote_argument(value: str) -> str:
@@ -929,12 +914,6 @@ def _verifier_workspace_snapshot(
         raise VerifierProcessError("verifier_workspace") from None
     identity = _verifier_workspace_identity(metadata)
     return identity, entries
-
-
-def _require_empty_verifier_workspace(workspace: Path) -> None:
-    _identity, entries = _verifier_workspace_snapshot(workspace)
-    if entries:
-        raise VerifierProcessError("verifier_workspace_not_empty") from None
 
 
 def _remove_verifier_workspace_entry(path: Path) -> None:
@@ -1038,8 +1017,6 @@ def _create_process_with_owned_output_handles(
         if stdin_handle is not None:
             if type(stdin_handle) is not int or stdin_handle <= 0:
                 raise VerifierProcessError("verifier_input_handle")
-            if not hasattr(kernel32, "DuplicateHandle") or not hasattr(kernel32, "GetCurrentProcess"):
-                raise VerifierProcessError("verifier_api_missing:DuplicateHandle")
             duplicate = wintypes.HANDLE()
             if not kernel32.DuplicateHandle(
                 kernel32.GetCurrentProcess(), wintypes.HANDLE(stdin_handle),
@@ -1247,8 +1224,6 @@ def run_contained_verifier(
         ctypes.POINTER(wintypes.DWORD),
     ]
     kernel32.QueryInformationJobObject.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
     _configure_executable_pin_apis(kernel32)
     kernel32.GetCurrentProcess.argtypes = []
     kernel32.GetCurrentProcess.restype = wintypes.HANDLE
@@ -1265,10 +1240,8 @@ def run_contained_verifier(
     ]
     psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
     if _stdin_descriptor is not None:
-        if not hasattr(kernel32, "DuplicateHandle") or not hasattr(kernel32, "GetCurrentProcess"):
+        if not hasattr(kernel32, "DuplicateHandle"):
             raise VerifierProcessError("verifier_api_missing:DuplicateHandle")
-        kernel32.GetCurrentProcess.argtypes = []
-        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
         kernel32.DuplicateHandle.argtypes = [
             wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
             ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, wintypes.BOOL,
@@ -1441,18 +1414,17 @@ def run_contained_verifier(
                 creation_flags=creation_flags,
                 process_info=process_info,
             )
-            if pinned_executable is not None:
-                _query_dos_device_mapping(
-                    kernel32=kernel32,
-                    drive=pinned_executable.dos_drive,
-                    native_volume_prefix=pinned_executable.native_volume_prefix,
-                )
-                _verify_suspended_child_image(
-                    kernel32=kernel32,
-                    process_handle=process_info.hProcess,
-                    expected_native_path=pinned_executable.nt_path,
-                    native_volume_prefix=pinned_executable.native_volume_prefix,
-                )
+            _query_dos_device_mapping(
+                kernel32=kernel32,
+                drive=pinned_executable.dos_drive,
+                native_volume_prefix=pinned_executable.native_volume_prefix,
+            )
+            _verify_suspended_child_image(
+                kernel32=kernel32,
+                process_handle=process_info.hProcess,
+                expected_native_path=pinned_executable.nt_path,
+                native_volume_prefix=pinned_executable.native_volume_prefix,
+            )
         except BaseException:
             if process_info.hProcess:
                 _terminate_and_reap_child(
@@ -1612,14 +1584,11 @@ def run_contained_verifier(
             peak_private_commit_bytes=peak_private_commit,
             parent_peak_working_set_bytes=parent_peak_working_set,
             parent_peak_private_commit_bytes=parent_peak_private_commit,
-            scratch_peak_bytes=0,
             child_process_count=child_process_count,
             measurement_complete=memory_sampled,
-            cleanup_complete=True,
             private_commit_delta_bytes=max(
                 0, peak_combined_private_commit - initial_private_commit
             ),
-            pagefile_growth_evidence="unavailable",
             process_tree_complete=process_tree_complete,
         )
     finally:
@@ -1726,17 +1695,14 @@ def run_contained_verifier_stream(
     _validate_output_cap(stderr_cap_bytes, "verifier_stderr_cap")
     _validate_output_encoding(stdout_ascii, "verifier_stdout_encoding")
     _validate_output_encoding(stderr_ascii, "verifier_stderr_encoding")
-    if (
-        expected_input_bytes is not None
-        and (
-            type(expected_input_bytes) is not int
-            or not 0 < expected_input_bytes <= STREAM_MAX_FRAME_BYTES
-        )
+    if expected_input_bytes is not None and (
+        type(expected_input_bytes) is not int
+        or not 0 < expected_input_bytes <= STREAM_MAX_FRAME_BYTES
+        or len(frame) != expected_input_bytes
     ):
         raise VerifierProcessError("verifier_stream_input_length")
-    if expected_input_bytes is not None and len(frame) != expected_input_bytes:
-        raise VerifierProcessError("verifier_stream_input_length")
-    _require_empty_verifier_workspace(workspace)
+    if _verifier_workspace_snapshot(workspace)[1]:
+        raise VerifierProcessError("verifier_workspace_not_empty") from None
     try:
         read_descriptor, write_descriptor = os.pipe()
     except OSError:
