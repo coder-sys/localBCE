@@ -1771,6 +1771,7 @@ class FinancialOwner:
         mode: str,
         owner_id: str,
         identity_contract: Mapping[str, Any],
+        correction_transition_release: object | None = None,
     ) -> "FinancialOwner":
         """Create a fresh restore target; only ``restore_continuity`` may call this.
 
@@ -1788,7 +1789,7 @@ class FinancialOwner:
             clock=clock,
             mode=mode,
             owner_id=owner_id,
-            correction_transition_release=None,
+            correction_transition_release=correction_transition_release,
             identity_contract=identity_contract,
         )
         return owner
@@ -6896,6 +6897,7 @@ class FinancialOwner:
         trusted_authority: SyntheticTrustedAuthority | None,
         clock: FinancialClock | None = None,
         restore_mode: str = "SHADOW",
+        correction_transition_release: object | None = None,
     ) -> "FinancialOwner":
         """Restore into a new SHADOW or explicitly approved TEST owner."""
         sidecar_paths = (Path(f"{recovered_path}-wal"), Path(f"{recovered_path}-shm")) if isinstance(recovered_path, Path) else ()
@@ -7010,6 +7012,7 @@ class FinancialOwner:
                 mode=restore_mode,
                 owner_id=restored_owner_id,
                 identity_contract=identity_contract,
+                correction_transition_release=correction_transition_release,
             )
             insertion_order = ["control_packs", "population_imports", "population_items", "obligations", "evidence", "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox", "financial_events", "financial_conflicts", "evaluations"]
             if config.schema_version in _FUNDING_SCHEMA_VERSIONS:
@@ -7104,6 +7107,7 @@ class FinancialOwner:
         recovered_path: Path,
         trusted_authority: SyntheticTrustedAuthority | None,
         clock: FinancialClock | None = None,
+        correction_transition_release: object | None = None,
     ) -> "FinancialOwner":
         """Restore into a separate non-live TEST owner for synthetic continuation."""
 
@@ -7113,6 +7117,7 @@ class FinancialOwner:
             trusted_authority=trusted_authority,
             clock=clock,
             restore_mode="TEST",
+            correction_transition_release=correction_transition_release,
         )
 
     def _checker_expectations(self) -> dict[str, Any]:

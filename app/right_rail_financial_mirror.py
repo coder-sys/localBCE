@@ -1627,6 +1627,7 @@ class FinancialMirror:
                     recovered_path=recovered_path,
                     trusted_authority=self.owner.trusted_authority,
                     restore_mode=restore_mode,
+                    correction_transition_release=self.owner.correction_transition_release,
                 )
                 summary = restored_owner.summary()
                 integrity = restored_owner.verify_integrity()
