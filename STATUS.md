@@ -59,11 +59,14 @@ in that archive that holds the raw record.
 8. **Provider App pre-submission checker core.** 2026-09-23: 13 of 13 Python tests and
    one Lean compile. Its later Lean comparison extension never built successfully.
    Evidence: `rightrail-provider-app-20260923-STATE.md`.
-9. **Payment gate formats #1-#4, #12** (branch `gate-v1`, not merged). Felt effect: the
-   state's payment system can verify a gate decision offline. 2026-09-25: Lean
-   `verifyToken` (nine checks, one predicate) judges all 50 golden vectors; its
-   theorems compile with no `sorry`; 8 of 8 Python tests pass; real AWS-LC
-   ML-DSA-87 signs the one-per-batch checkpoint. Logs: `native/guard/guarded-*-gate-v1-*`.
+9. **Payment gate formats #1-#4, #12** (branch `gate-v1`, not merged). Felt effect
+   (target): one gate decision per payment, which the payer checks before releasing
+   it. Offline payer verification is not claimed until the payer's ML-DSA-87 check
+   and the KEY-CERT chain are wired; in the Lean model both are supplied inputs.
+   2026-09-25: Lean `verifyToken` (nine checks, one predicate) judges 86 of 86
+   checked golden vectors; 11 theorems compile, their dependencies pinned by
+   `lake build gate_axioms`; 6 of 6 Python tests pass; AWS-LC ML-DSA-87 (pinned
+   binary) signs one checkpoint per batch. Logs: `native/guard/guarded-*-gate-fix-*`.
 
 ## What is written but has never run
 
