@@ -215,7 +215,6 @@ class CodecLawTests(unittest.TestCase):
         self.assertEqual(gate.decode_decide_request(gate.encode_decide_request(request)), request)
         for t in tokens:
             self.assertEqual(gate.decode_token(gate.encode_token(t)), t)
-            self.assertEqual(gate.decode_token_leaf(gate.encode_token_leaf(t.leaf)), t.leaf)
         self.assertEqual(gate.decode_checkpoint(gate.encode_checkpoint(tokens[0].checkpoint)), tokens[0].checkpoint)
 
     def test_every_strict_prefix_is_rejected(self) -> None:

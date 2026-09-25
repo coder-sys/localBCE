@@ -445,4 +445,10 @@ def verifyToken (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) : Bo
   | some t => certValid c s t && batchSigned c s t && aboveFence s t && unexpired s t &&
       paymentMatches c p t && allows t && granted s t && unreleased s t
 
+/-- The payer's step after releasing on `t`, as `PayerRelease` in
+    `docs/formal/gate_failover/gate_failover.tla`: record the payment and
+    raise the fence to the token's epoch. -/
+def release (s : PayerState) (t : Token) : PayerState :=
+  { s with fence := max s.fence t.leaf.epoch, released := t.leaf.paymentId :: s.released }
+
 end BlindLedger.Gate

@@ -24,6 +24,17 @@ theorem verifyToken_epoch_ge_fence {c : Crypto} {s : PayerState} {p : Payment} {
   obtain ⟨t, hd, -, -, h4, -⟩ := (verifyToken_iff c s p bytes).1 h
   exact ⟨t, hd, by simpa [aboveFence] using h4⟩
 
+/-- The fence never moves down (the model's `EpochMonotone` on the payer side). -/
+theorem release_fence_monotone (s : PayerState) (t : Token) : s.fence ≤ (release s t).fence :=
+  Nat.le_max_left _ _
+
+/-- At most one release per payment (the model's `AtMostOnceRelease`): after
+    releasing on `t`, every token for the same payment id is rejected. -/
+theorem release_rejects_same_payment (c : Crypto) (s : PayerState) (p : Payment) {t t' : Token}
+    {bytes : Bytes} (hd : decodeToken bytes = some t') (hp : t'.leaf.paymentId = t.leaf.paymentId) :
+    verifyToken c (release s t) p bytes = false := by
+  simp [verifyToken, hd, unreleased, release, hp]
+
 /-- A hash collision: two different inputs with one output. -/
 def Collision (H : Bytes → Bytes) : Prop := ∃ x y, x ≠ y ∧ H x = H y
 

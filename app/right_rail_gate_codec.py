@@ -45,13 +45,12 @@ SIG_ML_DSA_87_BATCH: Final = 1
 DIGEST: Final = 64
 ZERO_DIGEST: Final = bytes(DIGEST)
 MAX_NAT: Final = (1 << 63) - 1
-MAX_LINES: Final = 65_535
+MAX_LINES: Final = 65_535  # also bounds a lines tree to depth 16
 MAX_LINE_BYTES: Final = 512
 MAX_EVIDENCE_REFS: Final = 256
 MAX_REASON_CODES: Final = 32
 MAX_BATCH: Final = 1_000
 MAX_TOKEN_PATH: Final = 10  # ceil(log2(MAX_BATCH))
-MAX_TREE_DEPTH: Final = 16  # ceil(log2(MAX_LINES))
 MAX_RETRY_AFTER_MS: Final = 3_600_000
 MAX_REQUEST_BYTES: Final = 8 * 1024 * 1024
 MAX_TOKEN_BYTES: Final = 16 * 1024
@@ -418,13 +417,6 @@ def _read_token_leaf(r: _Reader) -> TokenLeaf:
     numbers = tuple(r.int(8, name) for name in ("epoch", "seq", "issued_at", "expires_at"))
     leaf = TokenLeaf(*scope, revision, supersedes, *payment, *lines, outcome, codes, authority, *digests, *numbers)
     _leaf_shape(leaf)
-    return leaf
-
-
-def decode_token_leaf(data: bytes) -> TokenLeaf:
-    r = _Reader(data, TOKEN, max_bytes=MAX_TOKEN_BYTES)
-    leaf = _read_token_leaf(r)
-    r.end()
     return leaf
 
 
