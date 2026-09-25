@@ -48,6 +48,14 @@ def Ctx.payer (x : Ctx) : PayerState :=
   { fence := x.fence, now := x.now, certs := x.certs.map (·.1), grants := x.grants,
     released := x.released }
 
+def flowOf : String → Option Flow
+  | "FFS_CYCLE" => some .FFS_CYCLE
+  | "FFS_CLAIM" => some .FFS_CLAIM
+  | "CAP_820" => some .CAP_820
+  | "SDP" => some .SDP
+  | "PLAN_PAY" => some .PLAN_PAY
+  | _ => none
+
 def verdict : String → Option Bool
   | "accept" => some true
   | "reject" => some false
@@ -68,8 +76,9 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
     pure ({ x with fence := (← fence.toNat?), now := (← now.toNat?),
                    released := (← list (some ∘ ascii) released) }, none)
   | ["sig", pk, msg, sig] => pure ({ x with sigs := x.sigs ++ [((← hex pk), (← hex msg), (← hex sig))] }, none)
-  | ["payment", name, tenant, program, id, payee, amount, period, lines] =>
-    let p : Payment := { tenantId := ascii tenant, programId := ascii program, paymentId := ascii id,
+  | ["payment", name, tenant, program, flow, id, payee, amount, period, lines] =>
+    let p : Payment := { tenantId := ascii tenant, programId := ascii program, flow := (← flowOf flow),
+                         paymentId := ascii id,
                          payeeRef := ascii payee, amountCents := (← amount.toNat?),
                          period := ascii period, lines := (← list hex lines) }
     pure ({ x with payments := x.payments ++ [(name, p)] }, none)

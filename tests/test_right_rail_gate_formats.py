@@ -105,11 +105,12 @@ def build_vectors(sign) -> str:
     for n, t in enumerate(tokens):
         leaf = t.leaf
         lines = ",".join(map(h, _lines(n))) or "-"
-        add(f"payment p{n} {TENANT} {PROGRAM} {leaf.payment_id} {leaf.payee_ref} {leaf.amount_cents} {PERIOD} {lines}")
+        add(f"payment p{n} {TENANT} {PROGRAM} {leaf.flow} {leaf.payment_id} {leaf.payee_ref} {leaf.amount_cents} {PERIOD} {lines}")
         verdict = "reject" if leaf.outcome != "ALLOW" else "accept"
         add(f"token {verdict} decode-ok t{n}-{leaf.outcome.lower()} p{n} {h(raw[n])}")
-    add(f"payment p0-short {TENANT} {PROGRAM} pay-0000 payee-0 124999 {PERIOD} -")
-    add(f"payment p1-no-lines {TENANT} {PROGRAM} pay-0001 payee-1 125001 {PERIOD} -")
+    add(f"payment p0-short {TENANT} {PROGRAM} FFS_CLAIM pay-0000 payee-0 124999 {PERIOD} -")
+    add(f"payment p0-other-flow {TENANT} {PROGRAM} FFS_CYCLE pay-0000 payee-0 125000 {PERIOD} -")
+    add(f"payment p1-no-lines {TENANT} {PROGRAM} FFS_CYCLE pay-0001 payee-1 125001 {PERIOD} -")
     leaf0 = len(gate.encode_token_leaf(tokens[0].leaf))
     wrong_path = gate.encode_token(replace(tokens[0], siblings=tokens[1].siblings))
     token_rows = [
@@ -122,6 +123,7 @@ def build_vectors(sign) -> str:
         ("wrong-path", "decode-ok", "p0", wrong_path),
         ("other-leaf-payment", "decode-ok", "p1", raw[0]),
         ("amount-mismatch", "decode-ok", "p0-short", raw[0]),
+        ("flow-mismatch", "decode-ok", "p0-other-flow", raw[0]),
         ("lines-mismatch", "decode-ok", "p1-no-lines", raw[1]),
     ]
     for name, decodes, payment, data in token_rows:
@@ -182,7 +184,7 @@ class GoldenVectorTests(unittest.TestCase):
                     accepted = False
                 self.assertEqual(accepted, expect)
             checked += 1
-        self.assertEqual(checked, 43)
+        self.assertEqual(checked, 44)
 
     def test_aws_lc_accepts_recorded_signature_and_rejects_a_flip(self) -> None:
         (pk, message, signature), = [[bytes.fromhex(x) for x in r[1:]] for r in _records() if r[0] == "sig"]

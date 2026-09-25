@@ -388,6 +388,7 @@ structure PayerState where
 structure Payment where
   tenantId : Bytes
   programId : Bytes
+  flow : Flow
   paymentId : Bytes
   payeeRef : Bytes
   amountCents : Nat
@@ -423,7 +424,8 @@ def unexpired (s : PayerState) (t : Token) : Bool := s.now < t.leaf.expiresAt + 
 /-- Check 6: the payment matches field for field and its lines hash to `lines_root`. -/
 def paymentMatches (c : Crypto) (p : Payment) (t : Token) : Bool :=
   let l := t.leaf
-  l.tenantId == p.tenantId && l.programId == p.programId && l.paymentId == p.paymentId &&
+  l.tenantId == p.tenantId && l.programId == p.programId && l.flow == p.flow &&
+    l.paymentId == p.paymentId &&
     l.payeeRef == p.payeeRef && l.amountCents == p.amountCents && l.period == p.period &&
     p.lines.length == l.lineCount && linesRoot c.hash p.lines == l.linesRoot
 
