@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import closing, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
+import gzip
 import hashlib
 import io
 import json
@@ -196,26 +197,6 @@ _V8_COMMAND_KINDS = frozenset({
     "CONTROL_PACK", "POPULATION_MANIFEST", "SUPPORT_EVIDENCE", "PAYMENT", "PAYMENT_REVERSAL",
     "OFFSET_CLAIM", "OFFSET_DECISION", "ACTION_ACKNOWLEDGMENT", "REPORT",
 })
-
-
-def _rewrite_store_as_v7(path: Path) -> None:
-    """Test fixture: rewrite a v8 store in the v7 format it replaces (no command log).
-
-    The declared foreign-key clauses stay in the table definitions; the owner's
-    conversion rebuilds every table from its rows, so they do not affect it.
-    """
-
-    with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        for (name,) in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger' "
-            "AND tbl_name IN ('financial_meta','financial_identity','commands')"
-        ).fetchall():
-            connection.execute(f'DROP TRIGGER "{name}"')
-        connection.execute("DROP TABLE commands")
-        connection.execute("UPDATE financial_meta SET schema_version=7,schema='RR/FINANCIAL/OWNER/v7' WHERE id=1")
-        connection.execute("UPDATE financial_identity SET schema_version=7 WHERE id=1")
-        connection.execute("COMMIT")
 
 
 _COMMAND_TRIGGER_BODY = "BEFORE {} ON commands BEGIN SELECT RAISE(ABORT,'command_immutable'); END"
@@ -4909,73 +4890,54 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def test_v7_store_converts_to_v8_on_owner_open_all_or_nothing(self) -> None:
-        store = self._build_base_for_correction()
-        self._prepare_final(store)
-        package = store.export_continuity()
-        with closing(sqlite3.connect(str(store.path))) as connection:
-            commands = connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall()
-        self.assertTrue(_V8_COMMAND_KINDS <= {row[1] for row in commands})
-        self.assertEqual(json.loads(package.decode("ascii"))["schema"], expected.CONTINUITY.export_version)
-
+        # A genuine v7 store: the v7 owner (d70ad50) ran the final correction journey and one funding receipt.
+        v7_bytes = gzip.decompress((Path(__file__).parent / "fixtures" / "v7-owner-store.sqlite.gz").read_bytes())
         v7_path = self._path("v7-store.sqlite")
-        v7_path.write_bytes(store.path.read_bytes())
-        _rewrite_store_as_v7(v7_path)
-        v7_bytes = v7_path.read_bytes()
+        v7_path.write_bytes(v7_bytes)
+        with closing(sqlite3.connect(str(v7_path))) as connection:
+            self.assertEqual(connection.execute("SELECT schema_version,schema FROM financial_meta").fetchone(), (7, "RR/FINANCIAL/OWNER/v7"))
+            native = {table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in owner._CAPTURED_TABLES}
+            v7_events = connection.execute("SELECT * FROM financial_events ORDER BY event_sequence").fetchall()
         # The checker verifies stores at v8 only: the owner converts a v7 store first.
         with self.assertRaisesRegex(IndependentFinancialError, "^schema"):
-            verify_database(v7_path, expected_config=store.config, expected_authority=self.authority)
+            verify_database(v7_path, expected_config=self._make_owner().config, expected_authority=self.authority)
         self.assertEqual(v7_path.read_bytes(), v7_bytes)
 
         # A v7 store its history does not explain is refused and left byte-identical.
-        tampered = self._path("v7-store-tampered.sqlite")
-        tampered.write_bytes(v7_bytes)
-        with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
-            connection.execute(
-                "UPDATE obligations SET owed_cents=owed_cents+1 WHERE obligation_id=?",
-                (expected.H_OBLIGATION_ID,),
-            )
-        tampered_bytes = tampered.read_bytes()
-        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification"):
-            self._make_owner(path=tampered)
-        self.assertEqual(tampered.read_bytes(), tampered_bytes)
-        # Review 466178b: the v7 size cache is compared before conversion drops anything,
-        # so a raw row edit the cache did not record is refused, not re-cached.
-        tampered.write_bytes(v7_bytes)
-        with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
-            connection.execute("UPDATE claimed_adjustments SET owner_role='FINANCE_DECISION'")
-        tampered_bytes = tampered.read_bytes()
-        with self.assertRaisesRegex(FinancialIntegrityError, "^continuity_admission_mismatch$"):
-            self._make_owner(path=tampered)
-        self.assertEqual(tampered.read_bytes(), tampered_bytes)
-        # Review 466178b finding 4: a same-length acknowledgment edit passes the size cache, but
-        # every history (v7 included) names the reference its acknowledgment event accepted. This fixture's
-        # events still carry their v8 rows, so the opening balance contradicting them is caught first
-        # (final review fix 4); a genuine v7 history carries none and reaches replay:acknowledgment.
-        tampered.write_bytes(v7_bytes)
-        with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
-            connection.execute("UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'")
-        tampered_bytes = tampered.read_bytes()
-        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:opening-balance$"):
-            self._make_owner(path=tampered)
-        self.assertEqual(tampered.read_bytes(), tampered_bytes)
+        tampers = {
+            "UPDATE obligations SET owed_cents=owed_cents+1": "^open_verification",
+            # Review 466178b: the v7 size cache is compared before conversion drops anything.
+            "UPDATE claimed_adjustments SET owner_role='FINANCE_DECISION'": "^continuity_admission_mismatch$",
+            # Review 466178b finding 4: a same-length acknowledgment edit passes the size cache, but every
+            # history, v7 included, names the reference its acknowledgment event accepted.
+            "UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'": "^open_verification:replay:acknowledgment$",
+        }
+        for statement, code in tampers.items():
+            with self.subTest(statement=statement):
+                tampered = self._path("v7-store-tampered.sqlite")
+                tampered.write_bytes(v7_bytes)
+                with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+                    connection.execute(statement)
+                tampered_bytes = tampered.read_bytes()
+                with self.assertRaisesRegex(FinancialIntegrityError, code):
+                    self._make_owner(path=tampered)
+                self.assertEqual(tampered.read_bytes(), tampered_bytes)
 
         converted = self._make_owner(path=v7_path)
-        # CONSTITUTION V.4: conversion appends one sealed opening balance holding the converted rows
-        # whose writes the v7 history did not carry; everything else is unchanged.
-        native, after = (json.loads(raw.decode("ascii"))["tables"] for raw in (package, converted.export_continuity()))
-        opening = after["financial_events"].pop()
-        self.assertEqual((opening["aggregate_type"], opening["kind"]), ("OPENING_BALANCE", "OPENING_BALANCE"))
-        self.assertEqual(
-            sorted(json.dumps(image, sort_keys=True) for image in json.loads(opening["payload_json"])["rows"]),
-            sorted(json.dumps({"table": table, "row": row}, sort_keys=True) for table in owner._CAPTURED_TABLES for row in native[table]),
-        )
-        self.assertEqual({table: rows for table, rows in after.items() if table != "financial_meta"}, {table: rows for table, rows in native.items() if table != "financial_meta"})
+        # CONSTITUTION V.4: conversion appends one sealed opening balance holding every converted row
+        # (v7 history carried none); every row and every v7 event is otherwise unchanged.
         with closing(sqlite3.connect(str(v7_path))) as connection:
-            self.assertEqual(
-                connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall(),
-                commands,
-            )
+            self.assertEqual({table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in owner._CAPTURED_TABLES}, native)
+            events = connection.execute("SELECT * FROM financial_events ORDER BY event_sequence").fetchall()
+            commands = {row[0] for row in connection.execute("SELECT kind FROM commands")}
             meta = connection.execute("SELECT schema_version,schema FROM financial_meta").fetchone()
+        self.assertEqual(events[:-1], v7_events)
+        self.assertEqual((events[-1][2], events[-1][4]), ("OPENING_BALANCE", "OPENING_BALANCE"))
+        self.assertEqual(
+            sorted(json.dumps(image, sort_keys=True) for image in json.loads(events[-1][7])["rows"]),
+            sorted(json.dumps({"table": table, "row": row}, sort_keys=True) for table, rows in json.loads(converted.export_continuity().decode("ascii"))["tables"].items() if table in owner._CAPTURED_TABLES for row in rows),
+        )
+        self.assertTrue(_V8_COMMAND_KINDS <= commands)
         self.assertEqual(meta, (8, "RR/FINANCIAL/OWNER/v8"))
         self._assert_verified(converted, current_snapshot_package=converted.export_continuity())
 

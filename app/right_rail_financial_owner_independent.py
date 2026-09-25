@@ -1316,10 +1316,10 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
 
 
 def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.Row]) -> None:
-    """Replay every event's ``rows`` (an opening balance restarts from its own) and require the result exactly."""
+    """Replay every event's ``rows`` and require the result exactly; an opening balance comes before any event that carries rows."""
 
     state: dict[str, dict[str, dict[str, object]]] = {table: {} for table in CAPTURED_TABLES}
-    opened, carried = False, {}  # the opening balance may restate, never change or drop, a row history carried
+    opened = False
     acknowledged: dict[object, object] = {}  # every history, v7 included, names the accepted reference
     for event in events:
         payload = _parse_json(event["payload_json"], "replay:payload", max_bytes=MAX_PACKAGE_BYTES)
@@ -1327,9 +1327,9 @@ def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.R
         if event["kind"] == "ACTION_ACKNOWLEDGED":
             acknowledged[payload.get("action_id")] = payload.get("acknowledgment_ref")
         if event["kind"] == "OPENING_BALANCE":
-            if opened or set(payload) != {"rows"} or event["aggregate_id"] != "opening-balance" or (event["before_revision"], event["after_revision"]) != (0, 0):
+            if opened or any(state.values()) or set(payload) != {"rows"} or event["aggregate_id"] != "opening-balance" or (event["before_revision"], event["after_revision"]) != (0, 0):
                 _fail("replay:opening-balance")
-            opened, carried, state = True, state, {table: {} for table in CAPTURED_TABLES}
+            opened = True
         elif images is None:
             continue
         if not isinstance(images, list) or not images and event["kind"] != "OPENING_BALANCE":
@@ -1347,8 +1347,6 @@ def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.R
                 rows[key].update({column: _package_import_value(value, f"replay:{table}") for column, value in changes.items()})
             else:
                 _fail(f"replay:image:{table}")
-        if event["kind"] == "OPENING_BALANCE" and any(state[table].get(key) != row for table, rows in carried.items() for key, row in rows.items()):
-            _fail("replay:opening-balance")
     for table in CAPTURED_TABLES:
         if {str(row[0]): dict(row) for row in _bounded_rows(connection, table)} != state[table]:
             _fail(f"replay:{table}")
