@@ -3265,11 +3265,26 @@ def _evaluation_input_snapshot(raw: object, code: str) -> dict[str, object]:
     }
 
 
+# The case status an evaluation starts from is set by the history that produced it, never
+# read back from the stored case (a correction writes Lean's answer there): publishing and a
+# claim open the case, a decision latches its own status, and any other evaluation continues
+# the previous evaluation's status.
+_CASE_LATCHES = {"OFFSET_CLAIMED": "OPEN", "OFFSET_AUTHORIZED": "AUTHORIZED", "OFFSET_REJECTED_CORRECTION_AUTHORIZED": "CORRECTION_REQUIRED"}
+
+
+def _evaluation_event_kinds(connection: sqlite3.Connection, obligation_id: str | None = None) -> dict[str, str]:
+    """evaluation_id -> the kind of the obligation event that produced it."""
+    sql = "SELECT json_extract(payload_json,'$.evaluation_id'),kind FROM financial_events WHERE aggregate_type='OBLIGATION'"
+    rows = connection.execute(sql) if obligation_id is None else connection.execute(sql + " AND aggregate_id=?", (obligation_id,))
+    return {str(row[0]): str(row[1]) for row in rows if row[0] is not None}
+
+
 def _evaluation_projection_from_input(
     snapshot: dict[str, object],
     *,
     evaluation: sqlite3.Row,
     action_revisions: dict[str, int],
+    latch: str,
 ) -> dict[str, object]:
     obligation = snapshot["obligation"]
     assert isinstance(obligation, dict)
@@ -3277,11 +3292,10 @@ def _evaluation_projection_from_input(
     payments = snapshot["payments"]
     claims = snapshot["claims"]
     determinations = snapshot["determinations"]
-    cases = snapshot["cases"]
     actions = snapshot["actions"]
     conflicts = snapshot["conflicts"]
     assert isinstance(evidence, list) and isinstance(payments, list) and isinstance(claims, list)
-    assert isinstance(determinations, list) and isinstance(cases, list) and isinstance(actions, list) and isinstance(conflicts, list)
+    assert isinstance(determinations, list) and isinstance(actions, list) and isinstance(conflicts, list)
     cash = _sum_cents((int(row["amount_cents"]) for row in payments if row["active"] == 1), "evaluation-input:cash")
     claimed = _sum_cents((int(row["amount_cents"]) for row in claims if row["status"] in {"CLAIMED", "AUTHORIZED"}), "evaluation-input:claimed")
     lawful = _sum_cents((int(row["amount_cents"]) for row in claims if row["status"] == "AUTHORIZED"), "evaluation-input:lawful")
@@ -3310,13 +3324,12 @@ def _evaluation_projection_from_input(
         completion = max(value[0] for value in entries)
     amount_satisfied = int(total >= owed)
     cash_satisfied = int(cash >= owed)
-    prior_case = "OPEN" if not cases else str(max(cases, key=lambda row: str(row["case_id"]))["status"])
     if amount_satisfied and int(obligation["reporting_complete"]):
         case_status = "RESOLVED"
     elif amount_satisfied:
         case_status = "ACTIONED"
-    elif prior_case in {"CORRECTION_REQUIRED", "AUTHORIZED"}:
-        case_status = prior_case
+    elif latch in {"CORRECTION_REQUIRED", "AUTHORIZED"}:
+        case_status = latch
     else:
         case_status = "OPEN"
     delivery = "NONE" if not actions else str(
@@ -3351,8 +3364,9 @@ def _verify_evaluations(
     evidence: dict[str, sqlite3.Row],
 ) -> dict[str, list[sqlite3.Row]]:
     by_obligation: dict[str, list[sqlite3.Row]] = {}
+    event_kinds = _evaluation_event_kinds(connection)
     for row in _bounded_rows(connection, "evaluations"):
-        obligation_id, _snapshot = _verify_evaluation_row(connection, meta, row, obligations, populations, packs, evidence)
+        obligation_id, _snapshot = _verify_evaluation_row(connection, meta, row, obligations, populations, packs, evidence, event_kinds)
         by_obligation.setdefault(obligation_id, []).append(row)
     for obligation_id, obligation in obligations.items():
         values = sorted(by_obligation.get(obligation_id, []), key=lambda row: row["revision"])
@@ -3374,6 +3388,7 @@ def _verify_evaluation_row(
     populations: Mapping[str, sqlite3.Row],
     packs: Mapping[str, sqlite3.Row],
     evidence: Mapping[str, sqlite3.Row],
+    event_kinds: Mapping[str, str],
 ) -> tuple[str, dict[str, object]]:
     """One evaluation receipt: its input binds to the rows it names and recomputes to its values."""
     evaluation_id = _id(row["evaluation_id"], "evaluation:id")
@@ -3458,10 +3473,17 @@ def _verify_evaluation_row(
         conflict = connection.execute("SELECT obligation_id FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone()
         if conflict is None or conflict["obligation_id"] != obligation_id:
             _fail("evaluation:input-conflict")
+    latch = "OPEN" if revision == 0 else _CASE_LATCHES.get(event_kinds.get(evaluation_id, ""))
+    if latch is None:
+        previous = connection.execute("SELECT case_status FROM evaluations WHERE evaluation_id=?", (f"evaluation:{obligation_id}:r{revision - 1}",)).fetchone()
+        if previous is None:
+            _fail("evaluation:revision-chain")
+        latch = str(previous[0])
     input_projection = _evaluation_projection_from_input(
         snapshot,
         evaluation=row,
         action_revisions=snapshot_action_revisions,
+        latch=latch,
     )
     if evidence_ids != input_projection["evidence_ids"]:
         _fail("evaluation:input-projection:evidence_ids")
@@ -3532,7 +3554,7 @@ def verify_obligation_connection(connection: sqlite3.Connection, obligation_id: 
         pack = None if population is None else connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (population["pack_id"],)).fetchone()
         packs = {} if pack is None else {str(pack["pack_id"]): pack}
         evidence = {str(value["evidence_id"]): value for value in connection.execute("SELECT * FROM evidence WHERE item_id=?", (obligation["item_id"],))}
-        _, snapshot = _verify_evaluation_row(connection, meta, row, {obligation_id: obligation}, populations, packs, evidence)
+        _, snapshot = _verify_evaluation_row(connection, meta, row, {obligation_id: obligation}, populations, packs, evidence, _evaluation_event_kinds(connection, obligation_id))
         current: dict[str, object] = {
             "pre_revision": snapshot["pre_revision"],
             "obligation": {**{key: obligation[key] for key in ("obligation_id", "item_id", "rule_version", "owed_cents", "due_at_ms", "reporting_complete")}, "revision": snapshot["pre_revision"]},

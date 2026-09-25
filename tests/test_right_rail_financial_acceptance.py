@@ -5133,10 +5133,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             ("evaluation:input-projection:timely", lambda r, m: {"timely": not r.timely}),
             ("evaluation:input-projection:verification_status", lambda r, m: {"verification_status": "MISSING_EVIDENCE"}),
             ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "RESOLVED"}),
+            # Review 75a5517 finding 1: an unsatisfied correction stays CORRECTION_REQUIRED; the
+            # checker derives that from the decision, not from the case status Lean wrote.
+            ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "OPEN"}),
+            ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "AUTHORIZED"}),
             ("evaluation:evidence-bindings", lambda r, m: {"evidence_ids": ()}),
         )
-        for code, change in tampers:
-            with self.subTest(code=code):
+        for index, (code, change) in enumerate(tampers):
+            with self.subTest(index=index, code=code):
                 store = self._build_base_for_correction()
                 self._record_cash(store)
                 claim_id = self._record_claim(store)
