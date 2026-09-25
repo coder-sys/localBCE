@@ -25,7 +25,7 @@ SEED = gate.sha3_512(b"RR/GATE/TEST-ONLY-SEED/synthetic")[:32]
 TENANT, OTHER, PROGRAM, PERIOD = "nc-dhhs", "nc-other", "medicaid-ffs", "2026-09"
 EPOCH, NOW, EXPIRES = 7, 1_790_000_000, 1_790_086_400
 D = [gate.sha3_512(bytes([i])) for i in range(12)]
-CHECKED = ("cert", "admit", "token", "release", "request", "response", "decision-id", "input", "lines-root")
+CHECKED = ("cert", "checkpoint", "token", "release", "request", "response", "decision-id", "input", "lines-root")
 
 
 def _request(flow: str = "FFS_CYCLE", n: int = 0, lines: tuple[bytes, ...] = ()) -> gate.DecideRequest:
@@ -116,14 +116,14 @@ def build_vectors(sign) -> str:
         add(f"sig {h(pk)} {h(header)} {h(sig)}")
         return gate.encode_checkpoint(c, sig)
 
-    def admit_line(name: str, c: gate.Checkpoint, data: bytes) -> None:
+    def checkpoint_line(name: str, c: gate.Checkpoint, data: bytes) -> None:
         fields = [c.tenant_id, c.program_id, *map(str, (c.seq_from, c.seq_to, c.epoch)),
                   *(h(getattr(c, n)) for n in gate._CHECKPOINT_DIGESTS), str(c.count), str(c.created_at),
                   h(gate.checkpoint_digest(c))]
-        add(f"admit accept {name} {h(data)} {' '.join(fields)}")
+        add(f"checkpoint accept {name} {h(data)} {' '.join(fields)}")
 
     signed_cp = signed(cp, signature)
-    admit_line("batch", cp, signed_cp)
+    checkpoint_line("batch", cp, signed_cp)
     variants = {
         "other-tenant": replace(cp, tenant_id=OTHER),
         "other-program": replace(cp, program_id="medicaid-cap"),
@@ -132,7 +132,7 @@ def build_vectors(sign) -> str:
         "flipped-root": replace(cp, token_root=_flip(cp.token_root, 0, 0x01)),
     }
     for name, c in variants.items():
-        admit_line(name, c, signed(c))
+        checkpoint_line(name, c, signed(c))
     for name, data in (
         ("truncated", signed_cp[:-1]),
         ("trailing", signed_cp + b"\x00"),
@@ -143,7 +143,7 @@ def build_vectors(sign) -> str:
         ("no-cert-for-epoch", signed(replace(cp, epoch=9))),
         ("no-cert-for-tenant", signed(replace(cp, tenant_id="nc-none"))),
     ):
-        add(f"admit reject {name} {h(data)}")
+        add(f"checkpoint reject {name} {h(data)}")
 
     # #3 TOKEN/v1: the batch, then one reject per check, each one field away
     raw = [gate.encode_token(t) for t in tokens]
@@ -179,7 +179,7 @@ def build_vectors(sign) -> str:
         ("cert-not-installed", "p0", token(epoch_cert_id=D[10])),
         ("cert-epoch", "p0", token(epoch_cert_id=certs["e6"][0])),
         ("cert-tenant", "p0", token(epoch_cert_id=certs["other"][0])),
-        ("checkpoint-not-admitted", "p0", token(checkpoint_digest=D[11])),
+        ("checkpoint-not-stored", "p0", token(checkpoint_digest=D[11])),
         *((f"checkpoint-{name}", "p0", token(checkpoint_digest=gate.checkpoint_digest(c))) for name, c in variants.items()),
         ("wrong-path", "p0", token(siblings=tokens[1].siblings)),
         *((f"payment-{name}", f"p0-{name}", raw[0]) for name in ("tenant", "program", "flow", "payment-id", "payee", "amount", "period")),

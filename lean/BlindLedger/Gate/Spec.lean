@@ -7,7 +7,7 @@ namespace BlindLedger.Gate
     and `LINES-NODE/v1` (a payment's lines tree).
 
     These decoders are the specification; `app/right_rail_gate_codec.py` only
-    produces bytes.  A payer installs epoch certificates and admits each signed
+    produces bytes.  A payer installs epoch certificates and stores each signed
     checkpoint once; `verifyToken` is then its whole per-payment release
     decision, one predicate over nine checks.  Hashing, the epoch-certificate
     chain (format #5, not yet built) and ML-DSA-87 verification enter only
@@ -436,7 +436,7 @@ structure Grant where
   ruleVersions : List Bytes
   engineReleases : List Bytes
 
-/-- An admitted checkpoint: its signature verified, filed under the hash of its header. -/
+/-- A stored checkpoint: its signature verified, filed under the hash of its header. -/
 structure Stored where
   digest : Bytes
   checkpoint : Checkpoint
@@ -466,7 +466,7 @@ def installCert (c : Crypto) (s : PayerState) (e : EpochCert) : Option PayerStat
 
 /-- Admit a signed checkpoint: one ML-DSA-87 verification per batch, under an
     installed certificate for the checkpoint's tenant and epoch. -/
-def admitCheckpoint (c : Crypto) (s : PayerState) (bytes : Bytes) : Option PayerState :=
+def storeCheckpoint (c : Crypto) (s : PayerState) (bytes : Bytes) : Option PayerState :=
   match decodeCheckpoint bytes with
   | none => none
   | some x =>
@@ -494,7 +494,7 @@ def certValid (s : PayerState) (t : Token) : Bool :=
   | some e => e.epoch == t.leaf.epoch && e.tenantId == t.leaf.tenantId
   | none => false
 
-/-- Check 3: the named checkpoint was admitted, is the token's own batch, and
+/-- Check 3: the named checkpoint was stored, is the token's own batch, and
     the Merkle path hashes the leaf to its `token_root`. -/
 def batchSigned (c : Crypto) (s : PayerState) (t : Token) : Bool :=
   match s.checkpoints.find? (·.digest == t.checkpointDigest) with

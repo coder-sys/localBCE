@@ -7,7 +7,7 @@ open BlindLedger.Gate
 
 /-! Conformance check of `tests/gate_vectors/gate_v1.vectors` against the Lean
     specification.  Lines run in order against one payer state: `cert`,
-    `admit` and `release` lines are the payer's own steps (and are checked);
+    `checkpoint` and `release` lines are the payer's own steps (and are checked);
     `grants`, `now` and `payment` lines set context.  The `sig` lines are the
     only ML-DSA-87 triples treated as valid; the Python test verifies each of
     them with AWS-LC.  Accepted request, response and checkpoint lines list
@@ -130,9 +130,9 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
                          payeeRef := ascii payee, amountCents := (← amount.toNat?),
                          period := ascii period, lines := (← list hex lines) }
     pure ({ x with payments := x.payments ++ [(name, p)] }, none)
-  | "admit" :: expect :: _ :: bytes :: rest =>
+  | "checkpoint" :: expect :: _ :: bytes :: rest =>
     let b ← hex bytes
-    let result := admitCheckpoint x.crypto x.state b
+    let result := storeCheckpoint x.crypto x.state b
     pure ({ x with state := result.getD x.state },
       some (← decoded expect renderCheckpoint (result.bind fun _ => decodeCheckpoint b) rest))
   | ["token", expect, decodes, _, payment, bytes] =>
