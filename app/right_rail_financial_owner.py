@@ -116,6 +116,7 @@ _TEST_OWNER_ID: Final[str] = "continuity-test-owner-v1"
 _SHADOW_OWNER_ID: Final[str] = "continuity-shadow-owner-v1"
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _UPPER_HEX128 = re.compile(r"[0-9A-F]{128}\Z")
+_UPPER_HEX64 = re.compile(r"[0-9A-F]{64}\Z")
 _ROLE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _KIND = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _WILDCARD_PERIODS: Final[frozenset[str]] = frozenset({"PROGRAM", "ALL"})
@@ -467,6 +468,10 @@ def _population_validation_digest(rows: Iterable[Any]) -> bytes:
 
 def _is_upper_hex128(value: object) -> bool:
     return type(value) is str and _UPPER_HEX128.match(value) is not None
+
+
+def _is_upper_hex64(value: object) -> bool:
+    return type(value) is str and _UPPER_HEX64.match(value) is not None
 
 
 def _staff_snapshot_id(fields: Mapping[str, Any]) -> str:
@@ -3768,7 +3773,12 @@ class FinancialOwner:
                     or int(existing_id["amount_cents"]) != amount_cents
                     or int(existing_id["event_at_ms"]) != event_at_ms
                     or actual_event_fields != expected_event_payload
-                    or set(event_payload) != (set(expected_event_payload) | {"evaluation_id"})
+                    # _append_event binds every obligation event that names an
+                    # evaluation to that evaluation's input/result/receipt digests.
+                    or set(event_payload) != (
+                        set(expected_event_payload)
+                        | {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
+                    )
                     or type(event_payload.get("evaluation_id")) is not str
                     or retry_evidence.record_digest != bytes(existing_evidence["record_digest"])
                     or retry_evidence.content_digest != bytes(existing_evidence["content_digest"])
@@ -3994,7 +4004,7 @@ class FinancialOwner:
 
         if type(binding) is not dict or set(binding) != {
             "contract", "snapshot", "item_binding", "authority", "input",
-        } or binding.get("contract") != "RR/FINANCIAL/STAFF-COMMAND-BINDING/v1":
+        } or binding.get("contract") != "RR/FINANCIAL/STAFF-COMMAND-BINDING/v2":
             malformed()
         snapshot = binding["snapshot"]
         snapshot_fields = (
@@ -4017,7 +4027,9 @@ class FinancialOwner:
             or type(snapshot["sequence"]) is not int
             or snapshot["sequence"] < 0
             or not _is_upper_hex128(snapshot["history_head"])
-            or not _is_upper_hex128(snapshot["snapshot_id"])
+            # snapshot_id is the SHA-256 staff snapshot identity (_staff_snapshot_id),
+            # 64 hex digits; it is recomputed and compared exactly below.
+            or not _is_upper_hex64(snapshot["snapshot_id"])
         ):
             malformed()
         if snapshot["snapshot_id"] != _staff_snapshot_id({key: snapshot[key] for key in snapshot_fields if key != "snapshot_id"}):
@@ -4051,16 +4063,18 @@ class FinancialOwner:
             or not _is_upper_hex128(authority.get("digest"))
         ):
             malformed()
+        # v2: the Mirror never shows staff the evaluation's input_snapshot_digest
+        # (Art. IV.2), so the binding carries the receipt_digest, whose receipt
+        # body includes the input_snapshot_digest; v1 demanded the hidden field
+        # and could never be satisfied.
         input_binding = binding["input"]
         if (
             type(input_binding) is not dict
-            or set(input_binding) != {
-                "evaluation_id", "evaluation_result_digest", "input_snapshot_digest", "receipt_digest",
-            }
+            or set(input_binding) != {"evaluation_id", "evaluation_result_digest", "receipt_digest"}
             or type(input_binding.get("evaluation_id")) is not str
             or not all(
                 _is_upper_hex128(input_binding.get(key))
-                for key in ("evaluation_result_digest", "input_snapshot_digest", "receipt_digest")
+                for key in ("evaluation_result_digest", "receipt_digest")
             )
         ):
             malformed()
@@ -4102,7 +4116,6 @@ class FinancialOwner:
         expected_input = {
             "evaluation_id": str(evaluation["evaluation_id"]),
             "evaluation_result_digest": _hex(bytes(evaluation["result_digest"])),
-            "input_snapshot_digest": _hex(bytes(evaluation["input_snapshot_digest"])),
             "receipt_digest": _hex(bytes(evaluation["receipt_digest"])),
         }
         if (
@@ -4152,11 +4165,19 @@ class FinancialOwner:
                     _fail(FinancialIntegrityError, "staff_command_binding_event")
                 if type(event_payload) is dict and event_payload.get("action_id") == action_id:
                     matched_event = event
+                    # The event's own ``evaluation_id`` is the result evaluation
+                    # the transition created; the reviewed input evaluation is
+                    # recorded in ``correction_followup.input_evaluation``.
+                    followup = event_payload.get("correction_followup")
+                    input_evaluation = followup.get("input_evaluation") if type(followup) is dict else None
                     if (
                         int(event["event_sequence"]) == snapshot["sequence"] + 1
                         and int(event["before_revision"]) == expected_revision
                         and bytes(event["previous_head"]).hex().upper() == snapshot["history_head"]
-                        and event_payload.get("evaluation_id") == evaluation_id
+                        and type(input_evaluation) is dict
+                        and input_evaluation.get("evaluation_id") == evaluation_id
+                        and input_evaluation.get("result_digest")
+                        == _hex(_digest_input(evaluation_result_digest, "evaluation_result_digest"))
                         and event_payload.get("determination_id") == f"determination:{action_id}"
                     ):
                         return

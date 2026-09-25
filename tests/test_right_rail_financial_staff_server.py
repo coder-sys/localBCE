@@ -38,6 +38,7 @@ from app.right_rail_financial_staff_server import (
     H_SHORTFALL_CENTS,
     ITEM_IDS,
     PROGRAM_TOTAL_CENTS,
+    SUPPORT_EVENT_MS,
     StaffWorkflow,
     _LoopbackServer,
     _handler_for,
@@ -188,6 +189,9 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                 "revision": initial_package["obligation"]["revision"],
                 "evaluation_id": initial_package["evaluation_receipt"]["evaluation_id"],
                 "evaluation_result_digest": initial_package["evaluation_receipt"]["result_digest"],
+                # The endpoint requires the reviewed-read binding (as staff.js
+                # sends it), built from the exact view this client fetched.
+                "read_binding": StaffWorkflow._staff_command_binding(before_view),
             }
 
             # The server drops the entire response after the Owner command commits.
@@ -711,7 +715,9 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         owner = workflow.mirror.owner
 
         altered = self._review_body(workflow)
-        altered["read_binding"]["input"]["input_snapshot_digest"] = "F" * 128
+        # Binding v2 carries the receipt digest (which binds the input snapshot
+        # the Mirror withholds from staff); a changed one is a stale review.
+        altered["read_binding"]["input"]["receipt_digest"] = "F" * 128
         before = owner.export_continuity()
         with self.assertRaises(FinancialRevisionError) as changed_input:
             workflow.reject_offset_and_authorize_correction(altered)
@@ -764,22 +770,47 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         def tracked_detail(*args, **kwargs):
             return original_detail(*args, **kwargs)
 
+        # The Owner database uses SQLite's rollback journal, so a second writer
+        # cannot commit while this read snapshot is open: it waits (busy
+        # timeout) and commits once the snapshot closes. The concurrent write
+        # therefore runs on its own thread; a same-thread write here could only
+        # deadlock into "database is locked".
+        writer_threads: list[threading.Thread] = []
+        writer_errors: list[BaseException] = []
+        writer_pending_during_verification: list[bool] = []
+        journal_path = Path(f"{first_owner.path}-journal")
+
+        def concurrent_write() -> None:
+            try:
+                writer.record_support_evidence(
+                    item_id="item-01",
+                    evidence_id="evidence:staff-snapshot-interleave:item-01",
+                    common_origin_id="origin:staff-snapshot-interleave:item-01",
+                    source_id="fixture-source",
+                    source_version="staff-interleave-v1",
+                    local_ref="ref:staff-snapshot-interleave:item-01",
+                    applicable_at_ms=1_767_312_000_000,
+                    event_at_ms=1_767_312_000_001,
+                    received_at_ms=1_767_312_000_002,
+                    expected_revision=int(before["revision"]),
+                )
+            except BaseException as error:  # reported by the main thread below
+                writer_errors.append(error)
+
         def write_during_verification(connection, **kwargs):
             transaction_states.append((connection.in_transaction, "before"))
-            writer.record_support_evidence(
-                item_id="item-01",
-                evidence_id="evidence:staff-snapshot-interleave:item-01",
-                common_origin_id="origin:staff-snapshot-interleave:item-01",
-                source_id="fixture-source",
-                source_version="staff-interleave-v1",
-                local_ref="ref:staff-snapshot-interleave:item-01",
-                applicable_at_ms=1_767_312_000_000,
-                event_at_ms=1_767_312_000_001,
-                received_at_ms=1_767_312_000_002,
-                expected_revision=int(before["revision"]),
-            )
+            thread = threading.Thread(target=concurrent_write, daemon=True)
+            writer_threads.append(thread)
+            thread.start()
+            # Wait until the writer is inside its write transaction (its
+            # rollback journal exists) before verifying this snapshot.
+            deadline = time.monotonic() + 4.0
+            while not journal_path.exists() and thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.002)
+            writer_pending_during_verification.append(journal_path.exists() and thread.is_alive())
             result = original_verify(connection, **kwargs)
             transaction_states.append((connection.in_transaction, "after"))
+            writer_pending_during_verification.append(thread.is_alive())
             return result
 
         with (
@@ -788,6 +819,13 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             patch.object(independent, "verify_database_connection", side_effect=write_during_verification) as verify_spy,
         ):
             snapshot = workflow.workspace()
+        self.assertEqual(len(writer_threads), 1)
+        writer_threads[0].join(timeout=15)
+        self.assertFalse(writer_threads[0].is_alive())
+        self.assertEqual(writer_errors, [])
+        # The write was in flight for the whole verification and committed only
+        # after the verified snapshot closed.
+        self.assertEqual(writer_pending_during_verification, [True, True])
 
         self.assertEqual(connect_spy.call_count, 1)
         self.assertEqual(detail_spy.call_count, 1)
@@ -843,7 +881,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                 workflow.workspace()
 
     def test_unrelated_owner_write_does_not_conflict_with_reviewed_ack_and_retry_order_is_preserved(self) -> None:
-        workflow = self._workflow()
+        # The correction runs only through the pinned Lean release (Art. V.2).
+        workflow = self._workflow(with_correction_release=True)
         self.addCleanup(workflow.close)
         workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         reviewed = self._revision_body(workflow)

@@ -402,14 +402,13 @@
     const receipt = pkg && pkg.evaluation_receipt;
     assert(itemBinding && isRecord(receipt) && isRecord(receipt.authority), "staff_command_binding");
     return {
-      contract: "RR/FINANCIAL/STAFF-COMMAND-BINDING/v1",
+      contract: "RR/FINANCIAL/STAFF-COMMAND-BINDING/v2",
       snapshot: { ...snapshotFields(envelope), snapshot_id: envelope.snapshot_id },
       item_binding: itemBinding,
       authority: receipt.authority,
       input: {
         evaluation_id: receipt.evaluation_id,
         evaluation_result_digest: receipt.evaluation_result_digest,
-        input_snapshot_digest: receipt.input_snapshot_digest,
         receipt_digest: receipt.receipt_digest,
       },
     };
@@ -606,7 +605,8 @@
     fact("Trusted authority", receipt.authority
       ? [receipt.authority.authority_id, "epoch " + String(receipt.authority.epoch), receipt.authority.digest].join(" · ")
       : "Unknown");
-    fact("Input state", [receipt.input_snapshot_digest, "receipt " + String(receipt.receipt_digest)].join(" · "));
+    // The Mirror withholds input_snapshot_digest from staff; the receipt digest binds it.
+    fact("Input state", "receipt " + String(receipt.receipt_digest));
     fact("Case", pkg.case ? pkg.case.case_id + " · " + pkg.case.status + " · " + pkg.case.reason : "No case reference");
     fact("Current determination", pkg.current_determination ? pkg.current_determination.decision : "None");
     fact("Source evidence", decisionView.source_assessment.status + " · H support " + decisionView.source_assessment.h_support_status);
