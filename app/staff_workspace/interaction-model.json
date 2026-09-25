@@ -1,0 +1,129 @@
+{
+  "schema": "RR/MIRROR/INTERACTION-MODEL/v1",
+  "note": "CONSTITUTION Art. XIII.4: the one declared interaction model. staff.js fetches this file and renders only what it declares for the resolved role; tests/test_right_rail_mirror_interaction_model.py walks it exhaustively and a browser crawl checks the served page matches it.",
+  "roles": {
+    "analyst": "State program analyst",
+    "approver": "Finance approver",
+    "director": "Program director",
+    "auditor": "Auditor",
+    "operator": "Replacement operator"
+  },
+  "screens": {
+    "picker": { "label": "Choose your role", "home": false, "back": null, "entry": true },
+    "overview": { "label": "Population overview", "home": true, "back": null },
+    "decision": { "label": "H decision package", "home": false, "back": "overview" },
+    "unavailable": { "label": "Owner unavailable", "home": false, "back": "overview", "reload": true }
+  },
+  "role_screens": {
+    "analyst": ["overview", "decision", "unavailable"],
+    "approver": ["overview", "decision", "unavailable"],
+    "director": ["overview", "unavailable"],
+    "auditor": ["overview", "decision", "unavailable"],
+    "operator": ["overview", "decision", "unavailable"]
+  },
+  "controls": {
+    "refresh-button": {
+      "screen": "overview",
+      "roles": ["analyst", "approver", "director", "auditor", "operator"],
+      "route": "GET /api/workspace",
+      "leads_to": "overview",
+      "enabled_when": "not command_pending",
+      "responses": {
+        "success": { "screen": "overview", "message": "Overview refreshed with the latest verified Owner snapshot." },
+        "owner_read_unavailable": { "screen": "unavailable", "message": "The Owner read failed. Reload this page to check again." },
+        "transport_failure": { "screen": "unavailable", "message": "The read did not reach the service. Reload this page to check again." },
+        "fork_detected": { "screen": "unavailable", "message": "The Owner history changed unexpectedly. Reload this page before continuing." }
+      }
+    },
+    "open-package": {
+      "screen": "overview",
+      "roles": ["analyst", "approver", "auditor", "operator"],
+      "route": "GET /api/decision-package",
+      "leads_to": "decision",
+      "enabled_when": "owner_available",
+      "responses": {
+        "success": { "screen": "decision", "message": "H package opened at the current verified snapshot." },
+        "stale_read": { "screen": "overview", "message": "The package changed while it was loading. Refresh and open it again." },
+        "owner_read_unavailable": { "screen": "unavailable", "message": "The package read failed. Reload this page to check again." },
+        "transport_failure": { "screen": "unavailable", "message": "The package read did not reach the service. Reload this page to check again." }
+      }
+    },
+    "reject-offset": {
+      "screen": "decision",
+      "roles": ["approver"],
+      "route": "POST /api/decision/reject-offset",
+      "leads_to": "decision",
+      "enabled_when": "reviewed and not decided",
+      "responses": {
+        "success": { "screen": "decision", "message": "Offset rejected and correction authorized." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "Owner rejected the stale revision. Reopen the H package and review the current revision." },
+        "authority_actor_not_authorized": { "screen": "decision", "message": "Owner denied the command: this role cannot make a financial decision." },
+        "gate_check_not_available_after_determination": { "screen": "decision", "message": "H already has a determination; there is nothing left to decide." },
+        "evaluation_revision_conflict": { "screen": "decision", "message": "The evaluation binding no longer matches the current package. Reopen it." },
+        "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Reopen the package before retrying." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "The Owner could not process the command. Reload this page to check again." }
+      }
+    },
+    "acknowledge": {
+      "screen": "decision",
+      "roles": ["analyst"],
+      "route": "POST /api/action/acknowledge",
+      "leads_to": "decision",
+      "enabled_when": "reviewed and action.status == READY",
+      "responses": {
+        "success": { "screen": "decision", "message": "Delivery acknowledged. Zero cash effect." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "Owner rejected the stale revision. Reopen the H package." },
+        "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Reopen the package before retrying." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "The Owner could not process the command. Reload this page to check again." }
+      }
+    },
+    "record-cash": {
+      "screen": "decision",
+      "roles": ["analyst"],
+      "route": "POST /api/correction/record-cash",
+      "leads_to": "decision",
+      "enabled_when": "reviewed and action.status == ACKNOWLEDGED and shortfall > 0",
+      "responses": {
+        "success": { "screen": "decision", "message": "Synthetic cash evidence recorded. No money moved." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "Owner rejected the stale revision. Reopen the H package." },
+        "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Reopen the package before retrying." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "The Owner could not process the command. Reload this page to check again." }
+      }
+    },
+    "record-report": {
+      "screen": "decision",
+      "roles": ["analyst"],
+      "route": "POST /api/reporting/record",
+      "leads_to": "decision",
+      "enabled_when": "reviewed and shortfall == 0 and not reporting_complete",
+      "responses": {
+        "success": { "screen": "decision", "message": "Synthetic reporting evidence recorded." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "Owner rejected the stale revision. Reopen the H package." },
+        "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Reopen the package before retrying." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "The Owner could not process the command. Reload this page to check again." }
+      }
+    },
+    "restore-test": {
+      "screen": "decision",
+      "roles": ["operator"],
+      "route": "POST /api/continuity/restore-test",
+      "leads_to": "decision",
+      "enabled_when": "reviewed and not test_mode",
+      "responses": {
+        "success": { "screen": "decision", "message": "Continuity TEST restore verified; H's decision package matches exactly." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "The package changed since it was opened. Reopen it before restoring." },
+        "continuity_package_size": { "screen": "decision", "message": "The Continuity package exceeded its size bound; restore did not run." },
+        "continuity_decision_package_mismatch": { "screen": "unavailable", "message": "The restored copy did not match. Reload this page to check again." },
+        "continuity_test_boundary": { "screen": "unavailable", "message": "The restored copy failed its TEST-only boundary check. Reload this page to check again." },
+        "continuity_destination_capacity": { "screen": "decision", "message": "No more TEST restore slots are available in this demo session." },
+        "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Reopen the package before retrying." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "The Owner could not process the command. Reload this page to check again." }
+      }
+    }
+  }
+}
