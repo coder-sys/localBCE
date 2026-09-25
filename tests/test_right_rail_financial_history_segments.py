@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 import sqlite3
 import tempfile
 import unittest
@@ -14,12 +13,12 @@ from pathlib import Path
 from unittest import mock
 
 import app.right_rail_financial_owner as owner_module
-from app.right_rail_financial_owner import FinancialContinuityError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority, _checker_authority
-from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_history_export
-from tools.load_synthetic import _DEPLOYMENT_ID, _PERIOD_ID, _PROGRAM_ID, _STATE_ID, _setup
+from app.right_rail_financial_owner import FinancialContinuityError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, ProgramFundingReceipt, SyntheticTrustedAuthority, _checker_authority
+from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database, verify_history_export
 
 AUTHORITY = SyntheticTrustedAuthority()
-CONFIG = FinancialOwnerConfig(state_id=_STATE_ID, deployment_id=_DEPLOYMENT_ID, program_id=_PROGRAM_ID, period_id=_PERIOD_ID)
+SCOPE = {"state_id": "state:segments", "deployment_id": "deployment:segments", "program_id": "program:segments", "period_id": "period:segments"}
+CONFIG = FinancialOwnerConfig(**SCOPE)
 DOMAIN = b"RR/GATE/SEGMENT/v1\x00"
 
 
@@ -44,19 +43,22 @@ class HistorySegmentTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.addCleanup(self._tmp.cleanup)
         self.owner = FinancialOwner(path=self.root / "owner.sqlite3", config=CONFIG, trusted_authority=AUTHORITY)
-        self.items, _ = _setup(self.owner, random.Random(7), 4, AUTHORITY)
         self.commands = 0
         self._drive(30)
 
     def _drive(self, count: int) -> None:
+        # Funding receipts on three sources, each superseding the last: inserted and updated rows.
         for _ in range(count):
             index = self.commands
-            item = self.items[index % len(self.items)]
-            if index % 3 == 2:
-                self.owner.evaluate_obligation(item.item_id)
-            else:
-                self.owner.record_payment_evidence(item_id=item.item_id, payment_id=f"payment:{index}", common_origin_id=f"origin:{index}", amount_cents=100 + index, evidence_id=f"evidence:{index}", event_at_ms=1_000 + index)
+            self.owner.record_program_funding_receipt(ProgramFundingReceipt(receipt_id=f"funding:{index}", source_record_ref=f"source:{index % 3}", amount_cents=100 + index, event_at_ms=1_000 + index, supersedes_receipt_id=None if index < 3 else f"funding:{index - 3}", **SCOPE))
             self.commands += 1
+
+    def _tracking(self) -> list[object]:
+        with closing(sqlite3.connect(self.owner.path)) as connection:
+            return [connection.execute(f"SELECT * FROM {table} ORDER BY 1,2").fetchall() for table in ("history_segments", "history_pending", "history_open")]
+
+    def _check(self, path: Path | None = None) -> None:
+        verify_database(path or self.owner.path, expected_config=CONFIG, expected_authority=AUTHORITY)
 
     def _verify(self, directory: Path, **kwargs: object) -> dict[str, object]:
         return verify_history_export(directory, expected_authority=_checker_authority(AUTHORITY), **kwargs)
@@ -163,13 +165,53 @@ class HistorySegmentTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialContinuityError, "continuity_source"):
             FinancialOwner.restore_continuity(package_bytes=b"{}", history=directory, recovered_path=self.root / "both.sqlite3", trusted_authority=AUTHORITY)
 
-    def test_write_past_the_hard_bound_is_refused_and_rolled_back(self) -> None:
-        with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 10_000), mock.patch.object(owner_module, "_MAX_SEGMENT_EVENTS", 20):
-            with self.assertRaisesRegex(FinancialContinuityError, "history_segment_size"):
-                for _ in range(40):
-                    sequence = self.owner.verify_integrity()["sequence"]
-                    self._drive(1)
-            self.assertEqual(self.owner.verify_integrity()["sequence"], sequence)
+    def test_write_past_a_hard_bound_is_refused_and_rolled_back(self) -> None:
+        # Every delta of the refused write rolls back, the open segment's tracking included.
+        for bound, value in (("_MAX_SEGMENT_EVENTS", 20), ("_MAX_SEGMENT_BYTES", 40_000)):
+            with self.subTest(bound=bound), mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 10_000), mock.patch.object(owner_module, bound, value):
+                with self.assertRaisesRegex(FinancialContinuityError, "^history_segment_size$"):
+                    for _ in range(40):
+                        before = (self.owner.path.read_bytes(), self._tracking())
+                        self._drive(1)
+                self.assertEqual((self.owner.path.read_bytes(), self._tracking()), before)
+                self._check()
+
+    def test_tracking_tables_are_checked_and_sealed_segments_are_append_only(self) -> None:
+        with closing(sqlite3.connect(self.owner.path)) as connection, self.assertRaisesRegex(sqlite3.IntegrityError, "history_segment_immutable"):
+            connection.execute("DELETE FROM history_segments")
+        self._check()
+        tampers = {
+            "UPDATE history_open SET byte_count=byte_count+1": "^history-open:counts$",
+            "DELETE FROM history_pending WHERE table_name='financial_events' AND row_key=(SELECT MAX(event_sequence) FROM financial_events)": "^history-open:counts$",
+            "INSERT INTO history_pending VALUES ('evidence',1,1)": "^history-pending:row$",
+            "UPDATE history_segments SET rows_json=rows_json||' ' WHERE segment_index=1": "^history-segments:1:seal$",
+            "UPDATE history_segments SET previous_digest=zeroblob(64) WHERE segment_index=2": "^history-segments:2:seal$",
+        }
+        source = self.owner.path.read_bytes()
+        for statement, code in tampers.items():
+            with self.subTest(statement=statement):
+                tampered = self.root / "tampered.sqlite3"
+                tampered.write_bytes(source)
+                self._tamper(tampered, statement)
+                with self.assertRaisesRegex(IndependentFinancialError, code):
+                    self._check(tampered)
+        # The Owner itself refuses, typed, to seal onto a tampered chain or with missing tracking.
+        for statement, code in (("UPDATE history_segments SET rows_json=rows_json||' ' WHERE segment_index=(SELECT MAX(segment_index) FROM history_segments)", "^history_segment_chain$"), ("DELETE FROM history_open", "^history_segment_events$")):
+            with self.subTest(statement=statement):
+                self.owner.path.write_bytes(source)
+                self._tamper(self.owner.path, statement)
+                with self.assertRaisesRegex(FinancialIntegrityError, code):
+                    self._drive(8)
+
+    @staticmethod
+    def _tamper(path: Path, statement: str) -> None:
+        with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+            triggers = [row[0] for row in connection.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name='history_segments'")]
+            for name in ("history_segment_update_immutable", "history_segment_delete_immutable"):
+                connection.execute(f"DROP TRIGGER {name}")
+            connection.execute(statement)
+            for sql in triggers:
+                connection.execute(sql)
 
     def test_store_from_before_segments_seals_its_whole_history(self) -> None:
         with closing(sqlite3.connect(self.owner.path, isolation_level=None)) as connection:
@@ -179,15 +221,21 @@ class HistorySegmentTests(unittest.TestCase):
         tampered = self.root / "legacy-tampered.sqlite3"  # conversion replays first: an edit history does not explain is not sealed
         tampered.write_bytes(self.owner.path.read_bytes())
         with closing(sqlite3.connect(tampered, isolation_level=None)) as connection:
-            connection.execute("UPDATE obligations SET owed_cents=owed_cents+1")
+            connection.execute("UPDATE program_funding_projection SET amount_cents=amount_cents+1")
         before = tampered.read_bytes()
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification"):
             FinancialOwner(path=tampered, config=CONFIG, trusted_authority=AUTHORITY)
         self.assertEqual(tampered.read_bytes(), before)
+        before = self.owner.path.read_bytes()  # a history past the hard bound is refused inside the conversion
+        with mock.patch.object(owner_module, "_MAX_SEGMENT_EVENTS", self.commands - 1), self.assertRaisesRegex(FinancialContinuityError, "^history_segment_size$"):
+            FinancialOwner(path=self.owner.path, config=CONFIG, trusted_authority=AUTHORITY)
+        self.assertEqual(self.owner.path.read_bytes(), before)
         reopened = FinancialOwner(path=self.owner.path, config=CONFIG, trusted_authority=AUTHORITY)
+        self.assertEqual(self._tracking()[1:], [[], [(1, 0, 0)]])  # sealed in the conversion itself
         manifest = json.loads(reopened.export_history(self.root / "legacy"))
         self.assertEqual(manifest["segment_count"], 1)
         self._verify(self.root / "legacy")
+        self._check()
 
 
 if __name__ == "__main__":

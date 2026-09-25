@@ -1779,6 +1779,8 @@ _SEGMENT_SCHEMA: Final[str] = """
         segment_digest BLOB NOT NULL UNIQUE CHECK (length(segment_digest)=64),
         rows_json TEXT NOT NULL
     );
+    CREATE TRIGGER history_segment_update_immutable BEFORE UPDATE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END;
+    CREATE TRIGGER history_segment_delete_immutable BEFORE DELETE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END;
     CREATE TABLE history_pending (
         table_name TEXT NOT NULL,
         row_key INTEGER NOT NULL,
@@ -1796,8 +1798,17 @@ _SEGMENT_SCHEMA: Final[str] = """
 
 def _replace_file(path: Path, data: bytes) -> None:
     temporary = path.with_name(f"{path.name}.tmp")
-    temporary.write_bytes(data)
+    with temporary.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temporary, path)
+    if os.name != "nt":  # Windows cannot open a directory to sync its entries
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 def _segment_seal(index: int, first: int, last: int, previous: bytes, head: bytes, root: bytes) -> dict[str, Any]:
@@ -2018,25 +2029,36 @@ class FinancialOwner:
         return row if table == "financial_events" else {"table": table, "row": row}
 
     def _track_all(self, connection: sqlite3.Connection) -> None:
-        """Mark every event and row pending: a store from before segments seals its whole history next."""
+        """Seal a store from before segments as one segment, inside the conversion transaction."""
         for table in ("financial_events", *_PROJECTION_TABLES):
             connection.executemany(
                 "INSERT INTO history_pending VALUES (?,?,?)",
                 ((table, row[0], len(_canonical(self._segment_record(table, tuple(row)[1:]))) + 1) for row in connection.execute(f'SELECT rowid,* FROM "{table}"').fetchall()),
             )
         connection.execute("UPDATE history_open SET event_count=(SELECT COUNT(*) FROM history_pending WHERE table_name='financial_events'),byte_count=(SELECT COALESCE(SUM(record_bytes),0) FROM history_pending)")
+        self._seal_segment(connection, force=True)
 
     def _seal_segment(self, connection: sqlite3.Connection, *, force: bool = False) -> bytes | None:
         """Seal the open segment at a soft bound (or when forced); refuse a write past a hard bound."""
-        count, size = connection.execute("SELECT event_count,byte_count FROM history_open").fetchone()
+        opened = connection.execute("SELECT event_count,byte_count FROM history_open WHERE id=1").fetchone()
+        if opened is None or {type(opened[0]), type(opened[1])} != {int}:
+            _fail(FinancialIntegrityError, "history_segment_events")
+        count, size = opened
         if count > _MAX_SEGMENT_EVENTS or size + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:
             _fail(FinancialContinuityError, "history_segment_size")
         if count == 0 or not force and count < _SEAL_SEGMENT_EVENTS and size < _SEAL_SEGMENT_BYTES:
             return None
-        last = connection.execute("SELECT segment_index,last_sequence,segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1").fetchone()
-        index, first, previous = (0, 1, _ZERO_DIGEST) if last is None else (last[0] + 1, last[1] + 1, bytes(last[2]))
+        # The chain continues from the last sealed segment only if its stored seal still recomputes.
+        last = connection.execute("SELECT * FROM history_segments ORDER BY segment_index DESC LIMIT 2").fetchall()
+        index, first, previous = 0, 1, _ZERO_DIGEST
+        if last:
+            stored = tuple(last[0])
+            if [type(value) for value in stored] != [int, int, int, bytes, bytes, bytes, bytes, str] or stored[3] != (last[1][6] if len(last) == 2 else _ZERO_DIGEST) or stored[5] != _digest(_SEGMENT_DOMAIN, b"rows", stored[7].encode()) or stored[6] != _digest(_SEGMENT_DOMAIN, b"seal", _canonical(_segment_seal(*stored[:6]))):
+                _fail(FinancialIntegrityError, "history_segment_chain")
+            index, first, previous = stored[0] + 1, stored[2] + 1, stored[6]
         meta = self._meta(connection)
-        if int(meta["sequence"]) - first + 1 != count:
+        pending = connection.execute("SELECT COALESCE(SUM(table_name='financial_events'),0),COALESCE(SUM(record_bytes),0) FROM history_pending").fetchone()
+        if int(meta["sequence"]) - first + 1 != count or tuple(pending) != (count, size):
             _fail(FinancialIntegrityError, "history_segment_events")
         images = []
         for table, key in connection.execute("SELECT table_name,row_key FROM history_pending WHERE table_name<>'financial_events'").fetchall():
@@ -2346,6 +2368,9 @@ class FinancialOwner:
         payload_bytes = _canonical(event_payload)
         payload_digest = _digest(_OPENING_BALANCE_DOMAIN if kind == "OPENING_BALANCE" else _EVENT_DOMAIN, payload_bytes)
         meta = self._meta(connection)
+        # Lean's maxRows/maxRevision (Types.lean): the checker refuses a history or revision past them.
+        if int(meta["sequence"]) >= _MAX_ROWS or after_revision > _MAX_ROWS:
+            _fail(FinancialIntegrityError, "history_capacity")
         sequence = int(meta["sequence"]) + 1
         previous_head = bytes(meta["history_head"])
         header = b"".join(
@@ -2934,6 +2959,9 @@ class FinancialOwner:
                 if published is not None:
                     _fail(FinancialConflictError, "population_manifest_supersede_after_publish")
                 before_version = int(head["manifest_version"])
+            # The checker caps each manifest table at maxRows; members are the only table that grows faster than history.
+            if connection.execute("SELECT COUNT(*) FROM population_manifest_members").fetchone()[0] + len(manifest.member_ids) > _MAX_ROWS:
+                _fail(FinancialIntegrityError, "history_capacity")
             now_ms = self._now()
             connection.execute(
                 "INSERT INTO population_manifests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -6855,7 +6883,9 @@ class FinancialOwner:
 
     def _continuity_package_bytes(self, connection: sqlite3.Connection) -> bytes:
         """Serialize the exact bounded Continuity package from this connection."""
-
+        # Refused before any row is loaded when the event payloads alone exceed the cap.
+        if connection.execute("SELECT COALESCE(SUM(length(payload_json)),0) FROM financial_events").fetchone()[0] > _MAX_PACKAGE_BYTES:
+            _fail(FinancialContinuityError, "continuity_package_size")
         exported_rows: dict[str, list[dict[str, Any]]] = {}
         for table in sorted(self._tables):
             columns = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
@@ -6882,23 +6912,27 @@ class FinancialOwner:
     def export_history(self, directory: Path) -> bytes:
         """Export all history as sealed segments and a manifest (docs/CORE_REDESIGN.md "History segments").
 
-        Segment files already in ``directory`` are never re-serialized: a repeated
-        export writes only new segments and the manifest (IX.3).
+        The manifest is read in the sealing transaction; sealed segments are append-only,
+        so their files may be written after it. A segment file already in ``directory``
+        is never rewritten, only compared byte for byte (IX.3).
         """
         with self._write() as connection:
             self._seal_segment(connection, force=True)
+            rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
+            count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
+        body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
         directory.mkdir(exist_ok=True)
         with self._read_snapshot() as connection:
-            segments = connection.execute("SELECT * FROM history_segments ORDER BY segment_index").fetchall()
-            if (segments[-1]["last_sequence"] if segments else 0) != int(self._meta(connection)["sequence"]):
-                _fail(FinancialContinuityError, "history_export_race")
-            for segment in segments:
+            for segment in connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall():
+                events = connection.execute("SELECT * FROM financial_events WHERE event_sequence BETWEEN ? AND ? ORDER BY event_sequence", (segment["first_sequence"], segment["last_sequence"]))
+                data = _canonical({"events": [self._segment_record("financial_events", tuple(row)) for row in events], "rows": json.loads(segment["rows_json"]), "seal": _segment_seal(*tuple(segment)[:6]), "segment_digest": _hex(bytes(segment["segment_digest"])), "signature": None})
                 path = directory / f"segment-{segment['segment_index']:08d}.json"
                 if not path.exists():
-                    events = connection.execute("SELECT * FROM financial_events WHERE event_sequence BETWEEN ? AND ? ORDER BY event_sequence", (segment["first_sequence"], segment["last_sequence"]))
-                    _replace_file(path, _canonical({"events": [self._segment_record("financial_events", tuple(row)) for row in events], "rows": json.loads(segment["rows_json"]), "seal": _segment_seal(*tuple(segment)[:6]), "segment_digest": _hex(bytes(segment["segment_digest"])), "signature": None}))
-            rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
-            body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": len(segments), "last_segment_digest": _hex(bytes(segments[-1]["segment_digest"]) if segments else _ZERO_DIGEST)}
+                    _replace_file(path, data)
+                else:
+                    with path.open("rb") as handle:
+                        if handle.read(len(data) + 1) != data:
+                            _fail(FinancialContinuityError, "history_export_mismatch")
         manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
         _replace_file(directory / "manifest.json", manifest)
         return manifest

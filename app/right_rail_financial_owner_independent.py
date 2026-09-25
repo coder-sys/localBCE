@@ -48,7 +48,7 @@ POPULATION_MANIFEST_CONTRACT = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 CURRENCY = "USD"
 MAX_CENTS = (1 << 63) - 1
 MAX_ROWS = 10_000
-MAX_SEQUENCE = (1 << 63) - 1  # history length is unbounded; each history segment is bounded
+MAX_SEQUENCE = (1 << 63) - 1  # each history segment is bounded; the Owner stops at Lean's maxRows events
 MAX_PACKAGE_BYTES = 8 * 1024 * 1024
 MAX_DECISION_PACKAGE_BYTES = MAX_PACKAGE_BYTES - 512
 MAX_DECISION_PACKAGE_DEPTH = 32
@@ -384,6 +384,8 @@ _TRIGGER_DEFS = {
     "population_manifest_binding_delete_immutable": "CREATE TRIGGER population_manifest_binding_delete_immutable BEFORE DELETE ON population_manifest_bindings BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END",
     "command_update_immutable": "CREATE TRIGGER command_update_immutable BEFORE UPDATE ON commands BEGIN SELECT RAISE(ABORT,'command_immutable'); END",
     "command_delete_immutable": "CREATE TRIGGER command_delete_immutable BEFORE DELETE ON commands BEGIN SELECT RAISE(ABORT,'command_immutable'); END",
+    "history_segment_update_immutable": "CREATE TRIGGER history_segment_update_immutable BEFORE UPDATE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END",
+    "history_segment_delete_immutable": "CREATE TRIGGER history_segment_delete_immutable BEFORE DELETE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END",
 }
 
 _EVENT_KINDS = {
@@ -1220,6 +1222,29 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
         if anchor_sequence > len(rows) or bytes(rows[anchor_sequence - 1]["head"]) != identity["anchor_head"]:
             _fail("identity:history-anchor")
     return rows
+
+
+def _verify_history_tables(connection: sqlite3.Connection, events: list[sqlite3.Row]) -> None:
+    """Recompute every sealed segment's seal and chain from the event rows, then the open segment's tracking."""
+    previous, sealed = ZERO_DIGEST, 0
+    for index, row in enumerate(connection.execute("SELECT * FROM history_segments ORDER BY segment_index")):
+        code, first = f"history-segments:{index}", sealed + 1
+        sealed = _integer(row["last_sequence"], f"{code}:last", minimum=first, maximum=min(len(events), sealed + MAX_ROWS))
+        if row["segment_index"] != index or row["first_sequence"] != first or len(row["rows_json"]) > MAX_SEGMENT_BYTES:
+            _fail(f"{code}:shape")
+        stored = {"previous_digest": previous, "event_head": bytes(events[sealed - 1]["head"]), "projection_root": _digest(SEGMENT_DOMAIN, b"rows", row["rows_json"].encode())}
+        if any(row[key] != value for key, value in stored.items()):
+            _fail(f"{code}:seal")
+        previous = _digest(SEGMENT_DOMAIN, b"seal", _canonical({"format": SEGMENT_FORMAT, "segment_index": index, "first_sequence": first, "last_sequence": sealed, "event_count": sealed - first + 1, **{key: value.hex().upper() for key, value in stored.items()}}))
+        if row["segment_digest"] != previous:
+            _fail(f"{code}:digest")
+    pending = connection.execute("SELECT table_name,row_key,record_bytes FROM history_pending").fetchall()
+    for table, key, size in pending:
+        if table not in PROJECTION_TABLES | {"financial_events"} or type(key) is not int or type(size) is not int or size < 1 or connection.execute(f'SELECT 1 FROM "{table}" WHERE rowid=?', (key,)).fetchone() is None:
+            _fail("history-pending:row")
+    opened = [tuple(row) for row in connection.execute("SELECT id,event_count,byte_count FROM history_open")]
+    if opened != [(1, len(events) - sealed, sum(row[2] for row in pending))] or sorted(key for table, key, _ in pending if table == "financial_events") != list(range(sealed + 1, len(events) + 1)):
+        _fail("history-open:counts")
 
 
 def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.Row]) -> None:
@@ -4195,6 +4220,7 @@ def _verify_connection(
         _fail(f"foreign-keys:{orphan[0]}")
     meta = _verify_meta(connection, identity, schema_version)
     events = _verify_events(connection, meta)
+    _verify_history_tables(connection, events)
     packs = _verify_packs(connection, meta)
     manifest_state = _verify_population_manifest_rows(
         manifest_rows=[dict(row) for row in _bounded_rows(connection, "population_manifests")],
