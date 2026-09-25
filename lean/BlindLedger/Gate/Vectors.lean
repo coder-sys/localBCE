@@ -100,7 +100,7 @@ def main (args : List String) : IO UInt32 := do
     let mut failed := 0
     for line in (← IO.FS.readFile path).splitOn "\n" do
       number := number + 1
-      let fields := ((String.mk (line.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
+      let fields := ((String.ofList (line.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
       if fields.isEmpty || fields.head! == "#" then continue
       match step ctx fields with
       | none =>

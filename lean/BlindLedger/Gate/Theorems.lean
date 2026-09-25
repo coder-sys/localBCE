@@ -88,7 +88,7 @@ theorem pathRoot_binding {H : Bytes → Bytes} (hlen : ∀ x, (H x).length = dig
     | nil => simp at hb
     | cons t qs =>
     simp only at ha hb
-    have hup := ih _ _ _ _ ps qs r (by split <;> split <;> simp [nodeHash, hlen]) ha hb
+    have hup := ih _ _ _ _ ps qs r (by split <;> simp [nodeHash, hlen]) ha hb
     rcases hup with hup | hup
     · by_cases he : (i % 2 == 0) = true
       · rw [if_pos he, if_pos he] at hup
@@ -111,7 +111,8 @@ theorem verifyPath_other_leaf_is_collision {H : Bytes → Bytes}
     (hne : x ≠ y) : Collision H := by
   simp only [verifyPath, Bool.and_eq_true, beq_iff_eq] at hx hy
   rcases pathRoot_binding hlen _ _ _ _ _ _ _ _ (by simp [leafHash, hlen]) hx.2 hy.2 with h | h
-  · rcases hash_inputs h with hin | hin
+  · unfold leafHash at h
+    rcases hash_inputs h with hin | hin
     · exact absurd (List.cons.inj (List.append_cancel_left hin)).2 hne
     · exact hin
   · exact h
