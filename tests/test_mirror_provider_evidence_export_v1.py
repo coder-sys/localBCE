@@ -21,8 +21,10 @@ from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror.source_admission import SourceAdmissionService
 from tests.test_nc_medicaid_fhir_source import _envelope
 
+
 def _canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
+
 
 def _request(operation_ref: str, *, now: int = 7_000, not_before: int = 6_990, expires_at: int = 7_050) -> bytes:
     return _canonical(
@@ -38,12 +40,14 @@ def _request(operation_ref: str, *, now: int = 7_000, not_before: int = 6_990, e
         }
     )
 
+
 def _admission():
     admission = SourceAdmissionService(
         profile.NC_MEDICAID_GRAPH_PROFILE,
         fhir_independent.NcMedicaidFhirVerifier(),
     ).admit(_envelope())
     return admission
+
 
 def _selection() -> producer.ProviderEvidenceSelectionV1:
     admission = _admission()
@@ -52,6 +56,7 @@ def _selection() -> producer.ProviderEvidenceSelectionV1:
         profile_registry=dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY),
         authorization_evidence=producer.SYNTHETIC_SELECTION_AUTHORIZATION,
     )
+
 
 def _selection_for_graph_profile(admission, graph_profile) -> producer.ProviderEvidenceSelectionV1:
     value = json.loads(admission.graph_input.decode("ascii"))
@@ -95,6 +100,7 @@ def _selection_for_graph_profile(admission, graph_profile) -> producer.ProviderE
         authorization_evidence=producer.SYNTHETIC_SELECTION_AUTHORIZATION,
     )
 
+
 class _RaisingRegistry(Mapping[str, object]):
     def __getitem__(self, key: str) -> object:
         raise RuntimeError("SELECTION_SYNTHETIC_SENTINEL")
@@ -104,6 +110,7 @@ class _RaisingRegistry(Mapping[str, object]):
 
     def __len__(self) -> int:
         return 1
+
 
 def _conflict_selection() -> producer.ProviderEvidenceSelectionV1:
     admission = _admission()
@@ -128,6 +135,7 @@ def _conflict_selection() -> producer.ProviderEvidenceSelectionV1:
         profile_registry=dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY),
         authorization_evidence=producer.SYNTHETIC_SELECTION_AUTHORIZATION,
     )
+
 
 class ProviderEvidenceExportV1Tests(unittest.TestCase):
     def test_valid_request_graph_export_and_independent_verification(self) -> None:

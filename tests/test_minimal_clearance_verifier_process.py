@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import app.minimal_clearance_verifier_process as process
 
+
 class _FakeFunction:
     def __init__(self, callback):
         self._callback = callback
@@ -23,6 +24,7 @@ class _FakeFunction:
 
     def __call__(self, *args):
         return self._callback(*args)
+
 
 class _Kernel:
     def __init__(self, *, failure: str | None = None, overlap: bool = False, pin_failure: str | None = None, pin_data: bytes | None = None, job_limit_mismatch: str | None = None):
@@ -352,6 +354,7 @@ class _Kernel:
             return 0 if self.pin_failure == "close" else 1
         self.events.append(("close", handle_number))
         return 0 if self.failure == "close" else 1
+
 
 class MinimalClearanceVerifierProcessTests(unittest.TestCase):
     def _inputs(self):
@@ -1826,6 +1829,7 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                 self.assertEqual(result.stderr, b"")
             finally:
                 os.close(descriptor)
+
 
 if __name__ == "__main__":
     unittest.main()

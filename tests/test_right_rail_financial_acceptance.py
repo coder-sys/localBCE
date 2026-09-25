@@ -52,6 +52,7 @@ from app.right_rail_financial_owner_independent import (
 )
 from tests import rightrail_financial_expected_cases as expected
 
+
 _CORRECTION_ENGINE_PATH = (
     Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction-e911" / "blind_financial_correction.exe"
 )
@@ -114,6 +115,7 @@ _EXPECTED_PRIVATE_INDEXES = (
     ),
 )
 
+
 def _correction_transition_test_release(
     *,
     workspace: Path,
@@ -163,6 +165,7 @@ def _correction_transition_test_release(
         job_memory_cap_bytes=1_000_000_000,
     )
 
+
 class _Clock:
     def __init__(self, initial: int | None = None) -> None:
         self.value = expected.CASH_EVENT_MS if initial is None else initial
@@ -171,8 +174,10 @@ class _Clock:
         self.value += 1
         return self.value
 
+
 def _independent_canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+
 
 def _independent_digest(domain: bytes, *parts: bytes) -> bytes:
     digest = hashlib.sha3_512(domain)
@@ -181,8 +186,10 @@ def _independent_digest(domain: bytes, *parts: bytes) -> bytes:
         digest.update(part)
     return digest.digest()
 
+
 def _independent_hex(value: bytes) -> str:
     return value.hex().upper()
+
 
 def _independent_evidence_digest(row: dict[str, object]) -> str:
     evidence_domain = b"RR/FINANCIAL/EVIDENCE/v1\x00"
@@ -222,6 +229,7 @@ def _independent_evidence_digest(row: dict[str, object]) -> str:
         )
     )
 
+
 def _independent_pack_digest(pack: expected.ControlPackExpectation) -> str:
     scope = pack.scope
     return _independent_hex(
@@ -248,6 +256,7 @@ def _independent_pack_digest(pack: expected.ControlPackExpectation) -> str:
             ),
         )
     )
+
 
 class _WriteBoundaryOwner(FinancialOwner):
     """Test-local interruption at the real owner transaction boundaries."""
@@ -290,6 +299,7 @@ class _WriteBoundaryOwner(FinancialOwner):
             self._fault = "consumed"
             print("PHASE=POSTCOMMIT_AFTER_COMMIT", flush=True)
             os._exit(74)
+
 
 _PROCESS_BOUNDARY_CHILD = """
 import sys
@@ -335,6 +345,7 @@ store.reject_offset_and_authorize_correction(
 raise SystemExit(99)
 """
 
+
 _PROCESS_FUNDING_BOUNDARY_CHILD = """
 import sys
 from pathlib import Path
@@ -377,6 +388,7 @@ print("PHASE=BEFORE_FUNDING_RECORD", flush=True)
 store.record_program_funding_receipt(receipt)
 raise SystemExit(99)
 """
+
 
 class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -4833,6 +4845,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertNotIn("right_rail_financial_owner", fixture_source)
         self.assertNotIn("sqlite3", fixture_source)
         self.assertEqual(expected.PROGRAM_TOTAL_CENTS, expected.H_OWED_CENTS + expected.OTHER_TOTAL_CENTS)
+
 
 if __name__ == "__main__":
     unittest.main()

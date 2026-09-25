@@ -18,6 +18,7 @@ from app.right_rail_financial_switch import (
 )
 from tests import rightrail_financial_expected_cases as expected
 
+
 class FinancialSwitchTests(unittest.TestCase):
     def setUp(self) -> None:
         from tests.test_right_rail_financial_acceptance import RightRailFinancialAcceptanceTests
@@ -314,6 +315,7 @@ class FinancialSwitchTests(unittest.TestCase):
         self.assertEqual(report["comparison_status"], "FORBIDDEN_DIFFERENCES")
         self.assertEqual(differences[f"members.{expected.H_ITEM_ID}.owed_cents"]["classification"], "FORBIDDEN")
         self._assert_source_bytes_unchanged()
+
 
 if __name__ == "__main__":
     unittest.main()

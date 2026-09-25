@@ -33,6 +33,7 @@ from app.right_rail_financial_owner import (
 from tests import rightrail_financial_expected_cases as expected
 from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
 
+
 EXPECTED_PROGRAM_TOTAL_CENTS = 100_000_000
 EXPECTED_H_OWED_CENTS = 10_000_000
 EXPECTED_H_CASH_CENTS = 9_700_000
@@ -44,6 +45,7 @@ STALE_ENGINE_EXECUTABLE_SHA256 = "DFCA506260A5A5F5C0A8DE42B72D3DFD15000EC6E3DD5B
 ENGINE_TIMEOUT_SECONDS = 30
 ENGINE_MAX_STDERR_BYTES = 64 * 1024
 
+
 @dataclass
 class _Clock:
     value: int = expected.CASH_EVENT_MS
@@ -51,6 +53,7 @@ class _Clock:
     def now_ms(self) -> int:
         self.value += 1
         return self.value
+
 
 class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -1101,6 +1104,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(adapter.SemanticAdapterCodecError, "delivery_status"):
             adapter.decode_blfres02_result(bytes(bad_tag), expected_snapshot=snapshot)
         self.assertEqual(obligation["received_cash_cents"], EXPECTED_H_CASH_CENTS)
+
 
 if __name__ == "__main__":
     unittest.main()

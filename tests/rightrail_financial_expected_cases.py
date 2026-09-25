@@ -7,6 +7,7 @@ the later real-owner tests.
 
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True, slots=True)
 class ScopeExpectation:
     state_id: str
@@ -14,6 +15,7 @@ class ScopeExpectation:
     program_id: str
     period_id: str
     currency: str
+
 
 @dataclass(frozen=True, slots=True)
 class ControlPackExpectation:
@@ -30,6 +32,7 @@ class ControlPackExpectation:
     authorized_roles: tuple[str, ...]
     expected_tests: tuple[str, ...]
 
+
 @dataclass(frozen=True, slots=True)
 class PopulationItemExpectation:
     population_id: str
@@ -38,6 +41,7 @@ class PopulationItemExpectation:
     owed_cents: int
     due_at_ms: int
     currency: str = "USD"
+
 
 @dataclass(frozen=True, slots=True)
 class PopulationManifestExpectation:
@@ -59,6 +63,7 @@ class PopulationManifestExpectation:
     supersedes_manifest_id: str | None = None
     supersedes_digest_hex: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class EvidenceExpectation:
     evidence_id: str
@@ -75,6 +80,7 @@ class EvidenceExpectation:
     reversal_of: str | None = None
     supersedes: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class RecipientPaymentExpectation:
     item_id: str
@@ -87,6 +93,7 @@ class RecipientPaymentExpectation:
     local_ref: str
     event_at_ms: int
 
+
 @dataclass(frozen=True, slots=True)
 class FundingReceiptExpectation:
     receipt_id: str
@@ -96,6 +103,7 @@ class FundingReceiptExpectation:
     event_at_ms: int
     confirmation_class: str
     evidence_status: str
+
 
 @dataclass(frozen=True, slots=True)
 class BalanceExpectation:
@@ -114,6 +122,7 @@ class BalanceExpectation:
     case_status: str
     delivery_status: str
 
+
 @dataclass(frozen=True, slots=True)
 class ActionExpectation:
     action_id: str
@@ -127,12 +136,14 @@ class ActionExpectation:
     duplicate_effect_count: int
     changed_payload_rejected: bool
 
+
 @dataclass(frozen=True, slots=True)
 class RejectionExpectation:
     operation: str
     reason: str
     expected_error: str
     mutation_committed: bool
+
 
 @dataclass(frozen=True, slots=True)
 class RevisionRaceExpectation:
@@ -145,6 +156,7 @@ class RevisionRaceExpectation:
     committed_projection_updates: int
     committed_outbox_rows: int
 
+
 @dataclass(frozen=True, slots=True)
 class InterruptionExpectation:
     boundary: str
@@ -152,6 +164,7 @@ class InterruptionExpectation:
     prior_state_preserved: bool
     reservation_preserved: bool
     external_effect: str
+
 
 @dataclass(frozen=True, slots=True)
 class ContinuityExpectation:
@@ -166,6 +179,7 @@ class ContinuityExpectation:
     action_idempotency_preserved: bool
     duplicate_dispatches_after_restore: int
 
+
 @dataclass(frozen=True, slots=True)
 class BoundaryExpectation:
     scoped_fields: tuple[str, ...]
@@ -177,6 +191,7 @@ class BoundaryExpectation:
     corporate_egress_enabled: bool
     canary_persisted_or_emitted: bool
     diagnostic_fields: tuple[str, ...]
+
 
 @dataclass(frozen=True, slots=True)
 class AcceptanceCase:
@@ -193,6 +208,7 @@ class AcceptanceCase:
     actions: tuple[ActionExpectation, ...]
     rejections: tuple[RejectionExpectation, ...]
     invariant_tags: tuple[str, ...]
+
 
 # Fixed scope and dates.  Times are UTC milliseconds; these literals make rule and timeliness
 # boundaries reproducible without consulting a clock or a production date helper.

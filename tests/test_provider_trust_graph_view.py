@@ -15,6 +15,7 @@ from app.mirror import provider_trust_graph_read_model_v1 as read_model
 from tests.test_mirror_provider_trust_graph_read_model_v1 import _admission, _selection
 from tools import provider_trust_graph_view as local_view
 
+
 class ProviderTrustGraphLocalViewTests(unittest.TestCase):
     def _bundle(self, *, compare: bool = False) -> bytes:
         admission = _admission()
@@ -164,6 +165,7 @@ class ProviderTrustGraphLocalViewTests(unittest.TestCase):
         self.assertNotIn("localStorage", script)
         self.assertNotIn("https://", script)
         self.assertNotIn("http://", script)
+
 
 if __name__ == "__main__":
     unittest.main()

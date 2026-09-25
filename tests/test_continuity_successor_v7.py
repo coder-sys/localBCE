@@ -10,6 +10,7 @@ import unittest
 
 from tools import continuity_successor_v7 as receiver
 
+
 SCOPE = {
     "state_id": "state-test",
     "deployment_id": "deployment-test",
@@ -47,6 +48,7 @@ CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
 EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
 HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
 
+
 def canonical(value: object) -> bytes:
     return json.dumps(
         value,
@@ -56,6 +58,7 @@ def canonical(value: object) -> bytes:
         allow_nan=False,
     ).encode("ascii")
 
+
 def digest(domain: bytes, *parts: bytes) -> bytes:
     hasher = hashlib.sha3_512(domain)
     for part in parts:
@@ -63,13 +66,16 @@ def digest(domain: bytes, *parts: bytes) -> bytes:
         hasher.update(part)
     return hasher.digest()
 
+
 def blob(value: bytes) -> dict[str, str]:
     return {"hex": value.hex().upper()}
+
 
 def seal(package: dict[str, object]) -> bytes:
     body = {key: value for key, value in package.items() if key != "package_digest"}
     package["package_digest"] = digest(CONTINUITY_DOMAIN, canonical(body)).hex().upper()
     return canonical(package)
+
 
 def root_package() -> bytes:
     authority_digest = bytes.fromhex("A" * 128)
@@ -143,6 +149,7 @@ def root_package() -> bytes:
         "package_digest": "",
     }
     return seal(package)
+
 
 class ContinuitySuccessorV7Tests(unittest.TestCase):
     def test_minimal_root_reconstructs_only_an_unauthenticated_read_only_view(self) -> None:
@@ -388,6 +395,7 @@ class ContinuitySuccessorV7Tests(unittest.TestCase):
 
         with self.assertRaisesRegex(receiver.ContinuityError, "scope_mismatch"):
             receiver.build_readonly_view(root_package(), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

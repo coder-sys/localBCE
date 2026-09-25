@@ -16,9 +16,11 @@ from app import right_rail_financial_semantic_adapter as adapter
 from tests import rightrail_financial_expected_cases as expected
 from tests import test_right_rail_financial_semantic_adapter as semantic_tests
 
+
 EXPECTED_H_CASH_CENTS = semantic_tests.EXPECTED_H_CASH_CENTS
 EXPECTED_H_OWED_CENTS = semantic_tests.EXPECTED_H_OWED_CENTS
 EXPECTED_OFFSET_CENTS = semantic_tests.EXPECTED_OFFSET_CENTS
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # The digest-pinned snapshot evaluator (blind_financial.exe, not the E911 correction
@@ -50,6 +52,7 @@ EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
 EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
     "312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E"
 )
+
 
 class RightRailFinancialEngineTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -518,6 +521,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         self.assertEqual(execution.result.overage_cents, 0)
         self.assertTrue(connection.in_transaction)
         self.assertEqual(self.fixture._hash(store.path), before_hash)
+
 
 if __name__ == "__main__":
     unittest.main()

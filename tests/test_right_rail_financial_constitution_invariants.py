@@ -65,7 +65,9 @@ from app.right_rail_financial_owner import (
 from tests import rightrail_financial_expected_cases as expected
 from tests import test_right_rail_financial_acceptance as acceptance
 
+
 _TestMethod = TypeVar("_TestMethod", bound=Callable[..., Any])
+
 
 def _requires_pinned_correction_engine(usage: str) -> Callable[[_TestMethod], _TestMethod]:
     """Mark a test that needs ``artifacts/engine-correction-e911``.
@@ -80,9 +82,11 @@ def _requires_pinned_correction_engine(usage: str) -> Callable[[_TestMethod], _T
 
     return mark
 
+
 # Raw class attributes (staticmethod descriptors preserved) of the acceptance
 # fixtures.  A mappingproxy is not a TestCase, so nothing extra is collected.
 _ACCEPTANCE = vars(acceptance.RightRailFinancialAcceptanceTests)
+
 
 class _AcceptanceFixtures:
     """The acceptance suite's owner fixtures, borrowed without modification."""
@@ -105,6 +109,7 @@ class _AcceptanceFixtures:
     _assert_snapshot = _ACCEPTANCE["_assert_snapshot"]
     _assert_verified = _ACCEPTANCE["_assert_verified"]
 
+
 # --- Independent BLFCRES1 encoder ------------------------------------------------
 # Written from the wire layout in ``decode_correction_transition_result`` and
 # deliberately independent of the adapter's private writer.  Every payload is
@@ -114,24 +119,31 @@ class _AcceptanceFixtures:
 _ABSENT = b"\x00"
 _CORRECTION_TRANSITION_TAG = 1  # OFFSET_REJECTED_CORRECTION_AUTHORIZED
 
+
 def _u16(value: int) -> bytes:
     return value.to_bytes(2, "big")
+
 
 def _text(value: str) -> bytes:
     raw = value.encode("utf-8")
     return _u16(len(raw)) + raw
 
+
 def _some_byte(value: int) -> bytes:
     return b"\x01" + bytes([value])
+
 
 def _some_text(value: str) -> bytes:
     return b"\x01" + _text(value)
 
+
 def _some_nat(value: int) -> bytes:
     return b"\x01" + value.to_bytes(8, "big")
 
+
 def _result_header(status_tag: int, contract: str = financial_engine.CORRECTION_TRANSITION_OPERATION) -> bytes:
     return b"BLFCRES1" + _u16(1) + bytes([status_tag]) + _text(contract)
+
 
 def _rejected_transition_result(reason_tag: int, requirement_tag: int) -> bytes:
     return b"".join(
@@ -153,6 +165,7 @@ def _rejected_transition_result(reason_tag: int, requirement_tag: int) -> bytes:
         )
     )
 
+
 def _duplicate_transition_result(*, action_id: str, claim_id: str, evaluation_id: str, expected_revision: int) -> bytes:
     return b"".join(
         (
@@ -172,6 +185,7 @@ def _duplicate_transition_result(*, action_id: str, claim_id: str, evaluation_id
             _ABSENT,  # mutation
         )
     )
+
 
 def _accepted_without_mutation(*, action_id: str, claim_id: str, evaluation_id: str, expected_revision: int) -> bytes:
     return b"".join(
@@ -193,6 +207,7 @@ def _accepted_without_mutation(*, action_id: str, claim_id: str, evaluation_id: 
         )
     )
 
+
 # (reason, reason tag, requirement tag, owner error class, owner error code).
 # Tags and the owner mapping are written out independently of the engine's
 # private tables (V.4: expected answers are not derived from the code under test).
@@ -203,6 +218,7 @@ _LEAN_REJECTIONS: tuple[tuple[str, int, int, type[FinancialError], str], ...] = 
     ("EVALUATION_CONSUMED", 10, 10, FinancialConflictError, "evaluation_already_consumed"),
     ("CAPACITY", 17, 17, FinancialIntegrityError, "history_capacity"),
 )
+
 
 class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest.TestCase):
     """Constitution-critical correction invariants (pinned Engine required)."""
@@ -623,6 +639,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
                 self.assertEqual(self._correction_evidence(store), (0, 0))
         self.assertEqual(store.current_evaluation_receipt(expected.H_ITEM_ID), current)
         self._assert_verified(store)
+
 
 if __name__ == "__main__":
     unittest.main()

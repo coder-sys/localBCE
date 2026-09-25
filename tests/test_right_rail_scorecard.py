@@ -11,6 +11,7 @@ import unittest
 
 from tools import right_rail_scorecard as scorecard
 
+
 class FeltValueScorecardTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -39,6 +40,7 @@ class FeltValueScorecardTest(unittest.TestCase):
         if better:
             print("\nScorecard improved; rewrite docs/scorecard/hospital_h.json:\n  " + "\n  ".join(better))
         self.assertEqual(worse, [], "felt-value regression (Art. XII)")
+
 
 if __name__ == "__main__":
     unittest.main()
