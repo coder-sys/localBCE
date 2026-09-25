@@ -5103,7 +5103,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             # checker derives that from the decision, not from the case status Lean wrote.
             ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "OPEN"}),
             ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "AUTHORIZED"}),
-            ("evaluation:evidence-bindings", lambda r, m: {"evidence_ids": ()}),
+            # Refused before the checker now: the post-state binding covers the result's evidence ids.
+            ("post_state:result_evidence_ids", lambda r, m: {"evidence_ids": ()}),
         )
         for index, (code, change) in enumerate(tampers):
             with self.subTest(index=index, code=code):
@@ -5135,7 +5136,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     with self.assertRaises(FinancialIntegrityError) as caught:
                         self._reject(store, claim_id)
                 # Before step 5 the Python re-derivation refused all seven as correction_result_input_binding.
-                self.assertEqual(str(caught.exception), f"correction_verification:{code}")
+                self.assertEqual(str(caught.exception), f"correction_{code if code.startswith('post_state:') else 'verification:' + code}")
                 self.assertEqual(store.path.read_bytes(), before)
                 self._assert_verified(store)
 
@@ -5146,14 +5147,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         real_run = financial_engine.run_correction_transition_v1
         wire = "resulting_input_wire"
         tampers = (
-            ("correction_resulting_input", wire, lambda w: semantic.BLFIN02_MAGIC + b"\x00" * 32),
-            ("correction_resulting_input", wire, lambda w: w[:-1]),
-            ("correction_resulting_input", wire, lambda w: w[:-1] + bytes([w[-1] ^ 1])),
-            ("correction_result_context", "item_id", lambda r: expected.OTHER_ITEM_IDS[0]),
-            ("correction_result_context", "population_id", lambda r: "population:other"),
-            ("correction_result_context", "provenance", lambda r: next(tag for tag in semantic._PROVENANCE_TAGS if tag != r)),
-            ("correction_result_context", "completion_at_ms", lambda r: (r or 0) + 1),
-            ("correction_result_context", "completion_at_ms", lambda r: None if r is not None else 1),
+            ("resulting_input", wire, lambda w: semantic.BLFIN02_MAGIC + b"\x00" * 32),
+            ("resulting_input", wire, lambda w: w[:-1]),
+            ("resulting_input", wire, lambda w: w[:-1] + bytes([w[-1] ^ 1])),
+            ("result_context_binding", "item_id", lambda r: expected.OTHER_ITEM_IDS[0]),
+            ("result_context_binding", "population_id", lambda r: "population:other"),
+            ("result_context_binding", "provenance", lambda r: next(tag for tag in semantic._PROVENANCE_TAGS if tag != r)),
+            ("result_context_binding", "owner_id", lambda r: "owner:other"),
+            ("result_authority_binding", "authority_epoch", lambda r: r + 1),
+            ("result_pack_binding", "pack_id", lambda r: "pack:other"),
+            ("result_completion", "completion_at_ms", lambda r: (r or 0) + 1),
+            ("result_completion", "completion_at_ms", lambda r: None if r is not None else 1),
         )
         for index, (code, field, change) in enumerate(tampers):
             with self.subTest(index=index, field=field):
@@ -5177,7 +5181,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 with patch.object(financial_engine, "run_correction_transition_v1", run):
                     with self.assertRaises(FinancialIntegrityError) as caught:
                         self._reject(store, claim_id)
-                self.assertEqual(str(caught.exception), code)
+                self.assertEqual(str(caught.exception), f"correction_post_state:{code}")
                 self.assertEqual(store.path.read_bytes(), before)
                 self._assert_verified(store)
 

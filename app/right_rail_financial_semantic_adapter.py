@@ -979,8 +979,8 @@ def _completion_time_from_snapshot(data: Mapping[str, Any]) -> int | None:
     return None
 
 
-def _validate_decoded_result(result: DecodedLeanResult, snapshot: LockedSemanticSnapshot) -> None:
-    data = snapshot.data
+def _bind_result_context(result: DecodedLeanResult, data: Mapping[str, Any]) -> None:
+    """Everything a result must share with the snapshot it evaluated, short of the stored projection."""
     scope = _wire_mapping(data["scope"], "scope")
     owner_body = _wire_mapping(data["owner"], "owner")
     authority = _wire_mapping(data["authority"], "authority")
@@ -1020,6 +1020,12 @@ def _validate_decoded_result(result: DecodedLeanResult, snapshot: LockedSemantic
         _fail(SemanticAdapterIntegrityError, "result_evidence_ids")
     if result.completion_at_ms != _completion_time_from_snapshot(data):
         _fail(SemanticAdapterIntegrityError, "result_completion")
+
+
+def _validate_decoded_result(result: DecodedLeanResult, snapshot: LockedSemanticSnapshot) -> None:
+    data = snapshot.data
+    _bind_result_context(result, data)
+    obligation = _wire_mapping(data["obligation"], "obligation")
     expected_values = {
         "owed_cents": obligation["owed_cents"],
         "claimed_adjustment_cents": obligation["claimed_adjustment_cents"],
@@ -2106,6 +2112,27 @@ def build_locked_semantic_snapshot(
         _fail(SemanticAdapterIntegrityError, "record_shape")
 
 
+def bind_resulting_state(
+    connection: sqlite3.Connection,
+    before: LockedSemanticSnapshot,
+    *,
+    authority_context: TrustedAuthorityContext,
+    evaluation_time_ms: int,
+    mutation: Mapping[str, Any],
+) -> None:
+    """A writer's declared post-state is its own: ``mutation``'s resulting input is this transaction's
+    snapshot after its writes (verified by ``before``), and its resulting result evaluated that snapshot."""
+
+    identity = _require_validated_snapshot(before).data["owner"]
+    post = build_locked_semantic_snapshot(
+        connection, obligation_id=before.obligation_id, authority_context=authority_context, evaluation_time_ms=evaluation_time_ms,
+        expected_config=None, expected_scope=None, expected_mode=identity["mode"], expected_owner_id=identity["owner_id"], verified_by=before,
+    )
+    if encode_blfin02_input(post) != mutation["resulting_input_wire"]:
+        _fail(SemanticAdapterIntegrityError, "resulting_input")
+    _bind_result_context(mutation["resulting_result"], post.data)
+
+
 __all__ = [
     "BLFIN02_MAGIC",
     "BLFRES02_MAGIC",
@@ -2122,6 +2149,7 @@ __all__ = [
     "SemanticAdapterInputError",
     "SemanticAdapterIntegrityError",
     "TrustedAuthorityContext",
+    "bind_resulting_state",
     "build_locked_semantic_snapshot",
     "decode_blfres02_result",
     "encode_blfin02_input",
