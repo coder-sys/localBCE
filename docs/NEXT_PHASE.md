@@ -279,7 +279,14 @@ payments after payment.
    incumbent's partner program, pitched as a controls layer for the prime.
    Estimate: 1–3 months.
 
-Composite estimate for a first state:
+Timing (founder, 2026-09-24): no investor or government pitching before the end
+of 2027; an institutional round comes first, then states. Paid attestations
+(items 5 and the accessibility report) are therefore timed about 6 months
+before the first pilot, not now. Until then the product is built so it would
+pass them: access control, audit logging, backups, WCAG 2.1 AA.
+
+Composite estimate for a first state, counted from the first pilot rather than
+from today:
 - months 0–3: pilot contracted;
 - months 3–6: shadow results;
 - months 6–12: production contract;
