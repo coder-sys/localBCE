@@ -27,6 +27,11 @@ CORE_FILE_LINES = {
     "tools/continuity_successor_v7.py": 2_400,
 }
 FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
+# Copy-paste: repeated 6-line windows (>=120 chars) across product Python.
+# Independent checkers may restate a small shared schema by design; the rest
+# is duplication to delete.
+PRODUCT_DIRS = ("app", "tools", os.path.join("provider_app", "provider_app"))
+DUPLICATED_WINDOWS = 870
 
 
 def _live_files():
@@ -77,6 +82,24 @@ class BloatBudgetTest(unittest.TestCase):
             else:
                 seen[digest] = path
         self.assertEqual(duplicates, [])
+
+    def test_copy_paste_stays_under_ceiling(self):
+        windows = {}
+        for top in PRODUCT_DIRS:
+            for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, top)):
+                dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+                for name in filenames:
+                    if not name.endswith(".py"):
+                        continue
+                    with open(os.path.join(dirpath, name), encoding="utf-8") as handle:
+                        lines = [line.strip() for line in handle]
+                    lines = [line for line in lines if line and not line.startswith("#")]
+                    for start in range(len(lines) - 5):
+                        text = "\n".join(lines[start:start + 6])
+                        if len(text) >= 120:
+                            windows[text] = windows.get(text, 0) + 1
+        repeated = sum(count for count in windows.values() if count > 1)
+        self.assertLessEqual(repeated, DUPLICATED_WINDOWS)
 
 
 if __name__ == "__main__":
