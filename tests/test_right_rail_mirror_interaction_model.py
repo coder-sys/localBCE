@@ -100,11 +100,13 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         cls.release = scorecard.financial_engine.load_correction_transition_release(scorecard.ENGINE_PATH.resolve(), engine_dir)
         cls.driver_path = Path(cls.temp.name) / "browser.js"
         cls.driver_path.write_text(scorecard.DRIVER_JS, encoding="utf-8")
+        cls.browser = scorecard._Browser(0, cls.driver_path)
         cls.workflow, cls.server, cls.thread = cls._start_workflow(Path(cls.temp.name) / "owner")
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls._stop_workflow(cls.workflow, cls.server, cls.thread)
+        cls.browser.close()
         cls.temp.cleanup()
 
     @classmethod
@@ -125,11 +127,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         workflow.close()
 
     def _open_path(self, path: str, server: Any = None) -> scorecard._Browser:
-        server = server or self.server
-        browser = scorecard._Browser(server.server_address[1], self.driver_path)
-        self.addCleanup(browser.close)
-        browser.open(path)
-        return browser
+        self.browser.port = (server or self.server).server_address[1]
+        self.browser.open(path)
+        return self.browser
 
     def _open(self, role: str, server: Any = None) -> scorecard._Browser:
         return self._open_path(f"/role/{role}", server)
