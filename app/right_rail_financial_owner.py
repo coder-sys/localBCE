@@ -81,6 +81,12 @@ _STAFF_DECISION_PACKAGE_QUERY: Final[str] = "decision_package"
 _MAX_CORRECTION_FOLLOWUP_PAGE_BYTES: Final[int] = 32 * 1024 * 1024
 _CONTINUITY_ADMISSION_TABLE: Final[str] = "right_rail_continuity_admission"
 _PRIVATE_INDEX_SET_VERSION: Final[int] = 1
+# The history is append-only in the database itself (Art. III.4); stores
+# created before these triggers get them once, atomically, on open.
+_HISTORY_APPEND_ONLY_TRIGGERS: Final[dict[str, str]] = {
+    "financial_event_update_immutable": "CREATE TRIGGER financial_event_update_immutable BEFORE UPDATE ON financial_events BEGIN SELECT RAISE(ABORT,'financial_event_immutable'); END",
+    "financial_event_delete_immutable": "CREATE TRIGGER financial_event_delete_immutable BEFORE DELETE ON financial_events BEGIN SELECT RAISE(ABORT,'financial_event_immutable'); END",
+}
 _PRIVATE_INDEX_SET_V1: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
     ("rr_financial_v1_evidence_item_id", "evidence", ("item_id", "evidence_id")),
     ("rr_financial_v1_claims_obligation_id", "claimed_adjustments", ("obligation_id", "claim_id")),
@@ -1238,6 +1244,26 @@ def _install_private_index_set(connection: sqlite3.Connection) -> None:
         _fail(FinancialIntegrityError, "schema_private_indexes")
 
 
+def _install_history_append_only(connection: sqlite3.Connection) -> None:
+    actual: dict[str, str] = {}
+    for row in connection.execute(
+        "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'"
+    ):
+        name, sql = row[0], row[1]
+        if type(name) is not str or type(sql) is not str or name in actual:
+            _fail(FinancialIntegrityError, "schema_history_triggers")
+        actual[name] = sql
+    if not actual:
+        for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
+            connection.execute(sql)
+        return
+    if set(actual) != set(_HISTORY_APPEND_ONLY_TRIGGERS) or any(
+        _normalized_schema_sql(actual[name]) != _normalized_schema_sql(sql)
+        for name, sql in _HISTORY_APPEND_ONLY_TRIGGERS.items()
+    ):
+        _fail(FinancialIntegrityError, "schema_history_triggers")
+
+
 def _sql_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
@@ -1617,6 +1643,8 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END;
         """
     )
+    for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
+        connection.execute(sql)
     _create_continuity_admission_table(connection, _TABLES)
 
 
@@ -1930,6 +1958,7 @@ class FinancialOwner:
             if not private_indexes_current and tables == expected_tables:
                 self._verify_continuity_admission_cache(connection)
             _install_private_index_set(connection)
+            _install_history_append_only(connection)
             connection.execute("COMMIT")
         except BaseException:
             if connection.in_transaction:

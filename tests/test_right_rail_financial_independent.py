@@ -14,6 +14,20 @@ import unittest
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
 
+_HISTORY_TRIGGERS = ("financial_event_update_immutable", "financial_event_delete_immutable")
+
+
+def _drop_history_triggers(connection: sqlite3.Connection) -> None:
+    # Model an attacker with file access: the append-only triggers are
+    # dropped for the tamper and restored, so only the history can reveal it.
+    for name in _HISTORY_TRIGGERS:
+        connection.execute(f"DROP TRIGGER {name}")
+
+
+def _restore_history_triggers(connection: sqlite3.Connection) -> None:
+    for name in _HISTORY_TRIGGERS:
+        connection.execute(independent._TRIGGER_DEFS[name])
+
 
 class _Clock:
     def __init__(self) -> None:
@@ -403,6 +417,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 target["payload_digest"] = independent._digest(independent.EVENT_DOMAIN, payload_bytes)
                 target["after_revision"] = 3
             offset = 100_000
+            _drop_history_triggers(connection)
             connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
             if removed_sequence is not None:
                 connection.execute("DELETE FROM financial_events WHERE event_sequence=?", (removed_sequence + offset,))
@@ -476,6 +491,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 )
                 previous = head
             connection.execute("UPDATE financial_meta SET sequence=?,history_head=? WHERE id=1", (len(rows), previous))
+            _restore_history_triggers(connection)
 
     @staticmethod
     def _reorder_and_rehash_population_events(
@@ -495,6 +511,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             right_position = right_candidates[right_index]
             rows[left_position], rows[right_position] = rows[right_position], rows[left_position]
             offset = 100_000
+            _drop_history_triggers(connection)
             connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
             meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
             assert meta is not None
@@ -552,6 +569,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 )
                 previous = head
             connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
+            _restore_history_triggers(connection)
 
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
@@ -663,19 +681,23 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         def tamper(path: Path) -> None:
             with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                _drop_history_triggers(connection)
                 connection.execute(
                     "UPDATE financial_events SET payload_json=? WHERE event_sequence=1",
                     ('{"tampered":true}',),
                 )
+                _restore_history_triggers(connection)
 
         self._assert_rejected_without_repair(target, tamper, "history:payload-digest")
 
     def test_event_header_tamper_fails_owner_verification_without_repair(self) -> None:
         target = self._copy_database("event-header-tamper.sqlite")
         with closing(sqlite3.connect(target, isolation_level=None)) as connection:
+            _drop_history_triggers(connection)
             connection.execute(
                 "UPDATE financial_events SET after_revision=after_revision+1 WHERE kind='POPULATION_SOURCE_COMPLETED'"
             )
+            _restore_history_triggers(connection)
         tampered_bytes = target.read_bytes()
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:event-id"):
             reopened = owner.FinancialOwner(
@@ -807,10 +829,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         def tamper(path: Path) -> None:
             with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                _drop_history_triggers(connection)
                 connection.execute(
                     "UPDATE financial_events SET head=? WHERE event_sequence=(SELECT MAX(event_sequence) FROM financial_events)",
                     (b"\xff" * 64,),
                 )
+                _restore_history_triggers(connection)
 
         self._assert_rejected_without_repair(target, tamper, "history:")
 

@@ -2114,6 +2114,65 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_private_index_schema(restored_path)
         restored.verify_integrity()
 
+    def test_financial_history_is_append_only_in_new_and_migrated_stores(self) -> None:
+        store = self._build_base()
+        package = store.export_continuity()
+        history_triggers = tuple(owner._HISTORY_APPEND_ONLY_TRIGGERS)
+        store_before = store.path.read_bytes()
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            event_count = connection.execute("SELECT COUNT(*) FROM financial_events").fetchone()[0]
+            self.assertGreater(event_count, 0)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "financial_event_immutable"):
+                connection.execute("UPDATE financial_events SET payload_json='{}' WHERE event_sequence=1")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "financial_event_immutable"):
+                connection.execute("DELETE FROM financial_events WHERE event_sequence=?", (event_count,))
+        self.assertEqual(store.path.read_bytes(), store_before)
+        self._assert_verified(store)
+
+        # A store written before the triggers existed: the checker refuses it,
+        # a wrong-scope opener leaves it untouched, and the owner installs the
+        # triggers once without changing any exported fact.
+        legacy_path = self._path("history-append-only-legacy.sqlite")
+        legacy_path.write_bytes(store_before)
+        with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+            for name in history_triggers:
+                connection.execute(f"DROP TRIGGER {name}")
+        legacy_bytes = legacy_path.read_bytes()
+        with self.assertRaisesRegex(IndependentFinancialError, "schema:triggers"):
+            verify_database(legacy_path, expected_config=store.config, expected_authority=self.authority)
+        wrong_config = replace(store.config, state_id="state:wrong-history-trigger-scope")
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
+            FinancialOwner(
+                path=legacy_path,
+                config=wrong_config,
+                trusted_authority=self.authority,
+                clock=_Clock(),
+            )
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+        migrated = self._make_owner(path=legacy_path)
+        self.assertEqual(migrated.export_continuity(), package)
+        self._assert_verified(migrated)
+        with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "financial_event_immutable"):
+                connection.execute("DELETE FROM financial_events")
+
+        # A weakened trigger is refused, not repaired.
+        weakened_path = self._path("history-append-only-weakened.sqlite")
+        weakened_path.write_bytes(store_before)
+        with closing(sqlite3.connect(str(weakened_path), isolation_level=None)) as connection:
+            connection.execute("DROP TRIGGER financial_event_update_immutable")
+            connection.execute(
+                "CREATE TRIGGER financial_event_update_immutable BEFORE UPDATE OF head ON financial_events "
+                "BEGIN SELECT RAISE(ABORT,'financial_event_immutable'); END"
+            )
+        weakened_bytes = weakened_path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_history_triggers"):
+            self._make_owner(path=weakened_path)
+        self.assertEqual(weakened_path.read_bytes(), weakened_bytes)
+        with self.assertRaisesRegex(IndependentFinancialError, "schema:trigger:financial_event_update_immutable"):
+            verify_database(weakened_path, expected_config=store.config, expected_authority=self.authority)
+        self.assertEqual(weakened_path.read_bytes(), weakened_bytes)
+
     def test_private_snapshot_index_upgrade_serializes_concurrent_openers(self) -> None:
         source = self._make_owner(schema_version=7)
         source_package = source.export_continuity()
