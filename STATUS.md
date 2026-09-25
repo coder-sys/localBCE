@@ -59,6 +59,12 @@ in that archive that holds the raw record.
 8. **Provider App pre-submission checker core.** 2026-09-23: 13 of 13 Python tests and
    one Lean compile. Its later Lean comparison extension never built successfully.
    Evidence: `rightrail-provider-app-20260923-STATE.md`.
+9. **Gate failover design model (TLA+).** 2026-09-25: TLC found no error in the
+   safety model (2 nodes, 2 payments, 3 epochs; 3,516,192 distinct states): no
+   conflicting tokens, no fenced token accepted, no release without a token or
+   bypass, at most one release, no lost decision, stale primaries cannot sign.
+   Bypass reconciliation (liveness) holds on a 1-payment model. A design model,
+   not the code. Evidence: `docs/formal/gate_failover/README.md`.
 
 ## What is written but has never run
 
@@ -88,11 +94,10 @@ in that archive that holds the raw record.
 
 ## Parked
 
-Private zero-knowledge / post-quantum proof research (`PRIVATE_ZK` evidence mode). Per the
-2026-09-24 plan this mode is conditional (only if a state must verify a hidden,
-source-bound fact) and is not on the critical path. The native work in
-`pq-wide-seed-native-20260913` is frozen as history. Retired research history lives in
-bundles under `work/_retired-research-20260924`.
+Nothing product-facing. Private zero-knowledge (`PRIVATE_ZK`) was un-parked on 2026-09-25 as an
+evidence-only prototype track (Constitution IX.4); old code under `parked/` is reference.
+The native work in `pq-wide-seed-native-20260913` is frozen as history. Retired research
+history lives in bundles under `work/_retired-research-20260924`.
 
 ## Next 5 concrete steps
 
@@ -110,6 +115,7 @@ bundles under `work/_retired-research-20260924`.
 
 ## Change log
 
+- 2026-09-25 — Gate failover TLA+ model and configs added under `docs/formal/gate_failover/` (Art. IV, XI); safety and small-model liveness checks passed under the guard. Deeper model still to run (memory).
 - 2026-09-24 — Private-ZK / Profile 11-12 track moved to `parked/private_zk/` (96 files); default `pytest` run excludes it (`pytest parked` runs it). Dead `tools/direct_mask_*` duplicates removed (newer copies live in `native/tools/`). New constitution tests: `tests/test_right_rail_financial_constitution_invariants.py` (written, not yet run).
 - 2026-09-24 — Audit fixes (Art. III.1, III.5, V.2, VI.1, XI.10, XI.13): checker now enforces actor roles against a digest-bound roster (the check never fired before); database verification requires trusted authority (no default-digest shortcut, no `authority_*` aliases); owner constructor backdoor removed; 11 `assert` safety checks replaced by typed errors; staff server measures cash/state before and after instead of hard-coding them, resume checks real integrity fields, import-order and owner-id bugs fixed. 4 new tests. Not yet run (RAM below floor).
 - 2026-09-24 — Gate/packager cleanup (Art. IX.1-2, X.1, XI.2, XI.6): removed 23 files, about 8,600 lines, none imported by the live path (recoverable from git history). Gates removed, per XI.2: `ops_authority` (SHA3 pins over `ops/` Markdown; protected doc bytes, not a product invariant); `documentation_governance` (Markdown registry/link gate; paperwork); `project_acceptance` (nine old per-team checkouts; obsolete in one trunk); `qualification_gate` v2/v3 (evaluated `ops/launch_blockers.json` and evidence packets for activation; nothing live consults them, and the owner, service kit, staff server hard-code `production_usable=false`/`activation=false`); `test_security_freeze_spec`/`test_active_core_contract` (document wording; guards importing modules absent here). Duplicate packagers `deployment_bundle`/`build_release_archive`/`release_manifest_gate` removed (service kit is the one packager; withdraws "Qualification bundle": 17 tests, 8 evidence slots). Dead `tests/conftest.py` removed (set `BL_DEV`/`BL_ALLOW_LOCAL_TEST_ORACLE_KEYS`, nothing reads). Kept: the privacy artifact scanner, the semantic assurance gate (still pinned to the old engine commit), the offline hash-locked dependency installer/attack tests, the native_v3 parser tests. Engine test's absolute engine path is now repo-relative with an env override; the pinned 398E `blind_financial.exe` was not found under `work/`, so that test fails until restored or re-pinned openly. No claims gained; nothing was run.
