@@ -44,6 +44,7 @@ from app import right_rail_financial_staff_server as staff  # noqa: E402
 SCHEMA = "RR/FINANCIAL/FELT-VALUE-SCORECARD/v1"
 SCORECARD_PATH = _ROOT / "docs" / "scorecard" / "hospital_h.json"
 ENGINE_PATH = _ROOT / "artifacts" / "engine-correction-e911" / "blind_financial_correction.exe"
+_MODEL = json.loads((_ROOT / "app" / "staff_workspace" / "interaction-model.json").read_text(encoding="utf-8"))
 HOUR_MS = 3_600_000
 # Screens in the order a person reaches them; the overview is up on page load.
 SCREEN_ORDER = ("overview", "decision_package", "raw:package-json", "raw:followup-json")
@@ -54,7 +55,7 @@ SCREEN_ORDER = ("overview", "decision_package", "raw:package-json", "raw:followu
 DRIVER_JS = r"""
 "use strict";
 const http = require("http"), readline = require("readline"), vm = require("vm");
-let port = 0, script = "", page = null, pending = 0;
+let port = 0, script = "", page = null, pending = 0, navPath = "/";
 class El {
   constructor(tag, id = "") { Object.assign(this, { tagName: tag, id, children: [], parent: null, _text: "", className: "", hidden: false, disabled: false, dataset: {}, listeners: {}, colSpan: 1 }); }
   get textContent() { return this.children.length ? this.children.map((c) => c.textContent).join("\n") : this._text; }
@@ -112,8 +113,13 @@ function newPage(elements, actions) {
       if (m) return buttons.get(m[1]) || null;
       throw new Error("unsupported_selector:" + sel);
     },
+    querySelectorAll: (sel) => {
+      if (sel === "[data-action]") return [...grid.children];
+      throw new Error("unsupported_selector:" + sel);
+    },
   };
   const context = { document, fetch: browserFetch, TextEncoder, console,
+    location: { pathname: navPath },
     crypto: { subtle: { digest: (a, b) => track(globalThis.crypto.subtle.digest(a, b)) } },
     setInterval: (_f, ms) => intervals.push(ms) };
   context.window = context;
@@ -130,13 +136,13 @@ function view() {
     if (el.children.length) tables[id] = el.children.map((r) => (r.children.length ? r.children.map((c) => c.textContent) : [r.textContent]));
     if (el.hidden) hidden[id] = true;
   }
-  for (const [name, b] of page.buttons) buttons[name] = { disabled: b.disabled };
+  for (const [name, b] of page.buttons) buttons[name] = { disabled: b.disabled, hidden: Boolean(b.hidden) };
   return { texts, tables, hidden, buttons, intervals: page.intervals.slice() };
 }
 async function handle(m) {
   if (m.op === "navigate") {
-    port = m.port; page = null;
-    const html = await (await browserFetch("/")).text();
+    port = m.port; page = null; navPath = m.path || "/";
+    const html = await (await browserFetch(navPath)).text();
     await browserFetch("/staff.css");
     script = await (await browserFetch("/staff.js")).text();
     return { html };
@@ -171,16 +177,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 """
 
-
 class HarnessUnavailable(RuntimeError):
     """A prerequisite (Node, the pinned engine artifact) is absent."""
 
-
 class _PageMap(HTMLParser):
     """Served index.html -> element id: {tag, screen, label (last heading), columns, hidden, text}."""
-
     _VOID = {"meta", "link", "br", "input", "img", "hr"}
-
     def __init__(self, html: str) -> None:
         super().__init__(convert_charrefs=True)
         self._stack: list[dict[str, Any]] = []
@@ -192,7 +194,6 @@ class _PageMap(HTMLParser):
         self.actions: dict[str, str] = {}
         self.feed(html)
         self.close()
-
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
         if tag in ("h1", "h2", "h3", "th", "button"):
@@ -219,7 +220,6 @@ class _PageMap(HTMLParser):
             "tag": tag, "screen": screen, "label": self._heading,
             "columns": list(self._headers) if tag == "tbody" else [], "hidden": "hidden" in values, "text": "",
         }
-
     def handle_endtag(self, tag: str) -> None:
         if tag in self._capture:
             text = " ".join("".join(self._capture.pop(tag)).split())
@@ -238,55 +238,43 @@ class _PageMap(HTMLParser):
                 self.elements[frame["id"]]["text"] = " ".join("".join(frame["text"]).split())
             if frame["tag"] == tag:
                 break
-
     def handle_data(self, data: str) -> None:
         for frame in self._stack:
             frame["text"].append(data)
         for parts in self._capture.values():
             parts.append(data)
 
-
 class _Meter:
     """Server-side request log, tagged with the role task in progress."""
-
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self.tag = "setup"
         self.requests: list[dict[str, Any]] = []
-
     def begin(self, method: str, path: str) -> dict[str, Any]:
         with self._lock:
             record = {"tag": self.tag, "method": method, "path": path, "status": None, "body": None}
             self.requests.append(record)
             return record
-
     def rows(self, tag: str) -> list[dict[str, Any]]:
         with self._lock:
             return [dict(row) for row in self.requests if row["tag"] == tag]
 
-
 def _metered_handler(workflow: staff.StaffWorkflow, meter: _Meter) -> type:
     """The staff server's own handler, with each request and its status recorded."""
-
     class Metered(staff._handler_for(workflow)):  # type: ignore[misc]
         def do_GET(self) -> None:
             self._record = meter.begin("GET", self.path)
             super().do_GET()
-
         def do_POST(self) -> None:
             self._record = meter.begin("POST", self.path)
             super().do_POST()
-
         def _json_request(self) -> dict[str, Any]:
             self._record["body"] = value = super()._json_request()
             return value
-
         def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8") -> None:
             self._record["status"] = status
             super()._respond(status, value, content_type)
-
     return Metered
-
 
 def _node_path() -> str:
     node = os.environ.get("RR_SCORECARD_NODE") or shutil.which("node")
@@ -294,10 +282,8 @@ def _node_path() -> str:
         raise HarnessUnavailable("node_unavailable")
     return node
 
-
 class _Browser:
     """One fresh browser tab for one role."""
-
     def __init__(self, port: int, driver: Path) -> None:
         self._process = subprocess.Popen(
             [_node_path(), str(driver)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -306,7 +292,6 @@ class _Browser:
         self.port = port
         self.page: _PageMap | None = None
         self.last_view: dict[str, Any] = {}
-
     def call(self, message: dict[str, Any]) -> dict[str, Any]:
         assert self._process.stdin and self._process.stdout
         self._process.stdin.write(json.dumps(message) + "\n")
@@ -320,21 +305,16 @@ class _Browser:
         if "view" in reply:
             self.last_view = reply["view"]
         return reply
-
-    def open(self) -> None:
-        self.page = _PageMap(self.call({"op": "navigate", "port": self.port})["html"])
+    def open(self, path: str = "/") -> None:
+        self.page = _PageMap(self.call({"op": "navigate", "port": self.port, "path": path})["html"])
         elements = {key: {"tag": spec["tag"], "text": spec["text"], "hidden": spec["hidden"]} for key, spec in self.page.elements.items()}
         self.call({"op": "boot", "elements": elements, "actions": self.page.actions})
-
     def click(self, element_id: str) -> None:
         self.call({"op": "click", "id": element_id})
-
     def action(self, name: str) -> bool:
         return bool(self.call({"op": "action", "name": name})["clicked"])
-
     def view(self) -> dict[str, Any]:
         return self.call({"op": "view"})["view"]
-
     def close(self) -> None:
         if self._process.stdin:
             self._process.stdin.close()
@@ -347,15 +327,12 @@ class _Browser:
             if stream:
                 stream.close()
 
-
 # ---- What a person can read on each screen ----------------------------------
 
 _NOT_CONTENT = frozenset({"button", "main", "section", "header", "footer", "body", "h1", "h2", "h3", "a"})
 
-
 def _screen_lines(page: _PageMap, view: dict[str, Any], screen: str) -> list[tuple[str, str, bool]]:
     """Visible (scope "H"|"program", line, is_table_row) of one non-raw screen."""
-
     lines: list[tuple[str, str, bool]] = []
     for element_id, spec in page.elements.items():
         if spec["screen"] != screen or view["hidden"].get(element_id) or spec["tag"] in _NOT_CONTENT:
@@ -376,7 +353,6 @@ def _screen_lines(page: _PageMap, view: dict[str, Any], screen: str) -> list[tup
             lines.append(("H" if in_h else "program", line, bool(columns)))
     return lines
 
-
 def _dig(value: Any, path: tuple[Any, ...]) -> Any:
     for key in path:
         if isinstance(value, dict) and key in value:
@@ -387,17 +363,14 @@ def _dig(value: Any, path: tuple[Any, ...]) -> Any:
             return None
     return value
 
-
 class Fact:
     """One thing a person must see: value and context regexes on one visible line,
     or (last resort) a path in the raw JSON screen."""
-
     def __init__(self, name: str, scope: str, value: str, context: str, json_path: tuple[Any, ...] | None = None,
                  *, rows_ok: bool = True) -> None:
         self.name, self.scope, self.json_path, self.rows_ok = name, scope, json_path, rows_ok
         self.value = re.compile(value)
         self.context = re.compile(context, re.IGNORECASE)
-
     def visible(self, screen: str, lines: list[tuple[str, str, bool]], raw: Any) -> bool:
         if screen.startswith("raw:"):
             return screen == "raw:package-json" and self.json_path is not None and _dig(raw, self.json_path) is not None
@@ -408,23 +381,17 @@ class Fact:
                 return True
         return False
 
-
 def _money(cents: int) -> str:
     """Exact dollars and cents; whole-dollar amounts may drop ".00"."""
-
     text = re.escape(f"${cents // 100:,}") + (r"(?:\.00)?" if cents % 100 == 0 else re.escape(f".{cents % 100:02d}"))
     return r"(?<![\d,$.])" + text + r"(?![\d,]|\.\d)"
 
-
 def _words(code: str) -> str:
     """An Owner code as shown raw (CASE_OWNER) or in plain words (case owner)."""
-
     return "(?i:" + "[_ ]".join(re.escape(part) for part in code.split("_")) + ")"
-
 
 def _utc(ms: int, fmt: str = "%Y-%m-%d") -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime(fmt)
-
 
 # ---- Fact sets per role (expected values come from the Owner, not the page) --
 
@@ -444,7 +411,6 @@ def _analyst_facts(truth: dict[str, Any]) -> list[Fact]:
         Fact("next_action", "H", next_value, next_context, ("conclusions", "case_resolution", "missing_requirements")),
     ]
 
-
 def _approver_facts(truth: dict[str, Any]) -> list[Fact]:
     package = truth["decision_package"]
     obligation = package["obligation"]
@@ -461,7 +427,6 @@ def _approver_facts(truth: dict[str, Any]) -> list[Fact]:
         Fact("deadline", "H", re.escape(_utc(int(package["case"]["due_at_ms"]))), r"due|deadline", ("case", "due_at_ms")),
     ]
 
-
 def _director_facts(truth: dict[str, Any]) -> list[Fact]:
     summary, population = truth["workspace"]["summary"], truth["workspace"]["population"]
     return [
@@ -471,7 +436,6 @@ def _director_facts(truth: dict[str, Any]) -> list[Fact]:
         Fact("program_shortfall", "program", _money(int(summary["shortfall_cents"])), r"shortfall|missing|gap", rows_ok=False),
         Fact("open_items", "program", r"(?<![\d/$,.])" + str(int(summary["open_count"])) + r"(?![\d/,.])", r"open|attention|unresolved", rows_ok=False),
     ]
-
 
 def _auditor_facts(truth: dict[str, Any]) -> list[Fact]:
     package = truth["decision_package"]
@@ -487,16 +451,14 @@ def _auditor_facts(truth: dict[str, Any]) -> list[Fact]:
         Fact("decided_at", "H", re.escape(_utc(int(determination["decided_at_ms"]), "%Y-%m-%d %H:%M")), r"determination|decision|decided|" + re.escape(decision), ("current_determination", "decided_at_ms")),
         Fact("supporting_evidence", "H", re.escape(str(evidence_id)), r"evidence", ("current_determination", "supporting_evidence")),
         Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule", ("control_pack", "adjustment_rule_id")),
-        Fact("chronology", "H", r"DETERMIN|OFFSET_REJECTED|CORRECTION", r"Chronology|event|sequence", ("current_determination", "determination_id")),
+        Fact("chronology", "H", r"(?i:determin|offset[_ ]rejected|correction)", r"Chronology|event|sequence", ("current_determination", "determination_id")),
         Fact("cash_reconciles", "H", _money(int(obligation["received_cash_cents"])) + r".*" + _money(int(obligation["shortfall_cents"])), r"cash|received", ("obligation", "received_cash_cents")),
     ]
-
 
 _CONTINUITY_FACTS = (
     Fact("continuity_test_mode", "H", r"\bTEST\b", r"continuity"),
     Fact("package_equal", "program", r"equality: true|equal: true|matches", r"restore|continuity", rows_ok=False),
 )
-
 
 # ---- The journey ------------------------------------------------------------
 
@@ -506,28 +468,22 @@ class _Journey:
         self.detail: dict[str, Any] = {}
         self.units: dict[str, int] = {}
         self._cash_body: Any = None
-
     def truth(self) -> dict[str, Any]:
         """Ground truth straight from the Owner through the Mirror (not counted)."""
-
         return {"workspace": self.workflow.workspace(), "decision_package": self.workflow.decision_view()["decision_package"]}
-
     def _task(self, tag: str) -> "_Task":
         self.meter.tag = tag
         return _Task(self, tag)
-
     def run(self) -> None:
         with self._task("director.weekly_review") as task:
             task.open()
             task.answer(_director_facts(self.truth()))
             task.record("rows_to_add_by_hand", len(task.browser.last_view["tables"].get("population-rows", [])) if task.unanswered else 0)
             task.record("rows_flagged_open", _open_rows(task.browser.last_view))
-
         with self._task("analyst.monday_reconciliation") as task:
             task.open()
             task.record("rows_flagged_open", _open_rows(task.browser.view()))
             task.answer(_analyst_facts(self.truth()))
-
         with self._task("approver.prepare_decision") as task:
             task.open()
             task.answer(_approver_facts(self.truth()), need_package=True)
@@ -536,7 +492,6 @@ class _Journey:
             task.record("requests_including_decision", task.request_count())
             if not self.truth()["decision_package"].get("current_determination"):
                 raise RuntimeError("scorecard_decision_not_committed")
-
         with self._task("analyst.correction_followthrough") as task:
             task.open()
             task.ensure_package()
@@ -550,25 +505,19 @@ class _Journey:
             posts = [row for row in self.meter.rows(task.tag) if row["method"] == "POST" and row["path"] in ("/api/correction/record-cash", "/api/reporting/record")]
             task.record("evidence_resubmissions", len(posts) - len({json.dumps([row["path"], row["body"]], sort_keys=True) for row in posts}))
             self._cash_body = next(row["body"] for row in posts if row["path"] == "/api/correction/record-cash")
-
         self._repeat_message()
-
         with self._task("auditor.answer_auditor") as task:
             task.open()
             task.answer(_auditor_facts(self.truth()))
-
         with self._task("replacement.continue_from_continuity") as task:
             task.open()
             task.ensure_package()
             task.command("restore-test")
             task.answer(list(_CONTINUITY_FACTS) + _analyst_facts(self.truth()), fresh_screens=True)
-
         self._case_units()
         self.meter.tag = "done"
-
     def _repeat_message(self) -> None:
         """The exact $3,000 cash message arrives again (as after a lost response)."""
-
         self.meter.tag = "harness.repeat_message"
         cash = lambda: int(self.truth()["decision_package"]["obligation"]["received_cash_cents"])  # noqa: E731
         before = cash()
@@ -583,7 +532,6 @@ class _Journey:
         self.detail["repeat_message"] = {"http_status": status, "outcome": _dig(body, ("command", "status") if status == 200 else ("error", "code"))}
         self.units["accuracy.repeat_message_double_count_cents"] = after - before
         self.units["evidence.repeat_message_absorbed"] = int(status == 200 and after == before)
-
     def _case_units(self) -> None:
         self.meter.tag = "harness.case_units"
         truth = self.truth()
@@ -616,17 +564,20 @@ class _Journey:
             "clock_note": "Synthetic demo clock; the fixture sets these times, so UI changes cannot move them.",
         }
 
-
 def _open_rows(view: dict[str, Any]) -> int:
     rows = view["tables"].get("population-rows", [])
     return sum(1 for cells in rows if (m := re.search(r"Case ([A-Z_]+)", " ".join(cells))) and m.group(1) != "RESOLVED")
 
+# Each task tag names the role it is performed as (Art. XIII.4: roles are
+# real, so the journey now opens each task's page as that role would).
+_TASK_ROLE = {"director": "director", "analyst": "analyst", "approver": "approver",
+              "auditor": "auditor", "replacement": "operator"}
 
 class _Task:
     """One role doing one task in a fresh browser tab."""
-
     def __init__(self, journey: _Journey, tag: str) -> None:
         self.journey, self.tag = journey, tag
+        self.role = _TASK_ROLE[tag.split(".")[0]]
         self.browser = _Browser(journey.port, journey.driver)
         self.steps: list[str] = []
         self.ui_actions = 0
@@ -634,10 +585,8 @@ class _Task:
         self.found_on: dict[str, str] = {}
         self.unanswered: list[str] = []
         self.values: dict[str, int] = {}
-
     def __enter__(self) -> "_Task":
         return self
-
     def __exit__(self, exc_type: object, _exc: object, _tb: object) -> None:
         try:
             if exc_type is None:
@@ -654,42 +603,37 @@ class _Task:
                 self.journey.units.update({f"{self.tag}.{name}": value for name, value in self.values.items()})
         finally:
             self.browser.close()
-
     def request_count(self) -> int:
         return len(self.journey.meter.rows(self.tag))
-
     def step(self, text: str) -> None:
         self.steps.append(text)
         self.ui_actions += text.startswith(("click", "expand"))
-
     def record(self, name: str, value: int) -> None:
         self.values[name] = int(value)
-
     def open(self) -> None:
-        self.browser.open()
+        self.browser.open(f"/role/{self.role}")
         self.steps.append("open workspace page")
         self.screens.append("overview")
-
     def click(self, element_id: str, why: str) -> None:
         self.browser.click(element_id)
         self.step(f"click: {why}")
-
     def command(self, name: str) -> None:
         if not self.browser.action(name):
             raise RuntimeError("scorecard_command_unavailable:" + name)
         self.step("click: " + name)
         status = self.browser.last_view["texts"].get("command-status", "")
-        if not status or any(word in status for word in ("rejected", "unresolved", "unavailable", "denied")):
+        # The declared success text (Art. XIII.4) is checked first: a control's own
+        # wording (e.g. reject-offset's "Offset rejected...") may legitimately use a
+        # failure-shaped word, so only fall back to the denylist once it disagrees.
+        expected = _MODEL["controls"][name]["responses"]["success"]["message"].split(".")[0]
+        if not status or (expected not in status and any(word in status for word in ("rejected", "unresolved", "unavailable", "denied"))):
             raise RuntimeError(f"scorecard_command_failed:{name}:{status}")
-
     def ensure_package(self) -> None:
         if "decision_package" not in self.screens:
             self.click("open-package", "open H decision package")
             self.screens.append("decision_package")
-
     def answer(self, facts: list[Fact], *, need_package: bool = False, fresh_screens: bool = False) -> None:
         """Walk the screens in order until every fact is visible; record the cost."""
-
         if need_package:
             self.ensure_package()
         pending = list(facts)
@@ -726,7 +670,6 @@ class _Task:
         self.record("facts_only_in_raw_json", sum(1 for screen in self.found_on.values() if screen.startswith("raw:")))
         self.record("facts_unanswered", len(self.unanswered))
         self.record("facts_total", len(facts))
-
 
 # ---- Scorecard assembly -----------------------------------------------------
 
@@ -829,10 +772,8 @@ DEMO_BASELINE: dict[str, int] = {
     "evidence.repeat_message_absorbed": 1,
 }
 
-
 def measure() -> dict[str, Any]:
     """Run the journey once on a fresh synthetic Owner; return units and journey detail."""
-
     if not ENGINE_PATH.is_file():
         raise HarnessUnavailable("correction_engine_artifact_absent")
     _node_path()
@@ -855,13 +796,10 @@ def measure() -> dict[str, Any]:
         journey.run()
         return {"units": dict(sorted(journey.units.items())), "journeys": journey.detail}
 
-
 def catalog() -> list[tuple[str, str, str, str]]:
     """(unit id, role, moment, plain unit) for every scored unit."""
-
     rows = [(f"{task}.{unit}", role, moment, UNIT_TEXT[unit]) for task, (role, moment, units) in TASKS.items() for unit in units.split()]
     return rows + list(CASE_UNITS)
-
 
 def build_scorecard(measured: dict[str, Any]) -> dict[str, Any]:
     units = []
@@ -888,7 +826,6 @@ def build_scorecard(measured: dict[str, Any]) -> dict[str, Any]:
         "journeys": measured["journeys"],
     }
 
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--write", action="store_true", help="rewrite docs/scorecard/hospital_h.json")
@@ -902,7 +839,6 @@ def main(argv: list[str] | None = None) -> int:
         print("wrote", path)
     print(json.dumps(measured["units"], indent=2, sort_keys=True))
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
