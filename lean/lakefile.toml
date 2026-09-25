@@ -1,9 +1,13 @@
 name = "RightRail"
 version = "0.1.0"
-defaultTargets = ["BlindLedger", "blind_semantic_kernel"]
+defaultTargets = ["BlindLedger", "blind_semantic_kernel", "blind_financial_axioms"]
 
 # One Lake workspace (Constitution IX.1).  `BlindLedger` holds the financial
 # correction transition, the Semantic kernel and the shared `BlindLedger.Sha3`.
+# `blind_financial_axioms` is a default target so a plain `lake build` compiles
+# every proof the semantic assurance gate checks (`CorrectionTransition.Theorems`,
+# the codec laws) and prints their axioms; the product executables import none
+# of them, so without it a broken theorem file would never break a build.
 # Parked, not built: the State kernel (`parked/state_clearance/lean`) and the
 # unbuilt Kernel-series/System modules (`parked/lean_unbuilt`).
 

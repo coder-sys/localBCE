@@ -1,9 +1,7 @@
 {
-  "schema": "blind_ledger_semantic_assurance_manifest_v2",
-  "manifest_version": 2,
+  "schema": "blind_ledger_semantic_assurance_manifest_v3",
+  "manifest_version": 3,
   "candidate": {
-    "required_head": "56ef4e1f1c96dd2367b1992e1519c0d1b8c4b335",
-    "required_tree": "ffa805469d1f72da18e3637439a403d00657e98d",
     "lean_root": "lean",
     "namespace": "BlindLedger.Financial.CorrectionTransition",
     "module": "BlindLedger.Financial.CorrectionTransition.Theorems",
@@ -75,7 +73,10 @@
     }
   },
   "build": {
-    "target": "blind_financial",
+    "targets": [
+      "blind_financial",
+      "blind_financial_axioms"
+    ],
     "root_module": "BlindLedger.Financial.Cli",
     "artifact": {
       "relative_path": ".lake/build/bin/blind_financial.exe",
@@ -216,7 +217,9 @@
     }
   ],
   "allowed_axioms": [
-    "propext"
+    "propext",
+    "Classical.choice",
+    "Quot.sound"
   ],
   "forbidden_source_tokens": [
     "axiom",
