@@ -36,10 +36,11 @@ in one transaction. An exact retry returns `DUPLICATE`; changed input is a
 conflict. Crashes before and after commit are recovered by restart; the
 committed result is found again by its command identity.
 
-The owner knows three store versions, `RR/FINANCIAL/OWNER/v5`, `v6` and `v7`
-(new stores default to v7, which adds the population manifest and decision
-package v2), each with its matching `RR/FINANCIAL/CONTINUITY/` package version.
-Older (v2-v4) or unknown versions are rejected without mutation.
+The owner knows one store version, `RR/FINANCIAL/OWNER/v7` (population
+manifest, program funding receipts, decision package v2), with its matching
+`RR/FINANCIAL/CONTINUITY/v7` package. The v5/v6 versions were retired on
+2026-09-24 (no such store existed); they, older (v2-v4) and unknown versions
+are rejected without mutation by the owner and the independent checker.
 
 The evaluation receipt binds scope, evaluation/obligation/revision, Control
 Pack id/version/digest, sorted evidence id/record-digest pairs, trusted

@@ -25,8 +25,9 @@ from app.right_rail_financial_owner_independent import (
     MAX_CENTS,
     MAX_PACKAGE_BYTES,
     MAX_ROWS,
-    CONTINUITY_SCHEMA_BY_VERSION,
-    SCHEMA_BY_VERSION,
+    CONTINUITY_SCHEMA,
+    SCHEMA,
+    SCHEMA_VERSION,
     verify_continuity_package,
 )
 
@@ -36,7 +37,7 @@ COHORT_APPROVAL_CONTRACT = "RR/SWITCH/COHORT-APPROVAL/v1"
 COHORT_BINDING_CONTRACT = "RR/SWITCH/COHORT-BINDING/v1"
 RESULT_CONTRACT = "RR/SWITCH/FINANCIAL-POPULATION-RESULT/v1"
 RUN_REPORT_CONTRACT = "RR/SWITCH/RUN-REPORT/v1"
-CURRENT_OWNER_SCHEMA_VERSION = 7
+CURRENT_OWNER_SCHEMA_VERSION = SCHEMA_VERSION
 MAX_REPLAY_INPUT_BYTES = 2 * MAX_PACKAGE_BYTES
 MAX_RESULT_BYTES = 8 * 1024 * 1024
 _SHA256_RE = re.compile(r"[0-9A-F]{64}\Z")
@@ -326,7 +327,7 @@ def inspect_shadow_snapshot(
         _fail("switch:snapshot-meta-shape")
     if (
         verified.get("version") != CURRENT_OWNER_SCHEMA_VERSION
-        or verified.get("schema") != CONTINUITY_SCHEMA_BY_VERSION[CURRENT_OWNER_SCHEMA_VERSION]
+        or verified.get("schema") != CONTINUITY_SCHEMA
         or meta.get("schema_version") != CURRENT_OWNER_SCHEMA_VERSION
         or meta.get("mode") != "SHADOW"
     ):
@@ -383,7 +384,7 @@ def inspect_shadow_snapshot(
             snapshot_sha256=hashlib.sha256(snapshot_bytes).hexdigest().upper(),
             package_digest=_sha3(verified.get("package_digest"), "package-digest"),
             owner_id=_id(meta.get("owner_id"), "owner-id"),
-            owner_schema=SCHEMA_BY_VERSION[CURRENT_OWNER_SCHEMA_VERSION],
+            owner_schema=SCHEMA,
             schema_version=CURRENT_OWNER_SCHEMA_VERSION,
             continuity_epoch=_checked_integer(verified.get("continuity_epoch"), "continuity-epoch", minimum=1),
             sequence=_checked_integer(verified.get("sequence"), "owner-sequence", minimum=0),

@@ -37,15 +37,12 @@ def _fail(code: str) -> NoReturn:
     raise error
 
 
+# Exactly one store/package version is accepted. Retired v5/v6 (and older)
+# databases and packages fail closed (docs/CORE_REDESIGN.md step 1).
 SCHEMA_VERSION = 7
-SCHEMA = "RR/FINANCIAL/OWNER/v5"
-CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v5"
-NEXT_SCHEMA_VERSION = 6
-NEXT_SCHEMA = "RR/FINANCIAL/OWNER/v6"
-NEXT_CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v6"
-MANIFEST_SCHEMA_VERSION = 7
-MANIFEST_SCHEMA = "RR/FINANCIAL/OWNER/v7"
-MANIFEST_CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v7"
+SCHEMA = "RR/FINANCIAL/OWNER/v7"
+CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v7"
+DECISION_PACKAGE_CONTRACT = "RR/FINANCIAL/DECISION-PACKAGE/v2"
 POPULATION_MANIFEST_CONTRACT = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 CURRENCY = "USD"
 MAX_CENTS = (1 << 63) - 1
@@ -120,9 +117,7 @@ CORRECTION_FOLLOWUP_READ_OBSERVATIONS = {
 
 EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
 HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
-GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v5\x00"
-NEXT_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v6\x00"
-MANIFEST_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v7\x00"
+GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v7\x00"
 EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
@@ -130,9 +125,7 @@ EVALUATION_RESULT_DOMAIN = b"RR/FINANCIAL/EVALUATION/v5\x00"
 EVALUATION_INPUT_DOMAIN = b"RR/FINANCIAL/EVALUATION-INPUT/v1\x00"
 EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
-CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v5\x00"
-NEXT_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v6\x00"
-MANIFEST_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
+CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
 POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
 POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
@@ -243,23 +236,12 @@ _TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = _parse_table_specs({
         "B control_pack_digest I authority_epoch B authority_digest T evidence_bindings_json "
         "T input_snapshot_json B input_snapshot_digest B receipt_digest"
     ),
-})
-
-TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
-    table: tuple(column[0] for column in definition)
-    for table, definition in _TABLE_DEFS.items()
-}
-TABLES = frozenset(_TABLE_DEFS)
-
-_PROGRAM_FUNDING_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = _parse_table_specs({
     "program_funding_receipts": (
         "T receipt_id@1 T state_id T deployment_id T program_id T period_id T currency "
         "T source_record_ref I amount_cents T confirmation_class T evidence_status I event_at_ms "
         "I recorded_at_ms T supersedes_receipt_id B receipt_digest"
     ),
     "program_funding_projection": "T source_record_ref@1 T receipt_id I amount_cents I event_at_ms I revision B receipt_digest",
-})
-_POPULATION_MANIFEST_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = _parse_table_specs({
     "population_manifests": (
         "T manifest_id@1 T contract I manifest_version T state_id T deployment_id T program_id "
         "T period_id T currency T pack_id I cutoff_ms T inclusion_rules_json T source_owner_id "
@@ -274,23 +256,12 @@ _POPULATION_MANIFEST_TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = _
     ),
     "population_manifest_bindings": "T population_id@1 T manifest_id I manifest_version B manifest_digest",
 })
-_TABLE_DEFS_BY_VERSION = {
-    5: _TABLE_DEFS,
-    6: {**_TABLE_DEFS, **_PROGRAM_FUNDING_TABLE_DEFS},
-    7: {**_TABLE_DEFS, **_PROGRAM_FUNDING_TABLE_DEFS, **_POPULATION_MANIFEST_TABLE_DEFS},
+
+TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
+    table: tuple(column[0] for column in definition)
+    for table, definition in _TABLE_DEFS.items()
 }
-TABLE_COLUMNS_BY_VERSION = {
-    version: {table: tuple(column[0] for column in definition) for table, definition in definitions.items()}
-    for version, definitions in _TABLE_DEFS_BY_VERSION.items()
-}
-TABLES_BY_VERSION = {
-    version: frozenset(definitions)
-    for version, definitions in _TABLE_DEFS_BY_VERSION.items()
-}
-SCHEMA_BY_VERSION = {5: SCHEMA, 6: NEXT_SCHEMA, 7: MANIFEST_SCHEMA}
-CONTINUITY_SCHEMA_BY_VERSION = {5: CONTINUITY_SCHEMA, 6: NEXT_CONTINUITY_SCHEMA, 7: MANIFEST_CONTINUITY_SCHEMA}
-GENESIS_DOMAIN_BY_VERSION = {5: GENESIS_DOMAIN, 6: NEXT_GENESIS_DOMAIN, 7: MANIFEST_GENESIS_DOMAIN}
-CONTINUITY_DOMAIN_BY_VERSION = {5: CONTINUITY_DOMAIN, 6: NEXT_CONTINUITY_DOMAIN, 7: MANIFEST_CONTINUITY_DOMAIN}
+TABLES = frozenset(_TABLE_DEFS)
 
 _TRIGGER_DEFS = {
     "action_payload_immutable": "CREATE TRIGGER action_payload_immutable BEFORE UPDATE OF action_id,obligation_id,determination_id,kind,revision,payload_json,payload_digest,idempotency_key,created_at_ms ON actions BEGIN SELECT RAISE(ABORT,'action_payload_immutable'); END",
@@ -299,23 +270,14 @@ _TRIGGER_DEFS = {
     "financial_identity_insert_immutable": "CREATE TRIGGER financial_identity_insert_immutable BEFORE INSERT ON financial_identity WHEN EXISTS (SELECT 1 FROM financial_identity) BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
     "financial_identity_update_immutable": "CREATE TRIGGER financial_identity_update_immutable BEFORE UPDATE OF schema_version,provenance,bound_mode,bound_owner_id,anchor_sequence,anchor_head,genesis_head,source_package_digest,identity_digest ON financial_identity BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
     "financial_identity_delete_immutable": "CREATE TRIGGER financial_identity_delete_immutable BEFORE DELETE ON financial_identity BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END",
-}
-_V6_TRIGGER_DEFS = {
     "program_funding_receipt_update_immutable": "CREATE TRIGGER program_funding_receipt_update_immutable BEFORE UPDATE ON program_funding_receipts BEGIN SELECT RAISE(ABORT,'program_funding_receipt_immutable'); END",
     "program_funding_receipt_delete_immutable": "CREATE TRIGGER program_funding_receipt_delete_immutable BEFORE DELETE ON program_funding_receipts BEGIN SELECT RAISE(ABORT,'program_funding_receipt_immutable'); END",
-}
-_V7_TRIGGER_DEFS = {
     "population_manifest_update_immutable": "CREATE TRIGGER population_manifest_update_immutable BEFORE UPDATE ON population_manifests BEGIN SELECT RAISE(ABORT,'population_manifest_immutable'); END",
     "population_manifest_delete_immutable": "CREATE TRIGGER population_manifest_delete_immutable BEFORE DELETE ON population_manifests BEGIN SELECT RAISE(ABORT,'population_manifest_immutable'); END",
     "population_manifest_member_update_immutable": "CREATE TRIGGER population_manifest_member_update_immutable BEFORE UPDATE ON population_manifest_members BEGIN SELECT RAISE(ABORT,'population_manifest_member_immutable'); END",
     "population_manifest_member_delete_immutable": "CREATE TRIGGER population_manifest_member_delete_immutable BEFORE DELETE ON population_manifest_members BEGIN SELECT RAISE(ABORT,'population_manifest_member_immutable'); END",
     "population_manifest_binding_update_immutable": "CREATE TRIGGER population_manifest_binding_update_immutable BEFORE UPDATE ON population_manifest_bindings BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END",
     "population_manifest_binding_delete_immutable": "CREATE TRIGGER population_manifest_binding_delete_immutable BEFORE DELETE ON population_manifest_bindings BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END",
-}
-_TRIGGER_DEFS_BY_VERSION = {
-    5: _TRIGGER_DEFS,
-    6: {**_TRIGGER_DEFS, **_V6_TRIGGER_DEFS},
-    7: {**_TRIGGER_DEFS, **_V6_TRIGGER_DEFS, **_V7_TRIGGER_DEFS},
 }
 
 _EVENT_KINDS = {
@@ -699,13 +661,10 @@ def _identity_digest(
 def _identity_record(
     value: Mapping[str, object],
     code_prefix: str = "identity",
-    schema_version: int = SCHEMA_VERSION,
 ) -> dict[str, object]:
-    if type(schema_version) is not int or schema_version not in TABLE_COLUMNS_BY_VERSION:
-        _fail(f"{code_prefix}:schema")
-    if not isinstance(value, Mapping) or set(value) != set(TABLE_COLUMNS_BY_VERSION[schema_version]["financial_identity"]):
+    if not isinstance(value, Mapping) or set(value) != set(TABLE_COLUMNS["financial_identity"]):
         _fail(f"{code_prefix}:shape")
-    if value["id"] != 1 or value["schema_version"] != schema_version:
+    if value["id"] != 1 or value["schema_version"] != SCHEMA_VERSION:
         _fail(f"{code_prefix}:schema")
     provenance = value["provenance"]
     bound_mode = value["bound_mode"]
@@ -735,7 +694,7 @@ def _identity_record(
         _fail(f"{code_prefix}:digest")
     return {
         "id": 1,
-        "schema_version": schema_version,
+        "schema_version": SCHEMA_VERSION,
         "provenance": provenance,
         "bound_mode": bound_mode,
         "bound_owner_id": bound_owner_id,
@@ -896,11 +855,9 @@ def _identity(
     schema_version = None
     if expected_config is not None:
         if isinstance(expected_config, Mapping) and "schema_version" in expected_config:
-            schema_version = _integer(expected_config["schema_version"], "identity:schema-version", minimum=5, maximum=7)
+            schema_version = _integer(expected_config["schema_version"], "identity:schema-version", minimum=SCHEMA_VERSION, maximum=SCHEMA_VERSION)
         elif hasattr(expected_config, "schema_version"):
-            schema_version = _integer(getattr(expected_config, "schema_version"), "identity:schema-version", minimum=5, maximum=7)
-        if schema_version is not None and schema_version not in TABLES_BY_VERSION:
-            _fail("identity:schema-version")
+            schema_version = _integer(getattr(expected_config, "schema_version"), "identity:schema-version", minimum=SCHEMA_VERSION, maximum=SCHEMA_VERSION)
     return {
         "scope": scope,
         "authority_source": authority_source,
@@ -945,7 +902,7 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
         if meta is None or type(meta["schema_version"]) is not int:
             _fail("schema:version")
         schema_version = int(meta["schema_version"])
-        if schema_version not in TABLES_BY_VERSION or meta["schema"] != SCHEMA_BY_VERSION[schema_version]:
+        if schema_version != SCHEMA_VERSION or meta["schema"] != SCHEMA:
             _fail("schema:version")
         tables = {
             str(row[0])
@@ -953,38 +910,32 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         }
-        expected_tables = TABLES_BY_VERSION[schema_version]
-        if schema_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
-            expected_tables = expected_tables | {CONTINUITY_ADMISSION_TABLE}
+        expected_tables = TABLES | {CONTINUITY_ADMISSION_TABLE}
         if tables != expected_tables:
             _fail("schema:tables")
-        table_definitions = _TABLE_DEFS_BY_VERSION[schema_version]
-        for table, definition in table_definitions.items():
+        for table, definition in _TABLE_DEFS.items():
             actual = tuple(
                 (str(row[1]), str(row[2]).upper(), int(row[5]))
                 for row in connection.execute(f"PRAGMA table_info({table})")
             )
             if actual != tuple(definition):
                 _fail(f"schema:columns:{table}")
-        if schema_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
-            admission_columns = tuple(
-                (str(row[1]), str(row[2]).upper(), int(row[3]))
-                for row in connection.execute(f"PRAGMA table_info({CONTINUITY_ADMISSION_TABLE})")
-            )
-            if admission_columns != CONTINUITY_ADMISSION_TABLE_DEFS:
-                _fail("schema:continuity-admission-columns")
+        admission_columns = tuple(
+            (str(row[1]), str(row[2]).upper(), int(row[3]))
+            for row in connection.execute(f"PRAGMA table_info({CONTINUITY_ADMISSION_TABLE})")
+        )
+        if admission_columns != CONTINUITY_ADMISSION_TABLE_DEFS:
+            _fail("schema:continuity-admission-columns")
         triggers = {
             str(row[0]): str(row[1])
             for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'")
         }
-        trigger_definitions = _TRIGGER_DEFS_BY_VERSION[schema_version]
-        if set(triggers) != set(trigger_definitions):
+        if set(triggers) != set(_TRIGGER_DEFS):
             _fail("schema:triggers")
-        for name, expected in trigger_definitions.items():
+        for name, expected in _TRIGGER_DEFS.items():
             if _normal_sql(triggers[name]) != _normal_sql(expected):
                 _fail(f"schema:trigger:{name}")
-        if schema_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
-            _verify_private_index_schema(connection)
+        _verify_private_index_schema(connection)
         return schema_version
     except IndependentFinancialError:
         raise
@@ -999,11 +950,9 @@ def _verify_continuity_admission(
 ) -> None:
     """Recompute the local admission cache from source rows; never trust it as source data."""
 
-    if schema_version not in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
-        return
     expected: dict[str, tuple[int, int]] = {}
-    for table in sorted(TABLES_BY_VERSION[schema_version]):
-        columns = TABLE_COLUMNS_BY_VERSION[schema_version][table]
+    for table in sorted(TABLES):
+        columns = TABLE_COLUMNS[table]
         count = 0
         row_bytes = 0
         try:
@@ -1055,7 +1004,7 @@ def _verify_continuity_admission(
     scope = meta["scope"]
     assert isinstance(scope, Mapping)
     body = {
-        "schema": CONTINUITY_SCHEMA_BY_VERSION[schema_version],
+        "schema": CONTINUITY_SCHEMA,
         "version": schema_version,
         "scope": dict(scope),
         "authority": {
@@ -1073,7 +1022,7 @@ def _verify_continuity_admission(
     }
     package = {
         **body,
-        "package_digest": _digest(CONTINUITY_DOMAIN_BY_VERSION[schema_version], _canonical(body)).hex().upper(),
+        "package_digest": _digest(CONTINUITY_DOMAIN, _canonical(body)).hex().upper(),
     }
     exact_size = len(_canonical(package))
     exact_size += sum(row_bytes + max(0, count - 1) for count, row_bytes in expected.values())
@@ -1102,7 +1051,7 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
         _fail("meta:read")
     if row is None:
         _fail("meta:missing")
-    if row["id"] != 1 or row["schema_version"] != schema_version or row["schema"] != SCHEMA_BY_VERSION[schema_version]:
+    if row["id"] != 1 or row["schema_version"] != SCHEMA_VERSION or row["schema"] != SCHEMA:
         _fail("meta:schema")
     if identity["schema_version"] is not None and identity["schema_version"] != schema_version:
         _fail("meta:schema-version-binding")
@@ -1145,14 +1094,13 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
     if identity_row is None:
         _fail("identity:missing")
     identity_contract = _identity_record(
-        {column: identity_row[column] for column in TABLE_COLUMNS_BY_VERSION[schema_version]["financial_identity"]},
-        schema_version=schema_version,
+        {column: identity_row[column] for column in TABLE_COLUMNS["financial_identity"]},
     )
     if identity_contract["bound_mode"] != mode or identity_contract["bound_owner_id"] != owner_id:
         _fail("identity:meta-binding")
     scope_bytes = _canonical(scope, "meta:scope")
     if identity_contract["provenance"] == "ROOT":
-        expected_genesis = _digest(GENESIS_DOMAIN_BY_VERSION[schema_version], scope_bytes, authority_digest, identity_contract["identity_digest"])
+        expected_genesis = _digest(GENESIS_DOMAIN, scope_bytes, authority_digest, identity_contract["identity_digest"])
         if identity_contract["source_package_digest"] != ZERO_DIGEST or identity_contract["anchor_sequence"] != 0 or identity_contract["anchor_head"] != expected_genesis or identity_contract["genesis_head"] != expected_genesis:
             _fail("identity:genesis")
     else:
@@ -1180,7 +1128,7 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
     }
 
 
-def _verify_events(connection: sqlite3.Connection, meta: dict[str, object], schema_version: int) -> list[sqlite3.Row]:
+def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> list[sqlite3.Row]:
     rows = list(connection.execute("SELECT * FROM financial_events ORDER BY event_sequence"))
     if len(rows) > MAX_ROWS:
         _fail("history:row-cap")
@@ -1198,12 +1146,6 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object], sche
         kind = _kind(row["kind"], "history:event-kind")
         if aggregate_type not in _EVENT_KINDS or kind not in _EVENT_KINDS[aggregate_type]:
             _fail("history:event-kind")
-        if schema_version not in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION} and aggregate_type == "PROGRAM_FUNDING_RECEIPT":
-            _fail("history:event-schema")
-        if schema_version != MANIFEST_SCHEMA_VERSION and (
-            aggregate_type == "POPULATION_MANIFEST" or kind == "POPULATION_IMPORT_OPENED"
-        ):
-            _fail("history:event-schema")
         before = _integer(row["before_revision"], "history:before-revision")
         after = _integer(row["after_revision"], "history:after-revision")
         if after < before:
@@ -1456,7 +1398,7 @@ def _verify_program_funding_rows(
     events: list[Mapping[str, object]],
     scope: Mapping[str, object],
 ) -> tuple[dict[str, object], set[str]]:
-    """Reconstruct v6 funding leaves, projection, and bound history events."""
+    """Reconstruct funding leaves, projection, and bound history events."""
 
     receipts: dict[str, dict[str, object]] = {}
     grouped: dict[str, list[str]] = {}
@@ -1756,7 +1698,6 @@ def _verify_packs(connection: sqlite3.Connection, meta: dict[str, object]) -> di
 
 def _verify_population_manifest_rows(
     *,
-    schema_version: int,
     manifest_rows: list[Mapping[str, object]],
     member_rows: list[Mapping[str, object]],
     head_rows: list[Mapping[str, object]],
@@ -1773,10 +1714,6 @@ def _verify_population_manifest_rows(
 ) -> dict[str, object]:
     """Reconstruct manifest receipts, membership, supersession, and bindings."""
 
-    if schema_version != MANIFEST_SCHEMA_VERSION:
-        if manifest_rows or member_rows or head_rows or binding_rows:
-            _fail("population-manifest:legacy-schema-tables")
-        return {"manifests": {}, "members_by_manifest": {}, "bindings": {}, "heads": {}}
     manifests: dict[str, Mapping[str, object]] = {}
     members_by_manifest: dict[str, tuple[str, ...]] = {}
     if len(manifest_rows) > MAX_ROWS or len(member_rows) > MAX_ROWS or len(head_rows) > MAX_ROWS or len(binding_rows) > MAX_ROWS:
@@ -2091,9 +2028,12 @@ def _verify_populations(
     manifest_records = manifest_state["manifests"]
     manifest_members = manifest_state["members_by_manifest"]
     manifest_bindings = manifest_state["bindings"]
-    assert isinstance(manifest_records, dict)
-    assert isinstance(manifest_members, dict)
-    assert isinstance(manifest_bindings, dict)
+    if not (
+        isinstance(manifest_records, dict)
+        and isinstance(manifest_members, dict)
+        and isinstance(manifest_bindings, dict)
+    ):
+        _fail("population:manifest-state")
     for row in imports:
         population_id = _id(row["population_id"], "population:id")
         if population_id in populations:
@@ -2132,20 +2072,19 @@ def _verify_populations(
             _fail("population:staged-digest")
         if imported > expected or validated > expected:
             _fail("population:count")
-        if meta["schema_version"] == MANIFEST_SCHEMA_VERSION:
-            binding = manifest_bindings.get(population_id)
-            if binding is None:
-                _fail("population:manifest-binding")
-            manifest_id = str(binding["manifest_id"])
-            manifest = manifest_records.get(manifest_id)
-            if manifest is None:
-                _fail("population:manifest-reference")
-            if (
-                row["pack_id"] != manifest["pack_id"]
-                or row["cutoff_ms"] != manifest["cutoff_ms"]
-                or expected != manifest["member_count"]
-            ):
-                _fail("population:manifest-binding")
+        binding = manifest_bindings.get(population_id)
+        if binding is None:
+            _fail("population:manifest-binding")
+        manifest_id = str(binding["manifest_id"])
+        manifest = manifest_records.get(manifest_id)
+        if manifest is None:
+            _fail("population:manifest-reference")
+        if (
+            row["pack_id"] != manifest["pack_id"]
+            or row["cutoff_ms"] != manifest["cutoff_ms"]
+            or expected != manifest["member_count"]
+        ):
+            _fail("population:manifest-binding")
         items_by_population[population_id] = []
         _ = scope
     for row in items:
@@ -2171,14 +2110,13 @@ def _verify_populations(
         actual_items = items_by_population.get(population_id, [])
         if len(actual_items) != row["imported_count"]:
             _fail("population:imported-count")
-        if meta["schema_version"] == MANIFEST_SCHEMA_VERSION:
-            binding = manifest_bindings[population_id]
-            expected_members = manifest_members[str(binding["manifest_id"])]
-            actual_members = tuple(sorted(str(item["item_id"]) for item in actual_items))
-            if not set(actual_members) <= set(expected_members):
-                _fail("population:manifest-extra-member")
-            if row["source_complete"] == 1 and actual_members != expected_members:
-                _fail("population:manifest-completeness")
+        binding = manifest_bindings[population_id]
+        expected_members = manifest_members[str(binding["manifest_id"])]
+        actual_members = tuple(sorted(str(item["item_id"]) for item in actual_items))
+        if not set(actual_members) <= set(expected_members):
+            _fail("population:manifest-extra-member")
+        if row["source_complete"] == 1 and actual_members != expected_members:
+            _fail("population:manifest-completeness")
         if row["status"] in {"VALIDATED", "PUBLISHED"}:
             material = b"".join(
                 _digest(
@@ -2272,7 +2210,6 @@ def _verify_population_history(
     populations: dict[str, sqlite3.Row],
     packs: dict[str, sqlite3.Row],
     manifest_state: Mapping[str, object],
-    schema_version: int,
 ) -> None:
     """Reconstruct each population's lifecycle from ordered history events."""
 
@@ -2285,37 +2222,37 @@ def _verify_population_history(
             _fail("history:population-reference")
         by_population[population_id].append(event)
 
+    bindings = manifest_state.get("bindings")
+    manifests = manifest_state.get("manifests")
+    event_sequences = manifest_state.get("event_sequences")
+    superseded_at = manifest_state.get("superseded_at")
+    # A typed failure, not an ``assert``: the check must hold under ``python -O`` too.
+    if not (
+        isinstance(bindings, dict)
+        and isinstance(manifests, dict)
+        and isinstance(event_sequences, dict)
+        and isinstance(superseded_at, dict)
+    ):
+        _fail("history:population-manifest-state")
     for population_id, population in populations.items():
         expected = _integer(population["expected_count"], "history:population-expected", minimum=1, maximum=MAX_ROWS)
-        manifest_fields: dict[str, object] = {}
-        if schema_version == MANIFEST_SCHEMA_VERSION:
-            bindings = manifest_state["bindings"]
-            manifests = manifest_state["manifests"]
-            event_sequences = manifest_state["event_sequences"]
-            superseded_at = manifest_state["superseded_at"]
-            assert (
-                isinstance(bindings, dict)
-                and isinstance(manifests, dict)
-                and isinstance(event_sequences, dict)
-                and isinstance(superseded_at, dict)
-            )
-            binding = bindings.get(population_id)
-            if binding is None:
-                _fail("history:population-manifest-binding")
-            manifest_id = str(binding["manifest_id"])
-            manifest = manifests.get(manifest_id)
-            if manifest is None:
-                _fail("history:population-manifest-reference")
-            manifest_event_sequence = event_sequences.get(manifest_id)
-            if type(manifest_event_sequence) is not int:
-                _fail("history:population-manifest-event")
-            superseded_sequence = superseded_at.get(manifest_id)
-            manifest_fields = {
-                "manifest_id": manifest_id,
-                "manifest_version": int(manifest["manifest_version"]),
-                "manifest_digest": _blob64(manifest["manifest_digest"], "history:population-manifest-digest").hex().upper(),
-                "member_digest": _blob64(manifest["member_digest"], "history:population-member-digest").hex().upper(),
-            }
+        binding = bindings.get(population_id)
+        if binding is None:
+            _fail("history:population-manifest-binding")
+        manifest_id = str(binding["manifest_id"])
+        manifest = manifests.get(manifest_id)
+        if manifest is None:
+            _fail("history:population-manifest-reference")
+        manifest_event_sequence = event_sequences.get(manifest_id)
+        if type(manifest_event_sequence) is not int:
+            _fail("history:population-manifest-event")
+        superseded_sequence = superseded_at.get(manifest_id)
+        manifest_fields: dict[str, object] = {
+            "manifest_id": manifest_id,
+            "manifest_version": int(manifest["manifest_version"]),
+            "manifest_digest": _blob64(manifest["manifest_digest"], "history:population-manifest-digest").hex().upper(),
+            "member_digest": _blob64(manifest["member_digest"], "history:population-member-digest").hex().upper(),
+        }
         imported = 0
         opened = False
         source_completed = False
@@ -2323,25 +2260,24 @@ def _verify_population_history(
         published = False
         previous_committed_at: int | None = None
         for event in by_population[population_id]:
-            if schema_version == MANIFEST_SCHEMA_VERSION:
-                event_sequence = _integer(
-                    event["event_sequence"],
-                    "history:population-event-sequence",
+            event_sequence = _integer(
+                event["event_sequence"],
+                "history:population-event-sequence",
+                minimum=1,
+                maximum=MAX_ROWS,
+            )
+            if event_sequence <= manifest_event_sequence:
+                _fail("history:population-manifest-order")
+            if (
+                superseded_sequence is not None
+                and event_sequence >= _integer(
+                    superseded_sequence,
+                    "history:population-superseded-sequence",
                     minimum=1,
                     maximum=MAX_ROWS,
                 )
-                if event_sequence <= manifest_event_sequence:
-                    _fail("history:population-manifest-order")
-                if (
-                    superseded_sequence is not None
-                    and event_sequence >= _integer(
-                        superseded_sequence,
-                        "history:population-superseded-sequence",
-                        minimum=1,
-                        maximum=MAX_ROWS,
-                    )
-                ):
-                    _fail("history:population-manifest-stale-event")
+            ):
+                _fail("history:population-manifest-stale-event")
             committed_at = _time(event["committed_at_ms"], "history:population-committed-at")
             if previous_committed_at is not None and committed_at < previous_committed_at:
                 _fail("history:population-chronology")
@@ -2352,13 +2288,11 @@ def _verify_population_history(
             if not isinstance(payload, dict):
                 _fail("history:population-payload")
             kind = str(event["kind"])
-            if schema_version == MANIFEST_SCHEMA_VERSION and kind != "POPULATION_IMPORT_OPENED" and not opened:
+            if kind != "POPULATION_IMPORT_OPENED" and not opened:
                 _fail("history:population-open-order")
             if kind == "POPULATION_IMPORT_OPENED":
                 # Staging is recorded exactly once, before any import, completion,
                 # validation or publication event for the same population.
-                if schema_version != MANIFEST_SCHEMA_VERSION:
-                    _fail("history:population-open-schema")
                 if opened:
                     _fail("history:population-open-duplicate")
                 if imported or source_completed or validated or published:
@@ -2397,9 +2331,7 @@ def _verify_population_history(
             if kind == "POPULATION_STAGED":
                 if source_completed or validated or published:
                     _fail("history:population-stage-order")
-                stage_fields = {"population_id", "imported_count", "chunk_count"}
-                if schema_version == MANIFEST_SCHEMA_VERSION:
-                    stage_fields |= set(manifest_fields)
+                stage_fields = {"population_id", "imported_count", "chunk_count"} | set(manifest_fields)
                 if set(payload) != stage_fields:
                     _fail("history:population-stage-payload")
                 if any(payload.get(key) != value for key, value in manifest_fields.items()):
@@ -2420,9 +2352,7 @@ def _verify_population_history(
                     _fail("history:population-completion-duplicate")
                 if validated or published:
                     _fail("history:population-completion-order")
-                completion_fields = {"population_id", "imported_count", "expected_count"}
-                if schema_version == MANIFEST_SCHEMA_VERSION:
-                    completion_fields |= set(manifest_fields)
+                completion_fields = {"population_id", "imported_count", "expected_count"} | set(manifest_fields)
                 if set(payload) != completion_fields:
                     _fail("history:population-completion-payload")
                 if any(payload.get(key) != value for key, value in manifest_fields.items()):
@@ -2443,9 +2373,7 @@ def _verify_population_history(
                     _fail("history:population-completion-order")
                 if validated or published:
                     _fail("history:population-validation-order")
-                validation_fields = {"population_id", "validated_count", "validation_digest"}
-                if schema_version == MANIFEST_SCHEMA_VERSION:
-                    validation_fields |= set(manifest_fields)
+                validation_fields = {"population_id", "validated_count", "validation_digest"} | set(manifest_fields)
                 if set(payload) != validation_fields:
                     _fail("history:population-validation-payload")
                 if any(payload.get(key) != value for key, value in manifest_fields.items()):
@@ -2468,9 +2396,7 @@ def _verify_population_history(
                     _fail("history:population-validation-order")
                 if published:
                     _fail("history:population-publication-duplicate")
-                publication_fields = {"population_id", "item_count", "pack_id", "pack_version", "evaluation_count", "evaluation_binding_digest"}
-                if schema_version == MANIFEST_SCHEMA_VERSION:
-                    publication_fields |= set(manifest_fields)
+                publication_fields = {"population_id", "item_count", "pack_id", "pack_version", "evaluation_count", "evaluation_binding_digest"} | set(manifest_fields)
                 if set(payload) != publication_fields:
                     _fail("history:population-publication-payload")
                 if any(payload.get(key) != value for key, value in manifest_fields.items()):
@@ -2489,7 +2415,7 @@ def _verify_population_history(
                     _fail("history:population-publication-binding")
                 published = True
 
-        if schema_version == MANIFEST_SCHEMA_VERSION and not opened:
+        if not opened:
             _fail("history:population-open-missing")
         persisted_imported = _integer(population["imported_count"], "history:population-imported", maximum=MAX_ROWS)
         if imported != persisted_imported:
@@ -3633,16 +3559,14 @@ def _package_payload_without_digest(value: Mapping[str, object]) -> dict[str, ob
     return payload
 
 
-def continuity_package_digest(payload: Mapping[str, object], *, schema_version: int = SCHEMA_VERSION) -> str:
+def continuity_package_digest(payload: Mapping[str, object]) -> str:
     """Return the independent digest for a package payload without its digest."""
 
     if not isinstance(payload, Mapping):
         _fail("continuity:payload")
     if "package_digest" in payload:
         _fail("continuity:digest-field")
-    if type(schema_version) is not int or schema_version not in CONTINUITY_DOMAIN_BY_VERSION:
-        _fail("continuity:digest-version")
-    return _digest(CONTINUITY_DOMAIN_BY_VERSION[schema_version], _canonical(dict(payload), "continuity:digest-input")).hex().upper()
+    return _digest(CONTINUITY_DOMAIN, _canonical(dict(payload), "continuity:digest-input")).hex().upper()
 
 
 def _package_import_value(value: object, code: str) -> object:
@@ -3663,11 +3587,11 @@ def _package_import_value(value: object, code: str) -> object:
     _fail(f"{code}:value")
 
 
-def _verify_package_rows(raw_rows: object, table: str, schema_version: int) -> list[dict[str, object]]:
+def _verify_package_rows(raw_rows: object, table: str) -> list[dict[str, object]]:
     if not isinstance(raw_rows, list) or len(raw_rows) > MAX_ROWS:
         _fail(f"continuity:rows:{table}")
-    definition = _TABLE_DEFS_BY_VERSION[schema_version][table]
-    columns = TABLE_COLUMNS_BY_VERSION[schema_version][table]
+    definition = _TABLE_DEFS[table]
+    columns = TABLE_COLUMNS[table]
     decoded_rows: list[dict[str, object]] = []
     for row_index, raw_row in enumerate(raw_rows):
         if type(raw_row) is not dict or set(raw_row) != set(columns):
@@ -3687,17 +3611,17 @@ def _verify_package_rows(raw_rows: object, table: str, schema_version: int) -> l
     return decoded_rows
 
 
-def _snapshot_row_key(row: Mapping[str, object], table: str, schema_version: int) -> tuple[object, ...]:
-    primary_columns = [column for column, _declared_type, primary in _TABLE_DEFS_BY_VERSION[schema_version][table] if primary]
+def _snapshot_row_key(row: Mapping[str, object], table: str) -> tuple[object, ...]:
+    primary_columns = [column for column, _declared_type, primary in _TABLE_DEFS[table] if primary]
     return tuple(row[column] for column in primary_columns)
 
 
-def _database_snapshot_rows(connection: sqlite3.Connection, schema_version: int) -> dict[str, list[dict[str, object]]]:
+def _database_snapshot_rows(connection: sqlite3.Connection) -> dict[str, list[dict[str, object]]]:
     snapshot: dict[str, list[dict[str, object]]] = {}
-    for table in TABLES_BY_VERSION[schema_version]:
+    for table in TABLES:
         rows = _bounded_rows(connection, table)
         snapshot[table] = [
-            {column: row[column] for column in TABLE_COLUMNS_BY_VERSION[schema_version][table]}
+            {column: row[column] for column in TABLE_COLUMNS[table]}
             for row in rows
         ]
     return snapshot
@@ -3706,14 +3630,13 @@ def _database_snapshot_rows(connection: sqlite3.Connection, schema_version: int)
 def _verify_current_snapshot(
     connection: sqlite3.Connection,
     package_rows: dict[str, list[dict[str, object]]],
-    schema_version: int,
 ) -> None:
     """Bind a current-snapshot package to every allowlisted row in this database."""
 
-    database_rows = _database_snapshot_rows(connection, schema_version)
-    for table in TABLES_BY_VERSION[schema_version]:
-        package_sorted = sorted(package_rows[table], key=lambda row: _snapshot_row_key(row, table, schema_version))
-        database_sorted = sorted(database_rows[table], key=lambda row: _snapshot_row_key(row, table, schema_version))
+    database_rows = _database_snapshot_rows(connection)
+    for table in TABLES:
+        package_sorted = sorted(package_rows[table], key=lambda row: _snapshot_row_key(row, table))
+        database_sorted = sorted(database_rows[table], key=lambda row: _snapshot_row_key(row, table))
         if package_sorted != database_sorted:
             _fail("continuity:current-snapshot-mismatch")
 
@@ -3781,11 +3704,12 @@ def verify_continuity_package(
     if set(value) != required:
         _fail("continuity:keys")
     package_version = value["version"]
-    if type(package_version) is not int or package_version not in TABLES_BY_VERSION:
+    # Only Continuity v7 is accepted; retired v5/v6 packages fail closed here.
+    if type(package_version) is not int or package_version != SCHEMA_VERSION:
         _fail("continuity:schema")
-    if value["schema"] != CONTINUITY_SCHEMA_BY_VERSION[package_version]:
+    if value["schema"] != CONTINUITY_SCHEMA:
         _fail("continuity:schema")
-    if expected_schema_version is not None and package_version != _integer(expected_schema_version, "continuity:expected-schema-version", minimum=5, maximum=7):
+    if expected_schema_version is not None and package_version != _integer(expected_schema_version, "continuity:expected-schema-version", minimum=SCHEMA_VERSION, maximum=SCHEMA_VERSION):
         _fail("continuity:schema-version-binding")
     if identity["schema_version"] is not None and identity["schema_version"] != package_version:
         _fail("continuity:schema-version-binding")
@@ -3824,17 +3748,17 @@ def verify_continuity_package(
     if expected_continuity_epoch is not None and epoch != _integer(expected_continuity_epoch, "continuity:expected-epoch", minimum=1, maximum=MAX_CENTS):
         _fail("continuity:epoch-binding")
     tables = value["tables"]
-    if not isinstance(tables, dict) or set(tables) != TABLES_BY_VERSION[package_version]:
+    if not isinstance(tables, dict) or set(tables) != TABLES:
         _fail("continuity:tables")
     counts: dict[str, int] = {}
     decoded_rows: dict[str, list[dict[str, object]]] = {}
-    for table in TABLES_BY_VERSION[package_version]:
-        decoded_rows[table] = _verify_package_rows(tables[table], table, package_version)
+    for table in TABLES:
+        decoded_rows[table] = _verify_package_rows(tables[table], table)
         counts[table] = len(decoded_rows[table])
     if counts["financial_meta"] != 1:
         _fail("continuity:meta-cardinality")
     meta = decoded_rows["financial_meta"][0]
-    if meta["id"] != 1 or meta["schema_version"] != package_version or meta["schema"] != SCHEMA_BY_VERSION[package_version]:
+    if meta["id"] != 1 or meta["schema_version"] != SCHEMA_VERSION or meta["schema"] != SCHEMA:
         _fail("continuity:meta-schema")
     for key, expected in scope.items():
         if meta[key] != expected:
@@ -3860,12 +3784,11 @@ def verify_continuity_package(
     identity_contract = _identity_record(
         decoded_rows["financial_identity"][0],
         "continuity:identity",
-        schema_version=package_version,
     )
     if identity_contract["bound_mode"] != mode or identity_contract["bound_owner_id"] != meta["owner_id"]:
         _fail("continuity:identity-binding")
     if identity_contract["provenance"] == "ROOT":
-        expected_genesis = _digest(GENESIS_DOMAIN_BY_VERSION[package_version], _canonical(scope, "continuity:scope"), authority_digest, identity_contract["identity_digest"])
+        expected_genesis = _digest(GENESIS_DOMAIN, _canonical(scope, "continuity:scope"), authority_digest, identity_contract["identity_digest"])
         if identity_contract["source_package_digest"] != ZERO_DIGEST or identity_contract["anchor_sequence"] != 0 or identity_contract["anchor_head"] != expected_genesis or identity_contract["genesis_head"] != expected_genesis:
             _fail("continuity:identity-genesis")
     else:
@@ -3878,7 +3801,7 @@ def verify_continuity_package(
             if anchor_row is None or anchor_row["head"] != identity_contract["anchor_head"]:
                 _fail("continuity:identity-history-anchor")
     payload = _package_payload_without_digest(value)
-    expected_digest = continuity_package_digest(payload, schema_version=package_version)
+    expected_digest = continuity_package_digest(payload)
     package_digest = value["package_digest"]
     if type(package_digest) is not str or package_digest != package_digest.upper() or _HEX128.fullmatch(package_digest) is None or package_digest != expected_digest:
         _fail("continuity:package-digest")
@@ -3890,39 +3813,36 @@ def verify_continuity_package(
         cases={str(row["case_id"]): row for row in decoded_rows["cases"]},
         packs={str(row["pack_id"]): row for row in decoded_rows["control_packs"]},
     )
-    if package_version == MANIFEST_SCHEMA_VERSION:
-        package_packs = {
-            _id(row["pack_id"], "continuity:manifest-pack-id"): row
-            for row in decoded_rows["control_packs"]
-        }
-        manifest_state = _verify_population_manifest_rows(
-            schema_version=package_version,
-            manifest_rows=decoded_rows["population_manifests"],
-            member_rows=decoded_rows["population_manifest_members"],
-            head_rows=decoded_rows["population_manifest_heads"],
-            binding_rows=decoded_rows["population_manifest_bindings"],
-            population_rows=decoded_rows["population_imports"],
-            item_rows=decoded_rows["population_items"],
-            event_rows=decoded_rows["financial_events"],
-            packs=package_packs,
-            scope=scope,
-            authority_id=authority_id,
-            authority_epoch=authority_epoch,
-            authority_digest=authority_digest,
-            actors=identity.get("actors"),
-        )
-        package_populations = {
-            str(row["population_id"]): row for row in decoded_rows["population_imports"]
-        }
-        _verify_population_history(
-            decoded_rows["financial_events"],
-            package_populations,
-            package_packs,
-            manifest_state,
-            package_version,
-        )
+    package_packs = {
+        _id(row["pack_id"], "continuity:manifest-pack-id"): row
+        for row in decoded_rows["control_packs"]
+    }
+    manifest_state = _verify_population_manifest_rows(
+        manifest_rows=decoded_rows["population_manifests"],
+        member_rows=decoded_rows["population_manifest_members"],
+        head_rows=decoded_rows["population_manifest_heads"],
+        binding_rows=decoded_rows["population_manifest_bindings"],
+        population_rows=decoded_rows["population_imports"],
+        item_rows=decoded_rows["population_items"],
+        event_rows=decoded_rows["financial_events"],
+        packs=package_packs,
+        scope=scope,
+        authority_id=authority_id,
+        authority_epoch=authority_epoch,
+        authority_digest=authority_digest,
+        actors=identity.get("actors"),
+    )
+    package_populations = {
+        str(row["population_id"]): row for row in decoded_rows["population_imports"]
+    }
+    _verify_population_history(
+        decoded_rows["financial_events"],
+        package_populations,
+        package_packs,
+        manifest_state,
+    )
     result: dict[str, object] = {
-        "schema": CONTINUITY_SCHEMA_BY_VERSION[package_version],
+        "schema": CONTINUITY_SCHEMA,
         "version": package_version,
         "scope": dict(scope),
         "authority": {"authority_id": authority_id, "epoch": authority_epoch, "digest": authority_digest.hex().upper()},
@@ -3932,14 +3852,13 @@ def verify_continuity_package(
         "table_counts": counts,
         "package_digest": package_digest,
     }
-    if package_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
-        funding, _receipt_ids = _verify_program_funding_rows(
-            decoded_rows["program_funding_receipts"],
-            decoded_rows["program_funding_projection"],
-            decoded_rows["financial_events"],
-            scope,
-        )
-        result["program_funding"] = funding
+    funding, _receipt_ids = _verify_program_funding_rows(
+        decoded_rows["program_funding_receipts"],
+        decoded_rows["program_funding_projection"],
+        decoded_rows["financial_events"],
+        scope,
+    )
+    result["program_funding"] = funding
     if _include_rows:
         result["_decoded_rows"] = decoded_rows
     return result
@@ -3954,29 +3873,25 @@ def _verify_connection(
 ) -> dict[str, object]:
     schema_version = _verify_schema(connection)
     meta = _verify_meta(connection, identity, schema_version)
-    events = _verify_events(connection, meta, schema_version)
+    events = _verify_events(connection, meta)
     packs = _verify_packs(connection, meta)
-    if schema_version == MANIFEST_SCHEMA_VERSION:
-        manifest_state = _verify_population_manifest_rows(
-            schema_version=schema_version,
-            manifest_rows=[dict(row) for row in _bounded_rows(connection, "population_manifests")],
-            member_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_members")],
-            head_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_heads")],
-            binding_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_bindings")],
-            population_rows=[dict(row) for row in _bounded_rows(connection, "population_imports")],
-            item_rows=[dict(row) for row in _bounded_rows(connection, "population_items")],
-            event_rows=[dict(row) for row in events],
-            packs={pack_id: dict(row) for pack_id, row in packs.items()},
-            scope=meta["scope"],
-            authority_id=str(meta["authority_id"]),
-            authority_epoch=int(meta["authority_epoch"]),
-            authority_digest=bytes(meta["authority_digest"]),
-            actors=identity.get("actors"),
-        )
-    else:
-        manifest_state = {"manifests": {}, "members_by_manifest": {}, "bindings": {}, "heads": {}}
+    manifest_state = _verify_population_manifest_rows(
+        manifest_rows=[dict(row) for row in _bounded_rows(connection, "population_manifests")],
+        member_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_members")],
+        head_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_heads")],
+        binding_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_bindings")],
+        population_rows=[dict(row) for row in _bounded_rows(connection, "population_imports")],
+        item_rows=[dict(row) for row in _bounded_rows(connection, "population_items")],
+        event_rows=[dict(row) for row in events],
+        packs={pack_id: dict(row) for pack_id, row in packs.items()},
+        scope=meta["scope"],
+        authority_id=str(meta["authority_id"]),
+        authority_epoch=int(meta["authority_epoch"]),
+        authority_digest=bytes(meta["authority_digest"]),
+        actors=identity.get("actors"),
+    )
     populations, items = _verify_populations(connection, meta, packs, manifest_state)
-    _verify_population_history([dict(row) for row in events], populations, packs, manifest_state, schema_version)
+    _verify_population_history([dict(row) for row in events], populations, packs, manifest_state)
     obligations = _verify_obligations(connection, meta, populations, items, packs)
     evidence = _verify_evidence(connection, items, obligations)
     payments = _verify_payments(connection, obligations, items, evidence)
@@ -3997,10 +3912,7 @@ def _verify_connection(
     )
     actions = _verify_actions(connection, meta, obligations, claims, determinations)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
-    funding: dict[str, object] | None = None
-    funding_receipt_ids: set[str] = set()
-    if schema_version in {NEXT_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}:
-        funding, funding_receipt_ids = _verify_program_funding(connection, meta, events)
+    funding, funding_receipt_ids = _verify_program_funding(connection, meta, events)
     manifest_records = manifest_state["manifests"]
     assert isinstance(manifest_records, dict)
     _verify_event_references(events, packs, populations, obligations, funding_receipt_ids, set(manifest_records))
@@ -4020,8 +3932,9 @@ def _verify_connection(
             _include_rows=True,
         )
         package_rows = package_result.pop("_decoded_rows")
-        assert isinstance(package_rows, dict)
-        _verify_current_snapshot(connection, package_rows, schema_version)
+        if not isinstance(package_rows, dict):
+            _fail("continuity:decoded-rows")
+        _verify_current_snapshot(connection, package_rows)
         package_result["role"] = "current_snapshot"
     elif restore_source_package is not None:
         package_result = verify_continuity_package(
@@ -4033,7 +3946,8 @@ def _verify_connection(
             _include_rows=True,
         )
         package_rows = package_result.pop("_decoded_rows")
-        assert isinstance(package_rows, dict)
+        if not isinstance(package_rows, dict):
+            _fail("continuity:decoded-rows")
         _verify_restore_source_binding(meta, package_result, package_rows)
         package_result["role"] = "restore_source"
     _verify_correction_followup_records(
@@ -4046,7 +3960,7 @@ def _verify_connection(
     )
     _verify_continuity_admission(connection, schema_version, meta)
     result = {
-        "schema": SCHEMA_BY_VERSION[schema_version],
+        "schema": SCHEMA,
         "schema_version": schema_version,
         "scope": dict(meta["scope"]),
         "authority": {
@@ -4076,9 +3990,8 @@ def _verify_connection(
         "totals": totals,
         "obligations": projections,
         "continuity": package_result,
+        "program_funding": funding,
     }
-    if funding is not None:
-        result["program_funding"] = funding
     return result
 
 
@@ -4229,80 +4142,77 @@ def verify_decision_package(
                 "current_evaluation_id": None if obligation["current_evaluation_id"] is None else str(obligation["current_evaluation_id"]),
                 "due_at_ms": int(obligation["due_at_ms"]),
             }
-            schema_version = int(verified["schema_version"])
-            population_binding: dict[str, object] | None = None
-            if schema_version == 7:
-                population_id = _id(obligation["population_id"], "decision-package:population-id")
-                population_row = connection.execute(
-                    """
-                    SELECT p.status,p.source_complete,p.expected_count,p.imported_count,p.validated_count,
-                           b.manifest_id,b.manifest_version AS binding_version,
-                           b.manifest_digest AS binding_digest,
-                           m.manifest_version AS manifest_version,m.manifest_digest,
-                           m.member_digest,m.member_count
-                    FROM population_imports p
-                    JOIN population_manifest_bindings b USING(population_id)
-                    JOIN population_manifests m USING(manifest_id)
-                    JOIN population_items i ON i.population_id=p.population_id
-                    WHERE p.population_id=? AND i.item_id=?
-                    """,
-                    (population_id, str(obligation["item_id"])),
-                ).fetchone()
-                if population_row is None:
-                    _fail("decision-package:population-binding")
-                expected_count = _integer(population_row["expected_count"], "decision-package:population-expected", minimum=1, maximum=MAX_ROWS)
-                imported_count = _integer(population_row["imported_count"], "decision-package:population-imported", maximum=MAX_ROWS)
-                validated_count = _integer(population_row["validated_count"], "decision-package:population-validated", maximum=MAX_ROWS)
-                if (
-                    population_row["status"] != "PUBLISHED"
-                    or _flag(population_row["source_complete"], "decision-package:population-source-complete") != 1
-                    or imported_count != expected_count
-                    or validated_count != expected_count
-                ):
-                    _fail("decision-package:population-incomplete")
-                manifest_id = _id(population_row["manifest_id"], "decision-package:manifest-id")
-                manifest_version = _integer(population_row["manifest_version"], "decision-package:manifest-version", minimum=1, maximum=MAX_ROWS)
-                if _integer(population_row["binding_version"], "decision-package:binding-version", minimum=1, maximum=MAX_ROWS) != manifest_version:
-                    _fail("decision-package:population-binding")
-                manifest_digest = _blob64(population_row["manifest_digest"], "decision-package:manifest-digest")
-                if _blob64(population_row["binding_digest"], "decision-package:binding-digest") != manifest_digest:
-                    _fail("decision-package:population-binding")
-                member_digest = _blob64(population_row["member_digest"], "decision-package:member-digest")
-                member_count = _integer(population_row["member_count"], "decision-package:member-count", minimum=1, maximum=MAX_ROWS)
-                if member_count != expected_count:
-                    _fail("decision-package:population-binding")
-                imported_members = tuple(
-                    _id(row["item_id"], "decision-package:population-member")
-                    for row in connection.execute(
-                        "SELECT item_id FROM population_items WHERE population_id=? ORDER BY item_id",
-                        (population_id,),
-                    )
+            population_id = _id(obligation["population_id"], "decision-package:population-id")
+            population_row = connection.execute(
+                """
+                SELECT p.status,p.source_complete,p.expected_count,p.imported_count,p.validated_count,
+                       b.manifest_id,b.manifest_version AS binding_version,
+                       b.manifest_digest AS binding_digest,
+                       m.manifest_version AS manifest_version,m.manifest_digest,
+                       m.member_digest,m.member_count
+                FROM population_imports p
+                JOIN population_manifest_bindings b USING(population_id)
+                JOIN population_manifests m USING(manifest_id)
+                JOIN population_items i ON i.population_id=p.population_id
+                WHERE p.population_id=? AND i.item_id=?
+                """,
+                (population_id, str(obligation["item_id"])),
+            ).fetchone()
+            if population_row is None:
+                _fail("decision-package:population-binding")
+            expected_count = _integer(population_row["expected_count"], "decision-package:population-expected", minimum=1, maximum=MAX_ROWS)
+            imported_count = _integer(population_row["imported_count"], "decision-package:population-imported", maximum=MAX_ROWS)
+            validated_count = _integer(population_row["validated_count"], "decision-package:population-validated", maximum=MAX_ROWS)
+            if (
+                population_row["status"] != "PUBLISHED"
+                or _flag(population_row["source_complete"], "decision-package:population-source-complete") != 1
+                or imported_count != expected_count
+                or validated_count != expected_count
+            ):
+                _fail("decision-package:population-incomplete")
+            manifest_id = _id(population_row["manifest_id"], "decision-package:manifest-id")
+            manifest_version = _integer(population_row["manifest_version"], "decision-package:manifest-version", minimum=1, maximum=MAX_ROWS)
+            if _integer(population_row["binding_version"], "decision-package:binding-version", minimum=1, maximum=MAX_ROWS) != manifest_version:
+                _fail("decision-package:population-binding")
+            manifest_digest = _blob64(population_row["manifest_digest"], "decision-package:manifest-digest")
+            if _blob64(population_row["binding_digest"], "decision-package:binding-digest") != manifest_digest:
+                _fail("decision-package:population-binding")
+            member_digest = _blob64(population_row["member_digest"], "decision-package:member-digest")
+            member_count = _integer(population_row["member_count"], "decision-package:member-count", minimum=1, maximum=MAX_ROWS)
+            if member_count != expected_count:
+                _fail("decision-package:population-binding")
+            imported_members = tuple(
+                _id(row["item_id"], "decision-package:population-member")
+                for row in connection.execute(
+                    "SELECT item_id FROM population_items WHERE population_id=? ORDER BY item_id",
+                    (population_id,),
                 )
-                manifest_members = tuple(
-                    _id(row["member_id"], "decision-package:manifest-member")
-                    for row in connection.execute(
-                        "SELECT member_id FROM population_manifest_members WHERE manifest_id=? ORDER BY position",
-                        (manifest_id,),
-                    )
+            )
+            manifest_members = tuple(
+                _id(row["member_id"], "decision-package:manifest-member")
+                for row in connection.execute(
+                    "SELECT member_id FROM population_manifest_members WHERE manifest_id=? ORDER BY position",
+                    (manifest_id,),
                 )
-                if (
-                    imported_members != manifest_members
-                    or len(imported_members) != member_count
-                    or str(obligation["item_id"]) not in imported_members
-                ):
-                    _fail("decision-package:population-membership")
-                population_binding = {
-                    "population_id": population_id,
-                    "status": "PUBLISHED",
-                    "completeness": "EXACT",
-                    "source_complete": True,
-                    "manifest_id": manifest_id,
-                    "manifest_version": manifest_version,
-                    "manifest_digest": manifest_digest.hex().upper(),
-                    "member_id": str(obligation["item_id"]),
-                    "member_count": member_count,
-                    "member_digest": member_digest.hex().upper(),
-                }
+            )
+            if (
+                imported_members != manifest_members
+                or len(imported_members) != member_count
+                or str(obligation["item_id"]) not in imported_members
+            ):
+                _fail("decision-package:population-membership")
+            population_binding = {
+                "population_id": population_id,
+                "status": "PUBLISHED",
+                "completeness": "EXACT",
+                "source_complete": True,
+                "manifest_id": manifest_id,
+                "manifest_version": manifest_version,
+                "manifest_digest": manifest_digest.hex().upper(),
+                "member_id": str(obligation["item_id"]),
+                "member_count": member_count,
+                "member_digest": member_digest.hex().upper(),
+            }
             if obligation["current_evaluation_id"] is None:
                 _fail("decision-package:evaluation")
             evaluation = connection.execute(
@@ -4622,14 +4532,10 @@ def verify_decision_package(
                 resolution_assessment = "SUPPORTED"
 
             expected_package = {
-                "contract": (
-                    "RR/FINANCIAL/DECISION-PACKAGE/v2"
-                    if schema_version == 7
-                    else "RR/FINANCIAL/DECISION-PACKAGE/v1"
-                ),
+                "contract": DECISION_PACKAGE_CONTRACT,
                 "scope": scope,
                 "obligation": expected_obligation,
-                **({"population_binding": population_binding} if population_binding is not None else {}),
+                "population_binding": population_binding,
                 "evaluation_receipt": expected_receipt,
                 "control_pack": expected_pack,
                 "case": current_case,

@@ -1,4 +1,4 @@
-"""Read-only owner-to-Lean adapter for the synthetic v5 workflow.
+"""Read-only owner-to-Lean adapter for the synthetic financial workflow.
 
 The adapter is deliberately a transaction-boundary producer, not another owner.
 It accepts an already-open ``sqlite3.Connection`` from the financial owner,

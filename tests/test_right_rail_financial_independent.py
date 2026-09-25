@@ -425,7 +425,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 "currency": str(meta["currency"]),
             }
             previous = independent._digest(
-                independent.GENESIS_DOMAIN_BY_VERSION[int(meta["schema_version"])],
+                independent.GENESIS_DOMAIN,
                 independent._canonical(scope, "test:genesis-scope"),
                 bytes(meta["trusted_authority_digest"]),
                 bytes(identity["identity_digest"]),
@@ -515,7 +515,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 "currency": str(meta["currency"]),
             }
             previous = independent._digest(
-                independent.GENESIS_DOMAIN_BY_VERSION[int(meta["schema_version"])],
+                independent.GENESIS_DOMAIN,
                 independent._canonical(scope, "test:genesis-scope"),
                 bytes(meta["trusted_authority_digest"]),
                 bytes(identity["identity_digest"]),

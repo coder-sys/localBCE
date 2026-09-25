@@ -27,6 +27,7 @@ from app.right_rail_financial_owner import (
 
 
 MIRROR_SCHEMA: Final[str] = "RR/FINANCIAL/MIRROR/v1"
+_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v2"
 CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v7"
 MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 MAX_CORRECTION_FOLLOWUP_PAGE_BYTES: Final[int] = 32 * 1024 * 1024
@@ -397,10 +398,7 @@ class FinancialMirror:
             expected_evaluation_result_digest=expected_evaluation_result_digest,
         )
         result = _safe_decision_value(raw)
-        if type(result) is not dict or result.get("contract") not in {
-            "RR/FINANCIAL/DECISION-PACKAGE/v1",
-            "RR/FINANCIAL/DECISION-PACKAGE/v2",
-        }:
+        if type(result) is not dict or result.get("contract") != _DECISION_PACKAGE_CONTRACT:
             _fail(FinancialMirrorContinuityError, "decision_package_contract")
         result["schema"] = MIRROR_SCHEMA
         result["resource"] = "decision_package"
@@ -774,7 +772,7 @@ class FinancialMirror:
         counts = (raw["imported_count"], raw["expected_count"], raw["validated_count"])
         if any(type(value) is not int or value < 0 for value in counts) or raw["expected_count"] < 1 or raw["validated_count"] > raw["imported_count"] or raw["imported_count"] > raw["expected_count"]:
             _fail(FinancialMirrorContinuityError, "population_status_counts")
-        if type(raw["manifest_status"]) is not str or raw["manifest_status"] not in {"CURRENT", "SUPERSEDED", "MISSING", "LEGACY_UNVERIFIED"}:
+        if type(raw["manifest_status"]) is not str or raw["manifest_status"] not in {"CURRENT", "SUPERSEDED", "MISSING"}:
             _fail(FinancialMirrorContinuityError, "population_status_manifest")
         if type(raw["completeness"]) is not str or raw["completeness"] not in {"EXACT", "INCOMPLETE", "STALE", "UNVERIFIED"} or type(raw["source_complete"]) is not bool:
             _fail(FinancialMirrorContinuityError, "population_status_completeness")
@@ -839,8 +837,8 @@ class FinancialMirror:
         }
         if (
             type(raw) is not dict
-            or raw.get("contract") not in {"RR/FINANCIAL/DECISION-PACKAGE/v1", "RR/FINANCIAL/DECISION-PACKAGE/v2"}
-            or set(raw) != (base_fields | ({"population_binding"} if raw.get("contract") == "RR/FINANCIAL/DECISION-PACKAGE/v2" else set()))
+            or raw.get("contract") != _DECISION_PACKAGE_CONTRACT
+            or set(raw) != base_fields | {"population_binding"}
             or type(raw.get("scope")) is not dict
             or set(raw["scope"]) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}
             or type(raw.get("obligation")) is not dict
@@ -904,11 +902,10 @@ class FinancialMirror:
             require_fields(action["acknowledgment"], {
                 "status", "reference", "attempt", "updated_at_ms", "cash_effect_cents",
             }, "decision_package_acknowledgment_allowlist")
-        if "population_binding" in raw:
-            require_fields(raw["population_binding"], {
-                "population_id", "status", "completeness", "source_complete", "manifest_id", "manifest_version",
-                "manifest_digest", "member_id", "member_count", "member_digest",
-            }, "decision_package_population_binding_allowlist")
+        require_fields(raw["population_binding"], {
+            "population_id", "status", "completeness", "source_complete", "manifest_id", "manifest_version",
+            "manifest_digest", "member_id", "member_count", "member_digest",
+        }, "decision_package_population_binding_allowlist")
         row_fields = {
             "cases": {"case_id", "obligation_id", "reason", "contractual_accountability", "next_action_owner", "due_at_ms", "completion_conditions", "status", "updated_at_ms"},
             "evidence": {"evidence_id", "item_id", "kind", "common_origin_id", "source_id", "source_version", "local_ref", "applicable_at_ms", "event_at_ms", "received_at_ms", "amount_cents", "reversal_of", "supersedes", "record_digest", "obligation_id"},
@@ -949,9 +946,7 @@ class FinancialMirror:
                     "amount_satisfied", "delivery_acknowledged_or_not_required", "reporting_complete",
                 }, "decision_package_requirements_allowlist")
         result = _safe_decision_value(raw)
-        if type(result) is not dict or result.get("contract") not in {
-            "RR/FINANCIAL/DECISION-PACKAGE/v1", "RR/FINANCIAL/DECISION-PACKAGE/v2",
-        }:
+        if type(result) is not dict or result.get("contract") != _DECISION_PACKAGE_CONTRACT:
             _fail(FinancialMirrorContinuityError, "decision_package_contract")
         result["schema"] = MIRROR_SCHEMA
         result["resource"] = "decision_package"
@@ -1253,7 +1248,7 @@ class FinancialMirror:
             or raw["imported_count"] > raw["expected_count"]
         ):
             _fail(FinancialMirrorContinuityError, "population_status_counts")
-        if type(raw["manifest_status"]) is not str or raw["manifest_status"] not in {"CURRENT", "SUPERSEDED", "MISSING", "LEGACY_UNVERIFIED"}:
+        if type(raw["manifest_status"]) is not str or raw["manifest_status"] not in {"CURRENT", "SUPERSEDED", "MISSING"}:
             _fail(FinancialMirrorContinuityError, "population_status_manifest")
         if type(raw["completeness"]) is not str or raw["completeness"] not in {"EXACT", "INCOMPLETE", "STALE", "UNVERIFIED"}:
             _fail(FinancialMirrorContinuityError, "population_status_completeness")

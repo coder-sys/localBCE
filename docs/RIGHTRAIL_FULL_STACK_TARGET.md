@@ -185,8 +185,8 @@ copies cannot dispatch.
 
 ## 3. Versioned interface contracts
 
-Existing local contract names are `RR/FINANCIAL/OWNER/v5`,
-`RR/FINANCIAL/CONTINUITY/v5` (with v6/v7 successors), and
+Existing local contract names are `RR/FINANCIAL/OWNER/v7`,
+`RR/FINANCIAL/CONTINUITY/v7` (v5/v6 retired 2026-09-24), and
 `RR/FINANCIAL/EVALUATION-RECEIPT/v1`. Production schemas
 remain owned and versioned at their actual boundary; breaking a contract
 requires a new version, explicit migration, and independent acceptance.

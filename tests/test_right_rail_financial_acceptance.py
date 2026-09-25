@@ -363,7 +363,6 @@ config = FinancialOwnerConfig(
     program_id=expected.PROGRAM_ID,
     period_id=expected.PERIOD_ONE_ID,
     currency=expected.CURRENCY,
-    schema_version=6,
 )
 store = _WriteBoundaryOwner(
     path=path,
@@ -469,7 +468,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "received_cash_cents", "reporting_complete", "resulting_revision", "revision",
             "rule_version", "shortfall_cents", "timely", "updated_at_ms", "visible_at_ms",
         }
-        columns = owner._TABLE_COLUMNS_BY_VERSION[7][table]
+        columns = owner._TABLE_COLUMNS[table]
         row: list[object] = []
         for column in columns:
             if column in values:
@@ -493,7 +492,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         rows_per_table = per_obligation * 20
         with store._write() as connection:
             for table in tables:
-                columns = owner._TABLE_COLUMNS_BY_VERSION[store.schema_version][table]
+                columns = owner._TABLE_COLUMNS[table]
                 statement = (
                     f"INSERT INTO {table} ({','.join(columns)}) "
                     f"VALUES ({','.join('?' for _ in columns)})"
@@ -1899,8 +1898,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         self.assertEqual(store.path.read_bytes(), source_before_restore)
 
-    def test_v6_program_funding_receipt_identity_supersession_and_test_restore(self) -> None:
-        store = self._make_owner(schema_version=6)
+    def test_program_funding_receipt_identity_supersession_and_test_restore(self) -> None:
+        store = self._make_owner()
         mirror = FinancialMirror(store)
         original_package = store.export_continuity()
         original_counts = self._durable_counts(store.path)
@@ -1992,25 +1991,25 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             second_package,
             expected_scope=package_identity["scope"],
             expected_authority=self.authority,
-            expected_schema_version=6,
+            expected_schema_version=7,
         )
-        self.assertEqual(independent_package["version"], 6)
+        self.assertEqual(independent_package["version"], 7)
         self.assertEqual(independent_package["program_funding"]["reported_funding_cents"], 99_000_000)
         tampered_package = json.loads(second_package.decode("ascii"))
         tampered_package["tables"]["program_funding_projection"][0]["amount_cents"] += 1
         tampered_body = dict(tampered_package)
         del tampered_body["package_digest"]
-        tampered_package["package_digest"] = continuity_package_digest(tampered_body, schema_version=6)
+        tampered_package["package_digest"] = continuity_package_digest(tampered_body)
         with self.assertRaisesRegex(IndependentFinancialError, "funding:projection-reconstruction"):
             verify_continuity_package(
                 _independent_canonical(tampered_package),
                 expected_scope=package_identity["scope"],
                 expected_authority=self.authority,
-                expected_schema_version=6,
+                expected_schema_version=7,
             )
         restored_mirror = mirror.restore_test_continuity(
             second_package,
-            self._path("v6-funding-test-restore.sqlite"),
+            self._path("funding-test-restore.sqlite"),
         )
         restored = restored_mirror.owner
         self.assertEqual(restored.mode, "TEST")
@@ -2023,46 +2022,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(restored.export_continuity(), restored_package_before_retry)
         self._assert_verified(restored, restore_source_package=second_package)
 
-        legacy = self._make_owner(schema_version=5)
-        legacy_package = legacy.export_continuity()
-        legacy_view = FinancialOwner.validate_continuity_package(legacy_package)
-        self.assertEqual(legacy_view["version"], 5)
-        self.assertEqual(legacy_view["schema"], "RR/FINANCIAL/CONTINUITY/v5")
-        self.assertNotIn("program_funding_receipts", legacy_view["tables"])
-        self.assertNotIn("program_funding_projection", legacy_view["tables"])
-        self.assertNotIn("schema_version", legacy.summary())
-        self.assertEqual(
-            legacy.config.canonical_bytes,
-            _independent_canonical(
-                {
-                    "state_id": expected.STATE_ID,
-                    "deployment_id": expected.DEPLOYMENT_ID,
-                    "program_id": expected.PROGRAM_ID,
-                    "period_id": expected.PERIOD_ONE_ID,
-                    "currency": expected.CURRENCY,
-                }
-            ),
-        )
-        with self.assertRaisesRegex(FinancialInputError, "program_funding_schema_v6_required"):
-            legacy.record_program_funding_receipt(receipt)
-        with self.assertRaisesRegex(FinancialInputError, "program_funding_schema_v6_required"):
-            legacy.program_funding_summary()
-        self.assertEqual(legacy.export_continuity(), legacy_package)
-        self.assertEqual(
-            verify_continuity_package(
-                legacy_package,
-                expected_scope=legacy_view["scope"],
-                expected_authority=self.authority,
-                expected_schema_version=5,
-            )["version"],
-            5,
-        )
-        legacy_database_bytes = legacy.path.read_bytes()
-        with self.assertRaisesRegex(FinancialIntegrityError, "schema_version_incompatible"):
-            self._make_owner(path=legacy.path, schema_version=6)
-        self.assertEqual(legacy.path.read_bytes(), legacy_database_bytes)
-
-        bounded = self._make_owner(schema_version=6)
+        bounded = self._make_owner()
         maximum = self._funding_receipt(
             receipt_id="funding-receipt:bounded:maximum",
             source_record_ref="state-payment-record:maximum",
@@ -2081,9 +2041,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(bounded.program_funding_summary()["reported_funding_cents"], (1 << 63) - 1)
         self._assert_verified(bounded)
 
-    def test_v6_program_funding_supersession_clock_rollback_rejects_atomically(self) -> None:
+    def test_program_funding_supersession_clock_rollback_rejects_atomically(self) -> None:
         clock = _Clock(initial=1_700_000_000_000)
-        store = self._make_owner(clock=clock, schema_version=6)
+        store = self._make_owner(clock=clock)
         mirror = FinancialMirror(store)
         parent_receipt = self._funding_receipt()
         recorded = mirror.record_program_funding_receipt(parent_receipt)
@@ -2113,58 +2073,46 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.export_continuity(), before_package)
         self._assert_verified(store)
 
-    def test_v5_owner_does_not_install_private_snapshot_indexes(self) -> None:
-        store = self._make_owner(schema_version=5)
-        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
-            indexes = connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
-            ).fetchall()
-        self.assertEqual(indexes, [])
-        store.verify_integrity()
+    def test_private_snapshot_index_migration_prevalidates_identity_and_preserves_restore(self) -> None:
+        source = self._make_owner()
+        source_package = source.export_continuity()
+        legacy_path = self._path("private-index-legacy.sqlite")
+        legacy_path.write_bytes(source.path.read_bytes())
+        with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+            for name, _table, _columns, _sql in _EXPECTED_PRIVATE_INDEXES:
+                connection.execute(f'DROP INDEX "{name}"')
+            connection.execute("PRAGMA user_version=0")
+        legacy_bytes = legacy_path.read_bytes()
 
-    def test_v6_v7_private_snapshot_index_migration_prevalidates_identity_and_preserves_restore(self) -> None:
-        for schema_version in (6, 7):
-            with self.subTest(schema_version=schema_version):
-                source = self._make_owner(schema_version=schema_version)
-                source_package = source.export_continuity()
-                legacy_path = self._path(f"v{schema_version}-private-index-legacy.sqlite")
-                legacy_path.write_bytes(source.path.read_bytes())
-                with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
-                    for name, _table, _columns, _sql in _EXPECTED_PRIVATE_INDEXES:
-                        connection.execute(f'DROP INDEX "{name}"')
-                    connection.execute("PRAGMA user_version=0")
-                legacy_bytes = legacy_path.read_bytes()
+        wrong_config = replace(source.config, state_id="state:wrong-private-index-scope")
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
+            FinancialOwner(
+                path=legacy_path,
+                config=wrong_config,
+                trusted_authority=self.authority,
+                clock=_Clock(initial=1_700_000_000_000),
+            )
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
 
-                wrong_config = replace(source.config, state_id="state:wrong-private-index-scope")
-                with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
-                    FinancialOwner(
-                        path=legacy_path,
-                        config=wrong_config,
-                        trusted_authority=self.authority,
-                        clock=_Clock(initial=1_700_000_000_000),
-                    )
-                self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+        migrated = self._make_owner(path=legacy_path)
+        self._assert_private_index_schema(legacy_path)
+        self.assertEqual(migrated.export_continuity(), source_package)
+        migrated.verify_integrity()
 
-                migrated = self._make_owner(schema_version=schema_version, path=legacy_path)
-                self._assert_private_index_schema(legacy_path)
-                self.assertEqual(migrated.export_continuity(), source_package)
-                migrated.verify_integrity()
+        reopened = self._make_owner(path=legacy_path)
+        self._assert_private_index_schema(legacy_path)
+        self.assertEqual(reopened.export_continuity(), source_package)
+        reopened.verify_integrity()
 
-                reopened = self._make_owner(schema_version=schema_version, path=legacy_path)
-                self._assert_private_index_schema(legacy_path)
-                self.assertEqual(reopened.export_continuity(), source_package)
-                reopened.verify_integrity()
-
-                restored_path = self._path(f"v{schema_version}-private-index-restored.sqlite")
-                restored = FinancialOwner.restore_test_continuity(
-                    package_bytes=source_package,
-                    recovered_path=restored_path,
-                    trusted_authority=self.authority,
-                    clock=_Clock(initial=1_700_000_000_000),
-                )
-                self._assert_private_index_schema(restored_path)
-                restored.verify_integrity()
+        restored_path = self._path("private-index-restored.sqlite")
+        restored = FinancialOwner.restore_test_continuity(
+            package_bytes=source_package,
+            recovered_path=restored_path,
+            trusted_authority=self.authority,
+            clock=_Clock(initial=1_700_000_000_000),
+        )
+        self._assert_private_index_schema(restored_path)
+        restored.verify_integrity()
 
     def test_private_snapshot_index_upgrade_serializes_concurrent_openers(self) -> None:
         source = self._make_owner(schema_version=7)
@@ -2384,7 +2332,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     started = time.perf_counter_ns()
                     try:
                         for table in write_tables:
-                            columns = owner._TABLE_COLUMNS_BY_VERSION[7][table]
+                            columns = owner._TABLE_COLUMNS[table]
                             statement = (
                                 f"INSERT INTO {table} ({','.join(columns)}) "
                                 f"VALUES ({','.join('?' for _ in columns)})"
@@ -2433,23 +2381,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         )
 
-    def test_v6_continuity_admission_migration_prevalidates_identity(self) -> None:
+    def test_continuity_admission_migration_prevalidates_identity(self) -> None:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
             deployment_id=expected.DEPLOYMENT_ID,
             program_id=expected.PROGRAM_ID,
             period_id=expected.PERIOD_ONE_ID,
             currency=expected.CURRENCY,
-            schema_version=6,
         )
         source = FinancialOwner(
-            path=self._path("v6-admission-migration-source.sqlite"),
+            path=self._path("admission-migration-source.sqlite"),
             config=config,
             trusted_authority=self.authority,
             clock=_Clock(initial=1_700_000_000_000),
         )
         source_package = source.export_continuity()
-        legacy_path = self._path("v6-admission-migration-legacy.sqlite")
+        legacy_path = self._path("admission-migration-legacy.sqlite")
         legacy_path.write_bytes(source.path.read_bytes())
         with closing(sqlite3.connect(legacy_path, isolation_level=None)) as connection:
             connection.execute("DROP TABLE right_rail_continuity_admission")
@@ -2460,7 +2407,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             program_id=expected.PROGRAM_ID,
             period_id=expected.PERIOD_ONE_ID,
             currency=expected.CURRENCY,
-            schema_version=6,
         )
         with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
             FinancialOwner(
@@ -2480,23 +2426,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(migrated.export_continuity(), source_package)
         self._assert_verified(migrated)
 
-    def test_v6_continuity_admission_cache_is_independently_recomputed(self) -> None:
+    def test_continuity_admission_cache_is_independently_recomputed(self) -> None:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
             deployment_id=expected.DEPLOYMENT_ID,
             program_id=expected.PROGRAM_ID,
             period_id=expected.PERIOD_ONE_ID,
             currency=expected.CURRENCY,
-            schema_version=6,
         )
         store = FinancialOwner(
-            path=self._path("v6-admission-cache.sqlite"),
+            path=self._path("admission-cache.sqlite"),
             config=config,
             trusted_authority=self.authority,
             clock=_Clock(initial=1_700_000_000_000),
         )
         self._assert_verified(store)
-        tampered = self._path("v6-admission-cache-tampered.sqlite")
+        tampered = self._path("admission-cache-tampered.sqlite")
         tampered.write_bytes(store.path.read_bytes())
         with closing(sqlite3.connect(tampered, isolation_level=None)) as connection:
             connection.execute(
@@ -2511,48 +2456,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         self._assert_verified(store)
 
-    def test_v6_continuity_admission_row_cap_rolls_back_all_deltas(self) -> None:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=expected.PERIOD_ONE_ID,
-            currency=expected.CURRENCY,
-            schema_version=6,
-        )
-        store = FinancialOwner(
-            path=self._path("v6-admission-row-cap.sqlite"),
-            config=config,
-            trusted_authority=self.authority,
-            clock=_Clock(initial=1_700_000_000_000),
-        )
-        package_before = store.export_continuity()
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_row_cap"):
-            with store._write() as connection:
-                for index in range(owner._MAX_ROWS + 1):
-                    connection.execute(
-                        "INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)",
-                        (
-                            f"conflict:cap:{index:05d}",
-                            "obligation:cap",
-                            f"origin:cap:{index:05d}",
-                            None,
-                            f"evidence:cap:{index:05d}",
-                            None,
-                            1,
-                            "CAP_TEST",
-                            index,
-                        ),
-                    )
-        self.assertEqual(store.export_continuity(), package_before)
-        with store._read_snapshot() as connection:
-            self.assertEqual(
-                store._continuity_admission_values(connection)["financial_conflicts"],
-                (0, 0),
-            )
-        self._assert_verified(store)
-
-    def test_v7_continuity_admission_row_cap_rolls_back_all_deltas(self) -> None:
+    def test_continuity_admission_row_cap_rolls_back_all_deltas(self) -> None:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
             deployment_id=expected.DEPLOYMENT_ID,
@@ -2593,14 +2497,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         self._assert_verified(store)
 
-    def test_v6_continuity_admission_cost_tracks_changed_work(self) -> None:
+    def test_continuity_admission_cost_tracks_changed_work(self) -> None:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
             deployment_id=expected.DEPLOYMENT_ID,
             program_id=expected.PROGRAM_ID,
             period_id=expected.PERIOD_ONE_ID,
             currency=expected.CURRENCY,
-            schema_version=6,
         )
         measurements: list[dict[str, object]] = []
 
@@ -2622,7 +2525,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
         for history_size in (0, 250, 1_000, 3_000):
             store = FinancialOwner(
-                path=self._path(f"v6-admission-measure-{history_size}.sqlite"),
+                path=self._path(f"admission-measure-{history_size}.sqlite"),
                 config=config,
                 trusted_authority=self.authority,
                 clock=_Clock(initial=1_700_100_000_000),
@@ -2683,7 +2586,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self._assert_verified(store)
         print("CONTINUITY_ADMISSION_MEASUREMENT " + json.dumps(measurements, sort_keys=True))
 
-    def test_v6_continuity_package_cap_is_checked_before_commit(self) -> None:
+    def test_continuity_package_cap_is_checked_before_commit(self) -> None:
         package_cap = owner._MAX_PACKAGE_BYTES
         scope = {
             "state_id": "s" * 128,
@@ -2692,10 +2595,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "period_id": "r" * 128,
             "currency": expected.CURRENCY,
         }
-        config = FinancialOwnerConfig(**scope, schema_version=6)
+        config = FinancialOwnerConfig(**scope)
         clock = _Clock(initial=1_700_000_000_000)
         store = FinancialOwner(
-            path=self._path("v6-continuity-cap.sqlite"),
+            path=self._path("continuity-cap.sqlite"),
             config=config,
             trusted_authority=self.authority,
             clock=clock,
@@ -2768,9 +2671,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 raw_package,
                 expected_scope=binding["scope"],
                 expected_authority=self.authority,
-                expected_schema_version=6,
+                expected_schema_version=7,
             )
-            self.assertEqual(independent["version"], 6)
+            self.assertEqual(independent["version"], 7)
             restored = FinancialMirror(store).restore_test_continuity(
                 raw_package,
                 self._path(destination_name),
@@ -2811,7 +2714,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             if not preview_receipt_package(candidate):
                 self.assertGreater(package_cap - len(package), 0)
                 self.assertLessEqual(package_cap - len(package), target_margin + 4_096)
-                verify_and_restore(package, "v6-continuity-before-cap-rejection.sqlite")
+                verify_and_restore(package, "continuity-before-cap-rejection.sqlite")
                 before_counts = self._durable_counts(store.path)
                 before_meta = self._durable_meta(store.path)
                 with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_size"):
@@ -2821,7 +2724,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 self.assertEqual(self._durable_counts(store.path), before_counts)
                 self.assertEqual(self._durable_meta(store.path), before_meta)
                 self._assert_verified(store)
-                verify_and_restore(package_after_rejection, "v6-continuity-after-cap-rejection.sqlite")
+                verify_and_restore(package_after_rejection, "continuity-after-cap-rejection.sqlite")
                 rejected = True
                 break
 
@@ -2833,14 +2736,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self.assertLess(len(package), package_cap)
         self.assertTrue(rejected, "the 8 MiB Continuity boundary was not reached within the bounded receipt window")
 
-    def test_v6_program_funding_receipt_process_crash_boundaries(self) -> None:
+    def test_program_funding_receipt_process_crash_boundaries(self) -> None:
         receipt = self._funding_receipt()
         initial_clock = receipt.event_at_ms
 
         precommit_store = self._make_owner(
             path=self._path("funding-precommit.sqlite"),
             clock=_Clock(initial_clock),
-            schema_version=6,
         )
         before_precommit_package = precommit_store.export_continuity()
         before_precommit_counts = self._durable_counts(precommit_store.path)
@@ -2858,7 +2760,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_precommit = self._make_owner(
             path=precommit_store.path,
             clock=_Clock(initial_clock + 1),
-            schema_version=6,
         )
         self.assertEqual(reopened_precommit.export_continuity(), before_precommit_package)
         self.assertEqual(self._durable_counts(reopened_precommit.path), before_precommit_counts)
@@ -2872,7 +2773,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         postcommit_store = self._make_owner(
             path=self._path("funding-postcommit.sqlite"),
             clock=_Clock(initial_clock),
-            schema_version=6,
         )
         pre_postcommit_package = postcommit_store.export_continuity()
         postcommit = self._run_funding_process_boundary(
@@ -2890,7 +2790,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_postcommit = self._make_owner(
             path=postcommit_store.path,
             clock=_Clock(initial_clock + 1),
-            schema_version=6,
         )
         self.assertEqual(reopened_postcommit.program_funding_summary()["historical_receipt_count"], 1)
         self._assert_verified(reopened_postcommit)
@@ -2905,7 +2804,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(reopened_postcommit)
 
     def test_first_service_acceptance_journey_and_effective_rule_change(self) -> None:
-        # The v6 receipt is reported separately; $1,000,000 remains the published-obligation denominator.
+        # The funding receipt is reported separately; $1,000,000 remains the published-obligation denominator.
         self.assertEqual(len(expected.PROGRAM_ITEMS), 20)
         self.assertEqual(sum(item.owed_cents for item in expected.PROGRAM_ITEMS), expected.PROGRAM_TOTAL_CENTS)
         self.assertEqual(len(expected.OTHER_RECIPIENT_PAYMENTS), 19)
@@ -3050,10 +2949,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             },
             expected_authority=self.authority,
         )
-        self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v6")
+        self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v7")
         self.assertEqual(source_package_result["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
         source_package_view = mirror.validate_owner_continuity_package(source_package)
-        self.assertEqual(source_package_view["version"], 6)
+        self.assertEqual(source_package_view["version"], 7)
         self.assertEqual(source_package_view["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
         self.assertFalse(source_package_view["dispatch_enabled"])
         self.assertFalse(source_package_view["egress_enabled"])
@@ -3381,32 +3280,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.summary()["obligation_count"], 0)
         self._assert_verified(store)
 
-    def test_v6_funding_owner_rejects_population_writes_without_mutation(self) -> None:
-        store = self._make_owner(schema_version=6)
-        pack = self._pack(expected.CONTROL_PACK_V1)
-        store.publish_control_pack(pack)
-        before_package = store.export_continuity()
-        before_counts = self._durable_counts(store.path)
-        population_id = "population:fixture:v6-rejected"
-        with self.assertRaisesRegex(FinancialInputError, "population_manifest_schema_v7_required"):
-            store.stage_population(
-                population_id=population_id,
-                manifest_id="population-manifest:fixture:v6-rejected:v1",
-                pack_id=pack.pack_id,
-                cutoff_ms=pack.effective_start_ms,
-                inclusion_rules=("included:synthetic",),
-                expected_count=1,
-                items=self._items(population_id)[:1],
-            )
-        with self.assertRaisesRegex(FinancialInputError, "population_manifest_schema_v7_required"):
-            store.validate_population(population_id)
-        with self.assertRaisesRegex(FinancialInputError, "population_manifest_schema_v7_required"):
-            store.publish_population(population_id)
-        self.assertEqual(store.export_continuity(), before_package)
-        self.assertEqual(self._durable_counts(store.path), before_counts)
-        self.assertEqual(store.summary()["obligation_count"], 0)
-        self._assert_verified(store)
-
     def test_population_same_count_substitution_stays_incomplete_and_unpublishable(self) -> None:
         store = self._make_owner()
         pack = self._pack(expected.CONTROL_PACK_V1)
@@ -3636,7 +3509,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             mutator(altered)
             body = dict(altered)
             del body["package_digest"]
-            altered["package_digest"] = continuity_package_digest(body, schema_version=7)
+            altered["package_digest"] = continuity_package_digest(body)
             return _independent_canonical(altered)
 
         tampered_member = tamper_and_rehash(
@@ -4775,7 +4648,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertFalse(destination.exists())
         self._assert_verified(store)
 
-    def test_v5_old_continuity_version_is_rejected_without_mutating_source(self) -> None:
+    def test_old_continuity_version_is_rejected_without_mutating_source(self) -> None:
         store = self._build_base()
         before = store.path.read_bytes()
         package = json.loads(store.export_continuity().decode("ascii"))
@@ -4787,10 +4660,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.path.read_bytes(), before)
         self._assert_verified(store)
 
-    def test_v2_v3_v4_tagged_store_and_package_inputs_reject_without_creation(self) -> None:
+    def test_retired_v2_to_v6_tagged_store_and_package_inputs_reject_without_creation(self) -> None:
         store = self._build_base()
         source_before = store.path.read_bytes()
-        for version in (2, 3, 4):
+        for version in (2, 3, 4, 5, 6):
             target = self._path(f"tag-only-owner-v{version}.sqlite")
             target.write_bytes(source_before)
             with closing(sqlite3.connect(target, isolation_level=None)) as connection:
@@ -4807,6 +4680,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     clock=_Clock(),
                 )
             self.assertEqual(target.read_bytes(), target_before)
+            with self.assertRaisesRegex(IndependentFinancialError, "schema:version"):
+                verify_database(target, expected_config=store.config, expected_authority=self.authority)
+            self.assertEqual(target.read_bytes(), target_before)
+            with self.assertRaises(FinancialInputError):
+                replace(store.config, schema_version=version)
 
             package = json.loads(store.export_continuity().decode("ascii"))
             package["schema"] = f"RR/FINANCIAL/CONTINUITY/v{version}"
@@ -4814,11 +4692,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             body = dict(package)
             del body["package_digest"]
             package["package_digest"] = _independent_hex(
-                _independent_digest(b"RR/FINANCIAL/CONTINUITY/v5\x00", _independent_canonical(body))
+                _independent_digest(f"RR/FINANCIAL/CONTINUITY/v{version}\x00".encode("ascii"), _independent_canonical(body))
             )
             old_package = _independent_canonical(package)
             with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
                 FinancialOwner.validate_continuity_package(old_package)
+            with self.assertRaisesRegex(IndependentFinancialError, "continuity:schema"):
+                verify_continuity_package(
+                    old_package,
+                    expected_scope=package["scope"],
+                    expected_authority=self.authority,
+                )
             destination = self._path(f"tag-only-restore-v{version}.sqlite")
             with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
                 FinancialOwner.restore_continuity(

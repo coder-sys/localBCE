@@ -61,18 +61,12 @@ def _fail(error_type: type[FinancialError], code: str) -> None:
     raise error
 
 
-_SCHEMA_VERSION: Final[int] = 5
-_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v5"
-_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v5"
-_NEXT_SCHEMA_VERSION: Final[int] = 6
-_NEXT_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v6"
-_NEXT_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v6"
-_MANIFEST_SCHEMA_VERSION: Final[int] = 7
-_MANIFEST_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v7"
-_MANIFEST_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v7"
-_DEFAULT_SCHEMA_VERSION: Final[int] = _MANIFEST_SCHEMA_VERSION
-_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v1"
-_POPULATION_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v2"
+# The owner knows exactly one store version. v5/v6 stores and packages are
+# retired (docs/CORE_REDESIGN.md step 1) and fail closed like v2-v4.
+_SCHEMA_VERSION: Final[int] = 7
+_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v7"
+_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v7"
+_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v2"
 _POPULATION_MANIFEST_CONTRACT: Final[str] = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 _CURRENCY: Final[str] = "USD"
 _MAX_CENTS: Final[int] = (1 << 63) - 1
@@ -154,9 +148,7 @@ _CONTROL_PACK_POLICIES: Final[dict[tuple[str, str], tuple[tuple[str, ...], str, 
 }
 _EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
 _HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
-_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v5\x00"
-_NEXT_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v6\x00"
-_MANIFEST_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v7\x00"
+_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v7\x00"
 _EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 _ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 _IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
@@ -164,9 +156,7 @@ _EVALUATION_RESULT_DOMAIN = b"RR/FINANCIAL/EVALUATION/v5\x00"
 _EVALUATION_INPUT_DOMAIN = b"RR/FINANCIAL/EVALUATION-INPUT/v1\x00"
 _EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 _EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
-_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v5\x00"
-_NEXT_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v6\x00"
-_MANIFEST_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
+_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
 _POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 _POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
 _POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
@@ -178,27 +168,7 @@ _IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
 _EVALUATION_RECEIPT_CONTRACT: Final[str] = "RR/FINANCIAL/EVALUATION-RECEIPT/v1"
 _ZERO_DIGEST: Final[bytes] = b"\x00" * 64
 
-_TABLES: Final[frozenset[str]] = frozenset(
-    {
-        "financial_identity",
-        "financial_meta",
-        "control_packs",
-        "population_imports",
-        "population_items",
-        "obligations",
-        "evidence",
-        "payments",
-        "claimed_adjustments",
-        "cases",
-        "determinations",
-        "actions",
-        "action_outbox",
-        "financial_events",
-        "financial_conflicts",
-        "evaluations",
-    }
-)
-
+# Exported (Continuity v7) tables and their exact column order.
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "financial_identity": (
         "id", "schema_version", "provenance", "bound_mode", "bound_owner_id",
@@ -282,9 +252,6 @@ _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
         "authority_digest", "evidence_bindings_json", "input_snapshot_json",
         "input_snapshot_digest", "receipt_digest",
     ),
-}
-
-_PROGRAM_FUNDING_TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "program_funding_receipts": (
         "receipt_id", "state_id", "deployment_id", "program_id", "period_id", "currency",
         "source_record_ref", "amount_cents", "confirmation_class", "evidence_status",
@@ -293,8 +260,6 @@ _PROGRAM_FUNDING_TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "program_funding_projection": (
         "source_record_ref", "receipt_id", "amount_cents", "event_at_ms", "revision", "receipt_digest",
     ),
-}
-_POPULATION_MANIFEST_TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "population_manifests": (
         "manifest_id", "contract", "manifest_version", "state_id", "deployment_id",
         "program_id", "period_id", "currency", "pack_id", "cutoff_ms",
@@ -313,52 +278,7 @@ _POPULATION_MANIFEST_TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
         "population_id", "manifest_id", "manifest_version", "manifest_digest",
     ),
 }
-_TABLES_BY_VERSION: Final[dict[int, frozenset[str]]] = {
-    5: _TABLES,
-    6: _TABLES | frozenset(_PROGRAM_FUNDING_TABLE_COLUMNS),
-    7: _TABLES | frozenset(_PROGRAM_FUNDING_TABLE_COLUMNS) | frozenset(_POPULATION_MANIFEST_TABLE_COLUMNS),
-}
-_TABLE_COLUMNS_BY_VERSION: Final[dict[int, dict[str, tuple[str, ...]]]] = {
-    5: _TABLE_COLUMNS,
-    6: {**_TABLE_COLUMNS, **_PROGRAM_FUNDING_TABLE_COLUMNS},
-    7: {**_TABLE_COLUMNS, **_PROGRAM_FUNDING_TABLE_COLUMNS, **_POPULATION_MANIFEST_TABLE_COLUMNS},
-}
-_SCHEMA_BY_VERSION: Final[dict[int, str]] = {
-    5: _SCHEMA,
-    6: _NEXT_SCHEMA,
-    7: _MANIFEST_SCHEMA,
-}
-_CONTINUITY_SCHEMA_BY_VERSION: Final[dict[int, str]] = {
-    5: _CONTINUITY_SCHEMA,
-    6: _NEXT_CONTINUITY_SCHEMA,
-    7: _MANIFEST_CONTINUITY_SCHEMA,
-}
-_GENESIS_DOMAIN_BY_VERSION: Final[dict[int, bytes]] = {
-    5: _GENESIS_DOMAIN,
-    6: _NEXT_GENESIS_DOMAIN,
-    7: _MANIFEST_GENESIS_DOMAIN,
-}
-_CONTINUITY_DOMAIN_BY_VERSION: Final[dict[int, bytes]] = {
-    5: _CONTINUITY_DOMAIN,
-    6: _NEXT_CONTINUITY_DOMAIN,
-    7: _MANIFEST_CONTINUITY_DOMAIN,
-}
-
-
-def _version_contract(schema_version: int) -> tuple[str, str, bytes, bytes, frozenset[str], dict[str, tuple[str, ...]]]:
-    if type(schema_version) is not int or schema_version not in _TABLES_BY_VERSION:
-        _fail(FinancialInputError, "schema_version")
-    return (
-        _SCHEMA_BY_VERSION[schema_version],
-        _CONTINUITY_SCHEMA_BY_VERSION[schema_version],
-        _GENESIS_DOMAIN_BY_VERSION[schema_version],
-        _CONTINUITY_DOMAIN_BY_VERSION[schema_version],
-        _TABLES_BY_VERSION[schema_version],
-        _TABLE_COLUMNS_BY_VERSION[schema_version],
-    )
-
-
-_FUNDING_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset({_NEXT_SCHEMA_VERSION, _MANIFEST_SCHEMA_VERSION})
+_TABLES: Final[frozenset[str]] = frozenset(_TABLE_COLUMNS)
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -547,18 +467,15 @@ def _time(value: object, label: str) -> int:
 def _identity_record(
     value: Mapping[str, Any],
     *,
-    schema_version: int = _DEFAULT_SCHEMA_VERSION,
     error_type: type[FinancialError] = FinancialIntegrityError,
     code_prefix: str = "identity",
 ) -> dict[str, Any]:
     fields = set(_TABLE_COLUMNS["financial_identity"])
-    if type(schema_version) is not int or schema_version not in _TABLES_BY_VERSION:
-        _fail(error_type, f"{code_prefix}:schema")
     if not isinstance(value, Mapping) or set(value) != fields:
         _fail(error_type, f"{code_prefix}:shape")
     if value["id"] != 1:
         _fail(error_type, f"{code_prefix}:id")
-    if type(value["schema_version"]) is not int or value["schema_version"] != schema_version:
+    if type(value["schema_version"]) is not int or value["schema_version"] != _SCHEMA_VERSION:
         _fail(error_type, f"{code_prefix}:schema")
     provenance = value["provenance"]
     bound_mode = value["bound_mode"]
@@ -595,7 +512,7 @@ def _identity_record(
         _fail(error_type, f"{code_prefix}:digest")
     return {
         "id": value["id"],
-        "schema_version": schema_version,
+        "schema_version": _SCHEMA_VERSION,
         "provenance": provenance,
         "bound_mode": bound_mode,
         "bound_owner_id": bound_owner_id,
@@ -1171,7 +1088,7 @@ class FinancialOwnerConfig:
     program_id: str
     period_id: str = "PROGRAM"
     currency: str = _CURRENCY
-    schema_version: int = _DEFAULT_SCHEMA_VERSION
+    schema_version: int = _SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         for value, label in ((self.state_id, "state_id"), (self.deployment_id, "deployment_id"), (self.program_id, "program_id"), (self.period_id, "period_id")):
@@ -1180,7 +1097,7 @@ class FinancialOwnerConfig:
             _fail(FinancialInputError, "period_scope_required")
         if self.currency != _CURRENCY:
             _fail(FinancialInputError, "currency")
-        if type(self.schema_version) is not int or self.schema_version not in _TABLES_BY_VERSION:
+        if type(self.schema_version) is not int or self.schema_version != _SCHEMA_VERSION:
             _fail(FinancialInputError, "schema_version")
 
     @property
@@ -1321,8 +1238,7 @@ def _install_private_index_set(connection: sqlite3.Connection) -> None:
         _fail(FinancialIntegrityError, "schema_private_indexes")
 
 
-def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAULT_SCHEMA_VERSION) -> None:
-    _version_contract(schema_version)
+def _sql_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
         CREATE TABLE financial_identity (
@@ -1594,11 +1510,6 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
         CREATE TRIGGER financial_identity_delete_immutable
         BEFORE DELETE ON financial_identity
         BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END;
-        """
-    )
-    if schema_version in _FUNDING_SCHEMA_VERSIONS:
-        connection.executescript(
-            """
             CREATE TABLE program_funding_receipts (
                 receipt_id TEXT PRIMARY KEY,
                 state_id TEXT NOT NULL,
@@ -1629,11 +1540,6 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             CREATE TRIGGER program_funding_receipt_delete_immutable
             BEFORE DELETE ON program_funding_receipts
             BEGIN SELECT RAISE(ABORT,'program_funding_receipt_immutable'); END;
-            """
-        )
-    if schema_version == _MANIFEST_SCHEMA_VERSION:
-        connection.executescript(
-            """
             CREATE TABLE population_manifests (
                 manifest_id TEXT PRIMARY KEY,
                 contract TEXT NOT NULL CHECK (contract='RR/FINANCIAL/POPULATION-MANIFEST/v1'),
@@ -1709,10 +1615,9 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             CREATE TRIGGER population_manifest_binding_delete_immutable
             BEFORE DELETE ON population_manifest_bindings
             BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END;
-            """
-        )
-    if schema_version in _FUNDING_SCHEMA_VERSIONS:
-        _create_continuity_admission_table(connection, _version_contract(schema_version)[4])
+        """
+    )
+    _create_continuity_admission_table(connection, _TABLES)
 
 
 def _create_continuity_admission_table(connection: sqlite3.Connection, tables: Iterable[str]) -> None:
@@ -1810,15 +1715,11 @@ class FinancialOwner:
             _fail(FinancialInputError, "clock")
         self.path = path
         self.config = config
-        self.schema_version = config.schema_version
-        (
-            self.schema,
-            self.continuity_schema,
-            self._genesis_domain,
-            self._continuity_domain,
-            self._tables,
-            self._table_columns,
-        ) = _version_contract(self.schema_version)
+        self.schema_version = _SCHEMA_VERSION
+        self.schema = _SCHEMA
+        self.continuity_schema = _CONTINUITY_SCHEMA
+        self._tables = _TABLES
+        self._table_columns = _TABLE_COLUMNS
         self.trusted_authority = trusted_authority
         self.correction_transition_release = correction_transition_release
         self.clock: FinancialClock = clock if clock is not None else _SystemClock()
@@ -1840,7 +1741,7 @@ class FinancialOwner:
                     anchor_sequence=0,
                     source_package_digest=_ZERO_DIGEST,
                 )
-                genesis = _digest(self._genesis_domain, config.canonical_bytes, trusted_authority.digest, identity_digest)
+                genesis = _digest(_GENESIS_DOMAIN, config.canonical_bytes, trusted_authority.digest, identity_digest)
                 identity = {
                     "id": 1,
                     "schema_version": self.schema_version,
@@ -1856,11 +1757,7 @@ class FinancialOwner:
                 initial_sequence = 0
                 initial_history_head = genesis
             else:
-                identity = _identity_record(
-                    identity_contract,
-                    schema_version=self.schema_version,
-                    code_prefix="identity_contract",
-                )
+                identity = _identity_record(identity_contract, code_prefix="identity_contract")
                 if identity["provenance"] != "CONTINUITY_RESTORE" or identity["bound_mode"] != mode or identity["bound_owner_id"] != self.owner_id:
                     _fail(FinancialIntegrityError, "identity_contract_binding")
                 if identity["source_package_digest"] == _ZERO_DIGEST:
@@ -1868,7 +1765,7 @@ class FinancialOwner:
                 initial_sequence = int(identity["anchor_sequence"])
                 initial_history_head = bytes(identity["anchor_head"])
             with closing(self._connect()) as connection:
-                _sql_schema(connection, schema_version=self.schema_version)
+                _sql_schema(connection)
                 self._install_continuity_admission_triggers(connection)
                 connection.execute(
                     "INSERT INTO financial_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1914,8 +1811,6 @@ class FinancialOwner:
             return -1
 
     def _install_continuity_admission_triggers(self, connection: sqlite3.Connection) -> None:
-        if self.schema_version not in _FUNDING_SCHEMA_VERSIONS:
-            return
         helper = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
             (_CONTINUITY_ADMISSION_TABLE,),
@@ -2004,8 +1899,6 @@ class FinancialOwner:
         return values
 
     def _ensure_continuity_admission(self, connection: sqlite3.Connection) -> None:
-        if self.schema_version not in _FUNDING_SCHEMA_VERSIONS:
-            return
         try:
             connection.execute("BEGIN IMMEDIATE")
             meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
@@ -2044,8 +1937,6 @@ class FinancialOwner:
             raise
 
     def _verify_continuity_admission_cache(self, connection: sqlite3.Connection) -> None:
-        if self.schema_version not in _FUNDING_SCHEMA_VERSIONS:
-            return
         actual = self._continuity_admission_values(connection)
         rebuilt = self._recompute_continuity_admission(connection)
         if actual != rebuilt:
@@ -2061,15 +1952,9 @@ class FinancialOwner:
                 if row is None:
                     _fail(FinancialIntegrityError, "schema_meta")
                 if row["schema_version"] != self.schema_version:
-                    if row["schema_version"] in _TABLES_BY_VERSION and self.schema_version in _TABLES_BY_VERSION:
-                        _fail(FinancialIntegrityError, "schema_version_incompatible")
                     _fail(FinancialIntegrityError, "schema_identity")
                 tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-                expected_tables = self._tables | (
-                    {_CONTINUITY_ADMISSION_TABLE}
-                    if self.schema_version in _FUNDING_SCHEMA_VERSIONS
-                    else set()
-                )
+                expected_tables = self._tables | {_CONTINUITY_ADMISSION_TABLE}
                 if tables != expected_tables:
                     _fail(FinancialIntegrityError, "schema_tables")
                 self._verify_meta_identity(connection, row)
@@ -2097,12 +1982,7 @@ class FinancialOwner:
             )
         )
         if actual != expected:
-            if (
-                meta["schema_version"] != self.schema_version
-                and meta["schema_version"] in _TABLES_BY_VERSION
-                and self.schema_version in _TABLES_BY_VERSION
-            ):
-                _fail(FinancialIntegrityError, "schema_version_incompatible")
+            # Any other store version, including the retired v5/v6, fails closed here.
             _fail(FinancialIntegrityError, "schema_identity")
         if int(meta["dispatch_enabled"]) != 0 or int(meta["egress_enabled"]) != 0 or str(meta["mode"]) != self.mode:
             _fail(FinancialIntegrityError, "nonactivating_boundary")
@@ -2124,13 +2004,12 @@ class FinancialOwner:
         identity_row = identity_rows[0]
         identity = _identity_record(
             {column: identity_row[column] for column in self._table_columns["financial_identity"]},
-            schema_version=self.schema_version,
         )
         if identity["bound_mode"] != str(meta["mode"]) or identity["bound_owner_id"] != str(meta["owner_id"]):
             _fail(FinancialIntegrityError, "identity_binding")
         if identity["provenance"] == "ROOT":
             expected_genesis = _digest(
-                self._genesis_domain,
+                _GENESIS_DOMAIN,
                 self.config.canonical_bytes,
                 self.trusted_authority.digest,
                 identity["identity_digest"],
@@ -2172,10 +2051,7 @@ class FinancialOwner:
                 connection.execute("BEGIN IMMEDIATE")
                 changes_before = connection.total_changes
                 yield connection
-                if (
-                    self.schema_version in _FUNDING_SCHEMA_VERSIONS
-                    and connection.total_changes != changes_before
-                ):
+                if connection.total_changes != changes_before:
                     # The committed local ledger preserves the exact export bound
                     # without serializing rows that this transaction did not touch.
                     if self._continuity_admission_package_size(connection) > _MAX_PACKAGE_BYTES:
@@ -2318,8 +2194,6 @@ class FinancialOwner:
     ) -> dict[str, Any]:
         """Reconstruct the published v7 manifest revision for one obligation."""
 
-        if self.schema_version != _MANIFEST_SCHEMA_VERSION:
-            _fail(FinancialIntegrityError, "population_manifest_schema_v7_required")
         population_id = _id(str(obligation["population_id"]), "population_id")
         population = connection.execute(
             "SELECT * FROM population_imports WHERE population_id=?",
@@ -2581,10 +2455,6 @@ class FinancialOwner:
             self._append_event(connection, aggregate_type="CONTROL_PACK", aggregate_id=pack.pack_id, kind="CONTROL_PACK_PUBLISHED", before_revision=0, after_revision=1, payload={"pack_id": pack.pack_id, "version": pack.version, "period_id": pack.period_id, "digest": _hex(pack.digest)}, committed_at_ms=at_ms)
             return {"status": "PUBLISHED", "pack_id": pack.pack_id, "version": pack.version, "digest": _hex(pack.digest)}
 
-    def _require_population_manifest_schema(self) -> None:
-        if self.schema_version != _MANIFEST_SCHEMA_VERSION:
-            _fail(FinancialInputError, "population_manifest_schema_v7_required")
-
     def _load_population_manifest(
         self,
         connection: sqlite3.Connection,
@@ -2767,7 +2637,6 @@ class FinancialOwner:
         """Record an immutable source roster receipt or an explicit supersession."""
 
         self._assert_actionable()
-        self._require_population_manifest_schema()
         if type(manifest) is not PopulationManifest:
             _fail(FinancialInputError, "population_manifest_type")
         if (
@@ -3048,7 +2917,6 @@ class FinancialOwner:
     ) -> dict[str, Any]:
         """Stream a population into a staged import; publish is a separate gate."""
         self._assert_actionable()
-        self._require_population_manifest_schema()
         _id(population_id, "population_id")
         if manifest_id is None:
             _fail(FinancialInputError, "population_manifest_required")
@@ -3181,7 +3049,6 @@ class FinancialOwner:
 
     def validate_population(self, population_id: str) -> dict[str, Any]:
         self._assert_actionable()
-        self._require_population_manifest_schema()
         _id(population_id, "population_id")
         with self._write() as connection:
             row = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
@@ -3249,15 +3116,6 @@ class FinancialOwner:
                 "expected_count": int(row["expected_count"]),
                 "validated_count": int(row["validated_count"]),
             }
-            if self.schema_version != _MANIFEST_SCHEMA_VERSION:
-                return {
-                    **base,
-                    "manifest_status": "LEGACY_UNVERIFIED",
-                    "completeness": "UNVERIFIED",
-                    "source_complete": False,
-                    "manifest_version": None,
-                    "manifest_digest": None,
-                }
             binding = connection.execute(
                 "SELECT manifest_id,manifest_version,manifest_digest FROM population_manifest_bindings WHERE population_id=?",
                 (population_id,),
@@ -3519,7 +3377,6 @@ class FinancialOwner:
     def publish_population(self, population_id: str) -> dict[str, Any]:
         """Publish only a fully validated population and create obligations atomically."""
         self._assert_actionable()
-        self._require_population_manifest_schema()
         _id(population_id, "population_id")
         with self._write() as connection:
             import_row = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
@@ -5298,11 +5155,7 @@ class FinancialOwner:
                 _fail(FinancialRevisionError, "evaluation_reference_conflict")
 
             pack, _calculation_rule, _adjustment_rule = self._control_pack_for_obligation(connection, obligation_id)
-            population_binding = (
-                self._population_binding_for_obligation(connection, obligation)
-                if self.schema_version == _MANIFEST_SCHEMA_VERSION
-                else None
-            )
+            population_binding = self._population_binding_for_obligation(connection, obligation)
 
             def page(
                 select_sql: str,
@@ -5647,14 +5500,10 @@ class FinancialOwner:
                 resolution_assessment = "SUPPORTED"
 
             package = {
-                "contract": (
-                    _POPULATION_DECISION_PACKAGE_CONTRACT
-                    if self.schema_version == _MANIFEST_SCHEMA_VERSION
-                    else _DECISION_PACKAGE_CONTRACT
-                ),
+                "contract": _DECISION_PACKAGE_CONTRACT,
                 "scope": self._scope_value(),
                 "obligation": self._projection_for_row(obligation),
-                **({"population_binding": population_binding} if population_binding is not None else {}),
+                "population_binding": population_binding,
                 "evaluation_receipt": receipt,
                 "control_pack": {
                     "pack_id": pack.pack_id,
@@ -6108,10 +5957,6 @@ class FinancialOwner:
     def _dict_rows(self, connection: sqlite3.Connection, query: str, args: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         return [dict(row) for row in connection.execute(query, args).fetchall()]
 
-    def _require_funding_schema(self) -> None:
-        if self.schema_version not in _FUNDING_SCHEMA_VERSIONS:
-            _fail(FinancialInputError, "program_funding_schema_v6_required")
-
     @staticmethod
     def _funding_row_value(row: sqlite3.Row) -> dict[str, Any]:
         return {
@@ -6129,7 +5974,6 @@ class FinancialOwner:
     def program_funding_summary(self) -> dict[str, Any]:
         """Return the separate, versioned program-funding evidence projection."""
 
-        self._require_funding_schema()
         with self._read_snapshot() as connection:
             projections = list(
                 connection.execute(
@@ -6167,7 +6011,7 @@ class FinancialOwner:
         connection: sqlite3.Connection,
         receipt: ProgramFundingReceipt,
     ) -> tuple[str, dict[str, Any]]:
-        """Persist one validated, scoped v6 receipt while the caller holds BEGIN IMMEDIATE."""
+        """Persist one validated, scoped receipt while the caller holds BEGIN IMMEDIATE."""
 
         receipt_digest = receipt.digest
         existing = connection.execute(
@@ -6285,7 +6129,6 @@ class FinancialOwner:
     def record_program_funding_receipt(self, receipt: ProgramFundingReceipt) -> dict[str, Any]:
         """Record synthetic program-funding evidence without changing obligations or cash."""
 
-        self._require_funding_schema()
         self._assert_actionable()
         if type(receipt) is not ProgramFundingReceipt:
             _fail(FinancialInputError, "program_funding_receipt_type")
@@ -6687,18 +6530,13 @@ class FinancialOwner:
         if set(package) != required:
             _fail(FinancialContinuityError, "continuity_package_shape")
         package_version = package["version"]
-        if type(package_version) is not int or package_version not in _TABLES_BY_VERSION:
+        # Only Continuity v7 is accepted; retired v5/v6 (and v2-v4) packages fail closed.
+        if type(package_version) is not int or package_version != _SCHEMA_VERSION:
             _fail(FinancialContinuityError, "continuity_package_schema")
-        (
-            schema,
-            continuity_schema,
-            genesis_domain,
-            continuity_domain,
-            tables_allowed,
-            table_columns,
-        ) = _version_contract(package_version)
-        if package["schema"] != continuity_schema:
+        if package["schema"] != _CONTINUITY_SCHEMA:
             _fail(FinancialContinuityError, "continuity_package_schema")
+        tables_allowed = _TABLES
+        table_columns = _TABLE_COLUMNS
         scope = package["scope"]
         if type(scope) is not dict or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
             _fail(FinancialContinuityError, "continuity_package_scope")
@@ -6750,7 +6588,7 @@ class FinancialOwner:
         if len(identity_rows) != 1:
             _fail(FinancialContinuityError, "continuity_identity_cardinality")
         identity_raw = {column: cls._import_value(identity_rows[0][column]) for column in table_columns["financial_identity"]}
-        identity = _identity_record(identity_raw, schema_version=package_version, error_type=FinancialContinuityError, code_prefix="continuity_identity")
+        identity = _identity_record(identity_raw, error_type=FinancialContinuityError, code_prefix="continuity_identity")
         if identity["id"] != 1:
             _fail(FinancialContinuityError, "continuity_identity_id")
         meta_rows = tables["financial_meta"]
@@ -6758,8 +6596,8 @@ class FinancialOwner:
             _fail(FinancialContinuityError, "continuity_meta_rows")
         meta_row = {column: cls._import_value(meta_rows[0][column]) for column in table_columns["financial_meta"]}
         expected_meta = {
-            "schema_version": package_version,
-            "schema": schema,
+            "schema_version": _SCHEMA_VERSION,
+            "schema": _SCHEMA,
             "state_id": scope["state_id"],
             "deployment_id": scope["deployment_id"],
             "program_id": scope["program_id"],
@@ -6781,7 +6619,7 @@ class FinancialOwner:
         if identity["bound_mode"] != package["mode"] or identity["bound_mode"] != meta_row["mode"] or identity["bound_owner_id"] != meta_row["owner_id"]:
             _fail(FinancialContinuityError, "continuity_identity_binding")
         if identity["provenance"] == "ROOT":
-            expected_genesis = _digest(genesis_domain, _canonical(scope), authority_digest, identity["identity_digest"])
+            expected_genesis = _digest(_GENESIS_DOMAIN, _canonical(scope), authority_digest, identity["identity_digest"])
             if identity["source_package_digest"] != _ZERO_DIGEST or identity["anchor_sequence"] != 0 or identity["anchor_head"] != expected_genesis or identity["genesis_head"] != expected_genesis:
                 _fail(FinancialContinuityError, "continuity_identity_genesis")
         else:
@@ -6797,7 +6635,7 @@ class FinancialOwner:
         digest = package["package_digest"]
         body = dict(package)
         del body["package_digest"]
-        expected = _hex(_digest(continuity_domain, _canonical(body)))
+        expected = _hex(_digest(_CONTINUITY_DOMAIN, _canonical(body)))
         if digest != expected:
             _fail(FinancialContinuityError, "continuity_package_digest")
         return package
@@ -6833,7 +6671,7 @@ class FinancialOwner:
                 _fail(FinancialContinuityError, "continuity_row_cap")
         empty_tables = {table: [] for table in sorted(self._tables)}
         body = self._continuity_package_body(connection, empty_tables)
-        package = {**body, "package_digest": _hex(_digest(self._continuity_domain, _canonical(body)))}
+        package = {**body, "package_digest": _hex(_digest(_CONTINUITY_DOMAIN, _canonical(body)))}
         total = len(_canonical(package))
         for row_count, row_bytes in admission.values():
             total += row_bytes + max(0, row_count - 1)
@@ -6854,7 +6692,7 @@ class FinancialOwner:
                 _fail(FinancialContinuityError, "continuity_row_cap")
             exported_rows[table] = rows
         body = self._continuity_package_body(connection, exported_rows)
-        package = {**body, "package_digest": _hex(_digest(self._continuity_domain, _canonical(body)))}
+        package = {**body, "package_digest": _hex(_digest(_CONTINUITY_DOMAIN, _canonical(body)))}
         encoded = _canonical(package)
         if len(encoded) > _MAX_PACKAGE_BYTES:
             _fail(FinancialContinuityError, "continuity_package_size")
@@ -6862,8 +6700,7 @@ class FinancialOwner:
 
     def export_continuity(self) -> bytes:
         """Export only bounded, allowlisted responsibility state."""
-        reader = self._read_snapshot if self.schema_version in _FUNDING_SCHEMA_VERSIONS else self._read
-        with reader() as connection:
+        with self._read_snapshot() as connection:
             return self._continuity_package_bytes(connection)
 
     @classmethod
@@ -6884,42 +6721,25 @@ class FinancialOwner:
         if restore_mode not in {"SHADOW", "TEST"}:
             _fail(FinancialContinuityError, "continuity_restore_mode")
         package = cls.validate_continuity_package(package_bytes)
-        if package["version"] != _MANIFEST_SCHEMA_VERSION:
-            tables = package["tables"]
-            if not isinstance(tables, dict):
-                _fail(FinancialContinuityError, "continuity_package_tables")
-            population_events = [
-                row
-                for row in tables["financial_events"]
-                if row.get("aggregate_type") == "POPULATION"
-            ]
-            if (
-                tables["population_imports"]
-                or tables["population_items"]
-                or tables["obligations"]
-                or population_events
-            ):
-                _fail(FinancialContinuityError, "continuity_manifest_schema_v7_required")
         if trusted_authority is None or type(trusted_authority) is not SyntheticTrustedAuthority:
             _fail(FinancialAuthorityError, "trusted_authority_required")
         authority = package["authority"]
         if (str(authority.get("authority_id")), int(authority.get("epoch", 0)), str(authority.get("digest"))) != (trusted_authority.authority_id, trusted_authority.epoch, _hex(trusted_authority.digest)):
             _fail(FinancialAuthorityError, "continuity_authority_mismatch")
         config_map = package["scope"]
-        config = FinancialOwnerConfig(state_id=str(config_map["state_id"]), deployment_id=str(config_map["deployment_id"]), program_id=str(config_map["program_id"]), period_id=str(config_map["period_id"]), currency=str(config_map["currency"]), schema_version=int(package["version"]))
+        config = FinancialOwnerConfig(state_id=str(config_map["state_id"]), deployment_id=str(config_map["deployment_id"]), program_id=str(config_map["program_id"]), period_id=str(config_map["period_id"]), currency=str(config_map["currency"]))
         restored_owner_id = _SHADOW_OWNER_ID if restore_mode == "SHADOW" else _TEST_OWNER_ID
         source_identity_rows = package["tables"]["financial_identity"]
         if len(source_identity_rows) != 1:
             _fail(FinancialContinuityError, "continuity_identity_rows")
         source_identity = _identity_record(
-            {column: cls._import_value(source_identity_rows[0][column]) for column in _TABLE_COLUMNS_BY_VERSION[config.schema_version]["financial_identity"]},
-            schema_version=config.schema_version,
+            {column: cls._import_value(source_identity_rows[0][column]) for column in _TABLE_COLUMNS["financial_identity"]},
             error_type=FinancialContinuityError,
             code_prefix="continuity_identity",
         )
         identity_contract = {
             "id": 1,
-            "schema_version": config.schema_version,
+            "schema_version": _SCHEMA_VERSION,
             "provenance": "CONTINUITY_RESTORE",
             "bound_mode": restore_mode,
             "bound_owner_id": restored_owner_id,
@@ -6990,16 +6810,13 @@ class FinancialOwner:
                 owner_id=restored_owner_id,
                 identity_contract=identity_contract,
             )
-            insertion_order = ["control_packs", "population_imports", "population_items", "obligations", "evidence", "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox", "financial_events", "financial_conflicts", "evaluations"]
-            if config.schema_version in _FUNDING_SCHEMA_VERSIONS:
-                insertion_order.extend(("program_funding_receipts", "program_funding_projection"))
-            if config.schema_version == _MANIFEST_SCHEMA_VERSION:
-                insertion_order.extend((
-                    "population_manifests",
-                    "population_manifest_members",
-                    "population_manifest_heads",
-                    "population_manifest_bindings",
-                ))
+            insertion_order = (
+                "control_packs", "population_imports", "population_items", "obligations", "evidence",
+                "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox",
+                "financial_events", "financial_conflicts", "evaluations", "program_funding_receipts",
+                "program_funding_projection", "population_manifests", "population_manifest_members",
+                "population_manifest_heads", "population_manifest_bindings",
+            )
             with owner._write() as connection:
                 for table in insertion_order:
                     connection.execute(f"DELETE FROM {table}")
