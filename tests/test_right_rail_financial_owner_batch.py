@@ -43,7 +43,7 @@ def _open(path, owner_type=FinancialOwner):
 def _commands(n):
     rng = random.Random(1)
     items = harness._build_cohort(random.Random(1), 4)
-    return [harness._command(rng, items[i % 4], 1, i)[1:] for i in range(n)]
+    return [harness._command(rng, items[i % 4], 1, i) for i in range(n)]
 
 
 def _history(path):
