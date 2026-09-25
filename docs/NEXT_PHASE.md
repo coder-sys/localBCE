@@ -157,8 +157,132 @@ Principles (details and verified figures: see section 7):
 
 ## 7. Verified procurement and Medicaid facts
 
-Pending: a sourced research pass (2026-09-24) on federal match and advance
-planning rules, modular certification, security frameworks, fast purchase
-routes, day-to-day Medicaid finance work, and state AI rules. Findings are
-folded in here with sources when complete; until then section 5 is direction,
-not a verified route.
+Desk research, 2026-09-24. Primary sources where possible; "[unconfirmed]"
+marks a claim not verified against a primary source. Recheck before quoting to
+a buyer: rules and dates move.
+
+**Money and federal approval.**
+- Federal match for Medicaid systems is 90% to build, 75% to run and 50% for
+  other administration. States spent about $9.0B on these systems in FY2025,
+  82% of it through contractors (MACPAC issue brief, July 2026).
+- CMS must approve in advance any contract at the 90/75 match expected to
+  exceed **$500K**, and any sole-source buy of $1M or more (45 CFR 95.611).
+  MACPAC's brief says $5M; that figure is the regular-match threshold. Plan
+  around $500K.
+- CMS has 60 days to answer an advance planning document; no answer means
+  provisional approval.
+- The conditions for the enhanced match (42 CFR 433.112(b)) name what we built:
+  - (b)(10): business rules separate from code, readable by people and machines
+    (the Control Pack).
+  - (b)(20): documentation that lets other contractors run the system (the
+    Continuity handover).
+  - (b)(13): reuse.
+- Risk: the state owns software *developed* with the 90% match. License the
+  platform commercially; deliver state-specific rules to the state.
+- Certification outcomes that fit (CMS certification repository, SMC v2.0,
+  October 2025): FM1 accurate payments including recoupments, FM4 capitation
+  accuracy and error correction, FM5 recoupment tracking and aging, FM8
+  financial reporting, PI6 recovery balances.
+- Certification timeline: 6 months in production plus about 6 months of
+  readiness preparation; after that the 75% run match applies retroactively.
+- Whether a ledger overlay that processes no claims counts as a system module
+  is decided state by state with CMS. The fallback is the 50% administrative
+  match with no certification.
+
+**Security and accessibility.**
+- Every module is built to NIST 800-53: independent assessment every 2 years,
+  a penetration test, a system security plan, annual disaster-recovery tests,
+  and business associate agreements (CMS certification repository).
+- ARC-AMPE replaced MARS-E (first deadline March 4, 2026). Build to NIST
+  800-53 Rev5 Moderate with an ARC-AMPE crosswalk; that covers both.
+- GovRAMP (formerly StateRAMP):
+  - Core: 60 controls, no outside assessor, small fees; the fastest entry.
+  - Ready or Authorized: 6–24 months [unconfirmed].
+  - Texas TX-RAMP Provisional allows contracting for 18 months while full
+    certification is pending.
+- SOC 2: about $25K–$80K in year one; a Type II report takes 6–12 months
+  [unconfirmed].
+- WCAG 2.1 AA deadlines moved to April 26, 2027 (ADA Title II, FR 2026-07663)
+  and May 11, 2027 (Section 504, FR 2026-09266). Buyers will ask for an
+  accessibility conformance report from 2027. Article XIII already requires AA.
+
+**Purchase routes.**
+- NASPO ValuePoint's Medicaid cooperative contracts cover claims, provider,
+  pharmacy and third-party liability, but no finance module.
+- The NASPO Cloud & Software Solutions 2026–2036 contract took effect September
+  16, 2026, with resellers such as Carahsoft and SHI. Whether resellers can add
+  a new product after award is unconfirmed.
+- Texas DIR runs a yearly solicitation cycle, published each September.
+- California's SB/DVBE option allows buys under $250K from a certified small
+  business after two quotes; California also runs innovation proofs of concept.
+- No documented case was found of a startup winning a first Medicaid finance
+  contract quickly. Fast-route timelines are estimates.
+
+**What the work looks like and where money is lost.**
+- Staff reconcile in Excel, SQL and SAS outside the claims system (state job
+  postings).
+- Directed payments are projected at about $110B a year, with no central record
+  of what was actually paid (MACPAC, October 2024; GAO-24-106202).
+- Documented losses:
+  - $207.5M in capitation paid for dead enrollees in FY2022 (OIG
+    A-04-23-09010, December 2025).
+  - Massachusetts duplicate-ID capitation became unrecoverable after its
+    reconciliation window closed (OIG with the state auditor, 2024).
+  - CMS does not track whether states return the federal share of plan
+    remittances (OIG OEI-03-23-00041, May 2025).
+  - $764.7M in federal overpayments on the CMS-64 that CMS's reviews missed
+    (OIG A-06-23-09006, June 2026).
+- States must return the federal share of an overpayment within 1 year of
+  discovery, recovered or not (42 CFR 433 Subpart F). Tracking discovery date
+  and aging is a recurring audit failure.
+
+**Dated triggers.**
+- Directed-payment fields in federal claims data: due September 2026.
+- Quarterly death-file checks and 6-month redeterminations for expansion
+  adults: January 1, 2027, bringing more recoupments.
+- Ban on post-payment reconciliation of directed payments: rating periods from
+  July 9, 2027.
+- Grandfathered directed payments step down: January 1, 2028.
+- Proposed rule CMS-2449-P, if finalized: January 2028 and 2029.
+
+Framing consequence: describe RightRail as tracking and correcting actual
+payment obligations and pass-through accuracy, never as reconciling directed
+payments after payment.
+
+**AI rules.**
+- No CMS rule on language models in Medicaid operations was found. The limits
+  are HIPAA, state policies and state AI laws:
+  - North Carolina, Pennsylvania and Illinois bar confidential data from
+    public AI tools.
+  - Texas TRAIGA, from January 2026.
+  - Colorado SB 189, from January 2027.
+- Section 4 already satisfies them: advisory only, inside the state's boundary,
+  and no identifying data.
+
+**Consequences for section 5, in order.**
+1. The first purchase is a 60–90 day shadow pilot under $500K on provider- and
+   plan-level data with no member data, bought through a small-purchase or
+   proof-of-concept route. Estimate: 1–4 months to contract.
+2. Sell against the dated triggers above, not "modernization".
+3. Get listed through a NASPO reseller (1–3 months) and enter the Texas DIR
+   cycle (6–12 months).
+4. A ready-to-paste advance-planning and alternatives-analysis insert mapping
+   RightRail to FM1/FM4/FM5/FM8/PI6 and 433.112(b)(10)/(13)/(20), with the
+   licensing position. Estimate: 4–8 weeks to build once.
+5. Security groundwork in parallel within about 6 months:
+   - a business associate agreement template;
+   - GovRAMP Core;
+   - the NIST system security plan and a penetration test;
+   - SOC 2 Type I;
+   - the accessibility conformance report.
+6. Subcontract under directed-payment consultants, integrators or an
+   incumbent's partner program, pitched as a controls layer for the prime.
+   Estimate: 1–3 months.
+
+Composite estimate for a first state:
+- months 0–3: pilot contracted;
+- months 3–6: shadow results;
+- months 6–12: production contract;
+- months 12–18: certification.
+
+A standalone RFP typically takes 12–24+ months.
