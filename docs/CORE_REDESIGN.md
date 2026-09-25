@@ -50,7 +50,10 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 5. Remove Python re-derivation of Lean (replacement: read-set binding + pre-COMMIT
    per-obligation checker).
 6. Complete-fact events + `apply` reducer: new OWNER/CONTINUITY v8 contract with explicit
-   v7->v8 conversion; old and new owners run side by side until projections match.
+   v7->v8 conversion. Engineering decision (2026-09-24): migrate on owner open, not side-by-side
+   owners: the owner converts a v7 store all-or-nothing inside the same open transaction that
+   already replays the history, and refuses (rolls back, file unchanged) if the converted
+   projections do not match the replay. v7 packages stay verifiable by the checker.
 7. Checker becomes replay + compare with an incremental mode; all 25 tamper tests still detect.
 8. Continuity v8, restore by replay, successor that can continue.
 9. Switch and Mirror reuse the replay.
