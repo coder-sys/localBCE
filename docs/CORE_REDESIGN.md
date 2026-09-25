@@ -68,7 +68,11 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 Replaces the per-write whole-history size admission, which refused every write after
 ~900 commands. Kept (not approved for removal): the v7 reader and size-cache check,
 `OPENING_BALANCE`, `tools/continuity_successor_v7.py`, and the 8 MiB package export,
-which now refuses at export time instead of refusing writes.
+now refused at export, not at write.
+
+Ceiling: 10,000 events, because Lean's `maxRows`/`maxRevision` (Types.lean) bound what the
+proof and checker accept. The owner refuses the 10,001st event, a revision or manifest members
+past 10,000 with `history_capacity` before commit; raising it is a Lean change.
 
 - Domain `RR/GATE/SEGMENT/v1` (one format for Continuity and the gate): SHA3-512 over
   `RR/GATE/SEGMENT/v1\0` and length-prefixed parts; `projection_root = D("rows", rows)`,
@@ -78,11 +82,13 @@ which now refuses at export time instead of refusing writes.
   its events, the sorted final images of the rows they touched, `segment_digest`, and a
   reserved `signature` (null; ML-DSA-87 later, outside the digest).
 - Bounds: seal after the write reaching 4,096 events or 4 MiB; a write carrying the open
-  segment past 10,000 events (the old row cap) or 16 MiB (twice the old package cap, so any
-  store the old cap admitted fits its one catch-up segment) fails `history_segment_size`.
-- Writes note touched rows in `history_pending`: O(this write) (IX.3). Older stores are
-  replayed on open, then their whole history opens segment 0.
-- `export_history`: manifest plus one file per segment; existing files are never rewritten.
+  segment past 10,000 events or 16 MiB (so any store the old cap admitted fits one segment)
+  fails `history_segment_size`.
+- Writes note touched rows in `history_pending`: O(this write) (IX.3). Older stores (v7,
+  v8 before segments) are replayed on open and sealed as segment 0 in the same transaction.
+- The checker recomputes sealed segments' chain, counts and event heads from the events and
+  the open segment's bookkeeping; sealed rows are append-only, bound by digest.
+- `export_history`: one fsynced file per segment; an existing file is compared, never rewritten.
   `restore_continuity(history=...)`: the checker verifies manifest, chain, event chains and
   seals; a fresh owner replays each segment and must reseal it byte-identically;
   `verify_database` replays the result and the checker binds its rows to the final images.
