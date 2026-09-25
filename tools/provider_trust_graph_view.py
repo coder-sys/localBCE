@@ -51,7 +51,8 @@ def _load_selection(
 
 
 def _base_view(selection: read_model.ProviderTrustGraphReadSelectionV1, *, now: int) -> dict[str, object]:
-    raw = read_model.build_read_model_v1(
+    # The read model returns its own canonical ASCII JSON object.
+    return json.loads(read_model.build_read_model_v1(
         selection.graph_artifact,
         selection.profile_registry,
         expected_profile_id=selection.expected_profile_id,
@@ -59,14 +60,7 @@ def _base_view(selection: read_model.ProviderTrustGraphReadSelectionV1, *, now: 
         export_request_raw=selection.export_request_raw,
         expected_operation_ref=selection.expected_operation_ref,
         now=now,
-    )
-    try:
-        value = json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise _LocalViewError("view:verified-response") from None
-    if type(value) is not dict:
-        raise _LocalViewError("view:verified-response")
-    return value
+    ))
 
 
 def _canonical_bundle(value: dict[str, object]) -> bytes:
@@ -103,13 +97,7 @@ def _build_bundle(
         )
 
     right_value = _base_view(right, now=now)
-    comparison_raw = read_model.compare_read_models_v1(left, right, now=now)
-    try:
-        comparison = json.loads(comparison_raw.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise _LocalViewError("view:verified-response") from None
-    if type(comparison) is not dict:
-        raise _LocalViewError("view:verified-response")
+    comparison = json.loads(read_model.compare_read_models_v1(left, right, now=now))
     return _canonical_bundle(
         {
             "schema": _BUNDLE_SCHEMA,
@@ -183,23 +171,7 @@ def _make_handler(routes: Mapping[str, tuple[str, bytes]]) -> type[BaseHTTPReque
         def _method_not_allowed(self) -> None:
             self._respond(405, b"Read-only GET routes only.\n")
 
-        def do_HEAD(self) -> None:
-            self._method_not_allowed()
-
-        def do_POST(self) -> None:
-            self._method_not_allowed()
-
-        def do_PUT(self) -> None:
-            self._method_not_allowed()
-
-        def do_PATCH(self) -> None:
-            self._method_not_allowed()
-
-        def do_DELETE(self) -> None:
-            self._method_not_allowed()
-
-        def do_OPTIONS(self) -> None:
-            self._method_not_allowed()
+        do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _method_not_allowed
 
         def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
             if code == 404:
@@ -233,8 +205,6 @@ class _LocalHTTPServer(HTTPServer):
 
 
 def _make_server(bundle: bytes, *, port: int) -> HTTPServer:
-    if type(bundle) is not bytes or not bundle or len(bundle) > _MAX_BUNDLE_BYTES:
-        raise _LocalViewError("view:bundle-input")
     routes = dict(_load_static_assets())
     routes["/data.json"] = ("application/json; charset=utf-8", bundle)
     return _LocalHTTPServer(
@@ -290,10 +260,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         bundle = _build_bundle(left, now=args.now, right=right)
         server = _make_server(bundle, port=args.port)
-    except read_model.ProviderTrustGraphReadModelV1Error as error:
-        sys.stderr.write(f"REJECT {error}\n")
-        return 1
-    except _LocalViewError as error:
+    except (read_model.ProviderTrustGraphReadModelV1Error, _LocalViewError) as error:
         sys.stderr.write(f"REJECT {error}\n")
         return 1
     except OSError:

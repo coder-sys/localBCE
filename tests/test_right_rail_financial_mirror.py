@@ -32,7 +32,6 @@ from tests.rightrail_financial_expected_cases import (
 )
 from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
 
-
 class _Clock:
     def __init__(self, value: int = 1_774_828_801_000) -> None:
         self.value = value
@@ -40,7 +39,6 @@ class _Clock:
     def now_ms(self) -> int:
         self.value += 1
         return self.value
-
 
 class FinancialMirrorTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -818,6 +816,27 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(reopened.obligation_detail(H_ITEM_ID)["case_status"], "CORRECTION_REQUIRED")
         self.assertEqual(reopened.verify_integrity()["mode"], "SHADOW")
 
+    def test_restore_test_continuity_keeps_the_correction_engine_binding(self) -> None:
+        """A TEST restore must not disable reject-offset: the restored Owner keeps
+        the same Lean correction-transition release as the Owner it was restored
+        from, so a correction attempted after restore-test still succeeds."""
+        self._prepare_claim()
+        package = self.mirror.export_continuity()
+        destination = self.root / "test-restore-then-reject.sqlite"
+        restored = self.mirror.restore_test_continuity(package, destination)
+        self.assertIsNotNone(restored.owner.correction_transition_release)
+        receipt = restored.current_evaluation_receipt(H_ITEM_ID)
+        decision = restored.reject_offset_and_authorize_correction(
+            item_id=H_ITEM_ID,
+            claim_id="claim:offset:h",
+            action_id="action:correction:h",
+            expected_revision=receipt["revision"],
+            decision_at_ms=1_774_922_400_000,
+            evaluation_id=receipt["evaluation_id"],
+            evaluation_result_digest=receipt["result_digest"],
+        )
+        self.assertEqual(decision["status"], "CORRECTION_AUTHORIZED")
+
     def test_continuity_tamper_oversize_source_overwrite_and_existing_destination_reject(self) -> None:
         package = self.mirror.export_continuity()
         tampered = json.loads(package.decode("ascii"))
@@ -908,7 +927,6 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(summary["schema"], "RR/FINANCIAL/MIRROR/v1")
         self.assertFalse(summary["dispatch_enabled"])
         self.assertFalse(summary["egress_enabled"])
-
 
 if __name__ == "__main__":
     unittest.main()

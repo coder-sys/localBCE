@@ -42,7 +42,6 @@ CORRECTION_TRANSITION_RESULT_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
     "312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E"
 )
 _SHA256_BYTES: Final[int] = 32
-_SEMANTIC_DIGEST_BYTES: Final[int] = 64
 _MAX_SQLITE_INTEGER: Final[int] = 2**63 - 1
 
 
@@ -153,8 +152,6 @@ class FinancialCorrectionTransitionRelease:
     stderr_max_bytes: int
     workspace: Path
     job_memory_cap_bytes: int
-    operation_contract: str = CORRECTION_TRANSITION_OPERATION
-    operation_version: int = 1
 
     def __post_init__(self) -> None:
         _validate_release(
@@ -163,13 +160,6 @@ class FinancialCorrectionTransitionRelease:
             input_cap=MAX_CORRECTION_TRANSITION_BYTES,
             output_cap=MAX_CORRECTION_TRANSITION_BYTES,
         )
-        if (
-            type(self.operation_contract) is not str
-            or self.operation_contract != CORRECTION_TRANSITION_OPERATION
-            or type(self.operation_version) is not int
-            or self.operation_version != 1
-        ):
-            raise FinancialEngineConfigError("engine_correction_operation_identity")
 
 
 # Execution records are built only below from an already validated contained
@@ -447,10 +437,7 @@ def _write_correction_query_observation(writer: Any, observation: Mapping[str, A
         raise FinancialEngineInputError(f"{label}_predicate")
     writer.byte(predicates[predicate], f"{label}_predicate")
     _ident(writer, observation.get("subject"), f"{label}_subject")
-    complete = observation.get("complete")
-    if type(complete) is not bool:
-        raise FinancialEngineInputError(f"{label}_complete")
-    writer.boolean(complete, f"{label}_complete")
+    writer.boolean(observation.get("complete"), f"{label}_complete")
     match_count = observation.get("match_count")
     if type(match_count) is not int or match_count not in (0, 1):
         raise FinancialEngineInputError(f"{label}_match_count")
@@ -596,8 +583,6 @@ def encode_correction_transition_request(
             expected_revision=expected_revision,
             action_lookup_kind=action_lookup.get("kind"),
         )
-        if len(current_input) > MAX_CORRECTION_TRANSITION_BYTES or len(receipt_bytes) > MAX_CORRECTION_TRANSITION_BYTES:
-            raise FinancialEngineInputError("engine_correction_request_limit")
 
         writer = semantic._WireWriter()
         writer.raw(b"BLFCMD01", "engine_correction_magic")
@@ -633,8 +618,6 @@ def encode_correction_transition_request(
         encoded = writer.finish(label="engine_correction_request_size")
     except semantic.SemanticAdapterError as error:
         raise FinancialEngineInputError(str(error)) from None
-    if len(encoded) > MAX_CORRECTION_TRANSITION_BYTES:
-        raise FinancialEngineInputError("engine_correction_request_contract")
     return encoded
 
 
@@ -1182,28 +1165,16 @@ _CORRECTION_REJECT_REQUIREMENTS: Final[dict[str, str]] = {
 }
 
 
-def _read_optional_correction_reject_reason(reader: Any, label: str) -> str | None:
+def _read_optional_correction_tag(reader: Any, tags: Mapping[int, str], label: str) -> str | None:
     tag = reader.byte(f"{label}_tag")
     if tag == 0:
         return None
     if tag != 1:
         raise FinancialEngineResultError(label)
-    reason = _CORRECTION_REJECT_REASON_TAGS.get(reader.byte(label))
-    if reason is None:
+    value = tags.get(reader.byte(label))
+    if value is None:
         raise FinancialEngineResultError(label)
-    return reason
-
-
-def _read_optional_correction_requirement(reader: Any, label: str) -> str | None:
-    tag = reader.byte(f"{label}_tag")
-    if tag == 0:
-        return None
-    if tag != 1:
-        raise FinancialEngineResultError(label)
-    requirement = _CORRECTION_REQUIREMENT_TAGS.get(reader.byte(label))
-    if requirement is None:
-        raise FinancialEngineResultError(label)
-    return requirement
+    return value
 
 
 def _read_correction_explanation(reader: Any) -> dict[str, Any]:
@@ -1224,8 +1195,8 @@ def _read_correction_explanation(reader: Any) -> dict[str, Any]:
     return {
         "code": code,
         "transition": transition,
-        "reject_reason": _read_optional_correction_reject_reason(reader, "correction_explanation_reject_reason"),
-        "unresolved_requirement": _read_optional_correction_requirement(reader, "correction_explanation_requirement"),
+        "reject_reason": _read_optional_correction_tag(reader, _CORRECTION_REJECT_REASON_TAGS, "correction_explanation_reject_reason"),
+        "unresolved_requirement": _read_optional_correction_tag(reader, _CORRECTION_REQUIREMENT_TAGS, "correction_explanation_requirement"),
         "claim_id": reader.option_identifier("correction_explanation_claim"),
         "action_id": reader.option_identifier("correction_explanation_action"),
         "input_evaluation_id": reader.option_identifier("correction_explanation_evaluation"),
@@ -1280,8 +1251,7 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             raise FinancialEngineResultError("engine_correction_event_payload") from None
         observations = deps["query_observations"]
         if (
-            action_id != transition_id.removeprefix("determination:")
-            or determination_id != transition_id
+            determination_id != transition_id
             or det["determination_id"] != determination_id
             or det["decision"] != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
             or det["amount_cents"] <= 0
@@ -1292,7 +1262,6 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             or action["status"] != "READY"
             or action["amount_cents"] != det["amount_cents"]
             or action["payload_digest"] != mutation["action_payload_digest"]
-            or len(mutation["action_idempotency_key"]) != _SEMANTIC_DIGEST_BYTES
             or outbox["action_id"] != action_id
             or outbox["status"] != "READY"
             or outbox["attempt"] != 0
@@ -1346,9 +1315,6 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             or deps["claim_before"]["obligation_id"] != det["obligation_id"]
             or det["supporting_evidence_ids"]
             != [binding["evidence_id"] for binding in deps["supporting_evidence"]]
-            or len(mutation["determination_digest"]) != _SEMANTIC_DIGEST_BYTES
-            or len(mutation["action_payload_digest"]) != _SEMANTIC_DIGEST_BYTES
-            or len(deps["input_evaluation_snapshot_digest"]) != _SEMANTIC_DIGEST_BYTES
             or not all(observation["complete"] for observation in observations.values())
             or any(
                 observation["version_sequence"] != deps["current_event_sequence"]
@@ -1364,9 +1330,6 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             or observations["action_id"]["match_count"] != 0
             or observations["determination_id"]["match_count"] != 0
             or observations["evaluation_consumed"]["match_count"] != 0
-            or observations["action_id"]["result_identity"] is not None
-            or observations["determination_id"]["result_identity"] is not None
-            or observations["evaluation_consumed"]["result_identity"] is not None
         ):
             raise FinancialEngineResultError("engine_correction_absence_binding")
         financial_result = mutation["resulting_result"]
@@ -1376,7 +1339,6 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             or financial_result.evaluated_at_ms != event["committed_at_ms"]
             or financial_result.obligation_id != det["obligation_id"]
             or financial_result.delivery_status != "READY"
-            or not mutation["resulting_input_wire"].startswith(semantic.BLFIN02_MAGIC)
         ):
             raise FinancialEngineResultError("engine_correction_result_projection")
         return
@@ -1400,7 +1362,7 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             raise FinancialEngineResultError("engine_correction_duplicate_shape")
         return
 
-    if status != "REJECTED" or reject_reason is None or mutation is not None:
+    if reject_reason is None or mutation is not None:
         raise FinancialEngineResultError("engine_correction_rejected_shape")
     if (
         explanation["code"] != "REJECTED"
@@ -1430,7 +1392,7 @@ def decode_correction_transition_result(payload: bytes) -> dict[str, Any]:
         contract = reader.string("correction_result_contract")
         if contract != CORRECTION_TRANSITION_OPERATION:
             raise FinancialEngineResultError("engine_correction_result_contract")
-        reject_reason = _read_optional_correction_reject_reason(reader, "correction_result_reject_reason")
+        reject_reason = _read_optional_correction_tag(reader, _CORRECTION_REJECT_REASON_TAGS, "correction_result_reject_reason")
         explanation = _read_correction_explanation(reader)
         action_id = reader.option_identifier("correction_result_action_id")
         determination_id = reader.option_identifier("correction_result_determination_id")

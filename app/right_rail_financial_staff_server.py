@@ -67,6 +67,7 @@ H_DUE_AT_MS = 1_774_915_200_000
 PACK_RECORDED_AT_MS = 1_767_139_200_000
 PACK_APPROVED_AT_MS = 1_767_182_400_000
 SUPPORT_EVENT_MS = 1_767_312_000_000
+OTHER_ITEM_PAYMENT_MS = 1_767_312_000_001
 CASH_EVENT_MS = 1_774_828_800_000
 DECISION_AT_MS = 1_774_922_400_000
 CORRECTION_EVENT_MS = 1_775_001_600_000
@@ -96,10 +97,16 @@ ITEM_LABELS = {
 }
 
 _ROOT = Path(__file__).resolve().parent
+# Role is selected by path, never by query string: do_GET rejects any query
+# or fragment outright, and a fixed set of real roles keeps every disallowed
+# control absent from the page rather than merely disabled (Art. XIII.4).
+STAFF_ROLES = ("analyst", "approver", "director", "auditor", "operator")
 _STATIC_FILES: dict[str, tuple[str, str]] = {
     "/": ("staff_workspace/index.html", "text/html; charset=utf-8"),
     "/staff.css": ("staff_workspace/staff.css", "text/css; charset=utf-8"),
     "/staff.js": ("staff_workspace/staff.js", "text/javascript; charset=utf-8"),
+    "/interaction-model.json": ("staff_workspace/interaction-model.json", "application/json; charset=utf-8"),
+    **{f"/role/{role}": ("staff_workspace/index.html", "text/html; charset=utf-8") for role in STAFF_ROLES},
 }
 _HEX_DIGEST = re.compile(r"^[0-9A-F]{128}$")
 _EVALUATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -385,8 +392,10 @@ class StaffWorkflow:
         owner.validate_population(POPULATION_ID)
         owner.publish_population(POPULATION_ID)
 
-        # Synthetic SUPPORT references exist for 19 recipients. H's offset
-        # claim intentionally has no supporting source evidence.
+        # Synthetic SUPPORT references and full payment exist for the 19 other
+        # recipients: they are paid in full and are not open items. H's offset
+        # claim intentionally has no supporting source evidence and is the
+        # one item this fixture leaves for staff to work.
         for index in range(1, 20):
             item_id = f"item-{index:02d}"
             owner.record_support_evidence(
@@ -399,6 +408,17 @@ class StaffWorkflow:
                 applicable_at_ms=SUPPORT_EVENT_MS,
                 event_at_ms=SUPPORT_EVENT_MS,
                 received_at_ms=SUPPORT_EVENT_MS,
+            )
+            owner.record_payment_evidence(
+                item_id=item_id,
+                payment_id=f"payment:{item_id}:full",
+                common_origin_id=f"origin:payment:{index:02d}",
+                amount_cents=ITEM_AMOUNTS[item_id],
+                evidence_id=f"evidence:payment:{item_id}",
+                event_at_ms=OTHER_ITEM_PAYMENT_MS,
+                source_id="fixture-payment-file",
+                source_version="payment-v1",
+                local_ref=f"ref:payment:{index:02d}",
             )
 
         owner.record_payment_evidence(

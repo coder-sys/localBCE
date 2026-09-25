@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
   <title>RightRail synthetic staff workspace</title>
   <link rel="stylesheet" href="/staff.css">
   <script src="/staff.js" defer></script>
@@ -15,10 +15,10 @@
     <h1>RightRail financial staff workspace</h1>
     <p class="lede">One Owner record, viewed and commanded through its same-owner Mirror.</p>
     <div class="notice" role="note">
-      <strong>Demo only.</strong> No State credentials, real source truth, PHI, production roles,
+      <strong>Demo only.</strong> No State credentials, real source truth, PHI, production identity,
       hosting, live dispatch, or payment movement are present. Every identity and source record
-      below is synthetic. The browser cannot choose an actor or role. Restarting the service resets
-      this temporary demo database.
+      below is synthetic. The role picker below only selects which synthetic controls are shown; it
+      does not authenticate a person. Restarting the service resets this temporary demo database.
     </div>
     <div class="status-row" aria-label="Service status">
       <p id="connection-status" class="status-banner pending" role="status" aria-live="polite">Connecting to the local Owner…</p>
@@ -26,9 +26,22 @@
       <p class="status-banner disabled">Dispatch and egress: DISABLED</p>
     </div>
     <p id="read-as-of" class="read-as-of">No successful read yet.</p>
+    <p id="role-status" class="read-as-of"></p>
+    <details class="package-details">
+      <summary>Technical read detail</summary>
+      <p id="read-detail" class="muted">No successful read yet.</p>
+    </details>
   </header>
 
   <main id="main" class="layout">
+    <section id="role-picker" aria-labelledby="picker-title" class="panel" hidden>
+      <p class="eyebrow">Choose your role</p>
+      <h2 id="picker-title">Who is using this workspace?</h2>
+      <p class="explanation">Each role sees only the screens and commands that role may use. Nothing here identifies a real staff member; this only selects which synthetic controls are shown.</p>
+      <ul id="role-links" class="unknown-list"></ul>
+    </section>
+
+    <div id="workspace-root" hidden>
     <section aria-labelledby="overview-title" class="panel">
       <div class="section-heading">
         <div>
@@ -37,10 +50,16 @@
         </div>
         <button id="refresh-button" class="secondary" type="button">Refresh overview</button>
       </div>
+      <div class="answer-first">
+        <h3>Needs attention now</h3>
+        <p id="h-attention">Waiting for the first Owner read.</p>
+      </div>
       <div class="metric-grid" aria-label="Program totals">
         <article class="metric"><h3>Population</h3><p id="population-count">—</p><span>owner obligations</span></article>
         <article class="metric"><h3>Total owed</h3><p id="program-total">—</p><span>synthetic USD</span></article>
-        <article class="metric"><h3>H shortfall</h3><p id="h-shortfall">—</p><span>current Owner projection</span></article>
+        <article class="metric"><h3>Cash recorded</h3><p id="program-cash">—</p><span>all hospitals</span></article>
+        <article class="metric"><h3>Program shortfall</h3><p id="program-shortfall">—</p><span>owed minus cash and approved adjustments</span></article>
+        <article class="metric"><h3>Open items</h3><p id="open-items">—</p><span>hospitals not yet paid in full</span></article>
         <article class="metric"><h3>Roster check</h3><p id="roster-status">—</p><span>internal manifest only</span></article>
       </div>
       <div class="split-note">
@@ -71,7 +90,7 @@
       </div>
     </section>
 
-    <section aria-labelledby="workflow-title" class="panel">
+    <section id="workflow-section" aria-labelledby="workflow-title" class="panel">
       <div class="section-heading">
         <div>
           <p class="eyebrow">H case workflow</p>
@@ -82,8 +101,6 @@
       <p class="explanation">The overview rereads the Owner every 15 seconds. Opening a package captures its verified snapshot, scope, obligation revision, Control Pack, authority, and evaluation input. A correction command carries those exact displayed bindings. If a response is lost, retry sends the same command identity and bindings.</p>
       <div id="command-status" class="command-status" role="status" aria-live="assertive">No operator command sent.</div>
       <div class="action-grid" aria-label="Synthetic workflow commands">
-        <button type="button" data-action="wrong-role" disabled>Exercise wrong-role gate</button>
-        <button type="button" data-action="stale-revision" disabled>Exercise stale-revision gate</button>
         <button type="button" data-action="reject-offset" disabled>Reject unsupported offset and authorize correction request</button>
         <button type="button" data-action="acknowledge" disabled>Record action delivery ACK</button>
         <button type="button" data-action="record-cash" disabled>Record synthetic $3,000 cash evidence</button>
@@ -91,15 +108,6 @@
         <button type="button" data-action="restore-test" disabled>Restore current case into Continuity TEST</button>
       </div>
       <p class="explanation">The cash and reporting buttons record synthetic evidence through Owner commands. They do not move money or contact a payment/reporting system. An ACK remains a delivery fact with zero cash effect.</p>
-
-      <h3>Owner gate results</h3>
-      <div class="table-wrap">
-        <table>
-          <caption>Wrong-role and stale-revision attempts are rejected by Owner without a state change</caption>
-          <thead><tr><th scope="col">Attempt</th><th scope="col">Outcome</th><th scope="col">Owner result</th><th scope="col">State changed</th></tr></thead>
-          <tbody id="gate-rows"><tr><td colspan="4">Waiting for Owner gate checks.</td></tr></tbody>
-        </table>
-      </div>
     </section>
 
     <section id="decision-panel" class="panel decision-panel" aria-labelledby="decision-title" hidden>
@@ -112,6 +120,10 @@
       </div>
       <p id="package-staleness" class="status-banner pending" role="status" aria-live="polite">Open the package to review the current Owner state.</p>
       <dl id="case-facts" class="facts-grid"></dl>
+      <details class="package-details">
+        <summary>Technical bindings (snapshot, digests, receipts)</summary>
+        <dl id="binding-facts" class="facts-grid"></dl>
+      </details>
 
       <div class="three-columns">
         <article class="fact-card">
@@ -151,6 +163,7 @@
         <pre id="followup-json">No correction follow-up is available yet.</pre>
       </details>
     </section>
+    </div>
   </main>
   <footer>
     <p>This local demonstration retains the Owner as the only transaction writer. Continuity TEST uses a separate restored database; live dispatch and egress remain disabled.</p>

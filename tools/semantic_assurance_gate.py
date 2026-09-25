@@ -470,15 +470,7 @@ def _decode(data: bytes, label: str, *, encoding: str = "utf-8") -> str:
 
 
 def _git(root: Path, *args: str) -> str:
-    result = _run(["git", *args], cwd=root, timeout=CHECK_TIMEOUT_SECONDS)
-    if result.returncode != 0:
-        raise AssuranceError(
-            f"git {' '.join(args)} failed exit={result.returncode}; "
-            f"stdout={result.stdout!r} stderr={result.stderr!r}"
-        )
-    if result.stderr:
-        raise AssuranceError(f"git {' '.join(args)} wrote stderr: {result.stderr!r}")
-    return _decode(result.stdout, "git").strip()
+    return _decode(_git_bytes(root, *args), "git").strip()
 
 
 def _git_bytes(root: Path, *args: str) -> bytes:

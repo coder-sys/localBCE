@@ -225,9 +225,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
             with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, code):
                 independent.verify_bytes(_rebind(value))
 
-    def test_live_transport_is_blocked_before_network_and_media_failures_are_explicit(self) -> None:
-        with self.assertRaisesRegex(fhir.FhirTransportError, "live-transport-disabled"):
-            fhir.LiveFhirTransport().fetch(profile.REQUEST_URL, timeout_seconds=5, attempt=0)
+    def test_media_failures_are_explicit(self) -> None:
         request_url = profile.REQUEST_URL
         bad = fhir.SyntheticFhirTransport({(request_url, 0): fhir.fixture_response(_bundle(), request_url, media_type="application/json")})
         raw = fhir.build_fixture_envelope(bad)

@@ -102,7 +102,9 @@ h3 { font-size: 1.02rem; margin-bottom: 0.45rem; }
 .primary:hover:not(:disabled) { background: #0f3b52; }
 .secondary { border-color: #86a1ad; color: #143b50; }
 
-.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
+.answer-first { border-left: 5px solid var(--blue); background: var(--blue-light); padding: 0.75rem 1rem; margin-bottom: 1rem; border-radius: 0.35rem; }
+.answer-first p { margin: 0; font-weight: 650; }
 .metric { border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.85rem; background: #fbfdfe; }
 .metric h3 { color: var(--muted); font-size: 0.85rem; font-weight: 650; }
 .metric p { font-size: clamp(1.2rem, 2.4vw, 1.75rem); font-weight: 750; margin: 0 0 0.15rem; font-variant-numeric: tabular-nums; }
@@ -162,4 +164,20 @@ footer { max-width: 1320px; margin: 0 auto; padding: 0 1rem 1.5rem; color: var(-
   .site-header { padding: 1.4rem 1rem; }
   .metric-grid, .split-note, .action-grid { grid-template-columns: 1fr; }
   .layout { margin-top: 0.75rem; }
+}
+
+/* Art. XIII.3: same restrained system, both themes, WCAG AA contrast kept. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ink: #e7eef2; --muted: #9fb2bd; --line: #33474f; --surface: #17242c; --canvas: #0e171c;
+    --blue: #7fc4e8; --blue-light: #16303d; --amber: #e8b96a; --amber-light: #3a2c10;
+    --red: #f0938d; --red-light: #3a1e1c; --green: #8fd6ab; --green-light: #163828;
+  }
+  a { color: #7fc4e8; }
+  .skip-link, button { background: var(--surface); border-color: #4c6a76; }
+  .primary { color: #06222f; }
+  caption, th, tbody tr:nth-child(even), .metric, .fact-card, .command-status, pre { background: #16232a; }
+  tbody tr.highlight { background: #3a3115; }
+  .split-note > div { background: #2c2611; }
 }
