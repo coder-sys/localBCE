@@ -100,11 +100,13 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         cls.release = scorecard.financial_engine.load_correction_transition_release(scorecard.ENGINE_PATH.resolve(), engine_dir)
         cls.driver_path = Path(cls.temp.name) / "browser.js"
         cls.driver_path.write_text(scorecard.DRIVER_JS, encoding="utf-8")
+        cls.browser = scorecard._Browser(0, cls.driver_path)
         cls.workflow, cls.server, cls.thread = cls._start_workflow(Path(cls.temp.name) / "owner")
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls._stop_workflow(cls.workflow, cls.server, cls.thread)
+        cls.browser.close()
         cls.temp.cleanup()
 
     @classmethod
@@ -125,11 +127,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         workflow.close()
 
     def _open_path(self, path: str, server: Any = None) -> scorecard._Browser:
-        server = server or self.server
-        browser = scorecard._Browser(server.server_address[1], self.driver_path)
-        self.addCleanup(browser.close)
-        browser.open(path)
-        return browser
+        self.browser.port = (server or self.server).server_address[1]
+        self.browser.open(path)
+        return self.browser
 
     def _open(self, role: str, server: Any = None) -> scorecard._Browser:
         return self._open_path(f"/role/{role}", server)
@@ -238,6 +238,35 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                     self._run_step(workflow, server, role, name)
         finally:
             self._stop_workflow(workflow, server, thread)
+
+    def test_accessibility_regressions_are_caught(self) -> None:
+        """WCAG 2.1 AA regression guard (Art. XIII.3): one table-driven test,
+        no new framework, for names, aria-live, token contrast (both themes),
+        and keyboard reachability in the real headless browser."""
+        css = (_WORKSPACE / "staff.css").read_text(encoding="utf-8")
+        def palette(anchor: str) -> dict[str, str]:
+            block = css[css.index(anchor):]; return dict(re.findall(r"--([\w-]+):\s*(#[0-9a-fA-F]{6})", block[:block.index("}")]))
+        linear = lambda c: c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        luminance = lambda h: 0.2126 * linear(int(h[1:3], 16) / 255) + 0.7152 * linear(int(h[3:5], 16) / 255) + 0.0722 * linear(int(h[5:7], 16) / 255)
+        contrast = lambda fg, bg: (max(luminance(fg), luminance(bg)) + 0.05) / (min(luminance(fg), luminance(bg)) + 0.05)
+        themes = {"light": palette(":root {"), "dark": palette("prefers-color-scheme: dark")}
+        for theme, tokens in themes.items():
+            for fg, bg, minimum in _MODEL["accessibility"]["contrast_pairs"]:
+                with self.subTest(check="contrast", theme=theme, pair=f"{fg}/{bg}"):
+                    self.assertGreaterEqual(contrast(tokens[fg], tokens[bg]), minimum)
+        always_reachable = _MODEL["accessibility"]["always_reachable_controls"]
+        markers = {n: (f'id="{n}"' if n in always_reachable else f'data-action="{n}"') for n in _MODEL["controls"]}
+        for name, marker in markers.items():
+            with self.subTest(check="accessible_name", control=name):
+                start = _HTML.index(marker)
+                self.assertRegex(_HTML[start:_HTML.index("</button>", start)], r">\s*\S", name)
+        for region in _MODEL["accessibility"]["live_regions"]:
+            with self.subTest(check="aria_live", region=region):
+                self.assertRegex(_HTML, rf'id="{region}"[^>]*role="status"[^>]*aria-live="(polite|assertive)"', region)
+        view = self._open("approver").view()
+        for control_id in always_reachable:
+            with self.subTest(check="keyboard_reachable", control=control_id):
+                self.assertFalse(view["hidden"].get(control_id) or view["disabled"].get(control_id), control_id)
 
 _JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
             ("analyst", "record-cash"), ("analyst", "record-report"))

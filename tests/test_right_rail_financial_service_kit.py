@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import unittest
 
+from app.right_rail_financial_staff_server import _STATIC_FILES
 from tools.right_rail_financial_service_kit import (
     EXPECTED_PYTHON_EXE_SHA256,
     KIT_CLAIMS,
     KIT_SCHEMA,
     RUNTIME_EXE,
+    STATE_FILES,
     KitError,
     _check_names,
     _check_runtime_member,
@@ -63,6 +65,10 @@ class FinancialServiceKitManifestTests(unittest.TestCase):
             _manifest_files({"claims": {**KIT_CLAIMS, "activation": 0}, "files": [entry], "schema": KIT_SCHEMA})
         with self.assertRaisesRegex(KitError, "kit_manifest_entry_value"):
             _manifest_files({"claims": KIT_CLAIMS, "files": [{**entry, "size_bytes": True}], "schema": KIT_SCHEMA})
+
+    def test_kit_ships_every_file_the_staff_server_serves(self) -> None:
+        # staff.js boots from /interaction-model.json; a kit without it serves a broken UI.
+        self.assertLessEqual({"app/" + path for path, _type in _STATIC_FILES.values()}, set(STATE_FILES))
 
 
 if __name__ == "__main__":
