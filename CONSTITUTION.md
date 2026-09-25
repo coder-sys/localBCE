@@ -249,6 +249,40 @@ Rules:
 - Each STATUS.md change-log entry for product work states its felt effect in
   one line, or says "none (infrastructure for: …)".
 
+## Article XIII — Design and interaction integrity
+
+Every screen must feel expensive, calm and obvious, the way the best consumer
+hardware does. Restraint is the standard: what is left out matters as much as
+what is added.
+
+1. **The answer first.** Each screen leads with the one thing its role needs
+   (what is happening, who owns it, what to do next) in plain words and exact
+   figures. Detail is one deliberate step away, never in the way.
+2. **One primary action per screen.** Secondary actions are quiet. Nothing
+   decorative, no jargon, no internal identifiers, digests or codes shown to
+   staff unless they asked for them.
+3. **Restrained system.** One type family, a small fixed palette and spacing
+   scale, tabular figures with amounts aligned to the cent, consistent words for
+   the same thing everywhere, motion only to explain a change. Light and dark
+   themes, and WCAG 2.1 AA accessibility, are part of done.
+4. **Every pathway is proven.** The interface is defined by one declared
+   interaction model: every screen, every control, every transition, and the
+   backend call each control makes. Automated checks prove, exhaustively over
+   that model and for every role:
+   - no dead control: every visible, enabled control leads to a defined result;
+   - no orphan screen: every screen is reachable from the start;
+   - no trap: from every screen and every error, the user can reach a
+     meaningful next step or home;
+   - no dead connection: every control's backend call exists, and every
+     response it can return (success, refusal, conflict, outage) has a defined,
+     plain-language screen;
+   - no illogical path: a control a role can never use successfully is not
+     shown to that role, and a finished action cannot be repeated by accident.
+   A real-browser crawl then clicks every control in every reachable state and
+   fails if the running interface differs from the declared model.
+5. **Measured.** Design changes are judged by the Article XII scorecard; a
+   prettier screen that adds staff steps is a regression.
+
 ## Enforcement
 
 - Every change, human or AI, must name which articles it touches and show it
@@ -275,3 +309,7 @@ never an amendment.
 - 2026-09-24 — Article XII added at the founder's direction: every product
   decision must name who feels it, when, the measured before/after, and the
   structural friction removed; the synthetic demo is the scorecard.
+- 2026-09-24 — Article XIII added at the founder's direction: interfaces must
+  feel expensive, restrained and intuitive, and every control and pathway is
+  proven over a declared interaction model with no dead buttons, orphan
+  screens, traps, dead connections or illogical paths.

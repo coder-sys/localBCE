@@ -54,6 +54,10 @@ and state relationships need humans.
    with age, owner, amount gap, next action, and evidence on one screen. Units:
    time-to-answer "what is happening and who owns it", staff steps, repeated
    evidence requests. Friction: chasing records, reconstructing history.
+   Built to Article XIII: a declared interaction model first, the screens
+   generated from or checked against it, exhaustive pathway proofs per role,
+   and a real-browser crawl that must match the model. The same model and
+   checks then apply to every later screen (rule change, handover, simulator).
 3. **Proven rule change ("policy memo to live rule").** Policy lead and finance
    approver, when policy changes. An assistant drafts the Control Pack rule and
    its Lean proof obligations from the policy text; Lean checks the proof; the
