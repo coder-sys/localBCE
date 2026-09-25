@@ -1515,7 +1515,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(FinancialIntegrityError, "population_source_incomplete"):
             store.validate_population(interrupted_population)
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             source_complete = connection.execute(
                 "SELECT source_complete FROM population_imports WHERE population_id=?",
                 (interrupted_population,),
@@ -3655,7 +3655,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0][0], FinancialConflictError)
         self.assertIn("population_manifest_supersession_conflict", errors[0][1])
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             manifests = int(connection.execute("SELECT COUNT(*) FROM population_manifests").fetchone()[0])
             events = int(connection.execute("SELECT COUNT(*) FROM financial_events WHERE aggregate_type='POPULATION_MANIFEST'").fetchone()[0])
             heads = int(connection.execute("SELECT COUNT(*) FROM population_manifest_heads").fetchone()[0])
@@ -3751,7 +3751,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 chunk_size=1,
             )
         self.assertEqual(store.export_continuity(), before)
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             imported = connection.execute(
                 "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",
                 (population_id,),
@@ -3797,7 +3797,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 items=items[:4],
                 chunk_size=3,
             )
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             imported = connection.execute(
                 "SELECT imported_count,status,source_complete FROM population_imports WHERE population_id=?",
                 (population_id,),
@@ -3809,7 +3809,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "population_source_incomplete"):
             store.validate_population(population_id)
         self._assert_verified(store)
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             before_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
         resumed = store.stage_population(
             population_id=population_id,
@@ -3822,7 +3822,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             chunk_size=3,
         )
         self.assertTrue(resumed["source_complete"])
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             after_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
         self.assertEqual(before_resume_events, ["POPULATION_IMPORT_OPENED", "POPULATION_STAGED"])
         self.assertEqual(
@@ -3858,7 +3858,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 items=(item,) * 258,
                 chunk_size=1,
             )
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             imported = connection.execute(
                 "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",
                 (population_id,),

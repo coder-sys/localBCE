@@ -8,7 +8,7 @@ live directive, stores raw evidence, or claims production authority.
 
 from __future__ import annotations
 
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 import sqlite3
 import tempfile
+import threading
 import time
 from typing import Any, Final, Iterable, Iterator, Mapping, Protocol
 
@@ -74,6 +75,8 @@ _CURRENCY: Final[str] = "USD"
 _MAX_CENTS: Final[int] = (1 << 63) - 1
 _MAX_ROWS: Final[int] = 10_000
 _MAX_DUPLICATE_INPUTS: Final[int] = 256
+# Commands that do all their work on the write connection, so one savepoint holds each whole.
+_BATCH_COMMANDS: Final = frozenset({"record_payment_evidence", "record_support_evidence", "evaluate_obligation", "reverse_payment"})
 _MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 _MAX_DECISION_PACKAGE_BYTES: Final[int] = _MAX_PACKAGE_BYTES - 512
 _MAX_CORRECTION_FOLLOWUP_BYTES: Final[int] = 3 * _MAX_DECISION_PACKAGE_BYTES + 64 * 1024
@@ -1878,6 +1881,7 @@ class FinancialOwner:
         self.clock: FinancialClock = clock if clock is not None else _SystemClock()
         self.mode = mode
         self.owner_id = _id(owner_id, "owner_id")
+        self._batch = threading.local()  # .connection: the open run_batch transaction on this thread
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
@@ -1925,11 +1929,7 @@ class FinancialOwner:
                     "INSERT INTO financial_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (1, self.schema_version, self.schema, config.state_id, config.deployment_id, config.program_id, config.period_id, config.currency, initial_sequence, initial_history_head, 1, 0, 0, trusted_authority.authority_id, trusted_authority.epoch, trusted_authority.digest, mode, self.owner_id),
                 )
-                identity_columns = self._table_columns["financial_identity"]
-                connection.execute(
-                    f"INSERT INTO financial_identity ({','.join(identity_columns)}) VALUES ({','.join('?' for _ in identity_columns)})",
-                    tuple(identity[column] for column in identity_columns),
-                )
+                self._insert_row(connection, "financial_identity", identity)
                 connection.execute("COMMIT")
 
     def _connect(self, *, admission_triggers: bool = False) -> sqlite3.Connection:
@@ -2110,18 +2110,13 @@ class FinancialOwner:
         connection.execute("PRAGMA user_version=0")
         _sql_schema(connection)
         for table, table_rows in rows.items():
-            columns = _TABLE_COLUMNS[table]
-            placeholders = ",".join("?" for _ in columns)
             for row in table_rows:
-                values = dict(zip(columns, tuple(row), strict=True))
+                values = dict(zip(_TABLE_COLUMNS[table], tuple(row), strict=True))
                 if table in {"financial_identity", "financial_meta"}:
                     values["schema_version"] = _SCHEMA_VERSION
                 if table == "financial_meta":
                     values["schema"] = _SCHEMA
-                connection.execute(
-                    f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})",
-                    tuple(values[column] for column in columns),
-                )
+                self._insert_row(connection, table, values)
         self._derive_command_log(connection)
         # CONSTITUTION V.4: one sealed opening balance holds the converted rows the v7 history did not carry.
         last = connection.execute("SELECT committed_at_ms FROM financial_events ORDER BY event_sequence DESC LIMIT 1").fetchone()
@@ -2300,9 +2295,13 @@ class FinancialOwner:
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
-        with closing(self._connect(admission_triggers=True)) as connection:
+        """One atomic command; inside ``run_batch`` the batch owns connection, BEGIN/COMMIT and savepoint."""
+        batch = getattr(self._batch, "connection", None)
+        began = batch is None
+        with closing(self._connect(admission_triggers=True)) if began else nullcontext(batch) as connection:
             try:
-                connection.execute("BEGIN IMMEDIATE")
+                if began:
+                    connection.execute("BEGIN IMMEDIATE")
                 changes_before = connection.total_changes
                 yield connection
                 if connection.total_changes != changes_before:
@@ -2312,44 +2311,46 @@ class FinancialOwner:
                         _fail(FinancialContinuityError, "continuity_package_size")
                 if connection.execute("SELECT 1 FROM temp.rr_captured_rows").fetchone() is not None:
                     _fail(FinancialIntegrityError, "captured_rows_without_event")  # refused, never stranded
-                connection.execute("COMMIT")
+                if began:
+                    connection.execute("COMMIT")
             except BaseException:
-                if connection.in_transaction:
+                if began and connection.in_transaction:
                     connection.execute("ROLLBACK")
                 raise
 
-    @contextmanager
-    def _read(self, *, _connection: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
-        if _connection is not None:
-            if not isinstance(_connection, sqlite3.Connection) or not _connection.in_transaction:
-                _fail(FinancialIntegrityError, "read_snapshot_required")
-            yield _connection
-            return
-        with closing(self._connect()) as connection:
-            yield connection
-
-    @contextmanager
-    def _read_snapshot(
-        self,
-        *,
-        _connection: sqlite3.Connection | None = None,
-    ) -> Iterator[sqlite3.Connection]:
-        """Read a multi-query view from one committed SQLite snapshot."""
-
-        if _connection is not None:
-            if not isinstance(_connection, sqlite3.Connection) or not _connection.in_transaction:
-                _fail(FinancialIntegrityError, "read_snapshot_required")
-            yield _connection
-            return
-        with closing(self._connect()) as connection:
+    def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]]) -> list[dict[str, Any] | FinancialError]:
+        """Up to 1,000 commands in one durable COMMIT, each exactly as its method alone (same history,
+        retries, conflicts) in its own savepoint: a refusal undoes only that command and takes its
+        result slot; any other failure rolls the whole batch back and raises (Art. III.2, III.5)."""
+        if type(commands) is not list or not 0 < len(commands) <= 1_000 or any(type(entry) is not tuple or len(entry) != 2 or entry[0] not in _BATCH_COMMANDS or not isinstance(entry[1], Mapping) for entry in commands):
+            _fail(FinancialInputError, "batch_commands")
+        results: list[dict[str, Any] | FinancialError] = []
+        with self._write() as connection:
+            self._batch.connection = connection
             try:
-                connection.execute("BEGIN")
-                yield connection
-                connection.execute("COMMIT")
-            except BaseException:
-                if connection.in_transaction:
-                    connection.execute("ROLLBACK")
-                raise
+                for name, arguments in commands:
+                    connection.execute("SAVEPOINT rr_command")
+                    try:
+                        results.append(getattr(self, name)(**arguments))
+                    except FinancialError as refusal:
+                        connection.execute("ROLLBACK TO rr_command")
+                        results.append(refusal)
+                    connection.execute("RELEASE rr_command")
+            finally:
+                self._batch.connection = None
+        return results
+
+    @contextmanager
+    def _read_snapshot(self, *, _connection: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
+        """Read a multi-query view from one committed SQLite snapshot."""
+        if _connection is not None:
+            if not isinstance(_connection, sqlite3.Connection) or not _connection.in_transaction:
+                _fail(FinancialIntegrityError, "read_snapshot_required")
+            yield _connection
+            return
+        with closing(self._connect()) as connection:  # closing ends the read; nothing to commit
+            connection.execute("BEGIN")
+            yield connection
 
     def _now(self) -> int:
         value = self.clock.now_ms()
@@ -3341,7 +3342,7 @@ class FinancialOwner:
                     },
                     committed_at_ms=now_ms,
                 )
-        with self._read() as connection:
+        with self._read_snapshot() as connection:
             row = connection.execute("SELECT imported_count,source_complete,status FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
             if row is None:
                 _fail(FinancialIntegrityError, "population_import_missing")
@@ -3963,19 +3964,16 @@ class FinancialOwner:
             )
             evidence_status = self._insert_evidence(connection, evidence)
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
-            if existing is not None or existing_id is not None:
-                candidate_existing = existing if existing is not None else existing_id
-                if candidate_existing is None:
-                    _fail(FinancialIntegrityError, "payment_identity_missing")
-                if int(candidate_existing["amount_cents"]) == amount_cents and str(candidate_existing["common_origin_id"]) == common_origin_id:
+            if existing is not None:  # existing_id is None here: that retry path returned or failed above
+                if int(existing["amount_cents"]) == amount_cents and str(existing["common_origin_id"]) == common_origin_id:
                     now_ms = self._now()
                     if evidence_status == "INSERTED":
-                        self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(candidate_existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=now_ms)
-                    return {"status": "DUPLICATE", "payment_id": str(candidate_existing["payment_id"]), **self._current_projection(connection, str(obligation["obligation_id"]))}
+                        self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=now_ms)
+                    return {"status": "DUPLICATE", "payment_id": str(existing["payment_id"]), **self._current_projection(connection, str(obligation["obligation_id"]))}
                 conflict_id = f"conflict:{item_id}:{common_origin_id}:{evidence_id}"
                 if connection.execute("SELECT 1 FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone() is None:
-                    connection.execute("INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)", (conflict_id, obligation["obligation_id"], common_origin_id, str(candidate_existing["payment_id"]), evidence_id, int(candidate_existing["amount_cents"]), amount_cents, "CONFLICTING_COMMON_ORIGIN_AMOUNT", self._now()))
-                    self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(candidate_existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now(), committed_at_ms=self._now())
+                    connection.execute("INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)", (conflict_id, obligation["obligation_id"], common_origin_id, str(existing["payment_id"]), evidence_id, int(existing["amount_cents"]), amount_cents, "CONFLICTING_COMMON_ORIGIN_AMOUNT", self._now()))
+                    self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now(), committed_at_ms=self._now())
                 return {"status": "CONFLICT", "conflict_id": conflict_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
             connection.execute("INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)", (payment_id, obligation["obligation_id"], item_id, evidence_id, common_origin_id, amount_cents, event_at_ms, 1, None))
             self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id}, now_ms=self._now())
@@ -5385,7 +5383,7 @@ class FinancialOwner:
     def current_evaluation_receipt(self, item_id: str) -> dict[str, Any]:
         """Read the current persisted evaluation reference without advancing state."""
 
-        with self._read() as connection:
+        with self._read_snapshot() as connection:
             obligation = self._get_obligation_row(connection, item_id)
             evaluation_id = obligation["current_evaluation_id"]
             if evaluation_id is None:
@@ -6419,7 +6417,7 @@ class FinancialOwner:
         }
 
     def summary(self, *, _connection: sqlite3.Connection | None = None) -> dict[str, Any]:
-        with self._read(_connection=_connection) as connection:
+        with self._read_snapshot(_connection=_connection) as connection:
             meta = self._meta(connection)
             totals = connection.execute("SELECT COUNT(*),COALESCE(SUM(owed_cents),0),COALESCE(SUM(received_cash_cents),0),COALESCE(SUM(lawful_adjustment_cents),0),COALESCE(SUM(shortfall_cents),0) FROM obligations").fetchone()
             return {
@@ -6458,7 +6456,7 @@ class FinancialOwner:
             _fail(FinancialInputError, "obligation_status")
         if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= _MAX_ROWS:
             _fail(FinancialInputError, "obligation_page")
-        with self._read(_connection=_connection) as connection:
+        with self._read_snapshot(_connection=_connection) as connection:
             clause = "1=1" if status == "ALL" else ("amount_satisfied=0" if status == "OPEN" else ("amount_satisfied=1" if status == "SATISFIED" else "cash_satisfied=0"))
             return [self._projection_for_row(row) for row in connection.execute(f"SELECT * FROM obligations WHERE {clause} ORDER BY obligation_id LIMIT ? OFFSET ?", (limit, offset)).fetchall()]
 
@@ -6493,7 +6491,7 @@ class FinancialOwner:
     ) -> list[dict[str, Any]]:
         if type(limit) is not int or not 1 <= limit <= 200 or type(offset) is not int or not 0 <= offset <= _MAX_ROWS:
             _fail(FinancialInputError, "history_page")
-        with self._read(_connection=_connection) as connection:
+        with self._read_snapshot(_connection=_connection) as connection:
             return self._dict_rows(connection, "SELECT event_sequence,event_id,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,payload_digest,previous_head,head,committed_at_ms FROM financial_events ORDER BY event_sequence LIMIT ? OFFSET ?", (limit, offset))
 
     def _obligation_timeline(self, connection: sqlite3.Connection, obligation_id: str, limit: int) -> dict[str, Any]:
@@ -6745,7 +6743,7 @@ class FinancialOwner:
 
     def action_payload(self, action_id: str) -> dict[str, Any]:
         _id(action_id, "action_id")
-        with self._read() as connection:
+        with self._read_snapshot() as connection:
             row = connection.execute("SELECT payload_json,payload_digest FROM actions WHERE action_id=?", (action_id,)).fetchone()
             if row is None:
                 _fail(FinancialIntegrityError, "action_missing")

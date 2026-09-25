@@ -208,7 +208,29 @@ def _setup(owner: FinancialOwner, rng: random.Random, cohort_size: int, authorit
     return items, latencies
 
 
-def run(n: int, seed: int) -> dict:
+def _command(rng: random.Random, item: PopulationItem, seed: int, i: int) -> tuple[str, str, dict]:
+    """The i-th steady-state command as (kind, owner method, arguments)."""
+    kind = rng.choices([k for k, _w in _MIX], weights=[w for _k, w in _MIX], k=1)[0]
+    if kind == "payment":
+        return kind, "record_payment_evidence", {
+            "item_id": item.item_id,
+            "payment_id": f"payment:{seed}:{i:07d}",
+            "common_origin_id": f"origin:{seed}:{i:07d}",
+            "amount_cents": rng.randint(100, 10_000),
+            "evidence_id": f"evidence:payment:{seed}:{i:07d}",
+            "event_at_ms": 1_000 + i,
+        }
+    if kind == "support":
+        return kind, "record_support_evidence", {
+            "item_id": item.item_id,
+            "evidence_id": f"evidence:support:{seed}:{i:07d}",
+            "common_origin_id": f"origin:support:{seed}:{i:07d}",
+        }
+    return kind, "evaluate_obligation", {"item_id": item.item_id}
+
+
+def run(n: int, seed: int, batch: int = 0) -> dict:
+    """``batch`` 0 calls each command alone; K>0 sends K commands per ``run_batch`` (one commit)."""
     if n <= 0:
         raise SystemExit(f"aborting: --n must be positive, got {n}")
     if n > _MAX_N:
@@ -234,41 +256,30 @@ def run(n: int, seed: int) -> dict:
         setup_commands = len(setup_latencies)
 
         by_kind: dict[str, list[float]] = {"payment": [], "support": [], "evaluate": []}
-        kinds = [k for k, _w in _MIX]
-        weights = [w for _k, w in _MIX]
         aborted = False
         abort_reason = None
         completed = 0
+        refusals = 0
+        commands = [_command(rng, items[i % cohort_size], seed, i) for i in range(n)]
+        step = max(batch, 1)
 
         steady_start = time.perf_counter()
-        for i in range(n):
+        for start in range(0, n, step):
             if time.perf_counter() - run_start > _MAX_WALL_SECONDS:
                 aborted = True
                 abort_reason = f"wall_clock_bound_exceeded ({_MAX_WALL_SECONDS:.0f}s) after {completed} of {n} steady-state commands"
                 break
-            item = items[i % cohort_size]
-            kind = rng.choices(kinds, weights=weights, k=1)[0]
+            chunk = commands[start:start + step]
             t0 = time.perf_counter()
-            if kind == "payment":
-                owner.record_payment_evidence(
-                    item_id=item.item_id,
-                    payment_id=f"payment:{seed}:{i:07d}",
-                    common_origin_id=f"origin:{seed}:{i:07d}",
-                    amount_cents=rng.randint(100, 10_000),
-                    evidence_id=f"evidence:payment:{seed}:{i:07d}",
-                    event_at_ms=1_000 + i,
-                )
-            elif kind == "support":
-                owner.record_support_evidence(
-                    item_id=item.item_id,
-                    evidence_id=f"evidence:support:{seed}:{i:07d}",
-                    common_origin_id=f"origin:support:{seed}:{i:07d}",
-                )
+            if batch:
+                # A command's latency is its batch's: its result exists only after that commit.
+                refusals += sum(not isinstance(r, dict) for r in owner.run_batch([(m, a) for _k, m, a in chunk]))
             else:
-                owner.evaluate_obligation(item.item_id)
+                getattr(owner, chunk[0][1])(**chunk[0][2])
             dt = time.perf_counter() - t0
-            by_kind[kind].append(dt)
-            completed += 1
+            for kind, _m, _a in chunk:
+                by_kind[kind].append(dt)
+            completed += len(chunk)
         steady_wall = time.perf_counter() - steady_start
 
         store_size_bytes = os.path.getsize(db_path)
@@ -287,6 +298,8 @@ def run(n: int, seed: int) -> dict:
         "n_completed": completed,
         "seed": seed,
         "cohort_size": cohort_size,
+        "batch": batch,
+        "refusals": refusals,
         "aborted_early": aborted,
         "abort_reason": abort_reason,
         "setup": {
@@ -336,10 +349,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n", type=int, default=1000, help="number of steady-state commands to run (default 1000, hard max %d)" % _MAX_N)
     parser.add_argument("--seed", type=int, default=1, help="integer seed for deterministic synthetic data (default 1)")
+    parser.add_argument("--batch", type=int, default=0, help="commands per run_batch transaction (default 0: each command alone)")
     parser.add_argument("--out", type=str, default=None, help="path to write the JSON result (default: print to stdout)")
     args = parser.parse_args()
 
-    result = run(args.n, args.seed)
+    result = run(args.n, args.seed, args.batch)
 
     payload = json.dumps(result, indent=2)
     if args.out:
@@ -349,7 +363,7 @@ def main() -> int:
 
     steady = result["steady_state"]
     overall = result["overall"]
-    print(f"[{_LABEL}] n_completed={result['n_completed']} aborted_early={result['aborted_early']}", file=sys.stderr)
+    print(f"[{_LABEL}] n_completed={result['n_completed']} batch={result['batch']} refusals={result['refusals']} aborted_early={result['aborted_early']}", file=sys.stderr)
     print(f"[{_LABEL}] steady-state: {steady['commands_per_sec']:.1f} commands/sec over {steady['commands']} commands", file=sys.stderr)
     print(f"[{_LABEL}] latency ms: p50={steady['latency_ms']['p50']:.3f} p95={steady['latency_ms']['p95']:.3f} p99={steady['latency_ms']['p99']:.3f}", file=sys.stderr)
     print(f"[{_LABEL}] overall (setup+steady): {overall['commands_per_sec']:.1f} commands/sec over {overall['commands']} commands", file=sys.stderr)
