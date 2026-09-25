@@ -75,24 +75,27 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         self.assertEqual(_history(batched.path), _history(single.path))
         batched.verify_integrity()
 
-    def test_a_refusal_mid_batch_rolls_back_only_its_own_writes(self) -> None:
+    def test_a_refusal_mid_batch_rolls_back_the_whole_batch(self) -> None:
         owner = self._store("isolation.sqlite", _Owner)
-        before = len(_history(owner.path))
-        results = owner.run_batch([_support("evidence:kept-1"), _support("evidence:refused"), _support("evidence:kept-2")])
-        self.assertEqual([type(result) for result in results], [dict, FinancialIntegrityError, dict])
-        self.assertEqual(len(_history(owner.path)), before + 2)
+        history = _history(owner.path)
+        with self.assertRaisesRegex(FinancialIntegrityError, "synthetic_refusal_after_writes") as refused:
+            owner.run_batch([_support("evidence:kept-1"), _support("evidence:refused"), _support("evidence:kept-2")])
+        self.assertIn("batch_index=1", refused.exception.__notes__)
+        self.assertEqual(_history(owner.path), history)
         with closing(sqlite3.connect(owner.path)) as connection:
-            stored = {row[0] for row in connection.execute("SELECT evidence_id FROM evidence")}
-        self.assertTrue({"evidence:kept-1", "evidence:kept-2"} <= stored and "evidence:refused" not in stored)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM evidence WHERE evidence_id IN ('evidence:kept-1','evidence:refused','evidence:kept-2')").fetchone()[0], 0)
         owner.verify_integrity()
 
-    def test_an_exact_retry_is_duplicate_and_a_changed_meaning_conflicts(self) -> None:
+    def test_an_exact_retry_is_duplicate_and_a_changed_meaning_conflicts_as_alone(self) -> None:
         owner = self._store("retry.sqlite")
         self.assertEqual(owner.run_batch([_support("evidence:retry")])[0]["status"], "RECORDED")
         history = _history(owner.path)
-        duplicate, conflict = owner.run_batch([_support("evidence:retry"), _support("evidence:retry", "origin:changed")])
-        self.assertEqual(duplicate["status"], "DUPLICATE")
-        self.assertIsInstance(conflict, FinancialConflictError)
+        self.assertEqual(owner.run_batch([_support("evidence:retry")])[0]["status"], "DUPLICATE")
+        changed = _support("evidence:retry", "origin:changed")
+        with self.assertRaisesRegex(FinancialConflictError, "evidence_identity_conflict"):
+            owner.run_batch([_support("evidence:retry"), changed])
+        with self.assertRaisesRegex(FinancialConflictError, "evidence_identity_conflict"):
+            owner.record_support_evidence(**changed[1])
         self.assertEqual(_history(owner.path), history)
 
     def test_a_crash_before_commit_leaves_no_part_of_the_batch(self) -> None:

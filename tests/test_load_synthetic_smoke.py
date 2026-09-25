@@ -15,7 +15,11 @@ from tools.load_synthetic import run
 
 class LoadSyntheticSmokeTest(unittest.TestCase):
     def test_tiny_run_produces_expected_shape_and_cleans_up(self) -> None:
-        result = run(n=12, seed=7)
+        for batch in (0, 5):
+            with self.subTest(batch=batch):
+                self._check(run(n=12, seed=7, batch=batch))
+
+    def _check(self, result) -> None:
 
         self.assertEqual(result["evidence_class"], "measured, local laptop, synthetic")
         self.assertEqual(result["n_requested"], 12)

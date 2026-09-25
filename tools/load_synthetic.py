@@ -41,7 +41,7 @@ from app.right_rail_financial_owner import (  # noqa: E402
 )
 
 # Explicit bounds (CONSTITUTION III.5 / IX.3: every input has a bound).
-_MAX_N = 100_000
+_MAX_N = 9_000  # one history event per command stays under the owner's 10,000-event cap
 _MAX_WALL_SECONDS = 600.0
 
 _STATE_ID = "state:harness"
@@ -259,7 +259,6 @@ def run(n: int, seed: int, batch: int = 0) -> dict:
         aborted = False
         abort_reason = None
         completed = 0
-        refusals = 0
         commands = [_command(rng, items[i % cohort_size], seed, i) for i in range(n)]
         step = max(batch, 1)
 
@@ -272,8 +271,7 @@ def run(n: int, seed: int, batch: int = 0) -> dict:
             chunk = commands[start:start + step]
             t0 = time.perf_counter()
             if batch:
-                # A command's latency is its batch's: its result exists only after that commit.
-                refusals += sum(not isinstance(r, dict) for r in owner.run_batch([(m, a) for _k, m, a in chunk]))
+                owner.run_batch([(m, a) for _k, m, a in chunk])  # each command's latency is its batch's commit
             else:
                 getattr(owner, chunk[0][1])(**chunk[0][2])
             dt = time.perf_counter() - t0
@@ -299,7 +297,6 @@ def run(n: int, seed: int, batch: int = 0) -> dict:
         "seed": seed,
         "cohort_size": cohort_size,
         "batch": batch,
-        "refusals": refusals,
         "aborted_early": aborted,
         "abort_reason": abort_reason,
         "setup": {
@@ -363,7 +360,7 @@ def main() -> int:
 
     steady = result["steady_state"]
     overall = result["overall"]
-    print(f"[{_LABEL}] n_completed={result['n_completed']} batch={result['batch']} refusals={result['refusals']} aborted_early={result['aborted_early']}", file=sys.stderr)
+    print(f"[{_LABEL}] n_completed={result['n_completed']} batch={result['batch']} aborted_early={result['aborted_early']}", file=sys.stderr)
     print(f"[{_LABEL}] steady-state: {steady['commands_per_sec']:.1f} commands/sec over {steady['commands']} commands", file=sys.stderr)
     print(f"[{_LABEL}] latency ms: p50={steady['latency_ms']['p50']:.3f} p95={steady['latency_ms']['p95']:.3f} p99={steady['latency_ms']['p99']:.3f}", file=sys.stderr)
     print(f"[{_LABEL}] overall (setup+steady): {overall['commands_per_sec']:.1f} commands/sec over {overall['commands']} commands", file=sys.stderr)

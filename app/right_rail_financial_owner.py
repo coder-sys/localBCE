@@ -75,7 +75,7 @@ _CURRENCY: Final[str] = "USD"
 _MAX_CENTS: Final[int] = (1 << 63) - 1
 _MAX_ROWS: Final[int] = 10_000
 _MAX_DUPLICATE_INPUTS: Final[int] = 256
-# Commands that do all their work on the write connection, so one savepoint holds each whole.
+# run_batch commands: all their work is on the one write connection and they catch nothing.
 _BATCH_COMMANDS: Final = frozenset({"record_payment_evidence", "record_support_evidence", "evaluate_obligation", "reverse_payment"})
 _MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 _MAX_DECISION_PACKAGE_BYTES: Final[int] = _MAX_PACKAGE_BYTES - 512
@@ -2295,7 +2295,7 @@ class FinancialOwner:
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
-        """One atomic command; inside ``run_batch`` the batch owns connection, BEGIN/COMMIT and savepoint."""
+        """One atomic command; inside ``run_batch`` the batch owns the connection, BEGIN, COMMIT and ROLLBACK."""
         batch = getattr(self._batch, "connection", None)
         began = batch is None
         with closing(self._connect(admission_triggers=True)) if began else nullcontext(batch) as connection:
@@ -2318,27 +2318,25 @@ class FinancialOwner:
                     connection.execute("ROLLBACK")
                 raise
 
-    def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]]) -> list[dict[str, Any] | FinancialError]:
-        """Up to 1,000 commands in one durable COMMIT, each exactly as its method alone (same history,
-        retries, conflicts) in its own savepoint: a refusal undoes only that command and takes its
-        result slot; any other failure rolls the whole batch back and raises (Art. III.2, III.5)."""
+    def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]]) -> list[dict[str, Any]]:
+        """Up to 1,000 commands in one transaction, each run exactly as its method alone (same checks,
+        history, retries). All or nothing: the first failure rolls the whole batch back and is raised
+        with a ``batch_index=<i>`` note (Art. III.2, III.5)."""
         if type(commands) is not list or not 0 < len(commands) <= 1_000 or any(type(entry) is not tuple or len(entry) != 2 or entry[0] not in _BATCH_COMMANDS or not isinstance(entry[1], Mapping) for entry in commands):
             _fail(FinancialInputError, "batch_commands")
-        results: list[dict[str, Any] | FinancialError] = []
         with self._write() as connection:
             self._batch.connection = connection
             try:
-                for name, arguments in commands:
-                    connection.execute("SAVEPOINT rr_command")
+                results = []
+                for index, (name, arguments) in enumerate(commands):
                     try:
                         results.append(getattr(self, name)(**arguments))
-                    except FinancialError as refusal:
-                        connection.execute("ROLLBACK TO rr_command")
-                        results.append(refusal)
-                    connection.execute("RELEASE rr_command")
+                    except BaseException as error:
+                        error.add_note(f"batch_index={index}")
+                        raise
+                return results
             finally:
                 self._batch.connection = None
-        return results
 
     @contextmanager
     def _read_snapshot(self, *, _connection: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
