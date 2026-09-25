@@ -276,10 +276,12 @@ class FinancialSwitchCliTests(unittest.TestCase):
         self._assert_owner_packages_unchanged()
 
     def test_cli_missing_approval_and_reference_facts_returns_incomplete_unknown(self) -> None:
-        exit_code, report = self._invoke([
+        # The CLI prints the structured report as JSON on stdout; parse it.
+        exit_code, output = self._invoke([
             "switch-compare",
             "--package", str(self.package_path),
         ])
+        report = json.loads(output)
 
         self.assertEqual(exit_code, financial_cli.SWITCH_COMPARE_INCOMPLETE_EXIT)
         self.assertEqual(report["completion"], "INCOMPLETE")

@@ -2915,7 +2915,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             expected.PARTIAL_OTHER_RECIPIENT_CASH_CENTS,
         )
 
-        store = self._build_base(schema_version=7)
+        # The journey authorizes a correction, which runs only through the pinned
+        # Lean release (Art. V.2); an owner without one fails closed.
+        store = self._build_base_for_correction(schema_version=7)
         mirror = FinancialMirror(store)
         funding_fixture = expected.PROGRAM_FUNDING_RECEIPT
         funding_record = self._funding_receipt()
@@ -3050,10 +3052,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             },
             expected_authority=self.authority,
         )
-        self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v6")
+        # The journey owner is schema 7 (population manifests), so its package is
+        # the v7 manifest-continuity schema; the v6 literal predates v7.
+        self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v7")
         self.assertEqual(source_package_result["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
         source_package_view = mirror.validate_owner_continuity_package(source_package)
-        self.assertEqual(source_package_view["version"], 6)
+        self.assertEqual(source_package_view["version"], 7)
         self.assertEqual(source_package_view["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
         self.assertFalse(source_package_view["dispatch_enabled"])
         self.assertFalse(source_package_view["egress_enabled"])
@@ -3259,7 +3263,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         completion["after_revision"] += 1
         body = dict(package)
         del body["package_digest"]
-        package["package_digest"] = owner._hex(owner._digest(owner._CONTINUITY_DOMAIN, owner._canonical(body)))
+        # Recompute the digest under the package's own version domain (v7 here),
+        # so the digest check passes and the restore integrity check must reject.
+        package_domain = owner._CONTINUITY_DOMAIN_BY_VERSION[package["version"]]
+        package["package_digest"] = owner._hex(owner._digest(package_domain, owner._canonical(body)))
         tampered = owner._canonical(package)
         destination = self._path("tampered-continuity.sqlite")
         with self.assertRaisesRegex(FinancialContinuityError, "continuity_restore_integrity"):

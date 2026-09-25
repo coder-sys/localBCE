@@ -772,6 +772,38 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             else:
                 self.fail(f"variant={variant} was accepted")
 
+            # Owner open recomputes the continuity admission cache (per-table
+            # row count and canonical bytes) and rejects a rewrite that changed
+            # either before any read (Art. III.5). It is a size admission bound,
+            # not a content digest, so the same-length "reduced" rewrite passes it.
+            with closing(sqlite3.connect(target)) as connection:
+                connection.row_factory = sqlite3.Row
+                rebuilt = reopened._recompute_continuity_admission(connection)
+                stored = {
+                    str(row["table_name"]): (int(row["row_count"]), int(row["row_bytes"]))
+                    for row in connection.execute(
+                        "SELECT table_name,row_count,row_bytes FROM right_rail_continuity_admission"
+                    )
+                }
+            if rebuilt != stored:
+                with self.assertRaisesRegex(owner.FinancialIntegrityError, "continuity_admission_mismatch"):
+                    owner.FinancialOwner(
+                        path=target,
+                        config=self.config,
+                        trusted_authority=self.authority,
+                        clock=_Clock(),
+                    )
+                # An attacker who also rewrites the cache must still be stopped
+                # by the independent history binding below.
+                with closing(sqlite3.connect(target)) as connection:
+                    connection.executemany(
+                        "UPDATE right_rail_continuity_admission SET row_count=?,row_bytes=? WHERE table_name=?",
+                        ((count, size, table) for table, (count, size) in rebuilt.items()),
+                    )
+                    connection.commit()
+            elif variant == "removed":
+                self.fail("removing a history event must change the admission row count")
+
             tampered_owner = owner.FinancialOwner(
                 path=target,
                 config=self.config,
