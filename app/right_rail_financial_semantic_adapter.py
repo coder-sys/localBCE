@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import json
 import re
 import sqlite3
-from typing import Any, Final, Mapping
+from typing import Any, Callable, Final, Mapping
 
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
@@ -832,7 +832,10 @@ def _write_actions(writer: _WireWriter, actions: object, *, currency: object) ->
 def encode_blfin02_input(snapshot: LockedSemanticSnapshot) -> bytes:
     """Encode one authenticated owner snapshot using the Engine BLFIN02 wire contract."""
 
-    data = _require_validated_snapshot(snapshot).data
+    return _encode_blfin02(_require_validated_snapshot(snapshot).data)
+
+
+def _encode_blfin02(data: Mapping[str, Any]) -> bytes:
     try:
         scope = _wire_mapping(data["scope"], "scope", {"state_id", "deployment_id", "program_id", "period_id", "currency"})
         owner_body = _wire_mapping(data["owner"], "owner")
@@ -979,7 +982,16 @@ def _completion_time_from_snapshot(data: Mapping[str, Any]) -> int | None:
 
 
 def _bind_result_context(result: DecodedLeanResult, data: Mapping[str, Any]) -> None:
-    """Everything a result must share with the snapshot it evaluated, short of the stored projection."""
+    """A snapshot result: its identity, the receipt's evidence ids, and the snapshot's completion."""
+    current = _wire_mapping(data["current_evaluation"], "current_evaluation")
+    receipt = _wire_mapping(current["receipt"], "current_receipt")
+    _bind_result_identity(result, data, tuple(receipt["evidence_ids"]))
+    if result.completion_at_ms != _completion_time_from_snapshot(data):
+        _fail(SemanticAdapterIntegrityError, "result_completion")
+
+
+def _bind_result_identity(result: DecodedLeanResult, data: Mapping[str, Any], evidence_ids: tuple[str, ...]) -> None:
+    """Everything a result must share with the input it evaluated; none of it is a decision."""
     scope = _wire_mapping(data["scope"], "scope")
     owner_body = _wire_mapping(data["owner"], "owner")
     authority = _wire_mapping(data["authority"], "authority")
@@ -988,8 +1000,6 @@ def _bind_result_context(result: DecodedLeanResult, data: Mapping[str, Any]) -> 
     pack = _wire_mapping(data["control_pack"], "control_pack")
     pack_fields = _wire_mapping(pack["canonical_fields"], "control_pack_fields")
     obligation = _wire_mapping(data["obligation"], "obligation")
-    current = _wire_mapping(data["current_evaluation"], "current_evaluation")
-    receipt = _wire_mapping(current["receipt"], "current_receipt")
     expected_context = (
         owner_body["owner_id"], owner_body["mode"], owner_body["provenance"],
         scope["state_id"], scope["deployment_id"], scope["program_id"], scope["period_id"],
@@ -1014,11 +1024,8 @@ def _bind_result_context(result: DecodedLeanResult, data: Mapping[str, Any]) -> 
         _fail(SemanticAdapterCodecError, "result_time_binding")
     if result.rule_version != obligation["rule_version"] or result.rule_version != pack_fields["version"]:
         _fail(SemanticAdapterIntegrityError, "result_rule_version")
-    expected_evidence_ids = tuple(receipt["evidence_ids"])
-    if result.evidence_ids != expected_evidence_ids:
+    if result.evidence_ids != evidence_ids:
         _fail(SemanticAdapterIntegrityError, "result_evidence_ids")
-    if result.completion_at_ms != _completion_time_from_snapshot(data):
-        _fail(SemanticAdapterIntegrityError, "result_completion")
 
 
 def _validate_decoded_result(result: DecodedLeanResult, snapshot: LockedSemanticSnapshot) -> None:
@@ -1053,6 +1060,18 @@ def decode_blfres02_result(
     """Decode, canonically re-encode, and bind one Engine BLFRES02 result."""
 
     expected_snapshot = _require_validated_snapshot(expected_snapshot, "result_snapshot_type")
+    return _decode_blfres02(payload, lambda result: _validate_decoded_result(result, expected_snapshot))
+
+
+def decode_live_result(payload: bytes, data: Mapping[str, Any]) -> DecodedLeanResult:
+    """Decode the worker's BLFRES02 answer to ``live_evaluation_input`` and bind it to that input."""
+
+    return _decode_blfres02(payload, lambda result: _bind_result_identity(
+        result, data, tuple(evidence["evidence_id"] for evidence in data["evidence"])
+    ))
+
+
+def _decode_blfres02(payload: bytes, bind: Callable[[DecodedLeanResult], None]) -> DecodedLeanResult:
     reader = _WireReader(payload, max_bytes=MAX_RESULT_BYTES)
     if reader.take(len(BLFRES02_MAGIC), "result_magic") != BLFRES02_MAGIC:
         _fail(SemanticAdapterCodecError, "result_magic")
@@ -1098,7 +1117,7 @@ def decode_blfres02_result(
             delivery_status=_read_tag(reader, _DELIVERY_STATUS_TAGS, "delivery_status"),
         )
         reader.finish()
-        _validate_decoded_result(result, expected_snapshot)
+        bind(result)
         if _encode_blfres02_result(result) != payload:
             _fail(SemanticAdapterCodecError, "result_canonical")
         return result
@@ -1837,6 +1856,7 @@ def _load_determinations(
     *,
     obligation_id: str,
     evidence: Mapping[str, Mapping[str, Any]],
+    actions: list[dict[str, Any]],
     authority_context: TrustedAuthorityContext,
     evaluation_time_ms: int,
     limit: int,
@@ -1897,7 +1917,117 @@ def _load_determinations(
         if body["decided_at_ms"] > evaluation_time_ms:
             _fail(SemanticAdapterIntegrityError, "determination_time_binding")
         result.append(body)
+    for determination in result:
+        action = next((value for value in actions if value["determination_id"] == determination["determination_id"]), None)
+        if action is None:
+            _fail(SemanticAdapterIntegrityError, "determination_action_missing")
+        determination["action_id"] = action["action_id"]
     return result
+
+
+def _load_facts(
+    connection: sqlite3.Connection,
+    *,
+    obligation_id: str,
+    scope: Mapping[str, str],
+    evaluation_time_ms: int,
+    limit: int,
+) -> tuple[sqlite3.Row, owner.ControlPack, dict[str, dict[str, Any]], dict[str, Any]]:
+    """The cross-bound facts BLFIN02 carries for one obligation, short of its determinations."""
+
+    obligation_row, obligation_body = _load_obligation(
+        connection, obligation_id=obligation_id, scope=scope, evaluation_time_ms=evaluation_time_ms,
+    )
+    item_id = str(obligation_row["item_id"])
+    population_body, pack_body, pack = _load_population_and_pack(connection, obligation_row, scope)
+    evidence_body, evidence_by_id = _load_evidence(
+        connection, item_id=item_id, evaluation_time_ms=evaluation_time_ms, limit=limit,
+    )
+    payments_body, payments_by_id = _load_payments(
+        connection, obligation_id=obligation_id, item_id=item_id, evidence=evidence_by_id,
+        evaluation_time_ms=evaluation_time_ms, limit=limit,
+    )
+    claims_body, _ = _load_claims(
+        connection, obligation_id=obligation_id, evidence=evidence_by_id,
+        evaluation_time_ms=evaluation_time_ms, limit=limit,
+    )
+    cases_body, _ = _load_cases(
+        connection, obligation_id=obligation_id, pack=pack, evaluation_time_ms=evaluation_time_ms, limit=limit,
+    )
+    actions_body, outbox_body, _ = _load_actions(
+        connection, obligation_id=obligation_id, evaluation_time_ms=evaluation_time_ms, limit=limit,
+    )
+    conflicts_body = _load_conflicts(
+        connection, obligation_id=obligation_id, item_id=item_id, evidence=evidence_by_id,
+        payments=payments_by_id, evaluation_time_ms=evaluation_time_ms, limit=limit,
+    )
+    return obligation_row, pack, evidence_by_id, {
+        "pre_evaluation": {"obligation_id": obligation_id, "item_id": item_id, "revision": int(obligation_row["revision"])},
+        "population": population_body,
+        "control_pack": pack_body,
+        "obligation": obligation_body,
+        "evidence": evidence_body,
+        "payments": payments_body,
+        "claims": claims_body,
+        "cases": cases_body,
+        "actions": actions_body,
+        "action_outbox": outbox_body,
+        "conflicts": conflicts_body,
+    }
+
+
+def _authority_body(authority_context: TrustedAuthorityContext) -> dict[str, Any]:
+    return {
+        "context": authority_context.source,
+        "authority_id": authority_context.authority_id,
+        "epoch": authority_context.epoch,
+        "digest": _hex(authority_context.digest),
+        "actors": authority_context.actor_roles,
+    }
+
+
+def live_evaluation_input(
+    connection: sqlite3.Connection,
+    *,
+    obligation_id: str,
+    authority_context: TrustedAuthorityContext,
+    evaluation_time_ms: int,
+    verification: Mapping[str, object],
+) -> tuple[bytes, dict[str, Any]]:
+    """BLFIN02 for the owner's live decision, read inside the writer's own transaction.
+
+    ``verification`` is the writer's bound scope, owner and mode.  Only the facts
+    BLFIN02 carries are read; evaluation history is not an input to the decision.
+    """
+
+    connection = _require_connection(connection)
+    if type(authority_context) is not TrustedAuthorityContext:
+        _fail(SemanticAdapterInputError, "authority_context_type")
+    _time(evaluation_time_ms, "evaluation_time")
+    try:
+        scope, identity = _read_verified_meta(connection, verification)
+        _row, _pack, evidence_by_id, facts = _load_facts(
+            connection, obligation_id=obligation_id, scope=scope,
+            evaluation_time_ms=evaluation_time_ms, limit=MAX_FACT_ROWS,
+        )
+        facts["determinations"] = _load_determinations(
+            connection, obligation_id=obligation_id, evidence=evidence_by_id, actions=facts["actions"],
+            authority_context=authority_context, evaluation_time_ms=evaluation_time_ms, limit=MAX_FACT_ROWS,
+        )
+        data = {
+            "scope": scope,
+            "owner": identity,
+            "authority": _authority_body(authority_context),
+            "evaluation_time_ms": evaluation_time_ms,
+            **facts,
+        }
+        return _encode_blfin02(data), data
+    except SemanticAdapterError:
+        raise
+    except sqlite3.Error:
+        _fail(SemanticAdapterIntegrityError, "database_read")
+    except (TypeError, ValueError, KeyError, IndexError):
+        _fail(SemanticAdapterIntegrityError, "record_shape")
 
 
 def _make_snapshot(body: dict[str, Any]) -> LockedSemanticSnapshot:
@@ -1973,55 +2103,9 @@ def build_locked_semantic_snapshot(
                 expected_owner_id=expected_owner_id,
                 expected_continuity_epoch=expected_continuity_epoch,
             ))
-        obligation_row, obligation_body = _load_obligation(
-            connection,
-            obligation_id=obligation_id,
-            scope=scope,
-            evaluation_time_ms=evaluation_time_ms,
-        )
-        population_body, pack_body, pack = _load_population_and_pack(connection, obligation_row, scope)
-        evidence_body, evidence_by_id = _load_evidence(
-            connection,
-            item_id=str(obligation_row["item_id"]),
-            evaluation_time_ms=evaluation_time_ms,
-            limit=max_fact_rows,
-        )
-        payments_body, payments_by_id = _load_payments(
-            connection,
-            obligation_id=obligation_id,
-            item_id=str(obligation_row["item_id"]),
-            evidence=evidence_by_id,
-            evaluation_time_ms=evaluation_time_ms,
-            limit=max_fact_rows,
-        )
-        claims_body, claims_by_id = _load_claims(
-            connection,
-            obligation_id=obligation_id,
-            evidence=evidence_by_id,
-            evaluation_time_ms=evaluation_time_ms,
-            limit=max_fact_rows,
-        )
-        cases_body, cases_by_id = _load_cases(
-            connection,
-            obligation_id=obligation_id,
-            pack=pack,
-            evaluation_time_ms=evaluation_time_ms,
-            limit=max_fact_rows,
-        )
-        actions_body, outbox_body, actions_by_id = _load_actions(
-            connection,
-            obligation_id=obligation_id,
-            evaluation_time_ms=evaluation_time_ms,
-            limit=max_fact_rows,
-        )
-        conflicts_body = _load_conflicts(
-            connection,
-            obligation_id=obligation_id,
-            item_id=str(obligation_row["item_id"]),
-            evidence=evidence_by_id,
-            payments=payments_by_id,
-            evaluation_time_ms=evaluation_time_ms,
-            limit=max_fact_rows,
+        obligation_row, pack, evidence_by_id, facts = _load_facts(
+            connection, obligation_id=obligation_id, scope=scope,
+            evaluation_time_ms=evaluation_time_ms, limit=max_fact_rows,
         )
         evaluations_body, evaluations_by_id, current_evaluation = _load_evaluations(
             connection,
@@ -2034,42 +2118,20 @@ def build_locked_semantic_snapshot(
             evaluation_time_ms=evaluation_time_ms,
             limit=max_fact_rows,
         )
-        determinations_raw = _load_determinations(
-            connection,
-            obligation_id=obligation_id,
-            evidence=evidence_by_id,
-            authority_context=authority_context,
-            evaluation_time_ms=evaluation_time_ms,
-            limit=max_fact_rows,
+        facts["determinations"] = _load_determinations(
+            connection, obligation_id=obligation_id, evidence=evidence_by_id, actions=facts["actions"],
+            authority_context=authority_context, evaluation_time_ms=evaluation_time_ms, limit=max_fact_rows,
         )
-        determination_by_id: dict[str, dict[str, Any]] = {}
-        for determination in determinations_raw:
-            action = next((value for value in actions_by_id.values() if value["determination_id"] == determination["determination_id"]), None)
-            if action is None:
-                _fail(SemanticAdapterIntegrityError, "determination_action_missing")
-            determination["action_id"] = action["action_id"]
-            determination_by_id[determination["determination_id"]] = determination
         body = {
             "schema": SEMANTIC_INPUT_SCHEMA,
             "version": SEMANTIC_INPUT_VERSION,
             "scope": dict(scope),
             "owner": identity,
-            "authority": {
-                "context": authority_context.source,
-                "authority_id": authority_context.authority_id,
-                "epoch": authority_context.epoch,
-                "digest": _hex(authority_context.digest),
-                "actors": authority_context.actor_roles,
-            },
+            "authority": _authority_body(authority_context),
             "evaluation_time_ms": evaluation_time_ms,
-            "pre_evaluation": {
-                "obligation_id": obligation_id,
-                "item_id": str(obligation_row["item_id"]),
-                "revision": int(obligation_row["revision"]),
-            },
-            "population": population_body,
+            **facts,
             "population_item": {
-                "population_id": population_body["population_id"],
+                "population_id": facts["population"]["population_id"],
                 "item_id": str(obligation_row["item_id"]),
                 "display_label": _text(
                     connection.execute(
@@ -2083,16 +2145,6 @@ def build_locked_semantic_snapshot(
                 "due_at_ms": int(obligation_row["due_at_ms"]),
                 "currency": str(obligation_row["currency"]),
             },
-            "control_pack": pack_body,
-            "obligation": obligation_body,
-            "evidence": evidence_body,
-            "payments": payments_body,
-            "claims": claims_body,
-            "determinations": determinations_raw,
-            "cases": cases_body,
-            "actions": actions_body,
-            "action_outbox": outbox_body,
-            "conflicts": conflicts_body,
             "evaluations": evaluations_body,
             "current_evaluation": {
                 "receipt": current_evaluation,
@@ -2151,6 +2203,8 @@ __all__ = [
     "bind_resulting_state",
     "build_locked_semantic_snapshot",
     "decode_blfres02_result",
+    "decode_live_result",
     "encode_blfin02_input",
     "encode_blfres02_result",
+    "live_evaluation_input",
 ]
