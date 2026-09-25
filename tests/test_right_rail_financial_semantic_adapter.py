@@ -479,30 +479,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         return self._snapshot(store, context=context)
 
     def _snapshot_on_tampered_path(self, path: Path, source: FinancialOwner) -> None:
-        # Layer 1: Owner open recomputes the v7 continuity admission cache
-        # (per-table row count and canonical bytes) and rejects a raw row edit
-        # that changed either before any read (Art. III.5). The cache is a size
-        # admission bound, not a content digest: a same-length edit passes it.
-        with closing(sqlite3.connect(str(path))) as connection:
-            connection.row_factory = sqlite3.Row
-            rebuilt = source._recompute_continuity_admission(connection)
-            stored = {
-                str(row["table_name"]): (int(row["row_count"]), int(row["row_bytes"]))
-                for row in connection.execute(
-                    "SELECT table_name,row_count,row_bytes FROM right_rail_continuity_admission"
-                )
-            }
-        if rebuilt != stored:
-            with self.assertRaisesRegex(owner.FinancialIntegrityError, "continuity_admission_mismatch"):
-                self._make_owner(path=path)
-            # An attacker who also rewrites the cache reaches the layers below.
-            with closing(sqlite3.connect(str(path))) as connection:
-                connection.executemany(
-                    "UPDATE right_rail_continuity_admission SET row_count=?,row_bytes=? WHERE table_name=?",
-                    ((count, size, table) for table, (count, size) in rebuilt.items()),
-                )
-                connection.commit()
-        # Layer 2: Owner open replays the history against the projections and
+        # Layer 1: Owner open replays the history against the projections and
         # refuses the tampered facts before any read or write.
         before_open = path.read_bytes()
         with self.assertRaises(owner.FinancialIntegrityError) as refused:
@@ -510,7 +487,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), before_open)
         open_code = str(refused.exception)
         self.assertTrue(open_code.startswith("open_verification:"), open_code)
-        # Layer 3: the adapter's own verifier, reading the file with no Owner at
+        # Layer 2: the adapter's own verifier, reading the file with no Owner at
         # all, must reject the same facts for the same reason.
         with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
             connection.row_factory = sqlite3.Row

@@ -777,11 +777,6 @@ class FinancialMirrorTests(unittest.TestCase):
     def test_continuity_export_validate_restore_restart_and_readback(self) -> None:
         self._prepare_action()
         package = self.mirror.export_continuity()
-        with self.store._read_snapshot() as connection:
-            self.assertEqual(
-                self.store._continuity_admission_package_size(connection),
-                len(package),
-            )
         metadata = self.mirror.validate_owner_continuity_package(package)
         self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v8")
         self.assertEqual(metadata["schema"], CONTINUITY.export_version)  # CASE_11

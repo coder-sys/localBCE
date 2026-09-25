@@ -12,7 +12,11 @@ synthetic". Standing claims: synthetic, non-PHI, nonpayment,
 proofSuiteId=null, production_usable=false, activation=false.
 
 Usage:
-    python tools/load_synthetic.py --n 1000 --seed 1 --out result.json
+    python tools/load_synthetic.py --n 1000 --seed 1 --out result.json [--history DIR]
+
+With ``--history DIR`` the run also exports the history as segments to DIR,
+restores it by replay into a fresh store, checks it, and shows that one
+flipped byte in a segment is refused (docs/CORE_REDESIGN.md "History segments").
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import json
 import math
 import os
 import random
+import shutil
 import sys
 import tempfile
 import time
@@ -38,7 +43,9 @@ from app.right_rail_financial_owner import (  # noqa: E402
     PopulationManifest,
     ProgramFundingReceipt,
     SyntheticTrustedAuthority,
+    _checker_authority,
 )
+from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_history_export  # noqa: E402
 
 # Explicit bounds (CONSTITUTION III.5 / IX.3: every input has a bound).
 _MAX_N = 100_000
@@ -208,7 +215,33 @@ def _setup(owner: FinancialOwner, rng: random.Random, cohort_size: int, authorit
     return items, latencies
 
 
-def run(n: int, seed: int) -> dict:
+def _history_round_trip(owner: FinancialOwner, authority: SyntheticTrustedAuthority, directory: Path) -> dict:
+    timings = {}
+    t0 = time.perf_counter()
+    manifest = json.loads(owner.export_history(directory))
+    timings["export_seconds"] = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    FinancialOwner.restore_continuity(history=directory, recovered_path=directory.with_name(f"{directory.name}-restored.sqlite3"), trusted_authority=authority)
+    timings["restore_seconds"] = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    verify_history_export(directory, expected_authority=_checker_authority(authority))
+    timings["check_seconds"] = time.perf_counter() - t0
+    tampered = directory.with_name(f"{directory.name}-tampered")
+    shutil.copytree(directory, tampered)
+    segment = tampered / f"segment-{manifest['segment_count'] // 2:08d}.json"
+    data = bytearray(segment.read_bytes())
+    data[len(data) // 2] ^= 1
+    segment.write_bytes(bytes(data))
+    try:
+        verify_history_export(tampered, expected_authority=_checker_authority(authority))
+        refusal = None
+    except IndependentFinancialError as error:
+        refusal = str(error)
+    sizes = [path.stat().st_size for path in directory.glob("segment-*.json")]
+    return {**timings, "segment_count": manifest["segment_count"], "sequence": manifest["meta"]["sequence"], "largest_segment_bytes": max(sizes, default=0), "export_bytes": sum(sizes), "tamper_refusal": refusal}
+
+
+def run(n: int, seed: int, history: Path | None = None) -> dict:
     if n <= 0:
         raise SystemExit(f"aborting: --n must be positive, got {n}")
     if n > _MAX_N:
@@ -270,6 +303,7 @@ def run(n: int, seed: int) -> dict:
             by_kind[kind].append(dt)
             completed += 1
         steady_wall = time.perf_counter() - steady_start
+        history_result = None if history is None else _history_round_trip(owner, authority, history)
 
         store_size_bytes = os.path.getsize(db_path)
         for suffix in ("-wal", "-shm", "-journal"):
@@ -314,6 +348,7 @@ def run(n: int, seed: int) -> dict:
             "commands_per_sec": ((setup_commands + completed) / total_wall) if total_wall > 0 else 0.0,
         },
         "store_size_bytes": store_size_bytes,
+        "history": history_result,
         "peak_rss": {"value": peak_rss, "note": peak_rss_note},
         "lean_engine_launch": {
             "count": 0,
@@ -337,9 +372,10 @@ def main() -> int:
     parser.add_argument("--n", type=int, default=1000, help="number of steady-state commands to run (default 1000, hard max %d)" % _MAX_N)
     parser.add_argument("--seed", type=int, default=1, help="integer seed for deterministic synthetic data (default 1)")
     parser.add_argument("--out", type=str, default=None, help="path to write the JSON result (default: print to stdout)")
+    parser.add_argument("--history", type=Path, default=None, help="export, restore by replay and check the history in this new directory")
     args = parser.parse_args()
 
-    result = run(args.n, args.seed)
+    result = run(args.n, args.seed, args.history)
 
     payload = json.dumps(result, indent=2)
     if args.out:

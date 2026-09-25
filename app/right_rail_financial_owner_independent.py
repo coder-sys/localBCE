@@ -48,18 +48,15 @@ POPULATION_MANIFEST_CONTRACT = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 CURRENCY = "USD"
 MAX_CENTS = (1 << 63) - 1
 MAX_ROWS = 10_000
-MAX_DATABASE_BYTES = 64 * 1024 * 1024
+MAX_SEQUENCE = (1 << 63) - 1  # history length is unbounded; each history segment is bounded
 MAX_PACKAGE_BYTES = 8 * 1024 * 1024
 MAX_DECISION_PACKAGE_BYTES = MAX_PACKAGE_BYTES - 512
 MAX_DECISION_PACKAGE_DEPTH = 32
 MAX_JSON_BYTES = 1 * 1024 * 1024
 MAX_PACKAGE_NODES = 250_000
-CONTINUITY_ADMISSION_TABLE = "right_rail_continuity_admission"
-CONTINUITY_ADMISSION_TABLE_DEFS = (
-    ("table_name", "TEXT", 1),
-    ("row_count", "INTEGER", 1),
-    ("row_bytes", "INTEGER", 1),
-)
+SEGMENT_FORMAT = "RR/GATE/SEGMENT/v1"  # docs/CORE_REDESIGN.md "History segments"
+SEGMENT_DOMAIN = b"RR/GATE/SEGMENT/v1\x00"
+MAX_SEGMENT_BYTES = 2 * MAX_PACKAGE_BYTES
 PRIVATE_INDEX_SET_VERSION = 1
 PRIVATE_INDEX_DEFS_V1 = {
     "rr_financial_v1_evidence_item_id": (
@@ -267,6 +264,12 @@ TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 TABLES = frozenset(_TABLE_DEFS)
 PACKAGE_TABLES = TABLES - {"commands"}  # the command log is derived from history, never exported
+PROJECTION_TABLES = PACKAGE_TABLES - {"financial_events", "financial_identity", "financial_meta"}
+_HISTORY_TABLE_DEFS = _parse_table_specs({
+    "history_segments": "I segment_index@1 I first_sequence I last_sequence B previous_digest B event_head B projection_root B segment_digest T rows_json",
+    "history_pending": "T table_name@1 I row_key@2 I record_bytes",
+    "history_open": "I id@1 I event_count I byte_count",
+})
 # Rows whose every write the next event carries in ``rows``; they must equal replay of the chain.
 CAPTURED_TABLES = ("action_outbox", "cases", "claimed_adjustments", "evidence", "financial_conflicts")
 
@@ -745,7 +748,7 @@ def _identity_digest(
     if bound_mode not in {"LIVE", "SHADOW", "TEST"}:
         _fail("identity:mode")
     _id(bound_owner_id, "identity:owner")
-    _integer(anchor_sequence, "identity:anchor-sequence", maximum=MAX_ROWS)
+    _integer(anchor_sequence, "identity:anchor-sequence", maximum=MAX_SEQUENCE)
     source_digest = _blob64(source_package_digest, "identity:source-package-digest")
     return _digest(
         IDENTITY_DOMAIN,
@@ -784,7 +787,7 @@ def _identity_record(
         expected_owner_id = SHADOW_OWNER_ID if bound_mode == "SHADOW" else TEST_OWNER_ID
         if bound_owner_id != expected_owner_id:
             _fail(f"{code_prefix}:restore-owner")
-    anchor_sequence = _integer(value["anchor_sequence"], f"{code_prefix}:anchor-sequence", maximum=MAX_ROWS)
+    anchor_sequence = _integer(value["anchor_sequence"], f"{code_prefix}:anchor-sequence", maximum=MAX_SEQUENCE)
     anchor_head = _blob64(value["anchor_head"], f"{code_prefix}:anchor-head")
     genesis_head = _blob64(value["genesis_head"], f"{code_prefix}:genesis-head")
     source_package_digest = _blob64(value["source_package_digest"], f"{code_prefix}:source-package-digest")
@@ -984,7 +987,7 @@ def _open_readonly(path: str | Path) -> sqlite3.Connection:
     try:
         if target.is_symlink() or not target.is_file():
             _fail("database:path")
-        if target.stat().st_size <= 0 or target.stat().st_size > MAX_DATABASE_BYTES:
+        if target.stat().st_size <= 0:
             _fail("database:byte-cap")
         uri = "file:" + quote(target.resolve().as_posix(), safe="/:") + "?mode=ro"
         connection = sqlite3.connect(uri, uri=True, timeout=5.0, isolation_level=None)
@@ -1015,22 +1018,15 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         }
-        expected_tables = TABLES | {CONTINUITY_ADMISSION_TABLE}
-        if tables != expected_tables:
+        if tables != TABLES | set(_HISTORY_TABLE_DEFS):
             _fail("schema:tables")
-        for table, definition in _TABLE_DEFS.items():
+        for table, definition in {**_TABLE_DEFS, **_HISTORY_TABLE_DEFS}.items():
             actual = tuple(
                 (str(row[1]), str(row[2]).upper(), int(row[5]))
                 for row in connection.execute(f"PRAGMA table_info({table})")
             )
             if actual != tuple(definition):
                 _fail(f"schema:columns:{table}")
-        admission_columns = tuple(
-            (str(row[1]), str(row[2]).upper(), int(row[3]))
-            for row in connection.execute(f"PRAGMA table_info({CONTINUITY_ADMISSION_TABLE})")
-        )
-        if admission_columns != CONTINUITY_ADMISSION_TABLE_DEFS:
-            _fail("schema:continuity-admission-columns")
         triggers = {
             str(row[0]): str(row[1])
             for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'")
@@ -1067,101 +1063,9 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
         _fail("schema:read")
 
 
-def _verify_continuity_admission(
-    connection: sqlite3.Connection,
-    schema_version: int,
-    meta: Mapping[str, object],
-) -> None:
-    """Recompute the local admission cache from source rows; never trust it as source data."""
-
-    expected: dict[str, tuple[int, int]] = {}
-    for table in sorted(PACKAGE_TABLES):
-        columns = TABLE_COLUMNS[table]
-        count = 0
-        row_bytes = 0
-        try:
-            for row in connection.execute(f"SELECT * FROM {table}"):
-                count += 1
-                if count > MAX_ROWS:
-                    _fail(f"continuity-admission:row-cap:{table}")
-                exported: dict[str, object] = {}
-                for column in columns:
-                    value = row[column]
-                    if type(value) is bytes:
-                        exported[column] = {"hex": value.hex().upper()}
-                    elif value is None or type(value) in {str, int, float, bool}:
-                        exported[column] = value
-                    else:
-                        _fail("continuity-admission:value")
-                row_bytes += len(_canonical(exported, "continuity-admission:row"))
-        except IndependentFinancialError:
-            raise
-        except sqlite3.Error:
-            _fail(f"continuity-admission:read:{table}")
-        expected[table] = (count, row_bytes)
-    try:
-        rows = list(
-            connection.execute(
-                f"SELECT table_name,row_count,row_bytes FROM {CONTINUITY_ADMISSION_TABLE}"
-            )
-        )
-    except sqlite3.Error:
-        _fail("continuity-admission:read")
-    actual: dict[str, tuple[int, int]] = {}
-    for row in rows:
-        table = row["table_name"]
-        count = row["row_count"]
-        row_bytes = row["row_bytes"]
-        if (
-            type(table) is not str
-            or table not in expected
-            or type(count) is not int
-            or count < 0
-            or type(row_bytes) is not int
-            or row_bytes < 0
-            or table in actual
-        ):
-            _fail("continuity-admission:values")
-        actual[table] = (count, row_bytes)
-    if actual != expected:
-        _fail("continuity-admission:mismatch")
-    scope = meta["scope"]
-    assert isinstance(scope, Mapping)
-    body = {
-        "schema": CONTINUITY_SCHEMA,
-        "version": schema_version,
-        "scope": dict(scope),
-        "authority": {
-            "authority_id": meta["authority_id"],
-            "epoch": meta["authority_epoch"],
-            "digest": bytes(meta["authority_digest"]).hex().upper(),
-        },
-        "continuity_epoch": meta["continuity_epoch"],
-        "sequence": meta["sequence"],
-        "history_head": bytes(meta["history_head"]).hex().upper(),
-        "dispatch_enabled": False,
-        "egress_enabled": False,
-        "mode": meta["mode"],
-        "tables": {table: [] for table in sorted(expected)},
-    }
-    package = {
-        **body,
-        "package_digest": _digest(CONTINUITY_DOMAIN, _canonical(body)).hex().upper(),
-    }
-    exact_size = len(_canonical(package))
-    exact_size += sum(row_bytes + max(0, count - 1) for count, row_bytes in expected.values())
-    if exact_size > MAX_PACKAGE_BYTES:
-        _fail("continuity-admission:package-size")
-
-
 def _bounded_rows(connection: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
     try:
-        count = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-        if count > MAX_ROWS:
-            _fail(f"rows:cap:{table}")
         return list(connection.execute(f"SELECT * FROM {table}"))
-    except IndependentFinancialError:
-        raise
     except sqlite3.Error:
         _fail(f"rows:read:{table}")
 
@@ -1185,7 +1089,7 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
         _text(row[key], f"meta:{key}")
         if row[key] != scope[key]:
             _fail(f"meta:scope:{key}")
-    sequence = _integer(row["sequence"], "meta:sequence", maximum=MAX_ROWS)
+    sequence = _integer(row["sequence"], "meta:sequence", maximum=MAX_SEQUENCE)
     history_head = _blob64(row["history_head"], "meta:history-head")
     continuity_epoch = _integer(row["continuity_epoch"], "meta:continuity-epoch", minimum=1, maximum=1)  # no writer advances it
     if _flag(row["dispatch_enabled"], "meta:dispatch") != 0 or _flag(row["egress_enabled"], "meta:egress") != 0:
@@ -1252,58 +1156,61 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
     }
 
 
+def _verify_event(row: Mapping[str, object], index: int, previous: bytes) -> bytes:
+    """Recompute one event's id and head from its predecessor's head; return the head."""
+    if row["event_sequence"] != index:
+        _fail("history:sequence")
+    event_id = _blob64(row["event_id"], "history:event-id")
+    aggregate_type = _kind(row["aggregate_type"], "history:aggregate-type")
+    aggregate_id = _id(row["aggregate_id"], "history:aggregate-id")
+    kind = _kind(row["kind"], "history:event-kind")
+    if aggregate_type not in _EVENT_KINDS or kind not in _EVENT_KINDS[aggregate_type]:
+        _fail("history:event-kind")
+    before = _integer(row["before_revision"], "history:before-revision")
+    after = _integer(row["after_revision"], "history:after-revision")
+    if after < before:
+        _fail("history:revision-order")
+    payload_raw = row["payload_json"]
+    payload = _parse_json(payload_raw, "history:payload", max_bytes=MAX_PACKAGE_BYTES)  # rows can outgrow 1 MiB; the package cap bounds them
+    if not isinstance(payload, dict):
+        _fail("history:payload-object")
+    payload_bytes = _canonical(payload, "history:payload")
+    payload_digest = _blob64(row["payload_digest"], "history:payload-digest")
+    expected_payload_digest = _digest(OPENING_BALANCE_DOMAIN if kind == "OPENING_BALANCE" else EVENT_DOMAIN, payload_bytes)
+    if payload_digest != expected_payload_digest:
+        _fail("history:payload-digest")
+    committed_at_ms = _time(row["committed_at_ms"], "history:committed-at")
+    header = _event_header(before, after, committed_at_ms)
+    expected_event_id = _digest(
+        EVENT_DOMAIN,
+        index.to_bytes(8, "big"),
+        aggregate_type.encode("ascii"),
+        aggregate_id.encode("ascii"),
+        kind.encode("ascii"),
+        header,
+        payload_digest,
+    )
+    if event_id != expected_event_id:
+        _fail("history:event-id")
+    previous_head = _blob64(row["previous_head"], "history:previous-head")
+    head = _blob64(row["head"], "history:head")
+    if previous_head != previous:
+        _fail("history:predecessor")
+    expected_head = _digest(HEAD_DOMAIN, previous_head, event_id, header, payload_digest)
+    if head != expected_head:
+        _fail("history:head")
+    return head
+
+
 def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> list[sqlite3.Row]:
     rows = list(connection.execute("SELECT * FROM financial_events ORDER BY event_sequence"))
-    if len(rows) > MAX_ROWS:
-        _fail("history:row-cap")
     expected_sequence = int(meta["sequence"])
     if len(rows) != expected_sequence:
         _fail("history:sequence-count")
     previous = meta["genesis"]
     assert isinstance(previous, bytes)
     for index, row in enumerate(rows, start=1):
-        if row["event_sequence"] != index:
-            _fail("history:sequence")
-        event_id = _blob64(row["event_id"], "history:event-id")
-        aggregate_type = _kind(row["aggregate_type"], "history:aggregate-type")
-        aggregate_id = _id(row["aggregate_id"], "history:aggregate-id")
-        kind = _kind(row["kind"], "history:event-kind")
-        if aggregate_type not in _EVENT_KINDS or kind not in _EVENT_KINDS[aggregate_type]:
-            _fail("history:event-kind")
-        before = _integer(row["before_revision"], "history:before-revision")
-        after = _integer(row["after_revision"], "history:after-revision")
-        if after < before:
-            _fail("history:revision-order")
-        payload_raw = row["payload_json"]
-        payload = _parse_json(payload_raw, "history:payload", max_bytes=MAX_PACKAGE_BYTES)  # rows can outgrow 1 MiB; the package cap bounds them
-        if not isinstance(payload, dict):
-            _fail("history:payload-object")
-        payload_bytes = _canonical(payload, "history:payload")
-        payload_digest = _blob64(row["payload_digest"], "history:payload-digest")
-        expected_payload_digest = _digest(OPENING_BALANCE_DOMAIN if kind == "OPENING_BALANCE" else EVENT_DOMAIN, payload_bytes)
-        if payload_digest != expected_payload_digest:
-            _fail("history:payload-digest")
-        committed_at_ms = _time(row["committed_at_ms"], "history:committed-at")
-        header = _event_header(before, after, committed_at_ms)
-        expected_event_id = _digest(
-            EVENT_DOMAIN,
-            index.to_bytes(8, "big"),
-            aggregate_type.encode("ascii"),
-            aggregate_id.encode("ascii"),
-            kind.encode("ascii"),
-            header,
-            payload_digest,
-        )
-        if event_id != expected_event_id:
-            _fail("history:event-id")
-        previous_head = _blob64(row["previous_head"], "history:previous-head")
-        head = _blob64(row["head"], "history:head")
-        if previous_head != previous:
-            _fail("history:predecessor")
-        expected_head = _digest(HEAD_DOMAIN, previous_head, event_id, header, payload_digest)
-        if head != expected_head:
-            _fail("history:head")
-        previous = head
+        previous = _verify_event(row, index, previous)
     if previous != meta["history_head"]:
         _fail("history:meta-head")
     identity = meta["identity"]
@@ -1395,7 +1302,7 @@ def _verify_correction_followup_records(
         action_id = _id(payload.get("action_id"), "history:correction-followup-action-id")
         determination_id = _id(payload.get("determination_id"), "history:correction-followup-determination-id")
         result_evaluation_id = _id(payload.get("evaluation_id"), "history:correction-followup-result-evaluation")
-        event_sequence = _integer(event.get("event_sequence"), "history:correction-followup-sequence", minimum=1, maximum=MAX_ROWS)
+        event_sequence = _integer(event.get("event_sequence"), "history:correction-followup-sequence", minimum=1, maximum=MAX_SEQUENCE)
         aggregate_id = _id(event.get("aggregate_id"), "history:correction-followup-obligation")
         if work_id != action_id or followup.get("determination_id") != determination_id:
             _fail("history:correction-followup-work-binding")
@@ -1683,7 +1590,7 @@ def _verify_program_funding_rows(
                 or _time(event["committed_at_ms"], "funding:event:committed") != receipt["recorded_at_ms"]
             ):
                 _fail("funding:event-binding")
-            sequence = _integer(event["event_sequence"], "funding:event:sequence", minimum=1, maximum=MAX_ROWS)
+            sequence = _integer(event["event_sequence"], "funding:event:sequence", minimum=1, maximum=MAX_SEQUENCE)
             if sequence <= prior_sequence:
                 _fail("funding:event-order")
             prior_sequence = sequence
@@ -3985,6 +3892,93 @@ def _verify_restore_source_binding(
         _fail("continuity:restore-source-genesis")
 
 
+def _read_json(path: Path, code: str, max_bytes: int) -> object:
+    try:
+        with path.open("rb") as handle:
+            return _parse_json(handle.read(max_bytes + 1).decode("latin-1"), code, max_bytes=max_bytes)
+    except OSError:
+        _fail(f"{code}:read")
+
+
+def verify_history_export(directory: str | Path, *, expected_authority: object, expected_scope: object | None = None, restored: str | Path | None = None) -> dict[str, object]:
+    """Replay-verify a history export (manifest, chained segments); bind a database ``restored`` from it to its final images."""
+    return _mapped(lambda: _verify_history_export(Path(directory), expected_authority, expected_scope, restored))
+
+
+def _verify_history_export(directory: Path, expected_authority: object, expected_scope: object | None, restored: str | Path | None) -> dict[str, object]:
+    manifest = _read_json(directory / "manifest.json", "history:manifest", MAX_JSON_BYTES)
+    if not isinstance(manifest, dict) or set(manifest) != {"format", "identity", "meta", "segment_count", "last_segment_digest", "manifest_digest"} or manifest["format"] != SEGMENT_FORMAT:
+        _fail("history:manifest")
+    body = {key: value for key, value in manifest.items() if key != "manifest_digest"}
+    if manifest["manifest_digest"] != _digest(SEGMENT_DOMAIN, b"manifest", _canonical(body)).hex().upper():
+        _fail("history:manifest-digest")
+    meta = _verify_package_rows([manifest["meta"]], "financial_meta")[0]
+    identity = _identity_record(_verify_package_rows([manifest["identity"]], "financial_identity")[0], "history:identity")
+    scope = {key: meta[key] for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")}
+    expected = _identity(expected_config=None, expected_scope=scope if expected_scope is None else expected_scope, expected_authority=expected_authority, expected_mode=None, expected_owner_id=None, expected_continuity_epoch=None)
+    authority = (meta["trusted_authority_id"], meta["trusted_authority_epoch"], meta["trusted_authority_digest"])
+    if meta["id"] != 1 or meta["schema_version"] != SCHEMA_VERSION or meta["schema"] != SCHEMA or scope != expected["scope"] or authority != (expected["authority_id"], expected["authority_epoch"], expected["authority_digest"]):
+        _fail("history:meta")
+    if identity["provenance"] == "ROOT" and identity["genesis_head"] != _digest(GENESIS_DOMAIN, _canonical(scope), expected["authority_digest"], identity["identity_digest"]):
+        _fail("history:identity-genesis")
+    if identity["anchor_sequence"] == 0 and identity["anchor_head"] != identity["genesis_head"]:
+        _fail("history:identity-anchor")
+    count = _integer(manifest["segment_count"], "history:segment-count", maximum=MAX_SEQUENCE)
+    previous, head, sequence = ZERO_DIGEST, identity["genesis_head"], 0
+    images: dict[tuple[str, tuple[object, ...]], dict[str, object]] = {}
+    for index in range(count):
+        code = f"history:segment:{index}"
+        segment = _read_json(directory / f"segment-{index:08d}.json", code, MAX_SEGMENT_BYTES)
+        if not isinstance(segment, dict) or set(segment) != {"events", "rows", "seal", "segment_digest", "signature"} or segment["signature"] is not None or not isinstance(segment["rows"], list):
+            _fail(f"{code}:shape")
+        first = sequence + 1
+        for event in _verify_package_rows(segment["events"], "financial_events"):
+            sequence += 1
+            head = _verify_event(event, sequence, head)
+            if sequence == identity["anchor_sequence"] and head != identity["anchor_head"]:
+                _fail("history:identity-anchor")
+        segment_images: dict[tuple[str, tuple[object, ...]], dict[str, object]] = {}
+        for record in segment["rows"]:
+            if not isinstance(record, dict) or set(record) != {"table", "row"} or record["table"] not in PROJECTION_TABLES:
+                _fail(f"{code}:record")
+            row = _verify_package_rows([record["row"]], record["table"])[0]
+            segment_images[(record["table"], _snapshot_row_key(row, record["table"]))] = row
+        records = [_canonical(record) for record in segment["rows"]]
+        if sequence < first or records != sorted(records) or len(segment_images) != len(records):  # sorted, one image per row
+            _fail(f"{code}:records")
+        images.update(segment_images)
+        seal = {"format": SEGMENT_FORMAT, "segment_index": index, "first_sequence": first, "last_sequence": sequence, "event_count": sequence - first + 1, "previous_digest": previous.hex().upper(), "event_head": head.hex().upper(), "projection_root": _digest(SEGMENT_DOMAIN, b"rows", _canonical(segment["rows"])).hex().upper()}
+        if _canonical(segment["seal"]) != _canonical(seal):
+            _fail(f"{code}:seal")
+        previous = _digest(SEGMENT_DOMAIN, b"seal", _canonical(seal))
+        if segment["segment_digest"] != previous.hex().upper():
+            _fail(f"{code}:digest")
+    if manifest["last_segment_digest"] != previous.hex().upper() or (meta["sequence"], meta["history_head"]) != (sequence, head) or identity["anchor_sequence"] > sequence:
+        _fail("history:manifest-binding")
+    result: dict[str, object] = {  # shaped like a verified package, for restore
+        "scope": scope, "authority": {"authority_id": authority[0], "epoch": authority[1], "digest": expected["authority_digest"].hex().upper()},
+        "continuity_epoch": meta["continuity_epoch"], "sequence": sequence, "history_head": head.hex().upper(), "package_digest": manifest["manifest_digest"],
+        "segment_count": count, "tables": {"financial_identity": [manifest["identity"]], "financial_meta": [manifest["meta"]]},
+    }
+    if restored is not None:
+        connection = _open_readonly(restored)
+        try:
+            target = _identity_record(dict(connection.execute("SELECT * FROM financial_identity").fetchone()))
+            _verify_restore_source_binding({"identity": target}, result, {"financial_identity": [identity]})
+            if tuple(connection.execute("SELECT sequence,history_head FROM financial_meta").fetchone()) != (sequence, head):
+                _fail("history:restored-head")
+            for table in sorted(PROJECTION_TABLES):
+                for row in connection.execute(f"SELECT * FROM {table}"):
+                    decoded = {column: row[column] for column in TABLE_COLUMNS[table]}
+                    if images.pop((table, _snapshot_row_key(decoded, table)), None) != decoded:
+                        _fail(f"history:restored-row:{table}")
+            if images:
+                _fail("history:restored-missing-row")
+        finally:
+            connection.close()
+    return result
+
+
 def verify_continuity_package(
     raw: bytes,
     *,
@@ -4293,7 +4287,6 @@ def _verify_connection(
         {table: [dict(row) for row in _bounded_rows(connection, table)] for table in sorted(TABLES)},
         "commands",
     )
-    _verify_continuity_admission(connection, schema_version, meta)
     result = {
         "schema": SCHEMA,
         "schema_version": schema_version,

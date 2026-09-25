@@ -92,10 +92,9 @@ follow-up explanation, a state report and a recipient-safe corporate-support
 output; a bounded follow-up drain is repeatable, and an acknowledgment changes
 follow-up status without changing cash.
 
-**Continuity** exports a versioned, bounded package from the same owner. An
-unexported admission table tracks exported row counts and canonical row bytes in
-the same transaction, so the owner enforces the 10,000-row and 8 MiB limits
-before commit; independent verification rebuilds that table from source rows.
+**Continuity** exports the history as chained, bounded segments
+(`RR/GATE/SEGMENT/v1`, docs/CORE_REDESIGN.md), which the checker verifies and a
+fresh owner restores by replay; the older whole-state package (8 MiB) remains.
 Restore runs in a private attempt directory and publishes atomically without
 replacing anything; a foreign destination and its `-wal`/`-shm` sidecars are
 left intact and cleanup failures are reported. SHADOW opens read-only; TEST is
