@@ -212,17 +212,18 @@ def _rewrite_store_as_v7(path: Path) -> None:
         ).fetchall():
             connection.execute(f'DROP TRIGGER "{name}"')
         connection.execute("DROP TABLE commands")
-        connection.execute("DELETE FROM right_rail_continuity_admission WHERE table_name='commands'")
         connection.execute("UPDATE financial_meta SET schema_version=7,schema='RR/FINANCIAL/OWNER/v7' WHERE id=1")
         connection.execute("UPDATE financial_identity SET schema_version=7 WHERE id=1")
         connection.execute("COMMIT")
+
+
+_COMMAND_TRIGGER_BODY = "BEFORE {} ON commands BEGIN SELECT RAISE(ABORT,'command_immutable'); END"
 
 
 def _v7_package_from_v8(package_bytes: bytes) -> bytes:
     """Test fixture: the v7 package the same history exported before v8."""
 
     package = json.loads(package_bytes.decode("ascii"))
-    del package["tables"]["commands"]
     package["schema"] = "RR/FINANCIAL/CONTINUITY/v7"
     package["version"] = 7
     package["tables"]["financial_meta"][0].update(schema_version=7, schema="RR/FINANCIAL/OWNER/v7")
@@ -2706,8 +2707,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         class _RollbackMeasurement(Exception):
             pass
 
-        # v8 command rows add ~0.5 KB per command; 2,500 keeps the top size under the 8 MiB cap.
-        for history_size in (0, 250, 1_000, 2_500):
+        # The derived command log is not exported, so v8 keeps v7's capacity.
+        for history_size in (0, 250, 1_000, 3_000):
             store = FinancialOwner(
                 path=self._path(f"admission-measure-{history_size}.sqlite"),
                 config=config,
@@ -4935,6 +4936,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification"):
             self._make_owner(path=tampered)
         self.assertEqual(tampered.read_bytes(), tampered_bytes)
+        # Review 466178b: the v7 size cache is compared before conversion drops anything,
+        # so a raw row edit the cache did not record is refused, not re-cached.
+        tampered.write_bytes(v7_bytes)
+        with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+            connection.execute("UPDATE claimed_adjustments SET owner_role='FINANCE_DECISION'")
+        tampered_bytes = tampered.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^continuity_admission_mismatch$"):
+            self._make_owner(path=tampered)
+        self.assertEqual(tampered.read_bytes(), tampered_bytes)
 
         converted = self._make_owner(path=v7_path)
         self.assertEqual(converted.export_continuity(), package)
@@ -4994,34 +5004,42 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 expected_authority=self.authority,
             )
 
-    def test_command_log_is_recomputed_from_history_by_the_checker(self) -> None:
+    def test_command_log_is_derived_from_history_and_recomputed_by_the_checker(self) -> None:
         store = self._build_base_for_correction()
         self._prepare_final(store)
-        package = json.loads(store.export_continuity().decode("ascii"))
-        scope = package["scope"]
-        rows = package["tables"]["commands"]
-        self.assertEqual(len(rows), len({row["command_id"] for row in rows}))
+        package = store.export_continuity()
+        self.assertNotIn("commands", json.loads(package.decode("ascii"))["tables"])
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            commands = connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall()
+        self.assertEqual(len(commands), len({row[0] for row in commands}))
+        restored = FinancialOwner.restore_continuity(
+            package_bytes=package,
+            recovered_path=self._path("command-log-restore.sqlite"),
+            trusted_authority=self.authority,
+            clock=_Clock(),
+        )
+        with closing(sqlite3.connect(str(restored.path))) as connection:
+            self.assertEqual(connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall(), commands)
+        first = "(SELECT min(event_sequence) FROM commands)"
         edits = {
-            "request": lambda row: row.update(request_json=row["request_json"].replace('"key"', '"key" ', 1)),
-            "sequence": lambda row: row.update(event_sequence=row["event_sequence"] + 1),
-            "dropped": None,
+            "request": f"UPDATE commands SET request_json=replace(request_json,'\"key\"','\"key\" ') WHERE event_sequence={first}",
+            "sequence": "UPDATE commands SET event_sequence=(SELECT min(event_sequence) FROM financial_events"
+            f" WHERE event_sequence NOT IN (SELECT event_sequence FROM commands)) WHERE event_sequence={first}",
+            "dropped": f"DELETE FROM commands WHERE event_sequence={first}",
         }
-        for label, change in edits.items():
+        source_bytes = store.path.read_bytes()
+        for label, statement in edits.items():
             with self.subTest(label=label):
-                tampered = json.loads(json.dumps(package))
-                if change is None:
-                    tampered["tables"]["commands"].pop()
-                else:
-                    change(tampered["tables"]["commands"][0])
-                body = dict(tampered)
-                del body["package_digest"]
-                tampered["package_digest"] = continuity_package_digest(body)
-                with self.assertRaisesRegex(IndependentFinancialError, "continuity:commands:"):
-                    verify_continuity_package(
-                        _independent_canonical(tampered),
-                        expected_scope=scope,
-                        expected_authority=self.authority,
-                    )
+                tampered = self._path(f"command-log-{label}.sqlite")
+                tampered.write_bytes(source_bytes)
+                with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+                    connection.execute("DROP TRIGGER command_update_immutable")
+                    connection.execute("DROP TRIGGER command_delete_immutable")
+                    connection.execute(statement)
+                    connection.execute(f"CREATE TRIGGER command_update_immutable {_COMMAND_TRIGGER_BODY.format('UPDATE')}")
+                    connection.execute(f"CREATE TRIGGER command_delete_immutable {_COMMAND_TRIGGER_BODY.format('DELETE')}")
+                with self.assertRaisesRegex(IndependentFinancialError, "^commands:"):
+                    verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
         with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
             with self.assertRaisesRegex(sqlite3.IntegrityError, "command_immutable"):
                 connection.execute("DELETE FROM commands")
@@ -5053,6 +5071,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             }
             return store.reject_offset_and_authorize_correction(**{**request, **changes})
 
+        def claim(**changes: object) -> dict[str, object]:
+            request = {
+                "item_id": expected.H_ITEM_ID,
+                "claim_id": claim_id,
+                "amount_cents": expected.OFFSET_CLAIM_EVIDENCE.amount_cents or 0,
+                "evidence_id": expected.OFFSET_CLAIM_EVIDENCE.evidence_id,
+                "owner_role": "CASE_OWNER",
+                "deadline_ms": expected.H_DUE_AT_MS,
+            }
+            return store.record_offset_claim(**{**request, **changes})
+
         cases = (
             ("control-pack", lambda: store.publish_control_pack(pack),
              lambda: store.publish_control_pack(replace(pack, recorded_at_ms=pack.recorded_at_ms - 1)),
@@ -5069,6 +5098,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             ("decision", reject,
              lambda: reject(decision_at_ms=decision["decided_at_ms"] + 1),
              "determination_request_conflict"),
+            # Review 466178b: a None claim or actor is a changed request, not an omitted optional field.
+            ("decision-claim-none", reject, lambda: reject(claim_id=None), "determination_request_conflict"),
+            ("decision-actor-none", reject, lambda: reject(actor_id=None, actor_role=None), "determination_request_conflict"),
+            # Review 466178b: an offset-claim retry must match every logged field.
+            ("claim-deadline", claim, lambda: claim(deadline_ms=expected.H_DUE_AT_MS + 999), "offset_claim_identity_conflict"),
+            ("claim-evidence", claim, lambda: claim(evidence_id="evidence:other-claim"), "offset_claim_identity_conflict"),
+            ("claim-amount", claim,
+             lambda: claim(amount_cents=(expected.OFFSET_CLAIM_EVIDENCE.amount_cents or 0) + 1),
+             "offset_claim_identity_conflict"),
         )
         package = store.export_continuity()
         for label, retry, changed, code in cases:
@@ -5079,6 +5117,49 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     changed()
                 self.assertEqual(store.export_continuity(), package)
         self._assert_verified(store)
+
+    def test_fresh_reversal_of_a_reversed_payment_is_refused_without_writing(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_reported(store)
+        reversal = expected.P2_REVERSAL_EVIDENCE
+        self._advance_clock(store, reversal.event_at_ms)
+        store.reverse_payment(
+            item_id=reversal.item_id,
+            payment_id="payment:h:p2",
+            evidence_id=reversal.evidence_id,
+            common_origin_id=reversal.common_origin_id,
+            event_at_ms=reversal.event_at_ms,
+        )
+        before = store.path.read_bytes()
+        # Review 466178b: this answered DUPLICATE yet wrote an evidence row no event explains.
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_already_reversed$"):
+            store.reverse_payment(item_id=reversal.item_id, payment_id="payment:h:p2", evidence_id="evidence:second-reversal")
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
+
+    def test_parent_removed_by_an_outside_writer_is_an_integrity_failure(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_rejected(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute("DELETE FROM obligations WHERE obligation_id=?", (expected.H_OBLIGATION_ID,))
+        for label, call in (
+            ("retry", lambda: store.retry_action(expected.ACTION_CORRECTION_ID)),
+            ("acknowledge", lambda: store.acknowledge_action(expected.ACTION_CORRECTION_ID, "ack:correction:h:v1")),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(FinancialIntegrityError, "^obligation_missing$"):
+                call()
+
+    def test_checker_requires_every_foreign_key_to_be_deferred(self) -> None:
+        store = self._build_base()
+        self._assert_verified(store)
+        # PRAGMA foreign_key_list cannot show deferral; the checker reads the table SQL.
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute("PRAGMA writable_schema=ON")
+            connection.execute(
+                "UPDATE sqlite_master SET sql=replace(sql,' DEFERRABLE INITIALLY DEFERRED','') WHERE type='table' AND name='commands'"
+            )
+        with self.assertRaisesRegex(IndependentFinancialError, "^schema:foreign-keys:commands$"):
+            verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
 
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:
         self.assertEqual(tuple(case.number for case in expected.ACCEPTANCE_CASES), tuple(range(1, 13)))

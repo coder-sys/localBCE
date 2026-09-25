@@ -265,16 +265,12 @@ TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     for table, definition in _TABLE_DEFS.items()
 }
 TABLES = frozenset(_TABLE_DEFS)
+PACKAGE_TABLES = TABLES - {"commands"}  # the command log is derived from history, never exported
 
-# Package versions: (continuity schema, owner schema, digest domain, tables).
-_PACKAGE_FORMATS: dict[int, tuple[str, str, bytes, frozenset[str]]] = {
-    8: (CONTINUITY_SCHEMA, SCHEMA, CONTINUITY_DOMAIN, TABLES),
-    7: (
-        "RR/FINANCIAL/CONTINUITY/v7",
-        "RR/FINANCIAL/OWNER/v7",
-        b"RR/FINANCIAL/CONTINUITY/v7\x00",
-        TABLES - {"commands"},
-    ),
+# Package versions: (continuity schema, owner schema, digest domain).
+_PACKAGE_FORMATS: dict[int, tuple[str, str, bytes]] = {
+    8: (CONTINUITY_SCHEMA, SCHEMA, CONTINUITY_DOMAIN),
+    7: ("RR/FINANCIAL/CONTINUITY/v7", "RR/FINANCIAL/OWNER/v7", b"RR/FINANCIAL/CONTINUITY/v7\x00"),
 }
 
 # Declared foreign keys, frozen here independently: "child,cols>parent.cols".
@@ -1041,6 +1037,9 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
             if _normal_sql(triggers[name]) != _normal_sql(expected):
                 _fail(f"schema:trigger:{name}")
         for table in sorted(TABLES):
+            sql = _normal_sql(connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0])
+            references = sql.count("references ")  # every one deferred: PRAGMA foreign_key_list cannot show it
+            deferred = references == len(re.findall(r"references \w+ ?\([^)]*\) deferrable initially deferred", sql))
             declared: dict[int, list[sqlite3.Row]] = {}
             for row in connection.execute(f"PRAGMA foreign_key_list({table})"):
                 if (str(row[5]).upper(), str(row[6]).upper(), str(row[7]).upper()) != ("NO ACTION", "NO ACTION", "NONE"):
@@ -1054,7 +1053,7 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
                 )
                 for rows in declared.values()
             }
-            if len(actual_keys) != len(declared) or actual_keys != _FOREIGN_KEY_DEFS.get(table, frozenset()):
+            if not deferred or len(actual_keys) != len(declared) or references != len(declared) or actual_keys != _FOREIGN_KEY_DEFS.get(table, frozenset()):
                 _fail(f"schema:foreign-keys:{table}")
         _verify_private_index_schema(connection)
         return schema_version
@@ -1072,7 +1071,7 @@ def _verify_continuity_admission(
     """Recompute the local admission cache from source rows; never trust it as source data."""
 
     expected: dict[str, tuple[int, int]] = {}
-    for table in sorted(TABLES):
+    for table in sorted(PACKAGE_TABLES):
         columns = TABLE_COLUMNS[table]
         count = 0
         row_bytes = 0
@@ -3770,7 +3769,7 @@ def _snapshot_row_key(row: Mapping[str, object], table: str) -> tuple[object, ..
 
 def _database_snapshot_rows(connection: sqlite3.Connection) -> dict[str, list[dict[str, object]]]:
     snapshot: dict[str, list[dict[str, object]]] = {}
-    for table in TABLES:
+    for table in PACKAGE_TABLES:
         rows = _bounded_rows(connection, table)
         snapshot[table] = [
             {column: row[column] for column in TABLE_COLUMNS[table]}
@@ -3786,7 +3785,7 @@ def _verify_current_snapshot(
     """Bind a current-snapshot package to every allowlisted row in this database."""
 
     database_rows = _database_snapshot_rows(connection)
-    for table in TABLES:
+    for table in PACKAGE_TABLES:
         package_sorted = sorted(package_rows[table], key=lambda row: _snapshot_row_key(row, table))
         database_sorted = sorted(database_rows[table], key=lambda row: _snapshot_row_key(row, table))
         if package_sorted != database_sorted:
@@ -3860,7 +3859,7 @@ def verify_continuity_package(
     package_format = _PACKAGE_FORMATS.get(package_version) if type(package_version) is int else None
     if package_format is None or value["schema"] != package_format[0]:
         _fail("continuity:schema")
-    package_schema, owner_schema, _domain, package_tables = package_format
+    package_schema, owner_schema, _domain = package_format
     if expected_schema_version is not None and package_version != _integer(expected_schema_version, "continuity:expected-schema-version", minimum=min(_PACKAGE_FORMATS), maximum=SCHEMA_VERSION):
         _fail("continuity:schema-version-binding")
     if identity["schema_version"] is not None and identity["schema_version"] != package_version:
@@ -3900,11 +3899,11 @@ def verify_continuity_package(
     if expected_continuity_epoch is not None and epoch != _integer(expected_continuity_epoch, "continuity:expected-epoch", minimum=1, maximum=MAX_CENTS):
         _fail("continuity:epoch-binding")
     tables = value["tables"]
-    if not isinstance(tables, dict) or set(tables) != package_tables:
+    if not isinstance(tables, dict) or set(tables) != PACKAGE_TABLES:
         _fail("continuity:tables")
     counts: dict[str, int] = {}
     decoded_rows: dict[str, list[dict[str, object]]] = {}
-    for table in package_tables:
+    for table in PACKAGE_TABLES:
         decoded_rows[table] = _verify_package_rows(tables[table], table)
         counts[table] = len(decoded_rows[table])
     if counts["financial_meta"] != 1:
@@ -3958,8 +3957,6 @@ def verify_continuity_package(
     package_digest = value["package_digest"]
     if type(package_digest) is not str or package_digest != package_digest.upper() or _HEX128.fullmatch(package_digest) is None or package_digest != expected_digest:
         _fail("continuity:package-digest")
-    if "commands" in package_tables:
-        _verify_commands(decoded_rows, "continuity:commands")
     _verify_correction_followup_records(
         decoded_rows["financial_events"],
         evaluations={str(row["evaluation_id"]): row for row in decoded_rows["evaluations"]},
