@@ -5121,6 +5121,45 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     self._make_owner(path=tampered)
                 self.assertEqual(tampered.read_bytes(), tampered_bytes)
 
+    def test_a_wrong_lean_correction_result_is_refused_before_commit(self) -> None:
+        from app import right_rail_financial_semantic_adapter as semantic
+
+        real_run = financial_engine.run_correction_transition_v1
+        # Each wrong result still passes the Engine decoder's own consistency checks.
+        tampers = (
+            ("evaluation:input-projection:claimed_adjustment_cents", lambda r, m: {"claimed_adjustment_cents": r.claimed_adjustment_cents + m["determination"]["amount_cents"]}),
+            ("evaluation:input-projection:received_cash_cents", lambda r, m: {"received_cash_cents": r.received_cash_cents + 1}),
+            ("evaluation:input-projection:shortfall_cents", lambda r, m: {"shortfall_cents": r.shortfall_cents - 1}),
+            ("evaluation:input-projection:timely", lambda r, m: {"timely": not r.timely}),
+            ("evaluation:input-projection:verification_status", lambda r, m: {"verification_status": "MISSING_EVIDENCE"}),
+            ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "RESOLVED"}),
+            ("evaluation:evidence-bindings", lambda r, m: {"evidence_ids": ()}),
+        )
+        for code, change in tampers:
+            with self.subTest(code=code):
+                store = self._build_base_for_correction()
+                self._record_cash(store)
+                claim_id = self._record_claim(store)
+                before = store.path.read_bytes()
+
+                def run(release: object, *, request: bytes, change: object = change) -> object:
+                    execution = real_run(release, request=request)
+                    mutation = execution.result["mutation"]
+                    wrong = replace(mutation["resulting_result"], **change(mutation["resulting_result"], mutation))
+                    mutation["resulting_result"] = wrong
+                    mutation["resulting_result_wire"] = semantic.encode_blfres02_result(wrong)
+                    mutation["case_delta"]["record"]["status"] = wrong.case_status
+                    financial_engine._validate_correction_result_shape(execution.result)
+                    return execution
+
+                with patch.object(financial_engine, "run_correction_transition_v1", run):
+                    with self.assertRaises(FinancialIntegrityError) as caught:
+                        self._reject(store, claim_id)
+                # Before step 5 the Python re-derivation refused all seven as correction_result_input_binding.
+                self.assertEqual(str(caught.exception), f"correction_verification:{code}")
+                self.assertEqual(store.path.read_bytes(), before)
+                self._assert_verified(store)
+
     def test_per_obligation_mode_checks_the_exact_current_inputs(self) -> None:
         store = self._build_base_for_correction()
         self._prepare_final(store)

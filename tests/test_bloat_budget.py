@@ -18,11 +18,11 @@ MARKDOWN_FILES = 20
 MARKDOWN_BYTES = 180_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 7_231,
+    "app/right_rail_financial_owner.py": 7_220,
     "app/right_rail_financial_owner_independent.py": 4_923,
     "app/right_rail_financial_semantic_adapter.py": 2_250,
     "app/right_rail_financial_mirror.py": 1_750,
-    "app/right_rail_financial_engine.py": 1_700,
+    "app/right_rail_financial_engine.py": 1_520,
     "app/right_rail_financial_switch.py": 1_400,
     "tools/continuity_successor_v7.py": 2_400,
 }

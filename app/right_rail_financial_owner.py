@@ -4388,13 +4388,11 @@ class FinancialOwner:
         input_receipt: Mapping[str, Any],
         input_result_digest: bytes,
         pack: ControlPack,
-        snapshot: Any,
         query_observations: Mapping[str, Mapping[str, Any]],
         current_event_sequence: int,
         previous_history_head: bytes,
         transition_result: Mapping[str, Any],
         financial_engine: Any,
-        semantic: Any,
     ) -> dict[str, Any]:
         """Bind and atomically apply one accepted Engine correction delta.
 
@@ -4402,7 +4400,8 @@ class FinancialOwner:
         internal consistency (effect order, explanation, action/outbox/case/event
         shape and cross-field equalities). This method binds the result to what
         only the Owner knows: the command, trusted authority, control pack,
-        claim row, read set, history position and scope.
+        claim row, read set, history position and scope. Before COMMIT the
+        independent checker recomputes the written evaluation from exact rows.
         """
 
         def require_binding(condition: bool, code: str) -> None:
@@ -4545,20 +4544,6 @@ class FinancialOwner:
             and financial_result.evaluated_at_ms == mutation_time,
             "correction_projection_binding",
         )
-        try:
-            expected_resulting_snapshot = financial_engine.validate_correction_result_input(
-                snapshot,
-                expected_revision=expected_revision,
-                result=transition_result,
-            )
-            rebound_result = semantic.decode_blfres02_result(
-                mutation["resulting_result_wire"],
-                expected_snapshot=expected_resulting_snapshot,
-            )
-        except (financial_engine.FinancialEngineError, semantic.SemanticAdapterError):
-            _fail(FinancialIntegrityError, "correction_result_input_binding")
-        require_binding(rebound_result == financial_result, "correction_result_wire_binding")
-
         prior_case = connection.execute(
             "SELECT * FROM cases WHERE case_id=? AND obligation_id=?",
             (case_record["case_id"], obligation_id),
@@ -4782,6 +4767,12 @@ class FinancialOwner:
             },
             committed_at_ms=int(event["committed_at_ms"]),
         )
+        from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_obligation_connection
+
+        try:  # before COMMIT: the independent checker recomputes what Lean decided from the exact rows written
+            verify_obligation_connection(connection, obligation_id, **self._checker_expectations())
+        except IndependentFinancialError as error:
+            _fail(FinancialIntegrityError, f"correction_verification:{error}")
         return {
             "status": "CORRECTION_AUTHORIZED",
             "action_id": action_id,
@@ -5134,13 +5125,11 @@ class FinancialOwner:
                 input_receipt=evaluation_receipt,
                 input_result_digest=input_result_digest,
                 pack=pack,
-                snapshot=snapshot,
                 query_observations=query_observations,
                 current_event_sequence=current_event_sequence,
                 previous_history_head=previous_history_head,
                 transition_result=transition_result,
                 financial_engine=financial_engine,
-                semantic=semantic,
             )
 
     def acknowledge_action(
