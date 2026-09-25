@@ -1,6 +1,6 @@
 name = "RightRail"
 version = "0.1.0"
-defaultTargets = ["BlindLedger", "blind_semantic_kernel", "blind_financial_axioms"]
+defaultTargets = ["BlindLedger", "blind_semantic_kernel", "blind_financial_axioms", "gate_vectors"]
 
 # One Lake workspace (Constitution IX.1).  `BlindLedger` holds the financial
 # correction transition, the Semantic kernel and the shared `BlindLedger.Sha3`.
@@ -32,4 +32,11 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 [[lean_exe]]
 name = "blind_financial_axioms"
 root = "BlindLedger.Financial.AxiomCheck"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Payment gate formats (D1): conformance check of tests/gate_vectors against
+# BlindLedger.Gate.Spec; a default target so the gate theorems always build.
+[[lean_exe]]
+name = "gate_vectors"
+root = "BlindLedger.Gate.Vectors"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
