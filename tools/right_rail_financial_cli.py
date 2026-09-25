@@ -29,6 +29,7 @@ from app.right_rail_financial_mirror import (
 )
 from app.right_rail_financial_switch import (
     COHORT_APPROVAL_CONTRACT,
+    CURRENT_OWNER_SCHEMA_VERSION,
     CandidateSpec,
     CohortApproval,
     DifferencePolicy,
@@ -442,12 +443,12 @@ def _verify_switch_package(package: bytes, authority: SyntheticTrustedAuthority,
         expected_scope=scope,
     )
     if (
-        verified.get("version") != 7
+        verified.get("version") != CURRENT_OWNER_SCHEMA_VERSION
         or verified.get("mode") != "SHADOW"
         or verified.get("dispatch_enabled") is not False
         or verified.get("egress_enabled") is not False
     ):
-        raise FinancialSwitchError("switch:continuity-v7-shadow-required")
+        raise FinancialSwitchError("switch:continuity-shadow-required")
 
 
 def _switch_prepare(args: argparse.Namespace) -> dict[str, object]:

@@ -20,6 +20,7 @@ from app.right_rail_financial_mirror import (
     MAX_PACKAGE_BYTES,
 )
 from tests.rightrail_financial_expected_cases import (
+    CONTINUITY,
     CONTROL_PACK_V1,
     H_CASH_CENTS,
     H_ITEM_ID,
@@ -784,8 +785,9 @@ class FinancialMirrorTests(unittest.TestCase):
                 len(package),
             )
         metadata = self.mirror.validate_owner_continuity_package(package)
-        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v7")
-        self.assertEqual(metadata["version"], 7)
+        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v8")
+        self.assertEqual(metadata["schema"], CONTINUITY.export_version)  # CASE_11
+        self.assertEqual(metadata["version"], 8)
         self.assertEqual(metadata["scope"]["state_id"], self.config.state_id)
         self.assertIn("financial_meta", metadata["table_counts"])
         self.assertFalse(metadata["dispatch_enabled"])

@@ -206,7 +206,7 @@ class _SnapshotRecords:
 
 @dataclass(frozen=True, slots=True)
 class SnapshotFacts(_SnapshotRecords):
-    """Identity and exact cohort facts derived from verified v7 SHADOW bytes."""
+    """Identity and exact cohort facts derived from verified current-version SHADOW bytes."""
 
     snapshot_sha256: str
     package_digest: str
@@ -276,7 +276,7 @@ def inspect_shadow_snapshot(
     trusted_authority: object,
     expected_scope: Mapping[str, object],
 ) -> SnapshotFacts:
-    """Independently verify and inspect one exact, complete v7 SHADOW package.
+    """Independently verify and inspect one exact, complete current-version SHADOW package.
 
     ``trusted_authority`` (authority id, epoch, digest and roster) and
     ``expected_scope`` come from the caller; absent either, this fails closed.
@@ -331,7 +331,7 @@ def inspect_shadow_snapshot(
         or meta.get("schema_version") != CURRENT_OWNER_SCHEMA_VERSION
         or meta.get("mode") != "SHADOW"
     ):
-        _fail("switch:snapshot-must-be-v7-shadow")
+        _fail("switch:snapshot-must-be-current-shadow")
     published = [
         row for row in population_rows
         if row.get("status") == "PUBLISHED" and row.get("source_complete") == 1

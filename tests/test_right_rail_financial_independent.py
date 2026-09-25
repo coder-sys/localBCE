@@ -574,7 +574,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
         obligation = next(iter(result["obligations"].values()))
-        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v7")
+        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v8")
         self.assertEqual(result["mode"], "LIVE")
         self.assertEqual(result["totals"], {
             "owed_cents": 10_000_000,

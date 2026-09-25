@@ -61,11 +61,13 @@ def _fail(error_type: type[FinancialError], code: str) -> None:
     raise error
 
 
-# The owner knows exactly one store version. v5/v6 stores and packages are
-# retired (docs/CORE_REDESIGN.md step 1) and fail closed like v2-v4.
-_SCHEMA_VERSION: Final[int] = 7
-_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v7"
-_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v7"
+# The owner writes one store version, v8. A v7 store is converted to v8,
+# all-or-nothing, inside the owner's open transaction (docs/CORE_REDESIGN.md
+# step 6); v5/v6 stores and packages are retired and fail closed like v2-v4.
+_SCHEMA_VERSION: Final[int] = 8
+_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v8"
+_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v8"
+_V7_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v7"
 _DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v2"
 _POPULATION_MANIFEST_CONTRACT: Final[str] = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 _CURRENCY: Final[str] = "USD"
@@ -164,7 +166,8 @@ _EVALUATION_RESULT_DOMAIN = b"RR/FINANCIAL/EVALUATION/v5\x00"
 _EVALUATION_INPUT_DOMAIN = b"RR/FINANCIAL/EVALUATION-INPUT/v1\x00"
 _EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 _EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
-_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
+_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v8\x00"
+_COMMAND_DOMAIN = b"RR/FINANCIAL/COMMAND/v1\x00"
 _POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 _POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
 _POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
@@ -176,7 +179,7 @@ _IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
 _EVALUATION_RECEIPT_CONTRACT: Final[str] = "RR/FINANCIAL/EVALUATION-RECEIPT/v1"
 _ZERO_DIGEST: Final[bytes] = b"\x00" * 64
 
-# Exported (Continuity v7) tables and their exact column order.
+# Exported (Continuity v8) tables and their exact column order.
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "financial_identity": (
         "id", "schema_version", "provenance", "bound_mode", "bound_owner_id",
@@ -285,8 +288,58 @@ _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "population_manifest_bindings": (
         "population_id", "manifest_id", "manifest_version", "manifest_digest",
     ),
+    "commands": ("command_id", "kind", "request_json", "request_digest", "event_sequence"),
 }
 _TABLES: Final[frozenset[str]] = frozenset(_TABLE_COLUMNS)
+_V7_TABLES: Final[frozenset[str]] = _TABLES - {"commands"}
+
+# The command log (Art. III.3): one row per request the Owner accepted, keyed by
+# the caller's natural key and bound to the history event that request produced.
+# The request fields are read back from the rows that request wrote, so a v7
+# history converts to exactly the rows a v8 Owner would have recorded, and the
+# independent checker can recompute every row.
+_COMMAND_EVENTS: Final[dict[str, tuple[str, str | None]]] = {
+    # event kind: (command kind, payload field naming the key; None = aggregate id)
+    "CONTROL_PACK_PUBLISHED": ("CONTROL_PACK", None),
+    "POPULATION_MANIFEST_REGISTERED": ("POPULATION_MANIFEST", None),
+    "POPULATION_MANIFEST_SUPERSEDED": ("POPULATION_MANIFEST", None),
+    "FUNDING_RECEIPT_RECORDED": ("FUNDING_RECEIPT", None),
+    "FUNDING_RECEIPT_SUPERSEDED": ("FUNDING_RECEIPT", None),
+    "SUPPORT_EVIDENCE_RECORDED": ("SUPPORT_EVIDENCE", "evidence_id"),
+    "PAYMENT_RECEIVED": ("PAYMENT", "payment_id"),
+    "PAYMENT_REVERSED": ("PAYMENT_REVERSAL", "evidence_id"),
+    "OFFSET_CLAIMED": ("OFFSET_CLAIM", "claim_id"),
+    "OFFSET_AUTHORIZED": ("OFFSET_DECISION", "action_id"),
+    "OFFSET_REJECTED_CORRECTION_AUTHORIZED": ("OFFSET_DECISION", "action_id"),
+    "ACTION_ACKNOWLEDGED": ("ACTION_ACKNOWLEDGMENT", "action_id"),
+    "REPORTING_EVIDENCE_RECORDED": ("REPORT", "evidence_id"),
+    "REPORTING_CORRECTION_RECORDED": ("REPORT", "evidence_id"),
+}
+_COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
+    "CONTROL_PACK": "SELECT pack_digest FROM control_packs WHERE pack_id=?",
+    "POPULATION_MANIFEST": "SELECT manifest_digest FROM population_manifests WHERE manifest_id=?",
+    "FUNDING_RECEIPT": "SELECT receipt_digest FROM program_funding_receipts WHERE receipt_id=?",
+    "SUPPORT_EVIDENCE": "SELECT item_id,record_digest FROM evidence WHERE evidence_id=?",
+    "PAYMENT": (
+        "SELECT p.item_id,p.evidence_id,p.common_origin_id,p.amount_cents,p.event_at_ms,"
+        "e.source_id,e.source_version,e.local_ref "
+        "FROM payments p JOIN evidence e ON e.evidence_id=p.evidence_id WHERE p.payment_id=?"
+    ),
+    "PAYMENT_REVERSAL": "SELECT item_id,reversal_of AS payment_id,record_digest FROM evidence WHERE evidence_id=?",
+    "OFFSET_CLAIM": (
+        "SELECT o.item_id,c.evidence_id,c.amount_cents,c.owner_role,c.deadline_ms "
+        "FROM claimed_adjustments c JOIN obligations o ON o.obligation_id=c.obligation_id WHERE c.claim_id=?"
+    ),
+    "OFFSET_DECISION": (
+        "SELECT o.item_id,d.claim_id,d.decision,d.actor_id,d.actor_role,"
+        "d.input_evaluation_id AS evaluation_id,d.input_evaluation_result_digest AS evaluation_result_digest,"
+        "d.expected_revision,d.decided_at_ms "
+        "FROM actions a JOIN determinations d ON d.determination_id=a.determination_id "
+        "JOIN obligations o ON o.obligation_id=a.obligation_id WHERE a.action_id=?"
+    ),
+    "ACTION_ACKNOWLEDGMENT": "SELECT acknowledgment_ref FROM action_outbox WHERE action_id=?",
+    "REPORT": "SELECT item_id,record_digest FROM evidence WHERE evidence_id=?",
+}
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -1283,8 +1336,26 @@ def _install_history_append_only(connection: sqlite3.Connection) -> None:
         _fail(FinancialIntegrityError, "schema_history_triggers")
 
 
+def _execute_script(connection: sqlite3.Connection, script: str) -> None:
+    """Run DDL one statement at a time inside the caller's transaction.
+
+    ``executescript`` would COMMIT first, which would break the all-or-nothing
+    v7 -> v8 conversion on open.
+    """
+    statement = ""
+    for part in script.split(";"):
+        statement += part + ";"
+        if sqlite3.complete_statement(statement):
+            if statement.strip(" \n;"):
+                connection.execute(statement)
+            statement = ""
+    if statement.strip(" \n;"):
+        _fail(FinancialIntegrityError, "schema_script")
+
+
 def _sql_schema(connection: sqlite3.Connection) -> None:
-    connection.executescript(
+    _execute_script(
+        connection,
         """
         CREATE TABLE financial_identity (
             id INTEGER PRIMARY KEY CHECK (id=1),
@@ -1339,7 +1410,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE TABLE population_imports (
             population_id TEXT PRIMARY KEY,
-            pack_id TEXT NOT NULL,
+            pack_id TEXT NOT NULL REFERENCES control_packs(pack_id) DEFERRABLE INITIALLY DEFERRED,
             cutoff_ms INTEGER NOT NULL,
             inclusion_rules_json TEXT NOT NULL,
             expected_count INTEGER NOT NULL CHECK (expected_count>0),
@@ -1352,7 +1423,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             updated_at_ms INTEGER NOT NULL
         );
         CREATE TABLE population_items (
-            population_id TEXT NOT NULL,
+            population_id TEXT NOT NULL REFERENCES population_imports(population_id) DEFERRABLE INITIALLY DEFERRED,
             item_id TEXT NOT NULL,
             display_label TEXT NOT NULL,
             owed_cents INTEGER NOT NULL CHECK (owed_cents>0),
@@ -1382,9 +1453,10 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             verification_status TEXT NOT NULL,
             case_status TEXT NOT NULL,
             delivery_status TEXT NOT NULL,
-            current_evaluation_id TEXT,
+            current_evaluation_id TEXT REFERENCES evaluations(evaluation_id) DEFERRABLE INITIALLY DEFERRED,
             updated_at_ms INTEGER NOT NULL,
-            UNIQUE (population_id,item_id)
+            UNIQUE (population_id,item_id),
+            FOREIGN KEY (population_id,item_id) REFERENCES population_items(population_id,item_id) DEFERRABLE INITIALLY DEFERRED
         );
         CREATE TABLE evidence (
             evidence_id TEXT PRIMARY KEY,
@@ -1400,25 +1472,25 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             content_digest BLOB NOT NULL CHECK (length(content_digest)=64),
             record_digest BLOB NOT NULL CHECK (length(record_digest)=64),
             amount_cents INTEGER,
-            reversal_of TEXT,
-            supersedes TEXT
+            reversal_of TEXT REFERENCES payments(payment_id) DEFERRABLE INITIALLY DEFERRED,
+            supersedes TEXT REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED
         );
         CREATE TABLE payments (
             payment_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
             item_id TEXT NOT NULL,
-            evidence_id TEXT NOT NULL,
+            evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED,
             common_origin_id TEXT NOT NULL,
             amount_cents INTEGER NOT NULL CHECK (amount_cents>0),
             event_at_ms INTEGER NOT NULL,
             active INTEGER NOT NULL CHECK (active IN (0,1)),
-            reversed_by_evidence_id TEXT,
+            reversed_by_evidence_id TEXT REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED,
             UNIQUE (obligation_id,common_origin_id)
         );
         CREATE TABLE claimed_adjustments (
             claim_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
-            evidence_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
+            evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED,
             amount_cents INTEGER NOT NULL CHECK (amount_cents>0),
             owner_role TEXT NOT NULL,
             deadline_ms INTEGER NOT NULL,
@@ -1428,7 +1500,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE TABLE cases (
             case_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
             reason TEXT NOT NULL,
             contractual_accountability TEXT NOT NULL,
             next_action_owner TEXT NOT NULL,
@@ -1439,8 +1511,8 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE TABLE determinations (
             determination_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
-            claim_id TEXT,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
+            claim_id TEXT REFERENCES claimed_adjustments(claim_id) DEFERRABLE INITIALLY DEFERRED,
             actor_id TEXT NOT NULL,
             actor_role TEXT NOT NULL,
             authority_id TEXT NOT NULL,
@@ -1453,14 +1525,14 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             resulting_revision INTEGER NOT NULL,
             decided_at_ms INTEGER NOT NULL,
             determination_digest BLOB NOT NULL CHECK (length(determination_digest)=64),
-            input_evaluation_id TEXT NOT NULL,
+            input_evaluation_id TEXT NOT NULL REFERENCES evaluations(evaluation_id) DEFERRABLE INITIALLY DEFERRED,
             input_evaluation_result_digest BLOB NOT NULL CHECK (length(input_evaluation_result_digest)=64),
             UNIQUE (input_evaluation_id)
         );
         CREATE TABLE actions (
             action_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
-            determination_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
+            determination_id TEXT NOT NULL REFERENCES determinations(determination_id) DEFERRABLE INITIALLY DEFERRED,
             kind TEXT NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('READY','ACKNOWLEDGED','CANCELLED')),
             revision INTEGER NOT NULL,
@@ -1470,7 +1542,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             created_at_ms INTEGER NOT NULL
         );
         CREATE TABLE action_outbox (
-            action_id TEXT PRIMARY KEY,
+            action_id TEXT PRIMARY KEY REFERENCES actions(action_id) DEFERRABLE INITIALLY DEFERRED,
             status TEXT NOT NULL CHECK (status IN ('READY','ACKNOWLEDGED','CANCELLED')),
             attempt INTEGER NOT NULL CHECK (attempt>=0),
             payload_digest BLOB NOT NULL CHECK (length(payload_digest)=64),
@@ -1493,10 +1565,10 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE TABLE financial_conflicts (
             conflict_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
             common_origin_id TEXT NOT NULL,
-            existing_payment_id TEXT,
-            candidate_evidence_id TEXT NOT NULL,
+            existing_payment_id TEXT REFERENCES payments(payment_id) DEFERRABLE INITIALLY DEFERRED,
+            candidate_evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED,
             existing_amount_cents INTEGER,
             candidate_amount_cents INTEGER,
             reason TEXT NOT NULL,
@@ -1504,7 +1576,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE TABLE evaluations (
             evaluation_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
             revision INTEGER NOT NULL,
             rule_version INTEGER NOT NULL,
             evidence_ids_json TEXT NOT NULL,
@@ -1526,7 +1598,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             result_digest BLOB NOT NULL CHECK (length(result_digest)=64),
             contract_version TEXT NOT NULL,
             scope_json TEXT NOT NULL,
-            control_pack_id TEXT NOT NULL,
+            control_pack_id TEXT NOT NULL REFERENCES control_packs(pack_id) DEFERRABLE INITIALLY DEFERRED,
             control_pack_version INTEGER NOT NULL,
             control_pack_digest BLOB NOT NULL CHECK (length(control_pack_digest)=64),
             authority_epoch INTEGER NOT NULL,
@@ -1568,12 +1640,12 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
                 evidence_status TEXT NOT NULL CHECK (evidence_status='SYNTHETIC_UNAPPROVED'),
                 event_at_ms INTEGER NOT NULL CHECK (event_at_ms>=0),
                 recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms>=0),
-                supersedes_receipt_id TEXT UNIQUE,
+                supersedes_receipt_id TEXT UNIQUE REFERENCES program_funding_receipts(receipt_id) DEFERRABLE INITIALLY DEFERRED,
                 receipt_digest BLOB NOT NULL CHECK (length(receipt_digest)=64)
             );
             CREATE TABLE program_funding_projection (
                 source_record_ref TEXT PRIMARY KEY,
-                receipt_id TEXT NOT NULL UNIQUE,
+                receipt_id TEXT NOT NULL UNIQUE REFERENCES program_funding_receipts(receipt_id) DEFERRABLE INITIALLY DEFERRED,
                 amount_cents INTEGER NOT NULL CHECK (amount_cents>0),
                 event_at_ms INTEGER NOT NULL CHECK (event_at_ms>=0),
                 revision INTEGER NOT NULL CHECK (revision>0),
@@ -1594,7 +1666,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
                 program_id TEXT NOT NULL,
                 period_id TEXT NOT NULL,
                 currency TEXT NOT NULL CHECK (currency='USD'),
-                pack_id TEXT NOT NULL,
+                pack_id TEXT NOT NULL REFERENCES control_packs(pack_id) DEFERRABLE INITIALLY DEFERRED,
                 cutoff_ms INTEGER NOT NULL CHECK (cutoff_ms>=0),
                 inclusion_rules_json TEXT NOT NULL,
                 source_owner_id TEXT NOT NULL,
@@ -1608,14 +1680,14 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
                 source_digest BLOB NOT NULL CHECK (length(source_digest)=64),
                 member_count INTEGER NOT NULL CHECK (member_count>0),
                 member_digest BLOB NOT NULL CHECK (length(member_digest)=64),
-                supersedes_manifest_id TEXT UNIQUE,
+                supersedes_manifest_id TEXT UNIQUE REFERENCES population_manifests(manifest_id) DEFERRABLE INITIALLY DEFERRED,
                 supersedes_digest BLOB CHECK (supersedes_digest IS NULL OR length(supersedes_digest)=64),
                 manifest_digest BLOB NOT NULL CHECK (length(manifest_digest)=64),
                 registered_at_ms INTEGER NOT NULL CHECK (registered_at_ms>=0),
                 UNIQUE (state_id,deployment_id,program_id,period_id,pack_id,cutoff_ms,source_owner_id,manifest_version)
             );
             CREATE TABLE population_manifest_members (
-                manifest_id TEXT NOT NULL,
+                manifest_id TEXT NOT NULL REFERENCES population_manifests(manifest_id) DEFERRABLE INITIALLY DEFERRED,
                 position INTEGER NOT NULL CHECK (position>=0),
                 member_id TEXT NOT NULL,
                 PRIMARY KEY (manifest_id,position),
@@ -1627,18 +1699,18 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
                 program_id TEXT NOT NULL,
                 period_id TEXT NOT NULL,
                 currency TEXT NOT NULL CHECK (currency='USD'),
-                pack_id TEXT NOT NULL,
+                pack_id TEXT NOT NULL REFERENCES control_packs(pack_id) DEFERRABLE INITIALLY DEFERRED,
                 cutoff_ms INTEGER NOT NULL CHECK (cutoff_ms>=0),
                 source_owner_id TEXT NOT NULL,
-                manifest_id TEXT NOT NULL UNIQUE,
+                manifest_id TEXT NOT NULL UNIQUE REFERENCES population_manifests(manifest_id) DEFERRABLE INITIALLY DEFERRED,
                 manifest_version INTEGER NOT NULL CHECK (manifest_version>0),
                 manifest_digest BLOB NOT NULL CHECK (length(manifest_digest)=64),
                 updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms>=0),
                 PRIMARY KEY (state_id,deployment_id,program_id,period_id,pack_id,cutoff_ms,source_owner_id)
             );
             CREATE TABLE population_manifest_bindings (
-                population_id TEXT PRIMARY KEY,
-                manifest_id TEXT NOT NULL UNIQUE,
+                population_id TEXT PRIMARY KEY REFERENCES population_imports(population_id) DEFERRABLE INITIALLY DEFERRED,
+                manifest_id TEXT NOT NULL UNIQUE REFERENCES population_manifests(manifest_id) DEFERRABLE INITIALLY DEFERRED,
                 manifest_version INTEGER NOT NULL CHECK (manifest_version>0),
                 manifest_digest BLOB NOT NULL CHECK (length(manifest_digest)=64)
             );
@@ -1660,7 +1732,20 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
             CREATE TRIGGER population_manifest_binding_delete_immutable
             BEFORE DELETE ON population_manifest_bindings
             BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END;
-        """
+            CREATE TABLE commands (
+                command_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                request_digest BLOB NOT NULL CHECK (length(request_digest)=64),
+                event_sequence INTEGER NOT NULL UNIQUE REFERENCES financial_events(event_sequence) DEFERRABLE INITIALLY DEFERRED
+            );
+            CREATE TRIGGER command_update_immutable
+            BEFORE UPDATE ON commands
+            BEGIN SELECT RAISE(ABORT,'command_immutable'); END;
+            CREATE TRIGGER command_delete_immutable
+            BEFORE DELETE ON commands
+            BEGIN SELECT RAISE(ABORT,'command_immutable'); END;
+        """,
     )
     for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
         connection.execute(sql)
@@ -1828,6 +1913,7 @@ class FinancialOwner:
                 initial_sequence = int(identity["anchor_sequence"])
                 initial_history_head = bytes(identity["anchor_head"])
             with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 _sql_schema(connection)
                 self._install_continuity_admission_triggers(connection)
                 connection.execute(
@@ -1839,7 +1925,7 @@ class FinancialOwner:
                     f"INSERT INTO financial_identity ({','.join(identity_columns)}) VALUES ({','.join('?' for _ in identity_columns)})",
                     tuple(identity[column] for column in identity_columns),
                 )
-                connection.commit()
+                connection.execute("COMMIT")
 
     def _connect(self, *, admission_triggers: bool = False) -> sqlite3.Connection:
         try:
@@ -1961,12 +2047,81 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "continuity_admission_tables")
         return values
 
+    def _migrate_v7_store(self, connection: sqlite3.Connection) -> None:
+        """Convert a v7 store to v8 inside the caller's open transaction (all-or-nothing).
+
+        v8 adds the exported ``commands`` table and declared foreign keys, which
+        SQLite can add only by rebuilding tables: every v7 row is read, the v7
+        schema is dropped, the v8 schema is created and the rows are written back
+        unchanged except the schema version; the command log is then derived from
+        the unchanged history. The caller's replay must still explain every row
+        before COMMIT, so a v7 store its history does not explain is refused and
+        left byte-identical.
+        """
+
+        tables = {
+            str(row[0])
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        }
+        if tables not in (set(_V7_TABLES), set(_V7_TABLES) | {_CONTINUITY_ADMISSION_TABLE}):
+            _fail(FinancialIntegrityError, "schema_tables")
+        rows: dict[str, list[sqlite3.Row]] = {}
+        for table in sorted(_V7_TABLES):
+            columns = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
+            if columns != _TABLE_COLUMNS[table]:
+                _fail(FinancialIntegrityError, "continuity_schema_columns")
+            rows[table] = connection.execute(f"SELECT * FROM {table}").fetchall()
+        for object_type in ("trigger", "index", "table"):
+            names = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type=? AND name NOT LIKE 'sqlite_%'",
+                    (object_type,),
+                )
+            ]
+            for name in names:
+                connection.execute(f'DROP {object_type.upper()} "{name}"')
+        connection.execute("PRAGMA user_version=0")
+        _sql_schema(connection)
+        for table, table_rows in rows.items():
+            columns = _TABLE_COLUMNS[table]
+            placeholders = ",".join("?" for _ in columns)
+            for row in table_rows:
+                values = dict(zip(columns, tuple(row), strict=True))
+                if table in {"financial_identity", "financial_meta"}:
+                    values["schema_version"] = _SCHEMA_VERSION
+                if table == "financial_meta":
+                    values["schema"] = _SCHEMA
+                connection.execute(
+                    f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})",
+                    tuple(values[column] for column in columns),
+                )
+        for event in connection.execute(
+            "SELECT event_sequence,aggregate_id,kind,payload_json FROM financial_events ORDER BY event_sequence"
+        ).fetchall():
+            self._record_command(
+                connection,
+                sequence=int(event["event_sequence"]),
+                kind=str(event["kind"]),
+                aggregate_id=str(event["aggregate_id"]),
+                payload=_stored_object(event["payload_json"], "migration_event_payload"),
+            )
+        rebuilt = self._recompute_continuity_admission(connection)
+        connection.executemany(
+            f"UPDATE {_CONTINUITY_ADMISSION_TABLE} SET row_count=?,row_bytes=? WHERE table_name=?",
+            ((count, size, table) for table, (count, size) in rebuilt.items()),
+        )
+
     def _ensure_continuity_admission(self, connection: sqlite3.Connection, *, verify_history: bool) -> None:
         try:
             connection.execute("BEGIN IMMEDIATE")
             meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
             if meta is None:
                 _fail(FinancialIntegrityError, "schema_meta")
+            migrated = (meta["schema_version"], meta["schema"]) == (7, _V7_SCHEMA)
+            if migrated:
+                self._migrate_v7_store(connection)
+                meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
             self._verify_meta_identity(connection, meta)
             private_indexes_current = _private_index_set_is_current(connection)
             tables = {
@@ -1995,7 +2150,7 @@ class FinancialOwner:
                 self._verify_continuity_admission_cache(connection)
             _install_private_index_set(connection)
             _install_history_append_only(connection)
-            if verify_history:
+            if verify_history or migrated:
                 self._verify_history_in_transaction(connection)
             connection.execute("COMMIT")
         except BaseException:
@@ -2243,7 +2398,42 @@ class FinancialOwner:
             (sequence, event_id, aggregate_type, aggregate_id, kind, before_revision, after_revision, payload_bytes.decode("ascii"), payload_digest, previous_head, head, committed_at_ms),
         )
         connection.execute("UPDATE financial_meta SET sequence=?,history_head=? WHERE id=1", (sequence, head))
+        self._record_command(connection, sequence=sequence, kind=kind, aggregate_id=aggregate_id, payload=event_payload)
         return event_id
+
+    def _record_command(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        sequence: int,
+        kind: str,
+        aggregate_id: str,
+        payload: Mapping[str, Any],
+    ) -> None:
+        """Record the accepted request behind one command event (``_COMMAND_EVENTS``)."""
+
+        command = _COMMAND_EVENTS.get(kind)
+        if command is None:
+            return
+        command_kind, key_field = command
+        key = aggregate_id if key_field is None else payload.get(key_field)
+        if type(key) is not str:
+            _fail(FinancialIntegrityError, "command_key")
+        rows = connection.execute(_COMMAND_REQUEST_SQL[command_kind], (key,)).fetchall()
+        if len(rows) != 1:
+            _fail(FinancialIntegrityError, "command_request_source")
+        request: dict[str, Any] = {"command": command_kind, "key": key}
+        for field in rows[0].keys():
+            value = rows[0][field]
+            request[field] = _hex(bytes(value)) if type(value) is bytes else value
+        command_id = f"{command_kind}:{key}"
+        if connection.execute("SELECT 1 FROM commands WHERE command_id=?", (command_id,)).fetchone() is not None:
+            _fail(FinancialIntegrityError, "command_duplicate")
+        request_json = _canonical(request)
+        connection.execute(
+            "INSERT INTO commands VALUES (?,?,?,?,?)",
+            (command_id, command_kind, request_json.decode("ascii"), _digest(_COMMAND_DOMAIN, request_json), sequence),
+        )
 
     def _assert_actionable(self) -> None:
         if self.mode == "SHADOW":
@@ -6590,7 +6780,8 @@ class FinancialOwner:
         if set(package) != required:
             _fail(FinancialContinuityError, "continuity_package_shape")
         package_version = package["version"]
-        # Only Continuity v7 is accepted; retired v5/v6 (and v2-v4) packages fail closed.
+        # The Owner restores Continuity v8 only (a v7 package stays verifiable by the
+        # independent checker; its v7 source store converts on open). v2-v7 fail closed here.
         if type(package_version) is not int or package_version != _SCHEMA_VERSION:
             _fail(FinancialContinuityError, "continuity_package_schema")
         if package["schema"] != _CONTINUITY_SCHEMA:
@@ -6875,7 +7066,7 @@ class FinancialOwner:
                 "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox",
                 "financial_events", "financial_conflicts", "evaluations", "program_funding_receipts",
                 "program_funding_projection", "population_manifests", "population_manifest_members",
-                "population_manifest_heads", "population_manifest_bindings",
+                "population_manifest_heads", "population_manifest_bindings", "commands",
             )
             with owner._write() as connection:
                 for table in insertion_order:

@@ -36,11 +36,17 @@ in one transaction. An exact retry returns `DUPLICATE`; changed input is a
 conflict. Crashes before and after commit are recovered by restart; the
 committed result is found again by its command identity.
 
-The owner knows one store version, `RR/FINANCIAL/OWNER/v7` (population
-manifest, program funding receipts, decision package v2), with its matching
-`RR/FINANCIAL/CONTINUITY/v7` package. The v5/v6 versions were retired on
-2026-09-24 (no such store existed); they, older (v2-v4) and unknown versions
-are rejected without mutation by the owner and the independent checker.
+The owner writes one store version, `RR/FINANCIAL/OWNER/v8` (population
+manifest, program funding receipts, decision package v2, the exported
+`commands` log and declared foreign keys), with its matching
+`RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). A v7
+store is converted to v8 all-or-nothing when the owner opens it, inside the
+open transaction that replays the history; a v7 store the history does not
+explain is refused and left unchanged. The independent checker verifies v8
+stores and v8 and v7 packages; the owner restores v8 packages only. The v5/v6
+versions were retired on 2026-09-24 (no such store existed); they, older
+(v2-v4) and unknown versions are rejected without mutation by the owner and
+the independent checker.
 
 The evaluation receipt binds scope, evaluation/obligation/revision, Control
 Pack id/version/digest, sorted evidence id/record-digest pairs, trusted

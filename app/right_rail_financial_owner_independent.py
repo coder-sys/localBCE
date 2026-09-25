@@ -8,7 +8,7 @@ database paths read-only.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 import hashlib
 import json
 import math
@@ -37,11 +37,12 @@ def _fail(code: str) -> NoReturn:
     raise error
 
 
-# Exactly one store/package version is accepted. Retired v5/v6 (and older)
-# databases and packages fail closed (docs/CORE_REDESIGN.md step 1).
-SCHEMA_VERSION = 7
-SCHEMA = "RR/FINANCIAL/OWNER/v7"
-CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v7"
+# Stores are verified at v8 only (a v7 store converts to v8 on owner open);
+# packages at v8 and v7 (founder approval 2026-09-24, CONSTITUTION V.4).
+# Retired v5/v6 (and older) databases and packages fail closed.
+SCHEMA_VERSION = 8
+SCHEMA = "RR/FINANCIAL/OWNER/v8"
+CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v8"
 DECISION_PACKAGE_CONTRACT = "RR/FINANCIAL/DECISION-PACKAGE/v2"
 POPULATION_MANIFEST_CONTRACT = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 CURRENCY = "USD"
@@ -125,7 +126,8 @@ EVALUATION_RESULT_DOMAIN = b"RR/FINANCIAL/EVALUATION/v5\x00"
 EVALUATION_INPUT_DOMAIN = b"RR/FINANCIAL/EVALUATION-INPUT/v1\x00"
 EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
-CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
+CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v8\x00"
+COMMAND_DOMAIN = b"RR/FINANCIAL/COMMAND/v1\x00"
 POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
 POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
@@ -255,6 +257,7 @@ _TABLE_DEFS: dict[str, tuple[tuple[str, str, int], ...]] = _parse_table_specs({
         "T source_owner_id@7 T manifest_id I manifest_version B manifest_digest I updated_at_ms"
     ),
     "population_manifest_bindings": "T population_id@1 T manifest_id I manifest_version B manifest_digest",
+    "commands": "T command_id@1 T kind T request_json B request_digest I event_sequence",
 })
 
 TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -262,6 +265,79 @@ TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     for table, definition in _TABLE_DEFS.items()
 }
 TABLES = frozenset(_TABLE_DEFS)
+
+# Package versions: (continuity schema, owner schema, digest domain, tables).
+_PACKAGE_FORMATS: dict[int, tuple[str, str, bytes, frozenset[str]]] = {
+    8: (CONTINUITY_SCHEMA, SCHEMA, CONTINUITY_DOMAIN, TABLES),
+    7: (
+        "RR/FINANCIAL/CONTINUITY/v7",
+        "RR/FINANCIAL/OWNER/v7",
+        b"RR/FINANCIAL/CONTINUITY/v7\x00",
+        TABLES - {"commands"},
+    ),
+}
+
+# Declared foreign keys, frozen here independently: "child,cols>parent.cols".
+_FOREIGN_KEY_DEFS: dict[str, frozenset[tuple[tuple[str, ...], str, tuple[str, ...]]]] = {
+    table: frozenset(
+        (tuple(child.split(",")), parent.partition(".")[0], tuple(parent.partition(".")[2].split(",")))
+        for child, _, parent in (entry.partition(">") for entry in spec.split())
+    )
+    for table, spec in {
+        "population_imports": "pack_id>control_packs.pack_id",
+        "population_items": "population_id>population_imports.population_id",
+        "obligations": (
+            "population_id,item_id>population_items.population_id,item_id "
+            "current_evaluation_id>evaluations.evaluation_id"
+        ),
+        "evidence": "reversal_of>payments.payment_id supersedes>evidence.evidence_id",
+        "payments": (
+            "obligation_id>obligations.obligation_id evidence_id>evidence.evidence_id "
+            "reversed_by_evidence_id>evidence.evidence_id"
+        ),
+        "claimed_adjustments": "obligation_id>obligations.obligation_id evidence_id>evidence.evidence_id",
+        "cases": "obligation_id>obligations.obligation_id",
+        "determinations": (
+            "obligation_id>obligations.obligation_id claim_id>claimed_adjustments.claim_id "
+            "input_evaluation_id>evaluations.evaluation_id"
+        ),
+        "actions": "obligation_id>obligations.obligation_id determination_id>determinations.determination_id",
+        "action_outbox": "action_id>actions.action_id",
+        "financial_conflicts": (
+            "obligation_id>obligations.obligation_id existing_payment_id>payments.payment_id "
+            "candidate_evidence_id>evidence.evidence_id"
+        ),
+        "evaluations": "obligation_id>obligations.obligation_id control_pack_id>control_packs.pack_id",
+        "program_funding_receipts": "supersedes_receipt_id>program_funding_receipts.receipt_id",
+        "program_funding_projection": "receipt_id>program_funding_receipts.receipt_id",
+        "population_manifests": "pack_id>control_packs.pack_id supersedes_manifest_id>population_manifests.manifest_id",
+        "population_manifest_members": "manifest_id>population_manifests.manifest_id",
+        "population_manifest_heads": "pack_id>control_packs.pack_id manifest_id>population_manifests.manifest_id",
+        "population_manifest_bindings": (
+            "population_id>population_imports.population_id manifest_id>population_manifests.manifest_id"
+        ),
+        "commands": "event_sequence>financial_events.event_sequence",
+    }.items()
+}
+
+# Command log: the event kind that each accepted request produced, the request
+# kind, and the payload field naming its key (None: the aggregate id).
+_COMMAND_EVENT_KINDS: dict[str, tuple[str, str | None]] = {
+    "CONTROL_PACK_PUBLISHED": ("CONTROL_PACK", None),
+    "POPULATION_MANIFEST_REGISTERED": ("POPULATION_MANIFEST", None),
+    "POPULATION_MANIFEST_SUPERSEDED": ("POPULATION_MANIFEST", None),
+    "FUNDING_RECEIPT_RECORDED": ("FUNDING_RECEIPT", None),
+    "FUNDING_RECEIPT_SUPERSEDED": ("FUNDING_RECEIPT", None),
+    "SUPPORT_EVIDENCE_RECORDED": ("SUPPORT_EVIDENCE", "evidence_id"),
+    "PAYMENT_RECEIVED": ("PAYMENT", "payment_id"),
+    "PAYMENT_REVERSED": ("PAYMENT_REVERSAL", "evidence_id"),
+    "OFFSET_CLAIMED": ("OFFSET_CLAIM", "claim_id"),
+    "OFFSET_AUTHORIZED": ("OFFSET_DECISION", "action_id"),
+    "OFFSET_REJECTED_CORRECTION_AUTHORIZED": ("OFFSET_DECISION", "action_id"),
+    "ACTION_ACKNOWLEDGED": ("ACTION_ACKNOWLEDGMENT", "action_id"),
+    "REPORTING_EVIDENCE_RECORDED": ("REPORT", "evidence_id"),
+    "REPORTING_CORRECTION_RECORDED": ("REPORT", "evidence_id"),
+}
 
 _TRIGGER_DEFS = {
     "action_payload_immutable": "CREATE TRIGGER action_payload_immutable BEFORE UPDATE OF action_id,obligation_id,determination_id,kind,revision,payload_json,payload_digest,idempotency_key,created_at_ms ON actions BEGIN SELECT RAISE(ABORT,'action_payload_immutable'); END",
@@ -280,6 +356,8 @@ _TRIGGER_DEFS = {
     "population_manifest_member_delete_immutable": "CREATE TRIGGER population_manifest_member_delete_immutable BEFORE DELETE ON population_manifest_members BEGIN SELECT RAISE(ABORT,'population_manifest_member_immutable'); END",
     "population_manifest_binding_update_immutable": "CREATE TRIGGER population_manifest_binding_update_immutable BEFORE UPDATE ON population_manifest_bindings BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END",
     "population_manifest_binding_delete_immutable": "CREATE TRIGGER population_manifest_binding_delete_immutable BEFORE DELETE ON population_manifest_bindings BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END",
+    "command_update_immutable": "CREATE TRIGGER command_update_immutable BEFORE UPDATE ON commands BEGIN SELECT RAISE(ABORT,'command_immutable'); END",
+    "command_delete_immutable": "CREATE TRIGGER command_delete_immutable BEFORE DELETE ON commands BEGIN SELECT RAISE(ABORT,'command_immutable'); END",
 }
 
 _EVENT_KINDS = {
@@ -663,10 +741,11 @@ def _identity_digest(
 def _identity_record(
     value: Mapping[str, object],
     code_prefix: str = "identity",
+    schema_version: int = SCHEMA_VERSION,
 ) -> dict[str, object]:
     if not isinstance(value, Mapping) or set(value) != set(TABLE_COLUMNS["financial_identity"]):
         _fail(f"{code_prefix}:shape")
-    if value["id"] != 1 or value["schema_version"] != SCHEMA_VERSION:
+    if value["id"] != 1 or value["schema_version"] != schema_version:
         _fail(f"{code_prefix}:schema")
     provenance = value["provenance"]
     bound_mode = value["bound_mode"]
@@ -696,7 +775,7 @@ def _identity_record(
         _fail(f"{code_prefix}:digest")
     return {
         "id": 1,
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
         "provenance": provenance,
         "bound_mode": bound_mode,
         "bound_owner_id": bound_owner_id,
@@ -937,6 +1016,22 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
         for name, expected in _TRIGGER_DEFS.items():
             if _normal_sql(triggers[name]) != _normal_sql(expected):
                 _fail(f"schema:trigger:{name}")
+        for table in sorted(TABLES):
+            declared: dict[int, list[sqlite3.Row]] = {}
+            for row in connection.execute(f"PRAGMA foreign_key_list({table})"):
+                if (str(row[5]).upper(), str(row[6]).upper(), str(row[7]).upper()) != ("NO ACTION", "NO ACTION", "NONE"):
+                    _fail(f"schema:foreign-keys:{table}")
+                declared.setdefault(int(row[0]), []).append(row)
+            actual_keys = {
+                (
+                    tuple(str(row[3]) for row in sorted(rows, key=lambda row: int(row[1]))),
+                    str(rows[0][2]),
+                    tuple(str(row[4]) for row in sorted(rows, key=lambda row: int(row[1]))),
+                )
+                for rows in declared.values()
+            }
+            if len(actual_keys) != len(declared) or actual_keys != _FOREIGN_KEY_DEFS.get(table, frozenset()):
+                _fail(f"schema:foreign-keys:{table}")
         _verify_private_index_schema(connection)
         return schema_version
     except IndependentFinancialError:
@@ -3568,7 +3663,113 @@ def continuity_package_digest(payload: Mapping[str, object]) -> str:
         _fail("continuity:payload")
     if "package_digest" in payload:
         _fail("continuity:digest-field")
-    return _digest(CONTINUITY_DOMAIN, _canonical(dict(payload), "continuity:digest-input")).hex().upper()
+    package_format = _PACKAGE_FORMATS.get(payload.get("version")) if type(payload.get("version")) is int else None
+    domain = CONTINUITY_DOMAIN if package_format is None else package_format[2]
+    return _digest(domain, _canonical(dict(payload), "continuity:digest-input")).hex().upper()
+
+
+def _verify_commands(rows: Mapping[str, Sequence[Mapping[str, object]]], code: str) -> None:
+    """Recompute the command log from the history and the rows each request wrote."""
+
+    def index(table: str, key: str) -> dict[object, Mapping[str, object]]:
+        return {row[key]: row for row in rows[table]}
+
+    tables = {
+        "packs": index("control_packs", "pack_id"),
+        "manifests": index("population_manifests", "manifest_id"),
+        "receipts": index("program_funding_receipts", "receipt_id"),
+        "evidence": index("evidence", "evidence_id"),
+        "payments": index("payments", "payment_id"),
+        "claims": index("claimed_adjustments", "claim_id"),
+        "obligations": index("obligations", "obligation_id"),
+        "determinations": index("determinations", "determination_id"),
+        "actions": index("actions", "action_id"),
+        "outbox": index("action_outbox", "action_id"),
+    }
+
+    def row(table: str, key: object) -> Mapping[str, object]:
+        found = tables[table].get(key)
+        if found is None:
+            _fail(f"{code}:source")
+        return found
+
+    def hex_of(value: object) -> object:
+        if value is None:
+            return None
+        if type(value) is not bytes:
+            _fail(f"{code}:digest")
+        return value.hex().upper()
+
+    expected: dict[str, tuple[str, str, bytes, int]] = {}
+    for event in sorted(rows["financial_events"], key=lambda event: int(event["event_sequence"])):
+        spec = _COMMAND_EVENT_KINDS.get(str(event["kind"]))
+        if spec is None:
+            continue
+        kind, field = spec
+        if field is None:
+            key = event["aggregate_id"]
+        else:
+            payload = _parse_json(event["payload_json"], f"{code}:event-payload")
+            key = payload.get(field) if isinstance(payload, dict) else None
+        if type(key) is not str:
+            _fail(f"{code}:key")
+        if kind == "CONTROL_PACK":
+            fields = {"pack_digest": hex_of(row("packs", key)["pack_digest"])}
+        elif kind == "POPULATION_MANIFEST":
+            fields = {"manifest_digest": hex_of(row("manifests", key)["manifest_digest"])}
+        elif kind == "FUNDING_RECEIPT":
+            fields = {"receipt_digest": hex_of(row("receipts", key)["receipt_digest"])}
+        elif kind in {"SUPPORT_EVIDENCE", "REPORT"}:
+            evidence = row("evidence", key)
+            fields = {"item_id": evidence["item_id"], "record_digest": hex_of(evidence["record_digest"])}
+        elif kind == "PAYMENT_REVERSAL":
+            evidence = row("evidence", key)
+            fields = {
+                "item_id": evidence["item_id"],
+                "payment_id": evidence["reversal_of"],
+                "record_digest": hex_of(evidence["record_digest"]),
+            }
+        elif kind == "PAYMENT":
+            payment = row("payments", key)
+            evidence = row("evidence", payment["evidence_id"])
+            fields = {
+                **{name: payment[name] for name in ("item_id", "evidence_id", "common_origin_id", "amount_cents", "event_at_ms")},
+                **{name: evidence[name] for name in ("source_id", "source_version", "local_ref")},
+            }
+        elif kind == "OFFSET_CLAIM":
+            claim = row("claims", key)
+            fields = {
+                "item_id": row("obligations", claim["obligation_id"])["item_id"],
+                **{name: claim[name] for name in ("evidence_id", "amount_cents", "owner_role", "deadline_ms")},
+            }
+        elif kind == "OFFSET_DECISION":
+            action = row("actions", key)
+            determination = row("determinations", action["determination_id"])
+            fields = {
+                "item_id": row("obligations", action["obligation_id"])["item_id"],
+                **{name: determination[name] for name in ("claim_id", "decision", "actor_id", "actor_role", "expected_revision", "decided_at_ms")},
+                "evaluation_id": determination["input_evaluation_id"],
+                "evaluation_result_digest": hex_of(determination["input_evaluation_result_digest"]),
+            }
+        else:
+            fields = {"acknowledgment_ref": row("outbox", key)["acknowledgment_ref"]}
+        command_id = f"{kind}:{key}"
+        if command_id in expected:
+            _fail(f"{code}:duplicate")
+        request_json = _canonical({"command": kind, "key": key, **fields}, f"{code}:request")
+        expected[command_id] = (kind, request_json.decode("ascii"), _digest(COMMAND_DOMAIN, request_json), int(event["event_sequence"]))
+    actual: dict[object, tuple[object, object, object, object]] = {}
+    for command in rows["commands"]:
+        if command["command_id"] in actual:
+            _fail(f"{code}:duplicate")
+        actual[command["command_id"]] = (
+            command["kind"],
+            command["request_json"],
+            command["request_digest"],
+            command["event_sequence"],
+        )
+    if actual != expected:
+        _fail(f"{code}:mismatch")
 
 
 def _package_import_value(value: object, code: str) -> object:
@@ -3706,12 +3907,12 @@ def verify_continuity_package(
     if set(value) != required:
         _fail("continuity:keys")
     package_version = value["version"]
-    # Only Continuity v7 is accepted; retired v5/v6 packages fail closed here.
-    if type(package_version) is not int or package_version != SCHEMA_VERSION:
+    # Continuity v8 and v7 are verified; retired v5/v6 packages fail closed here.
+    package_format = _PACKAGE_FORMATS.get(package_version) if type(package_version) is int else None
+    if package_format is None or value["schema"] != package_format[0]:
         _fail("continuity:schema")
-    if value["schema"] != CONTINUITY_SCHEMA:
-        _fail("continuity:schema")
-    if expected_schema_version is not None and package_version != _integer(expected_schema_version, "continuity:expected-schema-version", minimum=SCHEMA_VERSION, maximum=SCHEMA_VERSION):
+    package_schema, owner_schema, _domain, package_tables = package_format
+    if expected_schema_version is not None and package_version != _integer(expected_schema_version, "continuity:expected-schema-version", minimum=min(_PACKAGE_FORMATS), maximum=SCHEMA_VERSION):
         _fail("continuity:schema-version-binding")
     if identity["schema_version"] is not None and identity["schema_version"] != package_version:
         _fail("continuity:schema-version-binding")
@@ -3750,17 +3951,17 @@ def verify_continuity_package(
     if expected_continuity_epoch is not None and epoch != _integer(expected_continuity_epoch, "continuity:expected-epoch", minimum=1, maximum=MAX_CENTS):
         _fail("continuity:epoch-binding")
     tables = value["tables"]
-    if not isinstance(tables, dict) or set(tables) != TABLES:
+    if not isinstance(tables, dict) or set(tables) != package_tables:
         _fail("continuity:tables")
     counts: dict[str, int] = {}
     decoded_rows: dict[str, list[dict[str, object]]] = {}
-    for table in TABLES:
+    for table in package_tables:
         decoded_rows[table] = _verify_package_rows(tables[table], table)
         counts[table] = len(decoded_rows[table])
     if counts["financial_meta"] != 1:
         _fail("continuity:meta-cardinality")
     meta = decoded_rows["financial_meta"][0]
-    if meta["id"] != 1 or meta["schema_version"] != SCHEMA_VERSION or meta["schema"] != SCHEMA:
+    if meta["id"] != 1 or meta["schema_version"] != package_version or meta["schema"] != owner_schema:
         _fail("continuity:meta-schema")
     for key, expected in scope.items():
         if meta[key] != expected:
@@ -3786,6 +3987,7 @@ def verify_continuity_package(
     identity_contract = _identity_record(
         decoded_rows["financial_identity"][0],
         "continuity:identity",
+        package_version,
     )
     if identity_contract["bound_mode"] != mode or identity_contract["bound_owner_id"] != meta["owner_id"]:
         _fail("continuity:identity-binding")
@@ -3807,6 +4009,8 @@ def verify_continuity_package(
     package_digest = value["package_digest"]
     if type(package_digest) is not str or package_digest != package_digest.upper() or _HEX128.fullmatch(package_digest) is None or package_digest != expected_digest:
         _fail("continuity:package-digest")
+    if "commands" in package_tables:
+        _verify_commands(decoded_rows, "continuity:commands")
     _verify_correction_followup_records(
         decoded_rows["financial_events"],
         evaluations={str(row["evaluation_id"]): row for row in decoded_rows["evaluations"]},
@@ -3844,7 +4048,7 @@ def verify_continuity_package(
         manifest_state,
     )
     result: dict[str, object] = {
-        "schema": CONTINUITY_SCHEMA,
+        "schema": package_schema,
         "version": package_version,
         "scope": dict(scope),
         "authority": {"authority_id": authority_id, "epoch": authority_epoch, "digest": authority_digest.hex().upper()},
@@ -3960,6 +4164,16 @@ def _verify_connection(
         cases={str(row["case_id"]): dict(row) for row in _bounded_rows(connection, "cases")},
         packs={str(row["pack_id"]): dict(row) for row in _bounded_rows(connection, "control_packs")},
     )
+    _verify_commands(
+        {table: [dict(row) for row in _bounded_rows(connection, table)] for table in sorted(TABLES)},
+        "commands",
+    )
+    try:
+        orphan = connection.execute("PRAGMA foreign_key_check").fetchone()
+    except sqlite3.Error:
+        _fail("foreign-keys:read")
+    if orphan is not None:
+        _fail(f"foreign-keys:{orphan[0]}")
     _verify_continuity_admission(connection, schema_version, meta)
     result = {
         "schema": SCHEMA,
