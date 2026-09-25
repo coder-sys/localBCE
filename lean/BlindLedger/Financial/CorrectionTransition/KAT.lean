@@ -188,6 +188,9 @@ def gateCorrectionAcceptedTransition : Bool :=
       mutation.resultingResult.afterRevision = 5 &&
       mutation.resultingResult.claimedAdjustmentCents = 0 &&
       mutation.resultingResult.receivedCashCents = 9_700_000 &&
+      mutation.dependencies.inputShortfallCents = 300_000 &&
+      mutation.determination.amountCents = 300_000 && mutation.action.amountCents = 300_000 &&
+      mutation.action.payloadDigest = pendingPayloadDigest &&
       mutation.determination.decision = .OFFSET_REJECTED_CORRECTION_AUTHORIZED &&
       mutation.determination.expectedRevision = 4 && mutation.determination.resultingRevision = 5 &&
       mutation.action.kind = "CORRECTION_PAYMENT_REQUEST" && mutation.action.status = .READY &&
@@ -200,26 +203,6 @@ def gateCorrectionAcceptedTransition : Bool :=
         "evaluation:obligation:item-h:period-01:r5" &&
       mutation.orderedEffects = [ .DETERMINATION_RECORDED, .CLAIM_REJECTED, .CASE_UPSERTED,
         .ACTION_CREATED, .OUTBOX_CREATED, .PROJECTION_RECOMPUTED, .EVENT_APPENDED ]
-
-def gateCorrectionOwnerDigestVectors : Bool :=
-  match correctionKatAccepted.mutation with
-  | none => false
-  | some mutation =>
-      mutation.determinationDigest = [
-        0x1a, 0xb8, 0x2b, 0x82, 0xd1, 0x17, 0xfb, 0x08, 0x18, 0x0f, 0x9e, 0xf0, 0x8c, 0x04, 0x24, 0x9d,
-        0x9d, 0x69, 0x11, 0xad, 0xe6, 0x94, 0xa5, 0xe1, 0x74, 0x60, 0x0b, 0x8e, 0x06, 0x08, 0xb0, 0x1f,
-        0x40, 0x40, 0x43, 0xd8, 0x9d, 0x9e, 0x65, 0xe0, 0x8e, 0xfa, 0xd8, 0xd3, 0x3e, 0x8d, 0xd0, 0x83,
-        0xbe, 0x81, 0x65, 0xb4, 0xd0, 0xb0, 0x1a, 0x03, 0x4d, 0x79, 0xde, 0xa2, 0xc2, 0xd4, 0x9a, 0xfb ] &&
-      mutation.actionPayloadDigest = [
-        0xcf, 0xe3, 0x09, 0x53, 0xf5, 0x92, 0xf0, 0x86, 0x03, 0x69, 0x82, 0x12, 0x9e, 0x5c, 0x1c, 0x66,
-        0x84, 0x97, 0x09, 0xa5, 0x88, 0x17, 0x47, 0xcf, 0xd9, 0x07, 0x5d, 0x49, 0xdb, 0x56, 0xdc, 0x12,
-        0x89, 0x0c, 0x82, 0xe3, 0x7c, 0xa9, 0x49, 0x31, 0x82, 0x4b, 0xd2, 0x8a, 0x79, 0xcb, 0x22, 0x35,
-        0x0c, 0xd7, 0x7e, 0xd9, 0xb6, 0x08, 0xe0, 0x02, 0x3c, 0xf2, 0x4a, 0x8c, 0x36, 0xb8, 0x20, 0xc2 ] &&
-      mutation.actionIdempotencyKey = [
-        0xe0, 0xb7, 0x0f, 0xc0, 0xa8, 0xe5, 0xc4, 0x37, 0x56, 0xf7, 0x1d, 0x9f, 0x0f, 0xed, 0x93, 0x62,
-        0x0b, 0xf7, 0x72, 0xe5, 0xcd, 0x24, 0x86, 0xd6, 0xc8, 0x9b, 0x7c, 0x8e, 0xf2, 0xd3, 0xb9, 0x27,
-        0xe6, 0x2a, 0x28, 0x85, 0x02, 0x7d, 0x7b, 0xfd, 0x78, 0xa6, 0xa5, 0xaf, 0xcc, 0x77, 0x0f, 0x47,
-        0xa3, 0xdf, 0xe3, 0x0b, 0x67, 0x60, 0x0f, 0x8f, 0xe5, 0x5e, 0x27, 0xcb, 0x75, 0x4b, 0x91, 0x8c ]
 
 def gateCorrectionInputReceiptBound : Bool :=
   match evaluate correctionKatInput with
@@ -343,13 +326,11 @@ def gateCorrectionTrailingBytesRejected : Bool :=
     | some wire => (decodeCorrectionTransitionResult (wire ++ [UInt8.ofNat 0])).isNone
   requestRejected && resultRejected
 
-private def correctionKatReuseReceipt (mutation : CorrectionMutation) : EvaluationReceipt :=
-  let result := mutation.resultingResult
-  { correctionKatCurrentReceipt with
-    evidenceBindings := mutation.dependencies.supportingEvidence
-    inputSnapshotDigest := some (correctionKatDigest 92)
-    result := { correctionKatCurrentReceipt.result with
-      evaluationId := mutation.followUps.resultingEvaluationId
+/-- A receipt shaped like `base` whose owner result is Lean's projection `result`. -/
+private def correctionKatReceiptFor (base : EvaluationReceipt) (evaluationId : String)
+    (result : FinancialResult) : EvaluationReceipt :=
+  { base with result := { base.result with
+      evaluationId := evaluationId
       obligationId := result.context.obligationId
       revision := result.afterRevision
       ruleVersion := result.ruleVersion
@@ -368,7 +349,44 @@ private def correctionKatReuseReceipt (mutation : CorrectionMutation) : Evaluati
       reportingComplete := result.reportingComplete
       verificationStatus := ownerVerificationStatus result.verificationStatus
       caseStatus := ownerCaseStatus result.caseStatus
-      deliveryStatus := ownerDeliveryStatus result.deliveryStatus }
+      deliveryStatus := ownerDeliveryStatus result.deliveryStatus } }
+
+/-- The KAT request with the obligation owed `owedCents` against the same 9,700,000
+    cash and 300,000 claim; the receipt carries Lean's projection of that input. -/
+private def correctionKatOwedRequest (owedCents : Nat) : CorrectionTransitionRequest :=
+  let input := { correctionKatInput with
+    obligation := { correctionKatInput.obligation with owedCents := owedCents } }
+  match evaluate input with
+  | some result => { correctionKatRequest with
+      currentInput := input
+      currentReceipt := correctionKatReceiptFor correctionKatCurrentReceipt
+        katCorrectionEvaluationId result }
+  | none => { correctionKatRequest with currentInput := input }
+
+private def correctionKatOwedAction (owedCents : Nat) : Option (Nat × Nat × Nat) :=
+  (applyCorrectionTransition (correctionKatOwedRequest owedCents)).mutation.map (fun mutation =>
+    (mutation.dependencies.inputShortfallCents, mutation.determination.amountCents,
+      mutation.action.amountCents))
+
+/-- Paid in full: rejecting the offset leaves nothing to request. -/
+def gateCorrectionZeroShortfallRejected : Bool :=
+  let request := correctionKatOwedRequest 9_700_000
+  (evaluate request.currentInput).map FinancialResult.shortfallCents = some 0 &&
+    resultHasReason (applyCorrectionTransition request) .NO_SHORTFALL
+
+/-- 100,000 unpaid against a 300,000 offset: the request is 100,000. -/
+def gateCorrectionPartialShortfallAmount : Bool :=
+  correctionKatOwedAction 9_800_000 = some (100_000, 300_000, 100_000)
+
+/-- 800,000 unpaid against a 300,000 offset: the request is capped at the claim. -/
+def gateCorrectionShortfallAboveClaimAmount : Bool :=
+  correctionKatOwedAction 10_500_000 = some (800_000, 300_000, 300_000)
+
+private def correctionKatReuseReceipt (mutation : CorrectionMutation) : EvaluationReceipt :=
+  { correctionKatReceiptFor correctionKatCurrentReceipt mutation.followUps.resultingEvaluationId
+      mutation.resultingResult with
+    evidenceBindings := mutation.dependencies.supportingEvidence
+    inputSnapshotDigest := some (correctionKatDigest 92)
     resultDigest := correctionKatDigest 101
     receiptDigest := correctionKatDigest 102
     evaluationResultDigest := correctionKatDigest 101 }
@@ -380,7 +398,6 @@ def correctionKatReuseRequest : CorrectionReuseRequest :=
       currentInput := mutation.resultingInput
       currentReceipt := correctionKatReuseReceipt mutation
       currentDetermination := some mutation.determination
-      currentDeterminationDigest := some mutation.determinationDigest
       currentOutbox := some mutation.outbox
       currentQueries := correctionKatRetryQueries 11 43
       currentEventSequence := 11
@@ -391,7 +408,6 @@ def correctionKatReuseRequest : CorrectionReuseRequest :=
       currentInput := correctionKatInput
       currentReceipt := correctionKatCurrentReceipt
       currentDetermination := none
-      currentDeterminationDigest := none
       currentOutbox := none
       currentQueries := correctionKatAbsentQueries 10 42
       currentEventSequence := 10
@@ -528,7 +544,9 @@ def gateCorrectionReuseCodecRoundtrip : Bool :=
 
 def correctionTransitionKatLines : List (String × Bool) := [
   ("accepted_transition_effects_and_cash_separation", gateCorrectionAcceptedTransition),
-  ("owner_domain_digest_vectors", gateCorrectionOwnerDigestVectors),
+  ("zero_shortfall_rejected_without_mutation", gateCorrectionZeroShortfallRejected),
+  ("partial_shortfall_requests_unpaid_balance", gateCorrectionPartialShortfallAmount),
+  ("shortfall_above_claim_requests_claim_amount", gateCorrectionShortfallAboveClaimAmount),
   ("current_owner_evaluation_receipt_binding", gateCorrectionInputReceiptBound),
   ("exact_retry_after_ack_is_noop", gateCorrectionExactRetryNoEffects),
   ("changed_retry_identity_rejected", gateCorrectionRetryChangedIdentityRejected),

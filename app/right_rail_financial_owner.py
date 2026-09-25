@@ -4452,6 +4452,7 @@ class FinancialOwner:
             and dependencies["input_evaluation_evaluated_at_ms"] == input_receipt["evaluated_at_ms"]
             and dependencies["input_evaluation_snapshot_digest"]
             == bytes.fromhex(str(input_receipt["input_snapshot_digest"]))
+            and dependencies["input_shortfall_cents"] == int(input_receipt["shortfall_cents"])
             and dependencies["decision_at_ms"] == command["decision_at_ms"]
             and dependencies["owner_now_ms"] == command["owner_now_ms"]
             and dependencies["current_event_sequence"] == current_event_sequence
@@ -4484,8 +4485,12 @@ class FinancialOwner:
             and dependencies["query_observations"] == query_observations,
             "correction_read_set_binding",
         )
+        # Lean requests only the unpaid balance: min(claim, input shortfall) (B2).
+        action_amount = int(action["amount_cents"])
         require_binding(
-            action["obligation_id"] == obligation_id and action["currency"] == self.config.currency,
+            action["obligation_id"] == obligation_id
+            and action["currency"] == self.config.currency
+            and action_amount == min(expected_claim["amount_cents"], int(input_receipt["shortfall_cents"])),
             "correction_action_binding",
         )
 
@@ -4512,7 +4517,7 @@ class FinancialOwner:
         expected_determination_digest = _digest(_ACTION_DOMAIN, _canonical(determination_payload))
         action_payload = {
             "action_id": action_id,
-            "amount_cents": expected_claim["amount_cents"],
+            "amount_cents": action_amount,
             "claim_id": str(command["claim_id"]),
             "currency": self.config.currency,
             "determination_id": determination_id,
@@ -4525,12 +4530,6 @@ class FinancialOwner:
         }
         action_payload_digest = _digest(_ACTION_DOMAIN, _canonical(action_payload))
         action_idempotency_key = _digest(_IDEMPOTENCY_DOMAIN, action_id.encode("ascii"))
-        require_binding(
-            mutation["determination_digest"] == expected_determination_digest
-            and action["payload_digest"] == action_payload_digest
-            and mutation["action_idempotency_key"] == action_idempotency_key,
-            "correction_digest_binding",
-        )
         prior_case = connection.execute(
             "SELECT * FROM cases WHERE case_id=? AND obligation_id=?",
             (case_record["case_id"], obligation_id),
@@ -4753,7 +4752,7 @@ class FinancialOwner:
             after_revision=int(event["after_revision"]),
             payload={
                 "action_id": action_id,
-                "amount_cents": expected_claim["amount_cents"],
+                "amount_cents": action_amount,
                 "determination_id": determination_id,
                 "evaluation_id": evaluation_id,
                 "correction_followup": correction_followup,
@@ -5101,6 +5100,7 @@ class FinancialOwner:
                     "CHRONOLOGY": (FinancialIntegrityError, "evaluation_chronology"),
                     "QUERY_OBSERVATION_INVALID": (FinancialIntegrityError, "correction_read_set_invalid"),
                     "INPUT_SNAPSHOT_MISSING": (FinancialIntegrityError, "correction_input_snapshot_missing"),
+                    "NO_SHORTFALL": (FinancialConflictError, "correction_no_shortfall"),
                     "CAPACITY": (FinancialIntegrityError, "history_capacity"),
                 }
                 error_type, error_code = rejected_errors.get(

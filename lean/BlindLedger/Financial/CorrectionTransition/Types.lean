@@ -7,7 +7,11 @@ open BlindLedger.Financial.DecisionPackage
 
 def correctionTransitionContract : String := "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 def correctionTransitionInputMagic : Bytes := "BLFCMD01".toUTF8.toList
-def correctionTransitionResultMagic : Bytes := "BLFCRES1".toUTF8.toList
+def correctionTransitionResultMagic : Bytes := "BLFCRES2".toUTF8.toList
+/-- BLFCRES2 carries no Owner storage digest.  Lean places this all-zero value
+    in the new action's `payloadDigest`; the Owner adapter computes the real
+    digest from the approved fields and substitutes it before storage. -/
+def pendingPayloadDigest : Bytes := List.replicate digestBytes 0
 def maxCorrectionTransitionBytes : Nat := maxTotalEncodedBytes
 
 inductive TransitionStatus where
@@ -56,6 +60,7 @@ inductive TransitionRejectReason where
   | QUERY_OBSERVATION_INVALID
   | INPUT_SNAPSHOT_MISSING
   | CAPACITY
+  | NO_SHORTFALL
 deriving DecidableEq, Repr
 
 inductive TransitionRequirement where
@@ -78,6 +83,7 @@ inductive TransitionRequirement where
   | COMPLETE_QUERY_OBSERVATIONS
   | INPUT_SNAPSHOT_DIGEST_AVAILABLE
   | HISTORY_CAPACITY_AVAILABLE
+  | POSITIVE_SHORTFALL
 deriving DecidableEq, Repr
 
 def requiredTransitionCondition : TransitionRejectReason → TransitionRequirement
@@ -100,6 +106,7 @@ def requiredTransitionCondition : TransitionRejectReason → TransitionRequireme
   | .QUERY_OBSERVATION_INVALID => .COMPLETE_QUERY_OBSERVATIONS
   | .INPUT_SNAPSHOT_MISSING => .INPUT_SNAPSHOT_DIGEST_AVAILABLE
   | .CAPACITY => .HISTORY_CAPACITY_AVAILABLE
+  | .NO_SHORTFALL => .POSITIVE_SHORTFALL
 
 inductive CorrectionQueryPredicate where
   | ACTION_ID
@@ -218,8 +225,6 @@ structure CorrectionOutboxDelta where
   actionId : String
   status : ActionStatus
   attempt : Nat
-  payloadDigest : Bytes
-  idempotencyKey : Bytes
   acknowledgmentReference : Option String
   updatedAtMs : Nat
 deriving DecidableEq, Repr
@@ -233,7 +238,6 @@ structure CorrectionEventIntent where
   beforeRevision : Nat
   afterRevision : Nat
   committedAtMs : Nat
-  basePayloadJson : String
 deriving DecidableEq, Repr
 
 structure CorrectionDependencyFacts where
@@ -250,6 +254,7 @@ structure CorrectionDependencyFacts where
   inputEvaluationRevision : Nat
   inputEvaluationEvaluatedAtMs : Nat
   inputEvaluationSnapshotDigest : Bytes
+  inputShortfallCents : Nat
   decisionAtMs : Nat
   ownerNowMs : Nat
   claimBefore : Claim
@@ -282,7 +287,6 @@ inductive CorrectionApprovalReason where
   | ACCEPTED_TRANSITION_REQUIRED
   | DETERMINATION_MISSING
   | DETERMINATION_CHANGED
-  | DETERMINATION_DIGEST_CHANGED
 deriving DecidableEq, Repr
 
 inductive CorrectionExecutionPermission where
@@ -338,10 +342,7 @@ structure CorrectionMutation where
   resultingInput : FinancialInput
   resultingResult : FinancialResult
   determination : OffsetDetermination
-  determinationDigest : Bytes
   action : ActionRecord
-  actionPayloadDigest : Bytes
-  actionIdempotencyKey : Bytes
   caseDelta : CorrectionCaseDelta
   outbox : CorrectionOutboxDelta
   event : CorrectionEventIntent
@@ -364,7 +365,6 @@ structure CorrectionReuseRequest where
   currentInput : FinancialInput
   currentReceipt : EvaluationReceipt
   currentDetermination : Option OffsetDetermination
-  currentDeterminationDigest : Option Bytes
   currentOutbox : Option CorrectionOutboxDelta
   currentQueries : CorrectionQueryObservations
   currentEventSequence : Nat

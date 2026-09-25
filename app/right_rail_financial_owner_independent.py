@@ -2990,13 +2990,17 @@ def _verify_actions(
             _fail("action:payload-object")
         claim_id = determination["claim_id"]
         claim = claims[str(claim_id)]
+        amount = claim["amount_cents"]
+        if kind == "CORRECTION_PAYMENT_REQUEST":  # B2: only the input evaluation's unpaid balance
+            balance = connection.execute("SELECT shortfall_cents FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (determination["input_evaluation_id"], obligation_id)).fetchone()
+            amount = min(amount, _cents(balance[0] if balance else None, "action:input-shortfall", positive=True))
         expected_payload = {
             "action_id": action_id,
             "obligation_id": obligation_id,
             "determination_id": determination_id,
             "kind": kind,
             "claim_id": claim_id,
-            "amount_cents": claim["amount_cents"],
+            "amount_cents": amount,
             "currency": meta["scope"]["currency"],
             "revision": revision,
             "input_evaluation_id": determination["input_evaluation_id"],

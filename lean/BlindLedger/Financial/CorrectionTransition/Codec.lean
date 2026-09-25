@@ -1,6 +1,5 @@
 import BlindLedger.Financial.Codec
 import BlindLedger.Financial.DecisionPackage.Codec
-import BlindLedger.Financial.CorrectionTransition.Transition
 import BlindLedger.Financial.CorrectionTransition.Types
 
 namespace BlindLedger.Financial.CorrectionTransition
@@ -8,14 +7,14 @@ namespace BlindLedger.Financial.CorrectionTransition
 open BlindLedger.Financial
 open BlindLedger.Financial.DecisionPackage
 
-private def encodeSizedBytes (value : Bytes) : Bytes := natBE 4 value.length ++ value
+def encodeSizedBytes (value : Bytes) : Bytes := natBE 4 value.length ++ value
 
-private def readSizedBytes (maximum : Nat) (bytes : Bytes) : Option (Bytes × Bytes) := do
+def readSizedBytes (maximum : Nat) (bytes : Bytes) : Option (Bytes × Bytes) := do
   let (length, rest) ← readNatBE 4 bytes
   if length > maximum || length > rest.length then none
   else some (rest.take length, rest.drop length)
 
-private def encodeActionLookup : ActionIdentityLookup → Bytes
+def encodeActionLookup : ActionIdentityLookup → Bytes
   | .absent => [UInt8.ofNat 1]
   | .existing identity =>
       [UInt8.ofNat 2] ++ encodeString identity.actionId ++
@@ -29,7 +28,7 @@ private def encodeActionLookup : ActionIdentityLookup → Bytes
         natBE 8 identity.decidedAtMs
   | .conflicting => [UInt8.ofNat 3]
 
-private def readActionLookup (bytes : Bytes) : Option (ActionIdentityLookup × Bytes) := do
+def readActionLookup (bytes : Bytes) : Option (ActionIdentityLookup × Bytes) := do
   let (tag, rest) ← readByte bytes
   if tag.toNat = 1 then some (.absent, rest)
   else if tag.toNat = 3 then some (.conflicting, rest)
@@ -71,7 +70,7 @@ private def readActionLookup (bytes : Bytes) : Option (ActionIdentityLookup × B
     pure (.existing identity, rest)
   else none
 
-private def actionLookupWellFormed : ActionIdentityLookup → Bool
+def actionLookupWellFormed : ActionIdentityLookup → Bool
   | .absent | .conflicting => true
   | .existing identity =>
       [identity.actionId, identity.actionObligationId, identity.determinationId,
@@ -82,12 +81,12 @@ private def actionLookupWellFormed : ActionIdentityLookup → Bool
       digestWellFormed identity.inputEvaluationResultDigest &&
       revisionWellFormed identity.expectedRevision && timeWellFormed identity.decidedAtMs
 
-private def encodeQueryPredicate : CorrectionQueryPredicate → UInt8
+def encodeQueryPredicate : CorrectionQueryPredicate → UInt8
   | .ACTION_ID => UInt8.ofNat 1
   | .DETERMINATION_ID => UInt8.ofNat 2
   | .EVALUATION_CONSUMED => UInt8.ofNat 3
 
-private def readQueryPredicate (bytes : Bytes) : Option (CorrectionQueryPredicate × Bytes) := do
+def readQueryPredicate (bytes : Bytes) : Option (CorrectionQueryPredicate × Bytes) := do
   let (tag, rest) ← readByte bytes
   let predicate ← match tag.toNat with
     | 1 => some .ACTION_ID
@@ -96,30 +95,18 @@ private def readQueryPredicate (bytes : Bytes) : Option (CorrectionQueryPredicat
     | _ => none
   pure (predicate, rest)
 
-private def encodeQueryResultIdentity : Option String → Bytes
-  | none => [UInt8.ofNat 0]
-  | some value => UInt8.ofNat 1 :: encodeString value
-
-private def readQueryResultIdentity (bytes : Bytes) : Option (Option String × Bytes) := do
-  let (tag, rest) ← readByte bytes
-  if tag.toNat = 0 then some (none, rest)
-  else if tag.toNat = 1 then do
-    let (value, tail) ← readString rest
-    pure (some value, tail)
-  else none
-
-private def encodeQueryObservation (observation : CorrectionQueryObservation) : Bytes :=
+def encodeQueryObservation (observation : CorrectionQueryObservation) : Bytes :=
   [encodeQueryPredicate observation.predicate] ++ encodeString observation.subject ++
     encodeBool observation.complete ++ natBE 8 observation.matchCount ++
-    encodeQueryResultIdentity observation.resultIdentity ++ natBE 8 observation.versionSequence ++
+    encodeOptionString observation.resultIdentity ++ natBE 8 observation.versionSequence ++
     encodeDigest observation.versionHead
 
-private def readQueryObservation (bytes : Bytes) : Option (CorrectionQueryObservation × Bytes) := do
+def readQueryObservation (bytes : Bytes) : Option (CorrectionQueryObservation × Bytes) := do
   let (predicate, rest) ← readQueryPredicate bytes
   let (subject, rest) ← readString rest
   let (complete, rest) ← readBool rest
   let (matchCount, rest) ← readNatBE 8 rest
-  let (resultIdentity, rest) ← readQueryResultIdentity rest
+  let (resultIdentity, rest) ← readOptionString rest
   let (versionSequence, rest) ← readNatBE 8 rest
   let (versionHead, rest) ← readDigest rest
   let observation : CorrectionQueryObservation := {
@@ -133,12 +120,12 @@ private def readQueryObservation (bytes : Bytes) : Option (CorrectionQueryObserv
   if !correctionQueryObservationWellFormed observation then none
   else some (observation, rest)
 
-private def encodeQueryObservations (observations : CorrectionQueryObservations) : Bytes :=
+def encodeQueryObservations (observations : CorrectionQueryObservations) : Bytes :=
   encodeQueryObservation observations.actionId ++
     encodeQueryObservation observations.determinationId ++
     encodeQueryObservation observations.evaluationConsumed
 
-private def readQueryObservations (bytes : Bytes) : Option (CorrectionQueryObservations × Bytes) := do
+def readQueryObservations (bytes : Bytes) : Option (CorrectionQueryObservations × Bytes) := do
   let (actionId, rest) ← readQueryObservation bytes
   let (determinationId, rest) ← readQueryObservation rest
   let (evaluationConsumed, rest) ← readQueryObservation rest
@@ -159,7 +146,7 @@ def decodeCorrectionQueryObservations (bytes : Bytes) : Option CorrectionQueryOb
   if rest.isEmpty && correctionQueryObservationsWellFormed observations
     then some observations else none
 
-private def commandWellFormed (command : CorrectionCommand) : Bool :=
+def commandWellFormed (command : CorrectionCommand) : Bool :=
   [command.itemId, command.claimId, command.actionId, command.actorId,
     command.currentAuthorityId, command.evaluationId].all idWellFormed &&
   roleWellFormed command.actorRole &&
@@ -170,13 +157,13 @@ private def commandWellFormed (command : CorrectionCommand) : Bool :=
   correctionQueryObservationsWellFormed command.queryObservations &&
   command.currentEventSequence ≤ maxRows && digestWellFormed command.previousHistoryHead
 
-private def encodeInputBody (request : CorrectionTransitionRequest) : Option Bytes := do
+def encodeInputBody (request : CorrectionTransitionRequest) : Option Bytes := do
   if !commandWellFormed request.command ||
       !financialInputWellFormed request.currentInput ||
       !evaluationReceiptWellFormed request.currentReceipt then
     none
   let inputBytes ← encodeFinancialInput request.currentInput
-  let receiptBytes ← encodeEvaluationReceipt request.currentReceipt
+  let receiptBytes := encodeEvaluationReceipt request.currentReceipt
   pure (correctionTransitionInputMagic ++ natBE 2 1 ++
     encodeString correctionTransitionContract ++
     encodeString request.command.itemId ++ encodeString request.command.claimId ++
@@ -195,9 +182,11 @@ def encodeCorrectionTransitionRequest (request : CorrectionTransitionRequest) : 
   let body ← encodeInputBody request
   if body.length > maxCorrectionTransitionBytes then none else pure body
 
-def decodeCorrectionTransitionRequest (bytes : Bytes) : Option CorrectionTransitionRequest := do
-  if bytes.length > maxCorrectionTransitionBytes ||
-      !correctionTransitionInputMagic.isPrefixOf bytes then none
+/-- Reads one BLFCMD01 request and returns the unread bytes.  The decoder below
+    accepts only an empty remainder and the canonical re-encoding. -/
+def parseCorrectionTransitionRequest (bytes : Bytes) :
+    Option (CorrectionTransitionRequest × Bytes) := do
+  if !correctionTransitionInputMagic.isPrefixOf bytes then none
   let rest := bytes.drop correctionTransitionInputMagic.length
   let (version, rest) ← readNatBE 2 rest
   if version ≠ 1 then none
@@ -222,7 +211,6 @@ def decodeCorrectionTransitionRequest (bytes : Bytes) : Option CorrectionTransit
   let (previousHistoryHead, rest) ← readDigest rest
   let (inputBytes, rest) ← readSizedBytes maxCorrectionTransitionBytes rest
   let (receiptBytes, rest) ← readSizedBytes maxCorrectionTransitionBytes rest
-  if !rest.isEmpty then none
   let currentInput ← decodeFinancialInput inputBytes
   let (currentReceipt, receiptRest) ← readEvaluationReceipt receiptBytes
   if !receiptRest.isEmpty then none
@@ -247,12 +235,18 @@ def decodeCorrectionTransitionRequest (bytes : Bytes) : Option CorrectionTransit
       previousHistoryHead := previousHistoryHead }
     currentInput := currentInput
     currentReceipt := currentReceipt }
-  if !commandWellFormed request.command || !evaluationReceiptWellFormed currentReceipt then none
-  match encodeCorrectionTransitionRequest request with
-  | some canonical => if canonical = bytes then some request else none
-  | none => none
+  pure (request, rest)
 
-private def encodeRejectReason : TransitionRejectReason → UInt8
+/-- Well-formedness is enforced by the canonical re-encoding: the encoder
+    refuses every request the transition would treat as malformed. -/
+def decodeCorrectionTransitionRequest (bytes : Bytes) : Option CorrectionTransitionRequest :=
+  if bytes.length > maxCorrectionTransitionBytes then none else
+  match parseCorrectionTransitionRequest bytes with
+  | some (request, []) =>
+      if encodeCorrectionTransitionRequest request = some bytes then some request else none
+  | _ => none
+
+def encodeRejectReason : TransitionRejectReason → UInt8
   | .INVALID_REQUEST => UInt8.ofNat 1
   | .INVALID_INPUT => UInt8.ofNat 2
   | .SHADOW_READ_ONLY => UInt8.ofNat 3
@@ -272,8 +266,9 @@ private def encodeRejectReason : TransitionRejectReason → UInt8
   | .CAPACITY => UInt8.ofNat 17
   | .QUERY_OBSERVATION_INVALID => UInt8.ofNat 18
   | .INPUT_SNAPSHOT_MISSING => UInt8.ofNat 19
+  | .NO_SHORTFALL => UInt8.ofNat 20
 
-private def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
+def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   match byte.toNat with
   | 1 => some .INVALID_REQUEST
   | 2 => some .INVALID_INPUT
@@ -294,13 +289,14 @@ private def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   | 17 => some .CAPACITY
   | 18 => some .QUERY_OBSERVATION_INVALID
   | 19 => some .INPUT_SNAPSHOT_MISSING
+  | 20 => some .NO_SHORTFALL
   | _ => none
 
-private def encodeOptionalRejectReason : Option TransitionRejectReason → Bytes
+def encodeOptionalRejectReason : Option TransitionRejectReason → Bytes
   | none => [UInt8.ofNat 0]
   | some reason => [UInt8.ofNat 1, encodeRejectReason reason]
 
-private def readOptionalRejectReason (bytes : Bytes) : Option (Option TransitionRejectReason × Bytes) := do
+def readOptionalRejectReason (bytes : Bytes) : Option (Option TransitionRejectReason × Bytes) := do
   let (tag, rest) ← readByte bytes
   if tag.toNat = 0 then some (none, rest)
   else if tag.toNat = 1 then do
@@ -309,30 +305,18 @@ private def readOptionalRejectReason (bytes : Bytes) : Option (Option Transition
     pure (some reason, tail)
   else none
 
-private def encodeOptionalString : Option String → Bytes
-  | none => [UInt8.ofNat 0]
-  | some value => UInt8.ofNat 1 :: encodeString value
+def encodeTransitionKind (_ : TransitionKind) : UInt8 := UInt8.ofNat 1
 
-private def readOptionalString (bytes : Bytes) : Option (Option String × Bytes) := do
-  let (tag, rest) ← readByte bytes
-  if tag.toNat = 0 then some (none, rest)
-  else if tag.toNat = 1 then do
-    let (value, tail) ← readString rest
-    pure (some value, tail)
-  else none
-
-private def encodeTransitionKind (_ : TransitionKind) : UInt8 := UInt8.ofNat 1
-
-private def readTransitionKind (bytes : Bytes) : Option (TransitionKind × Bytes) := do
+def readTransitionKind (bytes : Bytes) : Option (TransitionKind × Bytes) := do
   let (tag, rest) ← readByte bytes
   if tag.toNat = 1 then some (.OFFSET_REJECTED_CORRECTION_AUTHORIZED, rest) else none
 
-private def encodeExplanationCode : ExplanationCode → UInt8
+def encodeExplanationCode : ExplanationCode → UInt8
   | .CORRECTION_AUTHORIZED => UInt8.ofNat 1
   | .EXACT_RETRY => UInt8.ofNat 2
   | .REJECTED => UInt8.ofNat 3
 
-private def readExplanationCode (bytes : Bytes) : Option (ExplanationCode × Bytes) := do
+def readExplanationCode (bytes : Bytes) : Option (ExplanationCode × Bytes) := do
   let (tag, rest) ← readByte bytes
   match tag.toNat with
   | 1 => some (.CORRECTION_AUTHORIZED, rest)
@@ -340,7 +324,7 @@ private def readExplanationCode (bytes : Bytes) : Option (ExplanationCode × Byt
   | 3 => some (.REJECTED, rest)
   | _ => none
 
-private def encodeCorrectionEffect : CorrectionEffect → UInt8
+def encodeCorrectionEffect : CorrectionEffect → UInt8
   | .DETERMINATION_RECORDED => UInt8.ofNat 1
   | .CLAIM_REJECTED => UInt8.ofNat 2
   | .CASE_UPSERTED => UInt8.ofNat 3
@@ -349,7 +333,7 @@ private def encodeCorrectionEffect : CorrectionEffect → UInt8
   | .PROJECTION_RECOMPUTED => UInt8.ofNat 6
   | .EVENT_APPENDED => UInt8.ofNat 7
 
-private def readCorrectionEffect (bytes : Bytes) : Option (CorrectionEffect × Bytes) := do
+def readCorrectionEffect (bytes : Bytes) : Option (CorrectionEffect × Bytes) := do
   let (tag, rest) ← readByte bytes
   let effect ← match tag.toNat with
     | 1 => some .DETERMINATION_RECORDED
@@ -362,7 +346,7 @@ private def readCorrectionEffect (bytes : Bytes) : Option (CorrectionEffect × B
     | _ => none
   pure (effect, rest)
 
-private def encodeTransitionRequirement : TransitionRequirement → UInt8
+def encodeTransitionRequirement : TransitionRequirement → UInt8
   | .VALID_COMMAND => UInt8.ofNat 1
   | .WELL_FORMED_FINANCIAL_SNAPSHOT => UInt8.ofNat 2
   | .ACTIONABLE_OWNER_MODE => UInt8.ofNat 3
@@ -382,8 +366,9 @@ private def encodeTransitionRequirement : TransitionRequirement → UInt8
   | .HISTORY_CAPACITY_AVAILABLE => UInt8.ofNat 17
   | .COMPLETE_QUERY_OBSERVATIONS => UInt8.ofNat 18
   | .INPUT_SNAPSHOT_DIGEST_AVAILABLE => UInt8.ofNat 19
+  | .POSITIVE_SHORTFALL => UInt8.ofNat 20
 
-private def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement × Bytes) := do
+def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement × Bytes) := do
   let (tag, rest) ← readByte bytes
   let requirement ← match tag.toNat with
     | 1 => some .VALID_COMMAND
@@ -405,14 +390,15 @@ private def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequir
     | 17 => some .HISTORY_CAPACITY_AVAILABLE
     | 18 => some .COMPLETE_QUERY_OBSERVATIONS
     | 19 => some .INPUT_SNAPSHOT_DIGEST_AVAILABLE
+    | 20 => some .POSITIVE_SHORTFALL
     | _ => none
   pure (requirement, rest)
 
-private def encodeOptionalRequirement : Option TransitionRequirement → Bytes
+def encodeOptionalRequirement : Option TransitionRequirement → Bytes
   | none => [UInt8.ofNat 0]
   | some requirement => [UInt8.ofNat 1, encodeTransitionRequirement requirement]
 
-private def readOptionalRequirement (bytes : Bytes) : Option (Option TransitionRequirement × Bytes) := do
+def readOptionalRequirement (bytes : Bytes) : Option (Option TransitionRequirement × Bytes) := do
   let (tag, rest) ← readByte bytes
   if tag.toNat = 0 then some (none, rest)
   else if tag.toNat = 1 then do
@@ -420,28 +406,22 @@ private def readOptionalRequirement (bytes : Bytes) : Option (Option TransitionR
     pure (some requirement, tail)
   else none
 
-private def encodeDependencyFacts (facts : CorrectionDependencyFacts) : Bytes :=
+def encodeDependencyFacts (facts : CorrectionDependencyFacts) : Bytes :=
   encodeString facts.artifactContract ++ natBE 8 facts.artifactVersion ++
     encodeString facts.authorityId ++ natBE 8 facts.authorityEpoch ++
     encodeDigest facts.authorityDigest ++ encodeString facts.controlPackId ++
     natBE 8 facts.controlPackVersion ++ encodeDigest facts.controlPackDigest ++
     encodeString facts.inputEvaluationId ++ encodeDigest facts.inputEvaluationResultDigest ++
     natBE 8 facts.inputEvaluationRevision ++ natBE 8 facts.inputEvaluationEvaluatedAtMs ++
-    encodeDigest facts.inputEvaluationSnapshotDigest ++ natBE 8 facts.decisionAtMs ++
+    encodeDigest facts.inputEvaluationSnapshotDigest ++ natBE 8 facts.inputShortfallCents ++
+    natBE 8 facts.decisionAtMs ++
     natBE 8 facts.ownerNowMs ++ encodeClaim facts.claimBefore ++
-    encodeList (fun binding => encodeString binding.evidenceId ++ encodeDigest binding.recordDigest)
-      facts.supportingEvidence ++ encodeQueryObservations facts.queryObservations ++
+    encodeList encodeEvidenceBinding facts.supportingEvidence ++
+    encodeQueryObservations facts.queryObservations ++
     natBE 8 facts.currentEventSequence ++
     encodeDigest facts.previousHistoryHead
 
-private def readEvidenceBinding (bytes : Bytes) : Option (EvidenceBinding × Bytes) := do
-  let (evidenceId, rest) ← readString bytes
-  let (recordDigest, rest) ← readDigest rest
-  pure ({
-    evidenceId := evidenceId
-    recordDigest := recordDigest }, rest)
-
-private def readDependencyFacts (bytes : Bytes) : Option (CorrectionDependencyFacts × Bytes) := do
+def readDependencyFacts (bytes : Bytes) : Option (CorrectionDependencyFacts × Bytes) := do
   let (artifactContract, rest) ← readString bytes
   let (artifactVersion, rest) ← readNatBE 8 rest
   let (authorityId, rest) ← readString rest
@@ -455,6 +435,7 @@ private def readDependencyFacts (bytes : Bytes) : Option (CorrectionDependencyFa
   let (inputEvaluationRevision, rest) ← readNatBE 8 rest
   let (inputEvaluationEvaluatedAtMs, rest) ← readNatBE 8 rest
   let (inputEvaluationSnapshotDigest, rest) ← readDigest rest
+  let (inputShortfallCents, rest) ← readNatBE 8 rest
   let (decisionAtMs, rest) ← readNatBE 8 rest
   let (ownerNowMs, rest) ← readNatBE 8 rest
   let (claimBefore, rest) ← decodeClaim rest
@@ -476,6 +457,7 @@ private def readDependencyFacts (bytes : Bytes) : Option (CorrectionDependencyFa
     inputEvaluationRevision := inputEvaluationRevision
     inputEvaluationEvaluatedAtMs := inputEvaluationEvaluatedAtMs
     inputEvaluationSnapshotDigest := inputEvaluationSnapshotDigest
+    inputShortfallCents := inputShortfallCents
     decisionAtMs := decisionAtMs
     ownerNowMs := ownerNowMs
     claimBefore := claimBefore
@@ -484,12 +466,12 @@ private def readDependencyFacts (bytes : Bytes) : Option (CorrectionDependencyFa
     currentEventSequence := currentEventSequence
     previousHistoryHead := previousHistoryHead }, rest)
 
-private def encodeFollowUps (followUps : CorrectionFollowUps) : Bytes :=
+def encodeFollowUps (followUps : CorrectionFollowUps) : Bytes :=
   encodeString followUps.actionId ++ encodeString followUps.outboxActionId ++
     encodeString followUps.caseId ++ encodeString followUps.resultingEvaluationId ++
     natBE 8 followUps.eventSequence
 
-private def readFollowUps (bytes : Bytes) : Option (CorrectionFollowUps × Bytes) := do
+def readFollowUps (bytes : Bytes) : Option (CorrectionFollowUps × Bytes) := do
   let (actionId, rest) ← readString bytes
   let (outboxActionId, rest) ← readString rest
   let (caseId, rest) ← readString rest
@@ -502,18 +484,18 @@ private def readFollowUps (bytes : Bytes) : Option (CorrectionFollowUps × Bytes
     resultingEvaluationId := resultingEvaluationId
     eventSequence := eventSequence }, rest)
 
-private def encodeExplanation (explanation : TransitionExplanation) : Bytes :=
+def encodeExplanation (explanation : TransitionExplanation) : Bytes :=
   let transitionBytes := match explanation.transition with
     | none => [UInt8.ofNat 0]
     | some kind => [UInt8.ofNat 1, encodeTransitionKind kind]
   [encodeExplanationCode explanation.code] ++ transitionBytes ++
     encodeOptionalRejectReason explanation.rejectReason ++
     encodeOptionalRequirement explanation.unresolvedRequirement ++
-    encodeOptionalString explanation.claimId ++ encodeOptionalString explanation.actionId ++
-    encodeOptionalString explanation.inputEvaluationId ++
+    encodeOptionString explanation.claimId ++ encodeOptionString explanation.actionId ++
+    encodeOptionString explanation.inputEvaluationId ++
     encodeOptionNat explanation.expectedRevision ++ encodeOptionNat explanation.resultingRevision
 
-private def readExplanation (bytes : Bytes) : Option (TransitionExplanation × Bytes) := do
+def readExplanation (bytes : Bytes) : Option (TransitionExplanation × Bytes) := do
   let (code, rest) ← readExplanationCode bytes
   let (transitionTag, rest) ← readByte rest
   let (transition, rest) ← if transitionTag.toNat = 0 then
@@ -524,9 +506,9 @@ private def readExplanation (bytes : Bytes) : Option (TransitionExplanation × B
     else none
   let (rejectReason, rest) ← readOptionalRejectReason rest
   let (unresolvedRequirement, rest) ← readOptionalRequirement rest
-  let (claimId, rest) ← readOptionalString rest
-  let (actionId, rest) ← readOptionalString rest
-  let (inputEvaluationId, rest) ← readOptionalString rest
+  let (claimId, rest) ← readOptionString rest
+  let (actionId, rest) ← readOptionString rest
+  let (inputEvaluationId, rest) ← readOptionString rest
   let (expectedRevision, rest) ← readOptionNat rest
   let (resultingRevision, rest) ← readOptionNat rest
   pure ({
@@ -540,7 +522,7 @@ private def readExplanation (bytes : Bytes) : Option (TransitionExplanation × B
     expectedRevision := expectedRevision
     resultingRevision := resultingRevision }, rest)
 
-private def encodeOptionalMutation : Option CorrectionMutation → Option Bytes
+def encodeOptionalMutation : Option CorrectionMutation → Option Bytes
   | none => some [UInt8.ofNat 0]
   | some mutation => do
       let inputBytes ← encodeFinancialInput mutation.resultingInput
@@ -549,24 +531,22 @@ private def encodeOptionalMutation : Option CorrectionMutation → Option Bytes
         encodeList (fun effect => [encodeCorrectionEffect effect]) mutation.orderedEffects ++
         encodeDependencyFacts mutation.dependencies ++ encodeFollowUps mutation.followUps ++
         encodeSizedBytes inputBytes ++ encodeSizedBytes resultBytes ++
-        encodeDetermination mutation.determination ++ encodeDigest mutation.determinationDigest ++
-        encodeAction mutation.action ++ encodeDigest mutation.actionPayloadDigest ++
-        encodeDigest mutation.actionIdempotencyKey ++ encodeCase mutation.caseDelta.record ++
+        encodeDetermination mutation.determination ++
+        encodeAction mutation.action ++ encodeCase mutation.caseDelta.record ++
         encodeString mutation.caseDelta.contractualAccountability ++
         encodeBool mutation.caseDelta.completionConditionsAmountSatisfied ++
         encodeBool mutation.caseDelta.completionConditionsReportingComplete ++
         encodeBool mutation.caseDelta.completionConditionsDeliveryAcknowledgedOrNotRequired ++
         encodeBool mutation.caseDelta.inserted ++ encodeString mutation.outbox.actionId ++
         [encodeActionStatus mutation.outbox.status] ++ natBE 8 mutation.outbox.attempt ++
-        encodeDigest mutation.outbox.payloadDigest ++ encodeDigest mutation.outbox.idempotencyKey ++
-        encodeOptionalString mutation.outbox.acknowledgmentReference ++
+        encodeOptionString mutation.outbox.acknowledgmentReference ++
         natBE 8 mutation.outbox.updatedAtMs ++ natBE 8 mutation.event.sequence ++
         encodeDigest mutation.event.previousHead ++ encodeString mutation.event.aggregateType ++
         encodeString mutation.event.aggregateId ++ encodeString mutation.event.kind ++
         natBE 8 mutation.event.beforeRevision ++ natBE 8 mutation.event.afterRevision ++
-        natBE 8 mutation.event.committedAtMs ++ encodeString mutation.event.basePayloadJson)
+        natBE 8 mutation.event.committedAtMs)
 
-private def readOptionalMutation (bytes : Bytes) : Option (Option CorrectionMutation × Bytes) := do
+def readOptionalMutation (bytes : Bytes) : Option (Option CorrectionMutation × Bytes) := do
   let (tag, rest) ← readByte bytes
   if tag.toNat = 0 then some (none, rest)
   else if tag.toNat ≠ 1 then none
@@ -582,10 +562,7 @@ private def readOptionalMutation (bytes : Bytes) : Option (Option CorrectionMuta
     let resultingInput ← decodeFinancialInput inputBytes
     let resultingResult ← decodeFinancialResult resultBytes
     let (determination, rest) ← decodeDetermination rest
-    let (determinationDigest, rest) ← readDigest rest
     let (action, rest) ← decodeAction rest
-    let (actionPayloadDigest, rest) ← readDigest rest
-    let (actionIdempotencyKey, rest) ← readDigest rest
     let (caseRecord, rest) ← decodeCase rest
     let (contractualAccountability, rest) ← readString rest
     let (completionConditionsAmountSatisfied, rest) ← readBool rest
@@ -596,9 +573,7 @@ private def readOptionalMutation (bytes : Bytes) : Option (Option CorrectionMuta
     let (outboxStatusByte, rest) ← readByte rest
     let outboxStatus ← decodeActionStatus outboxStatusByte
     let (attempt, rest) ← readNatBE 8 rest
-    let (outboxPayloadDigest, rest) ← readDigest rest
-    let (outboxIdempotencyKey, rest) ← readDigest rest
-    let (acknowledgmentReference, rest) ← readOptionalString rest
+    let (acknowledgmentReference, rest) ← readOptionString rest
     let (updatedAtMs, rest) ← readNatBE 8 rest
     let (sequence, rest) ← readNatBE 8 rest
     let (previousHead, rest) ← readDigest rest
@@ -608,7 +583,6 @@ private def readOptionalMutation (bytes : Bytes) : Option (Option CorrectionMuta
     let (beforeRevision, rest) ← readNatBE 8 rest
     let (afterRevision, rest) ← readNatBE 8 rest
     let (committedAtMs, rest) ← readNatBE 8 rest
-    let (basePayloadJson, rest) ← readString rest
     let mutation : CorrectionMutation := {
       transition := transition
       orderedEffects := orderedEffects
@@ -617,10 +591,7 @@ private def readOptionalMutation (bytes : Bytes) : Option (Option CorrectionMuta
       resultingInput := resultingInput
       resultingResult := resultingResult
       determination := determination
-      determinationDigest := determinationDigest
       action := action
-      actionPayloadDigest := actionPayloadDigest
-      actionIdempotencyKey := actionIdempotencyKey
       caseDelta := {
         record := caseRecord
         contractualAccountability := contractualAccountability
@@ -632,8 +603,6 @@ private def readOptionalMutation (bytes : Bytes) : Option (Option CorrectionMuta
         actionId := outboxActionId
         status := outboxStatus
         attempt := attempt
-        payloadDigest := outboxPayloadDigest
-        idempotencyKey := outboxIdempotencyKey
         acknowledgmentReference := acknowledgmentReference
         updatedAtMs := updatedAtMs }
       event := {
@@ -644,19 +613,18 @@ private def readOptionalMutation (bytes : Bytes) : Option (Option CorrectionMuta
         kind := kind
         beforeRevision := beforeRevision
         afterRevision := afterRevision
-        committedAtMs := committedAtMs
-        basePayloadJson := basePayloadJson } }
+        committedAtMs := committedAtMs } }
     pure (some mutation, rest)
 
-private def optionalIdWellFormed : Option String → Bool
+def optionalIdWellFormed : Option String → Bool
   | none => true
   | some value => idWellFormed value
 
-private def optionalRevisionWellFormed : Option Nat → Bool
+def optionalRevisionWellFormed : Option Nat → Bool
   | none => true
   | some value => revisionWellFormed value
 
-private def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
+def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
   match result.status, result.rejectReason, result.explanation.code,
       result.explanation.transition, result.explanation.rejectReason,
       result.explanation.unresolvedRequirement, result.actionId,
@@ -669,8 +637,6 @@ private def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       result.explanation.inputEvaluationId = some mutation.dependencies.inputEvaluationId &&
       result.explanation.expectedRevision = some mutation.determination.expectedRevision &&
       result.explanation.resultingRevision = some mutation.resultingResult.afterRevision &&
-      mutation.event.basePayloadJson = correctionEventBasePayload actionId
-        mutation.determination.amountCents determinationId mutation.followUps.resultingEvaluationId &&
       financialInputWellFormed mutation.resultingInput &&
       financialResultWellFormed mutation.resultingResult &&
       mutation.resultingResult.context = mutation.resultingInput.context &&
@@ -697,19 +663,20 @@ private def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.determination.resultingRevision = mutation.determination.expectedRevision + 1 &&
       timeWellFormed mutation.determination.decidedAt &&
       mutation.determination.obligationId = mutation.resultingInput.context.obligationId &&
-      mutation.action.actionId = actionId && mutation.action.payloadDigest = mutation.actionPayloadDigest &&
+      mutation.action.actionId = actionId && mutation.action.payloadDigest = pendingPayloadDigest &&
       mutation.action.obligationId = mutation.determination.obligationId &&
       mutation.action.determinationId = some determinationId &&
       mutation.action.kind = "CORRECTION_PAYMENT_REQUEST" &&
-      mutation.action.amountCents = mutation.determination.amountCents &&
+      mutation.dependencies.inputShortfallCents > 0 &&
+      mutation.dependencies.inputShortfallCents ≤ maxCents &&
+      mutation.action.amountCents =
+        min mutation.determination.amountCents mutation.dependencies.inputShortfallCents &&
       mutation.action.currency = mutation.resultingInput.context.currency &&
       mutation.action.revision = mutation.determination.resultingRevision &&
       mutation.action.status = .READY &&
       mutation.action.createdAt = mutation.event.committedAtMs &&
-      mutation.actionIdempotencyKey.length = digestBytes &&
       mutation.outbox.actionId = actionId && mutation.outbox.attempt = 0 &&
-      mutation.outbox.status = .READY && mutation.outbox.payloadDigest = mutation.actionPayloadDigest &&
-      mutation.outbox.idempotencyKey = mutation.actionIdempotencyKey &&
+      mutation.outbox.status = .READY &&
       mutation.event.beforeRevision = mutation.resultingResult.beforeRevision &&
       mutation.event.afterRevision = mutation.resultingResult.afterRevision &&
       mutation.event.beforeRevision = mutation.determination.expectedRevision &&
@@ -736,8 +703,6 @@ private def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.caseDelta.completionConditionsDeliveryAcknowledgedOrNotRequired &&
       mutation.outbox.status = .READY && mutation.outbox.acknowledgmentReference.isNone &&
       mutation.outbox.updatedAtMs = mutation.event.committedAtMs &&
-      mutation.outbox.payloadDigest = mutation.actionPayloadDigest &&
-      mutation.outbox.idempotencyKey = mutation.actionIdempotencyKey &&
       mutation.followUps.resultingEvaluationId = "evaluation:" ++ mutation.resultingInput.context.obligationId ++
         ":r" ++ toString mutation.resultingResult.afterRevision &&
       mutation.followUps.eventSequence = mutation.event.sequence &&
@@ -796,8 +761,7 @@ private def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.dependencies.queryObservations.evaluationConsumed.resultIdentity.isNone &&
       correctionQueryObservationsAt mutation.dependencies.queryObservations
         mutation.dependencies.currentEventSequence mutation.dependencies.previousHistoryHead &&
-      correctionQueryObservationsWellFormed mutation.dependencies.queryObservations &&
-      mutation.determinationDigest.length = digestBytes && mutation.actionPayloadDigest.length = digestBytes
+      correctionQueryObservationsWellFormed mutation.dependencies.queryObservations
   | .DUPLICATE, none, .EXACT_RETRY, some .OFFSET_REJECTED_CORRECTION_AUTHORIZED,
       none, none, some actionId, some determinationId, none =>
       idWellFormed actionId && determinationId = "determination:" ++ actionId &&
@@ -827,19 +791,20 @@ def encodeCorrectionTransitionResult (result : CorrectionTransitionResult) : Opt
     | .DUPLICATE => UInt8.ofNat 2
     | .REJECTED => UInt8.ofNat 3
   let mutationBytes ← encodeOptionalMutation result.mutation
-  let wire := correctionTransitionResultMagic ++ natBE 2 1 ++ [status] ++
+  let wire := correctionTransitionResultMagic ++ natBE 2 2 ++ [status] ++
     encodeString correctionTransitionContract ++
     encodeOptionalRejectReason result.rejectReason ++ encodeExplanation result.explanation ++
-    encodeOptionalString result.actionId ++
-    encodeOptionalString result.determinationId ++ mutationBytes
+    encodeOptionString result.actionId ++
+    encodeOptionString result.determinationId ++ mutationBytes
   if wire.length ≤ maxCorrectionTransitionBytes then some wire else none
 
-def decodeCorrectionTransitionResult (bytes : Bytes) : Option CorrectionTransitionResult := do
-  if bytes.length > maxCorrectionTransitionBytes ||
-      !correctionTransitionResultMagic.isPrefixOf bytes then none
+/-- Reads one BLFCRES2 result and returns the unread bytes. -/
+def parseCorrectionTransitionResult (bytes : Bytes) :
+    Option (CorrectionTransitionResult × Bytes) := do
+  if !correctionTransitionResultMagic.isPrefixOf bytes then none
   let rest := bytes.drop correctionTransitionResultMagic.length
   let (version, rest) ← readNatBE 2 rest
-  if version ≠ 1 then none
+  if version ≠ 2 then none
   let (statusByte, rest) ← readByte rest
   let status ← match statusByte.toNat with
     | 1 => some TransitionStatus.ACCEPTED
@@ -850,10 +815,9 @@ def decodeCorrectionTransitionResult (bytes : Bytes) : Option CorrectionTransiti
   if contract ≠ correctionTransitionContract then none
   let (rejectReason, rest) ← readOptionalRejectReason rest
   let (explanation, rest) ← readExplanation rest
-  let (actionId, rest) ← readOptionalString rest
-  let (determinationId, rest) ← readOptionalString rest
+  let (actionId, rest) ← readOptionString rest
+  let (determinationId, rest) ← readOptionString rest
   let (mutation, rest) ← readOptionalMutation rest
-  if !rest.isEmpty then none
   let result : CorrectionTransitionResult := {
     status := status
     rejectReason := rejectReason
@@ -861,9 +825,13 @@ def decodeCorrectionTransitionResult (bytes : Bytes) : Option CorrectionTransiti
     actionId := actionId
     determinationId := determinationId
     mutation := mutation }
-  if !resultWellFormed result then none
-  match encodeCorrectionTransitionResult result with
-  | some canonical => if canonical = bytes then some result else none
-  | none => none
+  pure (result, rest)
+
+def decodeCorrectionTransitionResult (bytes : Bytes) : Option CorrectionTransitionResult :=
+  if bytes.length > maxCorrectionTransitionBytes then none else
+  match parseCorrectionTransitionResult bytes with
+  | some (result, []) =>
+      if encodeCorrectionTransitionResult result = some bytes then some result else none
+  | _ => none
 
 end BlindLedger.Financial.CorrectionTransition

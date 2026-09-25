@@ -7,7 +7,7 @@ open BlindLedger.Financial
 open BlindLedger.Financial.DecisionPackage
 
 def correctionReuseContract : String := "RR/FINANCIAL/CORRECTION-REUSE/v1"
-def correctionReuseInputMagic : Bytes := "BLFCRU01".toUTF8.toList
+def correctionReuseInputMagic : Bytes := "BLFCRU02".toUTF8.toList
 def correctionReuseResultMagic : Bytes := "BLFCRV01".toUTF8.toList
 def maxCorrectionReuseBytes : Nat := maxCorrectionTransitionBytes * 3
 
@@ -30,18 +30,6 @@ private def readOptionDetermination (bytes : Bytes) : Option (Option OffsetDeter
     pure (some determination, tail)
   else none
 
-private def encodeOptionDigest : Option Bytes → Bytes
-  | none => [UInt8.ofNat 0]
-  | some digest => UInt8.ofNat 1 :: encodeDigest digest
-
-private def readOptionDigest (bytes : Bytes) : Option (Option Bytes × Bytes) := do
-  let (tag, rest) ← readByte bytes
-  if tag.toNat = 0 then some (none, rest)
-  else if tag.toNat = 1 then do
-    let (digest, tail) ← readDigest rest
-    pure (some digest, tail)
-  else none
-
 private def encodeOptionalStringReuse : Option String → Bytes
   | none => [UInt8.ofNat 0]
   | some value => UInt8.ofNat 1 :: encodeString value
@@ -59,7 +47,6 @@ private def encodeOptionOutbox : Option CorrectionOutboxDelta → Bytes
   | some outbox =>
       [UInt8.ofNat 1] ++ encodeString outbox.actionId ++
         [encodeActionStatus outbox.status] ++ natBE 8 outbox.attempt ++
-        encodeDigest outbox.payloadDigest ++ encodeDigest outbox.idempotencyKey ++
         encodeOptionalStringReuse outbox.acknowledgmentReference ++ natBE 8 outbox.updatedAtMs
 
 private def readOptionOutbox (bytes : Bytes) : Option (Option CorrectionOutboxDelta × Bytes) := do
@@ -70,16 +57,12 @@ private def readOptionOutbox (bytes : Bytes) : Option (Option CorrectionOutboxDe
     let (statusByte, rest) ← readByte rest
     let status ← decodeActionStatus statusByte
     let (attempt, rest) ← readNatBE 8 rest
-    let (payloadDigest, rest) ← readDigest rest
-    let (idempotencyKey, rest) ← readDigest rest
     let (acknowledgmentReference, rest) ← readOptionalStringReuse rest
     let (updatedAtMs, rest) ← readNatBE 8 rest
     let outbox : CorrectionOutboxDelta := {
       actionId := actionId
       status := status
       attempt := attempt
-      payloadDigest := payloadDigest
-      idempotencyKey := idempotencyKey
       acknowledgmentReference := acknowledgmentReference
       updatedAtMs := updatedAtMs }
     pure (some outbox, rest)
@@ -91,9 +74,6 @@ private def reuseRequestWellFormed (request : CorrectionReuseRequest) : Bool :=
   correctionQueryObservationsWellFormed request.currentQueries &&
   request.currentEventSequence ≤ maxRows && timeWellFormed request.currentOwnerNowMs &&
   digestWellFormed request.currentHistoryHead &&
-  (match request.currentDeterminationDigest with
-    | none => true
-    | some digest => digestWellFormed digest) &&
   (match request.currentDetermination with
     | none => true
     | some determination =>
@@ -103,7 +83,6 @@ private def reuseRequestWellFormed (request : CorrectionReuseRequest) : Bool :=
   (match request.currentOutbox with
     | none => true
     | some outbox => idWellFormed outbox.actionId && outbox.attempt ≤ maxRows &&
-        digestWellFormed outbox.payloadDigest && digestWellFormed outbox.idempotencyKey &&
         timeWellFormed outbox.updatedAtMs)
 
 def encodeCorrectionReuseRequest (request : CorrectionReuseRequest) : Option Bytes := do
@@ -114,7 +93,6 @@ def encodeCorrectionReuseRequest (request : CorrectionReuseRequest) : Option Byt
   let body := correctionReuseInputMagic ++ natBE 2 1 ++ encodeString correctionReuseContract ++
     reuseSizedBytes acceptedBytes ++ reuseSizedBytes inputBytes ++ reuseSizedBytes receiptBytes ++
     encodeOptionDetermination request.currentDetermination ++
-    encodeOptionDigest request.currentDeterminationDigest ++
     encodeOptionOutbox request.currentOutbox ++
     encodeCorrectionQueryObservations request.currentQueries ++
     natBE 8 request.currentEventSequence ++ encodeDigest request.currentHistoryHead ++
@@ -136,7 +114,6 @@ def decodeCorrectionReuseRequest (bytes : Bytes) : Option CorrectionReuseRequest
   let (currentReceipt, receiptRest) ← readEvaluationReceipt receiptBytes
   if !receiptRest.isEmpty then none
   let (currentDetermination, rest) ← readOptionDetermination rest
-  let (currentDeterminationDigest, rest) ← readOptionDigest rest
   let (currentOutbox, rest) ← readOptionOutbox rest
   let (currentQueries, rest) ← readCorrectionQueryObservations rest
   let (currentEventSequence, rest) ← readNatBE 8 rest
@@ -148,7 +125,6 @@ def decodeCorrectionReuseRequest (bytes : Bytes) : Option CorrectionReuseRequest
     currentInput := currentInput
     currentReceipt := currentReceipt
     currentDetermination := currentDetermination
-    currentDeterminationDigest := currentDeterminationDigest
     currentOutbox := currentOutbox
     currentQueries := currentQueries
     currentEventSequence := currentEventSequence
@@ -207,7 +183,6 @@ private def encodeApprovalReason : CorrectionApprovalReason → UInt8
   | .ACCEPTED_TRANSITION_REQUIRED => UInt8.ofNat 1
   | .DETERMINATION_MISSING => UInt8.ofNat 2
   | .DETERMINATION_CHANGED => UInt8.ofNat 3
-  | .DETERMINATION_DIGEST_CHANGED => UInt8.ofNat 4
 
 private def readApprovalReason (bytes : Bytes) : Option (CorrectionApprovalReason × Bytes) := do
   let (tag, rest) ← readByte bytes
@@ -215,7 +190,6 @@ private def readApprovalReason (bytes : Bytes) : Option (CorrectionApprovalReaso
     | 1 => some .ACCEPTED_TRANSITION_REQUIRED
     | 2 => some .DETERMINATION_MISSING
     | 3 => some .DETERMINATION_CHANGED
-    | 4 => some .DETERMINATION_DIGEST_CHANGED
     | _ => none
   pure (value, rest)
 

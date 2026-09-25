@@ -495,7 +495,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             source_path = self._lean_dir(root) / self.manifest.candidate["theorem_source"]
             source = source_path.read_text(encoding="utf-8")
             first_import = "import BlindLedger.Financial.CorrectionTransition.Reuse\n"
-            proof = "      .SYNTHETIC_RECORD_ONLY := by\n  rfl\n"
+            proof = "    (assessCorrectionReuse request).externalDispatchPermitted = false := by\n"
             self.assertEqual(1, source.count(first_import))
             self.assertEqual(1, source.count(proof))
             source = source.replace(
@@ -505,9 +505,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             )
             source = source.replace(
                 proof,
-                "      .SYNTHETIC_RECORD_ONLY := by\n"
-                "  have _h : True := injected_custom_axiom\n"
-                "  rfl\n",
+                proof + "  have _h : True := injected_custom_axiom\n",
                 1,
             )
             source_path.write_text(source, encoding="utf-8")
@@ -532,7 +530,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     gate.AxiomClosureFailure,
                     r"unapproved axiom dependency: 1 of \d+ declarations; .*"
-                    r"canonicalActionPayload_dispatch_is_synthetic_record_only uses unapproved "
+                    r"assessCorrectionReuse_never_permits_external_dispatch uses unapproved "
                     rf"\['{re.escape(self._namespace())}\.injected_custom_axiom'\]",
                 ) as raised:
                     gate._verify_candidate(candidate, test_manifest, head)
@@ -554,10 +552,15 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
         def mutate(root: Path) -> None:
             source_path = self._lean_dir(root) / self.manifest.candidate["theorem_source"]
             source = source_path.read_text(encoding="utf-8")
-            proof = "      .SYNTHETIC_RECORD_ONLY := by\n  rfl\n"
+            statement = "    (assessCorrectionReuse request).externalDispatchPermitted = false := by\n"
+            proof = statement + (
+                "  cases hStatus : request.acceptedResult.status <;>\n"
+                "    cases hMutation : request.acceptedResult.mutation <;>\n"
+                "      simp [assessCorrectionReuse, assessAcceptedCorrectionReuse, hStatus, hMutation]\n"
+            )
             self.assertEqual(1, source.count(proof))
             source_path.write_text(
-                source.replace(proof, "      .SYNTHETIC_RECORD_ONLY := by\n  sorry\n", 1),
+                source.replace(proof, statement + "  sorry\n", 1),
                 encoding="utf-8",
             )
             self._commit_fixture(root, "replace a proof with sorry for verifier test")
@@ -573,7 +576,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 gate.AxiomClosureFailure,
                 r"unapproved axiom dependency: 1 of \d+ declarations; .*"
-                r"canonicalActionPayload_dispatch_is_synthetic_record_only uses unapproved "
+                r"assessCorrectionReuse_never_permits_external_dispatch uses unapproved "
                 r"\['sorryAx'\]",
             ) as raised:
                 gate._verify_candidate(candidate, test_manifest, head)

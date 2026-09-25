@@ -22,6 +22,9 @@ Each test names the articles of ``CONSTITUTION.md`` it enforces:
 * ``test_relevant_late_h_payment_invalidates_prior_evaluation``
   III.3 (changed meaning is a conflict), III.5, XI.10 (stale state never
   creates authority).
+* ``test_correction_requests_only_the_unpaid_balance``
+  II and III.4 (a correction asks only for money actually short: zero
+  shortfall is a Lean rejection with no write; otherwise min(claim, shortfall)).
 
 Every test also carries VI (honest claims): these are synthetic, non-PHI,
 nonpayment fixtures; a local pass is "verified locally", never "qualified",
@@ -44,8 +47,10 @@ unittest and pytest do not collect and re-run the acceptance suite here.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import hashlib
+import json
+import sqlite3
 import tempfile
 from typing import Any, TypeVar
 import unittest
@@ -110,7 +115,7 @@ class _AcceptanceFixtures:
     _assert_verified = _ACCEPTANCE["_assert_verified"]
 
 
-# --- Independent BLFCRES1 encoder ------------------------------------------------
+# --- Independent BLFCRES2 encoder ------------------------------------------------
 # Written from the wire layout in ``decode_correction_transition_result`` and
 # deliberately independent of the adapter's private writer.  Every payload is
 # checked against the real decoder before it is fed to the owner, so a wrong
@@ -142,7 +147,7 @@ def _some_nat(value: int) -> bytes:
 
 
 def _result_header(status_tag: int, contract: str = financial_engine.CORRECTION_TRANSITION_OPERATION) -> bytes:
-    return b"BLFCRES1" + _u16(1) + bytes([status_tag]) + _text(contract)
+    return b"BLFCRES2" + _u16(2) + bytes([status_tag]) + _text(contract)
 
 
 def _rejected_transition_result(reason_tag: int, requirement_tag: int) -> bytes:
@@ -217,6 +222,7 @@ _LEAN_REJECTIONS: tuple[tuple[str, int, int, type[FinancialError], str], ...] = 
     ("REVISION_CONFLICT", 8, 8, FinancialRevisionError, "obligation_revision_conflict"),
     ("EVALUATION_CONSUMED", 10, 10, FinancialConflictError, "evaluation_already_consumed"),
     ("CAPACITY", 17, 17, FinancialIntegrityError, "history_capacity"),
+    ("NO_SHORTFALL", 20, 20, FinancialConflictError, "correction_no_shortfall"),
 )
 
 
@@ -359,8 +365,8 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
             "empty": b"",
             "truncated": valid_rejection[:-1],
             "trailing_byte": valid_rejection + b"\x00",
-            "wrong_magic": b"BLFCRES2" + valid_rejection[8:],
-            "unknown_status": b"BLFCRES1" + _u16(1) + b"\x09" + valid_rejection[11:],
+            "wrong_magic": b"BLFCRES1" + valid_rejection[8:],
+            "unknown_status": b"BLFCRES2" + _u16(2) + b"\x09" + valid_rejection[11:],
             "wrong_contract": _result_header(3, "RR/FINANCIAL/CORRECTION-TRANSITION/v2") + valid_rejection[len(_result_header(3)):],
             "rejection_requirement_mismatch": _rejected_transition_result(8, 5),
             "accepted_without_mutation": _accepted_without_mutation(
@@ -639,6 +645,46 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
                 self.assertEqual(self._correction_evidence(store), (0, 0))
         self.assertEqual(store.current_evaluation_receipt(expected.H_ITEM_ID), current)
         self._assert_verified(store)
+
+    # --- 6. The correction requests only the unpaid balance (B2) -----------------
+
+    @_requires_pinned_correction_engine("the binary is executed once per shortfall case")
+    def test_correction_requests_only_the_unpaid_balance(self) -> None:
+        cash = expected.H_CASH_EVIDENCE
+        claim_cents = expected.UNAPPROVED_OFFSET_CENTS
+        for cash_cents, shortfall_cents, requested_cents in (
+            (expected.H_OWED_CENTS, 0, None),  # nothing short: no payment request
+            (expected.H_OWED_CENTS - claim_cents // 3, claim_cents // 3, claim_cents // 3),  # partial
+            (expected.H_OWED_CENTS - claim_cents, claim_cents, claim_cents),  # full
+        ):
+            with self.subTest(shortfall_cents=shortfall_cents):
+                store = self._build_base_for_correction()
+                store.record_payment_evidence(
+                    item_id=cash.item_id, payment_id="payment:h:cash", common_origin_id=cash.common_origin_id,
+                    amount_cents=cash_cents, evidence_id=cash.evidence_id, event_at_ms=cash.event_at_ms,
+                    source_id=cash.source_id, source_version=cash.source_version, local_ref=cash.local_ref,
+                )
+                claim_id = self._record_claim(store)
+                receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+                self.assertEqual(receipt["shortfall_cents"], shortfall_cents)
+                if requested_cents is None:
+                    before = self._durable_state(store)
+                    with self.assertRaises(FinancialConflictError) as raised:
+                        self._reject(store, claim_id, receipt)
+                    self.assertEqual(str(raised.exception), "correction_no_shortfall")
+                    self.assertEqual(self._durable_state(store), before)
+                    self.assertEqual(self._correction_evidence(store), (0, 0))
+                    continue
+                self._reject(store, claim_id, receipt)
+                with closing(sqlite3.connect(store.path)) as connection:
+                    payload, determined = connection.execute(
+                        "SELECT a.payload_json,d.amount_cents FROM actions a JOIN determinations d "
+                        "ON d.determination_id=a.determination_id WHERE a.action_id=?",
+                        (expected.ACTION_CORRECTION_ID,),
+                    ).fetchone()
+                self.assertEqual(json.loads(payload)["amount_cents"], requested_cents)
+                self.assertEqual(determined, claim_cents)  # the rejected offset stays whole
+                self._assert_verified(store)
 
 
 if __name__ == "__main__":
