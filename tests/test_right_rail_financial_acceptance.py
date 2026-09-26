@@ -5002,10 +5002,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 before = store.path.read_bytes()
                 declared: dict = {}
 
-                def encode(snapshot: object) -> bytes:
+                def encode(snapshot: object, **options: object) -> bytes:
                     # Lean also declares the post-state the wrong rows encode, so the checker's own
                     # derivation is what stands between them and COMMIT.
-                    wire = real_encode(snapshot)
+                    wire = real_encode(snapshot, **options)
                     if "mutation" in declared:
                         declared["mutation"]["resulting_input_wire"] = wire
                     return wire
