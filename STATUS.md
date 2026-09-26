@@ -109,6 +109,33 @@ in that archive that holds the raw record.
    Process: the bloat-ceiling raises and the round-4 to 6 scope calls on this branch
    are lead decisions (2026-09-26) under the founder's grant of 2026-09-25 ("u have
    all auth", relayed by the lead; scope: internal engineering decisions).
+11. **Gate decision rules R1-R5 (Lean).** 2026-09-26: `BlindLedger.Gate.Rules` builds;
+    sound, complete, hold_complete, fail_closed, monotone and arrival-order deterministic
+    are proved, axioms pinned. Each line has an identity and claims its exact key, near
+    key and identity whatever its outcome or enrollment (only a CAP_820 line known not
+    enrolled with its plan claims no member-month). Certain reasons, a duplicate of an
+    unresolved line and a reused identity (`ALREADY_DECIDED`) HOLD; unusable data, bad
+    or future dates, near duplicates and FFS near collisions with unresolved lines
+    review; neither ALLOWs. The key guarantees are `allow_clear` (an ALLOW line shares
+    no key with a released or unresolved line but that member-month) and
+    `allowed_decideAll` (ALLOW lines of a batch share none); `ids_disjoint` keeps an
+    identity in at most one set. Both sets are append-only in v1: each must extend the
+    gate's checkpoint of it, else `STALE_*`. `gate_rules` passes 210 of 210 vectors and
+    all 3,616 demo lines (134 held, $46,987.00; 6 review; state ZZ), also as a unittest;
+    all 155 mutants are killed on a scratch copy. Tests only, not the token path.
+    REQUIRED trusted input: the gate's signed checkpoint of both sets (gate-v1); the
+    runner holds it in memory. REQUIRED for the unbuilt release path: it removes lines
+    from the unresolved set by identity, on release and on reject, under a new signed
+    checkpoint; before releasing it checks exact keys, near keys and member-months,
+    not-enrolled lines included, against the released set; a retry after an outage
+    must reuse the original identities. It must refuse to release an `ALREADY_DECIDED`
+    decision and bind each release to the exact reviewed row's identity. Before
+    releasing a stale-feed review it must re-run R1, R3 and R5 on fresh snapshots: that
+    review can hide known-bad facts. Corrections of held CAP member-months wait on it.
+    OPEN, fixed next on gate-rules-2 and REQUIRED before any token-path use: the
+    checkpoint must also take the gate's own new identities when the read set was
+    unusable; until then a rollback after an unresolved-set outage lets a later batch
+    ALLOW.
 
 ## What is written but has never run
 
@@ -161,6 +188,8 @@ history lives in bundles under `work/_retired-research-20260924`.
 
 ## Change log
 
+- 2026-09-26 — Gate rules R1-R5 (Art. V.1-V.2, VI, IX.3, X.1-X.2, XI.6, XI.8, XI.9, XII): Lean `decideBatch` holds deceased-member, second-plan member-month, excluded/deceased-provider, duplicate-FFS and not-enrolled lines; missing or stale snapshots go to human review. Felt effect: a state sees why each dollar was held, before it leaves. Next: wire into the gate token (one line = one leaf).
+
 - 2026-09-25 — Gate failover TLA+ model and configs added under `docs/formal/gate_failover/` (Art. IV, XI); safety and small-model liveness checks passed under the guard. Deeper model still to run (memory).
 - 2026-09-24 — Private-ZK / Profile 11-12 track moved to `parked/private_zk/` (96 files); default `pytest` run excludes it (`pytest parked` runs it). Dead `tools/direct_mask_*` duplicates removed (newer copies live in `native/tools/`). New constitution tests: `tests/test_right_rail_financial_constitution_invariants.py` (written, not yet run).
 - 2026-09-24 — Audit fixes (Art. III.1, III.5, V.2, VI.1, XI.10, XI.13): checker now enforces actor roles against a digest-bound roster (the check never fired before); database verification requires trusted authority (no default-digest shortcut, no `authority_*` aliases); owner constructor backdoor removed; 11 `assert` safety checks replaced by typed errors; staff server measures cash/state before and after instead of hard-coding them, resume checks real integrity fields, import-order and owner-id bugs fixed. 4 new tests. Not yet run (RAM below floor).
@@ -201,3 +230,4 @@ history lives in bundles under `work/_retired-research-20260924`.
 - 2026-09-25 — WCAG 2.1 AA pass (Art. XIII.3), branch a11y: fixed 5 dark-mode contrast bugs, added focus moves, aria-live/aria-expanded, and a contrast+keyboard test; cut staff.js redundant same-trust-domain SHA-256 re-verification (-233 lines), binding kept.
 - 2026-09-25 — Mirror outputs allowlist-only (Art. IV.2); CLI `obligation-detail` no longer leaks evaluation snapshot/scope JSON or idempotency keys.
 - 2026-09-25 — core-v8 integrated trunk 85dc88b (Art. IV.2, XIII): trunk structure, core-v8 behaviour. `staff.js` is trunk's (snapshot-id contract enforced server side); Mirror tables unchanged, plus v2-only decision package, required population binding, `CONTINUITY/v8`. No Mirror field added or dropped.
+- 2026-09-26 — PTG view flake fix (branch `fix-ptg-flake`): the 405 path reads a declared body (<=64 KiB) before replying, so Windows no longer sends RST and aborts the client (WinError 10053). Slow-client probe 95/100 -> 100/100. Open: staff server 403/404/400 POST refusals do not read the body either.

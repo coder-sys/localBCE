@@ -1,0 +1,135 @@
+"""Synthetic data for the gate rules vectors (test-only; invented IDs, no PHI).
+
+``pin FILE`` replaces each ``snap KIND ASOF COUNT ?`` with the SHA3-512 of the
+domain tag (``RR/GATE/RELEASED/v1`` or ``RR/GATE/UNRESOLVED/v1`` for those sets, else
+``RR/GATE/SNAPSHOT/v1``), ``KIND ASOF COUNT`` and the KIND rows after it; the
+author declares COUNT.  ``demo FILE`` writes the state-ZZ scenario with its
+pins and prints what it seeded.  No rule is evaluated here: each line's
+expected outcome is the reason it was seeded with (ALLOW when none), and the
+Lean runner decides and compares every line.
+"""
+
+import hashlib
+import sys
+
+
+def pin(lines):
+    out = list(lines)
+    for i, line in enumerate(out):
+        f = line.split()
+        if f[:1] == ["snap"] and f[4] == "?":
+            rows = []
+            for later in out[i + 1:]:
+                g = later.split()
+                if g[:2] in (["snap", f[1]], ["drop", f[1]]):
+                    break
+                if g[:1] == [f[1]]:
+                    rows.append(" ".join(g))
+            domain = f"RR/GATE/{f[1].upper()}/v1" if f[1] in ("released", "unresolved") else "RR/GATE/SNAPSHOT/v1"
+            text = "\n".join([domain, " ".join(f[1:4])] + rows)
+            out[i] = " ".join(f[:4] + [hashlib.sha3_512(text.encode()).hexdigest()])
+    return out
+
+
+class Rng:
+    """A fixed 64-bit LCG, so the scenario is identical on every Python."""
+
+    def __init__(self, seed):
+        self.s = seed
+
+    def below(self, n):
+        self.s = (self.s * 6364136223846793005 + 1442695040888963407) % 2**64
+        return (self.s >> 33) % n
+
+
+FEES = {99213: 9200, 99214: 13100, 99215: 18400, 90837: 15800, 85025: 1100}
+MONTHS = [20270101, 20270201, 20270301]
+GROUP = 79999
+
+
+def demo():
+    r = Rng(2027)
+    members = list(range(100001, 101001))
+    plan = {m: 501 + r.below(3) for m in members}
+    deceased, died_feb, two_plan = members[:12], members[12:15], members[15:23]
+    disenrolled, clean = members[23:28], members[28:]
+    providers = list(range(70001, 70201))
+    excluded, dead_provider, reinstated, billing = providers[:3], providers[3], providers[4], providers[5:]
+    rows = [f"dmf {m} 2026{3 + r.below(9):02d}{1 + r.below(28):02d}" for m in deceased]
+    rows += [f"dmf {m} 20270215" for m in died_feb]
+    rows += [f"dmf {200001 + i} 2026{1 + r.below(12):02d}10" for i in range(40)]
+    rows += [f"pdeath {dead_provider} 20270110"] + [f"pdeath {79101 + i} 20250601" for i in range(10)]
+    rows += [f"excl {p} 20250601 99991231" for p in excluded] + [f"excl {reinstated} 20240101 20261231"]
+    rows += [f"excl {79001 + i} 2024{1 + r.below(12):02d}01 99991231" for i in range(30)]
+    for m in members:
+        rows.append(f"span {m} {plan[m]} 20260101 {20270131 if m in disenrolled else 20271231}")
+        if m in two_plan:
+            rows.append(f"span {m} {501 + (plan[m] - 500) % 3} 20260101 20271231")
+    batches, seen, first = [], set(), []
+    for month in MONTHS:
+        lines = []
+        for m in members:
+            rate = 30000 + (m % 7) * 5000
+            for p in sorted({plan[m], 501 + (plan[m] - 500) % 3} if m in two_plan else {plan[m]}):
+                why = ("MEMBER_DECEASED" if m in deceased or (m in died_feb and month == MONTHS[2])
+                       else "MEMBER_NOT_ENROLLED" if m in disenrolled and month > MONTHS[0]
+                       else "CAP_MEMBER_MONTH_DUPLICATE" if m in two_plan else None)
+                lines.append((f"CAP_820 {m} {p} {p} {month} 0 1 {rate}", why))
+
+        def claim(provider, day, why=None):
+            while True:
+                proc = list(FEES)[r.below(5)]
+                c = f"FFS_CLAIM {clean[r.below(len(clean))]} {provider} {provider} {month + day} {proc} 1 {FEES[proc]}"
+                if c not in seen:
+                    seen.add(c)
+                    lines.append((c, why))
+                    return c
+
+        ffs = [claim(billing[r.below(len(billing))], r.below(28)) for _ in range(180)]
+        for p in excluded + [excluded[0]] * 4:
+            claim(p, r.below(28), "PROVIDER_EXCLUDED")
+        for _ in range(2):
+            claim(dead_provider, 11 + r.below(17), "PROVIDER_DECEASED")
+        for _ in range(3):
+            claim(reinstated, r.below(28))
+        if month == MONTHS[0]:
+            first = ffs[:6]
+        repeats = first if month == MONTHS[1] else ffs[:4] if month == MONTHS[2] else []
+        lines += [(c, "FFS_DUPLICATE_LINE") for c in repeats]
+        # The same service billed again under a group's payee ID.
+        lines += [(" ".join(c.split()[:2] + [str(GROUP)] + c.split()[3:]), "FFS_NEAR_DUPLICATE") for c in ffs[6:8]]
+        batches.append(lines)
+    seeded = {}
+    for c, why in (x for b in batches for x in b if x[1]):
+        n, total = seeded.get(why, (0, 0))
+        seeded[why] = (n + 1, total + int(c.split()[-1]))
+    head = ["# State ZZ scenario: synthetic, invented IDs, no PHI, nonpayment.  Generated by",
+            "# tools/gate_rules_data.py demo; three monthly batches decided against one read set.",
+            "today 20270405", "snap released 20270405 0 ?", "snap unresolved 20270405 0 ?"]
+    for kind, as_of in (("dmf", 20270401), ("pdeath", 20270401), ("excl", 20270401), ("span", 20270404)):
+        kind_rows = [x for x in rows if x.startswith(kind + " ")]
+        head += [f"snap {kind} {as_of} {len(kind_rows)} ?"] + kind_rows
+
+    def expect(why):
+        return "ALLOW -" if not why else f"HUMAN_REVIEW {why}" if why == "FFS_NEAR_DUPLICATE" else f"HOLD {why}"
+
+    ids = iter(range(1, sum(map(len, batches)) + 1))
+    body = [x for b in batches for x in [f"line {next(ids)} {c} {expect(why)}" for c, why in b] + ["commit"]]
+    return pin(head) + body + ["report", f"end {sum(map(len, batches))}"], seeded
+
+
+def main(command, path):
+    if command == "pin":
+        with open(path, encoding="utf-8") as f:
+            lines = pin(f.read().splitlines())
+    else:
+        lines, seeded = demo()
+        for kind, (n, cents) in sorted(seeded.items()):
+            print(f"SEEDED {kind}: {n} lines ${cents / 100:,.2f}")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(*sys.argv[1:]))
