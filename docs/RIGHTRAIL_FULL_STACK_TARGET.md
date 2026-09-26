@@ -244,7 +244,7 @@ evaluated by the interpreter (section 10), not baked into a bespoke theorem,
 so it stays on the interpreter's proof, not a new one.
 
 Today, of 14 command types, Lean decides exactly one —
-`reject_offset_and_authorize_correction`; its codec (`BLFCMD01`/`BLFCRES2`)
+`reject_offset_and_authorize_correction`; its codec (`BLFCMD02`/`BLFCRES3`)
 has codec laws (round-trip only for admissible values) and its pinned binary
 is rebuilt reproducibly from `lean/`. Closing the rest of the gap —
 proof hygiene, a reproducible rebuild, codec parity, then the live

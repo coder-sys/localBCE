@@ -30,15 +30,15 @@ ENGINE_ARGUMENTS: Final[tuple[str, ...]] = ("--evaluate",)
 CORRECTION_TRANSITION_OPERATION: Final[str] = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARGUMENTS: Final[tuple[str, ...]] = ("--apply-correction-transition",)
 MAX_CORRECTION_TRANSITION_BYTES: Final[int] = semantic.MAX_WIRE_BYTES
-CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES: Final[int] = 6_266_368
+CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES: Final[int] = 6_279_168
 CORRECTION_TRANSITION_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "349BED3194C27831C2C64F78E82D8803A1446C835125BB89240F5295AD0E7A5B"
+    "1A7A18333726484A0737DA7B005EC699F73E99EA0CFACFB409B000F964BED3AF"
 )
 CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
-    "13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537"
+    "B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067"
 )
 CORRECTION_TRANSITION_RESULT_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
-    "CB6DA046ED35E6E205AD1706CC29A37DE4539F14CE1AB56E1C95B86F379063DE"
+    "83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6"
 )
 _SHA256_BYTES: Final[int] = 32
 _MAX_SQLITE_INTEGER: Final[int] = 2**63 - 1
@@ -561,8 +561,10 @@ def encode_correction_transition_request(
     query_observations: Mapping[str, Mapping[str, Any]],
     current_event_sequence: int,
     previous_history_head: bytes,
+    correction_paid: list[dict[str, Any]],
 ) -> bytes:
-    """Encode the BLFCMD01 request from one locked Owner snapshot."""
+    """Encode the BLFCMD02 request from one locked Owner snapshot; correction_paid is what linked
+    payments paid on each of the obligation's correction requests, by action id."""
 
     if type(snapshot) is not semantic.LockedSemanticSnapshot:
         raise FinancialEngineInputError("engine_correction_snapshot_type")
@@ -584,8 +586,8 @@ def encode_correction_transition_request(
         )
 
         writer = semantic._WireWriter()
-        writer.raw(b"BLFCMD01", "engine_correction_magic")
-        writer.raw((1).to_bytes(2, "big"), "engine_correction_version")
+        writer.raw(b"BLFCMD02", "engine_correction_magic")
+        writer.raw((2).to_bytes(2, "big"), "engine_correction_version")
         writer.string(CORRECTION_TRANSITION_OPERATION, "engine_correction_contract")
         for field in ("item_id", "claim_id", "action_id", "actor_id"):
             _ident(writer, command.get(field), f"engine_correction_{field}")
@@ -610,6 +612,7 @@ def encode_correction_transition_request(
             _write_correction_query_observation(writer, observation, label)
         _u64(writer, current_event_sequence, "engine_correction_event_sequence")
         _digest(writer, previous_history_head, "engine_correction_history_head")
+        writer.list(correction_paid, "engine_correction_paid", lambda entry, label: (_ident(writer, entry["action_id"], label), _u64(writer, entry["paid_cents"], label)))
         writer.raw(len(current_input).to_bytes(4, "big"), "engine_correction_input_length")
         writer.raw(current_input, "engine_correction_input")
         writer.raw(len(receipt_bytes).to_bytes(4, "big"), "engine_correction_receipt_length")
@@ -815,6 +818,10 @@ def _read_correction_dependency_facts(reader: Any) -> dict[str, Any]:
     observations = _read_correction_query_observations(reader)
     current_event_sequence = _read_transition_nat(reader, "dependency_event_sequence")
     previous_history_head = reader.digest("dependency_history_head")
+    correction_paid = reader.list(
+        "dependency_correction_paid",
+        lambda label: {"action_id": reader.identifier(f"{label}_id"), "paid_cents": _read_transition_nat(reader, f"{label}_cents")},
+    )
     if current_event_sequence > 10_000:
         raise FinancialEngineResultError("dependency_event_sequence")
     return {
@@ -839,6 +846,7 @@ def _read_correction_dependency_facts(reader: Any) -> dict[str, Any]:
         "query_observations": observations,
         "current_event_sequence": current_event_sequence,
         "previous_history_head": previous_history_head,
+        "correction_paid": correction_paid,
     }
 
 
@@ -1356,13 +1364,13 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
 
 
 def decode_correction_transition_result(payload: bytes) -> dict[str, Any]:
-    """Strictly decode one BLFCRES2 value and reject any trailing bytes."""
+    """Strictly decode one BLFCRES3 value and reject any trailing bytes."""
 
     try:
         reader = semantic._WireReader(payload, max_bytes=MAX_CORRECTION_TRANSITION_BYTES)
-        if reader.take(8, "correction_result_magic") != b"BLFCRES2":
+        if reader.take(8, "correction_result_magic") != b"BLFCRES3":
             raise FinancialEngineResultError("engine_correction_result_magic")
-        if int.from_bytes(reader.take(2, "correction_result_version"), "big") != 2:
+        if int.from_bytes(reader.take(2, "correction_result_version"), "big") != 3:
             raise FinancialEngineResultError("engine_correction_result_version")
         status_tags = {1: "ACCEPTED", 2: "DUPLICATE", 3: "REJECTED"}
         status = status_tags.get(reader.byte("correction_result_status"))
@@ -1412,7 +1420,7 @@ def run_correction_transition_v1(
         raise FinancialEngineConfigError("engine_correction_transition_release_type")
     if (
         type(request) is not bytes
-        or not request.startswith(b"BLFCMD01")
+        or not request.startswith(b"BLFCMD02")
         or not 0 < len(request) <= configured.input_max_bytes
     ):
         raise FinancialEngineInputError("engine_correction_request_contract")

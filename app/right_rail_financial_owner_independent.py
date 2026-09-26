@@ -89,30 +89,41 @@ PRIVATE_INDEX_DEFS_V1 = {
 }
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARTIFACT_SHA256 = "349BED3194C27831C2C64F78E82D8803A1446C835125BB89240F5295AD0E7A5B"
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "1A7A18333726484A0737DA7B005EC699F73E99EA0CFACFB409B000F964BED3AF"
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
 RETIRED_PINS_SHA256 = "d0c3aa9e493e6adf6af590fdd1c32b99eb85bf1c6d52b73f3fca1dab46f1dc3b"
 
 
-def retired_correction_rule(sha256: object) -> str | None:
-    """The correction-amount rule of an engine a re-pin retired, else None: valid for committed history,
-    never for new work (append-only, digest-pinned; line = sha, date, retiring commit, rule, reason)."""
+# What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
+# what earlier correction requests on the obligation still ask for, less what was paid against them) -> amount.
+_CORRECTION_AMOUNT_RULES = {
+    "correction-rule-v1": lambda claim, shortfall, unpaid: claim,  # E911: the whole claim
+    "b2-v1": lambda claim, shortfall, unpaid: min(claim, shortfall),  # 88D8: the unpaid balance
+    "h1-v1": lambda claim, shortfall, unpaid: min(claim, max(shortfall - unpaid, 0)),  # current: not yet requested
+}
+
+
+def correction_engines() -> dict[str, tuple[int, str]]:
+    """Every engine committed correction history may name -> (generation, amount rule). Retired engines are
+    valid for history, never for new work; generation is registry order and the current pin is newest
+    (append-only, digest-pinned; line = sha, date, retiring commit, rule, reason). A malformed registry refuses."""
     try:
         registry = RETIRED_PINS_PATH.read_bytes()
     except OSError:
         registry = b""
     if hashlib.sha256(registry).hexdigest() != RETIRED_PINS_SHA256:
         _fail("history:correction-retired-pins")
-    return next((fields[3] for fields in (line.decode("ascii").split("\t") for line in registry.splitlines()) if fields[0] == sha256), None)
-
-
-# What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
-# what earlier outstanding correction requests on the obligation already ask for) -> amount.
-_CORRECTION_AMOUNT_RULES = {
-    "correction-rule-v1": lambda claim, shortfall, requested: claim,  # E911: the whole claim
-    "b2-v1": lambda claim, shortfall, requested: min(claim, shortfall),  # 88D8: the unpaid balance
-    None: lambda claim, shortfall, requested: min(claim, max(shortfall - requested, 0)),  # H1: not yet requested
-}
+    engines: dict[str, tuple[int, str]] = {}
+    try:
+        for line in registry.decode("ascii").splitlines():
+            sha, _date, _commit, rule, _reason = line.split("\t")
+            if re.fullmatch("[0-9A-F]{64}", sha) is None or rule not in _CORRECTION_AMOUNT_RULES or sha in engines or sha == CORRECTION_TRANSITION_ARTIFACT_SHA256:
+                raise ValueError(sha)
+            engines[sha] = (len(engines), rule)
+    except ValueError:
+        _fail("history:correction-retired-pins")
+    engines[CORRECTION_TRANSITION_ARTIFACT_SHA256] = (len(engines), "h1-v1")
+    return engines
 
 
 CORRECTION_FOLLOWUP_DEPENDENCIES = [
@@ -464,7 +475,7 @@ _CASE_STATUSES = {"OPEN", "AUTHORIZED", "CORRECTION_REQUIRED", "ACTIONED", "RESO
 _DELIVERY_STATUSES = {"NONE", "READY", "ACKNOWLEDGED", "CANCELLED"}
 _EVALUATION_VERIFICATION = {"MISSING_EVIDENCE", "SUPPORTED", "CONFLICT_VISIBLE"}
 _ACTION_KINDS = {"OFFSET_AUTHORIZATION", "CORRECTION_PAYMENT_REQUEST"}
-_ACTION_STATUSES = {"READY", "ACKNOWLEDGED", "CANCELLED"}
+_ACTION_STATUSES = {"READY", "ACKNOWLEDGED"}  # v2 never cancels an action
 _CLAIM_STATUSES = {"CLAIMED", "AUTHORIZED", "REJECTED"}
 
 
@@ -1385,7 +1396,7 @@ def _verify_correction_followup_records(
         if (
             artifact["contract"] != CORRECTION_TRANSITION_OPERATION
             or _integer(artifact["version"], "history:correction-followup-artifact-version", minimum=1, maximum=MAX_ROWS) != 1
-            or artifact["sha256"] != CORRECTION_TRANSITION_ARTIFACT_SHA256 and retired_correction_rule(artifact["sha256"]) is None
+            or str(artifact["sha256"]) not in correction_engines()
         ):
             _fail("history:correction-followup-artifact-binding")
 
@@ -2916,16 +2927,38 @@ def _verify_actions(
     evaluations: dict[str, list[sqlite3.Row]],
     claims: dict[str, sqlite3.Row],
     determinations: dict[str, sqlite3.Row],
+    payments: dict[str, sqlite3.Row],
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "actions")
     outbox_rows = _bounded_rows(connection, "action_outbox")
     outbox = {str(row["action_id"]): row for row in outbox_rows}
     acks = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.action_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='ACTION_ACKNOWLEDGED'")}
-    engines = dict(connection.execute("SELECT json_extract(payload_json,'$.action_id'),json_extract(payload_json,'$.correction_followup.artifact.sha256') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED'").fetchall())
+    registry = correction_engines()
+    current = registry[CORRECTION_TRANSITION_ARTIFACT_SHA256]
+    engines: dict[str, tuple[int, str]] = {}  # correction action -> the engine that decided it, by its decision event
+    decided: dict[str, object] = {}  # correction action -> the amount its decision event records
+    newest = 0
+    for action_ref, sha, event_amount in connection.execute("SELECT json_extract(payload_json,'$.action_id'),json_extract(payload_json,'$.correction_followup.artifact.sha256'),json_extract(payload_json,'$.amount_cents') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence"):
+        engines[action_ref] = engine = registry.get(sha, current)
+        if engine[0] < newest:
+            _fail("action:engine-order")  # a retired engine never decides after a newer one
+        newest = engine[0]
+        decided[action_ref] = event_amount
+    reversed_at = dict(connection.execute("SELECT json_extract(payload_json,'$.payment_id'),after_revision FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_REVERSED'").fetchall())
+    links = connection.execute("SELECT aggregate_id,after_revision,json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL").fetchall()
+    linked: dict[object, list[tuple[int, object, int]]] = {}  # correction action -> (paid at, reversed at, cents)
+    for _obligation, paid_revision, payment_id, action_ref in links:
+        if payment_id not in payments:
+            _fail("payment:link")
+        linked.setdefault(action_ref, []).append((paid_revision, reversed_at.get(payment_id), payments[payment_id]["amount_cents"]))
+
+    def paid_at(action_ref: object, revision: int) -> int:  # what linked payments had paid on the request when revision was decided
+        return sum(cents for paid, reversed_revision, cents in linked.get(action_ref, ()) if paid < revision and (reversed_revision is None or reversed_revision >= revision))
+
     if len(outbox) != len(outbox_rows):
         _fail("outbox:duplicate")
     actions: dict[str, sqlite3.Row] = {}
-    requested: dict[str, int] = {}  # per obligation, in revision order: outstanding correction requests
+    requests: dict[str, dict[str, int]] = {}  # per obligation, in revision order: correction request -> amount
     for row in sorted(rows, key=lambda row: (str(row["obligation_id"]), _integer(row["revision"], "action:revision"))):
         action_id = _id(row["action_id"], "action:id")
         if action_id in actions:
@@ -2951,12 +2984,15 @@ def _verify_actions(
         if not isinstance(payload, dict):
             _fail("action:payload-object")
         claim_id = determination["claim_id"]
-        amount = claims[str(claim_id)]["amount_cents"]
+        amount = requestable = claims[str(claim_id)]["amount_cents"]
         if kind == "CORRECTION_PAYMENT_REQUEST":  # the input evaluation's unpaid balance, by the deciding engine's rule
+            if decided.get(action_id) != amount:
+                _fail("action:event-amount")  # the decision event records the rejected claim
             shortfall = _cents(next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["evaluation_id"] == determination["input_evaluation_id"]), None), "action:input-shortfall", positive=True)
-            amount = _CORRECTION_AMOUNT_RULES[retired_correction_rule(engines.get(action_id))](amount, shortfall, requested.get(obligation_id, 0))
-            if row["status"] != "CANCELLED":
-                requested[obligation_id] = requested.get(obligation_id, 0) + amount
+            earlier = requests.setdefault(obligation_id, {})
+            unpaid = sum(max(cents - paid_at(ref, revision), 0) for ref, cents in earlier.items())
+            requestable = max(shortfall - unpaid, 0)
+            amount = earlier[action_id] = _CORRECTION_AMOUNT_RULES[engines.get(action_id, current)[1]](amount, shortfall, unpaid)
         expected_payload = {
             "action_id": action_id,
             "obligation_id": obligation_id,
@@ -2972,6 +3008,8 @@ def _verify_actions(
         }
         if payload != expected_payload:
             _fail("action:payload-binding")
+        if amount > requestable:
+            _fail("action:requestable")  # whatever engine decided it, never more than earlier requests leave unpaid
         payload_bytes = _canonical(payload, "action:payload")
         payload_digest = _blob64(row["payload_digest"], "action:payload-digest")
         if payload_digest != _digest(ACTION_DOMAIN, payload_bytes):
@@ -2996,6 +3034,10 @@ def _verify_actions(
                 _fail("outbox:acknowledged")
     if set(outbox) != set(actions):
         _fail("outbox:orphan")
+    for obligation_id, paid_revision, payment_id, action_ref in links:  # a payment pays an earlier request, never past it
+        request = requests.get(obligation_id, {}).get(action_ref)
+        if request is None or actions[action_ref]["revision"] >= paid_revision or paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request:
+            _fail("payment:link")
     return actions
 
 
@@ -4294,7 +4336,7 @@ def _verify_connection(
         evaluations,
         actors=identity["actors"],
     )
-    actions = _verify_actions(connection, meta, evaluations, claims, determinations)
+    actions = _verify_actions(connection, meta, evaluations, claims, determinations, payments)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
     funding, funding_receipt_ids = _verify_program_funding(connection, meta, events)
     manifest_records = manifest_state["manifests"]

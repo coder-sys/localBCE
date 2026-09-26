@@ -352,14 +352,29 @@ _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
 }
 
 
-def _retired_correction_rule(sha256: object) -> str | None:
-    """The checker's retired-pin lookup; a missing or altered registry is an integrity refusal."""
-    from app.right_rail_financial_owner_independent import IndependentFinancialError, retired_correction_rule
+def _known_correction_engine(sha256: object) -> bool:
+    """Whether committed correction history may name this engine (the checker's registry); a missing,
+    altered or malformed registry is an integrity refusal."""
+    from app.right_rail_financial_owner_independent import IndependentFinancialError, correction_engines
 
     try:
-        return retired_correction_rule(sha256)
+        return str(sha256) in correction_engines()
     except IndependentFinancialError as error:
         _fail(FinancialIntegrityError, str(error))
+
+
+def _correction_paid(connection: sqlite3.Connection, obligation_id: str) -> list[dict[str, Any]]:
+    """What active linked payments paid on each correction request of the obligation, by action id."""
+    return [
+        {"action_id": action_id, "paid_cents": paid}
+        for action_id, paid in connection.execute(
+            "SELECT json_extract(e.payload_json,'$.pays_action_id'),SUM(p.amount_cents) FROM financial_events e "
+            "JOIN payments p ON p.payment_id=json_extract(e.payload_json,'$.payment_id') "
+            "WHERE e.aggregate_type='OBLIGATION' AND e.aggregate_id=? AND e.kind='PAYMENT_RECEIVED' "
+            "AND json_extract(e.payload_json,'$.pays_action_id') IS NOT NULL AND p.active=1 GROUP BY 1 ORDER BY 1",
+            (obligation_id,),
+        )
+    ]
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -3756,10 +3771,14 @@ class FinancialOwner:
         source_version: str = "fixture-v1",
         local_ref: str | None = None,
         expected_revision: int | None = None,
+        pays_action_id: str | None = None,
     ) -> dict[str, Any]:
-        """Record one payment once by common origin; conflicts never mutate cash."""
+        """Record one payment once by common origin; conflicts never mutate cash. A payment answering
+        a correction request names it (pays_action_id) and never pays more than the request leaves unpaid."""
         self._assert_actionable()
         _id(payment_id, "payment_id")
+        if pays_action_id is not None:
+            _id(pays_action_id, "pays_action_id")
         _cents(amount_cents, "payment_amount", nonnegative=True)
         if amount_cents == 0:
             _fail(FinancialInputError, "payment_amount_zero")
@@ -3814,6 +3833,7 @@ class FinancialOwner:
                     "evidence_id": evidence_id,
                     "amount_cents": amount_cents,
                     "common_origin_id": common_origin_id,
+                    **({} if pays_action_id is None else {"pays_action_id": pays_action_id}),
                 }
                 actual_event_fields = {
                     key: event_payload.get(key)
@@ -3884,8 +3904,20 @@ class FinancialOwner:
                     connection.execute("INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)", (conflict_id, obligation["obligation_id"], common_origin_id, str(candidate_existing["payment_id"]), evidence_id, int(candidate_existing["amount_cents"]), amount_cents, "CONFLICTING_COMMON_ORIGIN_AMOUNT", self._now()))
                     self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(candidate_existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now(), committed_at_ms=self._now())
                 return {"status": "CONFLICT", "conflict_id": conflict_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
+            link = {}
+            if pays_action_id is not None:
+                (request,) = connection.execute(
+                    "SELECT json_extract(payload_json,'$.amount_cents') FROM actions WHERE action_id=? AND obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST'",
+                    (pays_action_id, obligation["obligation_id"]),
+                ).fetchone() or (None,)
+                if request is None:
+                    _fail(FinancialConflictError, "payment_request_unknown")
+                paid = next((entry["paid_cents"] for entry in _correction_paid(connection, str(obligation["obligation_id"])) if entry["action_id"] == pays_action_id), 0)
+                if paid + amount_cents > request:
+                    _fail(FinancialConflictError, "payment_exceeds_unpaid_request")
+                link = {"pays_action_id": pays_action_id}
             connection.execute("INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)", (payment_id, obligation["obligation_id"], item_id, evidence_id, common_origin_id, amount_cents, event_at_ms, 1, None))
-            self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id}, now_ms=self._now())
+            self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id, **link}, now_ms=self._now())
             return {"status": "RECORDED", "payment_id": payment_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
 
     def reverse_payment(
@@ -4299,6 +4331,7 @@ class FinancialOwner:
         query_observations: Mapping[str, Mapping[str, Any]],
         current_event_sequence: int,
         previous_history_head: bytes,
+        correction_paid: list[dict[str, Any]],
         transition_result: Mapping[str, Any],
         financial_engine: Any,
         semantic: Any,
@@ -4389,16 +4422,21 @@ class FinancialOwner:
         )
         require_binding(
             dependencies["supporting_evidence"] == evidence_bindings_wire
-            and dependencies["query_observations"] == query_observations,
+            and dependencies["query_observations"] == query_observations
+            and dependencies["correction_paid"] == correction_paid,
             "correction_read_set_binding",
         )
-        # Lean requests only the unpaid balance no outstanding correction request
-        # already asks for: min(claim, max(input shortfall - outstanding, 0)) (B2, H1).
-        (outstanding,) = connection.execute(
-            "SELECT COALESCE(SUM(json_extract(payload_json,'$.amount_cents')),0) FROM actions "
-            "WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST' AND status!='CANCELLED'",
-            (obligation_id,),
-        ).fetchone()
+        # Lean requests only the unpaid balance no earlier correction request still asks for, less
+        # what linked payments paid on it: min(claim, max(input shortfall - unpaid, 0)) (B2, H1).
+        paid = {entry["action_id"]: entry["paid_cents"] for entry in correction_paid}
+        outstanding = sum(
+            max(int(requested) - paid.get(action_ref, 0), 0)
+            for action_ref, requested in connection.execute(
+                "SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions "
+                "WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST'",
+                (obligation_id,),
+            )
+        )
         action_amount = int(action["amount_cents"])
         require_binding(
             action["obligation_id"] == obligation_id
@@ -4975,6 +5013,7 @@ class FinancialOwner:
                     "decision_at_ms": decision_time,
                     "owner_now_ms": owner_now_ms,
                 }
+                correction_paid = _correction_paid(connection, str(obligation["obligation_id"]))
                 request = financial_engine.encode_correction_transition_request(
                     snapshot=snapshot,
                     command=command,
@@ -4982,6 +5021,7 @@ class FinancialOwner:
                     query_observations=query_observations,
                     current_event_sequence=current_event_sequence,
                     previous_history_head=previous_history_head,
+                    correction_paid=correction_paid,
                 )
                 execution = financial_engine.run_correction_transition_v1(
                     configured_release,
@@ -5037,6 +5077,7 @@ class FinancialOwner:
                 query_observations=query_observations,
                 current_event_sequence=current_event_sequence,
                 previous_history_head=previous_history_head,
+                correction_paid=correction_paid,
                 transition_result=transition_result,
                 financial_engine=financial_engine,
                 semantic=semantic,
@@ -5891,8 +5932,7 @@ class FinancialOwner:
             artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
             or type(artifact.get("version")) is not int
             or artifact.get("version") != 1
-            or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
-            and _retired_correction_rule(artifact.get("sha256")) is None
+            or not _known_correction_engine(artifact.get("sha256"))
             or source.get("action_id") != payload.get("action_id")
             or source.get("outbox_action_id") != payload.get("action_id")
             or source.get("resulting_evaluation_id") != payload.get("evaluation_id")
@@ -6038,8 +6078,7 @@ class FinancialOwner:
             or artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
             or type(artifact.get("version")) is not int
             or artifact.get("version") != 1
-            or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
-            and _retired_correction_rule(artifact.get("sha256")) is None
+            or not _known_correction_engine(artifact.get("sha256"))
         ):
             artifact = None
         failure = {
