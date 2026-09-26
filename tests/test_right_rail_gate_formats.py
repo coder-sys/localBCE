@@ -189,7 +189,7 @@ def build_vectors(sign) -> str:
     def lifetime(expires: int) -> bytes:
         return leaf0[:-8] + expires.to_bytes(8, "big") + raw[0][len(leaf0) :]
 
-    token_flow_at = flow_at - len(gate.DECIDE_REQUEST) + len(gate.TOKEN)
+    token_flow_at = flow_at - len(gate.DECIDE_REQUEST) + len(gate.TOKEN) + 4  # after the u32 shard_id
     for name, data in (
         ("truncated", raw[0][:-1]),
         ("trailing", raw[0] + b"\x00"),
