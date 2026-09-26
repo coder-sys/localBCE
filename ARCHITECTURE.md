@@ -17,7 +17,7 @@ FinancialOwner (app/right_rail_financial_owner.py) -- the only writer, one SQLit
    +--> Mirror (app/right_rail_financial_mirror.py): queries and commands back into the owner
    |        +--> staff server + browser UI (app/right_rail_financial_staff_server.py, app/staff_workspace/)
    |        +--> CLI (tools/right_rail_financial_cli.py)
-   +--> Continuity export --> isolated SHADOW / TEST restore; v7 receiver (tools/continuity_successor_v7.py)
+   +--> Continuity export --> isolated SHADOW / TEST restore
    +--> Switch (app/right_rail_financial_switch.py): read-only replay and comparison
 ```
 
@@ -36,10 +36,15 @@ in one transaction. An exact retry returns `DUPLICATE`; changed input is a
 conflict. Crashes before and after commit are recovered by restart; the
 committed result is found again by its command identity.
 
-The owner knows three store versions, `RR/FINANCIAL/OWNER/v5`, `v6` and `v7`
-(new stores default to v7, which adds the population manifest and decision
-package v2), each with its matching `RR/FINANCIAL/CONTINUITY/` package version.
-Older (v2-v4) or unknown versions are rejected without mutation.
+The owner writes one store version, `RR/FINANCIAL/OWNER/v8` (population
+manifest, program funding receipts, decision package v2, the exported
+`commands` log and declared foreign keys), with its matching
+`RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). The owner
+and the independent checker accept v8 stores and packages only; every other
+version (v2-v7, unknown) is rejected without mutation, the owner's open with
+`unsupported_store_version`. The v7 conversion path was removed on 2026-09-25
+(decision C3; only synthetic data ever existed), so a v8 store converted from
+v7 (it contains an `OPENING_BALANCE` event) now fails `history:event-kind`.
 
 The evaluation receipt binds scope, evaluation/obligation/revision, Control
 Pack id/version/digest, sorted evidence id/record-digest pairs, trusted
@@ -85,16 +90,14 @@ follow-up explanation, a state report and a recipient-safe corporate-support
 output; a bounded follow-up drain is repeatable, and an acknowledgment changes
 follow-up status without changing cash.
 
-**Continuity** exports a versioned, bounded package from the same owner. An
-unexported admission table tracks exported row counts and canonical row bytes in
-the same transaction, so the owner enforces the 10,000-row and 8 MiB limits
-before commit; independent verification rebuilds that table from source rows.
+**Continuity** exports the history as chained, bounded segments
+(`RR/GATE/SEGMENT/v1`, docs/CORE_REDESIGN.md), which the checker verifies and a
+fresh owner restores by replay; the older whole-state package (8 MiB) remains.
 Restore runs in a private attempt directory and publishes atomically without
 replacing anything; a foreign destination and its `-wal`/`-shm` sidecars are
 left intact and cleanup failures are reported. SHADOW opens read-only; TEST is
 isolated; neither can dispatch, egress, become a live writer or replace an
-identity. `tools/continuity_successor_v7.py` is an independent, integrity-only
-receiver for v7 packages.
+identity.
 
 **Switch** takes only independently verified Continuity SHADOW bytes, gives the
 same canonical input to a reference and a candidate evaluator supplied by the

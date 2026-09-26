@@ -79,6 +79,7 @@
         "offset_claim_missing": { "screen": "decision", "message": "Plan A's offset claim is missing from H's record." },
         "offset_claim_not_claimed": { "screen": "decision", "message": "Plan A's offset was never actually claimed; there is nothing to reject." },
         "history_capacity": { "screen": "decision", "message": "The Owner's history is full; no more decisions can be recorded in this demo." },
+        "history_segment_size": { "screen": "decision", "message": "This decision would overfill the open history segment; nothing was recorded." },
         "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
         "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Reopen the package before retrying." },
         "owner_command_unavailable": { "screen": "unavailable", "message": "The Owner could not process the command. Reload this page to check again." }

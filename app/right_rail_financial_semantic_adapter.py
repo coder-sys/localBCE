@@ -1,4 +1,4 @@
-"""Read-only owner-to-Lean adapter for the synthetic v5 workflow.
+"""Read-only owner-to-Lean adapter for the synthetic financial workflow.
 
 The adapter is deliberately a transaction-boundary producer, not another owner.
 It accepts an already-open ``sqlite3.Connection`` from the financial owner,
@@ -979,8 +979,8 @@ def _completion_time_from_snapshot(data: Mapping[str, Any]) -> int | None:
     return None
 
 
-def _validate_decoded_result(result: DecodedLeanResult, snapshot: LockedSemanticSnapshot) -> None:
-    data = snapshot.data
+def _bind_result_context(result: DecodedLeanResult, data: Mapping[str, Any]) -> None:
+    """Everything a result must share with the snapshot it evaluated, short of the stored projection."""
     scope = _wire_mapping(data["scope"], "scope")
     owner_body = _wire_mapping(data["owner"], "owner")
     authority = _wire_mapping(data["authority"], "authority")
@@ -1020,6 +1020,12 @@ def _validate_decoded_result(result: DecodedLeanResult, snapshot: LockedSemantic
         _fail(SemanticAdapterIntegrityError, "result_evidence_ids")
     if result.completion_at_ms != _completion_time_from_snapshot(data):
         _fail(SemanticAdapterIntegrityError, "result_completion")
+
+
+def _validate_decoded_result(result: DecodedLeanResult, snapshot: LockedSemanticSnapshot) -> None:
+    data = snapshot.data
+    _bind_result_context(result, data)
+    obligation = _wire_mapping(data["obligation"], "obligation")
     expected_values = {
         "owed_cents": obligation["owed_cents"],
         "claimed_adjustment_cents": obligation["claimed_adjustment_cents"],
@@ -1934,12 +1940,15 @@ def build_locked_semantic_snapshot(
     expected_owner_id: str,
     expected_continuity_epoch: int | None = None,
     max_fact_rows: int = MAX_FACT_ROWS,
+    verified_by: LockedSemanticSnapshot | None = None,
 ) -> LockedSemanticSnapshot:
     """Produce a bounded authenticated snapshot from one owner transaction.
 
     This function performs SELECT/PRAGMA work only.  It intentionally does not
     call ``sqlite3.connect`` or any owner command, and it never commits or
-    rolls back the caller's transaction.
+    rolls back the caller's transaction. ``verified_by``, a snapshot this same
+    transaction verified before its own writes, supplies scope and owner instead
+    of verifying the whole database again (the writer's pre-COMMIT check follows).
     """
 
     connection = _require_connection(connection)
@@ -1952,16 +1961,19 @@ def build_locked_semantic_snapshot(
     if type(max_fact_rows) is not int or not 1 <= max_fact_rows <= MAX_FACT_ROWS:
         _fail(SemanticAdapterInputError, "fact_row_bound")
     try:
-        verification = _verify_owner_connection(
-            connection,
-            expected_config=expected_config,
-            expected_scope=expected_scope,
-            authority_context=authority_context,
-            expected_mode=expected_mode,
-            expected_owner_id=expected_owner_id,
-            expected_continuity_epoch=expected_continuity_epoch,
-        )
-        scope, identity = _read_verified_meta(connection, verification)
+        if verified_by is not None:
+            verified = _require_validated_snapshot(verified_by).data
+            scope, identity = dict(verified["scope"]), dict(verified["owner"])
+        else:
+            scope, identity = _read_verified_meta(connection, _verify_owner_connection(
+                connection,
+                expected_config=expected_config,
+                expected_scope=expected_scope,
+                authority_context=authority_context,
+                expected_mode=expected_mode,
+                expected_owner_id=expected_owner_id,
+                expected_continuity_epoch=expected_continuity_epoch,
+            ))
         obligation_row, obligation_body = _load_obligation(
             connection,
             obligation_id=obligation_id,
@@ -2100,6 +2112,27 @@ def build_locked_semantic_snapshot(
         _fail(SemanticAdapterIntegrityError, "record_shape")
 
 
+def bind_resulting_state(
+    connection: sqlite3.Connection,
+    before: LockedSemanticSnapshot,
+    *,
+    authority_context: TrustedAuthorityContext,
+    evaluation_time_ms: int,
+    mutation: Mapping[str, Any],
+) -> None:
+    """A writer's declared post-state is its own: ``mutation``'s resulting input is this transaction's
+    snapshot after its writes (verified by ``before``), and its resulting result evaluated that snapshot."""
+
+    identity = _require_validated_snapshot(before).data["owner"]
+    post = build_locked_semantic_snapshot(
+        connection, obligation_id=before.obligation_id, authority_context=authority_context, evaluation_time_ms=evaluation_time_ms,
+        expected_config=None, expected_scope=None, expected_mode=identity["mode"], expected_owner_id=identity["owner_id"], verified_by=before,
+    )
+    if encode_blfin02_input(post) != mutation["resulting_input_wire"]:
+        _fail(SemanticAdapterIntegrityError, "resulting_input")
+    _bind_result_context(mutation["resulting_result"], post.data)
+
+
 __all__ = [
     "BLFIN02_MAGIC",
     "BLFRES02_MAGIC",
@@ -2116,6 +2149,7 @@ __all__ = [
     "SemanticAdapterInputError",
     "SemanticAdapterIntegrityError",
     "TrustedAuthorityContext",
+    "bind_resulting_state",
     "build_locked_semantic_snapshot",
     "decode_blfres02_result",
     "encode_blfin02_input",
