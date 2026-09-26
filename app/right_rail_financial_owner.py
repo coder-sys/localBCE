@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+import ctypes
 import hashlib
 import json
 import os
@@ -729,7 +730,7 @@ class ControlPack:
             _id(value, label)
         if self.period_id in _WILDCARD_PERIODS:
             _fail(FinancialInputError, "period_scope_required")
-        if type(self.version) is not int or self.version < 1:
+        if type(self.version) is not int or not 1 <= self.version <= _MAX_ROWS:
             _fail(FinancialInputError, "pack_version")
         if type(self.source_refs) is not tuple or not self.source_refs:
             _fail(FinancialInputError, "pack_source_refs")
@@ -1802,8 +1803,11 @@ def _replace_file(path: Path, data: bytes) -> None:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temporary, path)
-    if os.name != "nt":  # Windows cannot open a directory to sync its entries
+    if os.name == "nt":  # Windows cannot sync a directory; the rename itself is written through
+        if not ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW(str(temporary), str(path), 0x1 | 0x8):  # REPLACE_EXISTING | WRITE_THROUGH
+            raise ctypes.WinError(ctypes.get_last_error())
+    else:
+        os.replace(temporary, path)
         directory = os.open(path.parent, os.O_RDONLY)
         try:
             os.fsync(directory)
@@ -2046,6 +2050,9 @@ class FinancialOwner:
         count, size = opened
         if count > _MAX_SEGMENT_EVENTS or size + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:
             _fail(FinancialContinuityError, "history_segment_size")
+        for (table,) in connection.execute("SELECT DISTINCT table_name FROM history_pending").fetchall():  # the Checker reads at most Lean's maxRows per table
+            if connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] > _MAX_ROWS:
+                _fail(FinancialIntegrityError, "history_capacity")
         if count == 0 or not force and count < _SEAL_SEGMENT_EVENTS and size < _SEAL_SEGMENT_BYTES:
             return None
         # The chain continues from the last sealed segment only if its stored seal still recomputes.
@@ -2057,13 +2064,15 @@ class FinancialOwner:
                 _fail(FinancialIntegrityError, "history_segment_chain")
             index, first, previous = stored[0] + 1, stored[2] + 1, stored[6]
         meta = self._meta(connection)
-        pending = connection.execute("SELECT COALESCE(SUM(table_name='financial_events'),0),COALESCE(SUM(record_bytes),0) FROM history_pending").fetchone()
-        if int(meta["sequence"]) - first + 1 != count or tuple(pending) != (count, size):
+        pending = connection.execute("SELECT COALESCE(SUM(table_name='financial_events'),0),COALESCE(SUM(record_bytes),0),COALESCE(SUM(record_bytes*(table_name='financial_events')),0) FROM history_pending").fetchone()
+        if int(meta["sequence"]) - first + 1 != count or tuple(pending[:2]) != (count, size):
             _fail(FinancialIntegrityError, "history_segment_events")
         images = []
         for table, key in connection.execute("SELECT table_name,row_key FROM history_pending WHERE table_name<>'financial_events'").fetchall():
             images.append(_canonical(self._segment_record(table, tuple(connection.execute(f'SELECT * FROM "{table}" WHERE rowid=?', (key,)).fetchone()))))
         rows_json = b"[" + b",".join(sorted(images)) + b"]"
+        if len(rows_json) + pending[2] + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:  # measured as built, before it is stored
+            _fail(FinancialContinuityError, "history_segment_size")
         seal = (index, first, int(meta["sequence"]), previous, bytes(meta["history_head"]), _digest(_SEGMENT_DOMAIN, b"rows", rows_json))
         digest = _digest(_SEGMENT_DOMAIN, b"seal", _canonical(_segment_seal(*seal)))
         connection.execute("INSERT INTO history_segments VALUES (?,?,?,?,?,?,?,?)", (*seal, digest, rows_json.decode("ascii")))
@@ -2959,9 +2968,6 @@ class FinancialOwner:
                 if published is not None:
                     _fail(FinancialConflictError, "population_manifest_supersede_after_publish")
                 before_version = int(head["manifest_version"])
-            # The checker caps each manifest table at maxRows; members are the only table that grows faster than history.
-            if connection.execute("SELECT COUNT(*) FROM population_manifest_members").fetchone()[0] + len(manifest.member_ids) > _MAX_ROWS:
-                _fail(FinancialIntegrityError, "history_capacity")
             now_ms = self._now()
             connection.execute(
                 "INSERT INTO population_manifests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

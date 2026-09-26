@@ -48,7 +48,6 @@ POPULATION_MANIFEST_CONTRACT = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 CURRENCY = "USD"
 MAX_CENTS = (1 << 63) - 1
 MAX_ROWS = 10_000
-MAX_SEQUENCE = (1 << 63) - 1  # each history segment is bounded; the Owner stops at Lean's maxRows events
 MAX_PACKAGE_BYTES = 8 * 1024 * 1024
 MAX_DECISION_PACKAGE_BYTES = MAX_PACKAGE_BYTES - 512
 MAX_DECISION_PACKAGE_DEPTH = 32
@@ -57,6 +56,7 @@ MAX_PACKAGE_NODES = 250_000
 SEGMENT_FORMAT = "RR/GATE/SEGMENT/v1"  # docs/CORE_REDESIGN.md "History segments"
 SEGMENT_DOMAIN = b"RR/GATE/SEGMENT/v1\x00"
 MAX_SEGMENT_BYTES = 2 * MAX_PACKAGE_BYTES
+SEAL_SEGMENT_EVENTS, SEAL_SEGMENT_BYTES = 4096, MAX_PACKAGE_BYTES // 2  # every Owner write leaves the open segment below both
 PRIVATE_INDEX_SET_VERSION = 1
 PRIVATE_INDEX_DEFS_V1 = {
     "rr_financial_v1_evidence_item_id": (
@@ -750,7 +750,7 @@ def _identity_digest(
     if bound_mode not in {"LIVE", "SHADOW", "TEST"}:
         _fail("identity:mode")
     _id(bound_owner_id, "identity:owner")
-    _integer(anchor_sequence, "identity:anchor-sequence", maximum=MAX_SEQUENCE)
+    _integer(anchor_sequence, "identity:anchor-sequence", maximum=MAX_ROWS)
     source_digest = _blob64(source_package_digest, "identity:source-package-digest")
     return _digest(
         IDENTITY_DOMAIN,
@@ -789,7 +789,7 @@ def _identity_record(
         expected_owner_id = SHADOW_OWNER_ID if bound_mode == "SHADOW" else TEST_OWNER_ID
         if bound_owner_id != expected_owner_id:
             _fail(f"{code_prefix}:restore-owner")
-    anchor_sequence = _integer(value["anchor_sequence"], f"{code_prefix}:anchor-sequence", maximum=MAX_SEQUENCE)
+    anchor_sequence = _integer(value["anchor_sequence"], f"{code_prefix}:anchor-sequence", maximum=MAX_ROWS)
     anchor_head = _blob64(value["anchor_head"], f"{code_prefix}:anchor-head")
     genesis_head = _blob64(value["genesis_head"], f"{code_prefix}:genesis-head")
     source_package_digest = _blob64(value["source_package_digest"], f"{code_prefix}:source-package-digest")
@@ -1067,7 +1067,11 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
 
 def _bounded_rows(connection: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
     try:
+        if int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) > MAX_ROWS:
+            _fail(f"rows:cap:{table}")
         return list(connection.execute(f"SELECT * FROM {table}"))
+    except IndependentFinancialError:
+        raise
     except sqlite3.Error:
         _fail(f"rows:read:{table}")
 
@@ -1091,7 +1095,7 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
         _text(row[key], f"meta:{key}")
         if row[key] != scope[key]:
             _fail(f"meta:scope:{key}")
-    sequence = _integer(row["sequence"], "meta:sequence", maximum=MAX_SEQUENCE)
+    sequence = _integer(row["sequence"], "meta:sequence", maximum=MAX_ROWS)
     history_head = _blob64(row["history_head"], "meta:history-head")
     continuity_epoch = _integer(row["continuity_epoch"], "meta:continuity-epoch", minimum=1, maximum=1)  # no writer advances it
     if _flag(row["dispatch_enabled"], "meta:dispatch") != 0 or _flag(row["egress_enabled"], "meta:egress") != 0:
@@ -1206,6 +1210,8 @@ def _verify_event(row: Mapping[str, object], index: int, previous: bytes) -> byt
 
 def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> list[sqlite3.Row]:
     rows = list(connection.execute("SELECT * FROM financial_events ORDER BY event_sequence"))
+    if len(rows) > MAX_ROWS:
+        _fail("history:row-cap")
     expected_sequence = int(meta["sequence"])
     if len(rows) != expected_sequence:
         _fail("history:sequence-count")
@@ -1238,13 +1244,26 @@ def _verify_history_tables(connection: sqlite3.Connection, events: list[sqlite3.
         previous = _digest(SEGMENT_DOMAIN, b"seal", _canonical({"format": SEGMENT_FORMAT, "segment_index": index, "first_sequence": first, "last_sequence": sealed, "event_count": sealed - first + 1, **{key: value.hex().upper() for key, value in stored.items()}}))
         if row["segment_digest"] != previous:
             _fail(f"{code}:digest")
+    touched = set()  # every captured-table write since the last seal is carried in an open event's rows
+    for event in events[sealed:]:
+        for image in _parse_json(event["payload_json"], "replay:payload", max_bytes=MAX_PACKAGE_BYTES).get("rows") or ():
+            touched.add((image["table"], image["row"][TABLE_COLUMNS[image["table"]][0]] if "row" in image else image["key"]))
     pending = connection.execute("SELECT table_name,row_key,record_bytes FROM history_pending").fetchall()
-    for table, key, size in pending:
-        if table not in PROJECTION_TABLES | {"financial_events"} or type(key) is not int or type(size) is not int or size < 1 or connection.execute(f'SELECT 1 FROM "{table}" WHERE rowid=?', (key,)).fetchone() is None:
+    for table, key, size in pending:  # each record size is recomputed from its row, never trusted
+        row = connection.execute(f'SELECT * FROM "{table}" WHERE rowid=?', (key,)).fetchone() if table in PROJECTION_TABLES | {"financial_events"} and type(key) is int else None
+        if row is None or size != _record_bytes(table, row):
             _fail("history-pending:row")
-    opened = [tuple(row) for row in connection.execute("SELECT id,event_count,byte_count FROM history_open")]
-    if opened != [(1, len(events) - sealed, sum(row[2] for row in pending))] or sorted(key for table, key, _ in pending if table == "financial_events") != list(range(sealed + 1, len(events) + 1)):
+        if table in CAPTURED_TABLES:
+            touched.symmetric_difference_update({(table, row[TABLE_COLUMNS[table][0]])})
+    count, size = len(events) - sealed, sum(row[2] for row in pending)
+    if touched or [tuple(row) for row in connection.execute("SELECT id,event_count,byte_count FROM history_open")] != [(1, count, size)] or count >= SEAL_SEGMENT_EVENTS or size >= SEAL_SEGMENT_BYTES or sorted(key for table, key, _ in pending if table == "financial_events") != list(range(sealed + 1, len(events) + 1)):
         _fail("history-open:counts")
+
+
+def _record_bytes(table: str, row: sqlite3.Row) -> int:
+    """The Owner's record size: the canonical export of an event, or of a table's row with its name, plus a separator."""
+    record = {column: {"hex": row[column].hex().upper()} if type(row[column]) is bytes else row[column] for column in TABLE_COLUMNS[table]}
+    return len(_canonical(record if table == "financial_events" else {"table": table, "row": record})) + 1
 
 
 def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.Row]) -> None:
@@ -1327,7 +1346,7 @@ def _verify_correction_followup_records(
         action_id = _id(payload.get("action_id"), "history:correction-followup-action-id")
         determination_id = _id(payload.get("determination_id"), "history:correction-followup-determination-id")
         result_evaluation_id = _id(payload.get("evaluation_id"), "history:correction-followup-result-evaluation")
-        event_sequence = _integer(event.get("event_sequence"), "history:correction-followup-sequence", minimum=1, maximum=MAX_SEQUENCE)
+        event_sequence = _integer(event.get("event_sequence"), "history:correction-followup-sequence", minimum=1, maximum=MAX_ROWS)
         aggregate_id = _id(event.get("aggregate_id"), "history:correction-followup-obligation")
         if work_id != action_id or followup.get("determination_id") != determination_id:
             _fail("history:correction-followup-work-binding")
@@ -1615,7 +1634,7 @@ def _verify_program_funding_rows(
                 or _time(event["committed_at_ms"], "funding:event:committed") != receipt["recorded_at_ms"]
             ):
                 _fail("funding:event-binding")
-            sequence = _integer(event["event_sequence"], "funding:event:sequence", minimum=1, maximum=MAX_SEQUENCE)
+            sequence = _integer(event["event_sequence"], "funding:event:sequence", minimum=1, maximum=MAX_ROWS)
             if sequence <= prior_sequence:
                 _fail("funding:event-order")
             prior_sequence = sequence
@@ -3948,7 +3967,7 @@ def _verify_history_export(directory: Path, expected_authority: object, expected
         _fail("history:identity-genesis")
     if identity["anchor_sequence"] == 0 and identity["anchor_head"] != identity["genesis_head"]:
         _fail("history:identity-anchor")
-    count = _integer(manifest["segment_count"], "history:segment-count", maximum=MAX_SEQUENCE)
+    count = _integer(manifest["segment_count"], "history:segment-count", maximum=MAX_ROWS)
     previous, head, sequence = ZERO_DIGEST, identity["genesis_head"], 0
     images: dict[tuple[str, tuple[object, ...]], dict[str, object]] = {}
     for index in range(count):
@@ -3959,6 +3978,8 @@ def _verify_history_export(directory: Path, expected_authority: object, expected
         first = sequence + 1
         for event in _verify_package_rows(segment["events"], "financial_events"):
             sequence += 1
+            if sequence > MAX_ROWS:
+                _fail("history:row-cap")
             head = _verify_event(event, sequence, head)
             if sequence == identity["anchor_sequence"] and head != identity["anchor_head"]:
                 _fail("history:identity-anchor")

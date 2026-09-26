@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import sqlite3
 import tempfile
 import unittest
@@ -13,11 +14,11 @@ from pathlib import Path
 from unittest import mock
 
 import app.right_rail_financial_owner as owner_module
-from app.right_rail_financial_owner import FinancialContinuityError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, ProgramFundingReceipt, SyntheticTrustedAuthority, _checker_authority
+from app.right_rail_financial_owner import FinancialContinuityError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority, _checker_authority
 from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database, verify_history_export
+from tools.load_synthetic import _SCOPE as SCOPE, _setup
 
 AUTHORITY = SyntheticTrustedAuthority()
-SCOPE = {"state_id": "state:segments", "deployment_id": "deployment:segments", "program_id": "program:segments", "period_id": "period:segments"}
 CONFIG = FinancialOwnerConfig(**SCOPE)
 DOMAIN = b"RR/GATE/SEGMENT/v1\x00"
 
@@ -43,14 +44,19 @@ class HistorySegmentTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.addCleanup(self._tmp.cleanup)
         self.owner = FinancialOwner(path=self.root / "owner.sqlite3", config=CONFIG, trusted_authority=AUTHORITY)
+        self.items = [item.item_id for item in _setup(self.owner, random.Random(1), 4, AUTHORITY)[0]]
         self.commands = 0
         self._drive(30)
 
     def _drive(self, count: int) -> None:
-        # Funding receipts on three sources, each superseding the last: inserted and updated rows.
+        # Payments, support evidence and evaluations over four obligations: money rows inserted and updated across seals.
         for _ in range(count):
-            index = self.commands
-            self.owner.record_program_funding_receipt(ProgramFundingReceipt(receipt_id=f"funding:{index}", source_record_ref=f"source:{index % 3}", amount_cents=100 + index, event_at_ms=1_000 + index, supersedes_receipt_id=None if index < 3 else f"funding:{index - 3}", **SCOPE))
+            index, item = self.commands, self.items[self.commands % 4]
+            (
+                lambda: self.owner.record_payment_evidence(item_id=item, payment_id=f"payment:{index}", common_origin_id=f"origin:{index}", amount_cents=100 + index, evidence_id=f"evidence:payment:{index}", event_at_ms=1_000 + index),
+                lambda: self.owner.record_support_evidence(item_id=item, evidence_id=f"evidence:support:{index}", common_origin_id=f"origin:support:{index}"),
+                lambda: self.owner.evaluate_obligation(item),
+            )[index % 3]()
             self.commands += 1
 
     def _tracking(self) -> list[object]:
@@ -70,6 +76,9 @@ class HistorySegmentTests(unittest.TestCase):
     def test_export_restore_by_replay_is_accepted_and_equal(self) -> None:
         directory, manifest = self._export()
         self.assertGreaterEqual(manifest["segment_count"], 4)
+        tables = [{record["table"] for record in json.loads((directory / f"segment-{index:08d}.json").read_bytes())["rows"]} for index in range(manifest["segment_count"])]
+        for table in ("obligations", "evidence", "payments", "evaluations"):  # replay crosses seals in every money table
+            self.assertGreaterEqual(sum(table in written for written in tables), 2, table)
         checked = self._verify(directory)
         self.assertEqual((checked["segment_count"], checked["sequence"]), (manifest["segment_count"], manifest["meta"]["sequence"]))
         restored = FinancialOwner.restore_continuity(history=directory, recovered_path=self.root / "restored.sqlite3", trusted_authority=AUTHORITY)
@@ -179,8 +188,18 @@ class HistorySegmentTests(unittest.TestCase):
     def test_tracking_tables_are_checked_and_sealed_segments_are_append_only(self) -> None:
         with closing(sqlite3.connect(self.owner.path)) as connection, self.assertRaisesRegex(sqlite3.IntegrityError, "history_segment_immutable"):
             connection.execute("DELETE FROM history_segments")
+        while "evidence" not in {row[0] for row in self._tracking()[1]}:  # the open segment wrote captured rows
+            self._drive(1)
         self._check()
+        with closing(sqlite3.connect(self.owner.path)) as connection:
+            cursor = connection.execute("SELECT * FROM evidence WHERE rowid NOT IN (SELECT row_key FROM history_pending WHERE table_name='evidence') LIMIT 1")
+            untouched = {column[0]: {"hex": value.hex().upper()} if type(value) is bytes else value for column, value in zip(cursor.description, cursor.fetchone())}
+        size = len(_canonical({"table": "evidence", "row": untouched})) + 1
+        pending_evidence = "(SELECT row_key FROM history_pending WHERE table_name='evidence' LIMIT 1)"
         tampers = {
+            "UPDATE history_pending SET record_bytes=record_bytes+1 WHERE table_name='financial_events'; UPDATE history_open SET byte_count=byte_count+(SELECT COUNT(*) FROM history_pending WHERE table_name='financial_events')": "^history-pending:row$",
+            f"INSERT INTO history_pending SELECT 'evidence',rowid,{size} FROM evidence WHERE evidence_id='{untouched['evidence_id']}'; UPDATE history_open SET byte_count=byte_count+{size}": "^history-open:counts$",
+            f"UPDATE history_open SET byte_count=byte_count-(SELECT record_bytes FROM history_pending WHERE table_name='evidence' AND row_key={pending_evidence}); DELETE FROM history_pending WHERE table_name='evidence' AND row_key={pending_evidence}": "^history-open:counts$",
             "UPDATE history_open SET byte_count=byte_count+1": "^history-open:counts$",
             "DELETE FROM history_pending WHERE table_name='financial_events' AND row_key=(SELECT MAX(event_sequence) FROM financial_events)": "^history-open:counts$",
             "INSERT INTO history_pending VALUES ('evidence',1,1)": "^history-pending:row$",
@@ -209,7 +228,7 @@ class HistorySegmentTests(unittest.TestCase):
             triggers = [row[0] for row in connection.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name='history_segments'")]
             for name in ("history_segment_update_immutable", "history_segment_delete_immutable"):
                 connection.execute(f"DROP TRIGGER {name}")
-            connection.execute(statement)
+            connection.executescript(statement)
             for sql in triggers:
                 connection.execute(sql)
 

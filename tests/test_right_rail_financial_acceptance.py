@@ -2744,6 +2744,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(self._reject(store, claim_id)["status"], "CORRECTION_AUTHORIZED")
         self.assertEqual(store.summary()["sequence"], owner._MAX_ROWS)
         self._assert_verified(store)
+        index -= 1  # the copy's last receipt is not in this store
+        with patch.object(owner, "_MAX_ROWS", owner._MAX_ROWS + 1):  # an Owner past the cap: its 10,001-event export does not restore
+            fill(owner._MAX_ROWS, store)
+            store.export_history(history := self._path("history-past-cap"))
+        with self.assertRaisesRegex(FinancialContinuityError, "^history_export:history:row-cap$"):
+            FinancialOwner.restore_continuity(history=history, recovered_path=self._path("history-past-cap.sqlite"), trusted_authority=self.authority)
 
     def test_revision_past_lean_max_revision_is_refused_before_commit(self) -> None:
         # Each revision step is its own event, so the event cap reaches first; the revision guard is exercised directly.
@@ -2754,6 +2760,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 store._append_event(connection, aggregate_type="CONTROL_PACK", aggregate_id="pack:revision-cap", kind="CONTROL_PACK_PUBLISHED", before_revision=owner._MAX_ROWS, after_revision=owner._MAX_ROWS + 1, payload={}, committed_at_ms=1)
         self.assertEqual(store.path.read_bytes(), before)
         self._assert_verified(store)
+
+    def test_control_pack_version_past_max_rows_is_refused(self) -> None:
+        # The checker reads pack versions up to maxRows.
+        self.assertEqual(replace(self._pack(expected.CONTROL_PACK_V1), version=owner._MAX_ROWS).version, owner._MAX_ROWS)
+        with self.assertRaisesRegex(FinancialInputError, "^pack_version$"):
+            replace(self._pack(expected.CONTROL_PACK_V1), version=owner._MAX_ROWS + 1)
 
     def test_population_manifest_members_stop_at_max_rows_before_commit(self) -> None:
         # The checker caps each manifest table at maxRows: two 6,000-member versions would hold 12,000 member rows.
