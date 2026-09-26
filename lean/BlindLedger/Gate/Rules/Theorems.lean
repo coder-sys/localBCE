@@ -4,16 +4,22 @@ namespace BlindLedger.Gate.Rules
 
 /-! What `decideBatch` guarantees.  `Fact` restates each rule over the pinned
     data in plain propositions; the batch theorems speak about the canonical
-    batch, where line `i` is checked against `seenAt rel b i`: the released
-    keys and the keys of the lines before it.  The axiom pins at the end show
-    no theorem here rests on `sorryAx` or `Lean.ofReduceBool`. -/
+    batch, where line `i` is checked against `seenAt c b i`: the keys of the
+    released set and those claimed by the lines before it.  The axiom pins at
+    the end show no theorem here rests on `sorryAx` or `Lean.ofReduceBool`. -/
 
-def Fresh {α : Type} (today maxAge : Nat) (o : Option (Snapshot α)) : Prop :=
-  ∃ s, o = some s ∧ s.asOf ≤ today ∧ dayNum today ≤ dayNum s.asOf + maxAge
+/-- A snapshot the rules may read: see `usable`. -/
+def Usable {α : Type} (today maxAge : Nat) (ok : α → Bool) (o : Option (Snapshot α)) : Prop :=
+  ∃ s, o = some s ∧ validDate today = true ∧ validDate s.asOf = true ∧ s.asOf ≤ today ∧
+    dayNum today ≤ dayNum s.asOf + maxAge ∧ s.entries.length = s.count ∧ 0 < s.count ∧
+    ∀ x ∈ s.entries, ok x = true
+
+def Whole (o : Option (Snapshot Line)) : Prop := ∃ s, o = some s ∧ s.entries.length = s.count
 
 def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
-  | .CAP_MEMBER_MONTH_DUPLICATE => l.flow = .CAP_820 ∧ key l ∈ seen
+  | .CAP_MEMBER_MONTH_DUPLICATE => l.flow = .CAP_820 ∧ (key l ∈ seen ∨ overlap c l = true)
   | .FFS_DUPLICATE_LINE => l.flow ≠ .CAP_820 ∧ key l ∈ seen
+  | .FFS_NEAR_DUPLICATE => l.flow ≠ .CAP_820 ∧ nearKey l ∈ seen ∧ key l ∉ seen
   | .MEMBER_DECEASED => ∃ d ∈ entries c.dmf, d.id = l.member ∧ d.date < l.date
   | .MEMBER_NOT_ENROLLED => ¬∃ s ∈ entries c.enrollment, s.member = l.member ∧ s.start ≤ l.date ∧
       l.date ≤ s.stop ∧ (l.flow ≠ .CAP_820 ∨ s.plan = l.payee)
@@ -21,24 +27,28 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
       (d.id = l.payee ∨ d.id = l.rendering) ∧ d.date < l.date
   | .PROVIDER_EXCLUDED => ∃ e ∈ entries c.exclusions,
       (e.id = l.payee ∨ e.id = l.rendering) ∧ e.start ≤ l.date ∧ l.date ≤ e.stop
-  | .STALE_DMF => ¬Fresh c.today 90 c.dmf
-  | .STALE_ENROLLMENT => ¬Fresh c.today 7 c.enrollment
-  | .STALE_EXCLUSION => ¬Fresh c.today 31 c.exclusions
-  | .STALE_PROVIDER_DEATH => ¬Fresh c.today 90 c.providerDeaths
+  | .SERVICE_DATE_FUTURE => c.today < l.date
+  | .SERVICE_DATE_INVALID => validDate l.date = false
+  | .STALE_DMF => ¬Usable c.today 90 okDeath c.dmf
+  | .STALE_ENROLLMENT => ¬Usable c.today 7 okSpan c.enrollment
+  | .STALE_EXCLUSION => ¬Usable c.today 31 okExclusion c.exclusions
+  | .STALE_PROVIDER_DEATH => ¬Usable c.today 90 okDeath c.providerDeaths
+  | .STALE_RELEASED => ¬Whole c.released
 
-def seenAt (rel : List Key) (b : List Line) (i : Nat) : List Key :=
-  (((canonical b).take i).map key).reverse ++ rel
+def seenAt (c : Ctx) (b : List Line) (i : Nat) : List Key :=
+  ((canonical b).take i).reverse.flatMap (claim c) ++ (entries c.released).flatMap keys
 
 /-! ## One line -/
 
-theorem fresh_iff {α : Type} {t m : Nat} {o : Option (Snapshot α)} : fresh t m o = true ↔ Fresh t m o := by
-  cases o <;> simp [fresh, Fresh]
+theorem usable_iff {α : Type} {t m : Nat} {ok : α → Bool} {o : Option (Snapshot α)} :
+    usable t m ok o = true ↔ Usable t m ok o := by
+  cases o <;> simp [usable, Usable, List.all_eq_true, and_assoc]
 
-theorem not_fresh {α : Type} {t m : Nat} {o : Option (Snapshot α)} : fresh t m o = false ↔ ¬Fresh t m o := by
-  rw [← fresh_iff]; simp
+theorem whole_iff {o : Option (Snapshot Line)} : whole o = true ↔ Whole o := by
+  cases o <;> simp [whole, Whole]
 
 theorem fires_iff {c seen l} (r : Reason) : fires c seen l r = true ↔ Fact c seen l r := by
-  cases r <;> simp [fires, Fact, covers, party, isCap, not_fresh, and_assoc]
+  cases r <;> simp [fires, Fact, enrolled, covers, party, isCap, ← usable_iff, ← whole_iff, and_assoc]
 
 theorem mem_all (r : Reason) : r ∈ reasons := by cases r <;> simp [reasons]
 
@@ -57,7 +67,7 @@ theorem outcomeOf_allow {rs : List Reason} : outcomeOf rs = .ALLOW ↔ rs = [] :
     rw [outcomeOf, if_neg (by simp)]
     exact ⟨(fun h => by split at h <;> cases h), (fun h => by cases h)⟩
 
-theorem outcomeOf_stale {rs : List Reason} {r : Reason} (h : r ∈ rs) (hs : stale r = true) :
+theorem outcomeOf_review {rs : List Reason} {r : Reason} (h : r ∈ rs) (hs : review r = true) :
     outcomeOf rs = .HUMAN_REVIEW := by
   cases rs with
   | nil => cases h
@@ -70,12 +80,35 @@ theorem line_complete {c seen l r} (h : Fact c seen l r) : (decideLine c seen l)
   rw [ha] at hr
   simp at hr
 
-/-- An ALLOWed line's key was not seen, so it cannot repeat a released or earlier key. -/
-theorem allow_unseen {c seen l} (h : (decideLine c seen l).outcome = .ALLOW) : key l ∉ seen := by
-  intro hk
-  by_cases hc : l.flow = .CAP_820
-  · exact line_complete (r := .CAP_MEMBER_MONTH_DUPLICATE) ⟨hc, hk⟩ h
-  · exact line_complete (r := .FFS_DUPLICATE_LINE) ⟨hc, hk⟩ h
+theorem line_review {c seen l r} (h : Fact c seen l r) (hr : review r = true) :
+    (decideLine c seen l).outcome = .HUMAN_REVIEW := by
+  rw [decideLine_outcome]
+  exact outcomeOf_review (mem_decideLine.mpr h) hr
+
+theorem fires_blocks {c seen l r} (hf : fires c seen l r = true)
+    (h : (decideLine c seen l).outcome = .ALLOW) : False :=
+  line_complete ((fires_iff r).mp hf) h
+
+/-- An ALLOWed line is enrolled, so it claims its keys, and none of them was seen. -/
+theorem allow_facts {c seen l} (h : (decideLine c seen l).outcome = .ALLOW) :
+    claim c l = keys l ∧ ∀ k ∈ keys l, k ∉ seen := by
+  refine ⟨?_, fun k hk hs => ?_⟩
+  · cases he : enrolled c l
+    · exact (fires_blocks (r := .MEMBER_NOT_ENROLLED) (by simp [fires, he]) h).elim
+    · simp [claim, he]
+  · by_cases hc : l.flow = .CAP_820
+    · simp [keys, hc] at hk
+      subst hk
+      exact fires_blocks (r := .CAP_MEMBER_MONTH_DUPLICATE) (by simp [fires, isCap, hc, hs]) h
+    · simp [keys, hc] at hk
+      by_cases hkey : key l ∈ seen
+      · exact fires_blocks (r := .FFS_DUPLICATE_LINE) (by simp [fires, isCap, hc, hkey]) h
+      · rcases hk with rfl | rfl
+        · exact hkey hs
+        · exact fires_blocks (r := .FFS_NEAR_DUPLICATE) (by simp [fires, isCap, hc, hkey, hs]) h
+
+theorem keys_nodup (l : Line) : (keys l).Nodup := by
+  by_cases hc : l.flow = .CAP_820 <;> simp [keys, key, nearKey, hc]
 
 /-- Reason codes come in the order of `reasons` (ascending by name), each at most once. -/
 theorem reasons_sublist {c seen l} : (decideLine c seen l).reasons.Sublist reasons := List.filter_sublist
@@ -86,31 +119,33 @@ theorem reasons_nodup {c seen l} : (decideLine c seen l).reasons.Nodup :=
 /-! ## The batch -/
 
 theorem decideAll_get (c : Ctx) : ∀ (seen : List Key) (ls : List Line) (i : Nat),
-    (decideAll c seen ls)[i]? = ls[i]?.map (decideLine c (((ls.take i).map key).reverse ++ seen))
+    (decideAll c seen ls)[i]? = ls[i]?.map (decideLine c ((ls.take i).reverse.flatMap (claim c) ++ seen))
   | _, [], _ => by simp [decideAll]
   | _, _ :: _, 0 => by simp [decideAll]
   | seen, l :: ls, i + 1 => by
-    simp only [decideAll, List.getElem?_cons_succ, List.take_succ_cons, List.map_cons,
-      List.reverse_cons, List.append_assoc, List.cons_append, List.nil_append]
-    exact decideAll_get c (key l :: seen) ls i
+    simpa [decideAll, List.flatMap_append, List.append_assoc] using decideAll_get c (claim c l ++ seen) ls i
 
-theorem decisions_eq {c rel b} : (decideBatch c rel b).decisions = decideAll c rel (canonical b) := rfl
-
-theorem decideBatch_get {c rel b i} :
-    (decideBatch c rel b).decisions[i]? = (canonical b)[i]?.map (decideLine c (seenAt rel b i)) :=
-  decideAll_get c rel (canonical b) i
+theorem decideBatch_get {c b i} :
+    (decideBatch c b).decisions[i]? = (canonical b)[i]?.map (decideLine c (seenAt c b i)) :=
+  decideAll_get c ((entries c.released).flatMap keys) (canonical b) i
 
 /-- Soundness: every reason on a decision is a true fact about the pinned data. -/
-theorem sound {c rel b i d r} (hd : (decideBatch c rel b).decisions[i]? = some d)
-    (hr : r ∈ d.reasons) : Fact c (seenAt rel b i) d.line r := by
+theorem sound {c b i d r} (hd : (decideBatch c b).decisions[i]? = some d)
+    (hr : r ∈ d.reasons) : Fact c (seenAt c b i) d.line r := by
   rw [decideBatch_get, Option.map_eq_some_iff] at hd
   obtain ⟨l, -, rfl⟩ := hd
   exact mem_decideLine.mp hr
 
 /-- Completeness: a line for which any rule's fact holds is not ALLOW. -/
-theorem complete {c rel b i l r} (hl : (canonical b)[i]? = some l) (h : Fact c (seenAt rel b i) l r) :
-    ∃ d, (decideBatch c rel b).decisions[i]? = some d ∧ d.line = l ∧ d.outcome ≠ .ALLOW :=
-  ⟨decideLine c (seenAt rel b i) l, by simp [decideBatch_get, hl], rfl, line_complete h⟩
+theorem complete {c b i l r} (hl : (canonical b)[i]? = some l) (h : Fact c (seenAt c b i) l r) :
+    ∃ d, (decideBatch c b).decisions[i]? = some d ∧ d.line = l ∧ d.outcome ≠ .ALLOW :=
+  ⟨decideLine c (seenAt c b i) l, by simp [decideBatch_get, hl], rfl, line_complete h⟩
+
+/-- Bad data or a near duplicate: a line with a fact for a `review` reason is HUMAN_REVIEW. -/
+theorem review_complete {c b i l r} (hl : (canonical b)[i]? = some l) (hr : review r = true)
+    (h : Fact c (seenAt c b i) l r) :
+    ∃ d, (decideBatch c b).decisions[i]? = some d ∧ d.line = l ∧ d.outcome = .HUMAN_REVIEW :=
+  ⟨decideLine c (seenAt c b i) l, by simp [decideBatch_get, hl], rfl, line_review h hr⟩
 
 theorem mem_decideAll {c : Ctx} : ∀ {seen : List Key} {ls : List Line} {d : Decision},
     d ∈ decideAll c seen ls → ∃ seen' l, d = decideLine c seen' l
@@ -121,56 +156,62 @@ theorem mem_decideAll {c : Ctx} : ∀ {seen : List Key} {ls : List Line} {d : De
     · exact ⟨seen, l, rfl⟩
     · exact mem_decideAll h
 
-/-- Fail-closed: with any snapshot missing, stale or dated after today, every line is HUMAN_REVIEW. -/
-theorem fail_closed {c rel b d}
-    (h : ¬Fresh c.today 90 c.dmf ∨ ¬Fresh c.today 90 c.providerDeaths ∨
-      ¬Fresh c.today 31 c.exclusions ∨ ¬Fresh c.today 7 c.enrollment)
-    (hd : d ∈ (decideBatch c rel b).decisions) : d.outcome = .HUMAN_REVIEW := by
-  rw [decisions_eq] at hd
-  obtain ⟨seen, l, rfl⟩ := mem_decideAll hd
-  have : ∃ r, stale r = true ∧ Fact c seen l r := by
-    rcases h with h | h | h | h
+/-- Fail-closed: when any reference snapshot is not usable (missing or failing
+    its pin, an invalid today or asOf, dated after today, too old, empty, a
+    parsed row count other than the declared one, or a malformed row), or the
+    released set is missing or short, every line is HUMAN_REVIEW. -/
+theorem fail_closed {c b d}
+    (h : ¬Usable c.today 90 okDeath c.dmf ∨ ¬Usable c.today 90 okDeath c.providerDeaths ∨
+      ¬Usable c.today 31 okExclusion c.exclusions ∨ ¬Usable c.today 7 okSpan c.enrollment ∨
+      ¬Whole c.released)
+    (hd : d ∈ (decideBatch c b).decisions) : d.outcome = .HUMAN_REVIEW := by
+  obtain ⟨seen, l, rfl⟩ := mem_decideAll (seen := (entries c.released).flatMap keys) (ls := canonical b) hd
+  have : ∃ r, review r = true ∧ Fact c seen l r := by
+    rcases h with h | h | h | h | h
     · exact ⟨.STALE_DMF, rfl, h⟩
     · exact ⟨.STALE_PROVIDER_DEATH, rfl, h⟩
     · exact ⟨.STALE_EXCLUSION, rfl, h⟩
     · exact ⟨.STALE_ENROLLMENT, rfl, h⟩
+    · exact ⟨.STALE_RELEASED, rfl, h⟩
   obtain ⟨r, hs, hf⟩ := this
-  rw [decideLine_outcome]
-  exact outcomeOf_stale (mem_decideLine.mpr hf) hs
+  exact line_review hf hs
 
 /-! ## Uniqueness -/
 
-theorem allowedKeys_decideAll (c : Ctx) : ∀ (seen : List Key) (ls : List Line),
-    (allowedKeys (decideAll c seen ls)).Nodup ∧ ∀ k ∈ allowedKeys (decideAll c seen ls), k ∉ seen
-  | _, [] => by simp [decideAll, allowedKeys]
+theorem allowed_decideAll (c : Ctx) : ∀ (seen : List Key) (ls : List Line),
+    ((allowedLines (decideAll c seen ls)).flatMap keys).Nodup ∧
+      ∀ k ∈ (allowedLines (decideAll c seen ls)).flatMap keys, k ∉ seen
+  | _, [] => by simp [decideAll, allowedLines]
   | seen, l :: ls => by
-    obtain ⟨ih1, ih2⟩ := allowedKeys_decideAll c (key l :: seen) ls
-    have hsub : ∀ k ∈ allowedKeys (decideAll c (key l :: seen) ls), k ≠ key l ∧ k ∉ seen :=
-      fun k hk => by simpa only [List.mem_cons, not_or] using ih2 k hk
+    obtain ⟨ih1, ih2⟩ := allowed_decideAll c (claim c l ++ seen) ls
+    have hsub : ∀ k ∈ (allowedLines (decideAll c (claim c l ++ seen) ls)).flatMap keys,
+        k ∉ claim c l ∧ k ∉ seen := fun k hk => by simpa only [List.mem_append, not_or] using ih2 k hk
     by_cases ha : (decideLine c seen l).outcome = .ALLOW
-    · have e : allowedKeys (decideAll c seen (l :: ls)) =
-          key l :: allowedKeys (decideAll c (key l :: seen) ls) := by
-        simp [allowedKeys, decideAll, ha, decideLine_line]
+    · obtain ⟨hcl, hks⟩ := allow_facts ha
+      have e : (allowedLines (decideAll c seen (l :: ls))).flatMap keys =
+          keys l ++ (allowedLines (decideAll c (claim c l ++ seen) ls)).flatMap keys := by
+        simp [allowedLines, decideAll, ha, decideLine_line]
       rw [e]
-      refine ⟨List.nodup_cons.mpr ⟨fun hm => (hsub _ hm).1 rfl, ih1⟩, fun k hk => ?_⟩
-      rcases List.mem_cons.mp hk with rfl | hk
-      · exact allow_unseen ha
-      · exact (hsub k hk).2
-    · have e : allowedKeys (decideAll c seen (l :: ls)) = allowedKeys (decideAll c (key l :: seen) ls) := by
-        simp [allowedKeys, decideAll, ha]
+      refine ⟨List.nodup_append.mpr ⟨keys_nodup l, ih1, fun x hx y hy e => ?_⟩, fun k hk => ?_⟩
+      · exact (hsub y hy).1 (by rw [hcl, ← e]; exact hx)
+      · rcases List.mem_append.mp hk with hk | hk
+        · exact hks k hk
+        · exact (hsub k hk).2
+    · have e : allowedLines (decideAll c seen (l :: ls)) = allowedLines (decideAll c (claim c l ++ seen) ls) := by
+        simp [allowedLines, decideAll, ha]
       rw [e]
       exact ⟨ih1, fun k hk => (hsub k hk).2⟩
 
-theorem released_eq {c rel b} :
-    (decideBatch c rel b).released = rel ++ allowedKeys (decideAll c rel (canonical b)) := rfl
-
-/-- Uniqueness: from a duplicate-free released set, the new released set (old
-    keys plus every ALLOWed line's key) has no key twice.  By `key_cap` and
-    `key_ffs`, no two released CAP_820 lines share a member-month and no two
-    released FFS lines are exact duplicates. -/
-theorem released_nodup {c rel b} (h : rel.Nodup) : (decideBatch c rel b).released.Nodup := by
-  obtain ⟨h1, h2⟩ := allowedKeys_decideAll c rel (canonical b)
-  rw [released_eq]
+/-- Uniqueness: if the released set is complete (every line already paid by
+    any path, human releases included) and its keys are distinct, then after
+    the batch (released lines plus every ALLOWed line) no key appears twice:
+    by `key_cap` and `key_ffs`, no member-month is paid twice by capitation
+    and no FFS line is paid twice.  A released set missing a paid line is
+    outside this theorem. -/
+theorem released_nodup {c b} (h : ((entries c.released).flatMap keys).Nodup) :
+    ((decideBatch c b).released.flatMap keys).Nodup := by
+  obtain ⟨h1, h2⟩ := allowed_decideAll c ((entries c.released).flatMap keys) (canonical b)
+  simp only [decideBatch, List.flatMap_append]
   exact List.nodup_append.mpr ⟨h, h1, fun x hx y hy e => h2 y hy (e ▸ hx)⟩
 
 theorem key_cap {x y : Line} (hx : x.flow = .CAP_820) (hy : y.flow = .CAP_820) :
@@ -184,40 +225,45 @@ theorem key_ffs {x y : Line} (hx : x.flow ≠ .CAP_820) (hy : y.flow ≠ .CAP_82
 
 /-! ## Monotonicity -/
 
-/-- `c'` has every death and exclusion entry of `c`, with the same snapshot
-    dates, the same enrollment and the same day. -/
+/-- `c'` has every death and exclusion row of `c`, the same day, enrollment
+    and released set, and each death or exclusion snapshot is usable exactly
+    when it was (so the added rows are well formed and counted). -/
 structure Grows (c c' : Ctx) : Prop where
   today : c'.today = c.today
   enrollment : c'.enrollment = c.enrollment
-  dmfAsOf : c'.dmf.map (·.asOf) = c.dmf.map (·.asOf)
-  pdAsOf : c'.providerDeaths.map (·.asOf) = c.providerDeaths.map (·.asOf)
-  exAsOf : c'.exclusions.map (·.asOf) = c.exclusions.map (·.asOf)
+  released : c'.released = c.released
+  dmfOk : usable c'.today 90 okDeath c'.dmf = usable c.today 90 okDeath c.dmf
+  pdOk : usable c'.today 90 okDeath c'.providerDeaths = usable c.today 90 okDeath c.providerDeaths
+  exOk : usable c'.today 31 okExclusion c'.exclusions = usable c.today 31 okExclusion c.exclusions
   dmf : ∀ x ∈ entries c.dmf, x ∈ entries c'.dmf
   pd : ∀ x ∈ entries c.providerDeaths, x ∈ entries c'.providerDeaths
   ex : ∀ x ∈ entries c.exclusions, x ∈ entries c'.exclusions
 
-theorem fresh_grows {α : Type} {o o' : Option (Snapshot α)} (h : o'.map (·.asOf) = o.map (·.asOf))
-    (t m : Nat) : Fresh t m o' ↔ Fresh t m o := by
-  rw [← fresh_iff, ← fresh_iff]
-  cases o <;> cases o' <;> simp_all [fresh]
+theorem seenAt_grows {c c'} (g : Grows c c') (b : List Line) (i : Nat) : seenAt c' b i = seenAt c b i := by
+  have : claim c' = claim c := funext fun l => by unfold claim enrolled; rw [g.enrollment]
+  simp only [seenAt, this, g.released]
 
 theorem fact_mono {c c' seen l} (g : Grows c c') : ∀ {r}, Fact c seen l r → Fact c' seen l r
-  | .CAP_MEMBER_MONTH_DUPLICATE, h | .FFS_DUPLICATE_LINE, h => h
+  | .CAP_MEMBER_MONTH_DUPLICATE, h => by simpa only [Fact, overlap, g.enrollment] using h
+  | .FFS_DUPLICATE_LINE, h | .FFS_NEAR_DUPLICATE, h | .SERVICE_DATE_INVALID, h => h
   | .MEMBER_DECEASED, ⟨d, hd, hp⟩ => ⟨d, g.dmf d hd, hp⟩
   | .PROVIDER_DECEASED, ⟨d, hd, hp⟩ => ⟨d, g.pd d hd, hp⟩
   | .PROVIDER_EXCLUDED, ⟨e, he, hp⟩ => ⟨e, g.ex e he, hp⟩
-  | .MEMBER_NOT_ENROLLED, h => by simp only [Fact, g.enrollment] at h ⊢; exact h
-  | .STALE_DMF, h => by simp only [Fact, g.today, fresh_grows g.dmfAsOf] at h ⊢; exact h
-  | .STALE_PROVIDER_DEATH, h => by simp only [Fact, g.today, fresh_grows g.pdAsOf] at h ⊢; exact h
-  | .STALE_EXCLUSION, h => by simp only [Fact, g.today, fresh_grows g.exAsOf] at h ⊢; exact h
-  | .STALE_ENROLLMENT, h => by simp only [Fact, g.today, g.enrollment] at h ⊢; exact h
+  | .MEMBER_NOT_ENROLLED, h => by simpa only [Fact, g.enrollment] using h
+  | .SERVICE_DATE_FUTURE, h => by simpa only [Fact, g.today] using h
+  | .STALE_DMF, h => by simpa only [Fact, ← usable_iff, g.dmfOk] using h
+  | .STALE_PROVIDER_DEATH, h => by simpa only [Fact, ← usable_iff, g.pdOk] using h
+  | .STALE_EXCLUSION, h => by simpa only [Fact, ← usable_iff, g.exOk] using h
+  | .STALE_ENROLLMENT, h => by simpa only [Fact, g.today, g.enrollment] using h
+  | .STALE_RELEASED, h => by simpa only [Fact, g.released] using h
 
-/-- Monotonicity: adding death or exclusion entries never turns a held (or
-    reviewed) line into ALLOW.  Seen keys do not depend on outcomes, so line
-    `i` is checked against the same keys under both contexts. -/
-theorem monotone {c c' : Ctx} {rel : List Key} {b : List Line} {i : Nat} {d d' : Decision} (g : Grows c c') (hd : (decideBatch c rel b).decisions[i]? = some d)
-    (hd' : (decideBatch c' rel b).decisions[i]? = some d') (h : d.outcome ≠ .ALLOW) :
-    d'.line = d.line ∧ d'.outcome ≠ .ALLOW := by
+/-- Monotonicity, for one batch under the same day, enrollment, released set
+    and snapshot usability: adding death or exclusion rows never turns a held
+    or reviewed line into ALLOW.  Claimed keys depend only on enrollment, so
+    line `i` is checked against the same keys under both contexts. -/
+theorem monotone {c c' : Ctx} {b : List Line} {i : Nat} {d d' : Decision} (g : Grows c c')
+    (hd : (decideBatch c b).decisions[i]? = some d) (hd' : (decideBatch c' b).decisions[i]? = some d')
+    (h : d.outcome ≠ .ALLOW) : d'.line = d.line ∧ d'.outcome ≠ .ALLOW := by
   rw [decideBatch_get, Option.map_eq_some_iff] at hd hd'
   obtain ⟨l, hl, rfl⟩ := hd
   obtain ⟨l', hl', rfl⟩ := hd'
@@ -225,11 +271,9 @@ theorem monotone {c c' : Ctx} {rel : List Key} {b : List Line} {i : Nat} {d d' :
   cases hl'
   refine ⟨rfl, fun ha => ?_⟩
   rw [decideLine_outcome, Ne, outcomeOf_allow] at h
-  rw [decideLine_outcome, outcomeOf_allow] at ha
   obtain ⟨r, hr⟩ := List.exists_mem_of_ne_nil _ h
-  have hr' := mem_decideLine.mpr (fact_mono g (mem_decideLine.mp hr))
-  rw [ha] at hr'
-  simp at hr'
+  rw [seenAt_grows g b i] at ha
+  exact line_complete (fact_mono g (mem_decideLine.mp hr)) ha
 
 /-! ## Determinism -/
 
@@ -255,8 +299,13 @@ theorem canonical_perm {b₁ b₂ : List Line} (h : b₁.Perm b₂) : canonical 
   simp only [lineLe, decide_eq_true_eq] at hxy hyx
   exact enc_inj (List.le_antisymm hxy hyx)
 
-/-- Determinism: the result depends on the batch's contents, not its arrival order. -/
-theorem deterministic {c rel b₁ b₂} (h : b₁.Perm b₂) : decideBatch c rel b₁ = decideBatch c rel b₂ := by
+/-- Determinism of order within a batch: the result depends on the batch's
+    contents, not their arrival order.  How lines are split into batches does
+    matter, and no theorem here says otherwise: a held line still claims its
+    keys, so a line that near-duplicates it is HUMAN_REVIEW in the same batch
+    but may be ALLOW in a later one, where only ALLOWed lines are released.
+    Either way `released_nodup` holds, so no key is paid twice. -/
+theorem deterministic {c b₁ b₂} (h : b₁.Perm b₂) : decideBatch c b₁ = decideBatch c b₂ := by
   simp only [decideBatch, canonical_perm h]
 
 /-! Axiom pins: no `sorryAx`, no `Lean.ofReduceBool`. `Classical.choice` in
