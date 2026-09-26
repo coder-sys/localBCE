@@ -356,7 +356,6 @@ theorem readOptionalDigest_append (value : Option Bytes) (rest : Bytes)
       have hDigest : digestWireAdmissible digest := h
       simp [readOptional, encodeOptional, readDigest_wire_append _ _ hDigest]
 
-set_option maxHeartbeats 1000000 in
 theorem readOwnerEvaluationResult_append (result : OwnerEvaluationResult) (rest : Bytes)
     (h : ownerResultWireAdmissible result) :
     readOwnerEvaluationResult (encodeOwnerEvaluationResult result ++ rest) =
@@ -367,7 +366,10 @@ theorem readOwnerEvaluationResult_append (result : OwnerEvaluationResult) (rest 
       readList readString (encodeList encodeString result.evidenceIds ++ tail) =
         some (result.evidenceIds, tail) :=
     fun tail => readList_encodeString_append _ tail hCount.1 hIds
-  simp [readOwnerEvaluationResult, encodeOwnerEvaluationResult, List.append_assoc,
+  -- Unfold by `delta`: generating `simp`'s equation lemma for a reader this long
+  -- exceeds the default heartbeat budget.
+  delta readOwnerEvaluationResult encodeOwnerEvaluationResult
+  simp [List.append_assoc,
     readString_encodeString_append _ _ h1, readString_encodeString_append _ _ h2,
     readNat8_natBE_append _ _ h3, readNat8_natBE_append _ _ h4, hIdsRead,
     readString_encodeString_append _ _ h6, readNat8_natBE_append _ _ h7,
@@ -377,7 +379,6 @@ theorem readOwnerEvaluationResult_append (result : OwnerEvaluationResult) (rest 
     readString_encodeString_append _ _ h14, readString_encodeString_append _ _ h15,
     readString_encodeString_append _ _ h16]
 
-set_option maxHeartbeats 1000000 in
 theorem readEvaluationReceipt_append (receipt : EvaluationReceipt) (rest : Bytes)
     (h : receiptWireAdmissible receipt) :
     readEvaluationReceipt (encodeEvaluationReceipt receipt ++ rest) = some (receipt, rest) := by
@@ -394,13 +395,13 @@ theorem readEvaluationReceipt_append (receipt : EvaluationReceipt) (rest : Bytes
     readOwnerEvaluationResult_append _ _ h14, readDigest_wire_append _ _ h15,
     readDigest_wire_append _ _ h16, readDigest_wire_append _ _ h17]
 
-set_option maxHeartbeats 1000000 in
 theorem readDependencyFacts_append (facts : CorrectionDependencyFacts) (rest : Bytes)
     (h : dependencyFactsWireAdmissible facts) :
     readDependencyFacts (encodeDependencyFacts facts ++ rest) = some (facts, rest) := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18,
     h19, h20, h21⟩ := h
-  simp [readDependencyFacts, encodeDependencyFacts, List.append_assoc,
+  delta readDependencyFacts encodeDependencyFacts
+  simp [List.append_assoc,
     readString_encodeString_append _ _ h1, readNat8_natBE_append _ _ h2,
     readString_encodeString_append _ _ h3, readNat8_natBE_append _ _ h4,
     readDigest_wire_append _ _ h5, readString_encodeString_append _ _ h6,

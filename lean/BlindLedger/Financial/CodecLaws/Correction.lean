@@ -11,7 +11,7 @@ namespace BlindLedger.Financial.CorrectionTransition
 open BlindLedger.Financial
 open BlindLedger.Financial.DecisionPackage
 
-set_option maxHeartbeats 4000000 in
+set_option maxHeartbeats 2000000 in
 theorem readOptionalMutation_of_encode (mutation : Option CorrectionMutation) (bytes rest : Bytes)
     (hMutation : optionalMutationWireAdmissible mutation)
     (hEncode : encodeOptionalMutation mutation = some bytes) :
@@ -20,7 +20,7 @@ theorem readOptionalMutation_of_encode (mutation : Option CorrectionMutation) (b
   | none =>
       simp [encodeOptionalMutation] at hEncode
       subst hEncode
-      first | rfl | simp [readOptionalMutation, readByte]
+      rfl
   | some mutation =>
       have hAdmissible : mutationWireAdmissible mutation := hMutation
       obtain ⟨hEffects, hDependencies, hFollowUps, hInput, hResult, hDetermination, hAction,
@@ -32,7 +32,10 @@ theorem readOptionalMutation_of_encode (mutation : Option CorrectionMutation) (b
       simp [encodeOptionalMutation, encodeFinancialInput_rawEncode _ hInput,
         encodeFinancialResult_rawEncode _ hResult] at hEncode
       subst hEncode
-      simp [readOptionalMutation, List.append_assoc, readByte, readTransitionKind_cons,
+      -- Unfold by `delta`: generating `simp`'s equation lemma for a reader this long
+      -- exceeds the default heartbeat budget.
+      delta readOptionalMutation
+      simp [List.append_assoc, readByte, readTransitionKind_cons,
         readCorrectionEffects_append _ _ hEffects, readDependencyFacts_append _ _ hDependencies,
         readFollowUps_append _ _ hFollowUps,
         readSizedBytes_encodeSizedBytes_append _ _ hInputLength,
@@ -51,7 +54,6 @@ theorem readOptionalMutation_of_encode (mutation : Option CorrectionMutation) (b
 
 /-! Whole-wire laws.  The parse lemmas read an encoding followed by any tail. -/
 
-set_option maxHeartbeats 2000000 in
 theorem parseCorrectionTransitionRequest_of_encode (request : CorrectionTransitionRequest)
     (bytes tail : Bytes) (hRequest : requestWireAdmissible request)
     (hEncode : encodeCorrectionTransitionRequest request = some bytes) :
@@ -81,7 +83,8 @@ theorem parseCorrectionTransitionRequest_of_encode (request : CorrectionTransiti
     encodeFinancialInput_rawEncode _ hInput] at hBody
   subst hBody
   have hReceiptLength := length_le_of_append_sized _ _ hLength
-  simp [parseCorrectionTransitionRequest, List.append_assoc, isPrefixOf_append_self,
+  delta parseCorrectionTransitionRequest
+  simp [List.append_assoc, isPrefixOf_append_self,
     readNatBE_natBE_append 2 1 _ (by decide),
     readString_encodeString_append _ _ correctionTransitionContract_wireAdmissible,
     readString_encodeString_append _ _ h1, readString_encodeString_append _ _ h2,
@@ -96,7 +99,6 @@ theorem parseCorrectionTransitionRequest_of_encode (request : CorrectionTransiti
     readSizedBytes_encodeSizedBytes_append _ _ hReceiptLength,
     decodeFinancialInput_rawEncode _ hInput, hReceiptRead]
 
-set_option maxHeartbeats 2000000 in
 theorem parseCorrectionTransitionResult_of_encode (result : CorrectionTransitionResult)
     (bytes tail : Bytes) (hResult : resultWireAdmissible result)
     (hEncode : encodeCorrectionTransitionResult result = some bytes) :
