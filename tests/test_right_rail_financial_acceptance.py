@@ -7,7 +7,7 @@ module never derives expected balances from owner code or reaches the database t
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import closing, contextmanager, redirect_stderr, redirect_stdout
+from contextlib import closing, contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from dataclasses import replace
 import hashlib
 import io
@@ -48,6 +48,7 @@ from app.right_rail_financial_owner_independent import (
     IndependentFinancialError,
     continuity_package_digest,
     verify_database,
+    verify_database_connection,
     verify_decision_package,
     verify_continuity_package,
     verify_obligation_connection,
@@ -74,7 +75,7 @@ _EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
 _RETIRED_CORRECTION_ARTIFACT_SHA256 = "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
 _B2_CORRECTION_ARTIFACT_SHA256 = "88D853961AB127EE33C65A57F6E35D03244FB5CCE2067F4A0FDF592ECC730992"
 _ACTION_B = "action:obligation-item-h:correction-b"
-_EXPECTED_PRIVATE_INDEX_SET_VERSION = 1
+_EXPECTED_PRIVATE_INDEX_SET_VERSION = 2
 _EXPECTED_PRIVATE_INDEXES = (
     (
         "rr_financial_v1_evidence_item_id",
@@ -117,6 +118,12 @@ _EXPECTED_PRIVATE_INDEXES = (
         "determinations",
         ("obligation_id", "determination_id"),
         "CREATE INDEX rr_financial_v1_determinations_obligation_id ON determinations(obligation_id,determination_id)",
+    ),
+    (
+        "rr_financial_v2_events_aggregate_kind",
+        "financial_events",
+        ("aggregate_type", "aggregate_id", "kind"),
+        "CREATE INDEX rr_financial_v2_events_aggregate_kind ON financial_events(aggregate_type,aggregate_id,kind)",
     ),
 )
 
@@ -1498,7 +1505,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(FinancialIntegrityError, "population_source_incomplete"):
             store.validate_population(interrupted_population)
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             source_complete = connection.execute(
                 "SELECT source_complete FROM population_imports WHERE population_id=?",
                 (interrupted_population,),
@@ -2258,6 +2265,51 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             verify_database(weakened_path, expected_config=store.config, expected_authority=self.authority)
         self.assertEqual(weakened_path.read_bytes(), weakened_bytes)
 
+    def test_a_v1_private_index_set_stays_valid_and_upgrades_to_v2_on_open(self) -> None:
+        source = self._make_owner()
+        source_package = source.export_continuity()
+        v1_path = self._path("private-index-v1.sqlite")
+        v1_path.write_bytes(source.path.read_bytes())
+        with closing(sqlite3.connect(str(v1_path), isolation_level=None)) as connection:
+            connection.execute('DROP INDEX "rr_financial_v2_events_aggregate_kind"')
+            connection.execute("PRAGMA user_version=1")
+        verify_database(v1_path, expected_config=source.config, expected_authority=self.authority)
+        with closing(sqlite3.connect(str(v1_path), isolation_level=None)) as connection:
+            connection.execute("PRAGMA user_version=2")  # v2 claimed without its index
+        with self.assertRaisesRegex(IndependentFinancialError, "schema:private-indexes"):
+            verify_database(v1_path, expected_config=source.config, expected_authority=self.authority)
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_private_indexes"):
+            self._make_owner(path=v1_path)
+        with closing(sqlite3.connect(str(v1_path), isolation_level=None)) as connection:
+            connection.execute("PRAGMA user_version=1")
+        upgraded = self._make_owner(path=v1_path)
+        self._assert_private_index_schema(v1_path)
+        self.assertEqual(upgraded.export_continuity(), source_package)
+        verify_database(v1_path, expected_config=source.config, expected_authority=self.authority)
+
+    def test_a_shadow_open_never_writes(self) -> None:
+        source = self._make_owner()
+        package = source.export_continuity()
+        stores = {  # a v1 index set is read as it is; a store a writing owner would migrate is refused
+            None: ('DROP INDEX "rr_financial_v2_events_aggregate_kind"', "PRAGMA user_version=1"),
+            "pre-segment": tuple(f"DROP TABLE {table}" for table in ("history_segments", "history_pending", "history_open")),
+            "no-append-only": tuple(f'DROP TRIGGER "{name}"' for name in owner._HISTORY_APPEND_ONLY_TRIGGERS),
+            "no-index-set": (*(f'DROP INDEX "{name}"' for name, _table, _columns in owner._PRIVATE_INDEX_SETS[2]), "PRAGMA user_version=0"),
+        }
+        for refusal, statements in stores.items():
+            with self.subTest(refusal=refusal):
+                path = self._path(f"shadow-{refusal}.sqlite")
+                FinancialOwner.restore_continuity(package_bytes=package, recovered_path=path, trusted_authority=self.authority, clock=_Clock())
+                with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    for statement in statements:
+                        connection.execute(statement)
+                before = hashlib.sha256(path.read_bytes()).hexdigest()
+                with self.assertRaisesRegex(FinancialIntegrityError, "^shadow_requires_migration$") if refusal else nullcontext():
+                    FinancialOwner(path=path, config=source.config, trusted_authority=self.authority, clock=_Clock(), mode="SHADOW", owner_id=owner._SHADOW_OWNER_ID)
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+                with closing(sqlite3.connect(str(path))) as connection:
+                    self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0 if refusal == "no-index-set" else 1 if refusal is None else 2)
+
     def test_private_snapshot_index_upgrade_serializes_concurrent_openers(self) -> None:
         source = self._make_owner(schema_version=8)
         source_package = source.export_continuity()
@@ -2766,6 +2818,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             store.register_population_manifest(self._population_manifest(manifest_id="population-manifest:fixture-2026-01:v2", supersedes=root, member_ids=members))
         self.assertEqual(store.path.read_bytes(), before)
         self._assert_verified(store)
+        # The Owner's cached row counts keep the cap exact: 10,000 member rows are accepted and the next is refused,
+        # by the Owner that counted them and by a fresh one.
+        full = self._population_manifest(manifest_id="population-manifest:fixture-2026-01:v2", supersedes=root, member_ids=members[:4_000])
+        self.assertEqual(store.register_population_manifest(full)["status"], "SUPERSEDED")
+        before = store.path.read_bytes()
+        for owner_at_cap in (store, self._make_owner(path=store.path, clock=store.clock)):
+            with self.subTest(fresh=owner_at_cap is not store), self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
+                owner_at_cap.register_population_manifest(self._population_manifest(manifest_id="population-manifest:fixture-2026-01:v3", supersedes=full, member_ids=members[:1]))
+            self.assertEqual(store.path.read_bytes(), before)
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM population_manifest_members").fetchone()[0], owner._MAX_ROWS)
 
     def test_program_funding_receipt_process_crash_boundaries(self) -> None:
         receipt = self._funding_receipt()
@@ -3518,7 +3581,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0][0], FinancialConflictError)
         self.assertIn("population_manifest_supersession_conflict", errors[0][1])
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             manifests = int(connection.execute("SELECT COUNT(*) FROM population_manifests").fetchone()[0])
             events = int(connection.execute("SELECT COUNT(*) FROM financial_events WHERE aggregate_type='POPULATION_MANIFEST'").fetchone()[0])
             heads = int(connection.execute("SELECT COUNT(*) FROM population_manifest_heads").fetchone()[0])
@@ -3614,7 +3677,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 chunk_size=1,
             )
         self.assertEqual(store.export_continuity(), before)
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             imported = connection.execute(
                 "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",
                 (population_id,),
@@ -3660,7 +3723,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 items=items[:4],
                 chunk_size=3,
             )
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             imported = connection.execute(
                 "SELECT imported_count,status,source_complete FROM population_imports WHERE population_id=?",
                 (population_id,),
@@ -3672,7 +3735,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "population_source_incomplete"):
             store.validate_population(population_id)
         self._assert_verified(store)
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             before_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
         resumed = store.stage_population(
             population_id=population_id,
@@ -3685,7 +3748,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             chunk_size=3,
         )
         self.assertTrue(resumed["source_complete"])
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             after_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
         self.assertEqual(before_resume_events, ["POPULATION_IMPORT_OPENED", "POPULATION_STAGED"])
         self.assertEqual(
@@ -3721,7 +3784,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 items=(item,) * 258,
                 chunk_size=1,
             )
-        with store._read() as connection:
+        with store._read_snapshot() as connection:
             imported = connection.execute(
                 "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",
                 (population_id,),
@@ -5590,6 +5653,49 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(IndependentFinancialError, "^schema:foreign-keys:commands$"):
             verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
+
+    def test_checker_refuses_a_hidden_partial_index(self) -> None:
+        # The checker's event lookups use an index the Owner wrote: one that silently omits rows must not pass.
+        store = self._build_base()
+        name, table, columns = "rr_financial_v2_events_aggregate_kind", "financial_events", ("aggregate_type", "aggregate_id", "kind")
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute(f'DROP INDEX "{name}"')
+            connection.execute(owner._private_index_sql(name, table, columns) + " WHERE aggregate_type<>'OBLIGATION'")
+            connection.execute("PRAGMA writable_schema=ON")
+            connection.execute("UPDATE sqlite_master SET sql=? WHERE name=?", (owner._private_index_sql(name, table, columns), name))
+        with self.assertRaisesRegex(IndependentFinancialError, "^schema:index-integrity$"):
+            verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
+
+    def test_owner_open_refuses_an_index_whose_keys_do_not_match_its_rows(self) -> None:
+        # Right entry count, wrong keys, canonical SQL: quick_check passes it and the index answers without one evidence row.
+        store = self._build_base()
+        name, hidden = "rr_financial_v1_evidence_item_id", expected.OTHER_SUPPORT_EVIDENCE[0]
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute(f'DROP INDEX "{name}"')
+            connection.execute(f"CREATE INDEX {name} ON evidence(CASE WHEN evidence_id='{hidden.evidence_id}' THEN '' ELSE item_id END,evidence_id)")
+            connection.execute("PRAGMA writable_schema=ON")
+            connection.execute("UPDATE sqlite_master SET sql=? WHERE name=?", (owner._private_index_sql(name, "evidence", ("item_id", "evidence_id")), name))
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            self.assertEqual(connection.execute("PRAGMA quick_check").fetchall(), [("ok",)])
+            self.assertNotIn((hidden.evidence_id,), connection.execute("SELECT evidence_id FROM evidence WHERE item_id=?", (hidden.item_id,)).fetchall())
+        before = store.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:index-integrity$"):
+            self._make_owner(path=store.path)
+        self.assertEqual(store.path.read_bytes(), before)
+
+    def test_per_obligation_mode_runs_no_file_level_check(self) -> None:
+        # It runs inside a correction's write lock; the file-wide integrity_check belongs to the open and whole-store modes.
+        store = self._build_base()
+        statements: list[str] = []
+        file_checks = lambda: [statement for statement in statements if "integrity_check" in statement or "quick_check" in statement]
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.set_trace_callback(statements.append)
+            obligation_id = str(connection.execute("SELECT obligation_id FROM obligations ORDER BY obligation_id").fetchone()[0])
+            self.assertEqual(verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)["obligation_id"], obligation_id)
+            self.assertEqual(file_checks(), [])
+            verify_database_connection(connection, expected_config=store.config, expected_authority=self.authority)
+            self.assertEqual(file_checks(), ["PRAGMA integrity_check"])  # the trace does see the whole-store check
 
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:
         self.assertEqual(tuple(case.number for case in expected.ACCEPTANCE_CASES), tuple(range(1, 13)))

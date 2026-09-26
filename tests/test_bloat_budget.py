@@ -30,7 +30,7 @@ FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Independent checkers may restate a small shared schema by design; the rest
 # is duplication to delete.
 PRODUCT_DIRS = ("app", "tools", os.path.join("provider_app", "provider_app"))
-DUPLICATED_WINDOWS = 740
+DUPLICATED_WINDOWS = 738
 
 
 def _live_files():

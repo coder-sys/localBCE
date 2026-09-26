@@ -46,6 +46,8 @@ in that archive that holds the raw record.
 4. **Private snapshot indexes** (fast per-obligation reads, safe migration).
    2026-09-24: 6 of 6 passed; no tested query still scans a whole table.
    Evidence: `rightrail-financial-workflow-20260913-STATE.md`.
+   Downgrade index set v2 to v1 (no owner open): `DROP INDEX rr_financial_v2_events_aggregate_kind; PRAGMA user_version=1;` — a writing (LIVE/TEST) owner re-upgrades on open; SHADOW never does.
+   Row-count cache: a table within 5% of the 10,000-row cap, and every seal, is counted exactly; only an undercount above 500 rows could pass the cap, which needs tampering with the store or the owner process.
 5. **Queue claim path (Python).** 2026-09-24: 29 of 29 focused tests passed. The last
    broader Queue run (122 tests) still has 1 failure and 5 errors. Earlier Lean/Rust
    admission integration (2026-09-19): 4 of 4. Evidence: `lean-queue-20260913-STATE.md`.
@@ -96,7 +98,7 @@ evidence-only prototype track (Constitution IX.4); old code under `parked/` is r
 The native work in `pq-wide-seed-native-20260913` is frozen as history. Retired research
 history lives in bundles under `work/_retired-research-20260924`.
 
-## Next 5 concrete steps
+## Next 6 concrete steps
 
 1. **Run the service kit end-to-end**: assemble, verify, run the scenario, serve the
    staff app on loopback, on the `artifacts/engine-correction/` pin.
@@ -113,6 +115,8 @@ history lives in bundles under `work/_retired-research-20260924`.
    corrections, repeat messages, crash recovery and restore, all visible in Mirror.
 5. **Second, nonfinancial workflow via the Provider Trust Graph**: run its 12 written
    tests, then expose it read-only through an authenticated staff route.
+6. **Owner writes don't re-verify the funding projection**: a tampered projection still accepted 70 writes on top.
+   Writer store_busy 0 during checker re-checks was measured on small stores; where a full check exceeds about 5 s, owner writes during a re-check can get store_busy (safe: changed:false, the held-body retry works).
 
 ## Change log
 
