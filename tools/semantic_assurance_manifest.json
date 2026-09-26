@@ -8,7 +8,7 @@
     "theorem_source": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
     "declaration_sources": {
       "applyCorrectionTransition_mutation_links": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
-      "applyCorrectionTransition_action_amount_le_shortfall": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "applyCorrectionTransition_action_amount_eq_b2": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "applyCorrectionTransition_zero_shortfall_has_no_mutation": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "evaluate_positive_shortfall_balance": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "applyCorrectionTransition_amounts_conserved": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
@@ -99,11 +99,11 @@
       ]
     },
     {
-      "id": "applyCorrectionTransition_action_amount_le_shortfall",
+      "id": "applyCorrectionTransition_action_amount_eq_b2",
       "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ 0 < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents result.shortfallCents ∧ mutation.action.amountCents ≤ result.shortfallCents",
       "declarations": [
         {
-          "name": "applyCorrectionTransition_action_amount_le_shortfall",
+          "name": "applyCorrectionTransition_action_amount_eq_b2",
           "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ 0 < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents result.shortfallCents ∧ mutation.action.amountCents ≤ result.shortfallCents"
         }
       ]
@@ -276,6 +276,7 @@
       "accepted_transition_effects_and_cash_separation",
       "zero_shortfall_rejected_without_mutation",
       "partial_shortfall_requests_unpaid_balance",
+      "full_shortfall_requests_claim_amount",
       "shortfall_above_claim_requests_claim_amount",
       "current_owner_evaluation_receipt_binding",
       "exact_retry_after_ack_is_noop",
@@ -303,6 +304,8 @@
       "reuse_acknowledgment_denies_local_execution",
       "reuse_cancellation_denies_local_execution",
       "reuse_stale_authority_denies_local_execution",
+      "reuse_rejects_amount_below_b2",
+      "reuse_rejects_amount_above_b2",
       "reuse_protocol_roundtrip",
       "request_codec_roundtrip",
       "result_codec_roundtrip",

@@ -36,9 +36,9 @@ theorem applyCorrectionTransition_mutation_links
               cases hMutation
               exact ⟨rfl, rfl, rfl, rfl, rfl, inputRevisionMatches, certified.property⟩
 
-/-- A correction never requests more than the shortfall Lean evaluated before the
-    decision: it requests the smaller of the rejected claim and that shortfall. -/
-theorem applyCorrectionTransition_action_amount_le_shortfall
+/-- B2: a correction requests exactly the smaller of the rejected claim and the
+    shortfall Lean evaluated before the decision, so never more than that shortfall. -/
+theorem applyCorrectionTransition_action_amount_eq_b2
     (request : CorrectionTransitionRequest) (mutation : CorrectionMutation)
     (hMutation : (applyCorrectionTransition request).mutation = some mutation) :
     ∃ result, evaluate request.currentInput = some result ∧ 0 < result.shortfallCents ∧
@@ -62,7 +62,7 @@ theorem applyCorrectionTransition_zero_shortfall_has_no_mutation
   | none => rfl
   | some mutation =>
       obtain ⟨other, hOther, hPositive, _, _⟩ :=
-        applyCorrectionTransition_action_amount_le_shortfall request mutation hMutation
+        applyCorrectionTransition_action_amount_eq_b2 request mutation hMutation
       rw [hEval] at hOther
       have hSame : result = other := Option.some.inj hOther
       subst hSame
@@ -128,7 +128,7 @@ theorem applyCorrectionTransition_amounts_conserved
         result.owedCents := by
   have hLinks := (applyCorrectionTransition_mutation_links request mutation hMutation).2.2.2.2.2.2
   obtain ⟨result, hEval, hPositive, _, hBound⟩ :=
-    applyCorrectionTransition_action_amount_le_shortfall request mutation hMutation
+    applyCorrectionTransition_action_amount_eq_b2 request mutation hMutation
   have hBalance := evaluate_positive_shortfall_balance request.currentInput result hEval hPositive
   refine ⟨result, hEval, hLinks.claimAmount, ?_, by omega⟩
   rw [hLinks.amountRule]

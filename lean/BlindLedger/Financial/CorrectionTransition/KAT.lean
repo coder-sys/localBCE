@@ -378,6 +378,10 @@ def gateCorrectionZeroShortfallRejected : Bool :=
 def gateCorrectionPartialShortfallAmount : Bool :=
   correctionKatOwedAction 9_800_000 = some (100_000, 300_000, 100_000)
 
+/-- 300,000 unpaid against a 300,000 offset: the request is the whole claim. -/
+def gateCorrectionFullShortfallAmount : Bool :=
+  correctionKatOwedAction 10_000_000 = some (300_000, 300_000, 300_000)
+
 /-- 800,000 unpaid against a 300,000 offset: the request is capped at the claim. -/
 def gateCorrectionShortfallAboveClaimAmount : Bool :=
   correctionKatOwedAction 10_500_000 = some (800_000, 300_000, 300_000)
@@ -391,10 +395,12 @@ private def correctionKatReuseReceipt (mutation : CorrectionMutation) : Evaluati
     receiptDigest := correctionKatDigest 102
     evaluationResultDigest := correctionKatDigest 101 }
 
-def correctionKatReuseRequest : CorrectionReuseRequest :=
-  match correctionKatAccepted.mutation with
+/-- The Owner's read right after `accepted` committed, handed back for reuse. -/
+private def correctionKatReuseRequestFor (accepted : CorrectionTransitionResult) :
+    CorrectionReuseRequest :=
+  match accepted.mutation with
   | some mutation => {
-      acceptedResult := correctionKatAccepted
+      acceptedResult := accepted
       currentInput := mutation.resultingInput
       currentReceipt := correctionKatReuseReceipt mutation
       currentDetermination := some mutation.determination
@@ -404,7 +410,7 @@ def correctionKatReuseRequest : CorrectionReuseRequest :=
       currentHistoryHead := correctionKatDigest 43
       currentOwnerNowMs := katOwnerNow + 1 }
   | none => {
-      acceptedResult := correctionKatAccepted
+      acceptedResult := accepted
       currentInput := correctionKatInput
       currentReceipt := correctionKatCurrentReceipt
       currentDetermination := none
@@ -413,6 +419,9 @@ def correctionKatReuseRequest : CorrectionReuseRequest :=
       currentEventSequence := 10
       currentHistoryHead := correctionKatDigest 42
       currentOwnerNowMs := katOwnerNow }
+
+def correctionKatReuseRequest : CorrectionReuseRequest :=
+  correctionKatReuseRequestFor correctionKatAccepted
 
 def gateCorrectionReuseBaselineValid : Bool :=
   let assessment := assessCorrectionReuse correctionKatReuseRequest
@@ -531,6 +540,29 @@ def gateCorrectionReuseStaleAuthorityDeniesExecution : Bool :=
   assessment.localExecutionPermission = .DENIED &&
     assessment.executionDenial = some .AUTHORITY_STALE
 
+/-- Reuse of the partial correction (B2 amount 100,000) with the stored action's
+    amount set to `amountCents`. -/
+private def correctionKatPartialReuse (amountCents : Nat) : CorrectionReuseAssessment :=
+  let request := correctionKatReuseRequestFor
+    (applyCorrectionTransition (correctionKatOwedRequest 9_800_000))
+  assessCorrectionReuse { request with currentInput := { request.currentInput with
+    actions := request.currentInput.actions.map (fun action =>
+      if action.actionId = katCorrectionActionId then { action with amountCents := amountCents }
+      else action) } }
+
+private def correctionKatReuseDeniesChangedAction (amountCents : Nat) : Bool :=
+  (correctionKatPartialReuse 100_000).localExecutionPermission = .ALLOWED &&
+    (correctionKatPartialReuse amountCents).localExecutionPermission = .DENIED &&
+    (correctionKatPartialReuse amountCents).executionDenial = some .ACTION_CHANGED
+
+/-- A stored correction one cent below the B2 amount is never executed. -/
+def gateCorrectionReuseRejectsAmountBelowB2 : Bool :=
+  correctionKatReuseDeniesChangedAction 99_999
+
+/-- A stored correction one cent above the B2 amount is never executed. -/
+def gateCorrectionReuseRejectsAmountAboveB2 : Bool :=
+  correctionKatReuseDeniesChangedAction 100_001
+
 def gateCorrectionReuseCodecRoundtrip : Bool :=
   match encodeCorrectionReuseRequest correctionKatReuseRequest with
   | none => false
@@ -546,6 +578,7 @@ def correctionTransitionKatLines : List (String × Bool) := [
   ("accepted_transition_effects_and_cash_separation", gateCorrectionAcceptedTransition),
   ("zero_shortfall_rejected_without_mutation", gateCorrectionZeroShortfallRejected),
   ("partial_shortfall_requests_unpaid_balance", gateCorrectionPartialShortfallAmount),
+  ("full_shortfall_requests_claim_amount", gateCorrectionFullShortfallAmount),
   ("shortfall_above_claim_requests_claim_amount", gateCorrectionShortfallAboveClaimAmount),
   ("current_owner_evaluation_receipt_binding", gateCorrectionInputReceiptBound),
   ("exact_retry_after_ack_is_noop", gateCorrectionExactRetryNoEffects),
@@ -573,6 +606,8 @@ def correctionTransitionKatLines : List (String × Bool) := [
   ("reuse_acknowledgment_denies_local_execution", gateCorrectionReuseAckDeniesExecution),
   ("reuse_cancellation_denies_local_execution", gateCorrectionReuseCancelDeniesExecution),
   ("reuse_stale_authority_denies_local_execution", gateCorrectionReuseStaleAuthorityDeniesExecution),
+  ("reuse_rejects_amount_below_b2", gateCorrectionReuseRejectsAmountBelowB2),
+  ("reuse_rejects_amount_above_b2", gateCorrectionReuseRejectsAmountAboveB2),
   ("reuse_protocol_roundtrip", gateCorrectionReuseCodecRoundtrip),
   ("request_codec_roundtrip", gateCorrectionRequestCodecRoundtrip),
   ("result_codec_roundtrip", gateCorrectionResultCodecRoundtrip),
