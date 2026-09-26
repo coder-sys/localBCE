@@ -14,6 +14,20 @@ import unittest
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
 
+_HISTORY_TRIGGERS = ("financial_event_update_immutable", "financial_event_delete_immutable")
+
+
+def _drop_history_triggers(connection: sqlite3.Connection) -> None:
+    # Model an attacker with file access: the append-only triggers are
+    # dropped for the tamper and restored, so only the history can reveal it.
+    for name in _HISTORY_TRIGGERS:
+        connection.execute(f"DROP TRIGGER {name}")
+
+
+def _restore_history_triggers(connection: sqlite3.Connection) -> None:
+    for name in _HISTORY_TRIGGERS:
+        connection.execute(independent._TRIGGER_DEFS[name])
+
 
 class _Clock:
     def __init__(self) -> None:
@@ -403,6 +417,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 target["payload_digest"] = independent._digest(independent.EVENT_DOMAIN, payload_bytes)
                 target["after_revision"] = 3
             offset = 100_000
+            _drop_history_triggers(connection)
             connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
             if removed_sequence is not None:
                 connection.execute("DELETE FROM financial_events WHERE event_sequence=?", (removed_sequence + offset,))
@@ -425,7 +440,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 "currency": str(meta["currency"]),
             }
             previous = independent._digest(
-                independent.GENESIS_DOMAIN_BY_VERSION[int(meta["schema_version"])],
+                independent.GENESIS_DOMAIN,
                 independent._canonical(scope, "test:genesis-scope"),
                 bytes(meta["trusted_authority_digest"]),
                 bytes(identity["identity_digest"]),
@@ -476,6 +491,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 )
                 previous = head
             connection.execute("UPDATE financial_meta SET sequence=?,history_head=? WHERE id=1", (len(rows), previous))
+            _restore_history_triggers(connection)
 
     @staticmethod
     def _reorder_and_rehash_population_events(
@@ -495,6 +511,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             right_position = right_candidates[right_index]
             rows[left_position], rows[right_position] = rows[right_position], rows[left_position]
             offset = 100_000
+            _drop_history_triggers(connection)
             connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
             meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
             assert meta is not None
@@ -515,7 +532,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 "currency": str(meta["currency"]),
             }
             previous = independent._digest(
-                independent.GENESIS_DOMAIN_BY_VERSION[int(meta["schema_version"])],
+                independent.GENESIS_DOMAIN,
                 independent._canonical(scope, "test:genesis-scope"),
                 bytes(meta["trusted_authority_digest"]),
                 bytes(identity["identity_digest"]),
@@ -552,11 +569,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 )
                 previous = head
             connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
+            _restore_history_triggers(connection)
 
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
         obligation = next(iter(result["obligations"].values()))
-        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v7")
+        self.assertEqual(result["schema"], "RR/FINANCIAL/OWNER/v8")
         self.assertEqual(result["mode"], "LIVE")
         self.assertEqual(result["totals"], {
             "owed_cents": 10_000_000,
@@ -663,28 +681,34 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         def tamper(path: Path) -> None:
             with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                _drop_history_triggers(connection)
                 connection.execute(
                     "UPDATE financial_events SET payload_json=? WHERE event_sequence=1",
                     ('{"tampered":true}',),
                 )
+                _restore_history_triggers(connection)
 
         self._assert_rejected_without_repair(target, tamper, "history:payload-digest")
 
     def test_event_header_tamper_fails_owner_verification_without_repair(self) -> None:
         target = self._copy_database("event-header-tamper.sqlite")
         with closing(sqlite3.connect(target, isolation_level=None)) as connection:
+            _drop_history_triggers(connection)
             connection.execute(
                 "UPDATE financial_events SET after_revision=after_revision+1 WHERE kind='POPULATION_SOURCE_COMPLETED'"
             )
+            _restore_history_triggers(connection)
         tampered_bytes = target.read_bytes()
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:event-id"):
-            reopened = owner.FinancialOwner(
+            self._verify(target)
+        # Owner open replays the history and refuses before any read or write.
+        with self.assertRaisesRegex(owner.FinancialIntegrityError, r"\Aopen_verification:history:event-id\Z"):
+            owner.FinancialOwner(
                 path=target,
                 config=self.config,
                 trusted_authority=self.authority,
                 clock=self.clock,
             )
-            reopened.verify_integrity()
         self.assertEqual(target.read_bytes(), tampered_bytes)
 
     def test_rehashed_population_history_rejects_invalid_completion_lifecycle(self) -> None:
@@ -772,50 +796,35 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             else:
                 self.fail(f"variant={variant} was accepted")
 
-            # Owner open recomputes the continuity admission cache (per-table
-            # row count and canonical bytes) and rejects a rewrite that changed
-            # either before any read (Art. III.5). It is a size admission bound,
-            # not a content digest, so the same-length "reduced" rewrite passes it.
-            with closing(sqlite3.connect(target)) as connection:
-                connection.row_factory = sqlite3.Row
-                rebuilt = reopened._recompute_continuity_admission(connection)
-                stored = {
-                    str(row["table_name"]): (int(row["row_count"]), int(row["row_bytes"]))
-                    for row in connection.execute(
-                        "SELECT table_name,row_count,row_bytes FROM right_rail_continuity_admission"
-                    )
-                }
-            if rebuilt != stored:
-                with self.assertRaisesRegex(owner.FinancialIntegrityError, "continuity_admission_mismatch"):
-                    owner.FinancialOwner(
-                        path=target,
-                        config=self.config,
-                        trusted_authority=self.authority,
-                        clock=_Clock(),
-                    )
-                # An attacker who also rewrites the cache must still be stopped
-                # by the independent history binding below.
-                with closing(sqlite3.connect(target)) as connection:
-                    connection.executemany(
-                        "UPDATE right_rail_continuity_admission SET row_count=?,row_bytes=? WHERE table_name=?",
-                        ((count, size, table) for table, (count, size) in rebuilt.items()),
-                    )
-                    connection.commit()
-            elif variant == "removed":
-                self.fail("removing a history event must change the admission row count")
-
-            tampered_owner = owner.FinancialOwner(
+            # Owner open replays the history against the projections and refuses
+            # the tampered store without writing to it.
+            tampered_bytes = target.read_bytes()
+            with self.assertRaisesRegex(
+                owner.FinancialIntegrityError,
+                r"\Aopen_verification:history:population-imported-binding\Z",
+                msg=f"variant={variant}",
+            ):
+                owner.FinancialOwner(
+                    path=target,
+                    config=self.config,
+                    trusted_authority=self.authority,
+                    clock=_Clock(),
+                )
+            self.assertEqual(target.read_bytes(), tampered_bytes, f"variant={variant}")
+            # The package path must reject such a store too. No Owner can open it,
+            # so export through a handle that skipped open verification, as a
+            # compromised writer would.
+            tampered_owner = owner.FinancialOwner.__new__(owner.FinancialOwner)
+            tampered_owner._initialize(
                 path=target,
                 config=self.config,
                 trusted_authority=self.authority,
                 clock=_Clock(),
+                mode="LIVE",
+                owner_id="financial-owner-v1",
+                correction_transition_release=None,
+                identity_contract=None,
             )
-            try:
-                tampered_owner.verify_integrity()
-            except independent.IndependentFinancialError as error:
-                self.assertEqual(str(error), "history:population-imported-binding", f"variant={variant}")
-            else:
-                self.fail(f"variant={variant} was accepted by owner verification")
             tampered_package = tampered_owner.export_continuity()
             with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-imported-binding"):
                 independent.verify_continuity_package(
@@ -839,10 +848,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         def tamper(path: Path) -> None:
             with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                _drop_history_triggers(connection)
                 connection.execute(
                     "UPDATE financial_events SET head=? WHERE event_sequence=(SELECT MAX(event_sequence) FROM financial_events)",
                     (b"\xff" * 64,),
                 )
+                _restore_history_triggers(connection)
 
         self._assert_rejected_without_repair(target, tamper, "history:")
 
@@ -949,7 +960,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                     ("evidence:report:H:original",),
                 )
 
-        self._assert_rejected_without_repair(target, tamper, "evidence:report-supersedes-missing")
+        # The declared foreign key (evidence.supersedes) refuses it before any per-table check.
+        self._assert_rejected_without_repair(target, tamper, "foreign-keys:evidence")
 
     def test_reporting_supersedes_fork_fails_closed_without_repair(self) -> None:
         target = self._copy_database("reporting-lineage-fork.sqlite")

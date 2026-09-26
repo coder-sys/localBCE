@@ -36,10 +36,17 @@ in one transaction. An exact retry returns `DUPLICATE`; changed input is a
 conflict. Crashes before and after commit are recovered by restart; the
 committed result is found again by its command identity.
 
-The owner knows three store versions, `RR/FINANCIAL/OWNER/v5`, `v6` and `v7`
-(new stores default to v7, which adds the population manifest and decision
-package v2), each with its matching `RR/FINANCIAL/CONTINUITY/` package version.
-Older (v2-v4) or unknown versions are rejected without mutation.
+The owner writes one store version, `RR/FINANCIAL/OWNER/v8` (population
+manifest, program funding receipts, decision package v2, the exported
+`commands` log and declared foreign keys), with its matching
+`RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). A v7
+store is converted to v8 all-or-nothing when the owner opens it, inside the
+open transaction that replays the history; a v7 store the history does not
+explain is refused and left unchanged. The independent checker verifies v8
+stores and v8 and v7 packages; the owner restores v8 packages only. The v5/v6
+versions were retired on 2026-09-24 (no such store existed); they, older
+(v2-v4) and unknown versions are rejected without mutation by the owner and
+the independent checker.
 
 The evaluation receipt binds scope, evaluation/obligation/revision, Control
 Pack id/version/digest, sorted evidence id/record-digest pairs, trusted
@@ -85,10 +92,9 @@ follow-up explanation, a state report and a recipient-safe corporate-support
 output; a bounded follow-up drain is repeatable, and an acknowledgment changes
 follow-up status without changing cash.
 
-**Continuity** exports a versioned, bounded package from the same owner. An
-unexported admission table tracks exported row counts and canonical row bytes in
-the same transaction, so the owner enforces the 10,000-row and 8 MiB limits
-before commit; independent verification rebuilds that table from source rows.
+**Continuity** exports the history as chained, bounded segments
+(`RR/GATE/SEGMENT/v1`, docs/CORE_REDESIGN.md), which the checker verifies and a
+fresh owner restores by replay; the older whole-state package (8 MiB) remains.
 Restore runs in a private attempt directory and publishes atomically without
 replacing anything; a foreign destination and its `-wal`/`-shm` sidecars are
 left intact and cleanup failures are reported. SHADOW opens read-only; TEST is

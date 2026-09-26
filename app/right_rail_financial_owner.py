@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+import ctypes
 import hashlib
 import json
 import os
@@ -61,18 +62,14 @@ def _fail(error_type: type[FinancialError], code: str) -> None:
     raise error
 
 
-_SCHEMA_VERSION: Final[int] = 5
-_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v5"
-_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v5"
-_NEXT_SCHEMA_VERSION: Final[int] = 6
-_NEXT_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v6"
-_NEXT_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v6"
-_MANIFEST_SCHEMA_VERSION: Final[int] = 7
-_MANIFEST_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v7"
-_MANIFEST_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v7"
-_DEFAULT_SCHEMA_VERSION: Final[int] = _MANIFEST_SCHEMA_VERSION
-_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v1"
-_POPULATION_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v2"
+# The owner writes one store version, v8. A v7 store is converted to v8,
+# all-or-nothing, inside the owner's open transaction (docs/CORE_REDESIGN.md
+# step 6); v5/v6 stores and packages are retired and fail closed like v2-v4.
+_SCHEMA_VERSION: Final[int] = 8
+_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v8"
+_CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v8"
+_V7_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v7"
+_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v2"
 _POPULATION_MANIFEST_CONTRACT: Final[str] = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 _CURRENCY: Final[str] = "USD"
 _MAX_CENTS: Final[int] = (1 << 63) - 1
@@ -82,11 +79,26 @@ _MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 _MAX_DECISION_PACKAGE_BYTES: Final[int] = _MAX_PACKAGE_BYTES - 512
 _MAX_CORRECTION_FOLLOWUP_BYTES: Final[int] = 3 * _MAX_DECISION_PACKAGE_BYTES + 64 * 1024
 _VERIFIED_STAFF_SNAPSHOT_CONTRACT: Final[str] = "RR/FINANCIAL/OWNER-VERIFIED-STAFF-SNAPSHOT/v1"
+_STAFF_SNAPSHOT_ID_CONTRACT: Final[str] = "RR/FINANCIAL/STAFF-SNAPSHOT-ID/v1"
 _STAFF_WORKSPACE_QUERY: Final[str] = "workspace"
 _STAFF_DECISION_PACKAGE_QUERY: Final[str] = "decision_package"
 _MAX_CORRECTION_FOLLOWUP_PAGE_BYTES: Final[int] = 32 * 1024 * 1024
-_CONTINUITY_ADMISSION_TABLE: Final[str] = "right_rail_continuity_admission"
+# History segments (docs/CORE_REDESIGN.md "History segments"): one format with the gate.
+_SEGMENT_FORMAT: Final[str] = "RR/GATE/SEGMENT/v1"
+_SEGMENT_DOMAIN: Final[bytes] = b"RR/GATE/SEGMENT/v1\x00"
+_MAX_SEGMENT_BYTES: Final[int] = 2 * _MAX_PACKAGE_BYTES  # holds the one catch-up segment of any store the old 8 MiB cap admitted
+_MAX_SEGMENT_EVENTS: Final[int] = _MAX_ROWS
+_SEAL_SEGMENT_BYTES: Final[int] = _MAX_PACKAGE_BYTES // 2  # soft bounds: seal after the write that reaches either
+_SEAL_SEGMENT_EVENTS: Final[int] = 4096
+_SEGMENT_FRAME_BYTES: Final[int] = 4096  # seal, digests and framing, which records do not count
+_SEGMENT_TABLES: Final[frozenset[str]] = frozenset({"history_segments", "history_pending", "history_open"})
 _PRIVATE_INDEX_SET_VERSION: Final[int] = 1
+# The history is append-only in the database itself (Art. III.4); stores
+# created before these triggers get them once, atomically, on open.
+_HISTORY_APPEND_ONLY_TRIGGERS: Final[dict[str, str]] = {
+    "financial_event_update_immutable": "CREATE TRIGGER financial_event_update_immutable BEFORE UPDATE ON financial_events BEGIN SELECT RAISE(ABORT,'financial_event_immutable'); END",
+    "financial_event_delete_immutable": "CREATE TRIGGER financial_event_delete_immutable BEFORE DELETE ON financial_events BEGIN SELECT RAISE(ABORT,'financial_event_immutable'); END",
+}
 _PRIVATE_INDEX_SET_V1: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
     ("rr_financial_v1_evidence_item_id", "evidence", ("item_id", "evidence_id")),
     ("rr_financial_v1_claims_obligation_id", "claimed_adjustments", ("obligation_id", "claim_id")),
@@ -155,9 +167,7 @@ _CONTROL_PACK_POLICIES: Final[dict[tuple[str, str], tuple[tuple[str, ...], str, 
 }
 _EVENT_DOMAIN = b"RR/FINANCIAL/EVENT/v2\x00"
 _HEAD_DOMAIN = b"RR/FINANCIAL/HEAD/v2\x00"
-_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v5\x00"
-_NEXT_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v6\x00"
-_MANIFEST_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v7\x00"
+_GENESIS_DOMAIN = b"RR/FINANCIAL/GENESIS/v7\x00"
 _EVIDENCE_DOMAIN = b"RR/FINANCIAL/EVIDENCE/v1\x00"
 _ACTION_DOMAIN = b"RR/FINANCIAL/ACTION/v1\x00"
 _IDEMPOTENCY_DOMAIN = b"RR/FINANCIAL/IDEMPOTENCY/v1\x00"
@@ -165,9 +175,9 @@ _EVALUATION_RESULT_DOMAIN = b"RR/FINANCIAL/EVALUATION/v5\x00"
 _EVALUATION_INPUT_DOMAIN = b"RR/FINANCIAL/EVALUATION-INPUT/v1\x00"
 _EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 _EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
-_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v5\x00"
-_NEXT_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v6\x00"
-_MANIFEST_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v7\x00"
+_CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v8\x00"
+_COMMAND_DOMAIN = b"RR/FINANCIAL/COMMAND/v1\x00"
+_OPENING_BALANCE_DOMAIN = b"RR/FINANCIAL/OPENING-BALANCE/v1\x00"  # CONSTITUTION V.4: the v7 conversion's sealed rows
 _POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 _POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
 _POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
@@ -179,27 +189,7 @@ _IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
 _EVALUATION_RECEIPT_CONTRACT: Final[str] = "RR/FINANCIAL/EVALUATION-RECEIPT/v1"
 _ZERO_DIGEST: Final[bytes] = b"\x00" * 64
 
-_TABLES: Final[frozenset[str]] = frozenset(
-    {
-        "financial_identity",
-        "financial_meta",
-        "control_packs",
-        "population_imports",
-        "population_items",
-        "obligations",
-        "evidence",
-        "payments",
-        "claimed_adjustments",
-        "cases",
-        "determinations",
-        "actions",
-        "action_outbox",
-        "financial_events",
-        "financial_conflicts",
-        "evaluations",
-    }
-)
-
+# Exported (Continuity v8) tables and their exact column order.
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "financial_identity": (
         "id", "schema_version", "provenance", "bound_mode", "bound_owner_id",
@@ -283,9 +273,6 @@ _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
         "authority_digest", "evidence_bindings_json", "input_snapshot_json",
         "input_snapshot_digest", "receipt_digest",
     ),
-}
-
-_PROGRAM_FUNDING_TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "program_funding_receipts": (
         "receipt_id", "state_id", "deployment_id", "program_id", "period_id", "currency",
         "source_record_ref", "amount_cents", "confirmation_class", "evidence_status",
@@ -294,8 +281,6 @@ _PROGRAM_FUNDING_TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "program_funding_projection": (
         "source_record_ref", "receipt_id", "amount_cents", "event_at_ms", "revision", "receipt_digest",
     ),
-}
-_POPULATION_MANIFEST_TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "population_manifests": (
         "manifest_id", "contract", "manifest_version", "state_id", "deployment_id",
         "program_id", "period_id", "currency", "pack_id", "cutoff_ms",
@@ -313,53 +298,63 @@ _POPULATION_MANIFEST_TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "population_manifest_bindings": (
         "population_id", "manifest_id", "manifest_version", "manifest_digest",
     ),
+    "commands": ("command_id", "kind", "request_json", "request_digest", "event_sequence"),
 }
-_TABLES_BY_VERSION: Final[dict[int, frozenset[str]]] = {
-    5: _TABLES,
-    6: _TABLES | frozenset(_PROGRAM_FUNDING_TABLE_COLUMNS),
-    7: _TABLES | frozenset(_PROGRAM_FUNDING_TABLE_COLUMNS) | frozenset(_POPULATION_MANIFEST_TABLE_COLUMNS),
-}
-_TABLE_COLUMNS_BY_VERSION: Final[dict[int, dict[str, tuple[str, ...]]]] = {
-    5: _TABLE_COLUMNS,
-    6: {**_TABLE_COLUMNS, **_PROGRAM_FUNDING_TABLE_COLUMNS},
-    7: {**_TABLE_COLUMNS, **_PROGRAM_FUNDING_TABLE_COLUMNS, **_POPULATION_MANIFEST_TABLE_COLUMNS},
-}
-_SCHEMA_BY_VERSION: Final[dict[int, str]] = {
-    5: _SCHEMA,
-    6: _NEXT_SCHEMA,
-    7: _MANIFEST_SCHEMA,
-}
-_CONTINUITY_SCHEMA_BY_VERSION: Final[dict[int, str]] = {
-    5: _CONTINUITY_SCHEMA,
-    6: _NEXT_CONTINUITY_SCHEMA,
-    7: _MANIFEST_CONTINUITY_SCHEMA,
-}
-_GENESIS_DOMAIN_BY_VERSION: Final[dict[int, bytes]] = {
-    5: _GENESIS_DOMAIN,
-    6: _NEXT_GENESIS_DOMAIN,
-    7: _MANIFEST_GENESIS_DOMAIN,
-}
-_CONTINUITY_DOMAIN_BY_VERSION: Final[dict[int, bytes]] = {
-    5: _CONTINUITY_DOMAIN,
-    6: _NEXT_CONTINUITY_DOMAIN,
-    7: _MANIFEST_CONTINUITY_DOMAIN,
-}
+_TABLES: Final[frozenset[str]] = frozenset(_TABLE_COLUMNS)
+_PACKAGE_TABLES: Final[frozenset[str]] = _TABLES - {"commands"}  # the command log is derived, never exported
+# Every write to these rows is carried in the next event's ``rows`` (step 6): the chain holds their full facts.
+_CAPTURED_TABLES: Final = ("action_outbox", "cases", "claimed_adjustments", "evidence", "financial_conflicts")
+# A history segment carries its events and the end-of-segment image of every row these tables changed in it.
+_PROJECTION_TABLES: Final = tuple(sorted(_PACKAGE_TABLES - {"financial_events", "financial_identity", "financial_meta"}))
 
-
-def _version_contract(schema_version: int) -> tuple[str, str, bytes, bytes, frozenset[str], dict[str, tuple[str, ...]]]:
-    if type(schema_version) is not int or schema_version not in _TABLES_BY_VERSION:
-        _fail(FinancialInputError, "schema_version")
-    return (
-        _SCHEMA_BY_VERSION[schema_version],
-        _CONTINUITY_SCHEMA_BY_VERSION[schema_version],
-        _GENESIS_DOMAIN_BY_VERSION[schema_version],
-        _CONTINUITY_DOMAIN_BY_VERSION[schema_version],
-        _TABLES_BY_VERSION[schema_version],
-        _TABLE_COLUMNS_BY_VERSION[schema_version],
-    )
-
-
-_FUNDING_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset({_NEXT_SCHEMA_VERSION, _MANIFEST_SCHEMA_VERSION})
+# The command log (Art. III.3): one row per request the Owner accepted, keyed by
+# the caller's natural key and bound to the history event that request produced.
+# The request fields are read back from the rows that request wrote, so a v7
+# history converts to exactly the rows a v8 Owner would have recorded, and the
+# independent checker can recompute every row.
+_COMMAND_EVENTS: Final[dict[str, tuple[str, str | None]]] = {
+    # event kind: (command kind, payload field naming the key; None = aggregate id)
+    "CONTROL_PACK_PUBLISHED": ("CONTROL_PACK", None),
+    "POPULATION_MANIFEST_REGISTERED": ("POPULATION_MANIFEST", None),
+    "POPULATION_MANIFEST_SUPERSEDED": ("POPULATION_MANIFEST", None),
+    "FUNDING_RECEIPT_RECORDED": ("FUNDING_RECEIPT", None),
+    "FUNDING_RECEIPT_SUPERSEDED": ("FUNDING_RECEIPT", None),
+    "SUPPORT_EVIDENCE_RECORDED": ("SUPPORT_EVIDENCE", "evidence_id"),
+    "PAYMENT_RECEIVED": ("PAYMENT", "payment_id"),
+    "PAYMENT_REVERSED": ("PAYMENT_REVERSAL", "evidence_id"),
+    "OFFSET_CLAIMED": ("OFFSET_CLAIM", "claim_id"),
+    "OFFSET_AUTHORIZED": ("OFFSET_DECISION", "action_id"),
+    "OFFSET_REJECTED_CORRECTION_AUTHORIZED": ("OFFSET_DECISION", "action_id"),
+    "ACTION_ACKNOWLEDGED": ("ACTION_ACKNOWLEDGMENT", "action_id"),
+    "REPORTING_EVIDENCE_RECORDED": ("REPORT", "evidence_id"),
+    "REPORTING_CORRECTION_RECORDED": ("REPORT", "evidence_id"),
+}
+_OPTIONAL_REQUEST_FIELDS: Final = frozenset({"evaluation_id", "evaluation_result_digest", "expected_revision", "decided_at_ms"})
+_COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
+    "CONTROL_PACK": "SELECT pack_digest FROM control_packs WHERE pack_id=?",
+    "POPULATION_MANIFEST": "SELECT manifest_digest FROM population_manifests WHERE manifest_id=?",
+    "FUNDING_RECEIPT": "SELECT receipt_digest FROM program_funding_receipts WHERE receipt_id=?",
+    "SUPPORT_EVIDENCE": "SELECT item_id,record_digest FROM evidence WHERE evidence_id=?",
+    "PAYMENT": (
+        "SELECT p.item_id,p.evidence_id,p.common_origin_id,p.amount_cents,p.event_at_ms,"
+        "e.source_id,e.source_version,e.local_ref "
+        "FROM payments p JOIN evidence e ON e.evidence_id=p.evidence_id WHERE p.payment_id=?"
+    ),
+    "PAYMENT_REVERSAL": "SELECT item_id,reversal_of AS payment_id,record_digest FROM evidence WHERE evidence_id=?",
+    "OFFSET_CLAIM": (
+        "SELECT o.item_id,c.evidence_id,c.amount_cents,c.owner_role,c.deadline_ms "
+        "FROM claimed_adjustments c JOIN obligations o ON o.obligation_id=c.obligation_id WHERE c.claim_id=?"
+    ),
+    "OFFSET_DECISION": (
+        "SELECT o.item_id,d.claim_id,d.decision,d.actor_id,d.actor_role,"
+        "d.input_evaluation_id AS evaluation_id,d.input_evaluation_result_digest AS evaluation_result_digest,"
+        "d.expected_revision,d.decided_at_ms "
+        "FROM actions a JOIN determinations d ON d.determination_id=a.determination_id "
+        "JOIN obligations o ON o.obligation_id=a.obligation_id WHERE a.action_id=?"
+    ),
+    "ACTION_ACKNOWLEDGMENT": "SELECT acknowledgment_ref FROM action_outbox WHERE action_id=?",
+    "REPORT": "SELECT item_id,record_digest FROM evidence WHERE evidence_id=?",
+}
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -447,6 +442,18 @@ def _stored_values(raw: object, code: str) -> tuple[Any, ...]:
     return tuple(value["values"])
 
 
+def _stored_object(raw: object, code: str) -> dict[str, Any]:
+    """Decode one persisted JSON object column or fail closed with ``code``."""
+
+    try:
+        value = json.loads(str(raw))
+    except (TypeError, ValueError):
+        _fail(FinancialIntegrityError, code)
+    if type(value) is not dict:
+        _fail(FinancialIntegrityError, code)
+    return value
+
+
 def _population_validation_digest(rows: Iterable[Any]) -> bytes:
     """Digest of ordered (item_id, display_label, owed_cents, due_at_ms, currency) rows."""
 
@@ -475,9 +482,13 @@ def _is_upper_hex64(value: object) -> bool:
 
 
 def _staff_snapshot_id(fields: Mapping[str, Any]) -> str:
-    """SHA-256 identity of one staff-visible Owner snapshot (fields exclude ``snapshot_id``)."""
+    """Versioned SHA-256 identity of one staff-visible Owner snapshot (fields exclude ``snapshot_id``).
 
-    encoded = json.dumps(dict(fields), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    SHA-256 because the browser recomputes it with WebCrypto, which has no SHA3.
+    """
+
+    material = {"contract": _STAFF_SNAPSHOT_ID_CONTRACT, **dict(fields)}
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest().upper()
 
 
@@ -520,7 +531,7 @@ def _identity_digest(
     if bound_mode not in _MODES:
         _fail(FinancialIntegrityError, "identity_mode")
     _id(bound_owner_id, "identity_owner_id")
-    if type(anchor_sequence) is not int or not 0 <= anchor_sequence <= _MAX_ROWS:
+    if type(anchor_sequence) is not int or not 0 <= anchor_sequence < 2**63:
         _fail(FinancialIntegrityError, "identity_anchor_sequence")
     source_package_digest = _blob(source_package_digest, 64, "identity_source_package_digest")
     return _digest(
@@ -552,18 +563,15 @@ def _time(value: object, label: str) -> int:
 def _identity_record(
     value: Mapping[str, Any],
     *,
-    schema_version: int = _DEFAULT_SCHEMA_VERSION,
     error_type: type[FinancialError] = FinancialIntegrityError,
     code_prefix: str = "identity",
 ) -> dict[str, Any]:
     fields = set(_TABLE_COLUMNS["financial_identity"])
-    if type(schema_version) is not int or schema_version not in _TABLES_BY_VERSION:
-        _fail(error_type, f"{code_prefix}:schema")
     if not isinstance(value, Mapping) or set(value) != fields:
         _fail(error_type, f"{code_prefix}:shape")
     if value["id"] != 1:
         _fail(error_type, f"{code_prefix}:id")
-    if type(value["schema_version"]) is not int or value["schema_version"] != schema_version:
+    if type(value["schema_version"]) is not int or value["schema_version"] != _SCHEMA_VERSION:
         _fail(error_type, f"{code_prefix}:schema")
     provenance = value["provenance"]
     bound_mode = value["bound_mode"]
@@ -581,7 +589,7 @@ def _identity_record(
         if bound_owner_id != expected_owner_id:
             _fail(error_type, f"{code_prefix}:restore-owner")
     anchor_sequence = value["anchor_sequence"]
-    if type(anchor_sequence) is not int or not 0 <= anchor_sequence <= _MAX_ROWS:
+    if type(anchor_sequence) is not int or not 0 <= anchor_sequence < 2**63:
         _fail(error_type, f"{code_prefix}:anchor-sequence")
     byte_values: dict[str, bytes] = {}
     for field in ("anchor_head", "genesis_head", "source_package_digest", "identity_digest"):
@@ -600,7 +608,7 @@ def _identity_record(
         _fail(error_type, f"{code_prefix}:digest")
     return {
         "id": value["id"],
-        "schema_version": schema_version,
+        "schema_version": _SCHEMA_VERSION,
         "provenance": provenance,
         "bound_mode": bound_mode,
         "bound_owner_id": bound_owner_id,
@@ -722,7 +730,7 @@ class ControlPack:
             _id(value, label)
         if self.period_id in _WILDCARD_PERIODS:
             _fail(FinancialInputError, "period_scope_required")
-        if type(self.version) is not int or self.version < 1:
+        if type(self.version) is not int or not 1 <= self.version <= _MAX_ROWS:
             _fail(FinancialInputError, "pack_version")
         if type(self.source_refs) is not tuple or not self.source_refs:
             _fail(FinancialInputError, "pack_source_refs")
@@ -798,13 +806,10 @@ def _control_pack_policy(
 def _control_pack_from_row(row: Mapping[str, Any]) -> ControlPack:
     """Rebuild one persisted control pack; malformed JSON columns fail closed."""
 
+    source_refs = _stored_values(row["source_refs_json"], "control_pack_binding")
+    authorized_roles = _stored_values(row["authorized_roles_json"], "control_pack_binding")
+    expected_tests = _stored_values(row["expected_tests_json"], "control_pack_binding")
     try:
-        source_refs = json.loads(str(row["source_refs_json"]))
-        authorized_roles = json.loads(str(row["authorized_roles_json"]))
-        expected_tests = json.loads(str(row["expected_tests_json"]))
-        for value in (source_refs, authorized_roles, expected_tests):
-            if not isinstance(value, dict) or set(value) != {"values"}:
-                _fail(FinancialIntegrityError, "control_pack_binding")
         return ControlPack(
             pack_id=str(row["pack_id"]),
             state_id=str(row["state_id"]),
@@ -812,15 +817,15 @@ def _control_pack_from_row(row: Mapping[str, Any]) -> ControlPack:
             program_id=str(row["program_id"]),
             period_id=str(row["period_id"]),
             version=int(row["version"]),
-            source_refs=tuple(source_refs["values"]),
+            source_refs=source_refs,
             effective_start_ms=int(row["effective_start_ms"]),
             effective_end_ms=int(row["effective_end_ms"]),
             recorded_at_ms=int(row["recorded_at_ms"]),
             approved_at_ms=int(row["approved_at_ms"]),
             calculation_rule_id=str(row["calculation_rule_id"]),
             adjustment_rule_id=str(row["adjustment_rule_id"]),
-            authorized_roles=tuple(authorized_roles["values"]),
-            expected_tests=tuple(expected_tests["values"]),
+            authorized_roles=authorized_roles,
+            expected_tests=expected_tests,
         )
     except (TypeError, ValueError):
         _fail(FinancialIntegrityError, "control_pack_binding")
@@ -1176,7 +1181,7 @@ class FinancialOwnerConfig:
     program_id: str
     period_id: str = "PROGRAM"
     currency: str = _CURRENCY
-    schema_version: int = _DEFAULT_SCHEMA_VERSION
+    schema_version: int = _SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         for value, label in ((self.state_id, "state_id"), (self.deployment_id, "deployment_id"), (self.program_id, "program_id"), (self.period_id, "period_id")):
@@ -1185,7 +1190,7 @@ class FinancialOwnerConfig:
             _fail(FinancialInputError, "period_scope_required")
         if self.currency != _CURRENCY:
             _fail(FinancialInputError, "currency")
-        if type(self.schema_version) is not int or self.schema_version not in _TABLES_BY_VERSION:
+        if type(self.schema_version) is not int or self.schema_version != _SCHEMA_VERSION:
             _fail(FinancialInputError, "schema_version")
 
     @property
@@ -1326,9 +1331,46 @@ def _install_private_index_set(connection: sqlite3.Connection) -> None:
         _fail(FinancialIntegrityError, "schema_private_indexes")
 
 
-def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAULT_SCHEMA_VERSION) -> None:
-    _version_contract(schema_version)
-    connection.executescript(
+def _install_history_append_only(connection: sqlite3.Connection) -> None:
+    actual: dict[str, str] = {}
+    for row in connection.execute(
+        "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'"
+    ):
+        name, sql = row[0], row[1]
+        if type(name) is not str or type(sql) is not str or name in actual:
+            _fail(FinancialIntegrityError, "schema_history_triggers")
+        actual[name] = sql
+    if not actual:
+        for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
+            connection.execute(sql)
+        return
+    if set(actual) != set(_HISTORY_APPEND_ONLY_TRIGGERS) or any(
+        _normalized_schema_sql(actual[name]) != _normalized_schema_sql(sql)
+        for name, sql in _HISTORY_APPEND_ONLY_TRIGGERS.items()
+    ):
+        _fail(FinancialIntegrityError, "schema_history_triggers")
+
+
+def _execute_script(connection: sqlite3.Connection, script: str) -> None:
+    """Run DDL one statement at a time inside the caller's transaction.
+
+    ``executescript`` would COMMIT first, which would break the all-or-nothing
+    v7 -> v8 conversion on open.
+    """
+    statement = ""
+    for part in script.split(";"):
+        statement += part + ";"
+        if sqlite3.complete_statement(statement):
+            if statement.strip(" \n;"):
+                connection.execute(statement)
+            statement = ""
+    if statement.strip(" \n;"):
+        _fail(FinancialIntegrityError, "schema_script")
+
+
+def _sql_schema(connection: sqlite3.Connection) -> None:
+    _execute_script(
+        connection,
         """
         CREATE TABLE financial_identity (
             id INTEGER PRIMARY KEY CHECK (id=1),
@@ -1383,7 +1425,7 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
         );
         CREATE TABLE population_imports (
             population_id TEXT PRIMARY KEY,
-            pack_id TEXT NOT NULL,
+            pack_id TEXT NOT NULL REFERENCES control_packs(pack_id) DEFERRABLE INITIALLY DEFERRED,
             cutoff_ms INTEGER NOT NULL,
             inclusion_rules_json TEXT NOT NULL,
             expected_count INTEGER NOT NULL CHECK (expected_count>0),
@@ -1396,7 +1438,7 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             updated_at_ms INTEGER NOT NULL
         );
         CREATE TABLE population_items (
-            population_id TEXT NOT NULL,
+            population_id TEXT NOT NULL REFERENCES population_imports(population_id) DEFERRABLE INITIALLY DEFERRED,
             item_id TEXT NOT NULL,
             display_label TEXT NOT NULL,
             owed_cents INTEGER NOT NULL CHECK (owed_cents>0),
@@ -1426,9 +1468,10 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             verification_status TEXT NOT NULL,
             case_status TEXT NOT NULL,
             delivery_status TEXT NOT NULL,
-            current_evaluation_id TEXT,
+            current_evaluation_id TEXT REFERENCES evaluations(evaluation_id) DEFERRABLE INITIALLY DEFERRED,
             updated_at_ms INTEGER NOT NULL,
-            UNIQUE (population_id,item_id)
+            UNIQUE (population_id,item_id),
+            FOREIGN KEY (population_id,item_id) REFERENCES population_items(population_id,item_id) DEFERRABLE INITIALLY DEFERRED
         );
         CREATE TABLE evidence (
             evidence_id TEXT PRIMARY KEY,
@@ -1444,25 +1487,25 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             content_digest BLOB NOT NULL CHECK (length(content_digest)=64),
             record_digest BLOB NOT NULL CHECK (length(record_digest)=64),
             amount_cents INTEGER,
-            reversal_of TEXT,
-            supersedes TEXT
+            reversal_of TEXT REFERENCES payments(payment_id) DEFERRABLE INITIALLY DEFERRED,
+            supersedes TEXT REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED
         );
         CREATE TABLE payments (
             payment_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
             item_id TEXT NOT NULL,
-            evidence_id TEXT NOT NULL,
+            evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED,
             common_origin_id TEXT NOT NULL,
             amount_cents INTEGER NOT NULL CHECK (amount_cents>0),
             event_at_ms INTEGER NOT NULL,
             active INTEGER NOT NULL CHECK (active IN (0,1)),
-            reversed_by_evidence_id TEXT,
+            reversed_by_evidence_id TEXT REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED,
             UNIQUE (obligation_id,common_origin_id)
         );
         CREATE TABLE claimed_adjustments (
             claim_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
-            evidence_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
+            evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED,
             amount_cents INTEGER NOT NULL CHECK (amount_cents>0),
             owner_role TEXT NOT NULL,
             deadline_ms INTEGER NOT NULL,
@@ -1472,7 +1515,7 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
         );
         CREATE TABLE cases (
             case_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
             reason TEXT NOT NULL,
             contractual_accountability TEXT NOT NULL,
             next_action_owner TEXT NOT NULL,
@@ -1483,8 +1526,8 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
         );
         CREATE TABLE determinations (
             determination_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
-            claim_id TEXT,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
+            claim_id TEXT REFERENCES claimed_adjustments(claim_id) DEFERRABLE INITIALLY DEFERRED,
             actor_id TEXT NOT NULL,
             actor_role TEXT NOT NULL,
             authority_id TEXT NOT NULL,
@@ -1497,14 +1540,14 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             resulting_revision INTEGER NOT NULL,
             decided_at_ms INTEGER NOT NULL,
             determination_digest BLOB NOT NULL CHECK (length(determination_digest)=64),
-            input_evaluation_id TEXT NOT NULL,
+            input_evaluation_id TEXT NOT NULL REFERENCES evaluations(evaluation_id) DEFERRABLE INITIALLY DEFERRED,
             input_evaluation_result_digest BLOB NOT NULL CHECK (length(input_evaluation_result_digest)=64),
             UNIQUE (input_evaluation_id)
         );
         CREATE TABLE actions (
             action_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
-            determination_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
+            determination_id TEXT NOT NULL REFERENCES determinations(determination_id) DEFERRABLE INITIALLY DEFERRED,
             kind TEXT NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('READY','ACKNOWLEDGED','CANCELLED')),
             revision INTEGER NOT NULL,
@@ -1514,7 +1557,7 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             created_at_ms INTEGER NOT NULL
         );
         CREATE TABLE action_outbox (
-            action_id TEXT PRIMARY KEY,
+            action_id TEXT PRIMARY KEY REFERENCES actions(action_id) DEFERRABLE INITIALLY DEFERRED,
             status TEXT NOT NULL CHECK (status IN ('READY','ACKNOWLEDGED','CANCELLED')),
             attempt INTEGER NOT NULL CHECK (attempt>=0),
             payload_digest BLOB NOT NULL CHECK (length(payload_digest)=64),
@@ -1537,10 +1580,10 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
         );
         CREATE TABLE financial_conflicts (
             conflict_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
             common_origin_id TEXT NOT NULL,
-            existing_payment_id TEXT,
-            candidate_evidence_id TEXT NOT NULL,
+            existing_payment_id TEXT REFERENCES payments(payment_id) DEFERRABLE INITIALLY DEFERRED,
+            candidate_evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) DEFERRABLE INITIALLY DEFERRED,
             existing_amount_cents INTEGER,
             candidate_amount_cents INTEGER,
             reason TEXT NOT NULL,
@@ -1548,7 +1591,7 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
         );
         CREATE TABLE evaluations (
             evaluation_id TEXT PRIMARY KEY,
-            obligation_id TEXT NOT NULL,
+            obligation_id TEXT NOT NULL REFERENCES obligations(obligation_id) DEFERRABLE INITIALLY DEFERRED,
             revision INTEGER NOT NULL,
             rule_version INTEGER NOT NULL,
             evidence_ids_json TEXT NOT NULL,
@@ -1570,7 +1613,7 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             result_digest BLOB NOT NULL CHECK (length(result_digest)=64),
             contract_version TEXT NOT NULL,
             scope_json TEXT NOT NULL,
-            control_pack_id TEXT NOT NULL,
+            control_pack_id TEXT NOT NULL REFERENCES control_packs(pack_id) DEFERRABLE INITIALLY DEFERRED,
             control_pack_version INTEGER NOT NULL,
             control_pack_digest BLOB NOT NULL CHECK (length(control_pack_digest)=64),
             authority_epoch INTEGER NOT NULL,
@@ -1599,11 +1642,6 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
         CREATE TRIGGER financial_identity_delete_immutable
         BEFORE DELETE ON financial_identity
         BEGIN SELECT RAISE(ABORT,'financial_identity_immutable'); END;
-        """
-    )
-    if schema_version in _FUNDING_SCHEMA_VERSIONS:
-        connection.executescript(
-            """
             CREATE TABLE program_funding_receipts (
                 receipt_id TEXT PRIMARY KEY,
                 state_id TEXT NOT NULL,
@@ -1617,12 +1655,12 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
                 evidence_status TEXT NOT NULL CHECK (evidence_status='SYNTHETIC_UNAPPROVED'),
                 event_at_ms INTEGER NOT NULL CHECK (event_at_ms>=0),
                 recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms>=0),
-                supersedes_receipt_id TEXT UNIQUE,
+                supersedes_receipt_id TEXT UNIQUE REFERENCES program_funding_receipts(receipt_id) DEFERRABLE INITIALLY DEFERRED,
                 receipt_digest BLOB NOT NULL CHECK (length(receipt_digest)=64)
             );
             CREATE TABLE program_funding_projection (
                 source_record_ref TEXT PRIMARY KEY,
-                receipt_id TEXT NOT NULL UNIQUE,
+                receipt_id TEXT NOT NULL UNIQUE REFERENCES program_funding_receipts(receipt_id) DEFERRABLE INITIALLY DEFERRED,
                 amount_cents INTEGER NOT NULL CHECK (amount_cents>0),
                 event_at_ms INTEGER NOT NULL CHECK (event_at_ms>=0),
                 revision INTEGER NOT NULL CHECK (revision>0),
@@ -1634,11 +1672,6 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             CREATE TRIGGER program_funding_receipt_delete_immutable
             BEFORE DELETE ON program_funding_receipts
             BEGIN SELECT RAISE(ABORT,'program_funding_receipt_immutable'); END;
-            """
-        )
-    if schema_version == _MANIFEST_SCHEMA_VERSION:
-        connection.executescript(
-            """
             CREATE TABLE population_manifests (
                 manifest_id TEXT PRIMARY KEY,
                 contract TEXT NOT NULL CHECK (contract='RR/FINANCIAL/POPULATION-MANIFEST/v1'),
@@ -1648,7 +1681,7 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
                 program_id TEXT NOT NULL,
                 period_id TEXT NOT NULL,
                 currency TEXT NOT NULL CHECK (currency='USD'),
-                pack_id TEXT NOT NULL,
+                pack_id TEXT NOT NULL REFERENCES control_packs(pack_id) DEFERRABLE INITIALLY DEFERRED,
                 cutoff_ms INTEGER NOT NULL CHECK (cutoff_ms>=0),
                 inclusion_rules_json TEXT NOT NULL,
                 source_owner_id TEXT NOT NULL,
@@ -1662,14 +1695,14 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
                 source_digest BLOB NOT NULL CHECK (length(source_digest)=64),
                 member_count INTEGER NOT NULL CHECK (member_count>0),
                 member_digest BLOB NOT NULL CHECK (length(member_digest)=64),
-                supersedes_manifest_id TEXT UNIQUE,
+                supersedes_manifest_id TEXT UNIQUE REFERENCES population_manifests(manifest_id) DEFERRABLE INITIALLY DEFERRED,
                 supersedes_digest BLOB CHECK (supersedes_digest IS NULL OR length(supersedes_digest)=64),
                 manifest_digest BLOB NOT NULL CHECK (length(manifest_digest)=64),
                 registered_at_ms INTEGER NOT NULL CHECK (registered_at_ms>=0),
                 UNIQUE (state_id,deployment_id,program_id,period_id,pack_id,cutoff_ms,source_owner_id,manifest_version)
             );
             CREATE TABLE population_manifest_members (
-                manifest_id TEXT NOT NULL,
+                manifest_id TEXT NOT NULL REFERENCES population_manifests(manifest_id) DEFERRABLE INITIALLY DEFERRED,
                 position INTEGER NOT NULL CHECK (position>=0),
                 member_id TEXT NOT NULL,
                 PRIMARY KEY (manifest_id,position),
@@ -1681,18 +1714,18 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
                 program_id TEXT NOT NULL,
                 period_id TEXT NOT NULL,
                 currency TEXT NOT NULL CHECK (currency='USD'),
-                pack_id TEXT NOT NULL,
+                pack_id TEXT NOT NULL REFERENCES control_packs(pack_id) DEFERRABLE INITIALLY DEFERRED,
                 cutoff_ms INTEGER NOT NULL CHECK (cutoff_ms>=0),
                 source_owner_id TEXT NOT NULL,
-                manifest_id TEXT NOT NULL UNIQUE,
+                manifest_id TEXT NOT NULL UNIQUE REFERENCES population_manifests(manifest_id) DEFERRABLE INITIALLY DEFERRED,
                 manifest_version INTEGER NOT NULL CHECK (manifest_version>0),
                 manifest_digest BLOB NOT NULL CHECK (length(manifest_digest)=64),
                 updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms>=0),
                 PRIMARY KEY (state_id,deployment_id,program_id,period_id,pack_id,cutoff_ms,source_owner_id)
             );
             CREATE TABLE population_manifest_bindings (
-                population_id TEXT PRIMARY KEY,
-                manifest_id TEXT NOT NULL UNIQUE,
+                population_id TEXT PRIMARY KEY REFERENCES population_imports(population_id) DEFERRABLE INITIALLY DEFERRED,
+                manifest_id TEXT NOT NULL UNIQUE REFERENCES population_manifests(manifest_id) DEFERRABLE INITIALLY DEFERRED,
                 manifest_version INTEGER NOT NULL CHECK (manifest_version>0),
                 manifest_digest BLOB NOT NULL CHECK (length(manifest_digest)=64)
             );
@@ -1714,24 +1747,76 @@ def _sql_schema(connection: sqlite3.Connection, *, schema_version: int = _DEFAUL
             CREATE TRIGGER population_manifest_binding_delete_immutable
             BEFORE DELETE ON population_manifest_bindings
             BEGIN SELECT RAISE(ABORT,'population_manifest_binding_immutable'); END;
-            """
-        )
-    if schema_version in _FUNDING_SCHEMA_VERSIONS:
-        _create_continuity_admission_table(connection, _version_contract(schema_version)[4])
+            CREATE TABLE commands (
+                command_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                request_digest BLOB NOT NULL CHECK (length(request_digest)=64),
+                event_sequence INTEGER NOT NULL UNIQUE REFERENCES financial_events(event_sequence) DEFERRABLE INITIALLY DEFERRED
+            );
+            CREATE TRIGGER command_update_immutable
+            BEFORE UPDATE ON commands
+            BEGIN SELECT RAISE(ABORT,'command_immutable'); END;
+            CREATE TRIGGER command_delete_immutable
+            BEFORE DELETE ON commands
+            BEGIN SELECT RAISE(ABORT,'command_immutable'); END;
+        """,
+    )
+    for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
+        connection.execute(sql)
+    _execute_script(connection, _SEGMENT_SCHEMA)
 
 
-def _create_continuity_admission_table(connection: sqlite3.Connection, tables: Iterable[str]) -> None:
-    connection.execute(
-        f"CREATE TABLE {_CONTINUITY_ADMISSION_TABLE} ("
-        "table_name TEXT NOT NULL PRIMARY KEY,"
-        "row_count INTEGER NOT NULL CHECK (row_count>=0),"
-        "row_bytes INTEGER NOT NULL CHECK (row_bytes>=0)"
-        ")"
-    )
-    connection.executemany(
-        f"INSERT INTO {_CONTINUITY_ADMISSION_TABLE} (table_name,row_count,row_bytes) VALUES (?,?,?)",
-        ((table, 0, 0) for table in sorted(tables)),
-    )
+# Sealed segments keep only what history cannot regenerate (their row images);
+# pending holds the events and rows the open segment has touched, open its size.
+_SEGMENT_SCHEMA: Final[str] = """
+    CREATE TABLE history_segments (
+        segment_index INTEGER PRIMARY KEY CHECK (segment_index>=0),
+        first_sequence INTEGER NOT NULL CHECK (first_sequence>=1),
+        last_sequence INTEGER NOT NULL UNIQUE CHECK (last_sequence>=first_sequence),
+        previous_digest BLOB NOT NULL CHECK (length(previous_digest)=64),
+        event_head BLOB NOT NULL CHECK (length(event_head)=64),
+        projection_root BLOB NOT NULL CHECK (length(projection_root)=64),
+        segment_digest BLOB NOT NULL UNIQUE CHECK (length(segment_digest)=64),
+        rows_json TEXT NOT NULL
+    );
+    CREATE TRIGGER history_segment_update_immutable BEFORE UPDATE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END;
+    CREATE TRIGGER history_segment_delete_immutable BEFORE DELETE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END;
+    CREATE TABLE history_pending (
+        table_name TEXT NOT NULL,
+        row_key INTEGER NOT NULL,
+        record_bytes INTEGER NOT NULL CHECK (record_bytes>0),
+        PRIMARY KEY (table_name,row_key)
+    ) WITHOUT ROWID;
+    CREATE TABLE history_open (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        event_count INTEGER NOT NULL CHECK (event_count>=0),
+        byte_count INTEGER NOT NULL CHECK (byte_count>=0)
+    );
+    INSERT INTO history_open VALUES (1,0,0);
+"""
+
+
+def _replace_file(path: Path, data: bytes) -> None:
+    temporary = path.with_name(f"{path.name}.tmp")
+    with temporary.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if os.name == "nt":  # Windows cannot sync a directory; the rename itself is written through
+        if not ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW(str(temporary), str(path), 0x1 | 0x8):  # REPLACE_EXISTING | WRITE_THROUGH
+            raise ctypes.WinError(ctypes.get_last_error())
+    else:
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+
+def _segment_seal(index: int, first: int, last: int, previous: bytes, head: bytes, root: bytes) -> dict[str, Any]:
+    return {"format": _SEGMENT_FORMAT, "segment_index": index, "first_sequence": first, "last_sequence": last, "event_count": last - first + 1, "previous_digest": _hex(previous), "event_head": _hex(head), "projection_root": _hex(root)}
 
 
 class FinancialOwner:
@@ -1758,7 +1843,22 @@ class FinancialOwner:
             correction_transition_release=correction_transition_release,
             identity_contract=None,
         )
-        self._verify_open_identity()
+        self._verify_open_identity(verify_history=True)
+
+    def _verify_history_in_transaction(self, connection: sqlite3.Connection) -> None:
+        """Replay the stored history against its projections before any use (Art. III.5).
+
+        The independent checker recomputes the hash chain and the
+        history-to-projection bindings on this uncommitted open transaction; on a
+        mismatch the open (and any migration in it) rolls back, so the Owner never
+        writes on top of state its own history does not explain.
+        """
+        from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database_connection
+
+        try:
+            verify_database_connection(connection, **self._checker_expectations())
+        except IndependentFinancialError as error:
+            _fail(FinancialIntegrityError, f"open_verification:{error}")
 
     @classmethod
     def _open_restore_destination(
@@ -1816,15 +1916,11 @@ class FinancialOwner:
             _fail(FinancialInputError, "clock")
         self.path = path
         self.config = config
-        self.schema_version = config.schema_version
-        (
-            self.schema,
-            self.continuity_schema,
-            self._genesis_domain,
-            self._continuity_domain,
-            self._tables,
-            self._table_columns,
-        ) = _version_contract(self.schema_version)
+        self.schema_version = _SCHEMA_VERSION
+        self.schema = _SCHEMA
+        self.continuity_schema = _CONTINUITY_SCHEMA
+        self._tables = _PACKAGE_TABLES
+        self._table_columns = _TABLE_COLUMNS
         self.trusted_authority = trusted_authority
         self.correction_transition_release = correction_transition_release
         self.clock: FinancialClock = clock if clock is not None else _SystemClock()
@@ -1846,7 +1942,7 @@ class FinancialOwner:
                     anchor_sequence=0,
                     source_package_digest=_ZERO_DIGEST,
                 )
-                genesis = _digest(self._genesis_domain, config.canonical_bytes, trusted_authority.digest, identity_digest)
+                genesis = _digest(_GENESIS_DOMAIN, config.canonical_bytes, trusted_authority.digest, identity_digest)
                 identity = {
                     "id": 1,
                     "schema_version": self.schema_version,
@@ -1862,11 +1958,7 @@ class FinancialOwner:
                 initial_sequence = 0
                 initial_history_head = genesis
             else:
-                identity = _identity_record(
-                    identity_contract,
-                    schema_version=self.schema_version,
-                    code_prefix="identity_contract",
-                )
+                identity = _identity_record(identity_contract, code_prefix="identity_contract")
                 if identity["provenance"] != "CONTINUITY_RESTORE" or identity["bound_mode"] != mode or identity["bound_owner_id"] != self.owner_id:
                     _fail(FinancialIntegrityError, "identity_contract_binding")
                 if identity["source_package_digest"] == _ZERO_DIGEST:
@@ -1874,8 +1966,8 @@ class FinancialOwner:
                 initial_sequence = int(identity["anchor_sequence"])
                 initial_history_head = bytes(identity["anchor_head"])
             with closing(self._connect()) as connection:
-                _sql_schema(connection, schema_version=self.schema_version)
-                self._install_continuity_admission_triggers(connection)
+                connection.execute("BEGIN IMMEDIATE")
+                _sql_schema(connection)
                 connection.execute(
                     "INSERT INTO financial_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (1, self.schema_version, self.schema, config.state_id, config.deployment_id, config.program_id, config.period_id, config.currency, initial_sequence, initial_history_head, 1, 0, 0, trusted_authority.authority_id, trusted_authority.epoch, trusted_authority.digest, mode, self.owner_id),
@@ -1885,201 +1977,214 @@ class FinancialOwner:
                     f"INSERT INTO financial_identity ({','.join(identity_columns)}) VALUES ({','.join('?' for _ in identity_columns)})",
                     tuple(identity[column] for column in identity_columns),
                 )
-                connection.commit()
+                connection.execute("COMMIT")
 
-    def _connect(self, *, admission_triggers: bool = False) -> sqlite3.Connection:
+    def _connect(self, *, capture_triggers: bool = False) -> sqlite3.Connection:
         try:
             connection = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
-            connection.create_function(
-                "rr_continuity_row_bytes",
-                -1,
-                self._continuity_row_bytes_for_sql,
-            )
-            if admission_triggers:
-                self._install_continuity_admission_triggers(connection)
+            connection.create_function("rr_segment_bytes", -1, lambda table, *values: len(_canonical(self._segment_record(table, values))) + 1)
+            connection.create_function("rr_captured_row", -1, self._captured_row_for_sql)
+            connection.execute("CREATE TEMP TABLE rr_captured_rows(image TEXT NOT NULL)")
+            if capture_triggers:
+                self._install_capture_triggers(connection)
             return connection
         except sqlite3.Error:
             _fail(FinancialIntegrityError, "database_open")
 
-    def _continuity_row_bytes_for_sql(self, table: object, *values: object) -> int:
-        if type(table) is not str or table not in self._table_columns:
-            return -1
-        columns = self._table_columns[table]
-        if len(values) != len(columns):
-            return -1
-        try:
-            row = {
-                column: self._export_value(value)
-                for column, value in zip(columns, values, strict=True)
-            }
-            return len(_canonical(row))
-        except (FinancialContinuityError, TypeError, ValueError, OverflowError):
-            return -1
+    def _captured_row_for_sql(self, table: str, *values: object) -> str | None:
+        """One row image for the next event: an insert's full row, or an update's changed columns."""
+        columns = _TABLE_COLUMNS[table]
+        new = {column: self._export_value(value) for column, value in zip(columns, values)}
+        if len(values) == len(columns):
+            return _canonical({"table": table, "row": new}).decode("ascii")
+        old = {column: self._export_value(value) for column, value in zip(columns, values[len(columns):])}
+        changed = {column: value for column, value in new.items() if old[column] != value}
+        return _canonical({"table": table, "key": old[columns[0]], "set": changed}).decode("ascii") if changed else None
 
-    def _install_continuity_admission_triggers(self, connection: sqlite3.Connection) -> None:
-        if self.schema_version not in _FUNDING_SCHEMA_VERSIONS:
-            return
-        helper = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (_CONTINUITY_ADMISSION_TABLE,),
-        ).fetchone()
-        if helper is None:
-            _fail(FinancialIntegrityError, "continuity_admission_missing")
-        for table in sorted(self._tables):
-            quoted_table = f'"{table}"'
+    def _install_capture_triggers(self, connection: sqlite3.Connection) -> None:
+        # The open history segment tracks each event and changed row with its record size: O(this write) (IX.3).
+        for table in ("financial_events", *_PROJECTION_TABLES):
+            new_values = ",".join(f'NEW."{column}"' for column in _TABLE_COLUMNS[table])
+            track = f"INSERT INTO history_pending VALUES ('{table}',NEW.rowid,rr_segment_bytes('{table}',{new_values})) ON CONFLICT (table_name,row_key) DO UPDATE SET record_bytes=excluded.record_bytes"
+            changed = " OR ".join(f'NEW."{column}" IS NOT OLD."{column}"' for column in _TABLE_COLUMNS[table])  # as capture: an UPDATE that changes nothing is not a write
+            for operation, when in (("INSERT", ""), ("UPDATE", f" WHEN {changed}")):
+                connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_{operation}" AFTER {operation} ON main."{table}"{when} BEGIN {track}; END')
+            connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_DELETE" BEFORE DELETE ON main."{table}" BEGIN SELECT RAISE(ABORT,\'history_row_delete\'); END')
+        connection.execute("CREATE TEMP TRIGGER rr_track_pending_insert AFTER INSERT ON main.history_pending BEGIN UPDATE history_open SET event_count=event_count+(NEW.table_name='financial_events'),byte_count=byte_count+NEW.record_bytes; END")
+        connection.execute("CREATE TEMP TRIGGER rr_track_pending_update AFTER UPDATE ON main.history_pending BEGIN UPDATE history_open SET byte_count=byte_count+NEW.record_bytes-OLD.record_bytes; END")
+        for table in _CAPTURED_TABLES:
             new_values = ",".join(f'NEW."{column}"' for column in self._table_columns[table])
             old_values = ",".join(f'OLD."{column}"' for column in self._table_columns[table])
-            row_bytes_new = f"rr_continuity_row_bytes('{table}',{new_values})"
-            row_bytes_old = f"rr_continuity_row_bytes('{table}',{old_values})"
             connection.execute(
-                f"CREATE TEMP TRIGGER rr_admission_{table}_insert "
-                f"AFTER INSERT ON main.{quoted_table} BEGIN "
-                f"UPDATE {_CONTINUITY_ADMISSION_TABLE} "
-                f"SET row_count=row_count+1,row_bytes=row_bytes+{row_bytes_new} "
-                f"WHERE table_name='{table}'; END"
+                f"CREATE TEMP TRIGGER rr_capture_{table}_insert AFTER INSERT ON main.\"{table}\" BEGIN "
+                f"INSERT INTO rr_captured_rows(image) VALUES (rr_captured_row('{table}',{new_values})); END"
             )
             connection.execute(
-                f"CREATE TEMP TRIGGER rr_admission_{table}_update "
-                f"AFTER UPDATE ON main.{quoted_table} BEGIN "
-                f"UPDATE {_CONTINUITY_ADMISSION_TABLE} "
-                f"SET row_bytes=row_bytes+{row_bytes_new}-{row_bytes_old} "
-                f"WHERE table_name='{table}'; END"
-            )
-            connection.execute(
-                f"CREATE TEMP TRIGGER rr_admission_{table}_delete "
-                f"AFTER DELETE ON main.{quoted_table} BEGIN "
-                f"UPDATE {_CONTINUITY_ADMISSION_TABLE} "
-                f"SET row_count=row_count-1,row_bytes=row_bytes-{row_bytes_old} "
-                f"WHERE table_name='{table}'; END"
+                f"CREATE TEMP TRIGGER rr_capture_{table}_update AFTER UPDATE ON main.\"{table}\" BEGIN "
+                f"INSERT INTO rr_captured_rows(image) SELECT image FROM (SELECT rr_captured_row('{table}',{new_values},{old_values}) AS image) "
+                f"WHERE image IS NOT NULL; END"
             )
 
-    def _continuity_admission_table_shape(self, connection: sqlite3.Connection) -> None:
-        actual = tuple(
-            (str(row[1]), str(row[2]).upper(), int(row[3]))
-            for row in connection.execute(f"PRAGMA table_info({_CONTINUITY_ADMISSION_TABLE})")
-        )
-        if actual != (("table_name", "TEXT", 1), ("row_count", "INTEGER", 1), ("row_bytes", "INTEGER", 1)):
-            _fail(FinancialIntegrityError, "continuity_admission_schema")
+    def _segment_record(self, table: str, values: Iterable[object]) -> dict[str, Any]:
+        """One segment record: an event row, or a projection row's full image."""
+        row = {column: self._export_value(value) for column, value in zip(_TABLE_COLUMNS[table], values, strict=True)}
+        return row if table == "financial_events" else {"table": table, "row": row}
 
-    def _recompute_continuity_admission(self, connection: sqlite3.Connection) -> dict[str, tuple[int, int]]:
-        result: dict[str, tuple[int, int]] = {}
-        for table in sorted(self._tables):
+    def _track_all(self, connection: sqlite3.Connection) -> None:
+        """Seal a store from before segments as one segment, inside the conversion transaction."""
+        for table in ("financial_events", *_PROJECTION_TABLES):
+            connection.executemany(
+                "INSERT INTO history_pending VALUES (?,?,?)",
+                ((table, row[0], len(_canonical(self._segment_record(table, tuple(row)[1:]))) + 1) for row in connection.execute(f'SELECT rowid,* FROM "{table}"').fetchall()),
+            )
+        connection.execute("UPDATE history_open SET event_count=(SELECT COUNT(*) FROM history_pending WHERE table_name='financial_events'),byte_count=(SELECT COALESCE(SUM(record_bytes),0) FROM history_pending)")
+        self._seal_segment(connection, force=True)
+
+    def _seal_segment(self, connection: sqlite3.Connection, *, force: bool = False) -> bytes | None:
+        """Seal the open segment at a soft bound (or when forced); refuse a write past a hard bound."""
+        opened = connection.execute("SELECT event_count,byte_count FROM history_open WHERE id=1").fetchone()
+        if opened is None or {type(opened[0]), type(opened[1])} != {int}:
+            _fail(FinancialIntegrityError, "history_segment_events")
+        count, size = opened
+        if count > _MAX_SEGMENT_EVENTS or size + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:
+            _fail(FinancialContinuityError, "history_segment_size")
+        for (table,) in connection.execute("SELECT DISTINCT table_name FROM history_pending").fetchall():  # the Checker reads at most Lean's maxRows per table
+            if connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] > _MAX_ROWS:
+                _fail(FinancialIntegrityError, "history_capacity")
+        if count == 0 or not force and count < _SEAL_SEGMENT_EVENTS and size < _SEAL_SEGMENT_BYTES:
+            return None
+        # The chain continues from the last sealed segment only if its stored seal still recomputes.
+        last = connection.execute("SELECT * FROM history_segments ORDER BY segment_index DESC LIMIT 2").fetchall()
+        index, first, previous = 0, 1, _ZERO_DIGEST
+        if last:
+            stored = tuple(last[0])
+            if [type(value) for value in stored] != [int, int, int, bytes, bytes, bytes, bytes, str] or stored[3] != (last[1][6] if len(last) == 2 else _ZERO_DIGEST) or stored[5] != _digest(_SEGMENT_DOMAIN, b"rows", stored[7].encode()) or stored[6] != _digest(_SEGMENT_DOMAIN, b"seal", _canonical(_segment_seal(*stored[:6]))):
+                _fail(FinancialIntegrityError, "history_segment_chain")
+            index, first, previous = stored[0] + 1, stored[2] + 1, stored[6]
+        meta = self._meta(connection)
+        pending = connection.execute("SELECT COALESCE(SUM(table_name='financial_events'),0),COALESCE(SUM(record_bytes),0),COALESCE(SUM(record_bytes*(table_name='financial_events')),0) FROM history_pending").fetchone()
+        if int(meta["sequence"]) - first + 1 != count or tuple(pending[:2]) != (count, size):
+            _fail(FinancialIntegrityError, "history_segment_events")
+        images = []
+        for table, key in connection.execute("SELECT table_name,row_key FROM history_pending WHERE table_name<>'financial_events'").fetchall():
+            images.append(_canonical(self._segment_record(table, tuple(connection.execute(f'SELECT * FROM "{table}" WHERE rowid=?', (key,)).fetchone()))))
+        rows_json = b"[" + b",".join(sorted(images)) + b"]"
+        if len(rows_json) + pending[2] + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:  # measured as built, before it is stored
+            _fail(FinancialContinuityError, "history_segment_size")
+        seal = (index, first, int(meta["sequence"]), previous, bytes(meta["history_head"]), _digest(_SEGMENT_DOMAIN, b"rows", rows_json))
+        digest = _digest(_SEGMENT_DOMAIN, b"seal", _canonical(_segment_seal(*seal)))
+        connection.execute("INSERT INTO history_segments VALUES (?,?,?,?,?,?,?,?)", (*seal, digest, rows_json.decode("ascii")))
+        connection.execute("DELETE FROM history_pending")
+        connection.execute("UPDATE history_open SET event_count=0,byte_count=0")
+        return digest
+
+    def _migrate_v7_store(self, connection: sqlite3.Connection) -> None:
+        """Convert a v7 store to v8 inside the caller's open transaction (all-or-nothing).
+
+        v8 adds the derived ``commands`` table and declared foreign keys, which
+        SQLite can add only by rebuilding tables. A present v7 size cache must
+        equal a recompute first; the rows are rewritten unchanged except the
+        schema version, the command log is derived from history, and the whole
+        history opens the first history segment. The
+        caller's replay must still explain every row before COMMIT, so a v7
+        store its history does not explain is refused and left byte-identical.
+        """
+
+        tables = {
+            str(row[0])
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        }
+        if tables not in (set(_PACKAGE_TABLES), set(_PACKAGE_TABLES) | {"right_rail_continuity_admission"}):
+            _fail(FinancialIntegrityError, "schema_tables")
+        rows: dict[str, list[sqlite3.Row]] = {}
+        for table in sorted(_PACKAGE_TABLES):
             columns = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
-            if columns != self._table_columns[table]:
+            if columns != _TABLE_COLUMNS[table]:
                 _fail(FinancialIntegrityError, "continuity_schema_columns")
-            row_count = 0
-            row_bytes = 0
-            for row in connection.execute(f"SELECT * FROM {table}"):
-                row_count += 1
-                if row_count > _MAX_ROWS:
-                    _fail(FinancialContinuityError, "continuity_row_cap")
-                encoded_row = {
-                    column: self._export_value(row[column])
-                    for column in columns
-                }
-                row_bytes += len(_canonical(encoded_row))
-            result[table] = (row_count, row_bytes)
-        return result
-
-    def _continuity_admission_values(self, connection: sqlite3.Connection) -> dict[str, tuple[int, int]]:
-        self._continuity_admission_table_shape(connection)
-        values: dict[str, tuple[int, int]] = {}
-        rows = connection.execute(
-            f"SELECT table_name,row_count,row_bytes FROM {_CONTINUITY_ADMISSION_TABLE}"
-        ).fetchall()
-        for row in rows:
-            table = row["table_name"]
-            row_count = row["row_count"]
-            row_bytes = row["row_bytes"]
-            if (
-                type(table) is not str
-                or table not in self._tables
-                or type(row_count) is not int
-                or row_count < 0
-                or type(row_bytes) is not int
-                or row_bytes < 0
-                or table in values
-            ):
-                _fail(FinancialIntegrityError, "continuity_admission_values")
-            values[table] = (row_count, row_bytes)
-        if set(values) != self._tables:
-            _fail(FinancialIntegrityError, "continuity_admission_tables")
-        return values
-
-    def _ensure_continuity_admission(self, connection: sqlite3.Connection) -> None:
-        if self.schema_version not in _FUNDING_SCHEMA_VERSIONS:
-            return
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-            if meta is None:
-                _fail(FinancialIntegrityError, "schema_meta")
-            self._verify_meta_identity(connection, meta)
-            private_indexes_current = _private_index_set_is_current(connection)
-            tables = {
+            rows[table] = connection.execute(f"SELECT * FROM {table}").fetchall()
+        if "right_rail_continuity_admission" in tables and dict((str(row[0]), (row[1], row[2])) for row in connection.execute("SELECT table_name,row_count,row_bytes FROM right_rail_continuity_admission")) != {
+            table: (len(table_rows), sum(len(_canonical({column: self._export_value(row[column]) for column in _TABLE_COLUMNS[table]})) for row in table_rows)) for table, table_rows in rows.items()
+        }:
+            _fail(FinancialIntegrityError, "continuity_admission_mismatch")
+        for object_type in ("trigger", "index", "table"):
+            names = [
                 str(row[0])
                 for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    "SELECT name FROM sqlite_master WHERE type=? AND name NOT LIKE 'sqlite_%'",
+                    (object_type,),
                 )
-            }
-            expected_tables = self._tables | {_CONTINUITY_ADMISSION_TABLE}
-            if tables == self._tables:
-                _create_continuity_admission_table(connection, self._tables)
-                rebuilt = self._recompute_continuity_admission(connection)
-                connection.executemany(
-                    f"UPDATE {_CONTINUITY_ADMISSION_TABLE} SET row_count=?,row_bytes=? WHERE table_name=?",
-                    ((count, size, table) for table, (count, size) in rebuilt.items()),
+            ]
+            for name in names:
+                connection.execute(f'DROP {object_type.upper()} "{name}"')
+        connection.execute("PRAGMA user_version=0")
+        _sql_schema(connection)
+        for table, table_rows in rows.items():
+            columns = _TABLE_COLUMNS[table]
+            placeholders = ",".join("?" for _ in columns)
+            for row in table_rows:
+                values = dict(zip(columns, tuple(row), strict=True))
+                if table in {"financial_identity", "financial_meta"}:
+                    values["schema_version"] = _SCHEMA_VERSION
+                if table == "financial_meta":
+                    values["schema"] = _SCHEMA
+                connection.execute(
+                    f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})",
+                    tuple(values[column] for column in columns),
                 )
-                size = self._continuity_admission_package_size(connection)
-                if size > _MAX_PACKAGE_BYTES:
-                    _fail(FinancialContinuityError, "continuity_package_size")
-            elif tables == expected_tables:
-                self._continuity_admission_table_shape(connection)
-            else:
-                _fail(FinancialIntegrityError, "schema_tables")
-            if not private_indexes_current and tables == expected_tables:
-                self._verify_continuity_admission_cache(connection)
-            _install_private_index_set(connection)
-            connection.execute("COMMIT")
-        except BaseException:
-            if connection.in_transaction:
-                connection.execute("ROLLBACK")
-            raise
+        self._derive_command_log(connection)
+        # CONSTITUTION V.4: one sealed opening balance holds the converted rows the v7 history did not carry.
+        last = connection.execute("SELECT committed_at_ms FROM financial_events ORDER BY event_sequence DESC LIMIT 1").fetchone()
+        images = [{"table": table, "row": {column: self._export_value(row[column]) for column in _TABLE_COLUMNS[table]}} for table in _CAPTURED_TABLES for row in rows[table]]
+        self._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=0 if last is None else int(last[0]))
+        self._track_all(connection)
 
-    def _verify_continuity_admission_cache(self, connection: sqlite3.Connection) -> None:
-        if self.schema_version not in _FUNDING_SCHEMA_VERSIONS:
-            return
-        actual = self._continuity_admission_values(connection)
-        rebuilt = self._recompute_continuity_admission(connection)
-        if actual != rebuilt:
-            _fail(FinancialIntegrityError, "continuity_admission_mismatch")
-        if self._continuity_admission_package_size(connection) > _MAX_PACKAGE_BYTES:
-            _fail(FinancialContinuityError, "continuity_package_size")
+    def _derive_command_log(self, connection: sqlite3.Connection) -> None:
+        """Rebuild the command log from history (conversion and restore; it is never exported)."""
+        for event in connection.execute(
+            "SELECT event_sequence,aggregate_id,kind,payload_json FROM financial_events ORDER BY event_sequence"
+        ).fetchall():
+            self._record_command(
+                connection,
+                sequence=int(event["event_sequence"]),
+                kind=str(event["kind"]),
+                aggregate_id=str(event["aggregate_id"]),
+                payload=_stored_object(event["payload_json"], "command_event_payload"),
+            )
 
-    def _verify_open_identity(self) -> None:
+    def _verify_open_identity(self, *, verify_history: bool) -> None:
         try:
             with closing(self._connect()) as connection:
-                self._ensure_continuity_admission(connection)
-                row = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-                if row is None:
-                    _fail(FinancialIntegrityError, "schema_meta")
-                if row["schema_version"] != self.schema_version:
-                    if row["schema_version"] in _TABLES_BY_VERSION and self.schema_version in _TABLES_BY_VERSION:
-                        _fail(FinancialIntegrityError, "schema_version_incompatible")
-                    _fail(FinancialIntegrityError, "schema_identity")
-                tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-                expected_tables = self._tables | (
-                    {_CONTINUITY_ADMISSION_TABLE}
-                    if self.schema_version in _FUNDING_SCHEMA_VERSIONS
-                    else set()
-                )
-                if tables != expected_tables:
-                    _fail(FinancialIntegrityError, "schema_tables")
-                self._verify_meta_identity(connection, row)
-                self._verify_continuity_admission_cache(connection)
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
+                    if meta is None:
+                        _fail(FinancialIntegrityError, "schema_meta")
+                    migrated = (meta["schema_version"], meta["schema"]) == (7, _V7_SCHEMA)
+                    if migrated:
+                        self._migrate_v7_store(connection)
+                        meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
+                    self._verify_meta_identity(connection, meta)
+                    tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+                    if tables in (_TABLES, _TABLES | {"right_rail_continuity_admission"}):
+                        # A v8 store from before history segments: replayed, then its whole history opens the first segment.
+                        migrated = True
+                        connection.execute("DROP TABLE IF EXISTS right_rail_continuity_admission")
+                        _execute_script(connection, _SEGMENT_SCHEMA)
+                        self._track_all(connection)
+                    elif tables != _TABLES | _SEGMENT_TABLES:
+                        _fail(FinancialIntegrityError, "schema_tables")
+                    _install_private_index_set(connection)
+                    _install_history_append_only(connection)
+                    if verify_history or migrated:
+                        self._verify_history_in_transaction(connection)
+                    connection.execute("COMMIT")
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.execute("ROLLBACK")
+                    raise
         except sqlite3.DatabaseError:
             _fail(FinancialIntegrityError, "schema_read")
 
@@ -2103,12 +2208,7 @@ class FinancialOwner:
             )
         )
         if actual != expected:
-            if (
-                meta["schema_version"] != self.schema_version
-                and meta["schema_version"] in _TABLES_BY_VERSION
-                and self.schema_version in _TABLES_BY_VERSION
-            ):
-                _fail(FinancialIntegrityError, "schema_version_incompatible")
+            # Any other store version, including the retired v5/v6, fails closed here.
             _fail(FinancialIntegrityError, "schema_identity")
         if int(meta["dispatch_enabled"]) != 0 or int(meta["egress_enabled"]) != 0 or str(meta["mode"]) != self.mode:
             _fail(FinancialIntegrityError, "nonactivating_boundary")
@@ -2130,13 +2230,12 @@ class FinancialOwner:
         identity_row = identity_rows[0]
         identity = _identity_record(
             {column: identity_row[column] for column in self._table_columns["financial_identity"]},
-            schema_version=self.schema_version,
         )
         if identity["bound_mode"] != str(meta["mode"]) or identity["bound_owner_id"] != str(meta["owner_id"]):
             _fail(FinancialIntegrityError, "identity_binding")
         if identity["provenance"] == "ROOT":
             expected_genesis = _digest(
-                self._genesis_domain,
+                _GENESIS_DOMAIN,
                 self.config.canonical_bytes,
                 self.trusted_authority.digest,
                 identity["identity_digest"],
@@ -2173,19 +2272,13 @@ class FinancialOwner:
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
-        with closing(self._connect(admission_triggers=True)) as connection:
+        with closing(self._connect(capture_triggers=True)) as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                changes_before = connection.total_changes
                 yield connection
-                if (
-                    self.schema_version in _FUNDING_SCHEMA_VERSIONS
-                    and connection.total_changes != changes_before
-                ):
-                    # The committed local ledger preserves the exact export bound
-                    # without serializing rows that this transaction did not touch.
-                    if self._continuity_admission_package_size(connection) > _MAX_PACKAGE_BYTES:
-                        _fail(FinancialContinuityError, "continuity_package_size")
+                self._seal_segment(connection)
+                if connection.execute("SELECT 1 FROM temp.rr_captured_rows").fetchone() is not None:
+                    _fail(FinancialIntegrityError, "captured_rows_without_event")  # refused, never stranded
                 connection.execute("COMMIT")
             except BaseException:
                 if connection.in_transaction:
@@ -2278,10 +2371,15 @@ class FinancialOwner:
                     "evaluation_receipt_digest": _hex(bytes(evaluation["receipt_digest"])),
                 }
             )
+        captured = connection.execute("SELECT image FROM temp.rr_captured_rows ORDER BY rowid").fetchall()
+        if captured:
+            event_payload["rows"] = [json.loads(row[0]) for row in captured]
+            connection.execute("DELETE FROM temp.rr_captured_rows")
         payload_bytes = _canonical(event_payload)
-        payload_digest = _digest(_EVENT_DOMAIN, payload_bytes)
+        payload_digest = _digest(_OPENING_BALANCE_DOMAIN if kind == "OPENING_BALANCE" else _EVENT_DOMAIN, payload_bytes)
         meta = self._meta(connection)
-        if int(meta["sequence"]) >= _MAX_ROWS:
+        # Lean's maxRows/maxRevision (Types.lean): the checker refuses a history or revision past them.
+        if int(meta["sequence"]) >= _MAX_ROWS or after_revision > _MAX_ROWS:
             _fail(FinancialIntegrityError, "history_capacity")
         sequence = int(meta["sequence"]) + 1
         previous_head = bytes(meta["history_head"])
@@ -2304,7 +2402,60 @@ class FinancialOwner:
             (sequence, event_id, aggregate_type, aggregate_id, kind, before_revision, after_revision, payload_bytes.decode("ascii"), payload_digest, previous_head, head, committed_at_ms),
         )
         connection.execute("UPDATE financial_meta SET sequence=?,history_head=? WHERE id=1", (sequence, head))
+        self._record_command(connection, sequence=sequence, kind=kind, aggregate_id=aggregate_id, payload=event_payload)
         return event_id
+
+    def _record_command(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        sequence: int,
+        kind: str,
+        aggregate_id: str,
+        payload: Mapping[str, Any],
+    ) -> None:
+        """Record the accepted request behind one command event (``_COMMAND_EVENTS``)."""
+
+        command = _COMMAND_EVENTS.get(kind)
+        if command is None:
+            return
+        command_kind, key_field = command
+        key = aggregate_id if key_field is None else payload.get(key_field)
+        if type(key) is not str:
+            _fail(FinancialIntegrityError, "command_key")
+        rows = connection.execute(_COMMAND_REQUEST_SQL[command_kind], (key,)).fetchall()
+        if len(rows) != 1:
+            _fail(FinancialIntegrityError, "command_request_source")
+        request: dict[str, Any] = {"command": command_kind, "key": key}
+        for field in rows[0].keys():
+            value = rows[0][field]
+            request[field] = _hex(bytes(value)) if type(value) is bytes else value
+        command_id = f"{command_kind}:{key}"
+        if connection.execute("SELECT 1 FROM commands WHERE command_id=?", (command_id,)).fetchone() is not None:
+            _fail(FinancialIntegrityError, "command_duplicate")
+        request_json = _canonical(request)
+        connection.execute(
+            "INSERT INTO commands VALUES (?,?,?,?,?)",
+            (command_id, command_kind, request_json.decode("ascii"), _digest(_COMMAND_DOMAIN, request_json), sequence),
+        )
+
+    def _replayed_command(
+        self,
+        connection: sqlite3.Connection,
+        kind: str,
+        key: str,
+        request: Mapping[str, Any],
+        conflict_code: str,
+    ) -> bool:
+        """The one retry rule: True if ``kind:key`` is logged with every field (only optional ones may be None); False if new."""
+
+        row = connection.execute("SELECT request_json FROM commands WHERE command_id=?", (f"{kind}:{key}",)).fetchone()
+        if row is None:
+            return False
+        logged = _stored_object(row[0], "command_request")
+        if any(logged.get(field) != value and not (value is None and field in _OPTIONAL_REQUEST_FIELDS) for field, value in request.items()):
+            _fail(FinancialConflictError, conflict_code)
+        return True
 
     def _assert_actionable(self) -> None:
         if self.mode == "SHADOW":
@@ -2324,8 +2475,6 @@ class FinancialOwner:
     ) -> dict[str, Any]:
         """Reconstruct the published v7 manifest revision for one obligation."""
 
-        if self.schema_version != _MANIFEST_SCHEMA_VERSION:
-            _fail(FinancialIntegrityError, "population_manifest_schema_v7_required")
         population_id = _id(str(obligation["population_id"]), "population_id")
         population = connection.execute(
             "SELECT * FROM population_imports WHERE population_id=?",
@@ -2469,9 +2618,7 @@ class FinancialOwner:
         return evaluation
 
     def _recompute_obligation(self, connection: sqlite3.Connection, obligation_id: str, *, now_ms: int) -> tuple[int, int, dict[str, Any]]:
-        old = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (obligation_id,)).fetchone()
-        if old is None:
-            _fail(FinancialIntegrityError, "obligation_missing")
+        old = self._obligation_by_id(connection, obligation_id)
         pack, calculation, adjustment = self._control_pack_for_obligation(connection, obligation_id)
         if int(old["rule_version"]) != pack.version:
             _fail(FinancialIntegrityError, "control_pack_rule_version")
@@ -2571,11 +2718,8 @@ class FinancialOwner:
             expected_tests=pack.expected_tests,
         )
         with self._write() as connection:
-            existing = connection.execute("SELECT pack_digest FROM control_packs WHERE pack_id=?", (pack.pack_id,)).fetchone()
-            if existing is not None:
-                if bytes(existing[0]) == pack.digest:
-                    return {"status": "DUPLICATE", "pack_id": pack.pack_id, "digest": _hex(pack.digest)}
-                _fail(FinancialConflictError, "control_pack_identity_conflict")
+            if self._replayed_command(connection, "CONTROL_PACK", pack.pack_id, {"pack_digest": _hex(pack.digest)}, "control_pack_identity_conflict"):
+                return {"status": "DUPLICATE", "pack_id": pack.pack_id, "digest": _hex(pack.digest)}
             for row in connection.execute("SELECT version,effective_start_ms,effective_end_ms FROM control_packs WHERE program_id=? AND period_id=? AND status='APPROVED'", (pack.program_id, pack.period_id)):
                 if int(row[0]) == pack.version or max(pack.effective_start_ms, int(row[1])) < min(pack.effective_end_ms, int(row[2])):
                     _fail(FinancialConflictError, "control_pack_effective_overlap")
@@ -2586,10 +2730,6 @@ class FinancialOwner:
             at_ms = self._now()
             self._append_event(connection, aggregate_type="CONTROL_PACK", aggregate_id=pack.pack_id, kind="CONTROL_PACK_PUBLISHED", before_revision=0, after_revision=1, payload={"pack_id": pack.pack_id, "version": pack.version, "period_id": pack.period_id, "digest": _hex(pack.digest)}, committed_at_ms=at_ms)
             return {"status": "PUBLISHED", "pack_id": pack.pack_id, "version": pack.version, "digest": _hex(pack.digest)}
-
-    def _require_population_manifest_schema(self) -> None:
-        if self.schema_version != _MANIFEST_SCHEMA_VERSION:
-            _fail(FinancialInputError, "population_manifest_schema_v7_required")
 
     def _load_population_manifest(
         self,
@@ -2603,9 +2743,7 @@ class FinancialOwner:
         if row is None:
             _fail(FinancialIntegrityError, "population_manifest_missing")
         try:
-            encoded_rules = json.loads(str(row["inclusion_rules_json"]))
-            if type(encoded_rules) is not dict or set(encoded_rules) != {"values"} or type(encoded_rules["values"]) is not list:
-                _fail(FinancialIntegrityError, "population_manifest_integrity")
+            inclusion_rules = _stored_values(row["inclusion_rules_json"], "population_manifest_integrity")
             member_rows = connection.execute(
                 "SELECT position,member_id FROM population_manifest_members WHERE manifest_id=? ORDER BY position",
                 (manifest_id,),
@@ -2620,7 +2758,7 @@ class FinancialOwner:
                 currency=str(row["currency"]),
                 pack_id=str(row["pack_id"]),
                 cutoff_ms=int(row["cutoff_ms"]),
-                inclusion_rules=tuple(encoded_rules["values"]),
+                inclusion_rules=inclusion_rules,
                 source_owner_id=str(row["source_owner_id"]),
                 authority_id=str(row["authority_id"]),
                 authority_epoch=int(row["authority_epoch"]),
@@ -2773,7 +2911,6 @@ class FinancialOwner:
         """Record an immutable source roster receipt or an explicit supersession."""
 
         self._assert_actionable()
-        self._require_population_manifest_schema()
         if type(manifest) is not PopulationManifest:
             _fail(FinancialInputError, "population_manifest_type")
         if (
@@ -2797,17 +2934,11 @@ class FinancialOwner:
         )
         with self._write() as connection:
             self._require_manifest_pack(connection, manifest)
-            existing = connection.execute(
-                "SELECT manifest_digest FROM population_manifests WHERE manifest_id=?",
-                (manifest.manifest_id,),
-            ).fetchone()
             head, latest = self._manifest_head_rows(connection, manifest)
             if (head is None) != (latest is None) or (head is not None and tuple(head) != tuple(latest)):
                 _fail(FinancialIntegrityError, "population_manifest_head")
-            if existing is not None:
+            if self._replayed_command(connection, "POPULATION_MANIFEST", manifest.manifest_id, {"manifest_digest": _hex(manifest_digest)}, "population_manifest_identity_conflict"):
                 stored_manifest, _stored_row = self._load_population_manifest(connection, manifest.manifest_id)
-                if stored_manifest.digest != manifest_digest:
-                    _fail(FinancialConflictError, "population_manifest_identity_conflict")
                 if stored_manifest.member_ids != manifest.member_ids:
                     _fail(FinancialIntegrityError, "population_manifest_integrity")
                 return {
@@ -3054,7 +3185,6 @@ class FinancialOwner:
     ) -> dict[str, Any]:
         """Stream a population into a staged import; publish is a separate gate."""
         self._assert_actionable()
-        self._require_population_manifest_schema()
         _id(population_id, "population_id")
         if manifest_id is None:
             _fail(FinancialInputError, "population_manifest_required")
@@ -3187,7 +3317,6 @@ class FinancialOwner:
 
     def validate_population(self, population_id: str) -> dict[str, Any]:
         self._assert_actionable()
-        self._require_population_manifest_schema()
         _id(population_id, "population_id")
         with self._write() as connection:
             row = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
@@ -3255,15 +3384,6 @@ class FinancialOwner:
                 "expected_count": int(row["expected_count"]),
                 "validated_count": int(row["validated_count"]),
             }
-            if self.schema_version != _MANIFEST_SCHEMA_VERSION:
-                return {
-                    **base,
-                    "manifest_status": "LEGACY_UNVERIFIED",
-                    "completeness": "UNVERIFIED",
-                    "source_complete": False,
-                    "manifest_version": None,
-                    "manifest_digest": None,
-                }
             binding = connection.execute(
                 "SELECT manifest_id,manifest_version,manifest_digest FROM population_manifest_bindings WHERE population_id=?",
                 (population_id,),
@@ -3515,17 +3635,16 @@ class FinancialOwner:
 
     def _ensure_case(self, connection: sqlite3.Connection, *, obligation_id: str, reason: str, owner: str, due_at_ms: int, status: str, now_ms: int) -> None:
         case_id = f"case:{obligation_id}"
-        existing = connection.execute("SELECT case_id FROM cases WHERE case_id=?", (case_id,)).fetchone()
+        existing = connection.execute("SELECT status FROM cases WHERE case_id=?", (case_id,)).fetchone()
         conditions = _canonical({"amount_satisfied": True, "reporting_complete": True, "delivery_acknowledged_or_not_required": True}).decode("ascii")
         if existing is None:
             connection.execute("INSERT INTO cases VALUES (?,?,?,?,?,?,?, ?,?)", (case_id, obligation_id, reason, "PROGRAM_ACCOUNTABILITY", owner, due_at_ms, conditions, status, now_ms))
-        else:
+        elif existing[0] != "CORRECTION_REQUIRED":  # an outstanding correction keeps its case, owner and due date
             connection.execute("UPDATE cases SET reason=?,next_action_owner=?,due_at_ms=?,status=?,updated_at_ms=? WHERE case_id=?", (reason, owner, due_at_ms, status, now_ms, case_id))
 
     def publish_population(self, population_id: str) -> dict[str, Any]:
         """Publish only a fully validated population and create obligations atomically."""
         self._assert_actionable()
-        self._require_population_manifest_schema()
         _id(population_id, "population_id")
         with self._write() as connection:
             import_row = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
@@ -3554,6 +3673,7 @@ class FinancialOwner:
             for item_id, _label, owed_cents, due_at_ms, currency in items:
                 obligation_id = self._obligation_id(str(item_id), str(pack["period_id"]))
                 connection.execute("INSERT INTO obligations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (obligation_id, population_id, str(item_id), str(pack["period_id"]), str(currency), int(owed_cents), int(due_at_ms), int(pack["version"]), 0, 0, 0, 0, int(owed_cents), 0, 0, 0, 0, 0, "MISSING_EVIDENCE", "OPEN", "NONE", f"evaluation:{obligation_id}:r0", now_ms))
+                self._ensure_case(connection, obligation_id=obligation_id, reason="INITIAL_ACCOUNTABILITY", owner="CASE_OWNER", due_at_ms=int(due_at_ms), status="OPEN", now_ms=now_ms)
                 initial_evaluation = self._insert_initial_evaluation(
                     connection,
                     obligation_id=obligation_id,
@@ -3570,7 +3690,6 @@ class FinancialOwner:
                         "receipt_digest": str(initial_evaluation["receipt_digest"]),
                     }
                 )
-                self._ensure_case(connection, obligation_id=obligation_id, reason="INITIAL_ACCOUNTABILITY", owner="CASE_OWNER", due_at_ms=int(due_at_ms), status="OPEN", now_ms=now_ms)
             connection.execute("UPDATE population_imports SET status='PUBLISHED',updated_at_ms=? WHERE population_id=?", (now_ms, population_id))
             self._append_event(
                 connection,
@@ -3650,11 +3769,14 @@ class FinancialOwner:
             "due_at_ms": int(row["due_at_ms"]),
         }
 
-    def _current_projection(self, connection: sqlite3.Connection, obligation_id: str) -> dict[str, Any]:
+    def _obligation_by_id(self, connection: sqlite3.Connection, obligation_id: str) -> sqlite3.Row:
         row = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (obligation_id,)).fetchone()
         if row is None:
             _fail(FinancialIntegrityError, "obligation_missing")
-        return self._projection_for_row(row)
+        return row
+
+    def _current_projection(self, connection: sqlite3.Connection, obligation_id: str) -> dict[str, Any]:
+        return self._projection_for_row(self._obligation_by_id(connection, obligation_id))
 
     def record_support_evidence(
         self,
@@ -3741,11 +3863,8 @@ class FinancialOwner:
                 ).fetchall()
                 original_event = None
                 for event in payment_events:
-                    try:
-                        payload = json.loads(str(event["payload_json"]))
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        _fail(FinancialIntegrityError, "payment_retry_event")
-                    if type(payload) is dict and payload.get("payment_id") == payment_id:
+                    payload = _stored_object(event["payload_json"], "payment_retry_event")
+                    if payload.get("payment_id") == payment_id:
                         original_event = (event, payload)
                         break
                 if original_event is None:
@@ -3776,7 +3895,7 @@ class FinancialOwner:
                     or actual_event_fields != expected_event_payload
                     # _append_event binds every obligation event that names an
                     # evaluation to that evaluation's input/result/receipt digests.
-                    or set(event_payload) != (
+                    or set(event_payload) - {"rows"} != (
                         set(expected_event_payload)
                         | {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
                     )
@@ -3854,7 +3973,7 @@ class FinancialOwner:
             if status == "DUPLICATE":
                 return {"status": "DUPLICATE", **self._projection_for_row(obligation)}
             if int(payment["active"]) == 0:
-                return {"status": "DUPLICATE", **self._projection_for_row(obligation)}
+                _fail(FinancialConflictError, "payment_already_reversed")
             connection.execute("UPDATE payments SET active=0,reversed_by_evidence_id=? WHERE payment_id=? AND active=1", (evidence_id, payment_id))
             self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_REVERSED", payload={"payment_id": payment_id, "evidence_id": evidence_id}, now_ms=self._now())
             return {"status": "REVERSED", "payment_id": payment_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
@@ -3884,11 +4003,9 @@ class FinancialOwner:
             if owner_role not in pack.authorized_roles:
                 _fail(FinancialAuthorityError, "control_pack_owner_role_not_authorized")
             self._check_revision(obligation, expected_revision)
-            existing = connection.execute("SELECT * FROM claimed_adjustments WHERE claim_id=?", (claim_id,)).fetchone()
-            if existing is not None:
-                if int(existing["amount_cents"]) == amount_cents and str(existing["obligation_id"]) == str(obligation["obligation_id"]):
-                    return {"status": "DUPLICATE", "claim_id": claim_id, **self._projection_for_row(obligation)}
-                _fail(FinancialConflictError, "offset_claim_identity_conflict")
+            request = {"item_id": item_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "owner_role": owner_role, "deadline_ms": deadline_ms}
+            if self._replayed_command(connection, "OFFSET_CLAIM", claim_id, request, "offset_claim_identity_conflict"):
+                return {"status": "DUPLICATE", "claim_id": claim_id, **self._projection_for_row(obligation)}
             evidence_status = self._insert_evidence(connection, evidence)
             if evidence_status == "DUPLICATE":
                 _fail(FinancialConflictError, "offset_evidence_reused")
@@ -3921,13 +4038,10 @@ class FinancialOwner:
             action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_id,)).fetchone()
             if action is None:
                 _fail(FinancialIntegrityError, "action_missing")
-            stored_payload = json.loads(str(action["payload_json"]))
+            stored_payload = _stored_object(action["payload_json"], "action_payload_integrity")
             if payload is not None and _canonical(dict(payload)) != _canonical(stored_payload):
                 _fail(FinancialConflictError, "action_payload_immutable")
-            obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (action["obligation_id"],)).fetchone()
-            if obligation is None:
-                _fail(FinancialIntegrityError, "obligation_missing")
-            return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
+            return {"status": "DUPLICATE", "action_id": action_id, **self._current_projection(connection, str(action["obligation_id"]))}
 
     def _authority_action(self, connection: sqlite3.Connection, obligation_id: str, actor_id: str, actor_role: str) -> None:
         self.trusted_authority.require(actor_id, actor_role)
@@ -4160,11 +4274,8 @@ class FinancialOwner:
             ).fetchall()
             matched_event = None
             for event in events:
-                try:
-                    event_payload = json.loads(str(event["payload_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "staff_command_binding_event")
-                if type(event_payload) is dict and event_payload.get("action_id") == action_id:
+                event_payload = _stored_object(event["payload_json"], "staff_command_binding_event")
+                if event_payload.get("action_id") == action_id:
                     matched_event = event
                     # The event's own ``evaluation_id`` is the result evaluation
                     # the transition created; the reviewed input evaluation is
@@ -4202,34 +4313,30 @@ class FinancialOwner:
         actor_id: str,
         actor_role: str,
         decision: str,
-        kind: str,
         evaluation_id: str | None,
         evaluation_result_digest: str | bytes | None,
         expected_revision: int | None,
         decision_at_ms: int | None,
     ) -> dict[str, Any]:
-        determination = connection.execute("SELECT * FROM determinations WHERE determination_id=?", (action["determination_id"],)).fetchone()
-        if determination is None:
-            _fail(FinancialIntegrityError, "determination_missing")
-        if str(action["obligation_id"]) != str(obligation["obligation_id"]) or str(determination["obligation_id"]) != str(obligation["obligation_id"]):
-            _fail(FinancialConflictError, "determination_request_conflict")
-        if str(action["kind"]) != kind or str(determination["decision"]) != decision or str(determination["claim_id"]) != claim_id:
-            _fail(FinancialConflictError, "determination_request_conflict")
-        if str(determination["actor_id"]) != actor_id or str(determination["actor_role"]) != actor_role:
-            _fail(FinancialConflictError, "determination_request_conflict")
-        if evaluation_id is not None and str(determination["input_evaluation_id"]) != evaluation_id:
-            _fail(FinancialConflictError, "determination_request_conflict")
-        if evaluation_result_digest is not None and bytes(determination["input_evaluation_result_digest"]) != _digest_input(evaluation_result_digest, "evaluation_result_digest"):
-            _fail(FinancialConflictError, "determination_request_conflict")
         if expected_revision is not None and type(expected_revision) is not int:
             _fail(FinancialInputError, "expected_revision")
-        if expected_revision is not None and int(determination["expected_revision"]) != expected_revision:
-            _fail(FinancialConflictError, "determination_request_conflict")
         if decision_at_ms is not None:
             _time(decision_at_ms, "decision_time")
-            if int(determination["decided_at_ms"]) != decision_at_ms:
-                _fail(FinancialConflictError, "determination_request_conflict")
-        if (str(determination["authority_id"]), int(determination["authority_epoch"]), bytes(determination["authority_digest"])) != (self.trusted_authority.authority_id, self.trusted_authority.epoch, self.trusted_authority.digest):
+        request = {
+            "item_id": str(obligation["item_id"]),
+            "claim_id": claim_id,
+            "decision": decision,
+            "actor_id": actor_id,
+            "actor_role": actor_role,
+            "evaluation_id": evaluation_id,
+            "evaluation_result_digest": None if evaluation_result_digest is None else _hex(_digest_input(evaluation_result_digest, "evaluation_result_digest")),
+            "expected_revision": expected_revision,
+            "decided_at_ms": decision_at_ms,
+        }
+        if not self._replayed_command(connection, "OFFSET_DECISION", str(action["action_id"]), request, "determination_request_conflict"):
+            _fail(FinancialConflictError, "determination_request_conflict")
+        authority = connection.execute("SELECT authority_id,authority_epoch,authority_digest FROM determinations WHERE determination_id=?", (action["determination_id"],)).fetchone()
+        if (str(authority[0]), int(authority[1]), bytes(authority[2])) != (self.trusted_authority.authority_id, self.trusted_authority.epoch, self.trusted_authority.digest):
             _fail(FinancialAuthorityError, "determination_authority_stale")
         return {"status": "DUPLICATE", "action_id": str(action["action_id"]), "determination_id": str(action["determination_id"]), **self._projection_for_row(obligation)}
 
@@ -4250,13 +4357,13 @@ class FinancialOwner:
         input_receipt: Mapping[str, Any],
         input_result_digest: bytes,
         pack: ControlPack,
-        snapshot: Any,
         query_observations: Mapping[str, Mapping[str, Any]],
         current_event_sequence: int,
         previous_history_head: bytes,
         transition_result: Mapping[str, Any],
         financial_engine: Any,
         semantic: Any,
+        snapshot: Any,
     ) -> dict[str, Any]:
         """Bind and atomically apply one accepted Engine correction delta.
 
@@ -4264,7 +4371,8 @@ class FinancialOwner:
         internal consistency (effect order, explanation, action/outbox/case/event
         shape and cross-field equalities). This method binds the result to what
         only the Owner knows: the command, trusted authority, control pack,
-        claim row, read set, history position and scope.
+        claim row, read set, history position and scope. Before COMMIT the
+        independent checker recomputes the written evaluation from exact rows.
         """
 
         def require_binding(condition: bool, code: str) -> None:
@@ -4391,36 +4499,6 @@ class FinancialOwner:
             and mutation["action_idempotency_key"] == action_idempotency_key,
             "correction_digest_binding",
         )
-        require_binding(
-            financial_result.owner_id == self.owner_id
-            and financial_result.mode == self.mode
-            and financial_result.state_id == self.config.state_id
-            and financial_result.deployment_id == self.config.deployment_id
-            and financial_result.program_id == self.config.program_id
-            and financial_result.period_id == self.config.period_id
-            and financial_result.currency == self.config.currency
-            and financial_result.authority_id == authority.authority_id
-            and financial_result.authority_epoch == authority.epoch
-            and financial_result.authority_digest == authority.digest
-            and financial_result.pack_id == pack.pack_id
-            and financial_result.pack_digest == pack.digest
-            and financial_result.evaluated_at_ms == mutation_time,
-            "correction_projection_binding",
-        )
-        try:
-            expected_resulting_snapshot = financial_engine.validate_correction_result_input(
-                snapshot,
-                expected_revision=expected_revision,
-                result=transition_result,
-            )
-            rebound_result = semantic.decode_blfres02_result(
-                mutation["resulting_result_wire"],
-                expected_snapshot=expected_resulting_snapshot,
-            )
-        except (financial_engine.FinancialEngineError, semantic.SemanticAdapterError):
-            _fail(FinancialIntegrityError, "correction_result_input_binding")
-        require_binding(rebound_result == financial_result, "correction_result_wire_binding")
-
         prior_case = connection.execute(
             "SELECT * FROM cases WHERE case_id=? AND obligation_id=?",
             (case_record["case_id"], obligation_id),
@@ -4515,6 +4593,12 @@ class FinancialOwner:
             "acknowledgment_ref": None,
             "updated_at_ms": mutation_time,
         })
+        try:  # Lean's declared post-state (input and result context, at mutation time) is the one these writes produced.
+            semantic.bind_resulting_state(
+                connection, snapshot, authority_context=semantic.TrustedAuthorityContext.from_authority(authority), evaluation_time_ms=mutation_time, mutation=mutation,
+            )
+        except semantic.SemanticAdapterError as error:
+            _fail(FinancialIntegrityError, f"correction_post_state:{error}")
 
         evaluation_receipt = self._insert_evaluation(
             connection,
@@ -4644,6 +4728,12 @@ class FinancialOwner:
             },
             committed_at_ms=int(event["committed_at_ms"]),
         )
+        from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_obligation_connection
+
+        try:  # before COMMIT: the independent checker recomputes what Lean decided from the exact rows written
+            verify_obligation_connection(connection, obligation_id, **self._checker_expectations())
+        except IndependentFinancialError as error:
+            _fail(FinancialIntegrityError, f"correction_verification:{error}")
         return {
             "status": "CORRECTION_AUTHORIZED",
             "action_id": action_id,
@@ -4716,7 +4806,6 @@ class FinancialOwner:
                     actor_id=actor_id,
                     actor_role=actor_role,
                     decision="OFFSET_AUTHORIZED",
-                    kind="OFFSET_AUTHORIZATION",
                     evaluation_id=evaluation_id,
                     evaluation_result_digest=evaluation_result_digest,
                     expected_revision=expected_revision,
@@ -4830,7 +4919,6 @@ class FinancialOwner:
                     actor_id=actor_id,
                     actor_role=actor_role,
                     decision="OFFSET_REJECTED_CORRECTION_AUTHORIZED",
-                    kind="CORRECTION_PAYMENT_REQUEST",
                     evaluation_id=evaluation_id,
                     evaluation_result_digest=evaluation_result_digest,
                     expected_revision=expected_revision,
@@ -4998,13 +5086,13 @@ class FinancialOwner:
                 input_receipt=evaluation_receipt,
                 input_result_digest=input_result_digest,
                 pack=pack,
-                snapshot=snapshot,
                 query_observations=query_observations,
                 current_event_sequence=current_event_sequence,
                 previous_history_head=previous_history_head,
                 transition_result=transition_result,
                 financial_engine=financial_engine,
                 semantic=semantic,
+                snapshot=snapshot,
             )
 
     def acknowledge_action(
@@ -5024,17 +5112,13 @@ class FinancialOwner:
             action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_id,)).fetchone()
             if action is None:
                 _fail(FinancialIntegrityError, "action_missing")
-            obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (action["obligation_id"],)).fetchone()
-            if obligation is None:
-                _fail(FinancialIntegrityError, "obligation_missing")
+            obligation = self._obligation_by_id(connection, str(action["obligation_id"]))
             self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
             outbox = connection.execute("SELECT * FROM action_outbox WHERE action_id=?", (action_id,)).fetchone()
             if outbox is None:
                 _fail(FinancialIntegrityError, "action_outbox_missing")
-            if str(action["status"]) == "ACKNOWLEDGED":
-                if str(outbox["acknowledgment_ref"]) == acknowledgment_ref:
-                    return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
-                _fail(FinancialConflictError, "acknowledgment_conflict")
+            if self._replayed_command(connection, "ACTION_ACKNOWLEDGMENT", action_id, {"acknowledgment_ref": acknowledgment_ref}, "acknowledgment_conflict"):
+                return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
             self._check_revision(obligation, expected_revision)
             if str(action["status"]) != "READY":
                 _fail(FinancialConflictError, "action_not_acknowledgeable")
@@ -5320,11 +5404,7 @@ class FinancialOwner:
                 _fail(FinancialRevisionError, "evaluation_reference_conflict")
 
             pack, _calculation_rule, _adjustment_rule = self._control_pack_for_obligation(connection, obligation_id)
-            population_binding = (
-                self._population_binding_for_obligation(connection, obligation)
-                if self.schema_version == _MANIFEST_SCHEMA_VERSION
-                else None
-            )
+            population_binding = self._population_binding_for_obligation(connection, obligation)
 
             def page(
                 select_sql: str,
@@ -5365,16 +5445,13 @@ class FinancialOwner:
                 }
 
             def case_ref(row: sqlite3.Row) -> dict[str, Any]:
-                try:
-                    conditions = json.loads(str(row["completion_conditions_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "decision_package_case")
+                conditions = _stored_object(row["completion_conditions_json"], "decision_package_case")
                 required_conditions = {
                     "amount_satisfied",
                     "delivery_acknowledged_or_not_required",
                     "reporting_complete",
                 }
-                if type(conditions) is not dict or set(conditions) != required_conditions or any(type(conditions[key]) is not bool for key in required_conditions):
+                if set(conditions) != required_conditions or any(type(conditions[key]) is not bool for key in required_conditions):
                     _fail(FinancialIntegrityError, "decision_package_case")
                 return {
                     "case_id": str(row["case_id"]),
@@ -5414,11 +5491,8 @@ class FinancialOwner:
                 }
 
             def determination_ref(row: sqlite3.Row) -> dict[str, Any]:
-                try:
-                    supporting = json.loads(str(row["supporting_evidence_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "decision_package_determination")
-                bindings = supporting.get("bindings") if type(supporting) is dict and set(supporting) == {"bindings"} else None
+                supporting = _stored_object(row["supporting_evidence_json"], "decision_package_determination")
+                bindings = supporting.get("bindings") if set(supporting) == {"bindings"} else None
                 if type(bindings) is not list or any(
                     type(value) is not dict
                     or set(value) != {"evidence_id", "record_digest"}
@@ -5459,12 +5533,7 @@ class FinancialOwner:
             )
 
             def action_ref(row: sqlite3.Row) -> dict[str, Any]:
-                try:
-                    payload = json.loads(str(row["payload_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "decision_package_action")
-                if type(payload) is not dict:
-                    _fail(FinancialIntegrityError, "decision_package_action")
+                payload = _stored_object(row["payload_json"], "decision_package_action")
                 payload_fields: dict[str, Any] = {}
                 for key in action_fields:
                     if key not in payload:
@@ -5669,14 +5738,10 @@ class FinancialOwner:
                 resolution_assessment = "SUPPORTED"
 
             package = {
-                "contract": (
-                    _POPULATION_DECISION_PACKAGE_CONTRACT
-                    if self.schema_version == _MANIFEST_SCHEMA_VERSION
-                    else _DECISION_PACKAGE_CONTRACT
-                ),
+                "contract": _DECISION_PACKAGE_CONTRACT,
                 "scope": self._scope_value(),
                 "obligation": self._projection_for_row(obligation),
-                **({"population_binding": population_binding} if population_binding is not None else {}),
+                "population_binding": population_binding,
                 "evaluation_receipt": receipt,
                 "control_pack": {
                     "pack_id": pack.pack_id,
@@ -5774,11 +5839,8 @@ class FinancialOwner:
                 (obligation_id,),
             )
             for row in rows:
-                try:
-                    payload = json.loads(str(row["payload_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "correction_followup_event")
-                if type(payload) is not dict or payload.get("action_id") != action_id:
+                payload = _stored_object(row["payload_json"], "correction_followup_event")
+                if payload.get("action_id") != action_id:
                     continue
                 if found is not None:
                     _fail(FinancialIntegrityError, "correction_followup_duplicate")
@@ -6065,7 +6127,7 @@ class FinancialOwner:
     ) -> dict[str, Any]:
         """Read a bounded, repeatable page of event-backed correction follow-up work."""
 
-        if type(after_event_sequence) is not int or not 0 <= after_event_sequence <= _MAX_ROWS:
+        if type(after_event_sequence) is not int or not 0 <= after_event_sequence < 2**63:
             _fail(FinancialInputError, "correction_followup_cursor")
         if type(limit) is not int or not 1 <= limit <= 100:
             _fail(FinancialInputError, "correction_followup_limit")
@@ -6080,11 +6142,8 @@ class FinancialOwner:
             selected = events[:limit]
             requests: list[tuple[int, str, str]] = []
             for event in selected:
-                try:
-                    payload = json.loads(str(event["payload_json"]))
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    _fail(FinancialIntegrityError, "correction_followup_event")
-                if type(payload) is not dict or type(payload.get("action_id")) is not str:
+                payload = _stored_object(event["payload_json"], "correction_followup_event")
+                if type(payload.get("action_id")) is not str:
                     _fail(FinancialIntegrityError, "correction_followup_event")
                 item = connection.execute(
                     "SELECT item_id FROM obligations WHERE obligation_id=?",
@@ -6130,10 +6189,6 @@ class FinancialOwner:
     def _dict_rows(self, connection: sqlite3.Connection, query: str, args: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         return [dict(row) for row in connection.execute(query, args).fetchall()]
 
-    def _require_funding_schema(self) -> None:
-        if self.schema_version not in _FUNDING_SCHEMA_VERSIONS:
-            _fail(FinancialInputError, "program_funding_schema_v6_required")
-
     @staticmethod
     def _funding_row_value(row: sqlite3.Row) -> dict[str, Any]:
         return {
@@ -6151,7 +6206,6 @@ class FinancialOwner:
     def program_funding_summary(self) -> dict[str, Any]:
         """Return the separate, versioned program-funding evidence projection."""
 
-        self._require_funding_schema()
         with self._read_snapshot() as connection:
             projections = list(
                 connection.execute(
@@ -6189,16 +6243,11 @@ class FinancialOwner:
         connection: sqlite3.Connection,
         receipt: ProgramFundingReceipt,
     ) -> tuple[str, dict[str, Any]]:
-        """Persist one validated, scoped v6 receipt while the caller holds BEGIN IMMEDIATE."""
+        """Persist one validated, scoped receipt while the caller holds BEGIN IMMEDIATE."""
 
         receipt_digest = receipt.digest
-        existing = connection.execute(
-            "SELECT * FROM program_funding_receipts WHERE receipt_id=?",
-            (receipt.receipt_id,),
-        ).fetchone()
-        if existing is not None:
-            if bytes(existing["receipt_digest"]) != receipt_digest:
-                _fail(FinancialConflictError, "program_funding_receipt_identity_conflict")
+        if self._replayed_command(connection, "FUNDING_RECEIPT", receipt.receipt_id, {"receipt_digest": _hex(receipt_digest)}, "program_funding_receipt_identity_conflict"):
+            existing = connection.execute("SELECT * FROM program_funding_receipts WHERE receipt_id=?", (receipt.receipt_id,)).fetchone()
             return "DUPLICATE", self._funding_row_value(existing)
 
         current = connection.execute(
@@ -6307,7 +6356,6 @@ class FinancialOwner:
     def record_program_funding_receipt(self, receipt: ProgramFundingReceipt) -> dict[str, Any]:
         """Record synthetic program-funding evidence without changing obligations or cash."""
 
-        self._require_funding_schema()
         self._assert_actionable()
         if type(receipt) is not ProgramFundingReceipt:
             _fail(FinancialInputError, "program_funding_receipt_type")
@@ -6669,7 +6717,7 @@ class FinancialOwner:
             row = connection.execute("SELECT payload_json,payload_digest FROM actions WHERE action_id=?", (action_id,)).fetchone()
             if row is None:
                 _fail(FinancialIntegrityError, "action_missing")
-            return {"action_id": action_id, "payload": json.loads(str(row[0])), "payload_digest": _hex(bytes(row[1]))}
+            return {"action_id": action_id, "payload": _stored_object(row[0], "action_payload_integrity"), "payload_digest": _hex(bytes(row[1]))}
 
     @staticmethod
     def _export_value(value: Any) -> Any:
@@ -6709,17 +6757,11 @@ class FinancialOwner:
         if set(package) != required:
             _fail(FinancialContinuityError, "continuity_package_shape")
         package_version = package["version"]
-        if type(package_version) is not int or package_version not in _TABLES_BY_VERSION:
+        # The Owner restores Continuity v8 only (a v7 package stays verifiable by the
+        # independent checker; its v7 source store converts on open). v2-v7 fail closed here.
+        if type(package_version) is not int or package_version != _SCHEMA_VERSION:
             _fail(FinancialContinuityError, "continuity_package_schema")
-        (
-            schema,
-            continuity_schema,
-            genesis_domain,
-            continuity_domain,
-            tables_allowed,
-            table_columns,
-        ) = _version_contract(package_version)
-        if package["schema"] != continuity_schema:
+        if package["schema"] != _CONTINUITY_SCHEMA:
             _fail(FinancialContinuityError, "continuity_package_schema")
         scope = package["scope"]
         if type(scope) is not dict or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
@@ -6756,13 +6798,13 @@ class FinancialOwner:
         if package["dispatch_enabled"] is not False or package["egress_enabled"] is not False or package["mode"] not in _MODES:
             _fail(FinancialContinuityError, "continuity_package_binding")
         tables = package["tables"]
-        if type(tables) is not dict or set(tables) != tables_allowed:
+        if type(tables) is not dict or set(tables) != _PACKAGE_TABLES:
             _fail(FinancialContinuityError, "continuity_package_tables")
-        for table in sorted(tables_allowed):
+        for table in sorted(_PACKAGE_TABLES):
             rows = tables[table]
             if type(rows) is not list or len(rows) > _MAX_ROWS:
                 _fail(FinancialContinuityError, "continuity_package_rows")
-            expected_columns = set(table_columns[table])
+            expected_columns = set(_TABLE_COLUMNS[table])
             for row in rows:
                 if type(row) is not dict or set(row) != expected_columns:
                     _fail(FinancialContinuityError, "continuity_package_row")
@@ -6771,17 +6813,17 @@ class FinancialOwner:
         identity_rows = tables["financial_identity"]
         if len(identity_rows) != 1:
             _fail(FinancialContinuityError, "continuity_identity_cardinality")
-        identity_raw = {column: cls._import_value(identity_rows[0][column]) for column in table_columns["financial_identity"]}
-        identity = _identity_record(identity_raw, schema_version=package_version, error_type=FinancialContinuityError, code_prefix="continuity_identity")
+        identity_raw = {column: cls._import_value(identity_rows[0][column]) for column in _TABLE_COLUMNS["financial_identity"]}
+        identity = _identity_record(identity_raw, error_type=FinancialContinuityError, code_prefix="continuity_identity")
         if identity["id"] != 1:
             _fail(FinancialContinuityError, "continuity_identity_id")
         meta_rows = tables["financial_meta"]
         if len(meta_rows) != 1:
             _fail(FinancialContinuityError, "continuity_meta_rows")
-        meta_row = {column: cls._import_value(meta_rows[0][column]) for column in table_columns["financial_meta"]}
+        meta_row = {column: cls._import_value(meta_rows[0][column]) for column in _TABLE_COLUMNS["financial_meta"]}
         expected_meta = {
-            "schema_version": package_version,
-            "schema": schema,
+            "schema_version": _SCHEMA_VERSION,
+            "schema": _SCHEMA,
             "state_id": scope["state_id"],
             "deployment_id": scope["deployment_id"],
             "program_id": scope["program_id"],
@@ -6803,7 +6845,7 @@ class FinancialOwner:
         if identity["bound_mode"] != package["mode"] or identity["bound_mode"] != meta_row["mode"] or identity["bound_owner_id"] != meta_row["owner_id"]:
             _fail(FinancialContinuityError, "continuity_identity_binding")
         if identity["provenance"] == "ROOT":
-            expected_genesis = _digest(genesis_domain, _canonical(scope), authority_digest, identity["identity_digest"])
+            expected_genesis = _digest(_GENESIS_DOMAIN, _canonical(scope), authority_digest, identity["identity_digest"])
             if identity["source_package_digest"] != _ZERO_DIGEST or identity["anchor_sequence"] != 0 or identity["anchor_head"] != expected_genesis or identity["genesis_head"] != expected_genesis:
                 _fail(FinancialContinuityError, "continuity_identity_genesis")
         else:
@@ -6819,7 +6861,7 @@ class FinancialOwner:
         digest = package["package_digest"]
         body = dict(package)
         del body["package_digest"]
-        expected = _hex(_digest(continuity_domain, _canonical(body)))
+        expected = _hex(_digest(_CONTINUITY_DOMAIN, _canonical(body)))
         if digest != expected:
             _fail(FinancialContinuityError, "continuity_package_digest")
         return package
@@ -6846,24 +6888,11 @@ class FinancialOwner:
             "tables": exported_rows,
         }
 
-    def _continuity_admission_package_size(self, connection: sqlite3.Connection) -> int:
-        """Return exact canonical package size from the transactionally maintained row ledger."""
-
-        admission = self._continuity_admission_values(connection)
-        for row_count, _row_bytes in admission.values():
-            if row_count > _MAX_ROWS:
-                _fail(FinancialContinuityError, "continuity_row_cap")
-        empty_tables = {table: [] for table in sorted(self._tables)}
-        body = self._continuity_package_body(connection, empty_tables)
-        package = {**body, "package_digest": _hex(_digest(self._continuity_domain, _canonical(body)))}
-        total = len(_canonical(package))
-        for row_count, row_bytes in admission.values():
-            total += row_bytes + max(0, row_count - 1)
-        return total
-
     def _continuity_package_bytes(self, connection: sqlite3.Connection) -> bytes:
         """Serialize the exact bounded Continuity package from this connection."""
-
+        # Refused before any row is loaded when the event payloads alone exceed the cap.
+        if connection.execute("SELECT COALESCE(SUM(length(payload_json)),0) FROM financial_events").fetchone()[0] > _MAX_PACKAGE_BYTES:
+            _fail(FinancialContinuityError, "continuity_package_size")
         exported_rows: dict[str, list[dict[str, Any]]] = {}
         for table in sorted(self._tables):
             columns = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
@@ -6876,7 +6905,7 @@ class FinancialOwner:
                 _fail(FinancialContinuityError, "continuity_row_cap")
             exported_rows[table] = rows
         body = self._continuity_package_body(connection, exported_rows)
-        package = {**body, "package_digest": _hex(_digest(self._continuity_domain, _canonical(body)))}
+        package = {**body, "package_digest": _hex(_digest(_CONTINUITY_DOMAIN, _canonical(body)))}
         encoded = _canonical(package)
         if len(encoded) > _MAX_PACKAGE_BYTES:
             _fail(FinancialContinuityError, "continuity_package_size")
@@ -6884,65 +6913,108 @@ class FinancialOwner:
 
     def export_continuity(self) -> bytes:
         """Export only bounded, allowlisted responsibility state."""
-        reader = self._read_snapshot if self.schema_version in _FUNDING_SCHEMA_VERSIONS else self._read
-        with reader() as connection:
+        with self._read_snapshot() as connection:
             return self._continuity_package_bytes(connection)
+
+    def export_history(self, directory: Path) -> bytes:
+        """Export all history as sealed segments and a manifest (docs/CORE_REDESIGN.md "History segments").
+
+        The manifest is read in the sealing transaction; sealed segments are append-only,
+        so their files may be written after it. A segment file already in ``directory``
+        is never rewritten, only compared byte for byte (IX.3).
+        """
+        with self._write() as connection:
+            self._seal_segment(connection, force=True)
+            rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
+            count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
+        body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
+        directory.mkdir(exist_ok=True)
+        with self._read_snapshot() as connection:
+            for segment in connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall():
+                events = connection.execute("SELECT * FROM financial_events WHERE event_sequence BETWEEN ? AND ? ORDER BY event_sequence", (segment["first_sequence"], segment["last_sequence"]))
+                data = _canonical({"events": [self._segment_record("financial_events", tuple(row)) for row in events], "rows": json.loads(segment["rows_json"]), "seal": _segment_seal(*tuple(segment)[:6]), "segment_digest": _hex(bytes(segment["segment_digest"])), "signature": None})
+                path = directory / f"segment-{segment['segment_index']:08d}.json"
+                if not path.exists():
+                    _replace_file(path, data)
+                else:
+                    with path.open("rb") as handle:
+                        if handle.read(len(data) + 1) != data:
+                            _fail(FinancialContinuityError, "history_export_mismatch")
+        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
+        _replace_file(directory / "manifest.json", manifest)
+        return manifest
+
+    def _replay_segment(self, connection: sqlite3.Connection, path: Path) -> None:
+        """Apply one checked segment's events and final row images, then reseal it; the seal must match."""
+        with path.open("rb") as handle:
+            segment = json.loads(handle.read(_MAX_SEGMENT_BYTES + 1))
+        columns = _TABLE_COLUMNS["financial_events"]
+        connection.executemany(f"INSERT INTO financial_events ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", ([self._import_value(event[column]) for column in columns] for event in segment["events"]))
+        keys = {table: [str(info[1]) for info in sorted(connection.execute(f"PRAGMA table_info({table})"), key=lambda info: info[5]) if info[5]] for table in _PROJECTION_TABLES}
+        for record in segment["rows"]:
+            table, values = record["table"], {column: self._import_value(record["row"][column]) for column in _TABLE_COLUMNS[record["table"]]}
+            where, key = " AND ".join(f"{column}=?" for column in keys[table]), [values[column] for column in keys[table]]
+            current = connection.execute(f"SELECT * FROM {table} WHERE {where}", key).fetchone()
+            if current is None:
+                connection.execute(f"INSERT INTO {table} ({','.join(values)}) VALUES ({','.join('?' for _ in values)})", list(values.values()))
+            elif changed := [column for column in values if current[column] != values[column]]:
+                connection.execute(f"UPDATE {table} SET {','.join(f'{column}=?' for column in changed)} WHERE {where}", [values[column] for column in changed] + key)
+            connection.execute(f"INSERT OR IGNORE INTO history_pending SELECT ?,rowid,? FROM {table} WHERE {where}", [table, len(_canonical(record)) + 1, *key])
+        last = segment["events"][-1]
+        connection.execute("UPDATE financial_meta SET sequence=?,history_head=? WHERE id=1", (last["event_sequence"], self._import_value(last["head"])))
+        connection.execute("DELETE FROM temp.rr_captured_rows")
+        if self._seal_segment(connection, force=True) != bytes.fromhex(segment["segment_digest"]):
+            _fail(FinancialContinuityError, "history_replay_mismatch")
 
     @classmethod
     def restore_continuity(
         cls,
         *,
-        package_bytes: bytes,
+        package_bytes: bytes | None = None,
+        history: Path | None = None,
         recovered_path: Path,
         trusted_authority: SyntheticTrustedAuthority | None,
         clock: FinancialClock | None = None,
         restore_mode: str = "SHADOW",
         correction_transition_release: object | None = None,
     ) -> "FinancialOwner":
-        """Restore into a new SHADOW or explicitly approved TEST owner."""
+        """Restore into a new SHADOW or explicitly approved TEST owner, from a package or by replaying a history export."""
+        from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database, verify_history_export
+
         sidecar_paths = (Path(f"{recovered_path}-wal"), Path(f"{recovered_path}-shm")) if isinstance(recovered_path, Path) else ()
         occupied = lambda path: path.exists() or path.is_symlink()
         if not isinstance(recovered_path, Path) or any(occupied(path) for path in (recovered_path, *sidecar_paths)) or not recovered_path.parent.is_dir():
             _fail(FinancialContinuityError, "continuity_destination")
         if restore_mode not in {"SHADOW", "TEST"}:
             _fail(FinancialContinuityError, "continuity_restore_mode")
-        package = cls.validate_continuity_package(package_bytes)
-        if package["version"] != _MANIFEST_SCHEMA_VERSION:
-            tables = package["tables"]
-            if not isinstance(tables, dict):
-                _fail(FinancialContinuityError, "continuity_package_tables")
-            population_events = [
-                row
-                for row in tables["financial_events"]
-                if row.get("aggregate_type") == "POPULATION"
-            ]
-            if (
-                tables["population_imports"]
-                or tables["population_items"]
-                or tables["obligations"]
-                or population_events
-            ):
-                _fail(FinancialContinuityError, "continuity_manifest_schema_v7_required")
+        if history is None:
+            package = cls.validate_continuity_package(package_bytes)
+        elif package_bytes is not None:
+            _fail(FinancialContinuityError, "continuity_source")
         if trusted_authority is None or type(trusted_authority) is not SyntheticTrustedAuthority:
             _fail(FinancialAuthorityError, "trusted_authority_required")
+        if history is not None:
+            try:
+                package = verify_history_export(history, expected_authority=_checker_authority(trusted_authority))
+            except IndependentFinancialError as error:
+                _fail(FinancialContinuityError, f"history_export:{error}")
         authority = package["authority"]
         if (str(authority.get("authority_id")), int(authority.get("epoch", 0)), str(authority.get("digest"))) != (trusted_authority.authority_id, trusted_authority.epoch, _hex(trusted_authority.digest)):
             _fail(FinancialAuthorityError, "continuity_authority_mismatch")
         config_map = package["scope"]
-        config = FinancialOwnerConfig(state_id=str(config_map["state_id"]), deployment_id=str(config_map["deployment_id"]), program_id=str(config_map["program_id"]), period_id=str(config_map["period_id"]), currency=str(config_map["currency"]), schema_version=int(package["version"]))
+        config = FinancialOwnerConfig(state_id=str(config_map["state_id"]), deployment_id=str(config_map["deployment_id"]), program_id=str(config_map["program_id"]), period_id=str(config_map["period_id"]), currency=str(config_map["currency"]))
         restored_owner_id = _SHADOW_OWNER_ID if restore_mode == "SHADOW" else _TEST_OWNER_ID
         source_identity_rows = package["tables"]["financial_identity"]
         if len(source_identity_rows) != 1:
             _fail(FinancialContinuityError, "continuity_identity_rows")
         source_identity = _identity_record(
-            {column: cls._import_value(source_identity_rows[0][column]) for column in _TABLE_COLUMNS_BY_VERSION[config.schema_version]["financial_identity"]},
-            schema_version=config.schema_version,
+            {column: cls._import_value(source_identity_rows[0][column]) for column in _TABLE_COLUMNS["financial_identity"]},
             error_type=FinancialContinuityError,
             code_prefix="continuity_identity",
         )
         identity_contract = {
             "id": 1,
-            "schema_version": config.schema_version,
+            "schema_version": _SCHEMA_VERSION,
             "provenance": "CONTINUITY_RESTORE",
             "bound_mode": restore_mode,
             "bound_owner_id": restored_owner_id,
@@ -7014,19 +7086,18 @@ class FinancialOwner:
                 identity_contract=identity_contract,
                 correction_transition_release=correction_transition_release,
             )
-            insertion_order = ["control_packs", "population_imports", "population_items", "obligations", "evidence", "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox", "financial_events", "financial_conflicts", "evaluations"]
-            if config.schema_version in _FUNDING_SCHEMA_VERSIONS:
-                insertion_order.extend(("program_funding_receipts", "program_funding_projection"))
-            if config.schema_version == _MANIFEST_SCHEMA_VERSION:
-                insertion_order.extend((
-                    "population_manifests",
-                    "population_manifest_members",
-                    "population_manifest_heads",
-                    "population_manifest_bindings",
-                ))
+            insertion_order = (
+                "control_packs", "population_imports", "population_items", "obligations", "evidence",
+                "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox",
+                "financial_events", "financial_conflicts", "evaluations", "program_funding_receipts",
+                "program_funding_projection", "population_manifests", "population_manifest_members",
+                "population_manifest_heads", "population_manifest_bindings",
+            )
             with owner._write() as connection:
-                for table in insertion_order:
+                for table in insertion_order if history is None else ():
                     connection.execute(f"DELETE FROM {table}")
+                for index in range(int(package["segment_count"]) if history is not None else 0):
+                    owner._replay_segment(connection, history / f"segment-{index:08d}.json")
                 meta_rows = package["tables"]["financial_meta"]
                 if len(meta_rows) != 1:
                     _fail(FinancialContinuityError, "continuity_meta_rows")
@@ -7038,7 +7109,7 @@ class FinancialOwner:
                 meta_values = [overrides.get(column, value) for column, value in zip(meta_columns, meta_values)]
                 assignments = ",".join(f"{column}=?" for column in meta_columns)
                 connection.execute(f"UPDATE financial_meta SET {assignments} WHERE id=1", tuple(meta_values))
-                for table in insertion_order:
+                for table in insertion_order if history is None else ():
                     columns = owner._table_columns[table]
                     rows = package["tables"][table]
                     placeholders = ",".join("?" for _ in columns)
@@ -7047,9 +7118,10 @@ class FinancialOwner:
                         if len(values) != len(columns):
                             _fail(FinancialContinuityError, "continuity_columns")
                         connection.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})", tuple(values))
-            owner._verify_open_identity()
-            from app.right_rail_financial_owner_independent import verify_database
-
+                connection.execute("DELETE FROM temp.rr_captured_rows")  # the imported history already carries them
+                owner._derive_command_log(connection)
+            # The restore-source verification below is strictly stronger than the open replay.
+            owner._verify_open_identity(verify_history=False)
             verify_database(
                 owner.path,
                 expected_config=config,
@@ -7059,6 +7131,8 @@ class FinancialOwner:
                 expected_continuity_epoch=int(package["continuity_epoch"]),
                 restore_source_package=package_bytes,
             )
+            if history is not None:
+                verify_history_export(history, expected_authority=_checker_authority(trusted_authority), restored=owner.path)
             owner.close()
             attempt_stat = attempt_path.stat()
             attempt_identity = (int(attempt_stat.st_dev), int(attempt_stat.st_ino))

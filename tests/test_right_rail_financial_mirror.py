@@ -20,6 +20,7 @@ from app.right_rail_financial_mirror import (
     MAX_PACKAGE_BYTES,
 )
 from tests.rightrail_financial_expected_cases import (
+    CONTINUITY,
     CONTROL_PACK_V1,
     H_CASH_CENTS,
     H_ITEM_ID,
@@ -518,6 +519,8 @@ class FinancialMirrorTests(unittest.TestCase):
             "--report-id", "report:cli:correction:h",
             "--evidence-id", "evidence:report:cli:correction:h",
             "--supersedes", "evidence:report:cli:prior:h",
+            "--actor-id", "synthetic-reporter",
+            "--actor-role", "REPORTING_EDITOR",
             "--expected-revision", "1",
         ]
 
@@ -600,6 +603,8 @@ class FinancialMirrorTests(unittest.TestCase):
                 "--item-id", H_ITEM_ID,
                 "--claim-id", "claim:offset:h",
                 "--action-id", "action:cli:correction:h",
+                "--actor-id", "synthetic-official",
+                "--actor-role", "FINANCE_DECISION",
                 "--expected-revision", str(receipt["revision"]),
                 "--decision-at-ms", "1774922400000",
                 "--evaluation-id", str(receipt["evaluation_id"]),
@@ -627,6 +632,8 @@ class FinancialMirrorTests(unittest.TestCase):
             "--item-id", H_ITEM_ID,
             "--claim-id", "claim:offset:h",
             "--action-id", "action:cli:offset:h",
+            "--actor-id", "synthetic-official",
+            "--actor-role", "FINANCE_DECISION",
             "--expected-revision", str(receipt["revision"]),
             "--decision-at-ms", "1774864800000",
             "--evaluation-id", str(receipt["evaluation_id"]),
@@ -659,6 +666,70 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(stderr, "ERROR:determination_request_conflict\n")
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
         self.mirror.verify_integrity()
+
+    def test_cli_mutations_require_explicit_actor_and_expected_revision(self) -> None:
+        from tools import right_rail_financial_cli as cli
+
+        common = [
+            "--database", str(self.db),
+            "--authority-file", str(self._authority_file()),
+            "--state-id", self.config.state_id,
+            "--deployment-id", self.config.deployment_id,
+            "--program-id", self.config.program_id,
+            "--period-id", self.config.period_id,
+        ]
+        actor = ["--actor-id", "synthetic-official", "--actor-role", "FINANCE_DECISION", "--expected-revision", "1"]
+        offset = ["--item-id", H_ITEM_ID, "--claim-id", "claim:offset:h", "--evaluation-id", "evaluation:h", "--evaluation-result-digest", "0" * 64]
+        commands = {
+            "authorize-offset": offset + actor,
+            "reject-offset-and-authorize-correction": offset + actor,
+            "acknowledge-action": ["--action-id", "action:h", "--acknowledgment-ref", "ack:h"] + actor,
+            "record-reporting-correction": ["--item-id", H_ITEM_ID, "--report-id", "report:h"] + actor,
+            "record-payment-evidence": [
+                "--item-id", H_ITEM_ID, "--payment-id", "payment:h", "--common-origin-id", "origin:h",
+                "--amount-cents", "1", "--evidence-id", "evidence:h", "--event-at-ms", "1",
+                "--expected-revision", "1",
+            ],
+        }
+
+        def without(args: list[str], flag: str) -> list[str]:
+            index = args.index(flag)
+            return args[:index] + args[index + 2:]
+
+        before_bytes = self.db.read_bytes()
+        refusals = 0
+        for command, args in commands.items():
+            for flag in ("--actor-id", "--actor-role", "--expected-revision"):
+                if flag not in args:
+                    continue
+                stderr = io.StringIO()
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr), self.assertRaises(SystemExit) as refused:
+                    cli.main(common + [command] + without(args, flag))
+                self.assertEqual(refused.exception.code, 2, (command, flag))
+                self.assertIn(f"the following arguments are required: {flag}", stderr.getvalue(), (command, flag))
+                refusals += 1
+        self.assertEqual(refusals, 13)
+        # Refused before the Owner is opened: nothing was read or written.
+        self.assertEqual(self.db.read_bytes(), before_bytes)
+
+        # The supplied actor and revision reach the Mirror exactly, for acknowledge too.
+        with mock.patch.object(FinancialMirror, "acknowledge_action", return_value={"status": "STUB"}) as acknowledge:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.main(common + ["acknowledge-action", "--action-id", "action:h", "--acknowledgment-ref", "ack:h",
+                                                    "--actor-id", "synthetic-receiver", "--actor-role", "RECEIVER", "--expected-revision", "7"]), 0)
+        acknowledge.assert_called_once_with(
+            "action:h", "ack:h", actor_id="synthetic-receiver", actor_role="RECEIVER", expected_revision=7
+        )
+        # A stale revision is refused by the Owner, not silently applied.
+        revision = int(self.mirror.obligation_detail(H_ITEM_ID)["revision"])
+        stale = list(commands["record-payment-evidence"])
+        stale[stale.index("--expected-revision") + 1] = str(revision - 1)
+        sequence = self.mirror.summary()["sequence"]
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            self.assertEqual(cli.main(common + ["record-payment-evidence"] + stale), 2)
+        self.assertEqual(stderr.getvalue(), "ERROR:obligation_revision_conflict\n")
+        self.assertEqual(self.mirror.summary()["sequence"], sequence)
 
     def test_population_status_reports_manifest_completeness_without_roster(self) -> None:
         status = self.mirror.population_status(PROGRAM_ITEMS[0].population_id)
@@ -706,14 +777,10 @@ class FinancialMirrorTests(unittest.TestCase):
     def test_continuity_export_validate_restore_restart_and_readback(self) -> None:
         self._prepare_action()
         package = self.mirror.export_continuity()
-        with self.store._read_snapshot() as connection:
-            self.assertEqual(
-                self.store._continuity_admission_package_size(connection),
-                len(package),
-            )
         metadata = self.mirror.validate_owner_continuity_package(package)
-        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v7")
-        self.assertEqual(metadata["version"], 7)
+        self.assertEqual(metadata["schema"], "RR/FINANCIAL/CONTINUITY/v8")
+        self.assertEqual(metadata["schema"], CONTINUITY.export_version)  # CASE_11
+        self.assertEqual(metadata["version"], 8)
         self.assertEqual(metadata["scope"]["state_id"], self.config.state_id)
         self.assertIn("financial_meta", metadata["table_counts"])
         self.assertFalse(metadata["dispatch_enabled"])

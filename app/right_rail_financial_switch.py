@@ -25,8 +25,9 @@ from app.right_rail_financial_owner_independent import (
     MAX_CENTS,
     MAX_PACKAGE_BYTES,
     MAX_ROWS,
-    CONTINUITY_SCHEMA_BY_VERSION,
-    SCHEMA_BY_VERSION,
+    CONTINUITY_SCHEMA,
+    SCHEMA,
+    SCHEMA_VERSION,
     verify_continuity_package,
 )
 
@@ -36,7 +37,7 @@ COHORT_APPROVAL_CONTRACT = "RR/SWITCH/COHORT-APPROVAL/v1"
 COHORT_BINDING_CONTRACT = "RR/SWITCH/COHORT-BINDING/v1"
 RESULT_CONTRACT = "RR/SWITCH/FINANCIAL-POPULATION-RESULT/v1"
 RUN_REPORT_CONTRACT = "RR/SWITCH/RUN-REPORT/v1"
-CURRENT_OWNER_SCHEMA_VERSION = 7
+CURRENT_OWNER_SCHEMA_VERSION = SCHEMA_VERSION
 MAX_REPLAY_INPUT_BYTES = 2 * MAX_PACKAGE_BYTES
 MAX_RESULT_BYTES = 8 * 1024 * 1024
 _SHA256_RE = re.compile(r"[0-9A-F]{64}\Z")
@@ -205,7 +206,7 @@ class _SnapshotRecords:
 
 @dataclass(frozen=True, slots=True)
 class SnapshotFacts(_SnapshotRecords):
-    """Identity and exact cohort facts derived from verified v7 SHADOW bytes."""
+    """Identity and exact cohort facts derived from verified current-version SHADOW bytes."""
 
     snapshot_sha256: str
     package_digest: str
@@ -275,7 +276,7 @@ def inspect_shadow_snapshot(
     trusted_authority: object,
     expected_scope: Mapping[str, object],
 ) -> SnapshotFacts:
-    """Independently verify and inspect one exact, complete v7 SHADOW package.
+    """Independently verify and inspect one exact, complete current-version SHADOW package.
 
     ``trusted_authority`` (authority id, epoch, digest and roster) and
     ``expected_scope`` come from the caller; absent either, this fails closed.
@@ -326,11 +327,11 @@ def inspect_shadow_snapshot(
         _fail("switch:snapshot-meta-shape")
     if (
         verified.get("version") != CURRENT_OWNER_SCHEMA_VERSION
-        or verified.get("schema") != CONTINUITY_SCHEMA_BY_VERSION[CURRENT_OWNER_SCHEMA_VERSION]
+        or verified.get("schema") != CONTINUITY_SCHEMA
         or meta.get("schema_version") != CURRENT_OWNER_SCHEMA_VERSION
         or meta.get("mode") != "SHADOW"
     ):
-        _fail("switch:snapshot-must-be-v7-shadow")
+        _fail("switch:snapshot-must-be-current-shadow")
     published = [
         row for row in population_rows
         if row.get("status") == "PUBLISHED" and row.get("source_complete") == 1
@@ -383,7 +384,7 @@ def inspect_shadow_snapshot(
             snapshot_sha256=hashlib.sha256(snapshot_bytes).hexdigest().upper(),
             package_digest=_sha3(verified.get("package_digest"), "package-digest"),
             owner_id=_id(meta.get("owner_id"), "owner-id"),
-            owner_schema=SCHEMA_BY_VERSION[CURRENT_OWNER_SCHEMA_VERSION],
+            owner_schema=SCHEMA,
             schema_version=CURRENT_OWNER_SCHEMA_VERSION,
             continuity_epoch=_checked_integer(verified.get("continuity_epoch"), "continuity-epoch", minimum=1),
             sequence=_checked_integer(verified.get("sequence"), "owner-sequence", minimum=0),

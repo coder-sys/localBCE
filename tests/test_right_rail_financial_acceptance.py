@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import closing, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
+import gzip
 import hashlib
 import io
 import json
@@ -49,6 +50,7 @@ from app.right_rail_financial_owner_independent import (
     verify_database,
     verify_decision_package,
     verify_continuity_package,
+    verify_obligation_connection,
 )
 from tests import rightrail_financial_expected_cases as expected
 
@@ -189,6 +191,31 @@ def _independent_digest(domain: bytes, *parts: bytes) -> bytes:
 
 def _independent_hex(value: bytes) -> str:
     return value.hex().upper()
+
+
+_V8_COMMAND_KINDS = frozenset({
+    "CONTROL_PACK", "POPULATION_MANIFEST", "SUPPORT_EVIDENCE", "PAYMENT", "PAYMENT_REVERSAL",
+    "OFFSET_CLAIM", "OFFSET_DECISION", "ACTION_ACKNOWLEDGMENT", "REPORT",
+})
+
+
+_COMMAND_TRIGGER_BODY = "BEFORE {} ON commands BEGIN SELECT RAISE(ABORT,'command_immutable'); END"
+
+
+def _v7_package_from_v8(package_bytes: bytes) -> bytes:
+    """Test fixture: the v7 package the same history exported before v8."""
+
+    package = json.loads(package_bytes.decode("ascii"))
+    package["schema"] = "RR/FINANCIAL/CONTINUITY/v7"
+    package["version"] = 7
+    package["tables"]["financial_meta"][0].update(schema_version=7, schema="RR/FINANCIAL/OWNER/v7")
+    package["tables"]["financial_identity"][0]["schema_version"] = 7
+    body = dict(package)
+    del body["package_digest"]
+    package["package_digest"] = _independent_hex(
+        _independent_digest(b"RR/FINANCIAL/CONTINUITY/v7\x00", _independent_canonical(body))
+    )
+    return _independent_canonical(package)
 
 
 def _independent_evidence_digest(row: dict[str, object]) -> str:
@@ -363,7 +390,6 @@ config = FinancialOwnerConfig(
     program_id=expected.PROGRAM_ID,
     period_id=expected.PERIOD_ONE_ID,
     currency=expected.CURRENCY,
-    schema_version=6,
 )
 store = _WriteBoundaryOwner(
     path=path,
@@ -428,8 +454,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "authority_digest": self.authority.digest,
             "contract_version": owner._EVALUATION_RECEIPT_CONTRACT,
             "control_pack_id": "pack:plan",
+            "pack_id": "pack:plan",
+            "population_id": "population:plan",
+            "current_evaluation_id": None,
+            "validation_digest": None,
+            "source_complete": 1,
             "currency": "USD",
-            "status": "CLAIMED" if table == "claimed_adjustments" else "READY",
+            "status": {
+                "claimed_adjustments": "CLAIMED",
+                "control_packs": "APPROVED",
+                "population_imports": "PUBLISHED",
+            }.get(table, "READY"),
             "decision": "REJECT_OFFSET",
             "owner_role": "FINANCE_DECISION",
             "actor_role": "FINANCE_DECISION",
@@ -463,13 +498,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         }
         integer_columns = {
             "active", "amount_cents", "amount_satisfied", "attempt", "authority_epoch",
+            "approved_at_ms", "effective_end_ms", "effective_start_ms", "expected_count",
+            "imported_count", "owed_cents", "recorded_at_ms", "validated_count", "version",
             "cash_satisfied", "claimed_adjustment_cents", "control_pack_version",
             "created_at_ms", "deadline_ms", "due_at_ms", "event_at_ms", "evaluated_at_ms",
             "expected_revision", "lawful_adjustment_cents", "overage_cents", "received_at_ms",
             "received_cash_cents", "reporting_complete", "resulting_revision", "revision",
             "rule_version", "shortfall_cents", "timely", "updated_at_ms", "visible_at_ms",
         }
-        columns = owner._TABLE_COLUMNS_BY_VERSION[7][table]
+        columns = owner._TABLE_COLUMNS[table]
         row: list[object] = []
         for column in columns:
             if column in values:
@@ -491,9 +528,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "action_outbox", "financial_conflicts", "evaluations", "determinations",
         )
         rows_per_table = per_obligation * 20
+        # v8 declares foreign keys: the SQL-shaped rows get the parents they name.
+        parents = (("control_packs", 1), ("population_imports", 1), ("population_items", 20), ("obligations", 20))
         with store._write() as connection:
+            for table, count in parents:
+                columns = owner._TABLE_COLUMNS[table]
+                connection.executemany(
+                    f"INSERT INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+                    (self._private_index_fixture_row(table, ordinal) for ordinal in range(count)),
+                )
             for table in tables:
-                columns = owner._TABLE_COLUMNS_BY_VERSION[store.schema_version][table]
+                columns = owner._TABLE_COLUMNS[table]
                 statement = (
                     f"INSERT INTO {table} ({','.join(columns)}) "
                     f"VALUES ({','.join('?' for _ in columns)})"
@@ -505,10 +550,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         for ordinal in range(rows_per_table)
                     ),
                 )
-            self.assertLessEqual(
-                store._continuity_admission_package_size(connection),
-                owner._MAX_PACKAGE_BYTES,
-            )
+            connection.execute("DELETE FROM temp.rr_captured_rows")  # plan-only rows: no event carries them
         return rows_per_table
 
     def _assert_private_index_schema(self, path: Path) -> None:
@@ -532,7 +574,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         period_id: str = expected.PERIOD_ONE_ID,
         path: Path | None = None,
         clock: _Clock | None = None,
-        schema_version: int = 7,
+        schema_version: int = 8,
         correction_transition_release: object | None = None,
     ) -> FinancialOwner:
         config = FinancialOwnerConfig(
@@ -558,7 +600,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         period_id: str = expected.PERIOD_ONE_ID,
         path: Path,
         clock: _Clock | None = None,
-        schema_version: int = 7,
+        schema_version: int = 8,
         correction_transition_release: object | None = None,
     ) -> _WriteBoundaryOwner:
         config = FinancialOwnerConfig(
@@ -788,7 +830,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         period_id: str = expected.PERIOD_ONE_ID,
         population_id: str = expected.POPULATION_ONE_ID,
         clock: _Clock | None = None,
-        schema_version: int = 7,
+        schema_version: int = 8,
         correction_transition_release: object | None = None,
     ) -> FinancialOwner:
         owner = self._make_owner(
@@ -825,7 +867,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         period_id: str = expected.PERIOD_ONE_ID,
         population_id: str = expected.POPULATION_ONE_ID,
         clock: _Clock | None = None,
-        schema_version: int = 7,
+        schema_version: int = 8,
     ) -> FinancialOwner:
         return self._build_base(
             period_id=period_id,
@@ -1294,6 +1336,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._ack(store)
         self._assert_snapshot(store, expected.H_ACKNOWLEDGED)
         self._assert_verified(store)
+
+    def test_corrupt_stored_action_payload_fails_closed_with_typed_error(self) -> None:
+        for corrupt in ("not-json", "[]"):
+            with self.subTest(corrupt=corrupt):
+                store = self._build_base_for_correction()
+                self._prepare_rejected(store)
+                with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+                    connection.execute("DROP TRIGGER action_payload_immutable")
+                    connection.execute(
+                        "UPDATE actions SET payload_json=? WHERE action_id=?",
+                        (corrupt, expected.ACTION_CORRECTION_ID),
+                    )
+                with self.assertRaisesRegex(FinancialIntegrityError, "action_payload_integrity"):
+                    store.action_payload(expected.ACTION_CORRECTION_ID)
+                with self.assertRaisesRegex(FinancialIntegrityError, "action_payload_integrity"):
+                    store.retry_action(expected.ACTION_CORRECTION_ID)
 
     def test_case_06_late_payment_and_report_correction(self) -> None:
         self.assertEqual(expected.CASE_06.number, 6)
@@ -1899,8 +1957,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         self.assertEqual(store.path.read_bytes(), source_before_restore)
 
-    def test_v6_program_funding_receipt_identity_supersession_and_test_restore(self) -> None:
-        store = self._make_owner(schema_version=6)
+    def test_program_funding_receipt_identity_supersession_and_test_restore(self) -> None:
+        store = self._make_owner()
         mirror = FinancialMirror(store)
         original_package = store.export_continuity()
         original_counts = self._durable_counts(store.path)
@@ -1992,25 +2050,25 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             second_package,
             expected_scope=package_identity["scope"],
             expected_authority=self.authority,
-            expected_schema_version=6,
+            expected_schema_version=8,
         )
-        self.assertEqual(independent_package["version"], 6)
+        self.assertEqual(independent_package["version"], 8)
         self.assertEqual(independent_package["program_funding"]["reported_funding_cents"], 99_000_000)
         tampered_package = json.loads(second_package.decode("ascii"))
         tampered_package["tables"]["program_funding_projection"][0]["amount_cents"] += 1
         tampered_body = dict(tampered_package)
         del tampered_body["package_digest"]
-        tampered_package["package_digest"] = continuity_package_digest(tampered_body, schema_version=6)
+        tampered_package["package_digest"] = continuity_package_digest(tampered_body)
         with self.assertRaisesRegex(IndependentFinancialError, "funding:projection-reconstruction"):
             verify_continuity_package(
                 _independent_canonical(tampered_package),
                 expected_scope=package_identity["scope"],
                 expected_authority=self.authority,
-                expected_schema_version=6,
+                expected_schema_version=8,
             )
         restored_mirror = mirror.restore_test_continuity(
             second_package,
-            self._path("v6-funding-test-restore.sqlite"),
+            self._path("funding-test-restore.sqlite"),
         )
         restored = restored_mirror.owner
         self.assertEqual(restored.mode, "TEST")
@@ -2023,46 +2081,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(restored.export_continuity(), restored_package_before_retry)
         self._assert_verified(restored, restore_source_package=second_package)
 
-        legacy = self._make_owner(schema_version=5)
-        legacy_package = legacy.export_continuity()
-        legacy_view = FinancialOwner.validate_continuity_package(legacy_package)
-        self.assertEqual(legacy_view["version"], 5)
-        self.assertEqual(legacy_view["schema"], "RR/FINANCIAL/CONTINUITY/v5")
-        self.assertNotIn("program_funding_receipts", legacy_view["tables"])
-        self.assertNotIn("program_funding_projection", legacy_view["tables"])
-        self.assertNotIn("schema_version", legacy.summary())
-        self.assertEqual(
-            legacy.config.canonical_bytes,
-            _independent_canonical(
-                {
-                    "state_id": expected.STATE_ID,
-                    "deployment_id": expected.DEPLOYMENT_ID,
-                    "program_id": expected.PROGRAM_ID,
-                    "period_id": expected.PERIOD_ONE_ID,
-                    "currency": expected.CURRENCY,
-                }
-            ),
-        )
-        with self.assertRaisesRegex(FinancialInputError, "program_funding_schema_v6_required"):
-            legacy.record_program_funding_receipt(receipt)
-        with self.assertRaisesRegex(FinancialInputError, "program_funding_schema_v6_required"):
-            legacy.program_funding_summary()
-        self.assertEqual(legacy.export_continuity(), legacy_package)
-        self.assertEqual(
-            verify_continuity_package(
-                legacy_package,
-                expected_scope=legacy_view["scope"],
-                expected_authority=self.authority,
-                expected_schema_version=5,
-            )["version"],
-            5,
-        )
-        legacy_database_bytes = legacy.path.read_bytes()
-        with self.assertRaisesRegex(FinancialIntegrityError, "schema_version_incompatible"):
-            self._make_owner(path=legacy.path, schema_version=6)
-        self.assertEqual(legacy.path.read_bytes(), legacy_database_bytes)
-
-        bounded = self._make_owner(schema_version=6)
+        bounded = self._make_owner()
         maximum = self._funding_receipt(
             receipt_id="funding-receipt:bounded:maximum",
             source_record_ref="state-payment-record:maximum",
@@ -2081,9 +2100,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(bounded.program_funding_summary()["reported_funding_cents"], (1 << 63) - 1)
         self._assert_verified(bounded)
 
-    def test_v6_program_funding_supersession_clock_rollback_rejects_atomically(self) -> None:
+    def test_program_funding_supersession_clock_rollback_rejects_atomically(self) -> None:
         clock = _Clock(initial=1_700_000_000_000)
-        store = self._make_owner(clock=clock, schema_version=6)
+        store = self._make_owner(clock=clock)
         mirror = FinancialMirror(store)
         parent_receipt = self._funding_receipt()
         recorded = mirror.record_program_funding_receipt(parent_receipt)
@@ -2113,61 +2132,147 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.export_continuity(), before_package)
         self._assert_verified(store)
 
-    def test_v5_owner_does_not_install_private_snapshot_indexes(self) -> None:
-        store = self._make_owner(schema_version=5)
+    def test_private_snapshot_index_migration_prevalidates_identity_and_preserves_restore(self) -> None:
+        source = self._make_owner()
+        source_package = source.export_continuity()
+        legacy_path = self._path("private-index-legacy.sqlite")
+        legacy_path.write_bytes(source.path.read_bytes())
+        with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+            for name, _table, _columns, _sql in _EXPECTED_PRIVATE_INDEXES:
+                connection.execute(f'DROP INDEX "{name}"')
+            connection.execute("PRAGMA user_version=0")
+        legacy_bytes = legacy_path.read_bytes()
+
+        wrong_config = replace(source.config, state_id="state:wrong-private-index-scope")
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
+            FinancialOwner(
+                path=legacy_path,
+                config=wrong_config,
+                trusted_authority=self.authority,
+                clock=_Clock(initial=1_700_000_000_000),
+            )
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+
+        migrated = self._make_owner(path=legacy_path)
+        self._assert_private_index_schema(legacy_path)
+        self.assertEqual(migrated.export_continuity(), source_package)
+        migrated.verify_integrity()
+
+        reopened = self._make_owner(path=legacy_path)
+        self._assert_private_index_schema(legacy_path)
+        self.assertEqual(reopened.export_continuity(), source_package)
+        reopened.verify_integrity()
+
+        restored_path = self._path("private-index-restored.sqlite")
+        restored = FinancialOwner.restore_test_continuity(
+            package_bytes=source_package,
+            recovered_path=restored_path,
+            trusted_authority=self.authority,
+            clock=_Clock(initial=1_700_000_000_000),
+        )
+        self._assert_private_index_schema(restored_path)
+        restored.verify_integrity()
+
+    def test_owner_open_replays_history_and_refuses_same_length_projection_edit(self) -> None:
+        store = self._build_base()
+        self._assert_verified(store)
+        tampered_path = self._path("open-replay-projection-tamper.sqlite")
+        tampered_path.write_bytes(store.path.read_bytes())
+        with closing(sqlite3.connect(str(tampered_path), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute(
+                "UPDATE obligations SET owed_cents=owed_cents+1 WHERE obligation_id=?",
+                (expected.H_OBLIGATION_ID,),
+            )
+        with self.assertRaises(IndependentFinancialError) as checker:
+            verify_database(tampered_path, expected_config=store.config, expected_authority=self.authority)
+        expected_code = f"open_verification:{checker.exception}"
+        tampered_bytes = tampered_path.read_bytes()
+        with self.assertRaises(FinancialIntegrityError) as refused:
+            self._make_owner(path=tampered_path)
+        self.assertEqual(str(refused.exception), expected_code)
+        self.assertEqual(tampered_path.read_bytes(), tampered_bytes)
+
+        # The same edit in a store written before the history triggers existed:
+        # the refused open rolls back its migration too, so nothing is written.
+        legacy_path = self._path("open-replay-projection-tamper-legacy.sqlite")
+        legacy_path.write_bytes(tampered_bytes)
+        with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+            for name in owner._HISTORY_APPEND_ONLY_TRIGGERS:
+                connection.execute(f"DROP TRIGGER {name}")
+        legacy_bytes = legacy_path.read_bytes()
+        with self.assertRaises(FinancialIntegrityError) as legacy_refused:
+            self._make_owner(path=legacy_path)
+        self.assertEqual(str(legacy_refused.exception), expected_code)
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+        with closing(sqlite3.connect(str(legacy_path))) as connection:
+            triggers = {
+                str(row[0])
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'")
+            }
+        self.assertTrue(triggers.isdisjoint(owner._HISTORY_APPEND_ONLY_TRIGGERS))
+
+    def test_financial_history_is_append_only_in_new_and_migrated_stores(self) -> None:
+        store = self._build_base()
+        package = store.export_continuity()
+        history_triggers = tuple(owner._HISTORY_APPEND_ONLY_TRIGGERS)
+        store_before = store.path.read_bytes()
         with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
-            indexes = connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
-            ).fetchall()
-        self.assertEqual(indexes, [])
-        store.verify_integrity()
+            event_count = connection.execute("SELECT COUNT(*) FROM financial_events").fetchone()[0]
+            self.assertGreater(event_count, 0)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "financial_event_immutable"):
+                connection.execute("UPDATE financial_events SET payload_json='{}' WHERE event_sequence=1")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "financial_event_immutable"):
+                connection.execute("DELETE FROM financial_events WHERE event_sequence=?", (event_count,))
+        self.assertEqual(store.path.read_bytes(), store_before)
+        self._assert_verified(store)
 
-    def test_v6_v7_private_snapshot_index_migration_prevalidates_identity_and_preserves_restore(self) -> None:
-        for schema_version in (6, 7):
-            with self.subTest(schema_version=schema_version):
-                source = self._make_owner(schema_version=schema_version)
-                source_package = source.export_continuity()
-                legacy_path = self._path(f"v{schema_version}-private-index-legacy.sqlite")
-                legacy_path.write_bytes(source.path.read_bytes())
-                with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
-                    for name, _table, _columns, _sql in _EXPECTED_PRIVATE_INDEXES:
-                        connection.execute(f'DROP INDEX "{name}"')
-                    connection.execute("PRAGMA user_version=0")
-                legacy_bytes = legacy_path.read_bytes()
+        # A store written before the triggers existed: the checker refuses it,
+        # a wrong-scope opener leaves it untouched, and the owner installs the
+        # triggers once without changing any exported fact.
+        legacy_path = self._path("history-append-only-legacy.sqlite")
+        legacy_path.write_bytes(store_before)
+        with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+            for name in history_triggers:
+                connection.execute(f"DROP TRIGGER {name}")
+        legacy_bytes = legacy_path.read_bytes()
+        with self.assertRaisesRegex(IndependentFinancialError, "schema:triggers"):
+            verify_database(legacy_path, expected_config=store.config, expected_authority=self.authority)
+        wrong_config = replace(store.config, state_id="state:wrong-history-trigger-scope")
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
+            FinancialOwner(
+                path=legacy_path,
+                config=wrong_config,
+                trusted_authority=self.authority,
+                clock=_Clock(),
+            )
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+        migrated = self._make_owner(path=legacy_path)
+        self.assertEqual(migrated.export_continuity(), package)
+        self._assert_verified(migrated)
+        with closing(sqlite3.connect(str(legacy_path), isolation_level=None)) as connection:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "financial_event_immutable"):
+                connection.execute("DELETE FROM financial_events")
 
-                wrong_config = replace(source.config, state_id="state:wrong-private-index-scope")
-                with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
-                    FinancialOwner(
-                        path=legacy_path,
-                        config=wrong_config,
-                        trusted_authority=self.authority,
-                        clock=_Clock(initial=1_700_000_000_000),
-                    )
-                self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
-
-                migrated = self._make_owner(schema_version=schema_version, path=legacy_path)
-                self._assert_private_index_schema(legacy_path)
-                self.assertEqual(migrated.export_continuity(), source_package)
-                migrated.verify_integrity()
-
-                reopened = self._make_owner(schema_version=schema_version, path=legacy_path)
-                self._assert_private_index_schema(legacy_path)
-                self.assertEqual(reopened.export_continuity(), source_package)
-                reopened.verify_integrity()
-
-                restored_path = self._path(f"v{schema_version}-private-index-restored.sqlite")
-                restored = FinancialOwner.restore_test_continuity(
-                    package_bytes=source_package,
-                    recovered_path=restored_path,
-                    trusted_authority=self.authority,
-                    clock=_Clock(initial=1_700_000_000_000),
-                )
-                self._assert_private_index_schema(restored_path)
-                restored.verify_integrity()
+        # A weakened trigger is refused, not repaired.
+        weakened_path = self._path("history-append-only-weakened.sqlite")
+        weakened_path.write_bytes(store_before)
+        with closing(sqlite3.connect(str(weakened_path), isolation_level=None)) as connection:
+            connection.execute("DROP TRIGGER financial_event_update_immutable")
+            connection.execute(
+                "CREATE TRIGGER financial_event_update_immutable BEFORE UPDATE OF head ON financial_events "
+                "BEGIN SELECT RAISE(ABORT,'financial_event_immutable'); END"
+            )
+        weakened_bytes = weakened_path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_history_triggers"):
+            self._make_owner(path=weakened_path)
+        self.assertEqual(weakened_path.read_bytes(), weakened_bytes)
+        with self.assertRaisesRegex(IndependentFinancialError, "schema:trigger:financial_event_update_immutable"):
+            verify_database(weakened_path, expected_config=store.config, expected_authority=self.authority)
+        self.assertEqual(weakened_path.read_bytes(), weakened_bytes)
 
     def test_private_snapshot_index_upgrade_serializes_concurrent_openers(self) -> None:
-        source = self._make_owner(schema_version=7)
+        source = self._make_owner(schema_version=8)
         source_package = source.export_continuity()
         legacy_path = self._path("v7-private-index-concurrent-legacy.sqlite")
         legacy_path.write_bytes(source.path.read_bytes())
@@ -2184,7 +2289,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             try:
                 barrier.wait(timeout=5)
                 store = self._make_owner(
-                    schema_version=7,
+                    schema_version=8,
                     path=legacy_path,
                     clock=_Clock(initial=1_700_000_000_000),
                 )
@@ -2203,7 +2308,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_private_index_schema(legacy_path)
 
     def test_owner_rejects_unapproved_or_mismatched_private_indexes_without_repair(self) -> None:
-        source = self._make_owner(schema_version=7)
+        source = self._make_owner(schema_version=8)
         corruptions = (
             ("extra-index", "CREATE INDEX unapproved_plan_index ON evidence(source_id)"),
             (
@@ -2221,25 +2326,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         connection.execute(sql)
                 before = target.read_bytes()
                 with self.assertRaisesRegex(FinancialIntegrityError, "schema_private_indexes"):
-                    self._make_owner(schema_version=7, path=target)
+                    self._make_owner(schema_version=8, path=target)
                 self.assertEqual(target.read_bytes(), before)
 
     def test_v7_private_snapshot_indexes_avoid_scans_in_bounded_fixture(self) -> None:
         # These SQL-shaped rows exercise plans and index cost only; this fixture
         # does not claim event-history or financial-semantic validity.
-        store = self._make_owner(schema_version=7)
+        store = self._make_owner(schema_version=8)
         rows_per_table = self._populate_private_index_fixture(store)
-        with store._read_snapshot() as connection:
-            admission = store._continuity_admission_values(connection)
-            package_bytes = store._continuity_admission_package_size(connection)
         self.assertEqual(rows_per_table, 400)
-        for table in (
-            "evidence", "payments", "claimed_adjustments", "cases", "actions",
-            "action_outbox", "financial_conflicts", "evaluations", "determinations",
-        ):
-            self.assertEqual(admission[table][0], rows_per_table)
-            self.assertLessEqual(admission[table][0], owner._MAX_ROWS)
-        self.assertLessEqual(package_bytes, owner._MAX_PACKAGE_BYTES)
 
         queries = (
             (
@@ -2384,7 +2479,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     started = time.perf_counter_ns()
                     try:
                         for table in write_tables:
-                            columns = owner._TABLE_COLUMNS_BY_VERSION[7][table]
+                            columns = owner._TABLE_COLUMNS[table]
                             statement = (
                                 f"INSERT INTO {table} ({','.join(columns)}) "
                                 f"VALUES ({','.join('?' for _ in columns)})"
@@ -2415,7 +2510,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         "obligations": 20,
                         "rows_per_obligation_per_table": 20,
                         "rows_per_table": rows_per_table,
-                        "package_bytes": package_bytes,
                     },
                     "storage_bytes": {
                         "without_private_indexes": baseline_storage,
@@ -2433,26 +2527,26 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         )
 
-    def test_v6_continuity_admission_migration_prevalidates_identity(self) -> None:
+    def test_history_segment_migration_prevalidates_identity(self) -> None:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
             deployment_id=expected.DEPLOYMENT_ID,
             program_id=expected.PROGRAM_ID,
             period_id=expected.PERIOD_ONE_ID,
             currency=expected.CURRENCY,
-            schema_version=6,
         )
         source = FinancialOwner(
-            path=self._path("v6-admission-migration-source.sqlite"),
+            path=self._path("admission-migration-source.sqlite"),
             config=config,
             trusted_authority=self.authority,
             clock=_Clock(initial=1_700_000_000_000),
         )
         source_package = source.export_continuity()
-        legacy_path = self._path("v6-admission-migration-legacy.sqlite")
+        legacy_path = self._path("admission-migration-legacy.sqlite")
         legacy_path.write_bytes(source.path.read_bytes())
         with closing(sqlite3.connect(legacy_path, isolation_level=None)) as connection:
-            connection.execute("DROP TABLE right_rail_continuity_admission")
+            for table in ("history_segments", "history_pending", "history_open"):
+                connection.execute(f"DROP TABLE {table}")
         legacy_bytes = legacy_path.read_bytes()
         wrong_config = FinancialOwnerConfig(
             state_id="state:wrong-admission-scope",
@@ -2460,7 +2554,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             program_id=expected.PROGRAM_ID,
             period_id=expected.PERIOD_ONE_ID,
             currency=expected.CURRENCY,
-            schema_version=6,
         )
         with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
             FinancialOwner(
@@ -2480,127 +2573,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(migrated.export_continuity(), source_package)
         self._assert_verified(migrated)
 
-    def test_v6_continuity_admission_cache_is_independently_recomputed(self) -> None:
+    def test_per_write_cost_tracks_changed_work(self) -> None:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
             deployment_id=expected.DEPLOYMENT_ID,
             program_id=expected.PROGRAM_ID,
             period_id=expected.PERIOD_ONE_ID,
             currency=expected.CURRENCY,
-            schema_version=6,
-        )
-        store = FinancialOwner(
-            path=self._path("v6-admission-cache.sqlite"),
-            config=config,
-            trusted_authority=self.authority,
-            clock=_Clock(initial=1_700_000_000_000),
-        )
-        self._assert_verified(store)
-        tampered = self._path("v6-admission-cache-tampered.sqlite")
-        tampered.write_bytes(store.path.read_bytes())
-        with closing(sqlite3.connect(tampered, isolation_level=None)) as connection:
-            connection.execute(
-                "UPDATE right_rail_continuity_admission SET row_bytes=row_bytes+1 "
-                "WHERE table_name='financial_events'"
-            )
-        with self.assertRaisesRegex(IndependentFinancialError, "continuity-admission:mismatch"):
-            verify_database(
-                tampered,
-                expected_config=config,
-                expected_authority=self.authority,
-            )
-        self._assert_verified(store)
-
-    def test_v6_continuity_admission_row_cap_rolls_back_all_deltas(self) -> None:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=expected.PERIOD_ONE_ID,
-            currency=expected.CURRENCY,
-            schema_version=6,
-        )
-        store = FinancialOwner(
-            path=self._path("v6-admission-row-cap.sqlite"),
-            config=config,
-            trusted_authority=self.authority,
-            clock=_Clock(initial=1_700_000_000_000),
-        )
-        package_before = store.export_continuity()
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_row_cap"):
-            with store._write() as connection:
-                for index in range(owner._MAX_ROWS + 1):
-                    connection.execute(
-                        "INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)",
-                        (
-                            f"conflict:cap:{index:05d}",
-                            "obligation:cap",
-                            f"origin:cap:{index:05d}",
-                            None,
-                            f"evidence:cap:{index:05d}",
-                            None,
-                            1,
-                            "CAP_TEST",
-                            index,
-                        ),
-                    )
-        self.assertEqual(store.export_continuity(), package_before)
-        with store._read_snapshot() as connection:
-            self.assertEqual(
-                store._continuity_admission_values(connection)["financial_conflicts"],
-                (0, 0),
-            )
-        self._assert_verified(store)
-
-    def test_v7_continuity_admission_row_cap_rolls_back_all_deltas(self) -> None:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=expected.PERIOD_ONE_ID,
-            currency=expected.CURRENCY,
-            schema_version=7,
-        )
-        store = FinancialOwner(
-            path=self._path("v7-admission-row-cap.sqlite"),
-            config=config,
-            trusted_authority=self.authority,
-            clock=_Clock(initial=1_700_000_000_000),
-        )
-        package_before = store.export_continuity()
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_row_cap"):
-            with store._write() as connection:
-                for index in range(owner._MAX_ROWS + 1):
-                    connection.execute(
-                        "INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)",
-                        (
-                            f"conflict:v7-cap:{index:05d}",
-                            "obligation:v7-cap",
-                            f"origin:v7-cap:{index:05d}",
-                            None,
-                            f"evidence:v7-cap:{index:05d}",
-                            None,
-                            1,
-                            "CAP_TEST",
-                            index,
-                        ),
-                    )
-        self.assertEqual(store.export_continuity(), package_before)
-        with store._read_snapshot() as connection:
-            self.assertEqual(
-                store._continuity_admission_values(connection)["financial_conflicts"],
-                (0, 0),
-            )
-        self._assert_verified(store)
-
-    def test_v6_continuity_admission_cost_tracks_changed_work(self) -> None:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=expected.PERIOD_ONE_ID,
-            currency=expected.CURRENCY,
-            schema_version=6,
         )
         measurements: list[dict[str, object]] = []
 
@@ -2620,9 +2599,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         class _RollbackMeasurement(Exception):
             pass
 
+        # IX.3: a commit tracks only its own rows for the next history segment.
         for history_size in (0, 250, 1_000, 3_000):
             store = FinancialOwner(
-                path=self._path(f"v6-admission-measure-{history_size}.sqlite"),
+                path=self._path(f"admission-measure-{history_size}.sqlite"),
                 config=config,
                 trusted_authority=self.authority,
                 clock=_Clock(initial=1_700_100_000_000),
@@ -2636,11 +2616,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         )
                         self.assertEqual(status, "RECORDED")
             package_before = store.export_continuity()
-            with store._read_snapshot() as connection:
-                self.assertEqual(
-                    store._continuity_admission_package_size(connection),
-                    len(package_before),
-                )
             full_package_ms: list[float] = []
             incremental_commit_ms: list[float] = []
             first_index = history_size
@@ -2664,12 +2639,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 result = store.record_program_funding_receipt(receipt)
                 incremental_commit_ms.append((time.perf_counter() - started) * 1_000)
                 self.assertEqual(result["status"], "RECORDED")
-                committed_package = store.export_continuity()
-                with store._read_snapshot() as connection:
-                    self.assertEqual(
-                        store._continuity_admission_package_size(connection),
-                        len(committed_package),
-                    )
             measurements.append(
                 {
                     "unrelated_funding_records_before_samples": history_size,
@@ -2681,10 +2650,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 }
             )
             self._assert_verified(store)
-        print("CONTINUITY_ADMISSION_MEASUREMENT " + json.dumps(measurements, sort_keys=True))
+        print("PER_WRITE_COST_MEASUREMENT " + json.dumps(measurements, sort_keys=True))
 
-    def test_v6_continuity_package_cap_is_checked_before_commit(self) -> None:
-        package_cap = owner._MAX_PACKAGE_BYTES
+    def test_writes_continue_past_the_continuity_package_cap(self) -> None:
+        # Writes no longer re-check the whole-history package: past its 8 MiB cap the package export
+        # refuses, while writes and the segmented history export (docs/CORE_REDESIGN.md) continue.
         scope = {
             "state_id": "s" * 128,
             "deployment_id": "d" * 128,
@@ -2692,13 +2662,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "period_id": "r" * 128,
             "currency": expected.CURRENCY,
         }
-        config = FinancialOwnerConfig(**scope, schema_version=6)
-        clock = _Clock(initial=1_700_000_000_000)
         store = FinancialOwner(
-            path=self._path("v6-continuity-cap.sqlite"),
-            config=config,
+            path=self._path("continuity-cap.sqlite"),
+            config=FinancialOwnerConfig(**scope),
             trusted_authority=self.authority,
-            clock=clock,
+            clock=_Clock(initial=1_700_000_000_000),
             owner_id="o" * 128,
         )
 
@@ -2707,140 +2675,118 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             source_prefix = f"state-payment-record-cap:{index:05d}:"
             return ProgramFundingReceipt(
                 receipt_id=receipt_prefix + "r" * (128 - len(receipt_prefix)),
-                state_id=scope["state_id"],
-                deployment_id=scope["deployment_id"],
-                program_id=scope["program_id"],
-                period_id=scope["period_id"],
-                currency=scope["currency"],
                 source_record_ref=source_prefix + "x" * (128 - len(source_prefix)),
                 amount_cents=1,
                 event_at_ms=1_700_000_000_000,
+                **scope,
             )
 
-        def append_batch(start: int, count: int) -> None:
-            with store._write() as connection:
-                for index in range(start, start + count):
-                    status, _receipt = store._record_program_funding_receipt_in_transaction(
-                        connection,
-                        receipt_for(index),
-                    )
-                    self.assertEqual(status, "RECORDED")
-
-        package_before_first = store.export_continuity()
-        self.assertLess(len(package_before_first), package_cap)
-        self.assertEqual(store.record_program_funding_receipt(receipt_for(0))["status"], "RECORDED")
-        package = store.export_continuity()
-        first_delta = len(package) - len(package_before_first)
-        self.assertGreater(first_delta, 0)
-        self.assertLess(len(package), package_cap)
-
-        next_index = 1
-        target_margin = max(256_000, (first_delta + 16) * 8)
-        while package_cap - len(package) > target_margin:
-            remaining = package_cap - len(package)
-            batch_count = min(256, max(1, (remaining - target_margin) // (first_delta + 16)))
-            while True:
-                try:
-                    append_batch(next_index, batch_count)
-                except FinancialContinuityError as error:
-                    self.assertRegex(str(error), "continuity_package_size")
-                    self.assertGreater(batch_count, 1)
-                    batch_count //= 2
-                    continue
-                break
-            next_index += batch_count
-            package = store.export_continuity()
-            self.assertLess(len(package), package_cap)
-        self.assertLessEqual(package_cap - len(package), target_margin + 4_096)
-        self.assertLess(store.summary()["sequence"], owner._MAX_ROWS)
-
-        before_positive = package
-        self.assertEqual(store.record_program_funding_receipt(receipt_for(next_index))["status"], "RECORDED")
-        next_index += 1
-        package = store.export_continuity()
-        self.assertGreater(len(package), len(before_positive))
-        self.assertLess(len(package), package_cap)
-        self._assert_verified(store)
-
-        def verify_and_restore(raw_package: bytes, destination_name: str) -> None:
-            binding = json.loads(raw_package.decode("ascii"))
-            independent = verify_continuity_package(
-                raw_package,
-                expected_scope=binding["scope"],
-                expected_authority=self.authority,
-                expected_schema_version=6,
-            )
-            self.assertEqual(independent["version"], 6)
-            restored = FinancialMirror(store).restore_test_continuity(
-                raw_package,
-                self._path(destination_name),
-            )
-            restored_package = restored.owner.export_continuity()
-            self.assertLessEqual(len(restored_package), package_cap)
-            self.assertEqual(restored.owner.mode, "TEST")
-            self._assert_verified(restored.owner, current_snapshot_package=restored_package)
-
-        class _RollbackPackagePreview(Exception):
-            pass
-
-        def preview_receipt_package(receipt: ProgramFundingReceipt) -> bool:
-            """Measure a candidate using the exact in-transaction package builder, then roll it back."""
-
+        index, batch = 0, 256
+        while batch:  # a batch whose package would pass the cap rolls back and halves: stop one receipt short
             try:
                 with store._write() as connection:
-                    status, _receipt = store._record_program_funding_receipt_in_transaction(
-                        connection,
-                        receipt,
-                    )
-                    self.assertEqual(status, "RECORDED")
-                    serialized = store._continuity_package_bytes(connection)
-                    self.assertEqual(
-                        store._continuity_admission_package_size(connection),
-                        len(serialized),
-                    )
-                    raise _RollbackPackagePreview()
-            except _RollbackPackagePreview:
-                return True
+                    for offset in range(batch):
+                        self.assertEqual(store._record_program_funding_receipt_in_transaction(connection, receipt_for(index + offset))[0], "RECORDED")
+                    store._continuity_package_bytes(connection)
             except FinancialContinuityError as error:
-                self.assertRegex(str(error), "continuity_package_size")
-                return False
+                self.assertEqual(str(error), "continuity_package_size")
+                batch //= 2
+            else:
+                index += batch
+        package = store.export_continuity()  # the largest package, one receipt under the cap, restores and verifies
+        self.assertLess(owner._MAX_PACKAGE_BYTES - len(package), 8_000)
+        verify_continuity_package(package, expected_scope=json.loads(package)["scope"], expected_authority=self.authority)
+        restored_package = FinancialMirror(store).restore_test_continuity(package, self._path("continuity-cap-largest.sqlite")).owner.export_continuity()
+        self.assertLessEqual(len(restored_package), owner._MAX_PACKAGE_BYTES)
+        self.assertEqual(store.record_program_funding_receipt(receipt_for(index))["status"], "RECORDED")
+        with self.assertRaisesRegex(FinancialContinuityError, "^continuity_package_size$"):
+            store.export_continuity()
+        self._assert_verified(store)
+        history = self._path("continuity-cap-history")
+        manifest = json.loads(store.export_history(history))
+        restored = FinancialOwner.restore_continuity(
+            history=history,
+            recovered_path=self._path("continuity-cap-restored.sqlite"),
+            trusted_authority=self.authority,
+        )
+        self.assertEqual(restored.verify_integrity()["sequence"], manifest["meta"]["sequence"])
 
-        rejected = False
-        for _attempt in range(128):
-            candidate = receipt_for(next_index)
-            if not preview_receipt_package(candidate):
-                self.assertGreater(package_cap - len(package), 0)
-                self.assertLessEqual(package_cap - len(package), target_margin + 4_096)
-                verify_and_restore(package, "v6-continuity-before-cap-rejection.sqlite")
-                before_counts = self._durable_counts(store.path)
-                before_meta = self._durable_meta(store.path)
-                with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_size"):
-                    store.record_program_funding_receipt(candidate)
-                package_after_rejection = store.export_continuity()
-                self.assertEqual(package_after_rejection, package)
-                self.assertEqual(self._durable_counts(store.path), before_counts)
-                self.assertEqual(self._durable_meta(store.path), before_meta)
-                self._assert_verified(store)
-                verify_and_restore(package_after_rejection, "v6-continuity-after-cap-rejection.sqlite")
-                rejected = True
-                break
+    def test_history_stops_at_lean_max_rows_before_commit(self) -> None:
+        # Lean's maxRows (Types.lean): a correction at sequence 9,999 commits event 10,000; one at 10,000 is refused.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        index = 0
 
-            before_candidate = package
-            self.assertEqual(store.record_program_funding_receipt(candidate)["status"], "RECORDED")
-            next_index += 1
-            package = store.export_continuity()
-            self.assertGreater(len(package), len(before_candidate))
-            self.assertLess(len(package), package_cap)
-        self.assertTrue(rejected, "the 8 MiB Continuity boundary was not reached within the bounded receipt window")
+        def fill(target: int, owner_store: FinancialOwner) -> None:
+            nonlocal index
+            while (sequence := owner_store.summary()["sequence"]) < target:
+                with owner_store._write() as connection:  # batches keep each open segment under its hard bound
+                    for _ in range(min(2_000, target - sequence)):
+                        receipt = self._funding_receipt(receipt_id=f"funding:cap:{index:05d}", supersedes_receipt_id=f"funding:cap:{index - 1:05d}" if index else None)
+                        self.assertEqual(owner_store._record_program_funding_receipt_in_transaction(connection, receipt)[0], "RECORDED")
+                        index += 1
 
-    def test_v6_program_funding_receipt_process_crash_boundaries(self) -> None:
+        fill(owner._MAX_ROWS - 1, store)
+        full_path = self._path("history-full.sqlite")
+        full_path.write_bytes(store.path.read_bytes())
+        full = self._make_owner(
+            path=full_path,
+            clock=_Clock(initial=store.clock.value),
+            correction_transition_release=_correction_transition_test_release(workspace=Path(self.temp_dir.name) / "history-full-engine"),
+        )
+        fill(owner._MAX_ROWS, full)
+        before = full.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
+            self._reject(full, claim_id)
+        self.assertEqual(full.path.read_bytes(), before)
+        self._assert_verified(full)
+        self.assertEqual(self._reject(store, claim_id)["status"], "CORRECTION_AUTHORIZED")
+        self.assertEqual(store.summary()["sequence"], owner._MAX_ROWS)
+        self._assert_verified(store)
+        index -= 1  # the copy's last receipt is not in this store
+        with patch.object(owner, "_MAX_ROWS", owner._MAX_ROWS + 1):  # an Owner past the cap: its 10,001-event export does not restore
+            fill(owner._MAX_ROWS, store)
+            store.export_history(history := self._path("history-past-cap"))
+        with self.assertRaisesRegex(FinancialContinuityError, "^history_export:history:row-cap$"):
+            FinancialOwner.restore_continuity(history=history, recovered_path=self._path("history-past-cap.sqlite"), trusted_authority=self.authority)
+
+    def test_revision_past_lean_max_revision_is_refused_before_commit(self) -> None:
+        # Each revision step is its own event, so the event cap reaches first; the revision guard is exercised directly.
+        store = self._make_owner()
+        before = store.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
+            with store._write() as connection:
+                store._append_event(connection, aggregate_type="CONTROL_PACK", aggregate_id="pack:revision-cap", kind="CONTROL_PACK_PUBLISHED", before_revision=owner._MAX_ROWS, after_revision=owner._MAX_ROWS + 1, payload={}, committed_at_ms=1)
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
+
+    def test_control_pack_version_past_max_rows_is_refused(self) -> None:
+        # The checker reads pack versions up to maxRows.
+        self.assertEqual(replace(self._pack(expected.CONTROL_PACK_V1), version=owner._MAX_ROWS).version, owner._MAX_ROWS)
+        with self.assertRaisesRegex(FinancialInputError, "^pack_version$"):
+            replace(self._pack(expected.CONTROL_PACK_V1), version=owner._MAX_ROWS + 1)
+
+    def test_population_manifest_members_stop_at_max_rows_before_commit(self) -> None:
+        # The checker caps each manifest table at maxRows: two 6,000-member versions would hold 12,000 member rows.
+        store = self._make_owner()
+        store.publish_control_pack(self._pack(expected.CONTROL_PACK_V1))
+        members = tuple(f"member:{index:05d}" for index in range(6_000))
+        root = self._population_manifest(member_ids=members)
+        store.register_population_manifest(root)
+        before = store.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
+            store.register_population_manifest(self._population_manifest(manifest_id="population-manifest:fixture-2026-01:v2", supersedes=root, member_ids=members))
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
+
+    def test_program_funding_receipt_process_crash_boundaries(self) -> None:
         receipt = self._funding_receipt()
         initial_clock = receipt.event_at_ms
 
         precommit_store = self._make_owner(
             path=self._path("funding-precommit.sqlite"),
             clock=_Clock(initial_clock),
-            schema_version=6,
         )
         before_precommit_package = precommit_store.export_continuity()
         before_precommit_counts = self._durable_counts(precommit_store.path)
@@ -2858,7 +2804,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_precommit = self._make_owner(
             path=precommit_store.path,
             clock=_Clock(initial_clock + 1),
-            schema_version=6,
         )
         self.assertEqual(reopened_precommit.export_continuity(), before_precommit_package)
         self.assertEqual(self._durable_counts(reopened_precommit.path), before_precommit_counts)
@@ -2872,7 +2817,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         postcommit_store = self._make_owner(
             path=self._path("funding-postcommit.sqlite"),
             clock=_Clock(initial_clock),
-            schema_version=6,
         )
         pre_postcommit_package = postcommit_store.export_continuity()
         postcommit = self._run_funding_process_boundary(
@@ -2890,7 +2834,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_postcommit = self._make_owner(
             path=postcommit_store.path,
             clock=_Clock(initial_clock + 1),
-            schema_version=6,
         )
         self.assertEqual(reopened_postcommit.program_funding_summary()["historical_receipt_count"], 1)
         self._assert_verified(reopened_postcommit)
@@ -2905,7 +2848,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(reopened_postcommit)
 
     def test_first_service_acceptance_journey_and_effective_rule_change(self) -> None:
-        # The v6 receipt is reported separately; $1,000,000 remains the published-obligation denominator.
+        # The funding receipt is reported separately; $1,000,000 remains the published-obligation denominator.
         self.assertEqual(len(expected.PROGRAM_ITEMS), 20)
         self.assertEqual(sum(item.owed_cents for item in expected.PROGRAM_ITEMS), expected.PROGRAM_TOTAL_CENTS)
         self.assertEqual(len(expected.OTHER_RECIPIENT_PAYMENTS), 19)
@@ -2917,7 +2860,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
         # The journey authorizes a correction, which runs only through the pinned
         # Lean release (Art. V.2); an owner without one fails closed.
-        store = self._build_base_for_correction(schema_version=7)
+        store = self._build_base_for_correction(schema_version=8)
         mirror = FinancialMirror(store)
         funding_fixture = expected.PROGRAM_FUNDING_RECEIPT
         funding_record = self._funding_receipt()
@@ -3052,12 +2995,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             },
             expected_authority=self.authority,
         )
-        # The journey owner is schema 7 (population manifests), so its package is
-        # the v7 manifest-continuity schema; the v6 literal predates v7.
-        self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v7")
+        self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v8")
         self.assertEqual(source_package_result["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
         source_package_view = mirror.validate_owner_continuity_package(source_package)
-        self.assertEqual(source_package_view["version"], 7)
+        self.assertEqual(source_package_view["version"], 8)
         self.assertEqual(source_package_view["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
         self.assertFalse(source_package_view["dispatch_enabled"])
         self.assertFalse(source_package_view["egress_enabled"])
@@ -3263,10 +3204,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         completion["after_revision"] += 1
         body = dict(package)
         del body["package_digest"]
-        # Recompute the digest under the package's own version domain (v7 here),
-        # so the digest check passes and the restore integrity check must reject.
-        package_domain = owner._CONTINUITY_DOMAIN_BY_VERSION[package["version"]]
-        package["package_digest"] = owner._hex(owner._digest(package_domain, owner._canonical(body)))
+        # Recompute the digest under the (only restorable) v8 package domain, so the digest
+        # check passes and the restore integrity check must reject.
+        self.assertEqual(package["version"], 8)
+        package["package_digest"] = owner._hex(owner._digest(owner._CONTINUITY_DOMAIN, owner._canonical(body)))
         tampered = owner._canonical(package)
         destination = self._path("tampered-continuity.sqlite")
         with self.assertRaisesRegex(FinancialContinuityError, "continuity_restore_integrity"):
@@ -3383,32 +3324,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 expected_count=len(expected.PROGRAM_ITEMS),
                 items=self._items(population_id),
             )
-        self.assertEqual(store.export_continuity(), before_package)
-        self.assertEqual(self._durable_counts(store.path), before_counts)
-        self.assertEqual(store.summary()["obligation_count"], 0)
-        self._assert_verified(store)
-
-    def test_v6_funding_owner_rejects_population_writes_without_mutation(self) -> None:
-        store = self._make_owner(schema_version=6)
-        pack = self._pack(expected.CONTROL_PACK_V1)
-        store.publish_control_pack(pack)
-        before_package = store.export_continuity()
-        before_counts = self._durable_counts(store.path)
-        population_id = "population:fixture:v6-rejected"
-        with self.assertRaisesRegex(FinancialInputError, "population_manifest_schema_v7_required"):
-            store.stage_population(
-                population_id=population_id,
-                manifest_id="population-manifest:fixture:v6-rejected:v1",
-                pack_id=pack.pack_id,
-                cutoff_ms=pack.effective_start_ms,
-                inclusion_rules=("included:synthetic",),
-                expected_count=1,
-                items=self._items(population_id)[:1],
-            )
-        with self.assertRaisesRegex(FinancialInputError, "population_manifest_schema_v7_required"):
-            store.validate_population(population_id)
-        with self.assertRaisesRegex(FinancialInputError, "population_manifest_schema_v7_required"):
-            store.publish_population(population_id)
         self.assertEqual(store.export_continuity(), before_package)
         self.assertEqual(self._durable_counts(store.path), before_counts)
         self.assertEqual(store.summary()["obligation_count"], 0)
@@ -3631,9 +3546,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             package_bytes,
             expected_scope=package["scope"],
             expected_authority=self.authority,
-            expected_schema_version=7,
+            expected_schema_version=8,
         )
-        self.assertEqual(verified["version"], 7)
+        self.assertEqual(verified["version"], 8)
         self.assertEqual(verified["table_counts"]["population_manifests"], 1)
         self.assertEqual(verified["table_counts"]["population_manifest_members"], len(expected.POPULATION_MANIFEST_MEMBER_IDS))
         self.assertEqual(verified["table_counts"]["population_manifest_bindings"], 1)
@@ -3643,7 +3558,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             mutator(altered)
             body = dict(altered)
             del body["package_digest"]
-            altered["package_digest"] = continuity_package_digest(body, schema_version=7)
+            altered["package_digest"] = continuity_package_digest(body)
             return _independent_canonical(altered)
 
         tampered_member = tamper_and_rehash(
@@ -3668,7 +3583,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         altered,
                         expected_scope=package["scope"],
                         expected_authority=self.authority,
-                        expected_schema_version=7,
+                        expected_schema_version=8,
                     )
         self._assert_verified(store)
 
@@ -4173,7 +4088,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             store.decision_package(expected.H_ITEM_ID, offset=10_001)
 
     def test_c05_v7_decision_package_survives_test_restore(self) -> None:
-        store = self._build_base_for_correction(schema_version=7)
+        store = self._build_base_for_correction(schema_version=8)
         self._prepare_acknowledged(store)
         mirror = FinancialMirror(store)
         source_package = store.decision_package(expected.H_ITEM_ID)
@@ -4198,7 +4113,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(restored_package["current_action"]["status"], "ACKNOWLEDGED")
 
     def test_c05_v7_population_revision_binding_is_verified_and_restored(self) -> None:
-        store = self._build_base_for_correction(schema_version=7)
+        store = self._build_base_for_correction(schema_version=8)
         self._prepare_acknowledged(store)
         package = store.decision_package(expected.H_ITEM_ID)
         manifest = self._population_manifest()
@@ -4782,7 +4697,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertFalse(destination.exists())
         self._assert_verified(store)
 
-    def test_v5_old_continuity_version_is_rejected_without_mutating_source(self) -> None:
+    def test_old_continuity_version_is_rejected_without_mutating_source(self) -> None:
         store = self._build_base()
         before = store.path.read_bytes()
         package = json.loads(store.export_continuity().decode("ascii"))
@@ -4794,10 +4709,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.path.read_bytes(), before)
         self._assert_verified(store)
 
-    def test_v2_v3_v4_tagged_store_and_package_inputs_reject_without_creation(self) -> None:
+    def test_retired_v2_to_v6_tagged_store_and_package_inputs_reject_without_creation(self) -> None:
         store = self._build_base()
         source_before = store.path.read_bytes()
-        for version in (2, 3, 4):
+        for version in (2, 3, 4, 5, 6):
             target = self._path(f"tag-only-owner-v{version}.sqlite")
             target.write_bytes(source_before)
             with closing(sqlite3.connect(target, isolation_level=None)) as connection:
@@ -4814,6 +4729,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     clock=_Clock(),
                 )
             self.assertEqual(target.read_bytes(), target_before)
+            with self.assertRaisesRegex(IndependentFinancialError, "schema:version"):
+                verify_database(target, expected_config=store.config, expected_authority=self.authority)
+            self.assertEqual(target.read_bytes(), target_before)
+            with self.assertRaises(FinancialInputError):
+                replace(store.config, schema_version=version)
 
             package = json.loads(store.export_continuity().decode("ascii"))
             package["schema"] = f"RR/FINANCIAL/CONTINUITY/v{version}"
@@ -4821,11 +4741,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             body = dict(package)
             del body["package_digest"]
             package["package_digest"] = _independent_hex(
-                _independent_digest(b"RR/FINANCIAL/CONTINUITY/v5\x00", _independent_canonical(body))
+                _independent_digest(f"RR/FINANCIAL/CONTINUITY/v{version}\x00".encode("ascii"), _independent_canonical(body))
             )
             old_package = _independent_canonical(package)
             with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
                 FinancialOwner.validate_continuity_package(old_package)
+            with self.assertRaisesRegex(IndependentFinancialError, "continuity:schema"):
+                verify_continuity_package(
+                    old_package,
+                    expected_scope=package["scope"],
+                    expected_authority=self.authority,
+                )
             destination = self._path(f"tag-only-restore-v{version}.sqlite")
             with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
                 FinancialOwner.restore_continuity(
@@ -4838,6 +4764,590 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
         self.assertEqual(store.path.read_bytes(), source_before)
         self._assert_verified(store)
+
+    def test_v7_store_converts_to_v8_on_owner_open_all_or_nothing(self) -> None:
+        # A genuine v7 store: the v7 owner (d70ad50) ran the final correction journey and one funding receipt.
+        v7_bytes = gzip.decompress((Path(__file__).parent / "fixtures" / "v7-owner-store.sqlite.gz").read_bytes())
+        v7_path = self._path("v7-store.sqlite")
+        v7_path.write_bytes(v7_bytes)
+        with closing(sqlite3.connect(str(v7_path))) as connection:
+            self.assertEqual(connection.execute("SELECT schema_version,schema FROM financial_meta").fetchone(), (7, "RR/FINANCIAL/OWNER/v7"))
+            native = {table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in owner._CAPTURED_TABLES}
+            v7_events = connection.execute("SELECT * FROM financial_events ORDER BY event_sequence").fetchall()
+        # The checker verifies stores at v8 only: the owner converts a v7 store first.
+        with self.assertRaisesRegex(IndependentFinancialError, "^schema"):
+            verify_database(v7_path, expected_config=self._make_owner().config, expected_authority=self.authority)
+        self.assertEqual(v7_path.read_bytes(), v7_bytes)
+
+        # A v7 store its history does not explain is refused and left byte-identical.
+        tampers = {
+            "UPDATE obligations SET owed_cents=owed_cents+1": "^open_verification",
+            # Review 466178b: the v7 size cache is compared before conversion drops anything.
+            "UPDATE claimed_adjustments SET owner_role='FINANCE_DECISION'": "^continuity_admission_mismatch$",
+            # Review 466178b finding 4: a same-length acknowledgment edit passes the size cache, but every
+            # history, v7 included, names the reference its acknowledgment event accepted.
+            "UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'": "^open_verification:replay:acknowledgment$",
+        }
+        for statement, code in tampers.items():
+            with self.subTest(statement=statement):
+                tampered = self._path("v7-store-tampered.sqlite")
+                tampered.write_bytes(v7_bytes)
+                with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+                    connection.execute(statement)
+                tampered_bytes = tampered.read_bytes()
+                with self.assertRaisesRegex(FinancialIntegrityError, code):
+                    self._make_owner(path=tampered)
+                self.assertEqual(tampered.read_bytes(), tampered_bytes)
+        # A v7 store at the event cap has no room for its opening balance, and one whose history exceeds the
+        # segment bound cannot be sealed: both refuse inside the conversion transaction. The v7 writer's own
+        # whole-history cap stops near 900 commands, so the bound is lowered to this store's size instead.
+        for bound, code in (("_MAX_ROWS", "^history_capacity$"), ("_MAX_SEGMENT_EVENTS", "^history_segment_size$")):
+            with self.subTest(bound=bound), patch.object(owner, bound, len(v7_events)):
+                with self.assertRaisesRegex((FinancialIntegrityError, FinancialContinuityError), code):
+                    self._make_owner(path=v7_path)
+                self.assertEqual(v7_path.read_bytes(), v7_bytes)
+
+        converted = self._make_owner(path=v7_path)
+        # CONSTITUTION V.4: conversion appends one sealed opening balance holding every converted row
+        # (v7 history carried none); every row and every v7 event is otherwise unchanged.
+        with closing(sqlite3.connect(str(v7_path))) as connection:
+            self.assertEqual({table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in owner._CAPTURED_TABLES}, native)
+            events = connection.execute("SELECT * FROM financial_events ORDER BY event_sequence").fetchall()
+            commands = {row[0] for row in connection.execute("SELECT kind FROM commands")}
+            meta = connection.execute("SELECT schema_version,schema FROM financial_meta").fetchone()
+        self.assertEqual(events[:-1], v7_events)
+        self.assertEqual((events[-1][2], events[-1][4]), ("OPENING_BALANCE", "OPENING_BALANCE"))
+        self.assertEqual(
+            sorted(json.dumps(image, sort_keys=True) for image in json.loads(events[-1][7])["rows"]),
+            sorted(json.dumps({"table": table, "row": row}, sort_keys=True) for table, rows in json.loads(converted.export_continuity().decode("ascii"))["tables"].items() if table in owner._CAPTURED_TABLES for row in rows),
+        )
+        self.assertTrue(_V8_COMMAND_KINDS <= commands)
+        self.assertEqual(meta, (8, "RR/FINANCIAL/OWNER/v8"))
+        self._assert_verified(converted, current_snapshot_package=converted.export_continuity())
+
+    def test_v7_package_stays_verifiable_but_restores_only_through_a_v7_store(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        package = store.export_continuity()
+        v7_package = _v7_package_from_v8(package)
+        scope = json.loads(package.decode("ascii"))["scope"]
+        verified = verify_continuity_package(
+            v7_package,
+            expected_scope=scope,
+            expected_schema_version=7,
+            expected_authority=self.authority,
+        )
+        self.assertEqual((verified["schema"], verified["version"]), ("RR/FINANCIAL/CONTINUITY/v7", 7))
+        self.assertNotIn("commands", verified["table_counts"])
+        with self.assertRaisesRegex(IndependentFinancialError, "continuity:schema-version-binding"):
+            verify_continuity_package(
+                v7_package,
+                expected_scope=scope,
+                expected_schema_version=8,
+                expected_authority=self.authority,
+            )
+        with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
+            FinancialOwner.validate_continuity_package(v7_package)
+        destination = self._path("v7-package-restore.sqlite")
+        with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
+            FinancialOwner.restore_continuity(
+                package_bytes=v7_package,
+                recovered_path=destination,
+                trusted_authority=self.authority,
+                clock=_Clock(),
+            )
+        self.assertFalse(destination.exists())
+
+        # The digest domains are distinct: a v8 body sealed under the v7 domain fails.
+        resealed = json.loads(package.decode("ascii"))
+        body = dict(resealed)
+        del body["package_digest"]
+        resealed["package_digest"] = _independent_hex(
+            _independent_digest(b"RR/FINANCIAL/CONTINUITY/v7\x00", _independent_canonical(body))
+        )
+        with self.assertRaisesRegex(IndependentFinancialError, "continuity:package-digest"):
+            verify_continuity_package(
+                _independent_canonical(resealed),
+                expected_scope=scope,
+                expected_authority=self.authority,
+            )
+
+    def test_command_log_is_derived_from_history_and_recomputed_by_the_checker(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        package = store.export_continuity()
+        self.assertNotIn("commands", json.loads(package.decode("ascii"))["tables"])
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            commands = connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall()
+        self.assertEqual(len(commands), len({row[0] for row in commands}))
+        restored = FinancialOwner.restore_continuity(
+            package_bytes=package,
+            recovered_path=self._path("command-log-restore.sqlite"),
+            trusted_authority=self.authority,
+            clock=_Clock(),
+        )
+        history = self._path("command-log-history")
+        store.export_history(history)  # the full journey also restores by replaying its history segments
+        replayed = FinancialOwner.restore_continuity(history=history, recovered_path=self._path("command-log-replay.sqlite"), trusted_authority=self.authority, clock=_Clock())
+        for copy in (restored, replayed):
+            with closing(sqlite3.connect(str(copy.path))) as connection:
+                self.assertEqual(connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall(), commands)
+        self._assert_verified(replayed)
+        first = "(SELECT min(event_sequence) FROM commands)"
+        edits = {
+            "request": f"UPDATE commands SET request_json=replace(request_json,'\"key\"','\"key\" ') WHERE event_sequence={first}",
+            "sequence": "UPDATE commands SET event_sequence=(SELECT min(event_sequence) FROM financial_events"
+            f" WHERE event_sequence NOT IN (SELECT event_sequence FROM commands)) WHERE event_sequence={first}",
+            "dropped": f"DELETE FROM commands WHERE event_sequence={first}",
+        }
+        source_bytes = store.path.read_bytes()
+        for label, statement in edits.items():
+            with self.subTest(label=label):
+                tampered = self._path(f"command-log-{label}.sqlite")
+                tampered.write_bytes(source_bytes)
+                with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+                    connection.execute("DROP TRIGGER command_update_immutable")
+                    connection.execute("DROP TRIGGER command_delete_immutable")
+                    connection.execute(statement)
+                    connection.execute(f"CREATE TRIGGER command_update_immutable {_COMMAND_TRIGGER_BODY.format('UPDATE')}")
+                    connection.execute(f"CREATE TRIGGER command_delete_immutable {_COMMAND_TRIGGER_BODY.format('DELETE')}")
+                with self.assertRaisesRegex(IndependentFinancialError, "^commands:"):
+                    verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "command_immutable"):
+                connection.execute("DELETE FROM commands")
+
+    def test_a_row_write_without_its_event_is_refused_before_commit(self) -> None:
+        store = self._build_base()
+        before = store.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^captured_rows_without_event$"):
+            with store._write() as connection:
+                connection.execute("UPDATE cases SET due_at_ms=due_at_ms+1")
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
+
+    def test_row_edits_the_history_does_not_explain_are_refused(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        self._assert_verified(store)
+        source = store.path.read_bytes()
+        # Review 466178b finding 4: same-length edits, with the command log and the size cache
+        # rewritten to match, passed both checkers; every write is now replayed from the chain.
+        reversal = expected.P2_REVERSAL_EVIDENCE
+        orphan = store._new_evidence(
+            evidence_id="evidence:orphan-reversal", item_id=reversal.item_id, kind="PAYMENT_REVERSAL",
+            common_origin_id="origin:orphan-reversal", source_id="synthetic-payment-source", source_version="fixture-v1",
+            local_ref="reversal:orphan", applicable_at_ms=reversal.event_at_ms, event_at_ms=reversal.event_at_ms,
+            received_at_ms=reversal.event_at_ms, amount_cents=reversal.amount_cents, reversal_of="payment:h:p2",
+        )
+        tampers = (
+            # Final review 75a5517 finding 3: the case row is now recomputed before replay, so these fail there first.
+            ("case:derived", lambda c: c.execute("UPDATE claimed_adjustments SET deadline_ms=deadline_ms+1")),
+            ("replay:action_outbox", lambda c: c.execute(
+                "UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'")),
+            # Review 466178b: a second reversal's evidence row, digest-valid, that no event names.
+            # Final review 75a5517 finding 5: every current evaluation is now compared with the rows first.
+            ("obligation:exact-input:evidence", lambda c: store._insert_evidence(c, orphan)),
+            ("case:derived", lambda c: c.execute("UPDATE cases SET due_at_ms=due_at_ms+1")),
+            ("replay:financial_conflicts", lambda c: c.execute("UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1")),
+            # Not carried as rows: bound to their evaluation, their population's history, and the only epoch.
+            ("projection:updated-at", lambda c: c.execute("UPDATE obligations SET updated_at_ms=updated_at_ms+1")),
+            ("history:population-updated-at", lambda c: c.execute("UPDATE population_imports SET updated_at_ms=updated_at_ms+1")),
+            ("meta:continuity-epoch", lambda c: c.execute("UPDATE financial_meta SET continuity_epoch=2")),
+        )
+        for code, tamper in tampers:
+            with self.subTest(code=code):
+                tampered = self._path(f"row-edit-{code.replace(':', '-')}.sqlite")
+                tampered.write_bytes(source)
+                with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+                    connection.row_factory = sqlite3.Row
+                    connection.execute("DROP TRIGGER command_update_immutable")
+                    connection.execute("DROP TRIGGER command_delete_immutable")
+                    tamper(connection)
+                    connection.execute("DELETE FROM commands")
+                    store._derive_command_log(connection)
+                    connection.execute(f"CREATE TRIGGER command_update_immutable {_COMMAND_TRIGGER_BODY.format('UPDATE')}")
+                    connection.execute(f"CREATE TRIGGER command_delete_immutable {_COMMAND_TRIGGER_BODY.format('DELETE')}")
+                tampered_bytes = tampered.read_bytes()
+                with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
+                    verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+                with self.assertRaisesRegex(FinancialIntegrityError, f"^open_verification:{code}$"):
+                    self._make_owner(path=tampered)
+                self.assertEqual(tampered.read_bytes(), tampered_bytes)
+
+    def test_a_wrong_lean_correction_result_is_refused_before_commit(self) -> None:
+        from app import right_rail_financial_semantic_adapter as semantic
+
+        real_run, real_encode = financial_engine.run_correction_transition_v1, semantic.encode_blfin02_input
+        # Each wrong result still passes the Engine decoder's own consistency checks.
+        tampers = (
+            ("evaluation:input-projection:claimed_adjustment_cents", lambda r, m: {"claimed_adjustment_cents": r.claimed_adjustment_cents + m["determination"]["amount_cents"]}),
+            ("evaluation:input-projection:received_cash_cents", lambda r, m: {"received_cash_cents": r.received_cash_cents + 1}),
+            ("evaluation:input-projection:shortfall_cents", lambda r, m: {"shortfall_cents": r.shortfall_cents - 1}),
+            ("evaluation:input-projection:timely", lambda r, m: {"timely": not r.timely}),
+            ("evaluation:input-projection:verification_status", lambda r, m: {"verification_status": "MISSING_EVIDENCE"}),
+            ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "RESOLVED"}),
+            # Review 75a5517 finding 1: an unsatisfied correction stays CORRECTION_REQUIRED; the
+            # checker derives that from the decision, not from the case status Lean wrote.
+            ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "OPEN"}),
+            ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "AUTHORIZED"}),
+            # Refused before the checker now: the post-state binding covers the result's evidence ids.
+            ("post_state:result_evidence_ids", lambda r, m: {"evidence_ids": ()}),
+        )
+        for index, (code, change) in enumerate(tampers):
+            with self.subTest(index=index, code=code):
+                store = self._build_base_for_correction()
+                self._record_cash(store)
+                claim_id = self._record_claim(store)
+                before = store.path.read_bytes()
+                declared: dict = {}
+
+                def encode(snapshot: object) -> bytes:
+                    # Lean also declares the post-state the wrong rows encode, so the checker's own
+                    # derivation is what stands between them and COMMIT.
+                    wire = real_encode(snapshot)
+                    if "mutation" in declared:
+                        declared["mutation"]["resulting_input_wire"] = wire
+                    return wire
+
+                def run(release: object, *, request: bytes, change: object = change) -> object:
+                    execution = real_run(release, request=request)
+                    mutation = declared["mutation"] = execution.result["mutation"]
+                    wrong = replace(mutation["resulting_result"], **change(mutation["resulting_result"], mutation))
+                    mutation["resulting_result"] = wrong
+                    mutation["resulting_result_wire"] = semantic.encode_blfres02_result(wrong)
+                    mutation["case_delta"]["record"]["status"] = wrong.case_status
+                    financial_engine._validate_correction_result_shape(execution.result)
+                    return execution
+
+                with patch.object(financial_engine, "run_correction_transition_v1", run), patch.object(semantic, "encode_blfin02_input", encode):
+                    with self.assertRaises(FinancialIntegrityError) as caught:
+                        self._reject(store, claim_id)
+                # Before step 5 the Python re-derivation refused all seven as correction_result_input_binding.
+                self.assertEqual(str(caught.exception), f"correction_{code if code.startswith('post_state:') else 'verification:' + code}")
+                self.assertEqual(store.path.read_bytes(), before)
+                self._assert_verified(store)
+
+    def test_lean_must_declare_the_post_state_it_produced(self) -> None:
+        # Final review of 75a5517, finding 2: these pass the Engine decoder but name another state or item.
+        from app import right_rail_financial_semantic_adapter as semantic
+
+        real_run = financial_engine.run_correction_transition_v1
+        wire = "resulting_input_wire"
+        tampers = (
+            ("resulting_input", wire, lambda w: semantic.BLFIN02_MAGIC + b"\x00" * 32),
+            ("resulting_input", wire, lambda w: w[:-1]),
+            ("resulting_input", wire, lambda w: w[:-1] + bytes([w[-1] ^ 1])),
+            ("result_context_binding", "item_id", lambda r: expected.OTHER_ITEM_IDS[0]),
+            ("result_context_binding", "population_id", lambda r: "population:other"),
+            ("result_context_binding", "provenance", lambda r: next(tag for tag in semantic._PROVENANCE_TAGS if tag != r)),
+            ("result_context_binding", "owner_id", lambda r: "owner:other"),
+            ("result_authority_binding", "authority_epoch", lambda r: r + 1),
+            ("result_pack_binding", "pack_id", lambda r: "pack:other"),
+            ("result_completion", "completion_at_ms", lambda r: (r or 0) + 1),
+            ("result_completion", "completion_at_ms", lambda r: None if r is not None else 1),
+        )
+        for index, (code, field, change) in enumerate(tampers):
+            with self.subTest(index=index, field=field):
+                store = self._build_base_for_correction()
+                self._record_cash(store)
+                claim_id = self._record_claim(store)
+                before = store.path.read_bytes()
+
+                def run(release: object, *, request: bytes, field: str = field, change: object = change) -> object:
+                    execution = real_run(release, request=request)
+                    mutation = execution.result["mutation"]
+                    if field == wire:
+                        mutation[wire] = change(mutation[wire])
+                    else:
+                        result = mutation["resulting_result"]
+                        mutation["resulting_result"] = replace(result, **{field: change(getattr(result, field))})
+                        mutation["resulting_result_wire"] = semantic.encode_blfres02_result(mutation["resulting_result"])
+                    financial_engine._validate_correction_result_shape(execution.result)
+                    return execution
+
+                with patch.object(financial_engine, "run_correction_transition_v1", run):
+                    with self.assertRaises(FinancialIntegrityError) as caught:
+                        self._reject(store, claim_id)
+                self.assertEqual(str(caught.exception), f"correction_post_state:{code}")
+                self.assertEqual(store.path.read_bytes(), before)
+                self._assert_verified(store)
+
+    def test_per_obligation_mode_checks_the_exact_current_inputs(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            obligation_ids = [str(row[0]) for row in connection.execute("SELECT obligation_id FROM obligations ORDER BY obligation_id")]
+            self.assertGreater(len(obligation_ids), 1)
+            for obligation_id in obligation_ids:
+                self.assertEqual(
+                    verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)["obligation_id"],
+                    obligation_id,
+                )
+            corrected = str(connection.execute("SELECT obligation_id FROM claimed_adjustments WHERE status='REJECTED'").fetchone()[0])
+            current = "(SELECT current_evaluation_id FROM obligations WHERE obligation_id=:o)"
+            tampers = (
+                # The current evaluation was computed from a state that is not the one being committed.
+                ("obligation:exact-input:claims", "UPDATE claimed_adjustments SET status='CLAIMED' WHERE obligation_id=:o AND status='REJECTED'"),
+                ("case:derived", "UPDATE cases SET status='OPEN' WHERE obligation_id=:o"),
+                ("obligation:exact-input:actions", "UPDATE actions SET status='CANCELLED' WHERE obligation_id=:o"),
+                # A row the evaluation never saw.
+                ("obligation:exact-input:evidence", lambda c: store._insert_evidence(c, store._new_evidence(
+                    evidence_id="evidence:unseen", item_id=str(c.execute("SELECT item_id FROM obligations WHERE obligation_id=?", (corrected,)).fetchone()[0]),
+                    kind="PAYMENT_REVERSAL", common_origin_id="origin:unseen", source_id="synthetic-payment-source",
+                    source_version="fixture-v1", local_ref="reversal:unseen", applicable_at_ms=1, event_at_ms=1, received_at_ms=1,
+                    amount_cents=1, reversal_of="payment:h:p2"))),
+                # Values that the exact inputs do not produce.
+                ("evaluation:input-projection:claimed_adjustment_cents", f"UPDATE evaluations SET claimed_adjustment_cents=claimed_adjustment_cents+1 WHERE evaluation_id={current}"),
+                ("obligation:projection:shortfall_cents", "UPDATE obligations SET shortfall_cents=shortfall_cents+1 WHERE obligation_id=:o"),
+                ("obligation:projection:updated_at_ms", "UPDATE obligations SET updated_at_ms=updated_at_ms+1 WHERE obligation_id=:o"),
+            )
+            for code, statement in tampers:
+                with self.subTest(code=code):
+                    connection.execute("BEGIN IMMEDIATE")
+                    try:
+                        if callable(statement):
+                            statement(connection)
+                        else:
+                            self.assertGreaterEqual(connection.execute(statement, {"o": corrected}).rowcount, 1)
+                        with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
+                            verify_obligation_connection(connection, corrected, expected_config=store.config, expected_authority=self.authority)
+                    finally:
+                        connection.execute("ROLLBACK")
+            with self.assertRaisesRegex(IndependentFinancialError, "^obligation:missing$"):
+                verify_obligation_connection(connection, "obligation:absent", expected_config=store.config, expected_authority=self.authority)
+        self._assert_verified(store)
+
+    def test_rows_history_does_not_carry_are_recomputed_or_bounded(self) -> None:
+        # Final review of 75a5517, finding 3: same-length edits to these fields passed v7 conversion
+        # and were sealed. The checker (run before replay) now recomputes each one or bounds it by history
+        # (an acknowledgment or a conflict no later than its event; the gap is the one edit room left).
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        ack = "(SELECT committed_at_ms FROM financial_events WHERE kind='ACTION_ACKNOWLEDGED')"
+        tampers = (
+            ("case:derived", "UPDATE cases SET reason='CORRECTION_REQUIREE' WHERE reason='CORRECTION_REQUIRED'"),
+            ("case:derived", "UPDATE cases SET reason='INITIAL_ACCOUNTABILITZ' WHERE rowid=1"),
+            ("case:derived", "UPDATE cases SET contractual_accountability='PROGRAM_ACCOUNTABILITZ' WHERE rowid=1"),
+            ("case:derived", "UPDATE cases SET next_action_owner='CASE_OWNES' WHERE rowid=1"),
+            ("case:derived", "UPDATE cases SET due_at_ms=due_at_ms+1 WHERE rowid=1"),
+            ("case:derived", "UPDATE cases SET updated_at_ms=updated_at_ms+1 WHERE rowid=1"),
+            ("case:derived", "UPDATE claimed_adjustments SET deadline_ms=deadline_ms+1"),
+            ("claim:owner", "UPDATE claimed_adjustments SET owner_role='CASE_OWNES'"),
+            ("claim:chronology", "UPDATE claimed_adjustments SET created_at_ms=created_at_ms+1"),
+            ("claim:chronology", "UPDATE claimed_adjustments SET updated_at_ms=updated_at_ms+1"),
+            ("outbox:acknowledged", f"UPDATE action_outbox SET updated_at_ms={ack}+1 WHERE status='ACKNOWLEDGED'"),
+            ("outbox:acknowledged", "UPDATE action_outbox SET attempt=2 WHERE status='ACKNOWLEDGED'"),
+            ("conflict:visible", "UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1000"),
+        )
+        tampered = self._path("rows-tampered.sqlite")
+        for index, (code, statement) in enumerate(tampers):
+            with self.subTest(index=index, code=code):
+                tampered.write_bytes(store.path.read_bytes())
+                with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+                    self.assertEqual(connection.execute(statement).rowcount, 1)
+                with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
+                    verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+
+    def test_an_opening_balance_cannot_launder_a_row_history_carried(self) -> None:
+        # Final review of 75a5517, finding 4: an opening balance appended to a native store restarted
+        # replay from rows of the writer's choosing. This edit is inside every bound but replay's.
+        store = self._build_base_for_correction()
+        self._prepare_acknowledged(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            self.assertEqual(connection.execute("UPDATE action_outbox SET updated_at_ms=updated_at_ms-1 WHERE status='ACKNOWLEDGED'").rowcount, 1)
+        with closing(store._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            images = [{"table": table, "row": {column: store._export_value(row[column]) for column in owner._TABLE_COLUMNS[table]}} for table in owner._CAPTURED_TABLES for row in connection.execute(f"SELECT * FROM {table}")]
+            last = int(connection.execute("SELECT max(committed_at_ms) FROM financial_events").fetchone()[0])
+            store._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=last)
+            connection.execute("COMMIT")
+        with self.assertRaisesRegex(IndependentFinancialError, "^replay:opening-balance$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:opening-balance$"):
+            self._make_owner(path=store.path)
+
+    def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:
+        # Final review of 75a5517, finding 5: publish opened the case after the first evaluation,
+        # and only the per-obligation mode compared a current evaluation with the current rows.
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            obligation_id, snapshot = connection.execute(
+                "SELECT obligation_id,input_snapshot_json FROM evaluations WHERE revision=0 ORDER BY obligation_id LIMIT 1"
+            ).fetchone()
+        self.assertEqual(json.loads(snapshot)["cases"], [{"case_id": f"case:{obligation_id}", "status": "OPEN"}])
+        tampered = self._path("unseen-evidence.sqlite")
+        tampered.write_bytes(store.path.read_bytes())
+        with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            store._insert_evidence(connection, store._new_evidence(
+                evidence_id="evidence:unseen", item_id=expected.H_ITEM_ID, kind="SUPPORT", common_origin_id="origin:unseen",
+                source_id="synthetic-support-source", source_version="fixture-v1", local_ref="support:unseen",
+                applicable_at_ms=1, event_at_ms=1, received_at_ms=1))
+        with self.assertRaisesRegex(IndependentFinancialError, "^obligation:exact-input:evidence$"):
+            verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+        # A repeated payment confirmation is stored without a new evaluation and stays verifiable.
+        repeat = expected.P2_CONFIRMATION_EVIDENCE
+        self.assertEqual(store.record_payment_evidence(
+            item_id=repeat.item_id, payment_id="payment:h:p2-repeat", common_origin_id=repeat.common_origin_id,
+            amount_cents=repeat.amount_cents or 0, evidence_id="evidence:p2-repeat", event_at_ms=repeat.event_at_ms,
+            source_id=repeat.source_id, source_version=repeat.source_version, local_ref="ref:p2-repeat",
+        )["status"], "DUPLICATE")
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            self.assertEqual(connection.execute("SELECT kind FROM financial_events ORDER BY event_sequence DESC LIMIT 1").fetchone(), ("PAYMENT_DUPLICATE_EVIDENCE",))
+        self._assert_verified(store)
+
+    def test_a_new_claim_does_not_hide_an_outstanding_correction(self) -> None:
+        # B1: a later claim reset the case to OPEN with the claimant's owner and deadline while the correction was READY.
+        claim_b = {"item_id": expected.H_ITEM_ID, "claim_id": "claim:obligation-item-h:offset-b", "amount_cents": 1000,
+                   "evidence_id": "evidence:offset-h:claim-b", "owner_role": "RECEIVER", "deadline_ms": expected.H_DUE_AT_MS + 86_400_000}
+        query = "SELECT reason,next_action_owner,due_at_ms,status FROM cases WHERE obligation_id=?"
+
+        def corrected() -> FinancialOwner:
+            store = self._build_base_for_correction()
+            self._record_cash(store)
+            self._reject(store, self._record_claim(store))
+            self._advance_clock(store, expected.CORRECTION_AUTH_MS + 60_000)
+            return store
+
+        store = corrected()
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            before = connection.execute(query, (expected.H_OBLIGATION_ID,)).fetchone()
+        self.assertEqual((before[0], before[3]), ("CORRECTION_REQUIRED", "CORRECTION_REQUIRED"))
+        self.assertEqual(store.record_offset_claim(**claim_b)["status"], "CLAIMED")
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            self.assertEqual(connection.execute(query, (expected.H_OBLIGATION_ID,)).fetchone(), before)
+            self.assertEqual(connection.execute("SELECT status FROM claimed_adjustments WHERE claim_id=?", (claim_b["claim_id"],)).fetchone(), ("CLAIMED",))
+            self.assertEqual(connection.execute("SELECT status FROM actions WHERE action_id=?", (expected.ACTION_CORRECTION_ID,)).fetchone(), ("READY",))
+        self._assert_verified(store)
+
+        def reset(_owner, connection, *, obligation_id, reason, owner, due_at_ms, status, now_ms):  # the old rule
+            connection.execute("UPDATE cases SET reason=?,next_action_owner=?,due_at_ms=?,status=?,updated_at_ms=? WHERE obligation_id=?", (reason, owner, due_at_ms, status, now_ms, obligation_id))
+
+        hidden = corrected()
+        with patch.object(FinancialOwner, "_ensure_case", reset):
+            hidden.record_offset_claim(**claim_b)
+        with self.assertRaisesRegex(IndependentFinancialError, "^evaluation:input-projection:case_status$"):
+            self._assert_verified(hidden)
+
+    def test_retries_are_answered_from_the_command_log(self) -> None:
+        store = self._build_base_for_correction()
+        claim_id = self._prepare_acknowledged(store)
+        receipt = self._funding_receipt()
+        self.assertEqual(store.record_program_funding_receipt(receipt)["status"], "RECORDED")
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        manifest = self._population_manifest()
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            decision = json.loads(connection.execute(
+                "SELECT request_json FROM commands WHERE command_id=?",
+                (f"OFFSET_DECISION:{expected.ACTION_CORRECTION_ID}",),
+            ).fetchone()[0])
+
+        def reject(**changes: object) -> dict[str, object]:
+            request = {
+                "item_id": expected.H_ITEM_ID,
+                "claim_id": claim_id,
+                "action_id": expected.ACTION_CORRECTION_ID,
+                "actor_id": decision["actor_id"],
+                "actor_role": decision["actor_role"],
+                "expected_revision": decision["expected_revision"],
+                "decision_at_ms": decision["decided_at_ms"],
+                "evaluation_id": decision["evaluation_id"],
+                "evaluation_result_digest": decision["evaluation_result_digest"],
+            }
+            return store.reject_offset_and_authorize_correction(**{**request, **changes})
+
+        def claim(**changes: object) -> dict[str, object]:
+            request = {
+                "item_id": expected.H_ITEM_ID,
+                "claim_id": claim_id,
+                "amount_cents": expected.OFFSET_CLAIM_EVIDENCE.amount_cents or 0,
+                "evidence_id": expected.OFFSET_CLAIM_EVIDENCE.evidence_id,
+                "owner_role": "CASE_OWNER",
+                "deadline_ms": expected.H_DUE_AT_MS,
+            }
+            return store.record_offset_claim(**{**request, **changes})
+
+        cases = (
+            ("control-pack", lambda: store.publish_control_pack(pack),
+             lambda: store.publish_control_pack(replace(pack, recorded_at_ms=pack.recorded_at_ms - 1)),
+             "control_pack_identity_conflict"),
+            ("manifest", lambda: store.register_population_manifest(manifest),
+             lambda: store.register_population_manifest(replace(manifest, source_digest=bytes.fromhex("FF" * 64))),
+             "population_manifest_identity_conflict"),
+            ("funding", lambda: store.record_program_funding_receipt(receipt),
+             lambda: store.record_program_funding_receipt(replace(receipt, amount_cents=receipt.amount_cents + 1)),
+             "program_funding_receipt_identity_conflict"),
+            ("acknowledgment", lambda: store.acknowledge_action(expected.ACTION_CORRECTION_ID, "ack:correction:h:v1"),
+             lambda: store.acknowledge_action(expected.ACTION_CORRECTION_ID, "ack:correction:h:other"),
+             "acknowledgment_conflict"),
+            ("decision", reject,
+             lambda: reject(decision_at_ms=decision["decided_at_ms"] + 1),
+             "determination_request_conflict"),
+            # Review 466178b: a None claim or actor is a changed request, not an omitted optional field.
+            ("decision-claim-none", reject, lambda: reject(claim_id=None), "determination_request_conflict"),
+            ("decision-actor-none", reject, lambda: reject(actor_id=None, actor_role=None), "determination_request_conflict"),
+            # Review 466178b: an offset-claim retry must match every logged field.
+            ("claim-deadline", claim, lambda: claim(deadline_ms=expected.H_DUE_AT_MS + 999), "offset_claim_identity_conflict"),
+            ("claim-evidence", claim, lambda: claim(evidence_id="evidence:other-claim"), "offset_claim_identity_conflict"),
+            ("claim-amount", claim,
+             lambda: claim(amount_cents=(expected.OFFSET_CLAIM_EVIDENCE.amount_cents or 0) + 1),
+             "offset_claim_identity_conflict"),
+        )
+        package = store.export_continuity()
+        for label, retry, changed, code in cases:
+            with self.subTest(label=label):
+                self.assertEqual(retry()["status"], "DUPLICATE")
+                self.assertEqual(store.export_continuity(), package)
+                with self.assertRaisesRegex(FinancialConflictError, f"^{code}$"):
+                    changed()
+                self.assertEqual(store.export_continuity(), package)
+        self._assert_verified(store)
+
+    def test_fresh_reversal_of_a_reversed_payment_is_refused_without_writing(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_reported(store)
+        reversal = expected.P2_REVERSAL_EVIDENCE
+        self._advance_clock(store, reversal.event_at_ms)
+        store.reverse_payment(
+            item_id=reversal.item_id,
+            payment_id="payment:h:p2",
+            evidence_id=reversal.evidence_id,
+            common_origin_id=reversal.common_origin_id,
+            event_at_ms=reversal.event_at_ms,
+        )
+        before = store.path.read_bytes()
+        # Review 466178b: this answered DUPLICATE yet wrote an evidence row no event explains.
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_already_reversed$"):
+            store.reverse_payment(item_id=reversal.item_id, payment_id="payment:h:p2", evidence_id="evidence:second-reversal")
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
+
+    def test_parent_removed_by_an_outside_writer_is_an_integrity_failure(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_rejected(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute("DELETE FROM obligations WHERE obligation_id=?", (expected.H_OBLIGATION_ID,))
+        for label, call in (
+            ("retry", lambda: store.retry_action(expected.ACTION_CORRECTION_ID)),
+            ("acknowledge", lambda: store.acknowledge_action(expected.ACTION_CORRECTION_ID, "ack:correction:h:v1")),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(FinancialIntegrityError, "^obligation_missing$"):
+                call()
+
+    def test_checker_requires_every_foreign_key_to_be_deferred(self) -> None:
+        store = self._build_base()
+        self._assert_verified(store)
+        # PRAGMA foreign_key_list cannot show deferral; the checker reads the table SQL.
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute("PRAGMA writable_schema=ON")
+            connection.execute(
+                "UPDATE sqlite_master SET sql=replace(sql,' DEFERRABLE INITIALLY DEFERRED','') WHERE type='table' AND name='commands'"
+            )
+        with self.assertRaisesRegex(IndependentFinancialError, "^schema:foreign-keys:commands$"):
+            verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
 
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:
         self.assertEqual(tuple(case.number for case in expected.ACCEPTANCE_CASES), tuple(range(1, 13)))

@@ -29,6 +29,7 @@ from app.right_rail_financial_mirror import (
 )
 from app.right_rail_financial_switch import (
     COHORT_APPROVAL_CONTRACT,
+    CURRENT_OWNER_SCHEMA_VERSION,
     CandidateSpec,
     CohortApproval,
     DifferencePolicy,
@@ -105,8 +106,7 @@ def _parser() -> argparse.ArgumentParser:
     acknowledge = subparsers.add_parser("acknowledge-action", aliases=("acknowledge",))
     acknowledge.add_argument("--action-id", required=True)
     acknowledge.add_argument("--acknowledgment-ref", required=True)
-    acknowledge.add_argument("--actor-id", default="synthetic-receiver")
-    acknowledge.add_argument("--actor-role", default="RECEIVER")
+    _add_actor_and_revision(acknowledge)
 
     payment = subparsers.add_parser("record-payment-evidence", aliases=("record-payment",))
     payment.add_argument("--item-id", required=True)
@@ -118,15 +118,13 @@ def _parser() -> argparse.ArgumentParser:
     payment.add_argument("--source-id", default="synthetic-payment-source")
     payment.add_argument("--source-version", default="fixture-v1")
     payment.add_argument("--local-ref")
-    payment.add_argument("--expected-revision", type=int)
+    payment.add_argument("--expected-revision", type=int, required=True)
 
     report = subparsers.add_parser("record-reporting-correction", aliases=("reporting-correction",))
     report.add_argument("--item-id", required=True)
     report.add_argument("--report-id", required=True)
     report.add_argument("--evidence-id")
-    report.add_argument("--actor-id", default="synthetic-reporter")
-    report.add_argument("--actor-role", default="REPORTING_EDITOR")
-    report.add_argument("--expected-revision", type=int)
+    _add_actor_and_revision(report)
     report.add_argument("--event-at-ms", type=int)
     report.add_argument("--supersedes")
 
@@ -164,12 +162,17 @@ def _add_switch_files(parser: argparse.ArgumentParser, *, required: bool) -> Non
     parser.add_argument("--candidate-spec", type=Path, required=required)
 
 
+def _add_actor_and_revision(parser: argparse.ArgumentParser) -> None:
+    """Every mutating command names who acts and the revision they reviewed; no defaults."""
+    parser.add_argument("--actor-id", required=True)
+    parser.add_argument("--actor-role", required=True)
+    parser.add_argument("--expected-revision", type=int, required=True)
+
+
 def _add_offset_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--item-id", required=True)
     parser.add_argument("--claim-id", required=True)
-    parser.add_argument("--actor-id", default="synthetic-official")
-    parser.add_argument("--actor-role", default="FINANCE_DECISION")
-    parser.add_argument("--expected-revision", type=int, required=True)
+    _add_actor_and_revision(parser)
     parser.add_argument("--action-id")
     parser.add_argument("--decision-at-ms", type=int)
     parser.add_argument("--evaluation-id", required=True)
@@ -440,12 +443,12 @@ def _verify_switch_package(package: bytes, authority: SyntheticTrustedAuthority,
         expected_scope=scope,
     )
     if (
-        verified.get("version") != 7
+        verified.get("version") != CURRENT_OWNER_SCHEMA_VERSION
         or verified.get("mode") != "SHADOW"
         or verified.get("dispatch_enabled") is not False
         or verified.get("egress_enabled") is not False
     ):
-        raise FinancialSwitchError("switch:continuity-v7-shadow-required")
+        raise FinancialSwitchError("switch:continuity-shadow-required")
 
 
 def _switch_prepare(args: argparse.Namespace) -> dict[str, object]:
@@ -588,6 +591,7 @@ def _run(args: argparse.Namespace) -> Any:
             args.acknowledgment_ref,
             actor_id=args.actor_id,
             actor_role=args.actor_role,
+            expected_revision=args.expected_revision,
         )
     if command in {"record-payment-evidence", "record-payment"}:
         return mirror.record_payment_evidence(

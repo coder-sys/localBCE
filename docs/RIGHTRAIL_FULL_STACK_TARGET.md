@@ -335,7 +335,10 @@ current source of truth on anything marked measured.
   that can no longer be recovered, so no proof today covers the binary that
   actually runs. Continuity admission and correction follow-up through
   Mirror. The felt-value scorecard and the Article XIII interaction-model
-  crawl.
+  crawl. The local store is `RR/FINANCIAL/OWNER/v8` with
+  `RR/FINANCIAL/CONTINUITY/v8` and a derived `RR/FINANCIAL/COMMAND/v1` log
+  (founder-approved 2026-09-24); a v7 store converts on owner open, v7
+  packages stay verifiable, and v5/v6 are retired.
 - **Designed, not built.** The gate API (decide/decide-batch), the token and
   checkpoint formats, the independent witness, batch signing, segmented
   Continuity, member-key sharding, the fenced primary/standby protocol, the
