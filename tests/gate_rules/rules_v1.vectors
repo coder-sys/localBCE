@@ -4,6 +4,7 @@
 # Snapshots persist across cases; a case that changes one restores it afterwards.
 today 20270315
 snap released 20270315 0 bf2c7bff5d0b708dd7ef579b9f13b65d2ee1cdae09081f564190643e8bd0484552c3c4063e3a2034faf92e027f78ac88fd25a507a3be8946c5cd6bf60f72981a
+snap unresolved 20270315 0 850c41ebe9648c51f97e4cc232246b2709cfecd0f09868e420f8473f8a22f6ae5ead558cd7e9df75692e578f28aaeadd053ffa7aa6ef65ebb6962dd8e0fedabc
 snap dmf 20270301 2 01a4a6be102bbaafe57e40215ff34cd2123011d401913dd30af6a7cc1fa3a905a00ddcb1f1339831d86a4d704ddb015527c530ed45a388c5790f158feae272e3
 dmf 9001 20270110
 dmf 9002 20261120
@@ -137,14 +138,16 @@ line FFS_CLAIM 1001 7002 7001 20270305 99213 1 12500 HUMAN_REVIEW FFS_NEAR_DUPLI
 commit
 snap released 20270315 0 bf2c7bff5d0b708dd7ef579b9f13b65d2ee1cdae09081f564190643e8bd0484552c3c4063e3a2034faf92e027f78ac88fd25a507a3be8946c5cd6bf60f72981a
 
-# A reviewed line is not released by the gate; once a person releases it, the
-# released set lists it and resubmitting it is a HOLD duplicate
+# A reviewed line is unresolved, not released; resubmitted, it collides with
+# itself.  Once a person releases it, the state moves it to the released set
+# and resubmitting it is a HOLD duplicate
 case review_then_release
 line FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
 line FFS_CLAIM 1001 7002 7001 20270305 99213 1 12500 HUMAN_REVIEW FFS_NEAR_DUPLICATE
 commit
-line FFS_CLAIM 1001 7002 7001 20270305 99213 1 12500 HUMAN_REVIEW FFS_NEAR_DUPLICATE
+line FFS_CLAIM 1001 7002 7001 20270305 99213 1 12500 HUMAN_REVIEW COLLIDES_WITH_UNRESOLVED,FFS_NEAR_DUPLICATE
 commit
+snap unresolved 20270315 0 850c41ebe9648c51f97e4cc232246b2709cfecd0f09868e420f8473f8a22f6ae5ead558cd7e9df75692e578f28aaeadd053ffa7aa6ef65ebb6962dd8e0fedabc
 snap released 20270315 2 efb447df31d49679bd524d7a0ddab1bf922aea5a7673c661ccb15bcafaddf1b974ba57cfc1522ca57e191c4b7fbcf8b1055cde5e0ff0e7d87cc3aa3212351d60
 released FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
 released FFS_CLAIM 1001 7002 7001 20270305 99213 1 12500
@@ -152,32 +155,80 @@ line FFS_CLAIM 1001 7002 7001 20270305 99213 1 12500 HOLD FFS_DUPLICATE_LINE
 commit
 snap released 20270315 0 bf2c7bff5d0b708dd7ef579b9f13b65d2ee1cdae09081f564190643e8bd0484552c3c4063e3a2034faf92e027f78ac88fd25a507a3be8946c5cd6bf60f72981a
 
-# Double billing in later batches: a released line's near key reviews a group
-# billing the same service, a one-cent change and half of a units split; an
-# exact resubmission is HOLD; another code or date is a distinct service
-case near_duplicates_across_batches
+# Double billing in later batches: line A is ALLOWed, then a later batch has
+# a group billing the same service, a one-cent change or half of a units
+# split (reviewed), an exact resubmission (HOLD), or another code or date (ALLOW)
+case later_group_billing
 line FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
-line FFS_CLAIM 1001 7001 7001 20270307 97110 2 8000 ALLOW -
 commit
 line FFS_CLAIM 1001 7999 7001 20270305 99213 1 12500 HUMAN_REVIEW FFS_NEAR_DUPLICATE
 commit
+
+case later_one_cent
+line FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
 line FFS_CLAIM 1001 7001 7001 20270305 99213 1 12501 HUMAN_REVIEW FFS_NEAR_DUPLICATE
+commit
+
+case later_units_split
+line FFS_CLAIM 1001 7001 7001 20270307 97110 2 8000 ALLOW -
 commit
 line FFS_CLAIM 1001 7001 7001 20270307 97110 1 4000 HUMAN_REVIEW FFS_NEAR_DUPLICATE
 commit
+
+case later_exact
+line FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
 line FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 HOLD FFS_DUPLICATE_LINE
+commit
+
+case later_distinct
+line FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
 commit
 line FFS_CLAIM 1001 7001 7001 20270305 99214 1 12500 ALLOW -
 line FFS_CLAIM 1001 7001 7001 20270306 99213 1 12500 ALLOW -
 commit
 
-# The split limit: a held line claims its keys in its own batch only, so its
-# near duplicate is reviewed there (held_lines_claim_keys) but allowed later
+# A held line's claim stays open in later batches: its near duplicate is
+# reviewed there too (in one batch, see held_lines_claim_keys)
 case split_after_held_line
 line FFS_CLAIM 1001 7801 7002 20270306 99213 1 12500 HOLD PROVIDER_EXCLUDED
 commit
-line FFS_CLAIM 1001 7901 7002 20270306 99213 1 12500 ALLOW -
+line FFS_CLAIM 1001 7901 7002 20270306 99213 1 12500 HUMAN_REVIEW COLLIDES_WITH_UNRESOLVED
 commit
+
+# Unresolved set: an exact, near or member-month collision is reviewed, never
+# HOLD or ALLOW; another service is ALLOW
+case unresolved_collisions
+snap unresolved 20270315 2 b9cccef84a5700ed623f21bf6f638b933b5423db41919ab951f3f02a4c8d97eeceeb152ad508755d4b58d1cbc0809c1c9410a4e24fc86e45d4a9561d0bd0fc3f
+unresolved FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+unresolved CAP_820 1001 501 501 20270301 0 1 45000
+line FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 HUMAN_REVIEW COLLIDES_WITH_UNRESOLVED
+commit
+line FFS_CLAIM 1001 7999 7001 20270305 99213 2 25000 HUMAN_REVIEW COLLIDES_WITH_UNRESOLVED
+commit
+line CAP_820 1001 501 501 20270315 0 1 45000 HUMAN_REVIEW COLLIDES_WITH_UNRESOLVED
+commit
+line FFS_CLAIM 1001 7001 7001 20270305 99214 1 12500 ALLOW -
+commit
+
+case unresolved_wrong_pin
+snap unresolved 20270315 2 b9cccef84a5700ed623f21bf6f638b933b5423db41919ab951f3f02a4c8d97eeceeb152ad508755d4b58d1cbc0809c1c9410a4e24fc86e45d4a9561d0bd0fc3f
+unresolved FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+unresolved CAP_820 1001 501 501 20270201 0 1 45000
+line FFS_CLAIM 1001 7001 7001 20270305 99214 1 12500 HUMAN_REVIEW STALE_UNRESOLVED
+commit
+
+case unresolved_short
+snap unresolved 20270315 1 0f895e64cdd4563802edc0b79326f341425fa07be7d027ebf0de2eaf6f86a2a4869936f44e14b5a127e7cb212a9348e107de61fbd71524e0d6adb20dad25e95a
+line FFS_CLAIM 1001 7001 7001 20270305 99214 1 12500 HUMAN_REVIEW STALE_UNRESOLVED
+commit
+
+case unresolved_missing
+drop unresolved
+line FFS_CLAIM 1001 7001 7001 20270305 99214 1 12500 HUMAN_REVIEW STALE_UNRESOLVED
+commit
+snap unresolved 20270315 0 850c41ebe9648c51f97e4cc232246b2709cfecd0f09868e420f8473f8a22f6ae5ead558cd7e9df75692e578f28aaeadd053ffa7aa6ef65ebb6962dd8e0fedabc
 
 # R5: span dates inclusive; for CAP_820 the span must be with the paying plan (payee)
 case r5_not_enrolled
@@ -559,4 +610,4 @@ dmf 9001 20270110
 line FFS_CLAIM 1001 7001 7001 20000301 99213 1 12500 HUMAN_REVIEW STALE_DMF
 commit
 
-end 138
+end 148

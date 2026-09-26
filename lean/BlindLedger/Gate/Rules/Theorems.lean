@@ -18,6 +18,7 @@ def Whole (o : Option (Snapshot Line)) : Prop := ∃ s, o = some s ∧ s.entries
 
 def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .CAP_MEMBER_MONTH_DUPLICATE => l.flow = .CAP_820 ∧ (key l ∈ seen ∨ overlap c l = true)
+  | .COLLIDES_WITH_UNRESOLVED => ∃ k ∈ keys l, k ∈ (entries c.unresolved).flatMap keys
   | .FFS_DUPLICATE_LINE => l.flow ≠ .CAP_820 ∧ key l ∈ seen
   | .FFS_NEAR_DUPLICATE => l.flow ≠ .CAP_820 ∧ nearKey l ∈ seen ∧ key l ∉ seen
   | .MEMBER_DECEASED => ∃ d ∈ entries c.dmf, d.id = l.member ∧ d.date < l.date
@@ -34,6 +35,7 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .STALE_EXCLUSION => ¬Usable c.today 31 okExclusion c.exclusions
   | .STALE_PROVIDER_DEATH => ¬Usable c.today 90 okDeath c.providerDeaths
   | .STALE_RELEASED => ¬Whole c.released
+  | .STALE_UNRESOLVED => ¬Whole c.unresolved
 
 def seenAt (c : Ctx) (b : List Line) (i : Nat) : List Key :=
   ((canonical b).take i).reverse.flatMap (claim c) ++ (entries c.released).flatMap keys
@@ -147,34 +149,72 @@ theorem review_complete {c b i l r} (hl : (canonical b)[i]? = some l) (hr : revi
     ∃ d, (decideBatch c b).decisions[i]? = some d ∧ d.line = l ∧ d.outcome = .HUMAN_REVIEW :=
   ⟨decideLine c (seenAt c b i) l, by simp [decideBatch_get, hl], rfl, line_review h hr⟩
 
+/-- Each decision was made against the keys seen so far: earlier claims, then `seen`. -/
 theorem mem_decideAll {c : Ctx} : ∀ {seen : List Key} {ls : List Line} {d : Decision},
-    d ∈ decideAll c seen ls → ∃ seen' l, d = decideLine c seen' l
+    d ∈ decideAll c seen ls → ∃ pre l, d = decideLine c (pre ++ seen) l
   | _, [], _, h => by simp [decideAll] at h
   | seen, l :: ls, d, h => by
     simp only [decideAll, List.mem_cons] at h
     rcases h with rfl | h
-    · exact ⟨seen, l, rfl⟩
-    · exact mem_decideAll h
+    · exact ⟨[], l, rfl⟩
+    · obtain ⟨pre, l', rfl⟩ := mem_decideAll h
+      exact ⟨pre ++ claim c l, l', by rw [List.append_assoc]⟩
 
 /-- Fail-closed: when any reference snapshot is not usable (missing or failing
     its pin, an invalid today or asOf, dated after today, too old, empty, a
     parsed row count other than the declared one, or a malformed row), or the
-    released set is missing or short, every line is HUMAN_REVIEW. -/
+    released or unresolved set is missing or miscounted, every line is HUMAN_REVIEW. -/
 theorem fail_closed {c b d}
     (h : ¬Usable c.today 90 okDeath c.dmf ∨ ¬Usable c.today 90 okDeath c.providerDeaths ∨
       ¬Usable c.today 31 okExclusion c.exclusions ∨ ¬Usable c.today 7 okSpan c.enrollment ∨
-      ¬Whole c.released)
+      ¬Whole c.released ∨ ¬Whole c.unresolved)
     (hd : d ∈ (decideBatch c b).decisions) : d.outcome = .HUMAN_REVIEW := by
-  obtain ⟨seen, l, rfl⟩ := mem_decideAll (seen := (entries c.released).flatMap keys) (ls := canonical b) hd
-  have : ∃ r, review r = true ∧ Fact c seen l r := by
-    rcases h with h | h | h | h | h
-    · exact ⟨.STALE_DMF, rfl, h⟩
-    · exact ⟨.STALE_PROVIDER_DEATH, rfl, h⟩
-    · exact ⟨.STALE_EXCLUSION, rfl, h⟩
-    · exact ⟨.STALE_ENROLLMENT, rfl, h⟩
-    · exact ⟨.STALE_RELEASED, rfl, h⟩
-  obtain ⟨r, hs, hf⟩ := this
-  exact line_review hf hs
+  obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := (entries c.released).flatMap keys) (ls := canonical b) hd
+  rcases h with h | h | h | h | h | h
+  · exact line_review (r := .STALE_DMF) h rfl
+  · exact line_review (r := .STALE_PROVIDER_DEATH) h rfl
+  · exact line_review (r := .STALE_EXCLUSION) h rfl
+  · exact line_review (r := .STALE_ENROLLMENT) h rfl
+  · exact line_review (r := .STALE_RELEASED) h rfl
+  · exact line_review (r := .STALE_UNRESOLVED) h rfl
+
+/-- An ALLOWed line shares no key (exact, near or member-month) with any line
+    of the released or unresolved set it was decided against. -/
+theorem allow_clear {c b d} (hd : d ∈ (decideBatch c b).decisions) (ha : d.outcome = .ALLOW) :
+    ∀ x ∈ entries c.released ++ entries c.unresolved, ∀ k ∈ keys d.line, k ∉ keys x := by
+  obtain ⟨pre, l, rfl⟩ := mem_decideAll (seen := (entries c.released).flatMap keys) (ls := canonical b) hd
+  intro x hx k hk hkx
+  rw [decideLine_line] at hk
+  rcases List.mem_append.mp hx with hx | hx
+  · exact (allow_facts ha).2 k hk (List.mem_append.mpr (Or.inr (List.mem_flatMap.mpr ⟨x, hx, hkx⟩)))
+  · exact line_complete (r := .COLLIDES_WITH_UNRESOLVED) ⟨k, hk, List.mem_flatMap.mpr ⟨x, hx, hkx⟩⟩ ha
+
+theorem lines_decideAll (c : Ctx) : ∀ (seen : List Key) (ls : List Line),
+    (decideAll c seen ls).map (·.line) = ls
+  | _, [] => rfl
+  | seen, l :: ls => by simp only [decideAll, List.map_cons, decideLine_line, lines_decideAll c _ ls]
+
+/-- Every line of the batch that claimed keys leaves it released or unresolved. -/
+theorem decided_kept {c b x} (hx : x ∈ b) (he : enrolled c x = true) :
+    x ∈ (decideBatch c b).released ∨ x ∈ (decideBatch c b).unresolved := by
+  have hm : x ∈ (decideAll c ((entries c.released).flatMap keys) (canonical b)).map (·.line) := by
+    rw [lines_decideAll]; exact (List.mergeSort_perm b lineLe).mem_iff.mpr hx
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hm
+  by_cases ha : d.outcome = .ALLOW
+  · exact Or.inl (List.mem_append_right _ (List.mem_map.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp [ha]⟩, rfl⟩))
+  · exact Or.inr (List.mem_append_right _ (List.mem_map.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp [ha, he]⟩, rfl⟩))
+
+/-- Across batches: when the next batch reads this batch's released and
+    unresolved sets, no line it ALLOWs shares an exact key, near key or
+    member-month with any line of this batch that claimed keys, whatever that
+    line's outcome.  (A line that claimed none was not enrolled, R5.) -/
+theorem later_allow_clear {c c₂ : Ctx} {b₁ b₂ x d}
+    (hr : entries c₂.released = (decideBatch c b₁).released)
+    (hu : entries c₂.unresolved = (decideBatch c b₁).unresolved)
+    (hx : x ∈ b₁) (he : enrolled c x = true)
+    (hd : d ∈ (decideBatch c₂ b₂).decisions) (ha : d.outcome = .ALLOW) :
+    ∀ k ∈ keys d.line, k ∉ keys x :=
+  allow_clear hd ha x (by rw [hr, hu]; exact List.mem_append.mpr (decided_kept hx he))
 
 /-! ## Uniqueness -/
 
@@ -225,13 +265,14 @@ theorem key_ffs {x y : Line} (hx : x.flow ≠ .CAP_820) (hy : y.flow ≠ .CAP_82
 
 /-! ## Monotonicity -/
 
-/-- `c'` has every death and exclusion row of `c`, the same day, enrollment
-    and released set, and each death or exclusion snapshot is usable exactly
-    when it was (so the added rows are well formed and counted). -/
+/-- `c'` has every death and exclusion row of `c`, the same day, enrollment,
+    released and unresolved sets, and each death or exclusion snapshot is
+    usable exactly when it was (so the added rows are well formed and counted). -/
 structure Grows (c c' : Ctx) : Prop where
   today : c'.today = c.today
   enrollment : c'.enrollment = c.enrollment
   released : c'.released = c.released
+  unresolved : c'.unresolved = c.unresolved
   dmfOk : usable c'.today 90 okDeath c'.dmf = usable c.today 90 okDeath c.dmf
   pdOk : usable c'.today 90 okDeath c'.providerDeaths = usable c.today 90 okDeath c.providerDeaths
   exOk : usable c'.today 31 okExclusion c'.exclusions = usable c.today 31 okExclusion c.exclusions
@@ -256,9 +297,10 @@ theorem fact_mono {c c' seen l} (g : Grows c c') : ∀ {r}, Fact c seen l r → 
   | .STALE_EXCLUSION, h => by simpa only [Fact, ← usable_iff, g.exOk] using h
   | .STALE_ENROLLMENT, h => by simpa only [Fact, g.today, g.enrollment] using h
   | .STALE_RELEASED, h => by simpa only [Fact, g.released] using h
+  | .COLLIDES_WITH_UNRESOLVED, h | .STALE_UNRESOLVED, h => by simpa only [Fact, g.unresolved] using h
 
-/-- Monotonicity, for one batch under the same day, enrollment, released set
-    and snapshot usability: adding death or exclusion rows never turns a held
+/-- Monotonicity, for one batch under the same day, enrollment, released
+    and unresolved sets and snapshot usability: adding death or exclusion rows never turns a held
     or reviewed line into ALLOW.  Claimed keys depend only on enrollment, so
     line `i` is checked against the same keys under both contexts. -/
 theorem monotone {c c' : Ctx} {b : List Line} {i : Nat} {d d' : Decision} (g : Grows c c')
@@ -301,16 +343,19 @@ theorem canonical_perm {b₁ b₂ : List Line} (h : b₁.Perm b₂) : canonical 
 
 /-- Determinism of order within a batch: the result depends on the batch's
     contents, not their arrival order.  Splitting lines into batches (same
-    snapshots, each batch's ALLOW lines released, their exact and near keys
-    seen by later batches) is not covered by a theorem.  It can change a
-    line's decision only through another line sharing its exact or near key
-    (its member-month for CAP_820) that is either
-    (a) in an earlier batch, enrolled and not ALLOW there: it claims its keys
-        in its own batch but is never released, so a later line is no longer
-        its duplicate; or
+    snapshots; each batch's ALLOW lines released and its other enrolled lines
+    unresolved, both read by the next batch) can change a line's decision
+    only through another line sharing its exact or near key (its
+    member-month for CAP_820) that is either
+    (a) in an earlier batch, enrolled and not ALLOW there: in one batch the
+        later line is a HOLD duplicate or reviewed near duplicate; after a
+        split it is reviewed as `COLLIDES_WITH_UNRESOLVED`; or
     (b) in another batch on the other side of it in canonical order: of the
         two, the one decided first is the one not flagged.
-    Either way `released_nodup` holds, so no key is paid twice. -/
+    Neither lets a line through that shares a key with an earlier batch's
+    released or unresolved line (`later_allow_clear`), and `released_nodup`
+    holds, so no key is paid twice.  The split statement itself is argued
+    here, not proved. -/
 theorem deterministic {c b₁ b₂} (h : b₁.Perm b₂) : decideBatch c b₁ = decideBatch c b₂ := by
   simp only [decideBatch, canonical_perm h]
 
@@ -328,5 +373,7 @@ theorem deterministic {c b₁ b₂} (h : b₁.Perm b₂) : decideBatch c b₁ = 
 #guard_msgs in #print axioms deterministic
 /-- info: 'BlindLedger.Gate.Rules.fail_closed' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms fail_closed
+/-- info: 'BlindLedger.Gate.Rules.later_allow_clear' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms later_allow_clear
 
 end BlindLedger.Gate.Rules

@@ -23,20 +23,29 @@ namespace BlindLedger.Gate.Rules
       CAP_820 the span must also be with the paying plan.  Such a line claims
       no key, so a line for a plan the member is not in never blocks the real one.
 
+    - `COLLIDES_WITH_UNRESOLVED`: the line's exact key, near key or
+      member-month equals a key of a line in the unresolved set: decided
+      HOLD or HUMAN_REVIEW earlier, enrolled, and not yet released or
+      rejected.  Its claim is open, so the line is reviewed, never allowed.
+
     Bad or unusable data never becomes ALLOW.  `SERVICE_DATE_INVALID` (not a
     calendar date) and `SERVICE_DATE_FUTURE` (after today) review the line.
     `STALE_*` marks a reference snapshot that is not usable: missing, failing
     its pin, dated on an invalid day or after an invalid or valid today, older
     than its maximum age, empty, not holding exactly its declared row count, or
     with a row whose dates are invalid or reversed.  `STALE_RELEASED` marks a
-    released set that is missing or short of its declared count.  Any of these,
-    or a near duplicate, makes the line HUMAN_REVIEW; any other reason, HOLD.
+    released set that is missing or short of its declared count, and
+    `STALE_UNRESOLVED` the same for the unresolved set.  Any of these, a near
+    duplicate or an unresolved collision makes the line HUMAN_REVIEW; any
+    other reason, HOLD.
     No rule yields BLOCK: blocking stays a human or state action.
 
     The released set is every line already paid by any path, including lines
     a person released from HUMAN_REVIEW; the uniqueness theorem assumes it is
     complete.  Only ALLOW lines join it here; every later batch sees its
     lines' keys, near keys included, so double billing days apart is caught.
+    The gate's own enrolled HOLD and HUMAN_REVIEW lines join the unresolved
+    set; the state moves each out when a person releases or rejects it.
 
     Mapping onto the token (`BlindLedger.Gate.Spec`, gate-v1; not imported):
     `Flow.tag` and the outcome names equal the token's; `reasons` lists the
@@ -46,7 +55,8 @@ namespace BlindLedger.Gate.Rules
     naturals after a 0x01 byte, which is injective), so `lines_root` commits
     to exactly the lines decided here.  The payment is ALLOW when every line
     is; a held line leaves the cycle.  Snapshot and released-set pins
-    (SHA3-512 under `RR/GATE/SNAPSHOT/v1` and `RR/GATE/RELEASED/v1` over kind,
+    (SHA3-512 under `RR/GATE/SNAPSHOT/v1`, `RR/GATE/RELEASED/v1` and
+    `RR/GATE/UNRESOLVED/v1` over kind,
     date, declared count and rows) join the token's read-set digest.  Dates
     are CCYYMMDD naturals (X12 D8), so on valid dates `<` is calendar order.
     Synthetic, nonpayment, activation=false. -/
@@ -59,18 +69,18 @@ def Flow.tag : Flow → Nat
 inductive Outcome | ALLOW | HOLD | HUMAN_REVIEW deriving DecidableEq, Repr
 
 inductive Reason
-  | CAP_MEMBER_MONTH_DUPLICATE | FFS_DUPLICATE_LINE | FFS_NEAR_DUPLICATE | MEMBER_DECEASED
-  | MEMBER_NOT_ENROLLED | PROVIDER_DECEASED | PROVIDER_EXCLUDED | SERVICE_DATE_FUTURE
-  | SERVICE_DATE_INVALID | STALE_DMF | STALE_ENROLLMENT | STALE_EXCLUSION | STALE_PROVIDER_DEATH
-  | STALE_RELEASED
+  | CAP_MEMBER_MONTH_DUPLICATE | COLLIDES_WITH_UNRESOLVED | FFS_DUPLICATE_LINE | FFS_NEAR_DUPLICATE
+  | MEMBER_DECEASED | MEMBER_NOT_ENROLLED | PROVIDER_DECEASED | PROVIDER_EXCLUDED
+  | SERVICE_DATE_FUTURE | SERVICE_DATE_INVALID | STALE_DMF | STALE_ENROLLMENT | STALE_EXCLUSION
+  | STALE_PROVIDER_DEATH | STALE_RELEASED | STALE_UNRESOLVED
   deriving DecidableEq, Repr
 
 /-- Every code once, in ascending byte order of its name (the runner's `#guard` checks the order). -/
 def reasons : List Reason :=
-  [.CAP_MEMBER_MONTH_DUPLICATE, .FFS_DUPLICATE_LINE, .FFS_NEAR_DUPLICATE, .MEMBER_DECEASED,
-   .MEMBER_NOT_ENROLLED, .PROVIDER_DECEASED, .PROVIDER_EXCLUDED, .SERVICE_DATE_FUTURE,
-   .SERVICE_DATE_INVALID, .STALE_DMF, .STALE_ENROLLMENT, .STALE_EXCLUSION, .STALE_PROVIDER_DEATH,
-   .STALE_RELEASED]
+  [.CAP_MEMBER_MONTH_DUPLICATE, .COLLIDES_WITH_UNRESOLVED, .FFS_DUPLICATE_LINE, .FFS_NEAR_DUPLICATE,
+   .MEMBER_DECEASED, .MEMBER_NOT_ENROLLED, .PROVIDER_DECEASED, .PROVIDER_EXCLUDED,
+   .SERVICE_DATE_FUTURE, .SERVICE_DATE_INVALID, .STALE_DMF, .STALE_ENROLLMENT, .STALE_EXCLUSION,
+   .STALE_PROVIDER_DEATH, .STALE_RELEASED, .STALE_UNRESOLVED]
 
 /-- For CAP_820, `payee` and `rendering` are the plan and `date` is the first
     day of the service period. -/
@@ -117,6 +127,7 @@ structure Ctx where
   exclusions : Option (Snapshot Exclusion)
   enrollment : Option (Snapshot Span)
   released : Option (Snapshot Line)
+  unresolved : Option (Snapshot Line)
 
 def entries {α : Type} (o : Option (Snapshot α)) : List α := (o.map (·.entries)).getD []
 
@@ -153,7 +164,7 @@ def usable {α : Type} (today maxAge : Nat) (ok : α → Bool) : Option (Snapsho
       dayNum today ≤ dayNum s.asOf + maxAge && s.entries.length == s.count && 0 < s.count &&
       s.entries.all ok
 
-/-- The released set is present with exactly its declared count (it may be empty). -/
+/-- The released or unresolved set is present with exactly its declared count (it may be empty). -/
 def whole : Option (Snapshot Line) → Bool
   | none => false
   | some s => s.entries.length == s.count
@@ -193,6 +204,7 @@ def party (l : Line) (id : Nat) : Bool := id == l.payee || id == l.rendering
     monthly checks); enrollment 7 days, a placeholder for the state's own. -/
 def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
   | .CAP_MEMBER_MONTH_DUPLICATE => isCap l && (seen.contains (key l) || overlap c l)
+  | .COLLIDES_WITH_UNRESOLVED => (keys l).any ((entries c.unresolved).flatMap keys).contains
   | .FFS_DUPLICATE_LINE => !isCap l && seen.contains (key l)
   | .FFS_NEAR_DUPLICATE => !isCap l && seen.contains (nearKey l) && !seen.contains (key l)
   | .MEMBER_DECEASED => (entries c.dmf).any fun d => d.id == l.member && d.date < l.date
@@ -207,11 +219,13 @@ def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
   | .STALE_EXCLUSION => !usable c.today 31 okExclusion c.exclusions
   | .STALE_PROVIDER_DEATH => !usable c.today 90 okDeath c.providerDeaths
   | .STALE_RELEASED => !whole c.released
+  | .STALE_UNRESOLVED => !whole c.unresolved
 
-/-- Reasons a person must look at: bad or unusable data, or a near duplicate. -/
+/-- Reasons a person must look at: bad or unusable data, a near duplicate or an unresolved collision. -/
 def review : Reason → Bool
-  | .FFS_NEAR_DUPLICATE | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID | .STALE_DMF
-  | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .STALE_RELEASED => true
+  | .COLLIDES_WITH_UNRESOLVED | .FFS_NEAR_DUPLICATE | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID
+  | .STALE_DMF | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .STALE_RELEASED
+  | .STALE_UNRESOLVED => true
   | _ => false
 
 def outcomeOf (rs : List Reason) : Outcome :=
@@ -246,14 +260,21 @@ def canonical (batch : List Line) : List Line := batch.mergeSort lineLe
 def allowedLines (ds : List Decision) : List Line :=
   (ds.filter (·.outcome == .ALLOW)).map (·.line)
 
+/-- HOLD and HUMAN_REVIEW lines that claimed keys: they stay open until a person acts. -/
+def unresolvedLines (c : Ctx) (ds : List Decision) : List Line :=
+  (ds.filter fun d => d.outcome != .ALLOW && enrolled c d.line).map (·.line)
+
 structure Result where
   decisions : List Decision
   released : List Line
+  unresolved : List Line
   deriving DecidableEq
 
-/-- One batch against the read set; only ALLOW lines join the released set. -/
+/-- One batch against the read set: ALLOW lines join the released set, the
+    other lines that claimed keys join the unresolved set. -/
 def decideBatch (c : Ctx) (batch : List Line) : Result :=
   let ds := decideAll c ((entries c.released).flatMap keys) (canonical batch)
-  { decisions := ds, released := entries c.released ++ allowedLines ds }
+  { decisions := ds, released := entries c.released ++ allowedLines ds,
+    unresolved := entries c.unresolved ++ unresolvedLines c ds }
 
 end BlindLedger.Gate.Rules
