@@ -17,7 +17,7 @@ FinancialOwner (app/right_rail_financial_owner.py) -- the only writer, one SQLit
    +--> Mirror (app/right_rail_financial_mirror.py): queries and commands back into the owner
    |        +--> staff server + browser UI (app/right_rail_financial_staff_server.py, app/staff_workspace/)
    |        +--> CLI (tools/right_rail_financial_cli.py)
-   +--> Continuity export --> isolated SHADOW / TEST restore; v7 receiver (tools/continuity_successor_v7.py)
+   +--> Continuity export --> isolated SHADOW / TEST restore
    +--> Switch (app/right_rail_financial_switch.py): read-only replay and comparison
 ```
 
@@ -39,14 +39,11 @@ committed result is found again by its command identity.
 The owner writes one store version, `RR/FINANCIAL/OWNER/v8` (population
 manifest, program funding receipts, decision package v2, the exported
 `commands` log and declared foreign keys), with its matching
-`RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). A v7
-store is converted to v8 all-or-nothing when the owner opens it, inside the
-open transaction that replays the history; a v7 store the history does not
-explain is refused and left unchanged. The independent checker verifies v8
-stores and v8 and v7 packages; the owner restores v8 packages only. The v5/v6
-versions were retired on 2026-09-24 (no such store existed); they, older
-(v2-v4) and unknown versions are rejected without mutation by the owner and
-the independent checker.
+`RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). The owner
+and the independent checker accept v8 stores and packages only; every other
+version (v2-v7, unknown) is rejected without mutation, the owner's open with
+`unsupported_store_version`. The v7 conversion path was removed on 2026-09-25
+(decision C3; only synthetic data ever existed).
 
 The evaluation receipt binds scope, evaluation/obligation/revision, Control
 Pack id/version/digest, sorted evidence id/record-digest pairs, trusted
@@ -99,8 +96,7 @@ Restore runs in a private attempt directory and publishes atomically without
 replacing anything; a foreign destination and its `-wal`/`-shm` sidecars are
 left intact and cleanup failures are reported. SHADOW opens read-only; TEST is
 isolated; neither can dispatch, egress, become a live writer or replace an
-identity. `tools/continuity_successor_v7.py` is an independent, integrity-only
-receiver for v7 packages.
+identity.
 
 **Switch** takes only independently verified Continuity SHADOW bytes, gives the
 same canonical input to a reference and a candidate evaluator supplied by the
