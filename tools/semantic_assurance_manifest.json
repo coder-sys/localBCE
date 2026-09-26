@@ -7,8 +7,10 @@
     "module": "BlindLedger.Financial.CorrectionTransition.Theorems",
     "theorem_source": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
     "declaration_sources": {
+      "canonicalActionPayload_dispatch_is_synthetic_record_only": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "applyCorrectionTransition_mutation_links": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "applyCorrectionTransition_action_amount_eq_b2": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
+      "applyCorrectionTransition_outstanding_within_shortfall": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "applyCorrectionTransition_zero_shortfall_has_no_mutation": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "evaluate_positive_shortfall_balance": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "applyCorrectionTransition_amounts_conserved": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
@@ -89,6 +91,16 @@
   },
   "properties": [
     {
+      "id": "canonicalActionPayload_dispatch_is_synthetic_record_only",
+      "statement": "(request : CorrectionTransitionRequest) (determinationId : String) (resultingRevision amountCents : Nat) : (canonicalActionPayload request determinationId resultingRevision amountCents).dispatchMode = .SYNTHETIC_RECORD_ONLY",
+      "declarations": [
+        {
+          "name": "canonicalActionPayload_dispatch_is_synthetic_record_only",
+          "source_statement": "(request : CorrectionTransitionRequest) (determinationId : String) (resultingRevision amountCents : Nat) : (canonicalActionPayload request determinationId resultingRevision amountCents).dispatchMode = .SYNTHETIC_RECORD_ONLY"
+        }
+      ]
+    },
+    {
       "id": "applyCorrectionTransition_mutation_links",
       "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : (applyCorrectionTransition request).status = .ACCEPTED ∧ (applyCorrectionTransition request).actionId = some request.command.actionId ∧ (applyCorrectionTransition request).determinationId = some (\"determination:\" ++ request.command.actionId) ∧ (applyCorrectionTransition request).explanation.transition = some .OFFSET_REJECTED_CORRECTION_AUTHORIZED ∧ (applyCorrectionTransition request).explanation.resultingRevision = some mutation.resultingResult.afterRevision ∧ request.currentInput.beforeRevision + 1 = request.command.expectedRevision ∧ CorrectionMutationLinkFacts request mutation",
       "declarations": [
@@ -100,11 +112,21 @@
     },
     {
       "id": "applyCorrectionTransition_action_amount_eq_b2",
-      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ 0 < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents result.shortfallCents ∧ mutation.action.amountCents ≤ result.shortfallCents",
+      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ outstandingCorrectionCents request.currentInput.actions < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents (result.shortfallCents - outstandingCorrectionCents request.currentInput.actions) ∧ mutation.action.amountCents ≤ result.shortfallCents",
       "declarations": [
         {
           "name": "applyCorrectionTransition_action_amount_eq_b2",
-          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ 0 < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents result.shortfallCents ∧ mutation.action.amountCents ≤ result.shortfallCents"
+          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ outstandingCorrectionCents request.currentInput.actions < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents (result.shortfallCents - outstandingCorrectionCents request.currentInput.actions) ∧ mutation.action.amountCents ≤ result.shortfallCents"
+        }
+      ]
+    },
+    {
+      "id": "applyCorrectionTransition_outstanding_within_shortfall",
+      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ outstandingCorrectionCents (mutation.action :: request.currentInput.actions) ≤ result.shortfallCents",
+      "declarations": [
+        {
+          "name": "applyCorrectionTransition_outstanding_within_shortfall",
+          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ outstandingCorrectionCents (mutation.action :: request.currentInput.actions) ≤ result.shortfallCents"
         }
       ]
     },
@@ -278,6 +300,9 @@
       "partial_shortfall_requests_unpaid_balance",
       "full_shortfall_requests_claim_amount",
       "shortfall_above_claim_requests_claim_amount",
+      "second_correction_on_fully_requested_shortfall_rejected",
+      "second_correction_requests_remaining_balance",
+      "owner_domain_digest_vectors",
       "current_owner_evaluation_receipt_binding",
       "exact_retry_after_ack_is_noop",
       "changed_retry_identity_rejected",
