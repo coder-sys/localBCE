@@ -116,6 +116,13 @@ _READ_ROUTES = {
     "/api/decision-package": "decision_view",
     "/api/correction-followup": "correction_followup",
 }
+# The record only that command writes: its appearance after a busy error proves the command committed.
+_OWN_RECORD = {
+    "reject_offset_and_authorize_correction": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_ACTION_ID),
+    "acknowledge_correction_action": ("SELECT COUNT(*) FROM action_outbox WHERE action_id=? AND acknowledgment_ref=?", H_ACTION_ID, "ack:correction:h:v1"),
+    "record_cash_correction": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", CASH_CORRECTION_COMMAND["evidence_id"]),
+    "record_reporting_evidence": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", "evidence:report:h:original"),
+}
 _COMMAND_ROUTES = {
     "/api/decision/reject-offset": "reject_offset_and_authorize_correction",
     "/api/action/acknowledge": "acknowledge_correction_action",
@@ -568,10 +575,12 @@ class StaffWorkflow:
             return {"gate": result, "workspace": self._workspace_locked()}
 
     def command(self, name: str, body: object) -> dict[str, Any]:
-        """Run one staff command. A busy store says whether the owner committed, from its position before and after."""
+        """Run one staff command. On a busy store, changed is true only when this command's own record appeared,
+        false only when the store did not move at all, and otherwise None: another process may have written."""
         with self._lock:
+            mirror = self._mirror
             try:
-                before = self._store_position()
+                before = self._store_position(name)
             except FinancialBusyError as error:
                 error.changed = False  # nothing has run yet
                 raise
@@ -579,15 +588,21 @@ class StaffWorkflow:
                 return getattr(self, name)(body)
             except FinancialBusyError as error:  # the command's own write, or its read-back after a commit
                 try:
-                    error.changed = self._store_position() != before
+                    position, own = self._store_position(name)
                 except FinancialBusyError:
-                    error.changed = None  # cannot tell: never claim it did not happen
+                    position, own = None, False
+                if (own and not before[1]) or self._mirror is not mirror:  # its own record appeared, or restore swapped in its store
+                    error.changed = True
+                else:
+                    error.changed = False if position == before[0] else None
                 raise
 
-    def _store_position(self) -> tuple[object, ...]:
-        owner = self._mirror.owner
+    def _store_position(self, name: str) -> tuple[tuple[object, ...], bool]:
+        """(owner path, sequence, head) and whether this command's own record exists."""
+        owner, (query, *arguments) = self._mirror.owner, _OWN_RECORD.get(name, ("SELECT 0",))
         with owner._read_snapshot() as connection:
-            return (str(owner.path), *connection.execute("SELECT sequence,history_head FROM financial_meta WHERE id=1").fetchone())
+            position = (str(owner.path), *connection.execute("SELECT sequence,history_head FROM financial_meta WHERE id=1").fetchone())
+            return position, connection.execute(query, arguments).fetchone()[0] > 0
 
     def attempt_stale_revision(self, body: object) -> dict[str, Any]:
         with self._lock:
