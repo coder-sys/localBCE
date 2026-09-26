@@ -5301,6 +5301,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "^schema:foreign-keys:commands$"):
             verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
 
+    def test_checker_refuses_a_hidden_partial_index(self) -> None:
+        # The checker's event lookups use an index the Owner wrote: one that silently omits rows must not pass.
+        store = self._build_base()
+        name, table, columns = "rr_financial_v2_events_aggregate_kind", "financial_events", ("aggregate_type", "aggregate_id", "kind")
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute(f'DROP INDEX "{name}"')
+            connection.execute(owner._private_index_sql(name, table, columns) + " WHERE aggregate_type<>'OBLIGATION'")
+            connection.execute("PRAGMA writable_schema=ON")
+            connection.execute("UPDATE sqlite_master SET sql=? WHERE name=?", (owner._private_index_sql(name, table, columns), name))
+        with self.assertRaisesRegex(IndependentFinancialError, "^schema:index-integrity$"):
+            verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
+
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:
         self.assertEqual(tuple(case.number for case in expected.ACCEPTANCE_CASES), tuple(range(1, 13)))
         fixture_source = Path(expected.__file__).read_text(encoding="utf-8")

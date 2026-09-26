@@ -831,6 +831,9 @@ def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
         )
         if key_parts != tuple((column, 0, "BINARY") for column in columns):
             _fail(f"schema:private-index:{name}")
+    # The lookups below trust index contents the Owner wrote: an index missing rows must not answer them.
+    if [tuple(row) for row in connection.execute("PRAGMA quick_check")] != [("ok",)]:
+        _fail("schema:index-integrity")
 
 
 def _field(value: object, name: str) -> object:
