@@ -11,7 +11,14 @@ namespace BlindLedger.Financial.CorrectionTransition
 open BlindLedger.Financial
 open BlindLedger.Financial.DecisionPackage
 
-set_option maxHeartbeats 2000000 in
+/-- One `do` step: a reader that returns `some a` hands `a` to the continuation. -/
+private theorem bind_step {α β : Type} {x : Option α} {a : α} {f : α → Option β} {y : Option β}
+    (hx : x = some a) (hf : f a = y) : (x >>= f) = y := by
+  subst hx; exact hf
+
+/-- Take one reader step and reduce the continuation's pattern match. -/
+local macro "step " h:term : tactic => `(tactic| (refine bind_step $h ?_; try dsimp only))
+
 theorem readOptionalMutation_of_encode (mutation : Option CorrectionMutation) (bytes rest : Bytes)
     (hMutation : optionalMutationWireAdmissible mutation)
     (hEncode : encodeOptionalMutation mutation = some bytes) :
@@ -32,25 +39,43 @@ theorem readOptionalMutation_of_encode (mutation : Option CorrectionMutation) (b
       simp [encodeOptionalMutation, encodeFinancialInput_rawEncode _ hInput,
         encodeFinancialResult_rawEncode _ hResult] at hEncode
       subst hEncode
-      -- Unfold by `delta`: generating `simp`'s equation lemma for a reader this long
-      -- exceeds the default heartbeat budget.
+      -- Unfold by `delta` and step through the reader one bind at a time: a single
+      -- `simp` over a reader this long exceeds the default heartbeat budget.
       delta readOptionalMutation
-      simp [List.append_assoc, readByte, readTransitionKind_cons,
-        readCorrectionEffects_append _ _ hEffects, readDependencyFacts_append _ _ hDependencies,
-        readFollowUps_append _ _ hFollowUps,
-        readSizedBytes_encodeSizedBytes_append _ _ hInputLength,
-        readSizedBytes_encodeSizedBytes_append _ _ hResultLength,
-        decodeFinancialInput_rawEncode _ hInput, decodeFinancialResult_rawEncode _ hResult,
-        decodeDetermination_encodeDetermination_append _ _ hDetermination,
-        decodeAction_encodeAction_append _ _ hAction, decodeCase_encodeCase_append _ _ hCase,
-        readString_encodeString_append _ _ h9, readBool_encodeBool_append,
-        readString_encodeString_append _ _ h10, decodeActionStatus_encodeActionStatus,
-        readNat8_natBE_append _ _ h11, readOptionString_encodeOptionString_append _ _ h12,
-        readNat8_natBE_append _ _ h13, readNat8_natBE_append _ _ h14,
-        readDigest_wire_append _ _ h15, readString_encodeString_append _ _ h16,
-        readString_encodeString_append _ _ h17, readString_encodeString_append _ _ h18,
-        readNat8_natBE_append _ _ h19, readNat8_natBE_append _ _ h20,
-        readNat8_natBE_append _ _ h21]
+      simp only [List.append_assoc, List.cons_append]
+      step rfl
+      rw [if_neg (by decide), if_neg (by decide)]
+      step (readTransitionKind_cons _ _)
+      step (readCorrectionEffects_append _ _ hEffects)
+      step (readDependencyFacts_append _ _ hDependencies)
+      step (readFollowUps_append _ _ hFollowUps)
+      step (readSizedBytes_encodeSizedBytes_append _ _ hInputLength)
+      step (readSizedBytes_encodeSizedBytes_append _ _ hResultLength)
+      step (decodeFinancialInput_rawEncode _ hInput)
+      step (decodeFinancialResult_rawEncode _ hResult)
+      step (decodeDetermination_encodeDetermination_append _ _ hDetermination)
+      step (decodeAction_encodeAction_append _ _ hAction)
+      step (decodeCase_encodeCase_append _ _ hCase)
+      step (readString_encodeString_append _ _ h9)
+      step (readBool_encodeBool_append _ _)
+      step (readBool_encodeBool_append _ _)
+      step (readBool_encodeBool_append _ _)
+      step (readBool_encodeBool_append _ _)
+      step (readString_encodeString_append _ _ h10)
+      step rfl
+      step (decodeActionStatus_encodeActionStatus _)
+      step (readNat8_natBE_append _ _ h11)
+      step (readOptionString_encodeOptionString_append _ _ h12)
+      step (readNat8_natBE_append _ _ h13)
+      step (readNat8_natBE_append _ _ h14)
+      step (readDigest_wire_append _ _ h15)
+      step (readString_encodeString_append _ _ h16)
+      step (readString_encodeString_append _ _ h17)
+      step (readString_encodeString_append _ _ h18)
+      step (readNat8_natBE_append _ _ h19)
+      step (readNat8_natBE_append _ _ h20)
+      step (readNat8_natBE_append _ _ h21)
+      rfl
 
 /-! Whole-wire laws.  The parse lemmas read an encoding followed by any tail. -/
 
