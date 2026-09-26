@@ -1325,7 +1325,6 @@ def _private_index_set_version(connection: sqlite3.Connection) -> int:
 
 
 def _install_private_index_set(connection: sqlite3.Connection) -> None:
-    """Brings an exact older set (or none) up to the current one, adding only the missing indexes."""
     found = _private_index_set_version(connection)
     if found == _PRIVATE_INDEX_SET_VERSION:
         return

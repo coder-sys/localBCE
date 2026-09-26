@@ -57,50 +57,18 @@ SEGMENT_FORMAT = "RR/GATE/SEGMENT/v1"  # docs/CORE_REDESIGN.md "History segments
 SEGMENT_DOMAIN = b"RR/GATE/SEGMENT/v1\x00"
 MAX_SEGMENT_BYTES = 2 * MAX_PACKAGE_BYTES
 SEAL_SEGMENT_EVENTS, SEAL_SEGMENT_BYTES = 4096, MAX_PACKAGE_BYTES // 2  # every Owner write leaves the open segment below both
-PRIVATE_INDEX_DEFS_V1 = {
-    "rr_financial_v1_evidence_item_id": (
-        "evidence",
-        ("item_id", "evidence_id"),
-        "CREATE INDEX rr_financial_v1_evidence_item_id ON evidence(item_id,evidence_id)",
-    ),
-    "rr_financial_v1_claims_obligation_id": (
-        "claimed_adjustments",
-        ("obligation_id", "claim_id"),
-        "CREATE INDEX rr_financial_v1_claims_obligation_id ON claimed_adjustments(obligation_id,claim_id)",
-    ),
-    "rr_financial_v1_cases_obligation_id": (
-        "cases",
-        ("obligation_id", "case_id"),
-        "CREATE INDEX rr_financial_v1_cases_obligation_id ON cases(obligation_id,case_id)",
-    ),
-    "rr_financial_v1_actions_obligation_id": (
-        "actions",
-        ("obligation_id", "action_id"),
-        "CREATE INDEX rr_financial_v1_actions_obligation_id ON actions(obligation_id,action_id)",
-    ),
-    "rr_financial_v1_conflicts_obligation_id": (
-        "financial_conflicts",
-        ("obligation_id", "conflict_id"),
-        "CREATE INDEX rr_financial_v1_conflicts_obligation_id ON financial_conflicts(obligation_id,conflict_id)",
-    ),
-    "rr_financial_v1_evaluations_obligation_revision": (
-        "evaluations",
-        ("obligation_id", "revision"),
-        "CREATE INDEX rr_financial_v1_evaluations_obligation_revision ON evaluations(obligation_id,revision)",
-    ),
-    "rr_financial_v1_determinations_obligation_id": (
-        "determinations",
-        ("obligation_id", "determination_id"),
-        "CREATE INDEX rr_financial_v1_determinations_obligation_id ON determinations(obligation_id,determination_id)",
-    ),
+PRIVATE_INDEX_DEFS_V1 = {  # name -> (table, key columns); each is exactly CREATE INDEX name ON table(columns)
+    "rr_financial_v1_evidence_item_id": ("evidence", ("item_id", "evidence_id")),
+    "rr_financial_v1_claims_obligation_id": ("claimed_adjustments", ("obligation_id", "claim_id")),
+    "rr_financial_v1_cases_obligation_id": ("cases", ("obligation_id", "case_id")),
+    "rr_financial_v1_actions_obligation_id": ("actions", ("obligation_id", "action_id")),
+    "rr_financial_v1_conflicts_obligation_id": ("financial_conflicts", ("obligation_id", "conflict_id")),
+    "rr_financial_v1_evaluations_obligation_revision": ("evaluations", ("obligation_id", "revision")),
+    "rr_financial_v1_determinations_obligation_id": ("determinations", ("obligation_id", "determination_id")),
 }
 PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; the Owner upgrades 1 to 2 on open
     1: PRIVATE_INDEX_DEFS_V1,
-    2: {**PRIVATE_INDEX_DEFS_V1, "rr_financial_v2_events_aggregate_kind": (
-        "financial_events",
-        ("aggregate_type", "aggregate_id", "kind"),
-        "CREATE INDEX rr_financial_v2_events_aggregate_kind ON financial_events(aggregate_type,aggregate_id,kind)",
-    )},
+    2: {**PRIVATE_INDEX_DEFS_V1, "rr_financial_v2_events_aggregate_kind": ("financial_events", ("aggregate_type", "aggregate_id", "kind"))},
 }
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
@@ -851,8 +819,8 @@ def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
     }
     if set(actual) != set(defs):
         _fail("schema:private-indexes")
-    for name, (table, columns, expected_sql) in defs.items():
-        if _normal_sql(actual[name]) != _normal_sql(expected_sql):
+    for name, (table, columns) in defs.items():
+        if _normal_sql(actual[name]) != _normal_sql(f"CREATE INDEX {name} ON {table}({','.join(columns)})"):
             _fail(f"schema:private-index:{name}")
         listed = [
             row
