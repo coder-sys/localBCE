@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import closing, contextmanager
 import http.client
 import hashlib
 import json
 import os
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,7 @@ from app.right_rail_financial_mirror import (
     FinancialMirrorDispatchError,
 )
 from app.right_rail_financial_owner import (
+    FinancialBusyError,
     FinancialConflictError,
     FinancialDispatchError,
     FinancialInputError,
@@ -1044,6 +1047,74 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         with patch.object(workflow, "workspace", side_effect=RuntimeError("internal detail")):
             self.assertEqual(call("GET", "/api/workspace", (host,))[:3:2], (503, {"error": {"code": "owner_read_unavailable"}}))
+        with patch.object(workflow, "acknowledge_correction_action", side_effect=FinancialBusyError("store_busy")):  # a transient lock is not a 409
+            status, headers, body = call("POST", "/api/action/acknowledge", post, b'{"revision":0}')
+        self.assertEqual((status, headers.get("Retry-After"), body), (503, "1", {"error": {"code": "store_busy"}, "changed": False}))
+
+    def test_a_lock_taken_right_after_a_commit_never_answers_changed_false(self) -> None:
+        for released in (False, True):  # held through the answer: cannot tell; released after the failed read-back: it committed
+            (workspace := Path(self.temp_dir.name) / f"released-{released}").mkdir()
+            workflow = self._workflow(workspace_dir=workspace)
+            self.addCleanup(workflow.close)
+            server = _LoopbackServer(("127.0.0.1", 0), _handler_for(workflow))
+            self.addCleanup(server.server_close)
+            threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+            self.addCleanup(server.shutdown)
+            owner, port, body = workflow.mirror.owner, int(server.server_address[1]), json.dumps(self._revision_body(workflow))
+            holder = sqlite3.connect(owner.path, isolation_level=None, check_same_thread=False)  # used from the server thread
+            self.addCleanup(holder.close)
+            real_record, real_snapshot, before = workflow.mirror.record_reporting_evidence, owner._read_snapshot, owner.summary()["sequence"]
+
+            def commit_then_lock(**arguments: object) -> object:
+                result = real_record(**arguments)  # the owner has committed
+                holder.execute("BEGIN EXCLUSIVE")
+                return result
+
+            @contextmanager
+            def snapshot(**arguments: object):  # type: ignore[no-untyped-def]
+                try:
+                    with real_snapshot(**arguments) as connection:
+                        yield connection
+                except FinancialBusyError:
+                    if released and holder.in_transaction:
+                        holder.execute("ROLLBACK")
+                    raise
+
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+            self.addCleanup(connection.close)
+            with patch.object(workflow.mirror, "record_reporting_evidence", commit_then_lock), patch.object(owner, "_read_snapshot", snapshot):
+                connection.request("POST", "/api/reporting/record", body, {"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"})
+                response = connection.getresponse()
+                answer = (response.status, response.getheader("Retry-After"), json.loads(response.read().decode("utf-8")))
+            if holder.in_transaction:
+                holder.execute("ROLLBACK")
+            code = "store_busy" if released else "store_busy_outcome_unknown"
+            self.assertEqual(answer, (503, None, {"error": {"code": code}, "changed": True if released else None}))
+            self.assertGreater(owner.summary()["sequence"], before)  # it did commit
+
+    def test_another_process_committing_during_a_busy_command_is_not_claimed_as_its_change(self) -> None:
+        workflow = self._workflow()
+        self.addCleanup(workflow.close)
+        owner, body = workflow.mirror.owner, self._revision_body(workflow)
+        other = FinancialOwner(path=owner.path, config=owner.config, trusted_authority=workflow._authority, clock=workflow._clock, mode="TEST", owner_id=owner.owner_id)
+        self.addCleanup(other.close)  # a second server process on the same store
+        holder = sqlite3.connect(owner.path, isolation_level=None, check_same_thread=False)
+        self.addCleanup(holder.close)
+        real_record, before = workflow.mirror.record_reporting_evidence, owner.summary()["sequence"]
+
+        def other_commits_then_holds(**arguments: object) -> object:
+            other.record_support_evidence(item_id="item-01", evidence_id="evidence:other-process:1", common_origin_id="origin:other-process")
+            holder.execute("BEGIN IMMEDIATE")  # the other process's next write outlasts this command's busy timeout
+            release = threading.Timer(7.0, lambda: holder.execute("ROLLBACK"))
+            release.start()
+            self.addCleanup(release.join)
+            return real_record(**arguments)
+        with patch.object(workflow.mirror, "record_reporting_evidence", other_commits_then_holds), self.assertRaises(FinancialBusyError) as busy:
+            workflow.command("record_reporting_evidence", body)
+        self.assertIsNone(busy.exception.changed)  # the store moved, but not by this command
+        self.assertGreater(owner.summary()["sequence"], before)
+        with closing(sqlite3.connect(owner.path)) as check:
+            self.assertEqual(check.execute("SELECT COUNT(*) FROM evidence WHERE evidence_id='evidence:report:h:original'").fetchone()[0], 0)
 
 
 if __name__ == "__main__":

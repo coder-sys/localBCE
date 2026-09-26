@@ -44,7 +44,7 @@ class HistorySegmentTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.addCleanup(self._tmp.cleanup)
         self.owner = FinancialOwner(path=self.root / "owner.sqlite3", config=CONFIG, trusted_authority=AUTHORITY)
-        self.items = [item.item_id for item in _setup(self.owner, random.Random(1), 4, AUTHORITY)[0]]
+        self.items = [item.item_id for item in _setup(self.owner, random.Random(1), 4, AUTHORITY)]
         self.commands = 0
         self._drive(30)
 

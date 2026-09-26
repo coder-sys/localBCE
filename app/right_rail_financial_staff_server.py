@@ -27,6 +27,7 @@ from app.right_rail_financial_mirror import (
 from app.right_rail_financial_owner import (
     ControlPack,
     FinancialAuthorityError,
+    FinancialBusyError,
     FinancialError,
     FinancialOwner,
     FinancialOwnerConfig,
@@ -114,6 +115,13 @@ _READ_ROUTES = {
     "/api/workspace": "workspace",
     "/api/decision-package": "decision_view",
     "/api/correction-followup": "correction_followup",
+}
+# The record only that command writes: its appearance after a busy error proves the command committed.
+_OWN_RECORD = {
+    "reject_offset_and_authorize_correction": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_ACTION_ID),
+    "acknowledge_correction_action": ("SELECT COUNT(*) FROM action_outbox WHERE action_id=? AND acknowledgment_ref=?", H_ACTION_ID, "ack:correction:h:v1"),
+    "record_cash_correction": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", CASH_CORRECTION_COMMAND["evidence_id"]),
+    "record_reporting_evidence": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", "evidence:report:h:original"),
 }
 _COMMAND_ROUTES = {
     "/api/decision/reject-offset": "reject_offset_and_authorize_correction",
@@ -566,6 +574,36 @@ class StaffWorkflow:
             result = self._gate_attempt(body, stale=False)
             return {"gate": result, "workspace": self._workspace_locked()}
 
+    def command(self, name: str, body: object) -> dict[str, Any]:
+        """Run one staff command. On a busy store, changed is true only when this command's own record appeared,
+        false only when the store did not move at all, and otherwise None: another process may have written."""
+        with self._lock:
+            mirror = self._mirror
+            try:
+                before = self._store_position(name)
+            except FinancialBusyError as error:
+                error.changed = False  # nothing has run yet
+                raise
+            try:
+                return getattr(self, name)(body)
+            except FinancialBusyError as error:  # the command's own write, or its read-back after a commit
+                try:
+                    position, own = self._store_position(name)
+                except FinancialBusyError:
+                    position, own = None, False
+                if (own and not before[1]) or self._mirror is not mirror:  # its own record appeared, or restore swapped in its store
+                    error.changed = True
+                else:
+                    error.changed = False if position == before[0] else None
+                raise
+
+    def _store_position(self, name: str) -> tuple[tuple[object, ...], bool]:
+        """(owner path, sequence, head) and whether this command's own record exists."""
+        owner, (query, *arguments) = self._mirror.owner, _OWN_RECORD.get(name, ("SELECT 0",))
+        with owner._read_snapshot() as connection:
+            position = (str(owner.path), *connection.execute("SELECT sequence,history_head FROM financial_meta WHERE id=1").fetchone())
+            return position, connection.execute(query, arguments).fetchone()[0] > 0
+
     def attempt_stale_revision(self, body: object) -> dict[str, Any]:
         with self._lock:
             result = self._gate_attempt(body, stale=True)
@@ -849,11 +887,13 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
             )
 
-        def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8") -> None:
+        def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8", *, retry_after: bool = False) -> None:
             content = value if type(value) is bytes else _json_bytes(value)
             self._response_length = len(content)
             self.send_response(status)
             self._headers(content_type)
+            if retry_after:
+                self.send_header("Retry-After", "1")
             self.end_headers()
             self.wfile.write(content)
 
@@ -912,7 +952,11 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 self._respond(400, {"error": {"code": "invalid_request"}})
                 return
             try:
-                result = getattr(workflow, command)(body)
+                result = workflow.command(command, body)
+            except FinancialBusyError as exc:  # a transient lock: retry only a command that provably did not commit
+                changed = getattr(exc, "changed", None)
+                code = "store_busy_outcome_unknown" if changed is None else str(exc)
+                self._respond(503, {"error": {"code": code}, "changed": changed}, retry_after=changed is False)
             except FinancialRevisionError as exc:
                 self._respond(409, {"error": {"code": str(exc)}, "changed": False})
             except FinancialAuthorityError as exc:

@@ -8,7 +8,7 @@ live directive, stores raw evidence, or claims production authority.
 
 from __future__ import annotations
 
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from dataclasses import dataclass
 import ctypes
 import hashlib
@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import sqlite3
 import tempfile
+import threading
 import time
 from typing import Any, Final, Iterable, Iterator, Mapping, Protocol
 
@@ -54,12 +55,22 @@ class FinancialDispatchError(FinancialError):
     pass
 
 
+class FinancialBusyError(FinancialError):
+    """Retryable: another connection held the store's lock past the busy timeout; nothing was written."""
+
+
 def _fail(error_type: type[FinancialError], code: str) -> None:
     error = error_type(code)
     error.__cause__ = None
     error.__context__ = None
     error.__suppress_context__ = True
     raise error
+
+
+def _raise_if_busy(error: BaseException) -> None:
+    """A lock held past the busy timeout is ``store_busy``, never an integrity finding or a raw sqlite error."""
+    if isinstance(error, sqlite3.OperationalError) and getattr(error, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+        _fail(FinancialBusyError, "store_busy")
 
 
 # The owner opens one store version, v8; any other fails closed.
@@ -72,6 +83,8 @@ _CURRENCY: Final[str] = "USD"
 _MAX_CENTS: Final[int] = (1 << 63) - 1
 _MAX_ROWS: Final[int] = 10_000
 _MAX_DUPLICATE_INPUTS: Final[int] = 256
+# run_batch commands: all their work is on the one write connection and they catch nothing.
+_BATCH_COMMANDS: Final = frozenset({"record_payment_evidence", "record_support_evidence", "evaluate_obligation", "reverse_payment"})
 _MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 _MAX_DECISION_PACKAGE_BYTES: Final[int] = _MAX_PACKAGE_BYTES - 512
 _MAX_CORRECTION_FOLLOWUP_BYTES: Final[int] = 3 * _MAX_DECISION_PACKAGE_BYTES + 64 * 1024
@@ -89,7 +102,11 @@ _SEAL_SEGMENT_BYTES: Final[int] = _MAX_PACKAGE_BYTES // 2  # soft bounds: seal a
 _SEAL_SEGMENT_EVENTS: Final[int] = 4096
 _SEGMENT_FRAME_BYTES: Final[int] = 4096  # seal, digests and framing, which records do not count
 _SEGMENT_TABLES: Final[frozenset[str]] = frozenset({"history_segments", "history_pending", "history_open"})
-_PRIVATE_INDEX_SET_VERSION: Final[int] = 1
+# Moves on every committed insert into a history table (a new pending key, or a seal adds a segment), and names
+# the exact history: the chain head differs between any two histories, so a swapped-in fork never matches.
+_HISTORY_MARK: Final[str] = "SELECT (SELECT MAX(segment_index) FROM history_segments),(SELECT COUNT(*) FROM history_pending),sequence,history_head FROM financial_meta WHERE id=1"
+_CHECK_ROW_CACHE: Final[bool] = os.environ.get("RIGHTRAIL_CHECK_ROW_CACHE") == "1"  # tests: recount after every write
+_PRIVATE_INDEX_SET_VERSION: Final[int] = 2  # v2 adds the events lookup the checker runs per obligation
 # The history is append-only in the database itself (Art. III.4); stores
 # created before these triggers get them once, atomically, on open.
 _HISTORY_APPEND_ONLY_TRIGGERS: Final[dict[str, str]] = {
@@ -105,6 +122,10 @@ _PRIVATE_INDEX_SET_V1: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
     ("rr_financial_v1_evaluations_obligation_revision", "evaluations", ("obligation_id", "revision")),
     ("rr_financial_v1_determinations_obligation_id", "determinations", ("obligation_id", "determination_id")),
 )
+_PRIVATE_INDEX_SETS: Final[dict[int, tuple[tuple[str, str, tuple[str, ...]], ...]]] = {
+    1: _PRIVATE_INDEX_SET_V1,
+    2: (*_PRIVATE_INDEX_SET_V1, ("rr_financial_v2_events_aggregate_kind", "financial_events", ("aggregate_type", "aggregate_id", "kind"))),
+}
 _CORRECTION_FOLLOWUP_CONTRACT: Final[str] = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 _CORRECTION_FOLLOWUP_DEPENDENCIES: Final[tuple[str, ...]] = (
     "OBLIGATION_REVISION",
@@ -1269,18 +1290,12 @@ def _private_index_sql(name: str, table: str, columns: tuple[str, ...]) -> str:
     return f"CREATE INDEX {name} ON {table}({','.join(columns)})"
 
 
-def _private_index_sql_by_name() -> dict[str, str]:
-    return {
-        name: _private_index_sql(name, table, columns)
-        for name, table, columns in _PRIVATE_INDEX_SET_V1
-    }
-
-
 def _normalized_schema_sql(value: str) -> str:
     return re.sub(r"\s+", "", value).replace('"', "").lower()
 
 
-def _private_index_set_is_current(connection: sqlite3.Connection) -> bool:
+def _private_index_set_version(connection: sqlite3.Connection) -> int:
+    """The exact private index set present: 0 for none (a store from before them), else its version."""
     version_row = connection.execute("PRAGMA user_version").fetchone()
     version = version_row[0] if version_row is not None else None
     actual: dict[str, str] = {}
@@ -1291,14 +1306,16 @@ def _private_index_set_is_current(connection: sqlite3.Connection) -> bool:
         if type(name) is not str or type(sql) is not str or name in actual:
             _fail(FinancialIntegrityError, "schema_private_indexes")
         actual[name] = sql
-    expected = _private_index_sql_by_name()
     if type(version) is int and version == 0 and not actual:
-        return False
-    if type(version) is not int or version != _PRIVATE_INDEX_SET_VERSION or set(actual) != set(expected):
+        return 0
+    if type(version) is not int or version not in _PRIVATE_INDEX_SETS:
+        _fail(FinancialIntegrityError, "schema_private_indexes")
+    expected = {name: _private_index_sql(name, table, columns) for name, table, columns in _PRIVATE_INDEX_SETS[version]}
+    if set(actual) != set(expected):
         _fail(FinancialIntegrityError, "schema_private_indexes")
     if any(_normalized_schema_sql(actual[name]) != _normalized_schema_sql(sql) for name, sql in expected.items()):
         _fail(FinancialIntegrityError, "schema_private_indexes")
-    for name, table, columns in _PRIVATE_INDEX_SET_V1:
+    for name, table, columns in _PRIVATE_INDEX_SETS[version]:
         listed = [
             row
             for row in connection.execute(f'PRAGMA index_list("{table}")')
@@ -1313,20 +1330,27 @@ def _private_index_set_is_current(connection: sqlite3.Connection) -> bool:
         )
         if key_parts != tuple((column, 0, "BINARY") for column in columns):
             _fail(FinancialIntegrityError, "schema_private_indexes")
-    return True
+    return version
+
+
+def _count_rows(connection: sqlite3.Connection) -> dict[str, int]:
+    return {table: connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in ("financial_events", *_PROJECTION_TABLES)}
 
 
 def _install_private_index_set(connection: sqlite3.Connection) -> None:
-    if _private_index_set_is_current(connection):
+    found = _private_index_set_version(connection)
+    if found == _PRIVATE_INDEX_SET_VERSION:
         return
-    for name, table, columns in _PRIVATE_INDEX_SET_V1:
-        connection.execute(_private_index_sql(name, table, columns))
+    present = {name for name, _table, _columns in _PRIVATE_INDEX_SETS.get(found, ())}
+    for name, table, columns in _PRIVATE_INDEX_SETS[_PRIVATE_INDEX_SET_VERSION]:
+        if name not in present:
+            connection.execute(_private_index_sql(name, table, columns))
     connection.execute(f"PRAGMA user_version={_PRIVATE_INDEX_SET_VERSION}")
-    if not _private_index_set_is_current(connection):
+    if _private_index_set_version(connection) != _PRIVATE_INDEX_SET_VERSION:
         _fail(FinancialIntegrityError, "schema_private_indexes")
 
 
-def _install_history_append_only(connection: sqlite3.Connection) -> None:
+def _install_history_append_only(connection: sqlite3.Connection, *, read_only: bool) -> None:
     actual: dict[str, str] = {}
     for row in connection.execute(
         "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'"
@@ -1336,6 +1360,8 @@ def _install_history_append_only(connection: sqlite3.Connection) -> None:
             _fail(FinancialIntegrityError, "schema_history_triggers")
         actual[name] = sql
     if not actual:
+        if read_only:
+            _fail(FinancialIntegrityError, "shadow_requires_migration")
         for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
             connection.execute(sql)
         return
@@ -1756,6 +1782,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
     for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
         connection.execute(sql)
     _execute_script(connection, _SEGMENT_SCHEMA)
+    _install_private_index_set(connection)  # born current: a read-only (SHADOW) open never upgrades
 
 
 # Sealed segments keep only what history cannot regenerate (their row images);
@@ -1917,11 +1944,20 @@ class FinancialOwner:
         self.clock: FinancialClock = clock if clock is not None else _SystemClock()
         self.mode = mode
         self.owner_id = _id(owner_id, "owner_id")
+        self._batch = threading.local()  # .connection: the open run_batch transaction on this thread; .rows: its base counts
+        self._row_cache: tuple[tuple[object, ...], dict[str, int]] | None = None  # (history mark, rows per table) at our last commit
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
-        if existed and path.stat().st_size == 0:
-            _fail(FinancialIntegrityError, "empty_database")
+        if existed and path.stat().st_size == 0:  # a creator holds its new file empty until its schema commits: wait for it
+            try:
+                with closing(sqlite3.connect(str(path), timeout=5.0, isolation_level=None)) as probe:
+                    probe.execute("BEGIN IMMEDIATE")
+                    probe.execute("ROLLBACK")
+            except sqlite3.Error as error:  # a file nobody can open or write stays empty: refused just below
+                _raise_if_busy(error)
+            if path.stat().st_size == 0:
+                _fail(FinancialIntegrityError, "empty_database")
         if existed and identity_contract is not None:
             _fail(FinancialIntegrityError, "identity_contract_destination")
         if not existed:
@@ -1957,20 +1993,24 @@ class FinancialOwner:
                 initial_sequence = int(identity["anchor_sequence"])
                 initial_history_head = bytes(identity["anchor_head"])
             with closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError as error:  # another creator holds the new file
+                    _raise_if_busy(error)
+                    raise
+                if connection.execute("SELECT 1 FROM sqlite_master").fetchone() is not None:  # another creator won: a retry opens its store
+                    connection.execute("ROLLBACK")
+                    _fail(FinancialBusyError, "store_busy")
                 _sql_schema(connection)
                 connection.execute(
                     "INSERT INTO financial_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (1, self.schema_version, self.schema, config.state_id, config.deployment_id, config.program_id, config.period_id, config.currency, initial_sequence, initial_history_head, 1, 0, 0, trusted_authority.authority_id, trusted_authority.epoch, trusted_authority.digest, mode, self.owner_id),
                 )
-                identity_columns = self._table_columns["financial_identity"]
-                connection.execute(
-                    f"INSERT INTO financial_identity ({','.join(identity_columns)}) VALUES ({','.join('?' for _ in identity_columns)})",
-                    tuple(identity[column] for column in identity_columns),
-                )
+                self._insert_row(connection, "financial_identity", identity)
                 connection.execute("COMMIT")
 
     def _connect(self, *, capture_triggers: bool = False) -> sqlite3.Connection:
+        connection = None
         try:
             connection = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
             connection.row_factory = sqlite3.Row
@@ -1982,7 +2022,10 @@ class FinancialOwner:
             if capture_triggers:
                 self._install_capture_triggers(connection)
             return connection
-        except sqlite3.Error:
+        except sqlite3.Error as error:
+            if connection is not None:
+                connection.close()  # a refused open leaves no handle on the store
+            _raise_if_busy(error)
             _fail(FinancialIntegrityError, "database_open")
 
     def _captured_row_for_sql(self, table: str, *values: object) -> str | None:
@@ -1996,13 +2039,15 @@ class FinancialOwner:
         return _canonical({"table": table, "key": old[columns[0]], "set": changed}).decode("ascii") if changed else None
 
     def _install_capture_triggers(self, connection: sqlite3.Connection) -> None:
+        connection.execute("CREATE TEMP TABLE rr_row_inserts(table_name TEXT PRIMARY KEY, n INTEGER NOT NULL)")  # rolls back with the write
         # The open history segment tracks each event and changed row with its record size: O(this write) (IX.3).
         for table in ("financial_events", *_PROJECTION_TABLES):
             new_values = ",".join(f'NEW."{column}"' for column in _TABLE_COLUMNS[table])
             track = f"INSERT INTO history_pending VALUES ('{table}',NEW.rowid,rr_segment_bytes('{table}',{new_values})) ON CONFLICT (table_name,row_key) DO UPDATE SET record_bytes=excluded.record_bytes"
             changed = " OR ".join(f'NEW."{column}" IS NOT OLD."{column}"' for column in _TABLE_COLUMNS[table])  # as capture: an UPDATE that changes nothing is not a write
-            for operation, when in (("INSERT", ""), ("UPDATE", f" WHEN {changed}")):
-                connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_{operation}" AFTER {operation} ON main."{table}"{when} BEGIN {track}; END')
+            count = f"INSERT INTO rr_row_inserts VALUES ('{table}',1) ON CONFLICT (table_name) DO UPDATE SET n=n+1"
+            for operation, when, body in (("INSERT", "", f"{track}; {count}"), ("UPDATE", f" WHEN {changed}", track)):
+                connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_{operation}" AFTER {operation} ON main."{table}"{when} BEGIN {body}; END')
             connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_DELETE" BEFORE DELETE ON main."{table}" BEGIN SELECT RAISE(ABORT,\'history_row_delete\'); END')
         connection.execute("CREATE TEMP TRIGGER rr_track_pending_insert AFTER INSERT ON main.history_pending BEGIN UPDATE history_open SET event_count=event_count+(NEW.table_name='financial_events'),byte_count=byte_count+NEW.record_bytes; END")
         connection.execute("CREATE TEMP TRIGGER rr_track_pending_update AFTER UPDATE ON main.history_pending BEGIN UPDATE history_open SET byte_count=byte_count+NEW.record_bytes-OLD.record_bytes; END")
@@ -2034,7 +2079,22 @@ class FinancialOwner:
         connection.execute("UPDATE history_open SET event_count=(SELECT COUNT(*) FROM history_pending WHERE table_name='financial_events'),byte_count=(SELECT COALESCE(SUM(record_bytes),0) FROM history_pending)")
         self._seal_segment(connection, force=True)
 
-    def _seal_segment(self, connection: sqlite3.Connection, *, force: bool = False) -> bytes | None:
+    def _row_counts(self, connection: sqlite3.Connection, base: dict[str, int]) -> dict[str, int]:
+        """Rows per history table now: the transaction's starting counts plus the rows it inserted (deletes abort)."""
+        counts = dict(base)
+        for table, inserted in connection.execute("SELECT table_name,n FROM temp.rr_row_inserts"):
+            counts[table] += inserted
+        return counts
+
+    def _committed_row_counts(self, connection: sqlite3.Connection) -> dict[str, int]:
+        """Rows per history table at BEGIN. The owner's cache from its last commit is used only if the history
+        has not moved since; another writer's commit or a swapped file moves it, so the tables are counted afresh."""
+        mark, cache = tuple(connection.execute(_HISTORY_MARK).fetchone()), self._row_cache
+        if cache is not None and cache[0] == mark:
+            return cache[1]
+        return _count_rows(connection)
+
+    def _seal_segment(self, connection: sqlite3.Connection, *, force: bool = False, rows: dict[str, int] | None = None) -> bytes | None:
         """Seal the open segment at a soft bound (or when forced); refuse a write past a hard bound."""
         opened = connection.execute("SELECT event_count,byte_count FROM history_open WHERE id=1").fetchone()
         if opened is None or {type(opened[0]), type(opened[1])} != {int}:
@@ -2042,10 +2102,19 @@ class FinancialOwner:
         count, size = opened
         if count > _MAX_SEGMENT_EVENTS or size + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:
             _fail(FinancialContinuityError, "history_segment_size")
+        sealing = count > 0 and (force or count >= _SEAL_SEGMENT_EVENTS or size >= _SEAL_SEGMENT_BYTES)
+        if sealing and rows is not None and rows != _count_rows(connection):  # each seal proves the cached counts exact
+            _fail(FinancialIntegrityError, "row_cache_drift")
         for (table,) in connection.execute("SELECT DISTINCT table_name FROM history_pending").fetchall():  # the Checker reads at most Lean's maxRows per table
-            if connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] > _MAX_ROWS:
+            cached = rows[table] if rows is not None else None
+            if cached is None or cached >= _MAX_ROWS - _MAX_ROWS // 20:  # within 5% of the cap, counted exactly
+                exact = connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                if cached is not None and cached != exact:
+                    _fail(FinancialIntegrityError, "row_cache_drift")
+                cached = exact
+            if cached > _MAX_ROWS:
                 _fail(FinancialIntegrityError, "history_capacity")
-        if count == 0 or not force and count < _SEAL_SEGMENT_EVENTS and size < _SEAL_SEGMENT_BYTES:
+        if not sealing:
             return None
         # The chain continues from the last sealed segment only if its stored seal still recomputes.
         last = connection.execute("SELECT * FROM history_segments ORDER BY segment_index DESC LIMIT 2").fetchall()
@@ -2100,14 +2169,19 @@ class FinancialOwner:
                     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
                     if tables in (_TABLES, _TABLES | {"right_rail_continuity_admission"}):
                         # A v8 store from before history segments: replayed, then its whole history opens the first segment.
+                        if self.mode == "SHADOW":  # read-only: only a writing owner migrates
+                            _fail(FinancialIntegrityError, "shadow_requires_migration")
                         migrated = True
                         connection.execute("DROP TABLE IF EXISTS right_rail_continuity_admission")
                         _execute_script(connection, _SEGMENT_SCHEMA)
                         self._track_all(connection)
                     elif tables != _TABLES | _SEGMENT_TABLES:
                         _fail(FinancialIntegrityError, "schema_tables")
-                    _install_private_index_set(connection)
-                    _install_history_append_only(connection)
+                    if self.mode != "SHADOW":
+                        _install_private_index_set(connection)
+                    elif _private_index_set_version(connection) == 0:  # read-only: checked, never upgraded
+                        _fail(FinancialIntegrityError, "shadow_requires_migration")
+                    _install_history_append_only(connection, read_only=self.mode == "SHADOW")
                     if verify_history or migrated:
                         self._verify_history_in_transaction(connection)
                     connection.execute("COMMIT")
@@ -2115,7 +2189,8 @@ class FinancialOwner:
                     if connection.in_transaction:
                         connection.execute("ROLLBACK")
                     raise
-        except sqlite3.DatabaseError:
+        except sqlite3.DatabaseError as error:
+            _raise_if_busy(error)
             _fail(FinancialIntegrityError, "schema_read")
 
     def _verify_meta_identity(self, connection: sqlite3.Connection, meta: sqlite3.Row) -> None:
@@ -2201,50 +2276,70 @@ class FinancialOwner:
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
-        with closing(self._connect(capture_triggers=True)) as connection:
+        """One atomic command; inside ``run_batch`` the batch owns the connection, BEGIN, COMMIT and ROLLBACK,
+        while each command still seals as it would alone, so a batch's segments equal its commands' run singly."""
+        batch = getattr(self._batch, "connection", None)
+        began = batch is None
+        with closing(self._connect(capture_triggers=True)) if began else nullcontext(batch) as connection:
             try:
-                connection.execute("BEGIN IMMEDIATE")
+                if began:
+                    connection.execute("BEGIN IMMEDIATE")
+                    self._batch.rows = self._committed_row_counts(connection)
                 yield connection
-                self._seal_segment(connection)
+                rows = self._row_counts(connection, self._batch.rows)
+                self._seal_segment(connection, rows=rows)
                 if connection.execute("SELECT 1 FROM temp.rr_captured_rows").fetchone() is not None:
                     _fail(FinancialIntegrityError, "captured_rows_without_event")  # refused, never stranded
-                connection.execute("COMMIT")
-            except BaseException:
-                if connection.in_transaction:
+                if began:
+                    if _CHECK_ROW_CACHE and rows != _count_rows(connection):
+                        raise AssertionError(f"row_count_cache: {rows} != {_count_rows(connection)}")
+                    after = (tuple(connection.execute(_HISTORY_MARK).fetchone()), rows)
+                    connection.execute("COMMIT")
+                    self._row_cache = after
+            except BaseException as error:
+                self._row_cache = None  # a failed write (a proven drift included) leaves the next write to recount
+                if began and connection.in_transaction:
                     connection.execute("ROLLBACK")
+                _raise_if_busy(error)
                 raise
+            finally:
+                if began:
+                    self._batch.rows = None
+
+    def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]]) -> list[dict[str, Any]]:
+        """Up to 1,000 commands in one transaction, each run exactly as its method alone (same checks,
+        history, retries). All or nothing: the first failure rolls the whole batch back and is raised
+        with a ``batch_index=<i>`` note (Art. III.2, III.5)."""
+        if type(commands) is not list or not 0 < len(commands) <= 1_000 or any(type(entry) is not tuple or len(entry) != 2 or entry[0] not in _BATCH_COMMANDS or not isinstance(entry[1], Mapping) for entry in commands):
+            _fail(FinancialInputError, "batch_commands")
+        with self._write() as connection:
+            self._batch.connection = connection
+            try:
+                results = []
+                for index, (name, arguments) in enumerate(commands):
+                    try:
+                        results.append(getattr(self, name)(**arguments))
+                    except BaseException as error:
+                        error.add_note(f"batch_index={index}")
+                        raise
+                return results
+            finally:
+                self._batch.connection = None
 
     @contextmanager
-    def _read(self, *, _connection: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
-        if _connection is not None:
-            if not isinstance(_connection, sqlite3.Connection) or not _connection.in_transaction:
-                _fail(FinancialIntegrityError, "read_snapshot_required")
-            yield _connection
-            return
-        with closing(self._connect()) as connection:
-            yield connection
-
-    @contextmanager
-    def _read_snapshot(
-        self,
-        *,
-        _connection: sqlite3.Connection | None = None,
-    ) -> Iterator[sqlite3.Connection]:
+    def _read_snapshot(self, *, _connection: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
         """Read a multi-query view from one committed SQLite snapshot."""
-
         if _connection is not None:
             if not isinstance(_connection, sqlite3.Connection) or not _connection.in_transaction:
                 _fail(FinancialIntegrityError, "read_snapshot_required")
             yield _connection
             return
-        with closing(self._connect()) as connection:
+        with closing(self._connect()) as connection:  # closing ends the read; nothing to commit
             try:
                 connection.execute("BEGIN")
                 yield connection
-                connection.execute("COMMIT")
-            except BaseException:
-                if connection.in_transaction:
-                    connection.execute("ROLLBACK")
+            except sqlite3.OperationalError as error:
+                _raise_if_busy(error)
                 raise
 
     def _now(self) -> int:
@@ -3238,7 +3333,7 @@ class FinancialOwner:
                     },
                     committed_at_ms=now_ms,
                 )
-        with self._read() as connection:
+        with self._read_snapshot() as connection:
             row = connection.execute("SELECT imported_count,source_complete,status FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
             if row is None:
                 _fail(FinancialIntegrityError, "population_import_missing")
@@ -3860,19 +3955,16 @@ class FinancialOwner:
             )
             evidence_status = self._insert_evidence(connection, evidence)
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
-            if existing is not None or existing_id is not None:
-                candidate_existing = existing if existing is not None else existing_id
-                if candidate_existing is None:
-                    _fail(FinancialIntegrityError, "payment_identity_missing")
-                if int(candidate_existing["amount_cents"]) == amount_cents and str(candidate_existing["common_origin_id"]) == common_origin_id:
+            if existing is not None:  # existing_id is None here: that retry path returned or failed above
+                if int(existing["amount_cents"]) == amount_cents and str(existing["common_origin_id"]) == common_origin_id:
                     now_ms = self._now()
                     if evidence_status == "INSERTED":
-                        self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(candidate_existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=now_ms)
-                    return {"status": "DUPLICATE", "payment_id": str(candidate_existing["payment_id"]), **self._current_projection(connection, str(obligation["obligation_id"]))}
+                        self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=now_ms)
+                    return {"status": "DUPLICATE", "payment_id": str(existing["payment_id"]), **self._current_projection(connection, str(obligation["obligation_id"]))}
                 conflict_id = f"conflict:{item_id}:{common_origin_id}:{evidence_id}"
                 if connection.execute("SELECT 1 FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone() is None:
-                    connection.execute("INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)", (conflict_id, obligation["obligation_id"], common_origin_id, str(candidate_existing["payment_id"]), evidence_id, int(candidate_existing["amount_cents"]), amount_cents, "CONFLICTING_COMMON_ORIGIN_AMOUNT", self._now()))
-                    self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(candidate_existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now(), committed_at_ms=self._now())
+                    connection.execute("INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)", (conflict_id, obligation["obligation_id"], common_origin_id, str(existing["payment_id"]), evidence_id, int(existing["amount_cents"]), amount_cents, "CONFLICTING_COMMON_ORIGIN_AMOUNT", self._now()))
+                    self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now(), committed_at_ms=self._now())
                 return {"status": "CONFLICT", "conflict_id": conflict_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
             connection.execute("INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)", (payment_id, obligation["obligation_id"], item_id, evidence_id, common_origin_id, amount_cents, event_at_ms, 1, None))
             self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id}, now_ms=self._now())
@@ -5282,7 +5374,7 @@ class FinancialOwner:
     def current_evaluation_receipt(self, item_id: str) -> dict[str, Any]:
         """Read the current persisted evaluation reference without advancing state."""
 
-        with self._read() as connection:
+        with self._read_snapshot() as connection:
             obligation = self._get_obligation_row(connection, item_id)
             evaluation_id = obligation["current_evaluation_id"]
             if evaluation_id is None:
@@ -6316,7 +6408,7 @@ class FinancialOwner:
         }
 
     def summary(self, *, _connection: sqlite3.Connection | None = None) -> dict[str, Any]:
-        with self._read(_connection=_connection) as connection:
+        with self._read_snapshot(_connection=_connection) as connection:
             meta = self._meta(connection)
             totals = connection.execute("SELECT COUNT(*),COALESCE(SUM(owed_cents),0),COALESCE(SUM(received_cash_cents),0),COALESCE(SUM(lawful_adjustment_cents),0),COALESCE(SUM(shortfall_cents),0) FROM obligations").fetchone()
             return {
@@ -6355,7 +6447,7 @@ class FinancialOwner:
             _fail(FinancialInputError, "obligation_status")
         if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= _MAX_ROWS:
             _fail(FinancialInputError, "obligation_page")
-        with self._read(_connection=_connection) as connection:
+        with self._read_snapshot(_connection=_connection) as connection:
             clause = "1=1" if status == "ALL" else ("amount_satisfied=0" if status == "OPEN" else ("amount_satisfied=1" if status == "SATISFIED" else "cash_satisfied=0"))
             return [self._projection_for_row(row) for row in connection.execute(f"SELECT * FROM obligations WHERE {clause} ORDER BY obligation_id LIMIT ? OFFSET ?", (limit, offset)).fetchall()]
 
@@ -6390,7 +6482,7 @@ class FinancialOwner:
     ) -> list[dict[str, Any]]:
         if type(limit) is not int or not 1 <= limit <= 200 or type(offset) is not int or not 0 <= offset <= _MAX_ROWS:
             _fail(FinancialInputError, "history_page")
-        with self._read(_connection=_connection) as connection:
+        with self._read_snapshot(_connection=_connection) as connection:
             return self._dict_rows(connection, "SELECT event_sequence,event_id,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,payload_digest,previous_head,head,committed_at_ms FROM financial_events ORDER BY event_sequence LIMIT ? OFFSET ?", (limit, offset))
 
     def _obligation_timeline(self, connection: sqlite3.Connection, obligation_id: str, limit: int) -> dict[str, Any]:
@@ -6642,7 +6734,7 @@ class FinancialOwner:
 
     def action_payload(self, action_id: str) -> dict[str, Any]:
         _id(action_id, "action_id")
-        with self._read() as connection:
+        with self._read_snapshot() as connection:
             row = connection.execute("SELECT payload_json,payload_digest FROM actions WHERE action_id=?", (action_id,)).fetchone()
             if row is None:
                 _fail(FinancialIntegrityError, "action_missing")
@@ -7149,6 +7241,7 @@ __all__ = (
     "ControlPack",
     "EvidenceRecord",
     "FinancialAuthorityError",
+    "FinancialBusyError",
     "FinancialConflictError",
     "FinancialContinuityError",
     "FinancialDispatchError",
