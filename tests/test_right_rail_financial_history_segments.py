@@ -174,6 +174,17 @@ class HistorySegmentTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialContinuityError, "continuity_source"):
             FinancialOwner.restore_continuity(package_bytes=b"{}", history=directory, recovered_path=self.root / "both.sqlite3", trusted_authority=AUTHORITY)
 
+    def test_an_update_that_changes_nothing_is_not_tracked(self) -> None:
+        # Two same-status evaluations of one obligation in one clock millisecond, sealed between: the second's case
+        # UPDATE changes nothing, so no event carries it, and tracking it would leave a store that never reopens.
+        now = self.owner.clock.now_ms()
+        self.owner.clock = mock.Mock(now_ms=lambda: now)
+        self.owner.evaluate_obligation(self.items[0])
+        self._export()
+        self.owner.evaluate_obligation(self.items[0])
+        FinancialOwner(path=self.owner.path, config=CONFIG, trusted_authority=AUTHORITY, clock=self.owner.clock)
+        self._check()
+
     def test_write_past_a_hard_bound_is_refused_and_rolled_back(self) -> None:
         # Every delta of the refused write rolls back, the open segment's tracking included.
         for bound, value in (("_MAX_SEGMENT_EVENTS", 20), ("_MAX_SEGMENT_BYTES", 40_000)):

@@ -2009,8 +2009,9 @@ class FinancialOwner:
         for table in ("financial_events", *_PROJECTION_TABLES):
             new_values = ",".join(f'NEW."{column}"' for column in _TABLE_COLUMNS[table])
             track = f"INSERT INTO history_pending VALUES ('{table}',NEW.rowid,rr_segment_bytes('{table}',{new_values})) ON CONFLICT (table_name,row_key) DO UPDATE SET record_bytes=excluded.record_bytes"
-            for operation in ("INSERT", "UPDATE"):
-                connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_{operation}" AFTER {operation} ON main."{table}" BEGIN {track}; END')
+            changed = " OR ".join(f'NEW."{column}" IS NOT OLD."{column}"' for column in _TABLE_COLUMNS[table])  # as capture: an UPDATE that changes nothing is not a write
+            for operation, when in (("INSERT", ""), ("UPDATE", f" WHEN {changed}")):
+                connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_{operation}" AFTER {operation} ON main."{table}"{when} BEGIN {track}; END')
             connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_DELETE" BEFORE DELETE ON main."{table}" BEGIN SELECT RAISE(ABORT,\'history_row_delete\'); END')
         connection.execute("CREATE TEMP TRIGGER rr_track_pending_insert AFTER INSERT ON main.history_pending BEGIN UPDATE history_open SET event_count=event_count+(NEW.table_name='financial_events'),byte_count=byte_count+NEW.record_bytes; END")
         connection.execute("CREATE TEMP TRIGGER rr_track_pending_update AFTER UPDATE ON main.history_pending BEGIN UPDATE history_open SET byte_count=byte_count+NEW.record_bytes-OLD.record_bytes; END")
