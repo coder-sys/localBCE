@@ -1,6 +1,6 @@
 # RightRail status
 
-Updated: 2026-09-25. This is the one current status file for the single codebase
+Updated: 2026-09-26. This is the one current status file for the single codebase
 `rightrail-main`. Code is still being copied in from the older checkouts.
 
 Standing rules: see CONSTITUTION.md (supreme; every change must comply).
@@ -69,25 +69,36 @@ in that archive that holds the raw record.
 10. **Payment gate formats #1-#4, #12** (branch `gate-v1`). Felt effect (target): one
    gate decision per payment (any flow) within the member's shard, which the payer
    checks before releasing it. Each payment routes to one shard from its tenant and
-   32-byte member key (`shardOf`; the shard count is in the epoch cert, fixed per
-   tenant). The payer accepts only a token from that shard, so two tokens it accepts
-   for one payment share a shard (theorem `verifyToken_one_shard`); inside that shard
-   the writer's PAYMENT_ALREADY_DECIDED answer is authoritative. A checkpoint fork
-   blocks release for its (tenant, shard, epoch) and keeps both signed headers.
-   Offline payer verification is not claimed: in the Lean model the ML-DSA-87 check and
-   KEY-CERT chain are supplied inputs. 2026-09-26: Lean `verifyToken` (eleven checks,
-   one predicate) judges 132 of 132 golden vectors; 17 theorems compile, axioms pinned
-   by `lake build gate_axioms`; 68 of 68 spec mutants killed (`tools/gate_mutants.py`);
-   6 of 6 Python tests pass. The signer build is reproducible on this machine: two
-   directories gave SHA-256 `af8743c7...116b` (recipe and limits:
-   `rust/gate_mldsa87/README.md`). Lead decision: the signer keeps its AWS-LC verify
-   mode, the only real check of the golden signatures. Logs:
-   `native/guard/guarded-command-gate-rr4-*`.
-   Known limits: resharding is out of scope (changing a tenant's shard count needs a
+   32-byte member key (`shardOf`; the shard count, 1 to 2^32-1, is in the epoch cert,
+   fixed per tenant). The payer pins the member key per (tenant, program, payment) at
+   its first command, write-once, and refuses a changed key as `member_key_changed`;
+   it accepts only a token under the pinned key from that key's shard, so across cert
+   installs, checkpoint stores, pins and releases every token it accepts for one
+   payment has one member key and one shard (theorem `verifyToken_one_route`); inside
+   that shard the writer's PAYMENT_ALREADY_DECIDED answer is authoritative. A
+   checkpoint fork (overlapping sequences, or a neighbour not linked by its previous
+   digest) blocks its whole (tenant, epoch) on every shard: nothing more releases, no
+   later checkpoint of that epoch is stored, both signed headers are kept; failover to
+   a new epoch recovers. A newer cert with a valid chain raises the fence even when
+   refused. Offline payer verification is not claimed: in the Lean model the ML-DSA-87
+   check and KEY-CERT chain are supplied inputs. 2026-09-26 (round 5): Lean
+   `verifyToken` (twelve checks, one predicate) judges 159 of 159 golden vectors; 25
+   theorems compile using only `propext`/`Quot.sound`, pinned by `lake build
+   gate_axioms` (printed output: `lean/BlindLedger/Gate/AXIOMS.txt`, log
+   `gate-rr5-axioms2-a4`); 78 of 78 spec mutants killed (`tools/gate_mutants.py`); 6
+   of 6 Python tests pass. Logs: `native/guard/guarded-command-gate-rr5-*`. The signer
+   build is reproducible on this machine: two directories gave SHA-256
+   `af8743c7...116b` (recipe and limits: `rust/gate_mldsa87/README.md`; logs
+   `gate-rr4-sign*`). Lead decision: the signer keeps its AWS-LC verify mode, the only
+   real check of the golden signatures.
+   Known limits: a legitimate member-key change needs an official determination, not
+   built in v1. Resharding is out of scope (changing a tenant's shard count needs a
    migration spec). An older ALLOW token stays valid until it expires even after a
    later HOLD revision; a re-issue carries only the latest revision (Lean `reissues`),
-   and a HOLD raising the fence is a possible later fix, not built. Open (M2): the
-   grant has no flow scope.
+   and a HOLD raising the fence is a possible later fix, not built. Deferred: LOW-6
+   (the F6 re-issue rule stays gate-side) and M2 (the grant has no flow scope).
+   Process: the bloat-ceiling raises and the round-4/5 scope calls on this branch are
+   lead decisions (2026-09-26) under the founder's "u have all auth" grant.
 
 ## What is written but has never run
 

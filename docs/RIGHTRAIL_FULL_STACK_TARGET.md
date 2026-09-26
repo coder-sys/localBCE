@@ -86,13 +86,17 @@ time; a full batch commits atomically or not at all). `outcome` is ALLOW,
 HOLD, HUMAN_REVIEW, or BLOCK — the engine's existing `CLEAR`/non-`CLEAR`
 distinction, unchanged.
 
-Before releasing money, the payer runs nine ordered checks against the
-token: canonical parse and domain, epoch certificate chain and signature,
-checkpoint signature and Merkle path, epoch at or above the payer's fence,
-not expired, payment fields match exactly, outcome is ALLOW, `rule_version`
-and `engine_release` are on the payer's approved list, and the payment has
-not already been released. These nine checks are one Lean predicate
-(`verifyToken`), proved to accept only when all nine hold, and published to
+Before releasing money, the payer runs twelve checks against the token:
+canonical parse and domain; a stored checkpoint verified under its epoch
+certificate; that checkpoint's Merkle path; epoch at or above the payer's
+fence; not expired; payment fields match exactly; the token comes from the
+shard the member key routes to; outcome is ALLOW; `rule_version` and
+`engine_release` are on the payer's approved list; the payment has not
+already been released; no fork is recorded for the tenant and epoch; and
+the member key is the one the payer pinned at its first command for the
+payment (a changed key is refused as `member_key_changed` until an official
+determination, not in v1). These twelve checks are one Lean predicate
+(`verifyToken`), proved to accept only when all twelve hold, and published to
 payers as a reference verifier with conformance vectors. A release with no
 token and no bypass is a payer-side violation visible in Mirror.
 
@@ -114,14 +118,18 @@ signing turns that into on the order of hundreds to a few thousand HSM
 signatures a week, with per-payment cost reduced to a Merkle path and a hash
 comparison.
 
-Every batch commit produces a checkpoint (tenant, program, sequence range,
-epoch, previous-checkpoint digest, event-chain head, token/evidence/
+Every batch commit produces a checkpoint (tenant, program, shard, sequence
+range, epoch, previous-checkpoint digest, event-chain head, token/evidence/
 projection roots, count, time), signed with the epoch's ML-DSA-87 key.
-Checkpoints stream to an independent witness — a separate state agency or
-auditor, outside the database administrator's control — which cosigns only
-after checking sequence monotonicity, epoch monotonicity, and that no two
-checkpoints share a sequence with different digests; a mismatch raises a
-fork alarm. The witness is asynchronous; payers never wait for it. History
+There is one sequence counter per (tenant, shard, epoch), shared by all of
+the tenant's programs: no two checkpoints in that scope share a sequence,
+whatever their program, and each names the checkpoint ending just before it
+as its previous. Checkpoints stream to an independent witness — a separate
+state agency or auditor, outside the database administrator's control —
+which cosigns only after checking sequence monotonicity, epoch monotonicity,
+and that no two checkpoints of one (tenant, shard, epoch) share a sequence
+with different digests or break that link; a mismatch raises a fork alarm,
+and payers holding one refuse the whole (tenant, epoch). The witness is asynchronous; payers never wait for it. History
 is sealed into segments (per day or per 1,000,000 events, whichever comes
 first) bound to the checkpoint that closes them, replacing the current
 10,000-row Continuity package cap. Records are retained 7 years (Pub 1075
