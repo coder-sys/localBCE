@@ -68,9 +68,11 @@ in that archive that holds the raw record.
    not the code. Evidence: `docs/formal/gate_failover/README.md`.
 10. **Gate decision rules R1-R5 (Lean).** 2026-09-26: `BlindLedger.Gate.Rules` builds;
     six theorems proved (sound, complete, fail-closed, released keys unique, monotone,
-    arrival-order deterministic), axioms pinned. `gate_rules` passes 52 of 52 vectors
-    and holds exactly the seeded 110 of 3,610 demo lines ($36,637.00, state ZZ);
-    all 44 rule mutants are killed. Runs in tests only, not yet in the token path.
+    arrival-order deterministic), axioms pinned. Invalid dates, miscounted, empty or
+    missing snapshots, a missing released set, future service dates and near
+    duplicates go to human review, never ALLOW. `gate_rules` passes 123 of 123 vectors
+    and all 3,616 demo lines line by line (134 held, $46,987.00; 6 review; state ZZ);
+    all 107 mutants are killed on a scratch copy. Runs in tests only, not in the token path.
 
 ## What is written but has never run
 
