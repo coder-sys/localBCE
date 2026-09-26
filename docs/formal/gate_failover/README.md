@@ -4,7 +4,9 @@
 fencing, synchronous replication, solo mode, ML-DSA token signing, the payer's
 fence, and the two-signature bypass with post-hoc reconciliation. It is a design
 model, not the implementation; a code change that departs from it needs the model
-updated and rechecked.
+updated and rechecked. It models one shard. Resharding is out of scope: a tenant's
+shard count is fixed (Lean `installCert`), and changing it needs its own migration
+spec.
 
 ## Results (2026-09-25, TLC 2.19, `-deadlock`, 1 worker, 512 MB heap, under the guard)
 

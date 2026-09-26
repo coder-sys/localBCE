@@ -67,14 +67,27 @@ in that archive that holds the raw record.
    Bypass reconciliation (liveness) holds on a 1-payment model. A design model,
    not the code. Evidence: `docs/formal/gate_failover/README.md`.
 10. **Payment gate formats #1-#4, #12** (branch `gate-v1`). Felt effect (target): one
-   gate decision per payment (any flow), which the payer checks before releasing it.
+   gate decision per payment (any flow) within the member's shard, which the payer
+   checks before releasing it. Each payment routes to one shard from its tenant and
+   32-byte member key (`shardOf`; the shard count is in the epoch cert, fixed per
+   tenant). The payer accepts only a token from that shard, so two tokens it accepts
+   for one payment share a shard (theorem `verifyToken_one_shard`); inside that shard
+   the writer's PAYMENT_ALREADY_DECIDED answer is authoritative. A checkpoint fork
+   blocks release for its (tenant, shard, epoch) and keeps both signed headers.
    Offline payer verification is not claimed: in the Lean model the ML-DSA-87 check and
-   KEY-CERT chain are supplied inputs. 2026-09-26: Lean `verifyToken` (nine checks, one
-   predicate) judges 114 of 114 golden vectors; 15 theorems compile, axioms pinned by
-   `lake build gate_axioms`; 54 of 54 spec mutants
-   killed (`tools/gate_mutants.py`); 6 of 6 Python tests pass.
-   Lead decision: the signer keeps its AWS-LC verify mode, the only real check of the
-   golden signatures. Logs: `native/guard/guarded-command-gate-rr3-*`.
+   KEY-CERT chain are supplied inputs. 2026-09-26: Lean `verifyToken` (eleven checks,
+   one predicate) judges 132 of 132 golden vectors; 17 theorems compile, axioms pinned
+   by `lake build gate_axioms`; 68 of 68 spec mutants killed (`tools/gate_mutants.py`);
+   6 of 6 Python tests pass. The signer build is reproducible on this machine: two
+   directories gave SHA-256 `af8743c7...116b` (recipe and limits:
+   `rust/gate_mldsa87/README.md`). Lead decision: the signer keeps its AWS-LC verify
+   mode, the only real check of the golden signatures. Logs:
+   `native/guard/guarded-command-gate-rr4-*`.
+   Known limits: resharding is out of scope (changing a tenant's shard count needs a
+   migration spec). An older ALLOW token stays valid until it expires even after a
+   later HOLD revision; a re-issue carries only the latest revision (Lean `reissues`),
+   and a HOLD raising the fence is a possible later fix, not built. Open (M2): the
+   grant has no flow scope.
 
 ## What is written but has never run
 
