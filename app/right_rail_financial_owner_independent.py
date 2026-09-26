@@ -831,9 +831,6 @@ def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
         )
         if key_parts != tuple((column, 0, "BINARY") for column in columns):
             _fail(f"schema:private-index:{name}")
-    # The lookups below trust index contents the Owner wrote: an index missing rows must not answer them.
-    if [tuple(row) for row in connection.execute("PRAGMA quick_check")] != [("ok",)]:
-        _fail("schema:index-integrity")
 
 
 def _field(value: object, name: str) -> object:
@@ -4213,6 +4210,9 @@ def _verify_connection(
     restore_source_package: bytes | None,
 ) -> dict[str, object]:
     schema_version = _verify_schema(connection)
+    # Whole-store mode only: the lookups below trust index contents the Owner wrote, so every index entry must match its row.
+    if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
+        _fail("schema:index-integrity")
     try:
         orphan = connection.execute("PRAGMA foreign_key_check").fetchone()
     except sqlite3.Error:

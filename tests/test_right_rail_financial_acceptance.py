@@ -47,6 +47,7 @@ from app.right_rail_financial_owner_independent import (
     IndependentFinancialError,
     continuity_package_digest,
     verify_database,
+    verify_database_connection,
     verify_decision_package,
     verify_continuity_package,
     verify_obligation_connection,
@@ -5325,6 +5326,37 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.execute("UPDATE sqlite_master SET sql=? WHERE name=?", (owner._private_index_sql(name, table, columns), name))
         with self.assertRaisesRegex(IndependentFinancialError, "^schema:index-integrity$"):
             verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
+
+    def test_owner_open_refuses_an_index_whose_keys_do_not_match_its_rows(self) -> None:
+        # Right entry count, wrong keys, canonical SQL: quick_check passes it and the index answers without one evidence row.
+        store = self._build_base()
+        name, hidden = "rr_financial_v1_evidence_item_id", expected.OTHER_SUPPORT_EVIDENCE[0]
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute(f'DROP INDEX "{name}"')
+            connection.execute(f"CREATE INDEX {name} ON evidence(CASE WHEN evidence_id='{hidden.evidence_id}' THEN '' ELSE item_id END,evidence_id)")
+            connection.execute("PRAGMA writable_schema=ON")
+            connection.execute("UPDATE sqlite_master SET sql=? WHERE name=?", (owner._private_index_sql(name, "evidence", ("item_id", "evidence_id")), name))
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            self.assertEqual(connection.execute("PRAGMA quick_check").fetchall(), [("ok",)])
+            self.assertNotIn((hidden.evidence_id,), connection.execute("SELECT evidence_id FROM evidence WHERE item_id=?", (hidden.item_id,)).fetchall())
+        before = store.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:index-integrity$"):
+            self._make_owner(path=store.path)
+        self.assertEqual(store.path.read_bytes(), before)
+
+    def test_per_obligation_mode_runs_no_file_level_check(self) -> None:
+        # It runs inside a correction's write lock; the file-wide integrity_check belongs to the open and whole-store modes.
+        store = self._build_base()
+        statements: list[str] = []
+        file_checks = lambda: [statement for statement in statements if "integrity_check" in statement or "quick_check" in statement]
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.set_trace_callback(statements.append)
+            obligation_id = str(connection.execute("SELECT obligation_id FROM obligations ORDER BY obligation_id").fetchone()[0])
+            self.assertEqual(verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)["obligation_id"], obligation_id)
+            self.assertEqual(file_checks(), [])
+            verify_database_connection(connection, expected_config=store.config, expected_authority=self.authority)
+            self.assertEqual(file_checks(), ["PRAGMA integrity_check"])  # the trace does see the whole-store check
 
     def test_fixture_has_twelve_cases_and_no_production_import(self) -> None:
         self.assertEqual(tuple(case.number for case in expected.ACCEPTANCE_CASES), tuple(range(1, 13)))
