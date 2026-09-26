@@ -43,7 +43,8 @@ manifest, program funding receipts, decision package v2, the exported
 and the independent checker accept v8 stores and packages only; every other
 version (v2-v7, unknown) is rejected without mutation, the owner's open with
 `unsupported_store_version`. The v7 conversion path was removed on 2026-09-25
-(decision C3; only synthetic data ever existed).
+(decision C3; only synthetic data ever existed), so a v8 store converted from
+v7 (it contains an `OPENING_BALANCE` event) now fails `history:event-kind`.
 
 The evaluation receipt binds scope, evaluation/obligation/revision, Control
 Pack id/version/digest, sorted evidence id/record-digest pairs, trusted
