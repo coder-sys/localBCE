@@ -27,6 +27,7 @@ from app.right_rail_financial_mirror import (
 from app.right_rail_financial_owner import (
     ControlPack,
     FinancialAuthorityError,
+    FinancialBusyError,
     FinancialError,
     FinancialOwner,
     FinancialOwnerConfig,
@@ -849,11 +850,13 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
             )
 
-        def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8") -> None:
+        def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8", *, retry_after: bool = False) -> None:
             content = value if type(value) is bytes else _json_bytes(value)
             self._response_length = len(content)
             self.send_response(status)
             self._headers(content_type)
+            if retry_after:
+                self.send_header("Retry-After", "1")
             self.end_headers()
             self.wfile.write(content)
 
@@ -913,6 +916,8 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 return
             try:
                 result = getattr(workflow, command)(body)
+            except FinancialBusyError as exc:  # a transient lock, not a conflict: nothing changed, retry
+                self._respond(503, {"error": {"code": str(exc)}, "changed": False}, retry_after=True)
             except FinancialRevisionError as exc:
                 self._respond(409, {"error": {"code": str(exc)}, "changed": False})
             except FinancialAuthorityError as exc:

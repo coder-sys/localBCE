@@ -1986,7 +1986,11 @@ class FinancialOwner:
                 initial_sequence = int(identity["anchor_sequence"])
                 initial_history_head = bytes(identity["anchor_head"])
             with closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError as error:  # another creator holds the new file
+                    _raise_if_busy(error)
+                    raise
                 _sql_schema(connection)
                 connection.execute(
                     "INSERT INTO financial_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

@@ -23,6 +23,7 @@ from app.right_rail_financial_mirror import (
     FinancialMirrorDispatchError,
 )
 from app.right_rail_financial_owner import (
+    FinancialBusyError,
     FinancialConflictError,
     FinancialDispatchError,
     FinancialInputError,
@@ -1044,6 +1045,9 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         with patch.object(workflow, "workspace", side_effect=RuntimeError("internal detail")):
             self.assertEqual(call("GET", "/api/workspace", (host,))[:3:2], (503, {"error": {"code": "owner_read_unavailable"}}))
+        with patch.object(workflow, "acknowledge_correction_action", side_effect=FinancialBusyError("store_busy")):  # a transient lock is not a 409
+            status, headers, body = call("POST", "/api/action/acknowledge", post, b'{"revision":0}')
+        self.assertEqual((status, headers.get("Retry-After"), body), (503, "1", {"error": {"code": "store_busy"}, "changed": False}))
 
 
 if __name__ == "__main__":

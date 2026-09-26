@@ -15,6 +15,7 @@ import math
 from pathlib import Path
 import re
 import sqlite3
+import sys
 from typing import Any, NoReturn
 from urllib.parse import quote
 
@@ -30,6 +31,9 @@ FinancialVerificationError = IndependentFinancialError
 
 
 def _fail(code: str) -> NoReturn:
+    handling = sys.exc_info()[1]  # a read refused by another connection's lock is retryable, never a finding
+    if isinstance(handling, sqlite3.OperationalError) and getattr(handling, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+        code = "database:busy"
     error = IndependentFinancialError(code)
     error.__cause__ = None
     error.__context__ = None

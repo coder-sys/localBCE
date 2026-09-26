@@ -13,6 +13,7 @@ from unittest import mock
 
 import app.right_rail_financial_owner as owner_module
 from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority
+from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database
 from tests.test_right_rail_financial_acceptance import _Clock
 from tools import load_synthetic as harness
 
@@ -225,7 +226,20 @@ class FinancialOwnerBatchTests(unittest.TestCase):
                 owner.summary(_connection=connection)
             with busy("open"):
                 _open(owner.path)
+            with self.assertRaisesRegex(IndependentFinancialError, "^database:busy$"):
+                verify_database(owner.path, expected_config=owner.config, expected_authority=_AUTHORITY)
             holder.execute("ROLLBACK")
+        connect, created = FinancialOwner._connect, self.directory / "busy-created.sqlite"
+
+        def another_creator_holds_it(store, **kw):
+            connection = connect(store, **kw)
+            connection.execute("PRAGMA busy_timeout=100")
+            creator = sqlite3.connect(created, isolation_level=None)
+            self.addCleanup(creator.close)
+            creator.execute("BEGIN EXCLUSIVE")
+            return connection
+        with mock.patch.object(FinancialOwner, "_connect", another_creator_holds_it), busy("create"):
+            _open(created)
         self.assertEqual(owner.run_batch([_support("evidence:busy")])[0]["status"], "RECORDED")  # retryable: nothing was written
 
     def test_an_exact_retry_is_duplicate_and_a_changed_meaning_conflicts_as_alone(self) -> None:
