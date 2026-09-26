@@ -1,5 +1,6 @@
 """run_batch: many commands share one durable commit, yet each stays atomic alone (Art. III)."""
 
+import os
 import random
 import sqlite3
 import subprocess
@@ -59,6 +60,33 @@ def _rows(path):
         return owner_module._count_rows(connection)
 
 
+def _where(path):
+    """Sealed segments, pending rows and chain head, read without the owner's mark."""
+    with closing(sqlite3.connect(path)) as connection:
+        return connection.execute("SELECT (SELECT COUNT(*) FROM history_segments),(SELECT COUNT(*) FROM history_pending),history_head FROM financial_meta").fetchone()
+
+
+class _AtCap(Exception):
+    pass
+
+
+def _insert_copies(owner, table, n, *, stop_after_seal=False):
+    """Raw inserts inside one owner write: only the row counter stands between them and the cap."""
+    seal = owner._seal_segment
+
+    def seal_then_stop(connection, **kw):
+        seal(connection, **kw)
+        raise _AtCap  # past the cap check; rolls back
+
+    with mock.patch.object(owner, "_seal_segment", seal_then_stop if stop_after_seal else seal), owner._write() as connection:
+        row = list(connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid DESC LIMIT 1').fetchone())
+        for i in range(n):
+            row[0] = row[0] + 1 if table == "financial_events" else f"{row[0]}:copy-{i}"
+            if table == "financial_events":
+                row[1] = os.urandom(64)  # event_id is unique
+            connection.execute(f'INSERT INTO "{table}" VALUES ({",".join("?" * len(row))})', row)
+
+
 def _support(evidence_id, origin="origin:batch"):
     return ("record_support_evidence", {"item_id": "item:000001", "evidence_id": evidence_id, "common_origin_id": origin, "received_at_ms": 1_700_000_000_000})  # a retry repeats its receipt time
 
@@ -116,6 +144,59 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         owner.evaluate_obligation(**evaluate)
         self.assertEqual(owner._row_cache[1], _rows(owner.path))
         owner.verify_integrity()
+
+    def test_a_cache_recounts_after_another_writer_seals_back_to_the_pending_count_it_saw(self) -> None:
+        with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):  # every write seals, so each commit ends with 0 pending
+            owner = self._store("sealed.sqlite")
+            other = FinancialOwner(path=owner.path, config=owner.config, trusted_authority=_AUTHORITY, clock=owner.clock)
+            owner.run_batch([_support("evidence:a-1")])
+            seen = _where(owner.path)
+            other.run_batch([_support("evidence:b-1")])
+            self.assertEqual((_where(owner.path)[1], seen[1]), (0, 0))  # B sealed and ends where A saw it
+            self.assertNotEqual(_where(owner.path)[0], seen[0])
+            owner.run_batch([_support("evidence:a-2")])
+        self.assertEqual(owner._row_cache[1], _rows(owner.path))
+        owner.verify_integrity()
+
+    def test_a_swapped_in_fork_with_the_same_segments_and_pending_is_recounted(self) -> None:
+        with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):
+            owner = self._store("fork-a.sqlite")
+            fork = self.directory / "fork-b.sqlite"
+            fork.write_bytes(owner.path.read_bytes())
+            owner.run_batch([_support("evidence:a-1")])
+            FinancialOwner(path=fork, config=owner.config, trusted_authority=_AUTHORITY, clock=owner.clock).evaluate_obligation(item_id="item:000001")
+            self.assertEqual(_where(fork)[:2], _where(owner.path)[:2])  # same segments and pending ...
+            self.assertNotEqual(_where(fork)[2], _where(owner.path)[2])  # ... a different history
+            self.assertNotEqual(_rows(fork), owner._row_cache[1])
+            owner.path.write_bytes(fork.read_bytes())
+            owner.run_batch([_support("evidence:a-2")])
+        self.assertEqual(owner._row_cache[1], _rows(owner.path))
+        owner.verify_integrity()
+
+    def test_a_drifted_cache_fails_closed_at_the_next_seal(self) -> None:
+        owner = self._store("drift.sqlite")
+        owner.run_batch([_support("evidence:d-1")])
+        mark, rows = owner._row_cache
+        owner._row_cache = (mark, {**rows, "evidence": rows["evidence"] - 1})  # as if one committed insert went uncounted
+        before = owner.path.read_bytes()
+        with mock.patch.object(owner_module, "_CHECK_ROW_CACHE", False), mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^row_cache_drift$"):
+                owner.run_batch([_support("evidence:d-2")])
+        self.assertEqual(owner.path.read_bytes(), before)
+
+    def test_the_counter_holds_events_and_a_projection_table_at_the_cap(self) -> None:
+        owner = self._store("cap.sqlite")
+        with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):  # sealed: only the table under test is pending
+            owner.run_batch([_support("evidence:cap")])  # a primed cache, then a fresh owner that counts
+        for table in ("financial_events", "evidence"):
+            for at_cap in (owner, _open(owner.path)):
+                with self.subTest(table=table, fresh=at_cap is not owner), mock.patch.object(owner_module, "_MAX_ROWS", _rows(owner.path)[table] + 2):
+                    before = owner.path.read_bytes()
+                    with self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
+                        _insert_copies(at_cap, table, 3)
+                    with self.assertRaises(_AtCap):  # exactly at the cap: the counter lets it through to the seal
+                        _insert_copies(at_cap, table, 2, stop_after_seal=True)
+                    self.assertEqual(owner.path.read_bytes(), before)
 
     def test_an_exact_retry_is_duplicate_and_a_changed_meaning_conflicts_as_alone(self) -> None:
         owner = self._store("retry.sqlite")

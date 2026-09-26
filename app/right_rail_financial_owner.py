@@ -92,8 +92,9 @@ _SEAL_SEGMENT_BYTES: Final[int] = _MAX_PACKAGE_BYTES // 2  # soft bounds: seal a
 _SEAL_SEGMENT_EVENTS: Final[int] = 4096
 _SEGMENT_FRAME_BYTES: Final[int] = 4096  # seal, digests and framing, which records do not count
 _SEGMENT_TABLES: Final[frozenset[str]] = frozenset({"history_segments", "history_pending", "history_open"})
-# Moves on every committed insert into a history table: the new row adds a pending key, or a seal adds a segment.
-_HISTORY_MARK: Final[str] = "SELECT (SELECT MAX(segment_index) FROM history_segments),(SELECT COUNT(*) FROM history_pending)"
+# Moves on every committed insert into a history table (a new pending key, or a seal adds a segment), and names
+# the exact history: the chain head differs between any two histories, so a swapped-in fork never matches.
+_HISTORY_MARK: Final[str] = "SELECT (SELECT MAX(segment_index) FROM history_segments),(SELECT COUNT(*) FROM history_pending),sequence,history_head FROM financial_meta WHERE id=1"
 _CHECK_ROW_CACHE: Final[bool] = os.environ.get("RIGHTRAIL_CHECK_ROW_CACHE") == "1"  # tests: recount after every write
 _PRIVATE_INDEX_SET_VERSION: Final[int] = 2  # v2 adds the events lookup the checker runs per obligation
 # The history is append-only in the database itself (Art. III.4); stores
@@ -2056,7 +2057,7 @@ class FinancialOwner:
 
     def _committed_row_counts(self, connection: sqlite3.Connection) -> dict[str, int]:
         """Rows per history table at BEGIN. The owner's cache from its last commit is used only if the history
-        has not moved since; any other writer or failed write moved it, so the tables are counted afresh."""
+        has not moved since; another writer's commit or a swapped file moves it, so the tables are counted afresh."""
         mark, cache = tuple(connection.execute(_HISTORY_MARK).fetchone()), self._row_cache
         if cache is not None and cache[0] == mark:
             return cache[1]
@@ -2075,6 +2076,8 @@ class FinancialOwner:
                 _fail(FinancialIntegrityError, "history_capacity")
         if count == 0 or not force and count < _SEAL_SEGMENT_EVENTS and size < _SEAL_SEGMENT_BYTES:
             return None
+        if rows is not None and rows != _count_rows(connection):  # each seal proves the cached counts exact
+            _fail(FinancialIntegrityError, "row_cache_drift")
         # The chain continues from the last sealed segment only if its stored seal still recomputes.
         last = connection.execute("SELECT * FROM history_segments ORDER BY segment_index DESC LIMIT 2").fetchall()
         index, first, previous = 0, 1, _ZERO_DIGEST
