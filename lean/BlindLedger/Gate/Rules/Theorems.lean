@@ -300,10 +300,16 @@ theorem canonical_perm {b₁ b₂ : List Line} (h : b₁.Perm b₂) : canonical 
   exact enc_inj (List.le_antisymm hxy hyx)
 
 /-- Determinism of order within a batch: the result depends on the batch's
-    contents, not their arrival order.  How lines are split into batches does
-    matter, and no theorem here says otherwise: a held line still claims its
-    keys, so a line that near-duplicates it is HUMAN_REVIEW in the same batch
-    but may be ALLOW in a later one, where only ALLOWed lines are released.
+    contents, not their arrival order.  Splitting lines into batches (same
+    snapshots, each batch's ALLOW lines released, their exact and near keys
+    seen by later batches) is not covered by a theorem.  It can change a
+    line's decision only through another line sharing its exact or near key
+    (its member-month for CAP_820) that is either
+    (a) in an earlier batch, enrolled and not ALLOW there: it claims its keys
+        in its own batch but is never released, so a later line is no longer
+        its duplicate; or
+    (b) in another batch on the other side of it in canonical order: of the
+        two, the one decided first is the one not flagged.
     Either way `released_nodup` holds, so no key is paid twice. -/
 theorem deterministic {c b₁ b₂} (h : b₁.Perm b₂) : decideBatch c b₁ = decideBatch c b₂ := by
   simp only [decideBatch, canonical_perm h]

@@ -35,7 +35,8 @@ namespace BlindLedger.Gate.Rules
 
     The released set is every line already paid by any path, including lines
     a person released from HUMAN_REVIEW; the uniqueness theorem assumes it is
-    complete.  Only ALLOW lines join it here.
+    complete.  Only ALLOW lines join it here; every later batch sees its
+    lines' keys, near keys included, so double billing days apart is caught.
 
     Mapping onto the token (`BlindLedger.Gate.Spec`, gate-v1; not imported):
     `Flow.tag` and the outcome names equal the token's; `reasons` lists the

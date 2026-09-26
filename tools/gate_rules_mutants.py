@@ -68,6 +68,8 @@ MUTANTS = [
      "decideAll c (if (decideLine c seen l).outcome == .ALLOW then keys l ++ seen else seen) ls"),
     ("earlier lines unseen", "decideAll c (claim c l ++ seen) ls", "decideAll c seen ls"),
     ("released set unread", "decideAll c ((entries c.released).flatMap keys)", "decideAll c []"),
+    ("released near keys ignored", "decideAll c ((entries c.released).flatMap keys)",
+     "decideAll c ((entries c.released).map key)"),
     ("nothing released", "entries c.released ++ allowedLines ds", "entries c.released"),
     ("held lines released", "entries c.released ++ allowedLines ds", "entries c.released ++ ds.map (·.line)"),
     ("reviewed lines released", "(ds.filter (·.outcome == .ALLOW))", "(ds.filter (·.outcome != .HOLD))"),
