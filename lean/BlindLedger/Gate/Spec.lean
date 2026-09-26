@@ -274,11 +274,16 @@ def decodeRequest : Bytes → Option Request := parse pRequest maxRequestBytes
 /-! ## #4 CHECKPOINT/v1 (ML-DSA-87 per-batch variant): header ‖ signature.
     A payer fetches it once per batch.  The ledger is sharded by member key
     (`shardOf`).  Normative: there is one seq counter per (tenant, shard,
-    epoch), shared by all of the tenant's programs, so within one tenant, shard
-    and epoch no two checkpoints cover a common seq whatever their program, and
-    `prevCheckpoint` is the digest of the checkpoint ending at `seqFrom - 1`
-    (`forks` checks both).  The engine release travels in each leaf, since a
-    re-issued leaf keeps the release that decided it. -/
+    epoch), shared by all of the tenant's programs, starting at 0 in each
+    epoch.  Within one tenant, shard and epoch no two checkpoints cover a
+    common seq whatever their program, and `prevCheckpoint` is the digest of
+    the checkpoint ending at `seqFrom - 1` (`forks` checks both, within one
+    epoch); the first checkpoint of an epoch has `seqFrom` 0 and an all-zero
+    `prevCheckpoint` (the decoder checks it).  The gate produces checkpoints
+    serially per (tenant, shard), persists each before publishing it, and
+    before publishing runs `forks` against its own stored checkpoints.  The
+    engine release travels in each leaf, since a re-issued leaf keeps the
+    release that decided it. -/
 
 structure Checkpoint where
   tenantId : Bytes
@@ -313,6 +318,7 @@ def pCheckpoint : P Checkpoint := do
   let count ← nat 2 1 maxBatch
   let createdAt ← nat 8
   need (seqTo + 1 == seqFrom + count)
+  need ((seqFrom == 0) == (prevCheckpoint == zeroDigest))
   pure { tenantId, programId, shardId, seqFrom, seqTo, epoch, prevCheckpoint, eventHead, tokenRoot,
          evidenceRoot, count, createdAt }
 
@@ -406,14 +412,14 @@ def decodeToken : Bytes → Option Token := parse pToken maxTokenBytes
     unreleased decision is fenced by a newer epoch or has expired, the gate
     answers `DUPLICATE` or `PAYMENT_ALREADY_DECIDED` with the same decision
     signed again: every leaf field (engine release included) equal except a
-    later seq, an epoch no older, and a new lifetime.  Only the payment's
-    `latest` revision in the gate's store is re-issued.  It never decides
-    again. -/
+    later (epoch, seq), compared in that order since the seq counter restarts
+    at each epoch, and a new lifetime.  Only the payment's `latest` revision
+    in the gate's store is re-issued.  It never decides again. -/
 def reissues (latest : Nat) (old new : Leaf) : Bool :=
   old.revision == latest &&
     decide ({ new with epoch := old.epoch, seq := old.seq, issuedAt := old.issuedAt,
                        expiresAt := old.expiresAt } = old) &&
-    old.epoch ≤ new.epoch && old.seq < new.seq
+    (old.epoch < new.epoch || old.epoch == new.epoch && old.seq < new.seq)
 
 /-! ## #2 DECIDE-RESPONSE/v1: outcome and reasons travel only inside the token -/
 
@@ -472,16 +478,19 @@ structure EpochCert where
   publicKey : Bytes
   /-- The tenant's shard count (u32, at least 1), the same in all its certificates. -/
   shardCount : Nat
+  deriving BEq
 
 /-- Why the payer refuses to send a command.  `member_key_changed`: the
-    payment's member key differs from the one pinned by its first command;
+    payment's member key differs from the one pinned by its first send;
     only a state official's determination (a later format, not built) could
     change it. -/
 inductive Refusal | member_key_changed deriving DecidableEq, Repr
 
 structure Crypto where
   hash : Bytes → Bytes
-  /-- KEY-CERT (#5) chain validity; supplied until that format exists. -/
+  /-- KEY-CERT (#5) chain validity, supplied until that format exists.
+      Normative: KEY-CERT signs every field, shard count included, so a
+      certificate id reused with any changed field has no valid chain. -/
   certChainOk : EpochCert → Bool
   /-- ML-DSA-87 verification: public key, message, signature. -/
   sigOk : Bytes → Bytes → Bytes → Bool
@@ -505,7 +514,8 @@ abbrev PayKey := Bytes × Bytes × Bytes
 /-- Payer-side state.  `fence` is per tenant; `certs` hold only chain-verified
     certificates; `grants` only active grants; `forked` holds each detected
     fork as (stored side, new side), both signed checkpoints as evidence;
-    `pins` holds each payment's member key from its first command. -/
+    `pins` is the sent set: each payment the payer sent a command for, with
+    the member key its first send pinned. -/
 structure PayerState where
   fence : Bytes → Nat
   now : Nat
@@ -590,13 +600,17 @@ structure Payment where
 
 def payKey (t : Token) : PayKey := (t.leaf.tenantId, t.leaf.programId, t.leaf.paymentId)
 
-/-- The payer pins a payment's member key when it first sends a command for
-    it, before any response (so a lost HOLD response opens no gap), and runs
-    every later command through the same check.  A pin is never changed. -/
-def pinPayment (s : PayerState) (p : Payment) : Except Refusal PayerState :=
-  let k : PayKey := (p.tenantId, p.programId, p.paymentId)
-  match s.pins.lookup k with
-  | none => .ok { s with pins := (k, p.memberKey) :: s.pins }
+def Payment.key (p : Payment) : PayKey := (p.tenantId, p.programId, p.paymentId)
+
+/-- The payer sends a DECIDE command for a payment (the model's only command
+    step): the first send pins its member key, and every later send (a retry,
+    a new command key, another flow) must carry the pinned key.  A pin is
+    never changed, and a lost or HOLD response opens no gap.  Normative: the
+    pin is durably persisted before the command leaves the payer, every
+    command path uses this one pin store, and a refused send sends nothing. -/
+def send (s : PayerState) (p : Payment) : Except Refusal PayerState :=
+  match s.pins.lookup p.key with
+  | none => .ok { s with pins := (p.key, p.memberKey) :: s.pins }
   | some m => if m == p.memberKey then .ok s else .error .member_key_changed
 
 /-- Check 2: the token names a stored checkpoint (verified under its tenant's epoch certificate). -/
@@ -647,9 +661,11 @@ def unreleased (s : PayerState) (t : Token) : Bool := !s.released.contains (payK
 /-- Check 11: no fork was recorded for the token's tenant and epoch, on any shard. -/
 def unforked (s : PayerState) (t : Token) : Bool := !blocked s t.leaf.tenantId t.leaf.epoch
 
-/-- Check 12: the token carries the member key pinned for its payment
-    (`pinPayment`), so an edited member key never reaches a decision. -/
-def keyPinned (s : PayerState) (t : Token) : Bool := s.pins.lookup (payKey t) == some t.leaf.memberKey
+/-- Check 12: a command was sent for the token's payment and the token
+    carries the member key its first send pinned (`send`), so a payment never
+    sent, or an edited member key, never reaches a release. -/
+def keyPinned (s : PayerState) (t : Token) : Bool :=
+  s.pins.lookup (t.leaf.tenantId, t.leaf.programId, t.leaf.paymentId) == some t.leaf.memberKey
 
 /-- Release only when all twelve checks hold; check 1 is a canonical `TOKEN/v1` parse. -/
 def verifyToken (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) : Bool :=

@@ -141,7 +141,7 @@ theorem verifyToken_pinned {c : Crypto} {s : PayerState} {p : Payment} {bytes : 
     s.pins.lookup (payKey t) = some t.leaf.memberKey := by
   obtain ⟨u, -, hu, -, -, -, -, -, -, -, -, -, -, hk⟩ := (verifyToken_iff c s p bytes).1 h
   obtain rfl : u = t := Option.some.inj (hu.symm.trans hd)
-  simpa [keyPinned] using hk
+  simpa [keyPinned, payKey] using hk
 
 /-- Checks 6 and 7: an accepted token comes from the shard its own tenant and
     member key route to, under the tenant's shard count. -/
@@ -160,12 +160,12 @@ theorem verifyToken_route {c : Crypto} {s : PayerState} {p : Payment} {bytes : B
     simp only [hn, Option.any_some, beq_iff_eq] at hr
     exact ⟨n, ht ▸ hn, by rw [ht, hk]; exact hr⟩
 
-/-- The payer's steps: install a certificate, store a checkpoint, pin a
-    payment before sending its command, release, or move the clock and grants. -/
+/-- The payer's steps: install a certificate, store a checkpoint, send a
+    command (the only step that pins), release, or move the clock and grants. -/
 inductive Step (c : Crypto) : PayerState → PayerState → Prop
   | install (s : PayerState) (e : EpochCert) : Step c s (installCert c s e).1
   | store {s s' : PayerState} {b : Bytes} : storeCheckpoint c s b = some s' → Step c s s'
-  | pin {s s' : PayerState} {p : Payment} : pinPayment s p = .ok s' → Step c s s'
+  | send {s s' : PayerState} {p : Payment} : send s p = .ok s' → Step c s s'
   | pay {s s' : PayerState} {p : Payment} {b : Bytes} : release c s p b = some s' → Step c s s'
   | context (s : PayerState) (now : Nat) (grants : List Grant) :
       Step c s { s with now := now, grants := grants }
@@ -227,16 +227,15 @@ theorem release_keeps {c : Crypto} {s s' : PayerState} {p : Payment} {bytes : By
       exact ⟨rfl, rfl⟩
     · simp at h
 
-/-- A pin is write-once: pinning keeps every existing pin (and the certificates). -/
-theorem pinPayment_keeps {s s' : PayerState} {p : Payment} (h : pinPayment s p = .ok s') :
+/-- A pin is write-once: a send keeps every existing pin (and the certificates). -/
+theorem send_keeps {s s' : PayerState} {p : Payment} (h : send s p = .ok s') :
     s'.certs = s.certs ∧ ∀ k m, s.pins.lookup k = some m → s'.pins.lookup k = some m := by
-  unfold pinPayment at h
-  dsimp only at h
+  unfold send at h
   split at h
   · rename_i hnone
     cases h
     refine ⟨rfl, fun k m hm => ?_⟩
-    have hne : k ≠ (p.tenantId, p.programId, p.paymentId) := by
+    have hne : k ≠ p.key := by
       rintro rfl
       rw [hnone] at hm
       cases hm
@@ -259,8 +258,8 @@ theorem Step.keeps {c : Crypto} {s s' : PayerState} (h : Step c s s') :
   | store h =>
     obtain ⟨hc, hp⟩ := storeCheckpoint_keeps h
     exact ⟨fun _ _ hm => hp ▸ hm, fun _ _ hn => by unfold shardCountOf; rw [hc]; exact hn⟩
-  | pin h =>
-    obtain ⟨hc, hp⟩ := pinPayment_keeps h
+  | send h =>
+    obtain ⟨hc, hp⟩ := send_keeps h
     exact ⟨hp, fun _ _ hn => by unfold shardCountOf; rw [hc]; exact hn⟩
   | pay h =>
     obtain ⟨hc, hp⟩ := release_keeps h
@@ -279,9 +278,8 @@ theorem Steps.keeps {c : Crypto} {s s' : PayerState} (h : Steps c s s') :
     token verifies only with its payment's pinned member key (check 12), and
     no step changes a pin or a tenant's shard count, so two tokens that verify
     for one payment, in a state and in any later one, carry one member key and
-    come from one shard.  A HOLD on one shard cannot be re-decided ALLOW on
-    another by editing the payer's member key: the edit is refused
-    (`member_key_changed`) and its tokens never verify. -/
+    come from one shard.  A HOLD token never verifies, so the HOLD case is
+    `verifyToken_after_send`. -/
 theorem verifyToken_one_route {c : Crypto} {s s' : PayerState} {p p' : Payment} {b b' : Bytes}
     {t t' : Token} (hs : Steps c s s') (h : verifyToken c s p b = true)
     (h' : verifyToken c s' p' b' = true) (hd : decodeToken b = some t)
@@ -296,6 +294,116 @@ theorem verifyToken_one_route {c : Crypto} {s s' : PayerState} {p p' : Payment} 
   rw [ht, hs.keeps.2 _ _ hn] at hn'
   refine ⟨hkey, ?_⟩
   rw [hr, hr', ht, hkey, Option.some.inj hn']
+
+/-- A send leaves its payment pinned to its member key. -/
+theorem send_pins {s s' : PayerState} {p : Payment} (h : send s p = .ok s') :
+    s'.pins.lookup p.key = some p.memberKey := by
+  unfold send at h
+  split at h
+  · cases h
+    simp only [List.lookup, beq_iff_eq.2 (rfl : p.key = p.key)]
+  · rename_i hm
+    split at h
+    · rename_i he
+      cases h
+      rw [hm, beq_iff_eq.1 he]
+    · cases h
+
+/-- A pin a send adds is its own payment's. -/
+theorem send_new {s s' : PayerState} {p : Payment} {k : PayKey} {m : Bytes} (h : send s p = .ok s')
+    (h0 : s.pins.lookup k = none) (h1 : s'.pins.lookup k = some m) : k = p.key ∧ m = p.memberKey := by
+  unfold send at h
+  split at h
+  · cases h
+    by_cases hk : k = p.key
+    · subst hk
+      simp only [List.lookup, beq_iff_eq.2 (rfl : p.key = p.key), Option.some.injEq] at h1
+      exact ⟨rfl, h1.symm⟩
+    · simp only [List.lookup, beq_false_of_ne hk] at h1
+      rw [h0] at h1
+      cases h1
+  · split at h
+    · cases h
+      rw [h0] at h1
+      cases h1
+    · cases h
+
+/-- Only a send adds a pin: after a step, a pin was there before, or the
+    step is a send of that payment, which pinned it. -/
+theorem Step.new_pin {c : Crypto} {s s' : PayerState} {k : PayKey} {m : Bytes} (h : Step c s s')
+    (h1 : s'.pins.lookup k = some m) :
+    s.pins.lookup k = some m ∨
+      s.pins.lookup k = none ∧ ∃ p, Gate.send s p = .ok s' ∧ p.key = k ∧ p.memberKey = m := by
+  cases hm : s.pins.lookup k with
+  | some m' =>
+    have hk := h.keeps.1 k m' hm
+    rw [h1] at hk
+    exact .inl hk.symm
+  | none =>
+    refine .inr ⟨rfl, ?_⟩
+    have hp : s'.pins = s.pins ∨ ∃ p, Gate.send s p = .ok s' := by
+      cases h with
+      | install e => left; unfold installCert; split <;> rfl
+      | store h => exact .inl (storeCheckpoint_keeps h).2
+      | send h => exact .inr ⟨_, h⟩
+      | pay h => exact .inl (release_keeps h).2
+      | context => exact .inl rfl
+    rcases hp with hp | ⟨p, hp⟩
+    · rw [hp, hm] at h1
+      cases h1
+    · obtain ⟨hk, hmk⟩ := send_new hp hm h1
+      exact ⟨p, hp, hk.symm, hmk.symm⟩
+
+theorem Steps.first_send {c : Crypto} {s0 s' : PayerState} {k : PayKey} (hs : Steps c s0 s') :
+    s0.pins.lookup k = none → ∀ {m}, s'.pins.lookup k = some m →
+      ∃ s1 s2 p, Steps c s0 s1 ∧ send s1 p = .ok s2 ∧ Steps c s2 s' ∧ s1.pins.lookup k = none ∧
+        p.key = k ∧ p.memberKey = m := by
+  induction hs with
+  | refl =>
+    intro h0 m h1
+    rw [h0] at h1
+    cases h1
+  | tail hs step ih =>
+    intro h0 m h1
+    rcases step.new_pin h1 with hm | ⟨hn, p, hp, hk, hmk⟩
+    · obtain ⟨s1, s2, q, h01, hq, h2, hq0, hqk, hqm⟩ := ih h0 hm
+      exact ⟨s1, s2, q, h01, hq, .tail h2 step, hq0, hqk, hqm⟩
+    · exact ⟨_, _, p, hs, hp, .refl _, hn, hk, hmk⟩
+
+/-- Pin before the first command.  Along the payer's steps from a state with
+    no pins, a token verifies only if a command was sent for its payment
+    (check 12), and the first send, made while the payment had no pin, pinned
+    the token's member key. -/
+theorem verifyToken_first_send {c : Crypto} {s0 s' : PayerState} {p : Payment} {b : Bytes}
+    {t : Token} (h0 : s0.pins = []) (hs : Steps c s0 s') (h : verifyToken c s' p b = true)
+    (hd : decodeToken b = some t) :
+    ∃ s1 s2 q, Steps c s0 s1 ∧ send s1 q = .ok s2 ∧ Steps c s2 s' ∧
+      s1.pins.lookup (payKey t) = none ∧ q.key = payKey t ∧ q.memberKey = t.leaf.memberKey :=
+  hs.first_send (by rw [h0]; rfl) (verifyToken_pinned h hd)
+
+/-- A HOLD cannot be escaped by editing the payer's member key.  Every
+    command sent for a payment, including one answered HOLD or whose answer
+    was lost, carried the member key of any token later accepted for it, and
+    was routed (under the shard count when it was sent) to that token's
+    shard, where the HOLD stands (`PAYMENT_ALREADY_DECIDED`). -/
+theorem verifyToken_after_send {c : Crypto} {s1 s2 s' : PayerState} {q p : Payment} {b : Bytes}
+    {t : Token} (hq : send s1 q = .ok s2) (hs : Steps c s2 s') (h : verifyToken c s' p b = true)
+    (hd : decodeToken b = some t) (hk : payKey t = q.key) :
+    t.leaf.memberKey = q.memberKey ∧
+      ∀ n, shardCountOf s1 q.tenantId = some n →
+        t.leaf.shardId = shardOf c.hash q.tenantId q.memberKey n := by
+  have hm := hs.keeps.1 _ _ (send_pins hq)
+  rw [← hk, verifyToken_pinned h hd] at hm
+  have hkey := Option.some.inj hm
+  have ht : t.leaf.tenantId = q.tenantId := congrArg Prod.fst hk
+  refine ⟨hkey, fun n hn => ?_⟩
+  obtain ⟨n', hn', hr⟩ := verifyToken_route h hd
+  have hn2 : shardCountOf s2 q.tenantId = some n := by
+    unfold shardCountOf at hn ⊢
+    rw [(send_keeps hq).1]
+    exact hn
+  rw [ht, hs.keeps.2 _ _ hn2] at hn'
+  rw [hr, ht, hkey, Option.some.inj hn']
 
 /-- A detected fork blocks its tenant and epoch on every shard: no token under
     them is accepted while the fork is on record (check 11). -/

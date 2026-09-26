@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import replace
 from itertools import count
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -31,7 +32,7 @@ CERTS = {"e7": (D[5], EPOCH, TENANT, SHARDS), "e6": (D[8], EPOCH - 1, TENANT, SH
          "bad": (D[10], EPOCH, TENANT, SHARDS), "reshard": (D[12], EPOCH, TENANT, 2 * SHARDS),
          "no-shards": (D[13], EPOCH, "nc-third", 0), "other8": (D[11], EPOCH + 1, OTHER, OTHER_SHARDS),
          "e8": (D[1], EPOCH + 1, TENANT, SHARDS), "huge-shards": (D[14], EPOCH, "nc-third", 2**32),
-         "reshard-e9": (D[15], EPOCH + 2, TENANT, 2 * SHARDS), "no-shards-e9": (D[16], EPOCH + 2, TENANT, 0)}
+         "reshard-e9": (D[15], EPOCH + 2, TENANT, 2 * SHARDS), "no-shards-other9": (D[16], EPOCH + 2, OTHER, 0)}
 CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "decision-id", "input",
            "lines-root")
 
@@ -132,6 +133,8 @@ def build_vectors(sign) -> str:
     cert("reshard", "reject")  # a second shard count for the tenant: v1 has no resharding
     cert("no-shards", "reject")
     cert("huge-shards", "reject")  # shard counts are u32
+    # KEY-CERT signs every field: that id reused with a fitting shard count has no valid chain
+    add(f"cert reject {h(D[14])} {EPOCH} nc-third 4 {h(pks['huge-shards'])} chain-bad")
     add(f"grants {h(D[3])} {h(D[4])} {h(D[6])}")
     add(f"now {NOW}")
 
@@ -185,6 +188,9 @@ def build_vectors(sign) -> str:
         ("retired-epoch-key", signed(cp, "e6")),
         ("other-tenant-key", signed(cp, "other")),
         ("state-digest-nonzero", resigned(nonzero[:-74] + D[7] + nonzero[-10:])),
+        # An epoch's first checkpoint, and only it, starts at seq 0 with an all-zero prev
+        ("first-with-prev", signed(replace(cp, seq_from=0, seq_to=4))),
+        ("zero-prev-not-first", signed(replace(cp, seq_from=80, seq_to=84, prev_checkpoint_digest=gate.ZERO_DIGEST))),
     ):
         add(f"checkpoint reject {name} {h(data)}")
     # A second decision for pay-0004 and pay-0000 under CAP_820, as a gate that
@@ -202,7 +208,7 @@ def build_vectors(sign) -> str:
 
     # #3 TOKEN/v1: the batch, then one reject per check, each one field away
     def payment_line(name: str, leaf: gate.TokenLeaf, verdict: str = "accept") -> None:
-        add(f"payment {verdict} {name} {TENANT} {PROGRAM} {leaf.flow} {leaf.payment_id} {h(leaf.member_key)} {leaf.payee_ref} "
+        add(f"payment {verdict} {name} {leaf.tenant_id} {leaf.program_id} {leaf.flow} {leaf.payment_id} {h(leaf.member_key)} {leaf.payee_ref} "
             f"{leaf.amount_cents} {PERIOD} {hexes(_lines(int(leaf.payment_id[4:])))}")
 
     raw = [gate.encode_token(t) for t in tokens]
@@ -273,8 +279,15 @@ def build_vectors(sign) -> str:
     add(f"token reject decode-ok released p0 {h(raw[0])}")
     add(f"release reject t0-again p0 {h(raw[0])}")
     add(f"token reject decode-ok cross-flow-after-release p0-cap {cross}")
-    cert("other8")
-    add(f"token accept decode-ok other-tenant-fence p1 {h(raw[1])}")
+    # Tenant OTHER's batch: a command was sent for pay-0030, while pay-0031 is on
+    # the payer's books but was never sent, so its token fails check 12 alone
+    other_cp, _, other = _batch([replace(_leaf(n, 20 + n), tenant_id=OTHER) for n in (30, 31)],
+                                lambda m: sign("other", m))
+    checkpoint_line("other-tenant-batch", other_cp, signed(other_cp, "other"))
+    payment_line("p30", other[0].leaf)
+    payment_line("p31", other[1].leaf, "unsent")
+    add(f"token reject decode-ok unsent p31 {h(gate.encode_token(other[1]))}")
+    other30 = h(gate.encode_token(other[0]))
     # A fork on shard 5 (overlapping seqs, or a neighbour on either side that
     # does not link to it) blocks tenant and epoch on every shard: no later
     # checkpoint of the epoch is stored and shard 3 releases nothing more
@@ -282,7 +295,7 @@ def build_vectors(sign) -> str:
                                _leaf(21, 2, shard=5, member_key=member(21, 5))], lambda m: sign("e7", m))
     later_cp = _batch([_leaf(22, 3, shard=5, member_key=member(22, 5))], lambda m: b"",
                       gate.checkpoint_digest(fork_cp))[0]
-    earlier_cp = _batch([_leaf(23, 0, shard=5, member_key=member(23, 5))], lambda m: b"")[0]
+    earlier_cp = _batch([_leaf(23, 0, shard=5, member_key=member(23, 5))], lambda m: b"", gate.ZERO_DIGEST)[0]
     checkpoint_line("fork-base", fork_cp, signed(fork_cp))
     payment_line("p20", fork[0].leaf)
     add(f"token accept decode-ok before-fork p20 {h(gate.encode_token(fork[0]))}")
@@ -295,26 +308,43 @@ def build_vectors(sign) -> str:
     add(f"checkpoint reject linked-after-fork {h(signed(later_cp))}")
     add(f"token reject decode-ok shard-3-after-fork p2 {h(raw[2])}")
     add(f"release reject shard-3-after-fork p3 {h(raw[3])}")
-    # Failover recovers: epoch 8 is not blocked
+    add(f"token accept decode-ok other-tenant-after-fork p30 {other30}")
+    # Failover recovers: epoch 8 is not blocked, and fences only its own tenant
     cert("e8")
-    # Re-issue: the fenced, unreleased t1 comes back as the same decision at epoch 8
-    new = replace(tokens[1].leaf, epoch=EPOCH + 1, seq=47, issued_at=NOW, expires_at=NOW + 2 * 86_400)
-    e8_cp, _, (t1_e8,) = _batch([new], lambda m: sign("e8", m), gate.checkpoint_digest(rogue_cp))
+    add(f"token accept decode-ok other-tenant-fence p30 {other30}")
+
+    def reissued(leaf: gate.TokenLeaf, seq: int) -> gate.TokenLeaf:
+        return replace(leaf, epoch=EPOCH + 1, seq=seq, issued_at=NOW, expires_at=NOW + 2 * 86_400)
+
+    # Re-issue: the fenced, unreleased t1 comes back as the same decision at
+    # epoch 8, whose seq counter restarts at 0 with an all-zero prev; the
+    # released t0 comes back too and fails check 10 alone
+    new = reissued(tokens[1].leaf, 0)
+    e8_cp, _, (t1_e8, t0_e8) = _batch([new, reissued(tokens[0].leaf, 1)], lambda m: sign("e8", m), gate.ZERO_DIGEST)
     checkpoint_line("reissue-e8", e8_cp, signed(e8_cp, "e8"))
     add(f"token accept decode-ok reissued-e8 p1 {h(gate.encode_token(t1_e8))}")
+    add(f"token reject decode-ok released-before-failover p0 {h(gate.encode_token(t0_e8))}")
     # The grant moves to engine D[7]: the re-issued leaf still carries D[6], its deciding release
     add(f"grants {h(D[3])} {h(D[4])} {h(D[7])}")
     add(f"token reject decode-ok reissued-revoked-engine p1 {h(gate.encode_token(t1_e8))}")
     add(f"grants {h(D[3])} {h(D[4])} {h(D[6])}")
-    # A newer certificate with a valid chain raises the fence even when refused
-    for name in ("reshard-e9", "no-shards-e9"):
+    # Clean failover of tenant OTHER (no fork): its epoch-8 certificate fences
+    # its epoch-7 token by check 4 alone, and the epoch-8 re-issue is accepted
+    cert("other8")
+    add(f"token reject decode-ok fenced-other-e7 p30 {other30}")
+    other_e8_cp, _, (p30_e8,) = _batch([reissued(other[0].leaf, 0)], lambda m: sign("other8", m), gate.ZERO_DIGEST)
+    checkpoint_line("other-reissue-e8", other_e8_cp, signed(other_e8_cp, "other8"))
+    add(f"token accept decode-ok other-reissued-e8 p30 {h(gate.encode_token(p30_e8))}")
+    # A newer certificate with a valid chain raises its tenant's fence even when refused
+    for name, payment, token in (("reshard-e9", "p1", t1_e8), ("no-shards-other9", "p30", p30_e8)):
         cert(name, "reject")
-        add(f"token reject decode-ok fenced-by-{name} p1 {h(gate.encode_token(t1_e8))}")
+        add(f"token reject decode-ok fenced-by-{name} {payment} {h(gate.encode_token(token))}")
     for verdict, name, latest, leaf in (
-        ("accept", "same-decision-e8", 1, new), ("reject", "re-decided", 1, replace(new, outcome="HOLD")),
+        ("accept", "same-decision-e8", 1, new), ("accept", "same-epoch-later-seq", 1, replace(new, epoch=EPOCH, seq=48)),
+        ("reject", "re-decided", 1, replace(new, outcome="HOLD")),
         ("reject", "other-engine", 1, replace(new, engine_release=D[7])),
-        ("reject", "older-epoch", 1, replace(new, epoch=EPOCH - 1)), ("reject", "older-seq", 1, replace(new, seq=40)),
-        ("reject", "not-latest-revision", 2, new),
+        ("reject", "older-epoch", 1, replace(new, epoch=EPOCH - 1, seq=48)),
+        ("reject", "older-seq", 1, replace(new, epoch=EPOCH, seq=40)), ("reject", "not-latest-revision", 2, new),
     ):
         add(f"reissue {verdict} {name} {latest} {h(raw[1])} {h(gate.encode_token(replace(t1_e8, leaf=leaf)))}")
 
@@ -384,7 +414,7 @@ def _verify(pk: bytes, message: bytes, signature: bytes) -> bool:
 class GoldenVectorTests(unittest.TestCase):
     def test_python_reproduces_every_vector_byte(self) -> None:
         recorded = {(r[1], r[2]): bytes.fromhex(r[3]) for r in _records() if r[0] == "sig"}
-        self.assertEqual(len(recorded), 20)
+        self.assertEqual(len(recorded), 24)
         pks = {name: signer.public_key(seed(name)).hex() for name in CERTS}
         self.assertEqual(build_vectors(lambda key, m: recorded[(pks[key], m.hex())]), VECTORS.read_text("ascii"))
 
@@ -410,6 +440,17 @@ class GoldenVectorTests(unittest.TestCase):
                 with self.subTest(name), mock.patch.object(signer, name, value), self.assertRaises(signer.GateSignerError):
                     signer.public_key(seed("e7"))
 
+
+class AxiomRecordTests(unittest.TestCase):
+    def test_axioms_txt_is_exactly_the_pinned_axioms(self) -> None:
+        """AXIOMS.txt is the output of ``lake env lean tools/gate_print_axioms.lean``; the build's
+        ``#guard_msgs`` pins in AxiomCheck.lean must be that text, theorem for theorem."""
+        root = VECTORS.parents[2]
+        check = (root / "lean" / "BlindLedger" / "Gate" / "AxiomCheck.lean").read_text("utf-8")
+        printed = re.findall(r"^#print axioms (\S+)$", (root / "tools" / "gate_print_axioms.lean").read_text("utf-8"), re.M)
+        self.assertEqual(re.findall(r"^#guard_msgs in #print axioms (\S+)$", check, re.M), printed)
+        self.assertEqual(re.findall(r"^/-- info: (.*) -/$", check, re.M),
+                         (root / "lean" / "BlindLedger" / "Gate" / "AXIOMS.txt").read_text("utf-8").splitlines())
 
 def _fold(index: int, count: int, node: bytes, path: list[bytes]) -> bytes:
     """Test-only reference fold of a token-tree path (the verifier is Lean's)."""

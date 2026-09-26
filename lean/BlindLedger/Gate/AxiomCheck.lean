@@ -34,14 +34,26 @@ import BlindLedger.Gate.Theorems
 #guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_keeps
 /-- info: 'BlindLedger.Gate.release_keeps' depends on axioms: [propext] -/
 #guard_msgs in #print axioms BlindLedger.Gate.release_keeps
-/-- info: 'BlindLedger.Gate.pinPayment_keeps' depends on axioms: [propext] -/
-#guard_msgs in #print axioms BlindLedger.Gate.pinPayment_keeps
+/-- info: 'BlindLedger.Gate.send_keeps' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.send_keeps
 /-- info: 'BlindLedger.Gate.Step.keeps' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Step.keeps
 /-- info: 'BlindLedger.Gate.Steps.keeps' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Steps.keeps
 /-- info: 'BlindLedger.Gate.verifyToken_one_route' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.verifyToken_one_route
+/-- info: 'BlindLedger.Gate.send_pins' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.send_pins
+/-- info: 'BlindLedger.Gate.send_new' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.send_new
+/-- info: 'BlindLedger.Gate.Step.new_pin' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Step.new_pin
+/-- info: 'BlindLedger.Gate.Steps.first_send' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Steps.first_send
+/-- info: 'BlindLedger.Gate.verifyToken_first_send' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_first_send
+/-- info: 'BlindLedger.Gate.verifyToken_after_send' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_after_send
 /-- info: 'BlindLedger.Gate.verifyToken_unforked' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.verifyToken_unforked
 /-- info: 'BlindLedger.Gate.release_isSome' depends on axioms: [propext] -/

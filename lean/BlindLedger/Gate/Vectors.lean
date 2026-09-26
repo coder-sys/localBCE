@@ -7,10 +7,12 @@ open BlindLedger.Gate
 
 /-! Conformance check of `tests/gate_vectors/gate_v1.vectors` against the Lean
     specification.  Lines run in order against one payer state: `cert`,
-    `payment` (the pin before a command), `checkpoint` and `release` lines are
-    the payer's own steps (and are checked); `grants` and `now` lines set
-    context.  A payment line is kept under its name even when its pin is
-    refused.  The `sig` lines are the
+    `payment` (a `send`), `checkpoint` and `release` lines are the payer's own
+    steps (and are checked); `grants` and `now` lines set context.  A payment
+    line is kept under its name even when its send is refused; an `unsent`
+    one only records the payment and checks it has no pin.  A certificate's
+    chain flag holds for that exact certificate, as KEY-CERT signs every
+    field.  The `sig` lines are the
     only ML-DSA-87 triples treated as valid; the Python test verifies each of
     them with AWS-LC.  A checkpoint line expects `accept` (stored), `fork`
     (recorded as a fork) or `reject`.  Accepted request, response and
@@ -84,7 +86,7 @@ structure Ctx where
   state : PayerState :=
     { fence := fun _ => 0, now := 0, certs := [], checkpoints := [], grants := [], released := [],
       forked := [], pins := [] }
-  chains : List (Bytes × Bool) := []
+  chains : List (EpochCert × Bool) := []
   sigs : List (Bytes × Bytes × Bytes) := []
   payments : List (String × Payment) := []
   requests : List (String × Request) := []
@@ -92,7 +94,7 @@ structure Ctx where
 
 def Ctx.crypto (x : Ctx) : Crypto where
   hash := sha3
-  certChainOk e := x.chains.contains (e.certId, true)
+  certChainOk e := x.chains.contains (e, true)
   sigOk pk msg sig := x.sigs.contains (pk, msg, sig)
 
 def verdict : String → Option Bool
@@ -123,7 +125,7 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
   | ["cert", expect, id, epoch, tenant, shards, pk, chain] =>
     let e : EpochCert := { certId := (← hex id), epoch := (← epoch.toNat?), tenantId := ascii tenant,
                            publicKey := (← hex pk), shardCount := (← shards.toNat?) }
-    let x := { x with chains := x.chains ++ [(e.certId, (← chainFlag chain))] }
+    let x := { x with chains := x.chains ++ [(e, (← chainFlag chain))] }
     let (s, ok) := installCert x.crypto x.state e
     pure ({ x with state := s }, some (ok == (← verdict expect)))
   | ["grants", id, rules, releases] =>
@@ -138,7 +140,8 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
                          memberKey := (← hex member), payeeRef := ascii payee, amountCents := (← amount.toNat?),
                          period := ascii period, lines := (← list hex lines) }
     let x := { x with payments := x.payments ++ [(name, p)] }
-    match pinPayment x.state p with
+    if expect == "unsent" then return (x, some (x.state.pins.lookup p.key).isNone)
+    match send x.state p with
     | .ok s => pure ({ x with state := s }, some (expect == "accept"))
     | .error .member_key_changed => pure (x, some (expect == "member_key_changed"))
   | "checkpoint" :: expect :: _ :: bytes :: rest =>
