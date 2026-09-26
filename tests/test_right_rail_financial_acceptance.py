@@ -4756,6 +4756,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with closing(sqlite3.connect(str(store.path))) as connection:
             commands = connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall()
         self.assertEqual(len(commands), len({row[0] for row in commands}))
+        self.assertTrue(_V8_COMMAND_KINDS <= {row[1] for row in commands})
         restored = FinancialOwner.restore_continuity(
             package_bytes=package,
             recovered_path=self._path("command-log-restore.sqlite"),
@@ -5025,6 +5026,60 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     self.assertEqual(connection.execute(statement).rowcount, 1)
                 with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
                     verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+
+    def test_a_forged_opening_balance_event_is_refused_on_a_native_store(self) -> None:
+        # Final review of 75a5517, finding 4, kept after C3: an OPENING_BALANCE event appended to a native
+        # store would restart replay from rows of the writer's choosing. The kind no longer exists.
+        store = self._build_base_for_correction()
+        self._prepare_acknowledged(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            self.assertEqual(connection.execute("UPDATE action_outbox SET updated_at_ms=updated_at_ms-1 WHERE status='ACKNOWLEDGED'").rowcount, 1)
+        with closing(store._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            images = [{"table": table, "row": {column: store._export_value(row[column]) for column in owner._TABLE_COLUMNS[table]}} for table in owner._CAPTURED_TABLES for row in connection.execute(f"SELECT * FROM {table}")]
+            last = int(connection.execute("SELECT max(committed_at_ms) FROM financial_events").fetchone()[0])
+            store._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=last)
+            connection.execute("COMMIT")
+        with self.assertRaisesRegex(IndependentFinancialError, "^history:event-kind$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:event-kind$"):
+            self._make_owner(path=store.path)
+
+    def test_a_rehashed_row_image_cannot_change_the_accepted_acknowledgment(self) -> None:
+        # The acknowledgment event names the reference it accepted; the stored row must match it even
+        # when the row and its history image are edited together and the chain is re-hashed.
+        store = self._build_base_for_correction()
+        self._prepare_acknowledged(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'").fetchall()
+            for name, _sql in triggers:
+                connection.execute(f'DROP TRIGGER "{name}"')
+            ref = connection.execute("SELECT acknowledgment_ref FROM action_outbox WHERE status='ACKNOWLEDGED'").fetchone()[0]
+            forged = ref[:-1] + ("8" if ref.endswith("9") else "9")
+            connection.execute("UPDATE action_outbox SET acknowledgment_ref=? WHERE acknowledgment_ref=?", (forged, ref))
+            events = connection.execute("SELECT event_sequence,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,previous_head,committed_at_ms FROM financial_events ORDER BY event_sequence").fetchall()
+            previous, edited = bytes(events[0][7]), 0
+            for sequence, aggregate_type, aggregate_id, kind, before, after, payload_json, _previous, committed_at in events:
+                payload = json.loads(payload_json)
+                for image in payload.get("rows", ()):
+                    values = image.get("row") or image.get("set")
+                    if image["table"] == "action_outbox" and values.get("acknowledgment_ref") == ref:
+                        values["acknowledgment_ref"], edited = forged, edited + 1
+                payload_bytes = owner._canonical(payload)
+                payload_digest = owner._digest(owner._EVENT_DOMAIN, payload_bytes)
+                header = b"".join(value.to_bytes(8, "big") for value in (before, after, committed_at))
+                event_id = owner._digest(owner._EVENT_DOMAIN, sequence.to_bytes(8, "big"), aggregate_type.encode("ascii"), aggregate_id.encode("ascii"), kind.encode("ascii"), header, payload_digest)
+                head = owner._digest(owner._HEAD_DOMAIN, previous, event_id, header, payload_digest)
+                connection.execute("UPDATE financial_events SET event_id=?,payload_json=?,payload_digest=?,previous_head=?,head=? WHERE event_sequence=?", (event_id, payload_bytes.decode("ascii"), payload_digest, previous, head, sequence))
+                previous = head
+            connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
+            for _name, sql in triggers:
+                connection.execute(sql)
+        self.assertGreaterEqual(edited, 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^replay:acknowledgment$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:acknowledgment$"):
+            self._make_owner(path=store.path)
 
     def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:
         # Final review of 75a5517, finding 5: publish opened the case after the first evaluation,
