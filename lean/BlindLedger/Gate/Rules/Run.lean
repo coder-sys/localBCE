@@ -20,7 +20,7 @@ open BlindLedger.Gate.Rules
     batch; `commit` decides it, checks the expectations (all lines or none)
     and that the reversed batch decides the same, adds its ALLOW lines to the
     released set and its other new identities to the unresolved set, and
-    moves the checkpoint of each set it read chained to the result; `report`
+    takes the result's checkpoints (`advance`); `report`
     prints totals; `end N` is the number of checked lines.  Test-only; never
     a payment path. -/
 
@@ -105,12 +105,6 @@ def tally (ds : List Decision) : String :=
   let c := ds.foldl (· + ·.line.cents) 0
   s!"lines={ds.length} cents={c} ({money c})"
 
-/-- The gate's checkpoint of a set after a commit: the resulting set when the set read was chained. -/
-def advance (today : Nat) (p : Snapshot Line) (o : Option (Snapshot Line)) (xs : List Line) : Snapshot Line :=
-  match o with
-  | some s => if chained today p o then ⟨s.asOf, xs.length, xs⟩ else p
-  | none => p
-
 def commit (st : St) : St × List String :=
   let c := st.ctx
   let lines := st.batch.map (·.1)
@@ -122,10 +116,9 @@ def commit (st : St) : St × List String :=
     if exp.isEmpty then (det, 0, [])
     else if exp.length == lines.length && det && sorted exp == sorted got then (true, lines.length, [])
     else (false, 0, ((sorted got).filter (!exp.contains ·)).map ("RULES_GOT " ++ ·))
-  ({ st with extra := st.extra ++ r.released.drop (entries c.released).length,
-             held := st.held ++ r.unresolved.drop (entries c.unresolved).length,
-             rprior := advance c.today st.rprior c.released r.released,
-             uprior := advance c.today st.uprior c.unresolved r.unresolved,
+  ({ st with extra := st.extra ++ r.released.entries.drop (releasedSet c).length,
+             held := st.held ++ r.unresolved.entries.drop (unresolvedSet c).length,
+             rprior := r.released, uprior := r.unresolved,
              batch := [], done := st.done ++ r.decisions, checked := st.checked + n, failed := st.failed + (if ok then 0 else 1) },
    if ok then [] else s!"RULES_VECTOR_MISMATCH commit determinism={det}" :: msg)
 

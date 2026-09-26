@@ -5,19 +5,32 @@ namespace BlindLedger.Gate.Rules
 /-! What `decideBatch` guarantees.  `Fact` restates each rule over the pinned
     data in plain propositions; the batch theorems speak about the canonical
     batch, where line `i` is checked against `seenAt c b i`: the keys of the
-    released set and those claimed by the lines before it.  The axiom pins at
+    gate's view of the released set and those claimed by the lines before it.  The axiom pins at
     the end show no theorem here rests on `sorryAx` or `Lean.ofReduceBool`. -/
 
 /-- A snapshot the rules may read: see `usable`. -/
-def Usable {α : Type} (today maxAge : Nat) (ok : α → Bool) (o : Option (Snapshot α)) : Prop :=
+def Usable {α : Type} (today maxAge : Nat) (ok : Nat → α → Bool) (o : Option (Snapshot α)) : Prop :=
   ∃ s, o = some s ∧ validDate today = true ∧ validDate s.asOf = true ∧ s.asOf ≤ today ∧
     dayNum today ≤ dayNum s.asOf + maxAge ∧ s.entries.length = s.count ∧ 0 < s.count ∧
-    ∀ x ∈ s.entries, ok x = true
+    ∀ x ∈ s.entries, ok s.asOf x = true
 
 /-- A released or unresolved set the rules may read: see `chained`. -/
 def Chained (today : Nat) (prior : Snapshot Line) (o : Option (Snapshot Line)) : Prop :=
   ∃ s, o = some s ∧ s.entries.length = s.count ∧ validDate s.asOf = true ∧ s.asOf ≤ today ∧
     prior.asOf ≤ s.asOf ∧ prior.entries <+: s.entries
+
+/-! The facts of R1, R3 and R5 as the rows show them. -/
+abbrev MemberDead (c : Ctx) (l : Line) : Prop := ∃ d ∈ entries c.dmf, d.id = l.member ∧ d.date < l.date
+
+abbrev NotCovered (c : Ctx) (l : Line) : Prop :=
+  ¬∃ s ∈ entries c.enrollment, s.member = l.member ∧ s.start ≤ l.date ∧ l.date ≤ s.stop ∧
+    (l.flow ≠ .CAP_820 ∨ s.plan = l.payee)
+
+abbrev ProviderDead (c : Ctx) (l : Line) : Prop :=
+  ∃ d ∈ entries c.providerDeaths, (d.id = l.payee ∨ d.id = l.rendering) ∧ d.date < l.date
+
+abbrev Excluded (c : Ctx) (l : Line) : Prop :=
+  ∃ e ∈ entries c.exclusions, (e.id = l.payee ∨ e.id = l.rendering) ∧ e.start ≤ l.date ∧ l.date ≤ e.stop
 
 def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .ALREADY_DECIDED => idKey l ∈ seen ∨ idKey l ∈ pending c
@@ -27,15 +40,19 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .DUPLICATE_OF_UNRESOLVED => exactKey l ∈ pending c ∨ l.flow = .CAP_820 ∧ nearKey l ∈ pending c
   | .FFS_DUPLICATE_LINE => l.flow ≠ .CAP_820 ∧ exactKey l ∈ seen
   | .FFS_NEAR_DUPLICATE => l.flow ≠ .CAP_820 ∧ nearKey l ∈ seen ∧ exactKey l ∉ seen
-  | .MEMBER_DECEASED => Usable c.today 90 okDeath c.dmf ∧ validDate l.date = true ∧
-      ∃ d ∈ entries c.dmf, d.id = l.member ∧ d.date < l.date
-  | .MEMBER_NOT_ENROLLED => Usable c.today 7 okSpan c.enrollment ∧ validDate l.date = true ∧
-      ¬∃ s ∈ entries c.enrollment, s.member = l.member ∧ s.start ≤ l.date ∧
-        l.date ≤ s.stop ∧ (l.flow ≠ .CAP_820 ∨ s.plan = l.payee)
+  | .MEMBER_DECEASED => Usable c.today 90 okDeath c.dmf ∧ validDate l.date = true ∧ MemberDead c l
+  | .MEMBER_DECEASED_UNVERIFIED => c.dmf.isSome ∧ ¬Usable c.today 90 okDeath c.dmf ∧ validDate l.date = true ∧
+      MemberDead c l
+  | .MEMBER_NOT_ENROLLED => Usable c.today 7 okSpan c.enrollment ∧ validDate l.date = true ∧ NotCovered c l
+  | .MEMBER_NOT_ENROLLED_UNVERIFIED => c.enrollment.isSome ∧ ¬Usable c.today 7 okSpan c.enrollment ∧
+      validDate l.date = true ∧ NotCovered c l
   | .PROVIDER_DECEASED => Usable c.today 90 okDeath c.providerDeaths ∧ validDate l.date = true ∧
-      ∃ d ∈ entries c.providerDeaths, (d.id = l.payee ∨ d.id = l.rendering) ∧ d.date < l.date
-  | .PROVIDER_EXCLUDED => Usable c.today 31 okExclusion c.exclusions ∧ validDate l.date = true ∧
-      ∃ e ∈ entries c.exclusions, (e.id = l.payee ∨ e.id = l.rendering) ∧ e.start ≤ l.date ∧ l.date ≤ e.stop
+      ProviderDead c l
+  | .PROVIDER_DECEASED_UNVERIFIED => c.providerDeaths.isSome ∧ ¬Usable c.today 90 okDeath c.providerDeaths ∧
+      validDate l.date = true ∧ ProviderDead c l
+  | .PROVIDER_EXCLUDED => Usable c.today 31 okExclusion c.exclusions ∧ validDate l.date = true ∧ Excluded c l
+  | .PROVIDER_EXCLUDED_UNVERIFIED => c.exclusions.isSome ∧ ¬Usable c.today 31 okExclusion c.exclusions ∧
+      validDate l.date = true ∧ Excluded c l
   | .SERVICE_DATE_FUTURE => c.today < l.date
   | .SERVICE_DATE_INVALID => validDate l.date = false
   | .STALE_DMF => ¬Usable c.today 90 okDeath c.dmf
@@ -46,11 +63,11 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .STALE_UNRESOLVED => ¬Chained c.today c.unresolvedPrior c.unresolved
 
 def seenAt (c : Ctx) (b : List Line) (i : Nat) : List Key :=
-  ((canonical b).take i).reverse.flatMap (claim c) ++ (entries c.released).flatMap keys
+  ((canonical b).take i).reverse.flatMap (claim c) ++ (releasedSet c).flatMap keys
 
 /-! ## One line -/
 
-theorem usable_iff {α : Type} {t m : Nat} {ok : α → Bool} {o : Option (Snapshot α)} :
+theorem usable_iff {α : Type} {t m : Nat} {ok : Nat → α → Bool} {o : Option (Snapshot α)} :
     usable t m ok o = true ↔ Usable t m ok o := by
   cases o <;> simp [usable, Usable, List.all_eq_true, and_assoc]
 
@@ -58,8 +75,8 @@ theorem chained_iff {t p o} : chained t p o = true ↔ Chained t p o := by
   cases o <;> simp [chained, Chained, and_assoc]
 
 theorem fires_iff {c seen l} (r : Reason) : fires c seen l r = true ↔ Fact c seen l r := by
-  cases r <;> simp [fires, Fact, certain, notEnrolled, enrolled, covers, party, isCap, ← usable_iff,
-    ← chained_iff, and_assoc, or_assoc]
+  cases r <;> simp [fires, Fact, certain, unverified, notEnrolled, enrolled, covers, party, isCap, memberDead,
+    providerDead, excluded, ← usable_iff, ← chained_iff, and_assoc, or_assoc]
 
 theorem mem_all (r : Reason) : r ∈ reasons := by cases r <;> simp [reasons]
 
@@ -190,7 +207,7 @@ theorem decideAll_get (c : Ctx) : ∀ (seen : List Key) (ls : List Line) (i : Na
 
 theorem decideBatch_get {c b i} :
     (decideBatch c b).decisions[i]? = (canonical b)[i]?.map (decideLine c (seenAt c b i)) :=
-  decideAll_get c ((entries c.released).flatMap keys) (canonical b) i
+  decideAll_get c ((releasedSet c).flatMap keys) (canonical b) i
 
 /-- Soundness: every reason on a decision is a true fact about the pinned data. -/
 theorem sound {c b i d r} (hd : (decideBatch c b).decisions[i]? = some d)
@@ -234,7 +251,7 @@ theorem fail_closed {c b d}
       ¬Chained c.today c.releasedPrior c.released ∨ ¬Chained c.today c.unresolvedPrior c.unresolved)
     (hd : d ∈ (decideBatch c b).decisions) :
     d.outcome = .HUMAN_REVIEW ∨ (d.outcome = .HOLD ∧ ∃ r ∈ d.reasons, review r = false) := by
-  obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := (entries c.released).flatMap keys) (ls := canonical b) hd
+  obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := (releasedSet c).flatMap keys) (ls := canonical b) hd
   apply outcome_cases
   rcases h with h | h | h | h | h | h
   · exact line_complete (r := .STALE_DMF) h
@@ -247,11 +264,12 @@ theorem fail_closed {c b d}
 /-- An ALLOWed line shares no key with any line of the released set, nor with
     what any line of the unresolved set claims: it may share only the
     member-month of an unresolved capitation line whose member is known not to
-    be enrolled with that plan. -/
+    be enrolled with that plan.  The sets are the gate's views; an ALLOW line
+    has both sets chained (`fail_closed`), so they are the sets read. -/
 theorem allow_clear {c b d} (hd : d ∈ (decideBatch c b).decisions) (ha : d.outcome = .ALLOW) :
-    ∀ x ∈ entries c.released ++ entries c.unresolved, ∀ k ∈ keys d.line, k ∈ keys x →
+    ∀ x ∈ releasedSet c ++ unresolvedSet c, ∀ k ∈ keys d.line, k ∈ keys x →
       x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled c x = true := by
-  obtain ⟨pre, l, rfl⟩ := mem_decideAll (seen := (entries c.released).flatMap keys) (ls := canonical b) hd
+  obtain ⟨pre, l, rfl⟩ := mem_decideAll (seen := (releasedSet c).flatMap keys) (ls := canonical b) hd
   intro x hx k hk hkx
   rw [decideLine_line] at hk
   have hf := (allow_facts ha).2 k hk
@@ -264,13 +282,13 @@ theorem lines_decideAll (c : Ctx) : ∀ (seen : List Key) (ls : List Line),
   | _, [] => rfl
   | seen, l :: ls => by simp only [decideAll, List.map_cons, decideLine_line, lines_decideAll c _ ls]
 
-/-- Every line of the batch leaves it released or unresolved, unless its
-    identity was already decided (release is by identity, so such a line is
-    never paid as submitted). -/
+/-- Every line of the batch is in the next checkpoint of the released or the
+    unresolved set, unless its identity was already decided (release is by
+    identity, so such a line is never paid as submitted). -/
 theorem decided_kept {c b x} (hx : x ∈ b) :
-    x ∈ (decideBatch c b).released ∨ x ∈ (decideBatch c b).unresolved ∨
+    x ∈ (decideBatch c b).released.entries ∨ x ∈ (decideBatch c b).unresolved.entries ∨
       ∃ d ∈ (decideBatch c b).decisions, d.line = x ∧ Reason.ALREADY_DECIDED ∈ d.reasons := by
-  have hm : x ∈ (decideAll c ((entries c.released).flatMap keys) (canonical b)).map (·.line) := by
+  have hm : x ∈ (decideAll c ((releasedSet c).flatMap keys) (canonical b)).map (·.line) := by
     rw [lines_decideAll]; exact (List.mergeSort_perm b lineLe).mem_iff.mpr hx
   obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hm
   by_cases ha : d.outcome = .ALLOW
@@ -280,21 +298,32 @@ theorem decided_kept {c b x} (hx : x ∈ b) :
     · exact Or.inr (Or.inl (List.mem_append_right _
         (List.mem_map.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp [ha, hr]⟩, rfl⟩)))
 
-/-- Across batches: when the next batch reads this batch's released and
-    unresolved sets, no line it ALLOWs shares an exact key, near key,
-    member-month or identity with any line of this batch, whatever that line's
-    outcome or enrollment, except the member-month of a capitation line whose
-    member is known not to be enrolled with that plan; unless that line was
-    itself a resubmitted identity. -/
+/-- The gate's view of a set keeps every line of its checkpoint. -/
+theorem prior_view {t p o x} (h : x ∈ p.entries) : x ∈ (view t p o).entries := by
+  unfold view
+  split
+  · rename_i hc
+    obtain ⟨s, rfl, -, -, -, -, hp⟩ := chained_iff.mp hc
+    exact hp.subset h
+  · exact h
+
+/-- Across batches, under the checkpoint rule: when the next batch's
+    checkpoints are the ones this batch produced (`advance`), whether or not
+    this batch's sets were chained, no line it ALLOWs shares an exact key, near
+    key, member-month or identity with any line of this batch, whatever that
+    line's outcome or enrollment, except the member-month of a capitation line
+    whose member is known not to be enrolled with that plan; unless that line
+    was itself a resubmitted identity.  A store that rolls back or drops a
+    line of this batch no longer chains, so it gets no ALLOW. -/
 theorem later_allow_clear {c c₂ : Ctx} {b₁ b₂ x d}
-    (hr : entries c₂.released = (decideBatch c b₁).released)
-    (hu : entries c₂.unresolved = (decideBatch c b₁).unresolved)
+    (hr : c₂.releasedPrior = (decideBatch c b₁).released)
+    (hu : c₂.unresolvedPrior = (decideBatch c b₁).unresolved)
     (hx : x ∈ b₁) (hd : d ∈ (decideBatch c₂ b₂).decisions) (ha : d.outcome = .ALLOW) :
     (∃ e ∈ (decideBatch c b₁).decisions, e.line = x ∧ Reason.ALREADY_DECIDED ∈ e.reasons) ∨
       ∀ k ∈ keys d.line, k ∈ keys x → x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled c₂ x = true := by
   rcases decided_kept (c := c) hx with h | h | h
-  · exact Or.inr (allow_clear hd ha x (by rw [hr, hu]; exact List.mem_append_left _ h))
-  · exact Or.inr (allow_clear hd ha x (by rw [hr, hu]; exact List.mem_append_right _ h))
+  · exact Or.inr (allow_clear hd ha x (List.mem_append_left _ (prior_view (by rw [hr]; exact h))))
+  · exact Or.inr (allow_clear hd ha x (List.mem_append_right _ (prior_view (by rw [hu]; exact h))))
   · exact Or.inl h
 
 /-! ## Uniqueness -/
@@ -355,10 +384,10 @@ theorem allow_nil {c : Ctx} {seen ls d} (hd : d ∈ decideAll c seen ls) (ha : d
   obtain ⟨pre, l, rfl⟩ := mem_decideAll hd
   exact outcomeOf_allow.mp (decideLine_outcome.symm.trans ha)
 
-/-- Identities: if no identity sits in both input sets, none sits in both
-    output sets; the gate adds each new identity to at most one of them. -/
-theorem ids_disjoint {c b} (h : ∀ x ∈ entries c.released, ∀ y ∈ entries c.unresolved, x.id ≠ y.id) :
-    ∀ x ∈ (decideBatch c b).released, ∀ y ∈ (decideBatch c b).unresolved, x.id ≠ y.id := by
+/-- Identities: if no identity sits in both views, none sits in both next
+    checkpoints; the gate adds each new identity to at most one of them. -/
+theorem ids_disjoint {c b} (h : ∀ x ∈ releasedSet c, ∀ y ∈ unresolvedSet c, x.id ≠ y.id) :
+    ∀ x ∈ (decideBatch c b).released.entries, ∀ y ∈ (decideBatch c b).unresolved.entries, x.id ≠ y.id := by
   intro x hx y hy hxy
   rcases List.mem_append.mp hx with hx | hx <;> rcases List.mem_append.mp hy with hy | hy
   · exact h x hx y hy hxy
@@ -406,10 +435,13 @@ theorem claim_grows {c c'} (g : Grows c c') : claim c' = claim c :=
   funext fun l => by unfold claim notEnrolled certain enrolled; rw [g.today, g.enrollment]
 
 theorem pending_grows {c c'} (g : Grows c c') : pending c' = pending c := by
-  simp only [pending, claim_grows g, g.unresolved]
+  simp only [pending, unresolvedSet, claim_grows g, g.today, g.unresolved, g.unresolvedPrior]
 
 theorem seenAt_grows {c c'} (g : Grows c c') (b : List Line) (i : Nat) : seenAt c' b i = seenAt c b i := by
-  simp only [seenAt, claim_grows g, g.released]
+  simp only [seenAt, releasedSet, claim_grows g, g.today, g.released, g.releasedPrior]
+
+theorem isSome_of_mem {α : Type} {o : Option (Snapshot α)} {x : α} (h : x ∈ entries o) : o.isSome = true := by
+  cases o <;> simp_all [entries]
 
 theorem fact_mono {c c' seen l} (g : Grows c c') : ∀ {r}, Fact c seen l r → Fact c' seen l r
   | .ALREADY_DECIDED, h | .COLLIDES_WITH_UNRESOLVED_NEAR, h | .DUPLICATE_OF_UNRESOLVED, h => by
@@ -420,7 +452,17 @@ theorem fact_mono {c c' seen l} (g : Grows c c') : ∀ {r}, Fact c seen l r → 
   | .PROVIDER_DECEASED, ⟨hu, hv, d, hd, hp⟩ => ⟨usable_iff.mp (g.pdOk.trans (usable_iff.mpr hu)), hv, d, g.pd d hd, hp⟩
   | .PROVIDER_EXCLUDED, ⟨hu, hv, e, he, hp⟩ =>
     ⟨usable_iff.mp (g.exOk.trans (usable_iff.mpr hu)), hv, e, g.ex e he, hp⟩
-  | .MEMBER_NOT_ENROLLED, h => by simpa only [Fact, g.today, g.enrollment] using h
+  | .MEMBER_DECEASED_UNVERIFIED, ⟨_, hu, hv, d, hd, hp⟩ =>
+    ⟨isSome_of_mem (g.dmf d hd), fun h => hu (usable_iff.mp (g.dmfOk.symm.trans (usable_iff.mpr h))), hv, d,
+      g.dmf d hd, hp⟩
+  | .PROVIDER_DECEASED_UNVERIFIED, ⟨_, hu, hv, d, hd, hp⟩ =>
+    ⟨isSome_of_mem (g.pd d hd), fun h => hu (usable_iff.mp (g.pdOk.symm.trans (usable_iff.mpr h))), hv, d,
+      g.pd d hd, hp⟩
+  | .PROVIDER_EXCLUDED_UNVERIFIED, ⟨_, hu, hv, e, he, hp⟩ =>
+    ⟨isSome_of_mem (g.ex e he), fun h => hu (usable_iff.mp (g.exOk.symm.trans (usable_iff.mpr h))), hv, e,
+      g.ex e he, hp⟩
+  | .MEMBER_NOT_ENROLLED, h | .MEMBER_NOT_ENROLLED_UNVERIFIED, h => by
+    simpa only [Fact, NotCovered, g.today, g.enrollment] using h
   | .SERVICE_DATE_FUTURE, h => by simpa only [Fact, g.today] using h
   | .STALE_DMF, h => by simpa only [Fact, ← usable_iff, g.dmfOk] using h
   | .STALE_PROVIDER_DEATH, h => by simpa only [Fact, ← usable_iff, g.pdOk] using h
