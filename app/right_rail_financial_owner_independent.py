@@ -57,7 +57,6 @@ SEGMENT_FORMAT = "RR/GATE/SEGMENT/v1"  # docs/CORE_REDESIGN.md "History segments
 SEGMENT_DOMAIN = b"RR/GATE/SEGMENT/v1\x00"
 MAX_SEGMENT_BYTES = 2 * MAX_PACKAGE_BYTES
 SEAL_SEGMENT_EVENTS, SEAL_SEGMENT_BYTES = 4096, MAX_PACKAGE_BYTES // 2  # every Owner write leaves the open segment below both
-PRIVATE_INDEX_SET_VERSION = 1
 PRIVATE_INDEX_DEFS_V1 = {
     "rr_financial_v1_evidence_item_id": (
         "evidence",
@@ -94,6 +93,14 @@ PRIVATE_INDEX_DEFS_V1 = {
         ("obligation_id", "determination_id"),
         "CREATE INDEX rr_financial_v1_determinations_obligation_id ON determinations(obligation_id,determination_id)",
     ),
+}
+PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; the Owner upgrades 1 to 2 on open
+    1: PRIVATE_INDEX_DEFS_V1,
+    2: {**PRIVATE_INDEX_DEFS_V1, "rr_financial_v2_events_aggregate_kind": (
+        "financial_events",
+        ("aggregate_type", "aggregate_id", "kind"),
+        "CREATE INDEX rr_financial_v2_events_aggregate_kind ON financial_events(aggregate_type,aggregate_id,kind)",
+    )},
 }
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
@@ -825,17 +832,18 @@ def _normal_sql(value: object) -> str:
 def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
     version_row = connection.execute("PRAGMA user_version").fetchone()
     version = version_row[0] if version_row is not None else None
-    if type(version) is not int or version != PRIVATE_INDEX_SET_VERSION:
+    if type(version) is not int or version not in PRIVATE_INDEX_DEFS:
         _fail("schema:private-index-version")
+    defs = PRIVATE_INDEX_DEFS[version]
     actual = {
         str(row[0]): row[1]
         for row in connection.execute(
             "SELECT name,sql FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
         )
     }
-    if set(actual) != set(PRIVATE_INDEX_DEFS_V1):
+    if set(actual) != set(defs):
         _fail("schema:private-indexes")
-    for name, (table, columns, expected_sql) in PRIVATE_INDEX_DEFS_V1.items():
+    for name, (table, columns, expected_sql) in defs.items():
         if _normal_sql(actual[name]) != _normal_sql(expected_sql):
             _fail(f"schema:private-index:{name}")
         listed = [

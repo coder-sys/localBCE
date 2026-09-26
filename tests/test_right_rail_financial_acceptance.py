@@ -71,7 +71,7 @@ _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
 _EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
     "312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E"
 )
-_EXPECTED_PRIVATE_INDEX_SET_VERSION = 1
+_EXPECTED_PRIVATE_INDEX_SET_VERSION = 2
 _EXPECTED_PRIVATE_INDEXES = (
     (
         "rr_financial_v1_evidence_item_id",
@@ -114,6 +114,12 @@ _EXPECTED_PRIVATE_INDEXES = (
         "determinations",
         ("obligation_id", "determination_id"),
         "CREATE INDEX rr_financial_v1_determinations_obligation_id ON determinations(obligation_id,determination_id)",
+    ),
+    (
+        "rr_financial_v2_events_aggregate_kind",
+        "financial_events",
+        ("aggregate_type", "aggregate_id", "kind"),
+        "CREATE INDEX rr_financial_v2_events_aggregate_kind ON financial_events(aggregate_type,aggregate_id,kind)",
     ),
 )
 
@@ -2270,6 +2276,28 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "schema:trigger:financial_event_update_immutable"):
             verify_database(weakened_path, expected_config=store.config, expected_authority=self.authority)
         self.assertEqual(weakened_path.read_bytes(), weakened_bytes)
+
+    def test_a_v1_private_index_set_stays_valid_and_upgrades_to_v2_on_open(self) -> None:
+        source = self._make_owner()
+        source_package = source.export_continuity()
+        v1_path = self._path("private-index-v1.sqlite")
+        v1_path.write_bytes(source.path.read_bytes())
+        with closing(sqlite3.connect(str(v1_path), isolation_level=None)) as connection:
+            connection.execute('DROP INDEX "rr_financial_v2_events_aggregate_kind"')
+            connection.execute("PRAGMA user_version=1")
+        verify_database(v1_path, expected_config=source.config, expected_authority=self.authority)
+        with closing(sqlite3.connect(str(v1_path), isolation_level=None)) as connection:
+            connection.execute("PRAGMA user_version=2")  # v2 claimed without its index
+        with self.assertRaisesRegex(IndependentFinancialError, "schema:private-indexes"):
+            verify_database(v1_path, expected_config=source.config, expected_authority=self.authority)
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_private_indexes"):
+            self._make_owner(path=v1_path)
+        with closing(sqlite3.connect(str(v1_path), isolation_level=None)) as connection:
+            connection.execute("PRAGMA user_version=1")
+        upgraded = self._make_owner(path=v1_path)
+        self._assert_private_index_schema(v1_path)
+        self.assertEqual(upgraded.export_continuity(), source_package)
+        verify_database(v1_path, expected_config=source.config, expected_authority=self.authority)
 
     def test_private_snapshot_index_upgrade_serializes_concurrent_openers(self) -> None:
         source = self._make_owner(schema_version=8)

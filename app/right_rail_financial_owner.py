@@ -95,7 +95,7 @@ _SEAL_SEGMENT_BYTES: Final[int] = _MAX_PACKAGE_BYTES // 2  # soft bounds: seal a
 _SEAL_SEGMENT_EVENTS: Final[int] = 4096
 _SEGMENT_FRAME_BYTES: Final[int] = 4096  # seal, digests and framing, which records do not count
 _SEGMENT_TABLES: Final[frozenset[str]] = frozenset({"history_segments", "history_pending", "history_open"})
-_PRIVATE_INDEX_SET_VERSION: Final[int] = 1
+_PRIVATE_INDEX_SET_VERSION: Final[int] = 2  # v2 adds the events lookup the checker runs per obligation
 # The history is append-only in the database itself (Art. III.4); stores
 # created before these triggers get them once, atomically, on open.
 _HISTORY_APPEND_ONLY_TRIGGERS: Final[dict[str, str]] = {
@@ -111,6 +111,10 @@ _PRIVATE_INDEX_SET_V1: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
     ("rr_financial_v1_evaluations_obligation_revision", "evaluations", ("obligation_id", "revision")),
     ("rr_financial_v1_determinations_obligation_id", "determinations", ("obligation_id", "determination_id")),
 )
+_PRIVATE_INDEX_SETS: Final[dict[int, tuple[tuple[str, str, tuple[str, ...]], ...]]] = {
+    1: _PRIVATE_INDEX_SET_V1,
+    2: (*_PRIVATE_INDEX_SET_V1, ("rr_financial_v2_events_aggregate_kind", "financial_events", ("aggregate_type", "aggregate_id", "kind"))),
+}
 _CORRECTION_FOLLOWUP_CONTRACT: Final[str] = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 _CORRECTION_FOLLOWUP_DEPENDENCIES: Final[tuple[str, ...]] = (
     "OBLIGATION_REVISION",
@@ -1277,18 +1281,12 @@ def _private_index_sql(name: str, table: str, columns: tuple[str, ...]) -> str:
     return f"CREATE INDEX {name} ON {table}({','.join(columns)})"
 
 
-def _private_index_sql_by_name() -> dict[str, str]:
-    return {
-        name: _private_index_sql(name, table, columns)
-        for name, table, columns in _PRIVATE_INDEX_SET_V1
-    }
-
-
 def _normalized_schema_sql(value: str) -> str:
     return re.sub(r"\s+", "", value).replace('"', "").lower()
 
 
-def _private_index_set_is_current(connection: sqlite3.Connection) -> bool:
+def _private_index_set_version(connection: sqlite3.Connection) -> int:
+    """The exact private index set present: 0 for none (a store from before them), else its version."""
     version_row = connection.execute("PRAGMA user_version").fetchone()
     version = version_row[0] if version_row is not None else None
     actual: dict[str, str] = {}
@@ -1299,14 +1297,16 @@ def _private_index_set_is_current(connection: sqlite3.Connection) -> bool:
         if type(name) is not str or type(sql) is not str or name in actual:
             _fail(FinancialIntegrityError, "schema_private_indexes")
         actual[name] = sql
-    expected = _private_index_sql_by_name()
     if type(version) is int and version == 0 and not actual:
-        return False
-    if type(version) is not int or version != _PRIVATE_INDEX_SET_VERSION or set(actual) != set(expected):
+        return 0
+    if type(version) is not int or version not in _PRIVATE_INDEX_SETS:
+        _fail(FinancialIntegrityError, "schema_private_indexes")
+    expected = {name: _private_index_sql(name, table, columns) for name, table, columns in _PRIVATE_INDEX_SETS[version]}
+    if set(actual) != set(expected):
         _fail(FinancialIntegrityError, "schema_private_indexes")
     if any(_normalized_schema_sql(actual[name]) != _normalized_schema_sql(sql) for name, sql in expected.items()):
         _fail(FinancialIntegrityError, "schema_private_indexes")
-    for name, table, columns in _PRIVATE_INDEX_SET_V1:
+    for name, table, columns in _PRIVATE_INDEX_SETS[version]:
         listed = [
             row
             for row in connection.execute(f'PRAGMA index_list("{table}")')
@@ -1321,16 +1321,20 @@ def _private_index_set_is_current(connection: sqlite3.Connection) -> bool:
         )
         if key_parts != tuple((column, 0, "BINARY") for column in columns):
             _fail(FinancialIntegrityError, "schema_private_indexes")
-    return True
+    return version
 
 
 def _install_private_index_set(connection: sqlite3.Connection) -> None:
-    if _private_index_set_is_current(connection):
+    """Brings an exact older set (or none) up to the current one, adding only the missing indexes."""
+    found = _private_index_set_version(connection)
+    if found == _PRIVATE_INDEX_SET_VERSION:
         return
-    for name, table, columns in _PRIVATE_INDEX_SET_V1:
-        connection.execute(_private_index_sql(name, table, columns))
+    present = {name for name, _table, _columns in _PRIVATE_INDEX_SETS.get(found, ())}
+    for name, table, columns in _PRIVATE_INDEX_SETS[_PRIVATE_INDEX_SET_VERSION]:
+        if name not in present:
+            connection.execute(_private_index_sql(name, table, columns))
     connection.execute(f"PRAGMA user_version={_PRIVATE_INDEX_SET_VERSION}")
-    if not _private_index_set_is_current(connection):
+    if _private_index_set_version(connection) != _PRIVATE_INDEX_SET_VERSION:
         _fail(FinancialIntegrityError, "schema_private_indexes")
 
 
