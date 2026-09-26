@@ -103,6 +103,7 @@ STATE_FILES = (
     "app/right_rail_financial_staff_server.py",
     "app/right_rail_financial_switch.py",
     "app/staff_workspace/index.html",
+    "app/staff_workspace/interaction-model.json",
     "app/staff_workspace/staff.css",
     "app/staff_workspace/staff.js",
     "tests/__init__.py",

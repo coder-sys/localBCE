@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest import mock
 
 from app import right_rail_financial_engine as financial_engine
 from app import right_rail_financial_owner as owner
@@ -713,7 +713,7 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(self.db.read_bytes(), before_bytes)
 
         # The supplied actor and revision reach the Mirror exactly, for acknowledge too.
-        with patch.object(FinancialMirror, "acknowledge_action", return_value={"status": "STUB"}) as acknowledge:
+        with mock.patch.object(FinancialMirror, "acknowledge_action", return_value={"status": "STUB"}) as acknowledge:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.main(common + ["acknowledge-action", "--action-id", "action:h", "--acknowledgment-ref", "ack:h",
                                                     "--actor-id", "synthetic-receiver", "--actor-role", "RECEIVER", "--expected-revision", "7"]), 0)
@@ -927,6 +927,52 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(summary["schema"], "RR/FINANCIAL/MIRROR/v1")
         self.assertFalse(summary["dispatch_enabled"])
         self.assertFalse(summary["egress_enabled"])
+
+    def test_unapproved_owner_field_never_reaches_mirror_or_cli_output(self) -> None:
+        """Article IV.2: outputs copy approved fields only, so a new owner column cannot leak."""
+        from tools import right_rail_financial_cli as cli
+
+        self._prepare_action()
+        marker = "unapproved_owner_column"
+
+        def tag(value: object) -> object:
+            if type(value) is dict:
+                return {**{key: tag(item) for key, item in value.items()}, marker: marker}
+            return [tag(item) for item in value] if type(value) is list else value
+
+        def tagging(name: str) -> object:
+            original = getattr(owner.FinancialOwner, name)
+            return mock.patch.object(owner.FinancialOwner, name, lambda store, *a, **k: tag(original(store, *a, **k)))
+
+        mirror = self.mirror
+        reads = {
+            "summary": mirror.summary,
+            "list": lambda: mirror.list_obligations(status="ALL"),
+            "detail": lambda: mirror.obligation_detail(H_ITEM_ID),
+            "receipt": lambda: mirror.current_evaluation_receipt(H_ITEM_ID),
+            "decision_package": lambda: mirror.decision_package(H_ITEM_ID),
+            "history": lambda: mirror.history(limit=200),
+            "followup": lambda: mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h"),
+            "drain": mirror.drain_correction_followups,
+            "program_funding": mirror.program_funding_summary,
+            "integrity": mirror.verify_integrity,
+            "command": lambda: mirror.acknowledge_action("action:correction:h", "ack:correction:h:tagged"),
+        }
+        scope = [text for key in ("state_id", "deployment_id", "program_id", "period_id") for text in (f"--{key.replace('_', '-')}", getattr(self.config, key))]
+        base = ["--database", str(self.db), "--authority-file", str(self._authority_file()), *scope]
+        cli_reads = (["summary"], ["list-obligations", "--status", "ALL"], ["detail", "--item-id", H_ITEM_ID],
+                     ["evaluation-receipt", "--item-id", H_ITEM_ID], ["history", "--limit", "200"], ["verify-integrity"])
+        with ExitStack() as patches:
+            for name in ("summary", "list_obligations", "obligation_detail", "current_evaluation_receipt", "decision_package", "history",
+                         "correction_followup_outputs", "program_funding_summary", "verify_integrity", "acknowledge_action"):
+                patches.enter_context(tagging(name))
+            for label, read in reads.items():
+                with self.subTest(label):
+                    self.assertNotIn(marker, json.dumps(read()))
+            for argv in cli_reads:
+                with self.subTest(argv[0]), redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()) as stderr:
+                    self.assertEqual((cli.main(base + argv), stderr.getvalue()), (0, ""))
+                    self.assertNotIn(marker, stdout.getvalue())
 
 if __name__ == "__main__":
     unittest.main()
