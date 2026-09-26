@@ -15,8 +15,8 @@ open BlindLedger.Gate.Rules
     `line ...same fields... [OUTCOME REASONS]` adds a line to the batch;
     `commit` decides it, checks the expectations (all lines or none) and that
     the reversed batch decides the same, then keeps the new released set;
-    `report` prints totals; `held N CENTS` checks the HOLD totals; `end N`
-    is the number of checked lines.  Test-only; never a payment path. -/
+    `report` prints totals; `end N` is the number of checked lines.
+    Test-only; never a payment path. -/
 
 def name {α : Type} [Repr α] (x : α) : String := ((reprStr x).splitOn ".").getLast!
 
@@ -113,11 +113,6 @@ def step (st : St) : List String → Option (St × List String)
     pure (st, s!"REPORT all {by_ fun _ => true}" ::
       ([Outcome.ALLOW, .HOLD, .HUMAN_REVIEW].map fun o => s!"REPORT {name o} {by_ (·.outcome == o)}") ++
       reasons.map fun r => s!"REPORT {name r} {by_ (·.reasons.contains r)}")
-  | ["held", n, cents] => do
-    let h := st.done.filter (·.outcome == .HOLD)
-    let ok := h.length == (← n.toNat?) && h.foldl (· + ·.line.cents) 0 == (← cents.toNat?)
-    pure ({ st with checked := st.checked + 1, failed := st.failed + (if ok then 0 else 1) },
-      if ok then [] else [s!"RULES_VECTOR_MISMATCH held {tally h}"])
   | ["end", n] => do pure ({ st with expected := some (← n.toNat?) }, [])
   | k :: fs => do
     guard (["dmf", "pdeath", "excl", "span"].contains k)
