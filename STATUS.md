@@ -65,6 +65,11 @@ in that archive that holds the raw record.
    bypass, at most one release, no lost decision, stale primaries cannot sign.
    Bypass reconciliation (liveness) holds on a 1-payment model. A design model,
    not the code. Evidence: `docs/formal/gate_failover/README.md`.
+10. **Gate decision rules R1-R5 (Lean).** 2026-09-26: `BlindLedger.Gate.Rules` builds;
+    six theorems proved (sound, complete, fail-closed, released keys unique, monotone,
+    arrival-order deterministic), axioms pinned. `gate_rules` passes 52 of 52 vectors
+    and holds exactly the seeded 110 of 3,610 demo lines ($36,637.00, state ZZ);
+    all 44 rule mutants are killed. Runs in tests only, not yet in the token path.
 
 ## What is written but has never run
 
@@ -114,6 +119,8 @@ history lives in bundles under `work/_retired-research-20260924`.
    tests, then expose it read-only through an authenticated staff route.
 
 ## Change log
+
+- 2026-09-26 — Gate rules R1-R5 (Art. V.1-V.2, VI, IX.3, X.1-X.2, XI.6, XI.8, XI.9, XII): Lean `decideBatch` holds deceased-member, second-plan member-month, excluded/deceased-provider, duplicate-FFS and not-enrolled lines; missing or stale snapshots go to human review. Felt effect: a state sees why each dollar was held, before it leaves. Next: wire into the gate token (one line = one leaf).
 
 - 2026-09-25 — Gate failover TLA+ model and configs added under `docs/formal/gate_failover/` (Art. IV, XI); safety and small-model liveness checks passed under the guard. Deeper model still to run (memory).
 - 2026-09-24 — Private-ZK / Profile 11-12 track moved to `parked/private_zk/` (96 files); default `pytest` run excludes it (`pytest parked` runs it). Dead `tools/direct_mask_*` duplicates removed (newer copies live in `native/tools/`). New constitution tests: `tests/test_right_rail_financial_constitution_invariants.py` (written, not yet run).
