@@ -37,7 +37,7 @@
   // A command whose response was lost or unverifiable may have committed: keep the exact body for retry.
   const UNCERTAIN_OUTCOMES = [
     "owner_command_unavailable", "Failed to fetch", "NetworkError", "command_unavailable",
-    "command_outcome_uncertain", "command_response_unverified",
+    "command_outcome_uncertain", "command_response_unverified", "store_busy", "store_busy_outcome_unknown",
   ];
   const ROUTES = {
     "reject-offset": "/api/decision/reject-offset",
@@ -636,6 +636,7 @@
   }
 
   function describeError(code, name) {
+    if (code === "store_busy") return "The Owner store was busy and recorded nothing. Retry the same command in a moment.";
     if (UNCERTAIN_OUTCOMES.includes(code)) {
       return "Command outcome is unavailable and may have committed. Refresh the overview, reopen the package, and inspect Owner state before retrying.";
     }
@@ -665,9 +666,9 @@
       throw new Error("command_outcome_uncertain");
     }
     if (!response.ok) {
-      throw new Error(isRecord(value) && isRecord(value.error) && typeof value.error.code === "string"
-        ? value.error.code
-        : "command_unavailable");
+      const code = isRecord(value) && isRecord(value.error) && typeof value.error.code === "string" ? value.error.code : "command_unavailable";
+      // Only a busy answer that says nothing changed is safe to retry blind; any other busy answer may have committed.
+      throw new Error(code === "store_busy" && value.changed !== false ? "store_busy_outcome_unknown" : code);
     }
     try {
       assert(isRecord(value) && isRecord(value.workspace), "command_workspace_missing");

@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from app.right_rail_financial_owner import FinancialBusyError
 from tools import right_rail_scorecard as scorecard
 
 _WORKSPACE = Path(__file__).resolve().parents[1] / "app" / "staff_workspace"
@@ -236,6 +237,33 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 check_stale(role, name)
                 if advance:
                     self._run_step(workflow, server, role, name)
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
+    def test_a_busy_store_keeps_the_exact_body_for_retry(self) -> None:
+        """store_busy with changed:false recorded nothing: say so and offer the same body again. A busy answer after
+        the command committed is uncertain: the held body is retried and the Owner answers with what it recorded."""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-busy")
+        real = workflow.reject_offset_and_authorize_correction
+
+        def busy_after(commit):
+            def command(body):
+                del workflow.reject_offset_and_authorize_correction  # busy once
+                if commit:
+                    real(body)
+                raise FinancialBusyError("store_busy")
+            return command
+        try:
+            browser = self._open("approver", server)
+            browser.click("open-package")
+            for commit, words in ((False, "recorded nothing"), (True, "may have committed")):
+                workflow.reject_offset_and_authorize_correction = busy_after(commit)
+                self.assertTrue(browser.action("reject-offset"))
+                self.assertIn(words, browser.last_view["texts"]["command-status"])
+                self.assertFalse(browser.last_view["buttons"]["reject-offset"]["disabled"])  # the held body, offered again
+            self.assertTrue(browser.action("reject-offset"))
+            self.assertIn(_MODEL["controls"]["reject-offset"]["responses"]["success"]["message"].split(".")[0], browser.last_view["texts"]["command-status"])
+            self.assertEqual(workflow.decision_view()["decision_package"]["current_action"]["status"], "READY")
         finally:
             self._stop_workflow(workflow, server, thread)
 
