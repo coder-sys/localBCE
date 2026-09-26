@@ -47,6 +47,8 @@ python3 scripts/extract_rightrail_pdf_documents.py \
 
 python3 scripts/extract_rightrail_requirements.py \
   /path/to/RightRail-Agent-20260919
+
+python3 scripts/build_rightrail_operating_plan_review_queue.py
 ```
 
 The generated reports are intentional checkpoint artifacts:
@@ -59,6 +61,8 @@ The generated reports are intentional checkpoint artifacts:
 - `reports/pdf_document_inventory_v1.json`
 - `reports/requirements_candidates_v1.jsonl`
 - `reports/requirements_crosswalk_summary_v1.json`
+- `reports/operating_plan_review_queue_v1.jsonl`
+- `reports/operating_plan_review_queue_summary_v1.json`
 
 The static workspace analysis inventories build descriptors, tests, language
 surfaces, preserved binaries, and review markers across all 73 workspaces. It
@@ -72,6 +76,10 @@ promotes a statement automatically. The dedicated PDF inventory verifies all
 four retained PDFs against the catalog and records page-level text hashes without
 retaining full extracted text. The three cryptography papers remain documentary
 references and are not treated as product requirements.
+
+The operating-plan review queue prioritizes the four existing safety-boundary
+candidates and leaves every human decision empty. Repository paths are only
+cross-reference suggestions; they are not evidence of adoption or compatibility.
 
 ## Safety Boundaries
 

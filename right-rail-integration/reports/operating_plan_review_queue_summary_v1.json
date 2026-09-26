@@ -1,0 +1,32 @@
+{
+  "automatic_adoption": false,
+  "checkpoint_sha256": "c4b933a7a095134a53eae0f49d58b3e0f7e2fae6e060629b2fa53f3e2351d66d",
+  "crosswalk_disposition_counts": {
+    "adopt_safety_boundary": 4,
+    "review_candidate": 106
+  },
+  "execution_allowed": false,
+  "human_reviewed_count": 0,
+  "pending_human_review_count": 110,
+  "priority_counts": {
+    "1": 4,
+    "3": 106
+  },
+  "proof_binding_count": 0,
+  "queue_item_count": 110,
+  "queue_sha256": "53c47905a20e42bff818058673c8dfa39992ce9a0b0ee9398b523dd7494e544c",
+  "runtime_eligible_count": 0,
+  "schema_version": "localbce-rightrail-operating-plan-review-summary-v1",
+  "source_path": "original/reference/RightRail_Architecture_and_Operating_Plan.pdf",
+  "source_requirements_checkpoint_sha256": "d1db552ce723223b149dbdacd5f20487635f18ed82609a433543a82151ba7879",
+  "source_requirements_sha256": "2b939941df496df73b0922f2cb76b5a222e80e0b62d4f0f7c05078a73ee2e2dd",
+  "suggested_target_counts": {
+    "ARCHITECTURE_ALIGNMENT.md": 82,
+    "PROJECT_STATE.md": 5,
+    "RULES_ENGINE.md": 7,
+    "STARK_RUNTIME.md": 15,
+    "gov-rules-kg-prototype/README.md": 13,
+    "ops/PRODUCTION_CONFIG_CHECKLIST.md": 11,
+    "ops/RISK_REGISTER.md": 1
+  }
+}
