@@ -1,6 +1,6 @@
 [
-  { "path": "artifacts\\engine-correction\\blind_financial_correction.exe", "sha256": "88D853961AB127EE33C65A57F6E35D03244FB5CCE2067F4A0FDF592ECC730992" },
+  { "path": "artifacts\\engine-correction\\blind_financial_correction.exe", "sha256": "349BED3194C27831C2C64F78E82D8803A1446C835125BB89240F5295AD0E7A5B" },
   { "path": "artifacts\\engine-correction\\vectors\\request.bin", "sha256": "13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537" },
-  { "path": "artifacts\\engine-correction\\vectors\\result.expected.bin", "sha256": "6858FC3684D1243EB12F2FC038AD8D2107239E92C520C388B7D5719741FE13D2" },
+  { "path": "artifacts\\engine-correction\\vectors\\result.expected.bin", "sha256": "CB6DA046ED35E6E205AD1706CC29A37DE4539F14CE1AB56E1C95B86F379063DE" },
   { "path": "native\\guard\\run_guarded_v4.ps1", "sha256": "57F9EC8AEFE1D0E281B3BB0D76F2F057C8295F99AFDD04305DFC777703ED99FB" }
 ]
