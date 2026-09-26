@@ -41,6 +41,7 @@ from app.right_rail_financial_staff_server import (
     PROGRAM_TOTAL_CENTS,
     SUPPORT_EVENT_MS,
     StaffWorkflow,
+    _COMMAND_ROUTES,
     _LoopbackServer,
     _handler_for,
     _request_allowed,
@@ -1010,46 +1011,39 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         thread.start()
         self.addCleanup(server.shutdown)
         port = int(server.server_address[1])
-        origin = f"http://127.0.0.1:{port}"
+        host = ("Host", f"127.0.0.1:{port}")
+        post = (host, ("Origin", f"http://127.0.0.1:{port}"), ("Content-Type", "application/json"))
 
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-        self.addCleanup(connection.close)
-        connection.request("GET", "/api/workspace", headers={"Host": f"127.0.0.1:{port}"})
-        response = connection.getresponse()
-        body = json.loads(response.read().decode("utf-8"))
-        self.assertEqual(response.status, 200)
-        self.assertEqual(body["summary"]["obligation_count"], 20)
+        def call(method: str, path: str, headers: tuple[tuple[str, str], ...], body: bytes = b"", length: str = "") -> tuple[int, dict[str, str], object]:
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            self.addCleanup(connection.close)
+            connection.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+            for name, value in (*headers, ("Content-Length", length or str(len(body)))):
+                connection.putheader(name, value)
+            connection.endheaders(body)
+            response = connection.getresponse()
+            return response.status, dict(response.getheaders()), json.loads(response.read().decode("utf-8"))
 
-        connection.request(
-            "POST",
-            "/api/attempt/wrong-role",
-            body=json.dumps(self._review_body(workflow)),
-            headers={
-                "Host": f"127.0.0.1:{port}",
-                "Content-Type": "application/json",
-                "Origin": "https://other.example",
-            },
-        )
-        response = connection.getresponse()
-        denied = json.loads(response.read().decode("utf-8"))
-        self.assertEqual(response.status, 403)
-        self.assertEqual(denied["error"]["code"], "loopback_origin_required")
-
-        connection.request(
-            "POST",
-            "/api/attempt/wrong-role",
-            body=json.dumps(self._review_body(workflow)),
-            headers={
-                "Host": f"127.0.0.1:{port}",
-                "Content-Type": "application/json",
-                "Origin": origin,
-            },
-        )
-        response = connection.getresponse()
-        gate = json.loads(response.read().decode("utf-8"))
-        self.assertEqual(response.status, 200)
-        self.assertEqual(gate["gate"]["code"], "authority_actor_not_authorized")
-        self.assertTrue(gate["gate"]["state_unchanged"])
+        status, headers, body = call("GET", "/api/workspace", (host,))
+        self.assertEqual((status, body["summary"]["obligation_count"]), (200, 20))
+        self.assertEqual((headers["Server"], headers["Cross-Origin-Resource-Policy"]), ("RightRail", "same-origin"))
+        self.assertEqual(call("POST", "/api/action/acknowledge", (host, ("Origin", "https://other.example"), post[2]), b'{"revision":0}')[:3:2],
+                         (403, {"error": {"code": "loopback_origin_required"}}))
+        # Only the model's declared commands are served; the demo gate routes are not.
+        model = json.loads((Path(__file__).resolve().parents[1] / "app" / "staff_workspace" / "interaction-model.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(_COMMAND_ROUTES), {c["route"][5:] for c in model["controls"].values() if c["route"].startswith("POST ")})
+        self.assertEqual(call("POST", "/api/attempt/wrong-role", post, json.dumps(self._review_body(workflow)).encode())[0], 404)
+        # Exact targets and one exact Host; odd framing, duplicate keys and deep nesting get a clean 400.
+        self.assertEqual(call("GET", f"http://127.0.0.1:{port}/api/workspace", (host,))[0], 404)
+        self.assertEqual(call("GET", "/api/workspace", (host, ("Host", "rebound.example")))[0], 403)
+        for body_bytes, length in ((b'{"revision":0,"revision":0}', ""), (b"[" * 5000, ""), (b'{"revision":0}', "1_4")):
+            self.assertEqual(call("POST", "/api/action/acknowledge", post, body_bytes, length)[:3:2], (400, {"error": {"code": "invalid_request"}}))
+        # Framework refusals and unexpected read failures are JSON with the same headers, and no detail.
+        status, headers, body = call("PUT", "/api/workspace", post)
+        self.assertEqual((status, body), (501, {"error": {"code": "invalid_request"}}))
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+        with patch.object(workflow, "workspace", side_effect=RuntimeError("internal detail")):
+            self.assertEqual(call("GET", "/api/workspace", (host,))[:3:2], (503, {"error": {"code": "owner_read_unavailable"}}))
 
 
 if __name__ == "__main__":

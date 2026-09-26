@@ -145,5 +145,11 @@
         "owner_command_unavailable": { "screen": "unavailable", "message": "The Owner could not process the command. Reload this page to check again." }
       }
     }
+  },
+  "accessibility": {
+    "note": "Art. XIII.3 (WCAG 2.1 AA): the table tests/test_right_rail_mirror_interaction_model.py drives -- declared colour-token contrast pairs (checked in both the light and the prefers-color-scheme: dark palette), the status/error regions that must stay aria-live, and the controls that must always stay reachable by keyboard because no interaction-model control entry tracks their own accessible name.",
+    "contrast_pairs": [["ink", "surface", 4.5], ["ink", "canvas", 4.5], ["muted", "surface", 4.5], ["blue", "blue-light", 4.5], ["amber", "amber-light", 4.5], ["red", "red-light", 4.5], ["green", "green-light", 4.5]],
+    "live_regions": ["connection-status", "command-status", "package-staleness"],
+    "always_reachable_controls": ["refresh-button", "open-package"]
   }
 }

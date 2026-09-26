@@ -16,8 +16,7 @@ import re
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable
-from urllib.parse import urlsplit
+from typing import Any
 
 from app import right_rail_financial_engine as financial_engine
 from app.right_rail_financial_mirror import (
@@ -107,6 +106,21 @@ _STATIC_FILES: dict[str, tuple[str, str]] = {
     "/staff.js": ("staff_workspace/staff.js", "text/javascript; charset=utf-8"),
     "/interaction-model.json": ("staff_workspace/interaction-model.json", "application/json; charset=utf-8"),
     **{f"/role/{role}": ("staff_workspace/index.html", "text/html; charset=utf-8") for role in STAFF_ROLES},
+}
+# Routes match the raw request target exactly, so a query, fragment, authority
+# form or encoded variant matches nothing. Commands are exactly the interaction
+# model's declared POST controls (tested): no undeclared command is served.
+_READ_ROUTES = {
+    "/api/workspace": "workspace",
+    "/api/decision-package": "decision_view",
+    "/api/correction-followup": "correction_followup",
+}
+_COMMAND_ROUTES = {
+    "/api/decision/reject-offset": "reject_offset_and_authorize_correction",
+    "/api/action/acknowledge": "acknowledge_correction_action",
+    "/api/correction/record-cash": "record_cash_correction",
+    "/api/reporting/record": "record_reporting_evidence",
+    "/api/continuity/restore-test": "restore_test",
 }
 _HEX_DIGEST = re.compile(r"^[0-9A-F]{128}$")
 _EVALUATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -449,11 +463,11 @@ class StaffWorkflow:
         return value
 
     @staticmethod
-    def _review_values(body: dict[str, Any], *, with_receipt: bool = True) -> tuple[int, str | None, str | None]:
+    def _review_values(body: object, *, with_receipt: bool = True) -> tuple[int, str | None, str | None]:
         required = {"revision"}
         if with_receipt:
             required |= {"evaluation_id", "evaluation_result_digest"}
-        StaffWorkflow._require_object(body, required)
+        body = StaffWorkflow._require_object(body, required)
         revision = body["revision"]
         if type(revision) is not int or revision < 0:
             raise ValueError("review_binding")
@@ -468,23 +482,20 @@ class StaffWorkflow:
             raise ValueError("review_binding")
         return revision, evaluation_id, result_digest
 
-    def _review_dependencies(self, body: dict[str, Any]) -> tuple[int, str, str]:
-        self._require_object(
+    def _review_dependencies(self, body: object) -> tuple[int, str, str, dict[str, Any]]:
+        """The one shape check for a reviewed command: exact keys, typed values, binding object."""
+        payload = self._require_object(
             body,
             {"revision", "evaluation_id", "evaluation_result_digest", "read_binding"},
         )
-        if type(body["read_binding"]) is not dict:
+        if type(payload["read_binding"]) is not dict:
             raise ValueError("review_binding")
         revision, evaluation_id, result_digest = self._review_values(
-            {
-                "revision": body["revision"],
-                "evaluation_id": body["evaluation_id"],
-                "evaluation_result_digest": body["evaluation_result_digest"],
-            }
+            {key: payload[key] for key in ("revision", "evaluation_id", "evaluation_result_digest")}
         )
         if evaluation_id is None or result_digest is None:
             raise ValueError("review_binding")
-        return revision, evaluation_id, result_digest
+        return revision, evaluation_id, result_digest, payload["read_binding"]
 
     def _owner_position(self) -> tuple[int, object]:
         """Measure the Owner's committed history position (sequence and head)."""
@@ -507,11 +518,7 @@ class StaffWorkflow:
         return value
 
     def _gate_attempt(self, body: object, *, stale: bool) -> dict[str, Any]:
-        payload = self._require_object(
-            body,
-            {"revision", "evaluation_id", "evaluation_result_digest", "read_binding"},
-        )
-        revision, evaluation_id, result_digest = self._review_dependencies(payload)
+        revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
         if self._mirror.decision_package(H_ITEM_ID).get("current_determination") is not None:
             raise ValueError("gate_check_not_available_after_determination")
         if stale:
@@ -536,7 +543,7 @@ class StaffWorkflow:
                 decision_at_ms=DECISION_AT_MS,
                 evaluation_id=evaluation_id,
                 evaluation_result_digest=result_digest,
-                staff_read_binding=payload["read_binding"],
+                staff_read_binding=read_binding,
             )
         except (FinancialError, FinancialMirrorError) as exc:
             code = str(exc)
@@ -565,12 +572,8 @@ class StaffWorkflow:
             return {"gate": result, "workspace": self._workspace_locked()}
 
     def reject_offset_and_authorize_correction(self, body: object) -> dict[str, Any]:
-        payload = self._require_object(
-            body,
-            {"revision", "evaluation_id", "evaluation_result_digest", "read_binding"},
-        )
         with self._lock:
-            revision, evaluation_id, result_digest = self._review_dependencies(payload)
+            revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
             result = self._mirror.reject_offset_and_authorize_correction(
                 item_id=H_ITEM_ID,
                 claim_id=H_CLAIM_ID,
@@ -581,13 +584,12 @@ class StaffWorkflow:
                 decision_at_ms=DECISION_AT_MS,
                 evaluation_id=evaluation_id,
                 evaluation_result_digest=result_digest,
-                staff_read_binding=payload["read_binding"],
+                staff_read_binding=read_binding,
             )
             return {"command": result, "workspace": self._workspace_locked()}
 
     def acknowledge_correction_action(self, body: object) -> dict[str, Any]:
-        payload = self._require_object(body, {"revision"})
-        revision, _evaluation_id, _result_digest = self._review_values(payload, with_receipt=False)
+        revision, _evaluation_id, _result_digest = self._review_values(body, with_receipt=False)
         with self._lock:
             cash_before = self._h_received_cash_cents()
             result = self._mirror.acknowledge_action(
@@ -608,10 +610,7 @@ class StaffWorkflow:
 
     def record_cash_correction(self, body: object) -> dict[str, Any]:
         payload = self._require_object(body, {"revision", "cash_command"})
-        revision, _evaluation_id, _result_digest = self._review_values(
-            {"revision": payload["revision"]},
-            with_receipt=False,
-        )
+        revision, _evaluation_id, _result_digest = self._review_values({"revision": payload["revision"]}, with_receipt=False)
         cash_command = self._require_object(payload["cash_command"], set(CASH_CORRECTION_COMMAND))
         if cash_command != CASH_CORRECTION_COMMAND:
             raise ValueError("cash_command_binding")
@@ -624,8 +623,7 @@ class StaffWorkflow:
             return {"command": result, "money_movement": False, "workspace": self._workspace_locked()}
 
     def record_reporting_evidence(self, body: object) -> dict[str, Any]:
-        payload = self._require_object(body, {"revision"})
-        revision, _evaluation_id, _result_digest = self._review_values(payload, with_receipt=False)
+        revision, _evaluation_id, _result_digest = self._review_values(body, with_receipt=False)
         with self._lock:
             self._clock.advance_to(REPORT_EVENT_MS)
             result = self._mirror.record_reporting_evidence(
@@ -720,15 +718,9 @@ class StaffWorkflow:
             }
 
     def restore_test(self, body: object) -> dict[str, Any]:
-        payload = self._require_object(
-            body,
-            {"revision", "evaluation_id", "evaluation_result_digest", "read_binding"},
-        )
-        revision, evaluation_id, result_digest = self._review_dependencies(payload)
-        if evaluation_id is None or result_digest is None:
-            raise ValueError("review_binding")
+        revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
         with self._lock:
-            if payload["read_binding"] != self._staff_command_binding(self.decision_view()):
+            if read_binding != self._staff_command_binding(self.decision_view()):
                 raise FinancialRevisionError("obligation_revision_conflict")
             before_package = self._mirror.decision_package(H_ITEM_ID, limit=100, offset=0)
             receipt = before_package.get("evaluation_receipt", {})
@@ -780,16 +772,19 @@ def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """A repeated key would give one command two meanings (Art. III.3)."""
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError("request_duplicate_key")
+    return value
+
+
 def _request_allowed(peer: str, host: str, origin: str | None, port: int, *, mutation: bool) -> bool:
-    expected_host = f"127.0.0.1:{port}"
-    expected_origin = f"http://{expected_host}"
-    if peer != "127.0.0.1" or host != expected_host:
-        return False
-    if origin is not None and origin != expected_origin:
-        return False
-    if mutation and origin != expected_origin:
-        return False
-    return True
+    # Exact Host blocks DNS rebinding; a command also needs the exact same-origin Origin (CSRF).
+    expected_origin = f"http://127.0.0.1:{port}"
+    allowed_origins = (expected_origin,) if mutation else (None, expected_origin)
+    return peer == "127.0.0.1" and host == f"127.0.0.1:{port}" and origin in allowed_origins
 
 
 def _validate_workspace_directory(
@@ -832,6 +827,14 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
             # Avoid request paths or user activity in console logs.
             return
 
+        def version_string(self) -> str:
+            return "RightRail"  # no Python or runtime version banner
+
+        def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+            # Framework refusals (bad request line, oversized header, unsupported
+            # method) carry the same JSON body and security headers as any other.
+            self._respond(code, {"error": {"code": "invalid_request"}})
+
         def _headers(self, content_type: str) -> None:
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(self._response_length))
@@ -839,10 +842,11 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
             self.send_header("Connection", "close")
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+                "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
             )
 
         def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8") -> None:
@@ -856,97 +860,64 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
         def _allowed(self, *, mutation: bool) -> bool:
             return _request_allowed(
                 self.client_address[0],
-                self.headers.get("Host", ""),
+                ",".join(self.headers.get_all("Host", [])),  # a repeated Host never matches
                 self.headers.get("Origin"),
                 int(self.server.server_address[1]),
                 mutation=mutation,
             )
 
         def _json_request(self) -> dict[str, Any]:
-            if self.headers.get_content_type() != "application/json":
-                raise ValueError("content_type")
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-            except ValueError as exc:
-                raise ValueError("content_length") from exc
-            if length < 0 or length > MAX_STAFF_COMMAND_BYTES:
+            length = self.headers.get("Content-Length", "")
+            if self.headers.get_content_type() != "application/json" or not re.fullmatch(r"[0-9]{1,5}", length):
+                raise ValueError("request_header")
+            if int(length) > MAX_STAFF_COMMAND_BYTES:
                 raise ValueError("request_size")
-            if length == 0:
-                return {}
-            value = json.loads(self.rfile.read(length).decode("utf-8"))
+            value = json.loads(self.rfile.read(int(length)).decode("utf-8"), object_pairs_hook=_unique_json_object)
             if type(value) is not dict:
                 raise ValueError("request_shape")
             return value
 
         def do_GET(self) -> None:
+            read, static = _READ_ROUTES.get(self.path), _STATIC_FILES.get(self.path)
             if not self._allowed(mutation=False):
                 self._respond(403, {"error": {"code": "loopback_origin_required"}})
-                return
-            path = urlsplit(self.path)
-            if path.query or path.fragment:
+            elif read is not None:
+                try:
+                    value = getattr(workflow, read)()
+                except Exception:  # one detail-free refusal; no internal error reaches the client
+                    self._respond(503, {"error": {"code": "owner_read_unavailable"}})
+                else:
+                    self._respond(200, value)
+            elif static is None:
                 self._respond(404, {"error": {"code": "not_found"}})
-                return
-            if path.path == "/api/workspace":
+            else:
                 try:
-                    self._respond(200, workflow.workspace())
-                except (FinancialError, FinancialMirrorError, OSError, ValueError):
-                    self._respond(503, {"error": {"code": "owner_read_unavailable"}})
-                return
-            if path.path == "/api/decision-package":
-                try:
-                    self._respond(200, workflow.decision_view())
-                except (FinancialError, FinancialMirrorError, OSError, ValueError):
-                    self._respond(503, {"error": {"code": "owner_read_unavailable"}})
-                return
-            if path.path == "/api/correction-followup":
-                try:
-                    self._respond(200, workflow.correction_followup())
-                except (FinancialError, FinancialMirrorError, OSError, ValueError):
-                    self._respond(503, {"error": {"code": "owner_read_unavailable"}})
-                return
-            static = _STATIC_FILES.get(path.path)
-            if static is None:
-                self._respond(404, {"error": {"code": "not_found"}})
-                return
-            relative_path, content_type = static
-            try:
-                content = (_ROOT / relative_path).read_bytes()
-            except OSError:
-                self._respond(503, {"error": {"code": "staff_ui_unavailable"}})
-                return
-            self._respond(200, content, content_type)
+                    content = (_ROOT / static[0]).read_bytes()
+                except OSError:
+                    self._respond(503, {"error": {"code": "staff_ui_unavailable"}})
+                else:
+                    self._respond(200, content, static[1])
 
         def do_POST(self) -> None:
+            command = _COMMAND_ROUTES.get(self.path)
             if not self._allowed(mutation=True):
                 self._respond(403, {"error": {"code": "loopback_origin_required"}})
                 return
-            try:
-                body = self._json_request()
-            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
-                self._respond(400, {"error": {"code": "invalid_request"}})
-                return
-            routes: dict[str, Callable[[object], dict[str, Any]]] = {
-                "/api/attempt/wrong-role": workflow.attempt_wrong_role,
-                "/api/attempt/stale-revision": workflow.attempt_stale_revision,
-                "/api/decision/reject-offset": workflow.reject_offset_and_authorize_correction,
-                "/api/action/acknowledge": workflow.acknowledge_correction_action,
-                "/api/correction/record-cash": workflow.record_cash_correction,
-                "/api/reporting/record": workflow.record_reporting_evidence,
-                "/api/continuity/restore-test": workflow.restore_test,
-            }
-            action = routes.get(urlsplit(self.path).path)
-            if action is None or urlsplit(self.path).query or urlsplit(self.path).fragment:
+            if command is None:
                 self._respond(404, {"error": {"code": "not_found"}})
                 return
             try:
-                result = action(body)
+                body = self._json_request()
+            except (ValueError, RecursionError):  # ValueError covers JSON and UTF-8 decode errors
+                self._respond(400, {"error": {"code": "invalid_request"}})
+                return
+            try:
+                result = getattr(workflow, command)(body)
             except FinancialRevisionError as exc:
                 self._respond(409, {"error": {"code": str(exc)}, "changed": False})
             except FinancialAuthorityError as exc:
                 self._respond(403, {"error": {"code": str(exc)}, "changed": False})
-            except FinancialError as exc:
-                self._respond(409, {"error": {"code": str(exc)}})
-            except FinancialMirrorError as exc:
+            except (FinancialError, FinancialMirrorError) as exc:
                 self._respond(409, {"error": {"code": str(exc)}})
             except ValueError:
                 self._respond(400, {"error": {"code": "invalid_request"}})

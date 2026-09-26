@@ -18,19 +18,30 @@ Working rules (details in the constitution):
 - The pinned engine binary in `artifacts/engine-correction-e911/` was built
   from an older source; see its `PROVENANCE.md`. Never describe it as built
   from the current `lean/` source.
-- Parked work (private zero-knowledge / Profile 11-12 native track) is not on
-  the critical path.
+- Private zero-knowledge is an active prototype track (Constitution IX.4). It
+  is evidence only and never blocks core or gate work. The old code under
+  `parked/` stays reference material.
 - Update `STATUS.md` in a few lines per change. Raw logs stay in log files.
 - Standing claims: synthetic, non-PHI, nonpayment, `proofSuiteId=null`,
   `production_usable=false`, `activation=false`.
-- Helpers are matched to the work (founder, 2026-09-24; definitions in
-  `~/.claude/agents/`):
-  - `rr-core` (Opus, high effort): money logic, formats, proofs, security.
+- Helpers are matched to the work (founder, 2026-09-25; definitions in
+  `~/.claude/agents/`). Helpers do their own work and never spawn helpers.
+  - `rr-core` (Opus, high effort): designing or changing money logic, new
+    formats and digests, new non-trivial proofs, crypto, security, undiagnosed
+    failures.
+  - `rr-eng` (Opus, medium): clear-spec work near the core that existing
+    tests or proofs will catch: performance, finishing a planned track,
+    build/pin plumbing, mechanical proof migrations. Escalates to rr-core.
   - `rr-review` (Opus, extra-high, read-only): the final bug-hunt before any
-    money-logic or storage-format change merges.
-  - `rr-build` (Sonnet, high): screens, harnesses, clear-spec refactors.
-  - `rr-research` (Sonnet, medium): sourced research.
+    money-logic, storage-format or crypto change merges.
+  - `rr-check` (Opus, medium, read-only): pre-merge review for everything
+    else (UI, tooling, tests, docs).
+  - `rr-analyst` (Opus, high): red-teams, judgment research, sizing calls.
+  - `rr-build` (Sonnet, medium): screens, harnesses, clear-spec refactors.
+  - `rr-research` (Sonnet, medium): plain sourced lookups.
   - `rr-chore` (Haiku, low): mechanically checkable chores only.
+- One lead session at a time; at most about three helpers, one or two of
+  them using the guard (16 GB laptop).
 - Never destroy uncommitted work, raw evidence, keys or the only copy of
   anything. No `git reset --hard`, `git clean`, or force pushes.
 

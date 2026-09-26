@@ -21,10 +21,10 @@ CORE_FILE_LINES = {
     "app/right_rail_financial_owner.py": 7_230,
     "app/right_rail_financial_owner_independent.py": 4_988,
     "app/right_rail_financial_semantic_adapter.py": 2_157,
-    "app/right_rail_financial_mirror.py": 1_750,
+    "app/right_rail_financial_mirror.py": 1_576,
     "app/right_rail_financial_engine.py": 1_482,
-    "app/right_rail_financial_switch.py": 1_400,
-    "tools/continuity_successor_v7.py": 2_400,
+    "app/right_rail_financial_switch.py": 1_334,
+    "tools/continuity_successor_v7.py": 2_326,
 }
 FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Copy-paste: repeated 6-line windows (>=120 chars) across product Python.

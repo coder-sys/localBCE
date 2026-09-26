@@ -148,6 +148,39 @@ independent result checker and a Lean comparison path. See
   reproductions.
 - Heavy runs go through `native/guard/` only.
 
+## Path to the payment gate
+
+The target end state
+([`docs/RIGHTRAIL_FULL_STACK_TARGET.md`](docs/RIGHTRAIL_FULL_STACK_TARGET.md))
+is Blind Ledger as an inline gate every FFS and managed-care payment passes
+before money goes out, at full state scale. None of that gate is built yet.
+What exists today toward it:
+
+- Lean decides one of 14 command types
+  (`reject_offset_and_authorize_correction`); Python still decides
+  population, evidence, payment/reversal, offset authorization,
+  acknowledgment, reporting, funding and evaluation recording.
+- The live correction codec (`BLFCMD01`/`BLFCRES1`) has no codec laws; only
+  the comparison-only `BLFIN02`/`BLFRES02` codec does.
+- The pinned decision binary (`artifacts/engine-correction-e911/`) was built
+  from Lean source that cannot be recovered; the current `lean/` source has
+  never been compiled into a pinned artifact.
+- There is no batch decide API, no ML-DSA-87 checkpoint signing, no
+  Merkle-inclusion token, no independent witness, no member-key sharding, no
+  fenced primary/standby, and no Bypass outcome.
+- The subprocess-per-decision path
+  (`app/minimal_clearance_verifier_process.py`, one Windows process per
+  call, serialized to one core) is disqualifying for gate throughput; it
+  needs replacing with a long-lived worker pool, not optimizing in place. No
+  warm-worker throughput benchmark has been run.
+- There is no CI, on-call rotation, or tested failover drill; `native/guard/`
+  runs one heavy job at a time on one laptop.
+
+See the target document for the authority ladder, gate points, batch
+signing, fail policy and bypass, sharding, the proof boundary, evidence
+modes, and post-quantum crypto choices, and for which of those are still
+PENDING FOUNDER DECISION.
+
 ## Rejected directions
 
 - BL-PQ512, H4, K128 and K512 proof layouts, monolithic STARK-era launch
