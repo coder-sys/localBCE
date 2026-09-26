@@ -4,14 +4,15 @@ namespace BlindLedger.Gate
 
 /-! What the payer's steps and the Merkle path guarantee, for every `Crypto`. -/
 
-/-- The nine payer checks, as one proposition; check 2 names the stored batch `st`. -/
+/-- The eleven payer checks, as one proposition; check 2 names the stored batch `st`. -/
 def Checks (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) (t : Token) (st : Stored) :
     Prop :=
   decodeToken bytes = some t ∧ batchOf s t = some st ∧ inBatch c st.checkpoint t = true ∧
     aboveFence s t = true ∧ unexpired s t = true ∧ paymentMatches c p t = true ∧
-    allows t = true ∧ granted s st.checkpoint t = true ∧ unreleased s t = true
+    routed c s p t = true ∧ allows t = true ∧ granted s t = true ∧ unreleased s t = true ∧
+    unforked s t = true
 
-/-- `verifyToken` accepts exactly when all nine checks hold. -/
+/-- `verifyToken` accepts exactly when all eleven checks hold. -/
 theorem verifyToken_iff (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) :
     verifyToken c s p bytes = true ↔ ∃ t st, Checks c s p bytes t st := by
   unfold verifyToken Checks
@@ -88,14 +89,16 @@ theorem storeCheckpoint_coherent {c : Crypto} {s s' : PayerState} {bytes : Bytes
     dsimp only at h
     split at h
     · rename_i hany
-      simp only [Bool.and_eq_true] at hany
-      obtain rfl := Option.some.inj h
-      refine ⟨hs.1, fun y hy => ?_⟩
-      rcases List.mem_cons.1 hy with rfl | hy
-      · obtain ⟨e, he, hm⟩ := List.any_eq_true.1 hany.1
-        simp only [Bool.and_eq_true, beq_iff_eq] at hm
-        exact ⟨e, he, hm.1.1, hm.1.2⟩
-      · exact hs.2 y hy
+      split at h
+      · obtain rfl := Option.some.inj h
+        exact hs
+      · obtain rfl := Option.some.inj h
+        refine ⟨hs.1, fun y hy => ?_⟩
+        rcases List.mem_cons.1 hy with rfl | hy
+        · obtain ⟨e, he, hm⟩ := List.any_eq_true.1 hany
+          simp only [Bool.and_eq_true, beq_iff_eq] at hm
+          exact ⟨e, he, hm.1.1, hm.1.2⟩
+        · exact hs.2 y hy
     · simp at h
 
 theorem release_coherent {c : Crypto} {s s' : PayerState} {p : Payment} {bytes : Bytes}
@@ -122,6 +125,37 @@ theorem verifyToken_fence_eq_epoch {c : Crypto} {s : PayerState} {p : Payment} {
   have hle := hs.1 e he
   rw [ht, hin.1.1.1.1.1, hep, hin.1.1.2] at hle
   exact Nat.le_antisymm hf hle
+
+/-- One shard per payment: two tokens the payer accepts for one payment come
+    from the same shard, the route of its member key (check 7).  So a
+    decision on any other shard, as a gate that enforced one decision per
+    payment only per shard would sign it, is never released. -/
+theorem verifyToken_one_shard {c : Crypto} {s : PayerState} {p : Payment} {b b' : Bytes}
+    {t t' : Token} (h : verifyToken c s p b = true) (h' : verifyToken c s p b' = true)
+    (hd : decodeToken b = some t) (hd' : decodeToken b' = some t') :
+    t.leaf.shardId = t'.leaf.shardId := by
+  obtain ⟨u, -, hu, -, -, -, -, -, hr, -⟩ := (verifyToken_iff c s p b).1 h
+  obtain ⟨u', -, hu', -, -, -, -, -, hr', -⟩ := (verifyToken_iff c s p b').1 h'
+  obtain rfl : u = t := Option.some.inj (hu.symm.trans hd)
+  obtain rfl : u' = t' := Option.some.inj (hu'.symm.trans hd')
+  unfold routed at hr hr'
+  cases hf : s.certs.find? (·.tenantId == p.tenantId) with
+  | none => simp [hf] at hr
+  | some e =>
+    simp only [hf, Option.any_some, beq_iff_eq] at hr hr'
+    rw [hr, hr']
+
+/-- A detected fork blocks its tenant, shard and epoch: no token under that
+    key is accepted while the fork is on record (check 11). -/
+theorem verifyToken_unforked {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes}
+    {t : Token} (h : verifyToken c s p bytes = true) (hd : decodeToken bytes = some t) :
+    ∀ f ∈ s.forked, (f.1.checkpoint.tenantId, f.1.checkpoint.shardId, f.1.checkpoint.epoch) ≠
+      (t.leaf.tenantId, t.leaf.shardId, t.leaf.epoch) := by
+  obtain ⟨u, -, hu, -, -, -, -, -, -, -, -, -, hf⟩ := (verifyToken_iff c s p bytes).1 h
+  obtain rfl : u = t := Option.some.inj (hu.symm.trans hd)
+  intro f hm heq
+  simp only [unforked, Bool.not_eq_true', List.any_eq_false, beq_iff_eq] at hf
+  exact hf f hm heq
 
 /-- `release` happens exactly on the bytes `verifyToken` accepts. -/
 theorem release_isSome (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) :

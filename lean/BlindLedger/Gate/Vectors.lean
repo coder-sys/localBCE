@@ -10,9 +10,11 @@ open BlindLedger.Gate
     `checkpoint` and `release` lines are the payer's own steps (and are checked);
     `grants`, `now` and `payment` lines set context.  The `sig` lines are the
     only ML-DSA-87 triples treated as valid; the Python test verifies each of
-    them with AWS-LC.  Accepted request, response and checkpoint lines list
-    the decoded fields they must yield; a response line names the decoded
-    request it answers, and a `reissue` line checks `reissues` on two tokens.  The last line, `end N`, is the number
+    them with AWS-LC.  A checkpoint line expects `accept` (stored), `fork`
+    (recorded as a fork) or `reject`.  Accepted request, response and
+    checkpoint lines list the decoded fields they must yield; a response line
+    names the decoded request it answers, and a `reissue` line checks
+    `reissues` on the latest revision and two tokens.  The last line, `end N`, is the number
     of checked lines; anything else is a FAIL.  Test-only: this executable is
     never a release path. -/
 
@@ -59,7 +61,7 @@ def rejectNames : List (String × RejectCode) :=
 
 def renderRequest (r : Request) : List String :=
   [text r.tenantId, text r.programId, nameOf flowNames r.flow, text r.commandKey,
-   text r.paymentId, text r.payeeRef, toString r.amountCents, text r.period, hexList r.lines,
+   text r.paymentId, toHex r.memberKey, text r.payeeRef, toString r.amountCents, text r.period, hexList r.lines,
    hexList r.evidenceRefs]
 
 def renderResponse (r : Response) : List String :=
@@ -74,11 +76,12 @@ def renderCheckpoint (x : SignedCheckpoint) : List String :=
   let c := x.checkpoint
   [text c.tenantId, text c.programId, toString c.shardId, toString c.seqFrom, toString c.seqTo, toString c.epoch,
    toHex c.prevCheckpoint, toHex c.eventHead, toHex c.tokenRoot, toHex c.evidenceRoot,
-   toHex c.engineRelease, toString c.count, toString c.createdAt, toHex (sha3 x.header)]
+   toString c.count, toString c.createdAt, toHex (sha3 x.header)]
 
 structure Ctx where
   state : PayerState :=
-    { fence := fun _ => 0, now := 0, certs := [], checkpoints := [], grants := [], released := [] }
+    { fence := fun _ => 0, now := 0, certs := [], checkpoints := [], grants := [], released := [],
+      forked := [] }
   chains : List (Bytes × Bool) := []
   sigs : List (Bytes × Bytes × Bytes) := []
   payments : List (String × Payment) := []
@@ -115,9 +118,9 @@ def decoded {α : Type} (expect : String) (render : α → List String) (result 
 /-- One line: the new context and, for a checked line, whether it matched. -/
 def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
   match fields with
-  | ["cert", expect, id, epoch, tenant, pk, chain] =>
-    let e : EpochCert := { certId := (← hex id), epoch := (← epoch.toNat?),
-                           tenantId := ascii tenant, publicKey := (← hex pk) }
+  | ["cert", expect, id, epoch, tenant, shards, pk, chain] =>
+    let e : EpochCert := { certId := (← hex id), epoch := (← epoch.toNat?), tenantId := ascii tenant,
+                           publicKey := (← hex pk), shardCount := (← shards.toNat?) }
     let x := { x with chains := x.chains ++ [(e.certId, (← chainFlag chain))] }
     stepped x expect (installCert x.crypto x.state e)
   | ["grants", id, rules, releases] =>
@@ -126,17 +129,20 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
     pure ({ x with state := { x.state with grants := [g] } }, none)
   | ["now", now] => pure ({ x with state := { x.state with now := (← now.toNat?) } }, none)
   | ["sig", pk, msg, sig] => pure ({ x with sigs := x.sigs ++ [((← hex pk), (← hex msg), (← hex sig))] }, none)
-  | ["payment", name, tenant, program, flow, id, payee, amount, period, lines] =>
+  | ["payment", name, tenant, program, flow, id, member, payee, amount, period, lines] =>
     let p : Payment := { tenantId := ascii tenant, programId := ascii program,
                          flow := (← flowNames.lookup flow), paymentId := ascii id,
-                         payeeRef := ascii payee, amountCents := (← amount.toNat?),
+                         memberKey := (← hex member), payeeRef := ascii payee, amountCents := (← amount.toNat?),
                          period := ascii period, lines := (← list hex lines) }
     pure ({ x with payments := x.payments ++ [(name, p)] }, none)
   | "checkpoint" :: expect :: _ :: bytes :: rest =>
     let b ← hex bytes
     let result := storeCheckpoint x.crypto x.state b
-    pure ({ x with state := result.getD x.state },
-      some (← decoded expect renderCheckpoint (result.bind fun _ => decodeCheckpoint b) rest))
+    let got := match result with
+      | none => "reject"
+      | some s => if s.forked.length > x.state.forked.length then "fork" else "accept"
+    let fields := if got == "accept" then ((decodeCheckpoint b).map renderCheckpoint).getD [] else []
+    pure ({ x with state := result.getD x.state }, some (got == expect && fields == rest))
   | ["token", expect, decodes, _, payment, bytes] =>
     let b ← hex bytes
     let p ← List.lookup payment x.payments
@@ -151,11 +157,11 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
       some (← decoded expect renderRequest r rest))
   | "response" :: expect :: _ :: request :: bytes :: rest =>
     let r ← List.lookup request x.requests
-    pure (x, some (← decoded expect renderResponse (decodeResponse r (← hex bytes)) rest))
-  | ["reissue", expect, _, old, new] =>
+    pure (x, some (← decoded expect renderResponse (decodeResponse sha3 r (← hex bytes)) rest))
+  | ["reissue", expect, _, latest, old, new] =>
     let a ← decodeToken (← hex old)
     let b ← decodeToken (← hex new)
-    pure (x, some (reissues a.leaf b.leaf == (← verdict expect)))
+    pure (x, some (reissues (← latest.toNat?) a.leaf b.leaf == (← verdict expect)))
   | ["decision-id", _, tenant, program, payment, rev, out] =>
     pure (x, some (decisionId sha3 (ascii tenant) (ascii program) (ascii payment) (← rev.toNat?) ==
       (← hex out)))

@@ -24,6 +24,10 @@ import BlindLedger.Gate.Theorems
 #guard_msgs in #print axioms BlindLedger.Gate.release_coherent
 /-- info: 'BlindLedger.Gate.verifyToken_fence_eq_epoch' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.verifyToken_fence_eq_epoch
+/-- info: 'BlindLedger.Gate.verifyToken_one_shard' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_one_shard
+/-- info: 'BlindLedger.Gate.verifyToken_unforked' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_unforked
 /-- info: 'BlindLedger.Gate.release_isSome' depends on axioms: [propext] -/
 #guard_msgs in #print axioms BlindLedger.Gate.release_isSome
 /-- info: 'BlindLedger.Gate.release_at_most_once' depends on axioms: [propext, Quot.sound] -/
