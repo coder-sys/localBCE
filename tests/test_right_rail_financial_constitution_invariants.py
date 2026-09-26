@@ -115,7 +115,7 @@ class _AcceptanceFixtures:
     _assert_verified = _ACCEPTANCE["_assert_verified"]
 
 
-# --- Independent BLFCRES2 encoder ------------------------------------------------
+# --- Independent BLFCRES3 encoder ------------------------------------------------
 # Written from the wire layout in ``decode_correction_transition_result`` and
 # deliberately independent of the adapter's private writer.  Every payload is
 # checked against the real decoder before it is fed to the owner, so a wrong
@@ -147,7 +147,7 @@ def _some_nat(value: int) -> bytes:
 
 
 def _result_header(status_tag: int, contract: str = financial_engine.CORRECTION_TRANSITION_OPERATION) -> bytes:
-    return b"BLFCRES2" + _u16(2) + bytes([status_tag]) + _text(contract)
+    return b"BLFCRES3" + _u16(3) + bytes([status_tag]) + _text(contract)
 
 
 def _rejected_transition_result(reason_tag: int, requirement_tag: int) -> bytes:
@@ -335,7 +335,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         call = containment.call_args
         self.assertEqual(call.args[0], release.executable)
         self.assertEqual(call.args[1], financial_engine.CORRECTION_TRANSITION_ARGUMENTS)
-        self.assertTrue(bytes(call.args[2]).startswith(b"BLFCMD01"))
+        self.assertTrue(bytes(call.args[2]).startswith(b"BLFCMD02"))
         # No partial change of any kind (III.5).
         self.assertEqual(self._durable_state(store), before)
         self.assertEqual(self._correction_evidence(store), (0, 0))
@@ -366,7 +366,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
             "truncated": valid_rejection[:-1],
             "trailing_byte": valid_rejection + b"\x00",
             "wrong_magic": b"BLFCRES1" + valid_rejection[8:],
-            "unknown_status": b"BLFCRES2" + _u16(2) + b"\x09" + valid_rejection[11:],
+            "unknown_status": b"BLFCRES3" + _u16(3) + b"\x09" + valid_rejection[11:],
             "wrong_contract": _result_header(3, "RR/FINANCIAL/CORRECTION-TRANSITION/v2") + valid_rejection[len(_result_header(3)):],
             "rejection_requirement_mismatch": _rejected_transition_result(8, 5),
             "accepted_without_mutation": _accepted_without_mutation(
