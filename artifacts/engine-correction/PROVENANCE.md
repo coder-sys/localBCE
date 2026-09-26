@@ -41,8 +41,8 @@ date, retiring commit, amount rule, reason (tab-separated, append-only). A
 correction follow-up already committed under one of them stays valid history,
 judged by that engine's amount rule (`correction-rule-v1`: the whole claim;
 `b2-v1`: min(claim, shortfall)); only the pin above decides new work. The
-independent checker pins the file's SHA-256,
-so appending a line means updating `RETIRED_PINS_SHA256` too.
+independent checker pins the file's SHA-256, so appending a line means
+updating `RETIRED_PINS_SHA256` too.
 
 ## Status
 
