@@ -2086,13 +2086,20 @@ class FinancialOwner:
         count, size = opened
         if count > _MAX_SEGMENT_EVENTS or size + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:
             _fail(FinancialContinuityError, "history_segment_size")
-        for (table,) in connection.execute("SELECT DISTINCT table_name FROM history_pending").fetchall():  # the Checker reads at most Lean's maxRows per table
-            if (rows[table] if rows is not None else connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]) > _MAX_ROWS:
-                _fail(FinancialIntegrityError, "history_capacity")
-        if count == 0 or not force and count < _SEAL_SEGMENT_EVENTS and size < _SEAL_SEGMENT_BYTES:
-            return None
-        if rows is not None and rows != _count_rows(connection):  # each seal proves the cached counts exact
+        sealing = count > 0 and (force or count >= _SEAL_SEGMENT_EVENTS or size >= _SEAL_SEGMENT_BYTES)
+        if sealing and rows is not None and rows != _count_rows(connection):  # each seal proves the cached counts exact
             _fail(FinancialIntegrityError, "row_cache_drift")
+        for (table,) in connection.execute("SELECT DISTINCT table_name FROM history_pending").fetchall():  # the Checker reads at most Lean's maxRows per table
+            cached = rows[table] if rows is not None else None
+            if cached is None or cached >= _MAX_ROWS - _MAX_ROWS // 20:  # within 5% of the cap, counted exactly
+                exact = connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                if cached is not None and cached != exact:
+                    _fail(FinancialIntegrityError, "row_cache_drift")
+                cached = exact
+            if cached > _MAX_ROWS:
+                _fail(FinancialIntegrityError, "history_capacity")
+        if not sealing:
+            return None
         # The chain continues from the last sealed segment only if its stored seal still recomputes.
         last = connection.execute("SELECT * FROM history_segments ORDER BY segment_index DESC LIMIT 2").fetchall()
         index, first, previous = 0, 1, _ZERO_DIGEST
@@ -2272,6 +2279,7 @@ class FinancialOwner:
                     connection.execute("COMMIT")
                     self._row_cache = after
             except BaseException as error:
+                self._row_cache = None  # a failed write (a proven drift included) leaves the next write to recount
                 if began and connection.in_transaction:
                     connection.execute("ROLLBACK")
                 _raise_if_busy(error)

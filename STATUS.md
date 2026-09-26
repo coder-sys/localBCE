@@ -47,6 +47,7 @@ in that archive that holds the raw record.
    2026-09-24: 6 of 6 passed; no tested query still scans a whole table.
    Evidence: `rightrail-financial-workflow-20260913-STATE.md`.
    Downgrade index set v2 to v1 (no owner open): `DROP INDEX rr_financial_v2_events_aggregate_kind; PRAGMA user_version=1;` — a writing (LIVE/TEST) owner re-upgrades on open; SHADOW never does.
+   Row-count cache: a table within 5% of the 10,000-row cap, and every seal, is counted exactly; only an undercount above 500 rows could pass the cap, which needs tampering with the store or the owner process.
 5. **Queue claim path (Python).** 2026-09-24: 29 of 29 focused tests passed. The last
    broader Queue run (122 tests) still has 1 failure and 5 errors. Earlier Lean/Rust
    admission integration (2026-09-19): 4 of 4. Evidence: `lean-queue-20260913-STATE.md`.

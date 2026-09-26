@@ -182,6 +182,20 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         with mock.patch.object(owner_module, "_CHECK_ROW_CACHE", False), mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):
             with self.assertRaisesRegex(FinancialIntegrityError, "^row_cache_drift$"):
                 owner.run_batch([_support("evidence:d-2")])
+        self.assertEqual((owner.path.read_bytes(), owner._row_cache), (before, None))  # a proven drift is not kept
+        self.assertEqual(owner.run_batch([_support("evidence:d-2")])[0]["status"], "RECORDED")  # the next write recounts
+        self.assertEqual(owner._row_cache[1], _rows(owner.path))
+
+    def test_an_undercount_near_the_cap_is_refused_not_committed(self) -> None:
+        owner = self._store("near-cap.sqlite")
+        with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):  # sealed: only evidence is pending below
+            owner.run_batch([_support("evidence:near-cap")])
+        mark, rows = owner._row_cache
+        owner._row_cache = (mark, {**rows, "evidence": rows["evidence"] - 1})  # one committed row went uncounted
+        before = owner.path.read_bytes()
+        with mock.patch.object(owner_module, "_MAX_ROWS", rows["evidence"]), mock.patch.object(owner_module, "_CHECK_ROW_CACHE", False):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^row_cache_drift$"):  # counted by the cache alone, it would pass the cap
+                _insert_copies(owner, "evidence", 1, stop_after_seal=True)  # the cache says exactly at the cap; the table is one past it
         self.assertEqual(owner.path.read_bytes(), before)
 
     def test_the_counter_holds_events_and_a_projection_table_at_the_cap(self) -> None:
