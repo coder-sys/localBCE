@@ -1,6 +1,6 @@
 # RightRail status
 
-Updated: 2026-09-25. This is the one current status file for the single codebase
+Updated: 2026-09-26. This is the one current status file for the single codebase
 `rightrail-main`. Code is still being copied in from the older checkouts.
 
 Standing rules: see CONSTITUTION.md (supreme; every change must comply).
@@ -34,12 +34,12 @@ in that archive that holds the raw record.
    2026-09-24: 9 of 9 selected tests passed (run r7; r1-r6 failed and were fixed).
    The owner rejects the disallowed offset and authorizes the correction only through
    the Lean transition inside one database transaction; crashes before and after commit
-   and exact retries were checked. Caveat: the Lean program was built on 2026-09-23
-   from an OLDER version of the Lean source; the current source has never been compiled.
-   Evidence: `rightrail-financial-workflow-20260913-STATE.md`.
-2. **Engine correction program self-checks (older source).** 2026-09-23: correction
-   gates 32 of 32, existing 30 gates, 38-theorem checker. Evidence:
-   `lean-engine-20260913-STATE.md`.
+   and exact retries were checked. 2026-09-26 (branch `correction-v2`): the pinned
+   engine is built from the current source and asks for exactly min(claim, unpaid
+   balance) (B2). Evidence: `rightrail-financial-workflow-20260913-STATE.md`; change log.
+2. **Engine correction program self-checks (current source).** 2026-09-26: two clean
+   guarded builds byte-identical, correction KAT 37 of 37 (`cv2-kat-final-a1`).
+   Evidence: `artifacts/engine-correction/PROVENANCE.md`.
 3. **Continuity admission (v7 at this run; now v8, see the change log) and correction follow-up through Mirror.**
    2026-09-24: 11 of 11 passed (run r6; r3-r5 failed and were fixed).
    Evidence: `rightrail-financial-workflow-20260913-STATE.md`.
@@ -73,8 +73,8 @@ in that archive that holds the raw record.
   restore). 0 runs; archive never assembled; needs an Engine build receipt.
 - **Switch** shadow replay module and CLI: 10 tests written, 0 run.
 - **Staff server additions** (read bundle, envelope, browser checks): 3 test files skipped.
-- **Engine current Lean source** (fixed-point proof, release producer script): never
-  compiled. Which exact source built the existing program could not be recovered.
+- **Release producer script** `tools/build_financial_correction_release.ps1`: still
+  names the retired pin's reuse vectors; never run against `artifacts/engine-correction/`.
 - **Queue source-bound lifecycle mode**: still closed; the program is on its old pin.
 - **State BLSDRQ01 clearance route**: run r2 (2026-09-24) was 45 passed, 1 failing (a
   retry-conflict test got the wrong error type). Later fixes are unrun; the production
@@ -85,12 +85,12 @@ in that archive that holds the raw record.
 
 ## Known blockers
 
-1. **Engine must rebuild the current source.** The build needs about 4.2 GB free RAM
-   at start (4,190,433,321 bytes). The machine has 16 GB (15.3 GB usable) and usually
-   only about 1-1.6 GB free with current apps open (1.0 GB when this was written). The
-   last two Engine guard starts also failed with "Access denied" before measuring
-   memory. Until this build happens, the service kit cannot be assembled and Queue's
-   source-bound mode stays closed.
+1. **History from a retired engine pin does not reopen.** Checker and owner require a
+   correction follow-up's recorded engine artifact to equal the current pin, so after
+   the 2026-09-26 re-pin a store with E911-era corrections fails
+   `open_verification:history:correction-followup-artifact-binding` (the v7 conversion
+   test). Lead decision: admit a closed set of past pins for history only, accept it
+   before production, or re-merge trunk (deletes that test, not the issue).
 2. **One heavy run at a time.** All builds and tests share one guarded lane.
 
 ## Parked
@@ -103,10 +103,9 @@ history lives in bundles under `work/_retired-research-20260924`.
 ## Next 5 concrete steps
 
 1. **Run the service kit end-to-end**: assemble, verify, run the scenario, serve the
-   staff app on loopback. Needs the build receipt from step 2.
-2. **Fresh Engine build of the current source** under the guard: free about 4.2 GB
-   first (close apps or reboot), keep the build receipt, rerun the 9 correction tests
-   on the new program.
+   staff app on loopback, on the `artifacts/engine-correction/` pin.
+2. **Decide blocker 1**, then make correction reuse recompute the input shortfall
+   instead of trusting the accepted result's recorded one.
 3. **Make `rightrail-main` the only place code changes**; old checkouts become read-only.
 4. **Hospital-payment full cycle demo** per the plan: 20 hospitals, $1M, Hospital H
    short $3,000, with incomplete files, disputed offsets, late records, partial
@@ -116,6 +115,7 @@ history lives in bundles under `work/_retired-research-20260924`.
 
 ## Change log
 
+- 2026-09-26 — B2 correction amount and engine re-pin (branch `correction-v2`; Art. V, X, XI.2; founder-approved protected exception). Gate change, `actionBindingWellFormed` (`Financial/Types.lean`): before `action.amountCents = determination.amountCents`; after `≤` for `OFFSET_REJECTED_CORRECTION_AUTHORIZED`, exact otherwise. The exact amount min(claim, input shortfall) is pinned by theorem `applyCorrectionTransition_action_amount_eq_b2`, BLFCRES2 `resultWellFormed` and KATs at B2−1 and B2+1 (100,000 of 300,000 unpaid) and full shortfall; no protected statement changed. Engine built twice byte-identically from fbb06aa (SHA-256 88D85396…0992, 6,237,184 B), KAT 37/37; old pin `engine-correction-e911` removed (in f1de262). The semantic gate's manifest pin was stale since 11ff5ee, so all 14 of its runnable unit tests errored; fixed. Ceilings: checker +2, adapter +1 (founder-approved), engine 1,482->1,464. Open: blocker 1; reuse trusts the accepted result's recorded shortfall. Felt: a hospital short part of its claim is asked for exactly the unpaid balance.
 - 2026-09-25 — Gate failover TLA+ model and configs added under `docs/formal/gate_failover/` (Art. IV, XI); safety and small-model liveness checks passed under the guard. Deeper model still to run (memory).
 - 2026-09-24 — Private-ZK / Profile 11-12 track moved to `parked/private_zk/` (96 files); default `pytest` run excludes it (`pytest parked` runs it). Dead `tools/direct_mask_*` duplicates removed (newer copies live in `native/tools/`). New constitution tests: `tests/test_right_rail_financial_constitution_invariants.py` (written, not yet run).
 - 2026-09-24 — Audit fixes (Art. III.1, III.5, V.2, VI.1, XI.10, XI.13): checker now enforces actor roles against a digest-bound roster (the check never fired before); database verification requires trusted authority (no default-digest shortcut, no `authority_*` aliases); owner constructor backdoor removed; 11 `assert` safety checks replaced by typed errors; staff server measures cash/state before and after instead of hard-coding them, resume checks real integrity fields, import-order and owner-id bugs fixed. 4 new tests. Not yet run (RAM below floor).
