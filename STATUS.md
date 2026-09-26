@@ -70,9 +70,14 @@ in that archive that holds the raw record.
     six theorems proved (sound, complete, fail-closed, released keys unique, monotone,
     arrival-order deterministic), axioms pinned. Invalid dates, miscounted, empty or
     missing snapshots, a missing released set, future service dates and near
-    duplicates go to human review, never ALLOW. `gate_rules` passes 138 of 138 vectors
+    duplicates go to human review, never ALLOW. Enrolled HOLD and review lines join a
+    pinned unresolved set; a later line sharing a key with one is reviewed
+    (`COLLIDES_WITH_UNRESOLVED`), and `later_allow_clear` proves no later ALLOW shares a
+    key with an earlier released or unresolved line. `gate_rules` passes 148 of 148 vectors
     and all 3,616 demo lines line by line (134 held, $46,987.00; 6 review; state ZZ);
-    all 108 mutants are killed on a scratch copy. Runs in tests only, not in the token path.
+    all 116 mutants are killed on a scratch copy. Runs in tests only, not in the token path.
+    REQUIRED for the unbuilt release path: releasing a held line must first check it
+    against the released set (and move it out of the unresolved set); the gate cannot.
 
 ## What is written but has never run
 
