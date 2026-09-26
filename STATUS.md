@@ -116,6 +116,7 @@ history lives in bundles under `work/_retired-research-20260924`.
 5. **Second, nonfinancial workflow via the Provider Trust Graph**: run its 12 written
    tests, then expose it read-only through an authenticated staff route.
 6. **Owner writes don't re-verify the funding projection**: a tampered projection still accepted 70 writes on top.
+   Writer store_busy 0 during checker re-checks was measured on small stores; where a full check exceeds about 5 s, owner writes during a re-check can get store_busy (safe: changed:false, the held-body retry works).
 
 ## Change log
 

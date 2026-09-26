@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import app.right_rail_financial_owner as owner_module
+import app.right_rail_financial_owner_independent as checker_module
 from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority
 from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database
 from tests.test_right_rail_financial_acceptance import _Clock
@@ -249,7 +250,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         owner.run_batch(commands[:20])
 
         def checks_while_writing(writes):
-            seen, written, failures = set(), [], []
+            seen, written, failures, retries = set(), [], [], [0]
 
             def write():
                 try:
@@ -259,7 +260,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
                                 getattr(owner, name)(**arguments)
                                 break
                             except FinancialBusyError:  # accepted: a consistent re-check holds the store for its length
-                                continue
+                                retries[0] += 1
                         written.append(name)
                 except BaseException as error:  # noqa: BLE001 - a dead writer would make the checks vacuous
                     failures.append(error)
@@ -274,6 +275,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
                 if writer.is_alive():  # answered while writes continue
                     seen.add(outcome)
             writer.join()
+            print(f"LOAD_WRITER_STORE_BUSY_RETRIES={retries[0]} writes={len(writes)} checks={sorted(seen)}")  # reported, not asserted
             self.assertEqual((failures, len(written)), ([], len(writes)))
             return seen
 
@@ -296,6 +298,17 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             else:
                 self.fail("the other file was not locked")
             holder.execute("ROLLBACK")
+
+    def test_a_clean_check_a_commit_lands_under_is_busy_never_accepted(self) -> None:
+        owner, real = self._store("torn.sqlite"), checker_module._verify_mapped
+
+        def commit_mid_check(*arguments):  # a clean pass whose reads another connection's commit may have torn
+            result = real(*arguments)
+            owner.record_support_evidence(**_support("evidence:mid-check")[1])
+            return result
+        with mock.patch.object(checker_module, "_verify_mapped", commit_mid_check), self.assertRaisesRegex(IndependentFinancialError, "^database:busy$"):
+            verify_database(owner.path, **owner._checker_expectations())
+        verify_database(owner.path, **owner._checker_expectations())  # the store itself is clean
 
     def test_a_store_being_created_is_waited_for_and_an_empty_file_is_refused(self) -> None:
         created, real_schema, real_exists, first = self.directory / "raced.sqlite", owner_module._sql_schema, Path.exists, threading.Event()
