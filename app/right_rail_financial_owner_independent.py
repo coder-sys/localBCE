@@ -23,12 +23,6 @@ class IndependentFinancialError(RuntimeError):
     """Raised for every malformed, stale, rebound, or inconsistent owner DB."""
 
 
-# Friendly aliases keep the boundary usable without coupling callers to one
-# historical exception spelling.
-FinancialIndependentError = IndependentFinancialError
-FinancialVerificationError = IndependentFinancialError
-
-
 def _fail(code: str) -> NoReturn:
     error = IndependentFinancialError(code)
     error.__cause__ = None
@@ -5025,7 +5019,3 @@ def verify_decision_package(
             _fail("decision-package:malformed")
     finally:
         connection.close()
-
-
-verify = verify_database
-verify_continuity = verify_continuity_package

@@ -1554,13 +1554,6 @@ class FinancialMirror:
 
         return self._restore_continuity(package_bytes, recovered_path, restore_mode="TEST")
 
-    restore_shadow = restore_continuity
-    restore_test = restore_test_continuity
-
-
-RightRailFinancialMirror = FinancialMirror
-Mirror = FinancialMirror
-
 
 __all__ = (
     "CONTINUITY_SCHEMA",
@@ -1571,6 +1564,4 @@ __all__ = (
     "FinancialMirrorInputError",
     "MAX_PACKAGE_BYTES",
     "MIRROR_SCHEMA",
-    "Mirror",
-    "RightRailFinancialMirror",
 )
