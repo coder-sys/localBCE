@@ -469,7 +469,8 @@ INTERRUPTION_EXPECTATIONS = (
     InterruptionExpectation("RECOVERY", "reopen-reads-last-committed-state", True, True, "none"),
 )
 CONTINUITY = ContinuityExpectation(
-    "RR/FINANCIAL/CONTINUITY/v7", CASE_11.case_id, "SHADOW", False, False,
+    # v7 -> v8: founder approval 2026-09-24 in session chat (CONSTITUTION V.4).
+    "RR/FINANCIAL/CONTINUITY/v8", CASE_11.case_id, "SHADOW", False, False,
     ("control_packs", "populations", "obligations", "evidence_references", "evaluations", "cases", "determinations", "actions", "outbox_state"),
     ("raw_evidence_bytes", "secrets", "private_proof_material", "external_payment_credentials"), True, True, 0,
 )

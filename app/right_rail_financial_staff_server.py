@@ -198,7 +198,7 @@ class StaffWorkflow:
             program_id=PROGRAM_ID,
             period_id=PERIOD_ID,
             currency="USD",
-            schema_version=7,
+            schema_version=8,
         )
         self._mirror = FinancialMirror(
             FinancialOwner(
@@ -274,7 +274,7 @@ class StaffWorkflow:
         if (
             integrity.get("mode") != "TEST"
             or integrity.get("owner_id") != owner.owner_id
-            or integrity.get("schema_version") != 7
+            or integrity.get("schema_version") != 8
             or integrity.get("scope") != {
                 "state_id": STATE_ID,
                 "deployment_id": DEPLOYMENT_ID,
