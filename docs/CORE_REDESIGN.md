@@ -54,10 +54,9 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 5. Remove Python re-derivation of Lean (replacement: read-set binding + pre-COMMIT
    per-obligation checker).
 6. Complete-fact events + `apply` reducer: new OWNER/CONTINUITY v8 contract with explicit
-   v7->v8 conversion. Engineering decision (2026-09-24): migrate on owner open, not side-by-side
-   owners: the owner converts a v7 store all-or-nothing inside the same open transaction that
-   already replays the history, and refuses (rolls back, file unchanged) if the converted
-   projections do not match the replay. v7 packages stay verifiable by the checker.
+   v7->v8 conversion on owner open. Removed 2026-09-25 (decision C3): the conversion, the
+   `OPENING_BALANCE` event and the v7 receiver are gone; a non-v8 store fails
+   `unsupported_store_version`.
 7. Checker becomes replay + compare with an incremental mode; all 25 tamper tests still detect.
 8. Continuity v8, restore by replay, successor that can continue.
 9. Switch and Mirror reuse the replay.
@@ -66,9 +65,7 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 ## History segments (approved by the founder 2026-09-25)
 
 Replaces the per-write whole-history size admission, which refused every write after
-~900 commands. Kept (not approved for removal): the v7 reader and size-cache check,
-`OPENING_BALANCE`, `tools/continuity_successor_v7.py`, and the 8 MiB package export,
-now refused at export, not at write.
+~900 commands. Kept: the 8 MiB package export, now refused at export, not at write.
 
 Ceiling: 10,000 events, because Lean's `maxRows`/`maxRevision` (Types.lean) bound what the
 proof and checker accept. The owner refuses the 10,001st event, revision or row of any
@@ -84,8 +81,8 @@ table with `history_capacity` before commit; raising it is a Lean change.
 - Bounds: seal after the write reaching 4,096 events or 4 MiB; a write carrying the open
   segment past 10,000 events or 16 MiB (so any store the old cap admitted fits one segment)
   fails `history_segment_size`.
-- Writes note touched rows in `history_pending`: O(this write) (IX.3). Older stores (v7,
-  v8 before segments) are replayed on open and sealed as segment 0 in the same transaction.
+- Writes note touched rows in `history_pending`: O(this write) (IX.3). Older stores (v8
+  before segments) are replayed on open and sealed as segment 0 in the same transaction.
 - The checker recomputes sealed segments' chain, counts and event heads from the events and
   the open segment's bookkeeping; sealed rows are append-only, bound by digest.
 - `export_history`: one fsynced file per segment; an existing file is compared, never rewritten.
@@ -96,5 +93,4 @@ table with `history_capacity` before commit; raising it is a Lean change.
 
 Protected throughout (V.4): `tests/rightrail_financial_expected_cases.py`, Lean KAT/vector
 files, `artifacts/engine-correction/vectors/`, the correction engine pin, wire formats and digest
-domains, theorem statements, `tests/test_right_rail_financial_constitution_invariants.py`,
-and the v7 contract while v7 is accepted.
+domains, theorem statements, and `tests/test_right_rail_financial_constitution_invariants.py`.

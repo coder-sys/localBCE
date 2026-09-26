@@ -37,9 +37,7 @@ def _fail(code: str) -> NoReturn:
     raise error
 
 
-# Stores are verified at v8 only (a v7 store converts to v8 on owner open);
-# packages at v8 and v7 (founder approval 2026-09-24, CONSTITUTION V.4).
-# Retired v5/v6 (and older) databases and packages fail closed.
+# Stores and packages are verified at v8 only; every other version fails closed.
 SCHEMA_VERSION = 8
 SCHEMA = "RR/FINANCIAL/OWNER/v8"
 CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v8"
@@ -125,7 +123,6 @@ EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
 CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v8\x00"
 COMMAND_DOMAIN = b"RR/FINANCIAL/COMMAND/v1\x00"
-OPENING_BALANCE_DOMAIN = b"RR/FINANCIAL/OPENING-BALANCE/v1\x00"
 POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
 POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
@@ -276,7 +273,6 @@ CAPTURED_TABLES = ("action_outbox", "cases", "claimed_adjustments", "evidence", 
 # Package versions: (continuity schema, owner schema, digest domain).
 _PACKAGE_FORMATS: dict[int, tuple[str, str, bytes]] = {
     8: (CONTINUITY_SCHEMA, SCHEMA, CONTINUITY_DOMAIN),
-    7: ("RR/FINANCIAL/CONTINUITY/v7", "RR/FINANCIAL/OWNER/v7", b"RR/FINANCIAL/CONTINUITY/v7\x00"),
 }
 
 # Declared foreign keys, frozen here independently: "child,cols>parent.cols".
@@ -389,7 +385,6 @@ _TRIGGER_DEFS = {
 }
 
 _EVENT_KINDS = {
-    "OPENING_BALANCE": {"OPENING_BALANCE"},
     "CONTROL_PACK": {"CONTROL_PACK_PUBLISHED"},
     "POPULATION": {
         "POPULATION_IMPORT_OPENED",
@@ -1182,7 +1177,7 @@ def _verify_event(row: Mapping[str, object], index: int, previous: bytes) -> byt
         _fail("history:payload-object")
     payload_bytes = _canonical(payload, "history:payload")
     payload_digest = _blob64(row["payload_digest"], "history:payload-digest")
-    expected_payload_digest = _digest(OPENING_BALANCE_DOMAIN if kind == "OPENING_BALANCE" else EVENT_DOMAIN, payload_bytes)
+    expected_payload_digest = _digest(EVENT_DOMAIN, payload_bytes)
     if payload_digest != expected_payload_digest:
         _fail("history:payload-digest")
     committed_at_ms = _time(row["committed_at_ms"], "history:committed-at")
@@ -1267,23 +1262,18 @@ def _record_bytes(table: str, row: sqlite3.Row) -> int:
 
 
 def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.Row]) -> None:
-    """Replay every event's ``rows`` and require the result exactly; an opening balance comes before any event that carries rows."""
+    """Replay every event's ``rows`` and require the result exactly."""
 
     state: dict[str, dict[str, dict[str, object]]] = {table: {} for table in CAPTURED_TABLES}
-    opened = False
-    acknowledged: dict[object, object] = {}  # every history, v7 included, names the accepted reference
+    acknowledged: dict[object, object] = {}  # every history names the accepted reference
     for event in events:
         payload = _parse_json(event["payload_json"], "replay:payload", max_bytes=MAX_PACKAGE_BYTES)
         images = payload.get("rows")
         if event["kind"] == "ACTION_ACKNOWLEDGED":
             acknowledged[payload.get("action_id")] = payload.get("acknowledgment_ref")
-        if event["kind"] == "OPENING_BALANCE":
-            if opened or any(state.values()) or set(payload) != {"rows"} or event["aggregate_id"] != "opening-balance" or (event["before_revision"], event["after_revision"]) != (0, 0):
-                _fail("replay:opening-balance")
-            opened = True
-        elif images is None:
+        if images is None:
             continue
-        if not isinstance(images, list) or not images and event["kind"] != "OPENING_BALANCE":
+        if not isinstance(images, list) or not images:
             _fail("replay:rows")
         for image in images:
             table = image.get("table") if isinstance(image, dict) else None
@@ -4066,7 +4056,7 @@ def verify_continuity_package(
     if set(value) != required:
         _fail("continuity:keys")
     package_version = value["version"]
-    # Continuity v8 and v7 are verified; retired v5/v6 packages fail closed here.
+    # Continuity v8 only; every other package version fails closed here.
     package_format = _PACKAGE_FORMATS.get(package_version) if type(package_version) is int else None
     if package_format is None or value["schema"] != package_format[0]:
         _fail("continuity:schema")

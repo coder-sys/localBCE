@@ -336,8 +336,8 @@ current source of truth on anything marked measured.
   Mirror. The felt-value scorecard and the Article XIII interaction-model
   crawl. The local store is `RR/FINANCIAL/OWNER/v8` with
   `RR/FINANCIAL/CONTINUITY/v8` and a derived `RR/FINANCIAL/COMMAND/v1` log
-  (founder-approved 2026-09-24); a v7 store converts on owner open, v7
-  packages stay verifiable, and v5/v6 are retired.
+  (founder-approved 2026-09-24); any non-v8 store fails closed with
+  `unsupported_store_version`, and non-v8 packages are refused.
 - **Designed, not built.** The gate API (decide/decide-batch), the token and
   checkpoint formats, the independent witness, batch signing, segmented
   Continuity, member-key sharding, the fenced primary/standby protocol, the
@@ -400,11 +400,9 @@ work):
 6. **Segmented Continuity as a new store/package version** (day- or
    million-event-sealed segments bound to checkpoints, replacing the
    current 10,000-row cap) — a protected format change.
-7. **Dropping v7 store-version compatibility, the `OPENING_BALANCE`
-   migration path, and `tools/continuity_successor_v7.py`**, and starting
-   the gate's store fresh from genesis instead, per the recommendation that
-   this carries real cost (about 2,800 lines) for a migration path no real
-   v7 store will ever use, since all current data is synthetic.
+7. **Done 2026-09-25 (decision C3):** v7 store-version compatibility, the
+   `OPENING_BALANCE` migration path and `tools/continuity_successor_v7.py`
+   were removed (about 2,950 lines); all data was synthetic.
 
 ## 15. Beyond the gate
 
