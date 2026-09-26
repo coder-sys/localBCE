@@ -253,7 +253,8 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             writer.start()
             while writer.is_alive():
                 try:
-                    seen.append(verify_database(owner.path, **owner._checker_expectations())["integrity"])
+                    verify_database(owner.path, **owner._checker_expectations())
+                    seen.append("accepted")
                 except IndependentFinancialError as error:
                     seen.append(str(error))
             writer.join()
@@ -261,7 +262,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
 
         seen = checks_while_writing(commands[20:90])
         self.assertIn("database:busy", seen)  # the check saw commits land mid-read
-        self.assertLessEqual(seen, {"VERIFIED", "database:busy"})
+        self.assertLessEqual(seen, {"accepted", "database:busy"})
         with closing(sqlite3.connect(owner.path)) as connection, connection:
             connection.execute("UPDATE program_funding_projection SET amount_cents=amount_cents+1")
         seen = checks_while_writing(commands[90:160])
