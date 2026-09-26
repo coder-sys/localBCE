@@ -7,7 +7,7 @@ module never derives expected balances from owner code or reaches the database t
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import closing, contextmanager, redirect_stderr, redirect_stdout
+from contextlib import closing, contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from dataclasses import replace
 import hashlib
 import io
@@ -2283,18 +2283,28 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(upgraded.export_continuity(), source_package)
         verify_database(v1_path, expected_config=source.config, expected_authority=self.authority)
 
-    def test_a_shadow_open_of_a_v1_store_writes_nothing(self) -> None:
+    def test_a_shadow_open_never_writes(self) -> None:
         source = self._make_owner()
-        shadow_path = self._path("shadow-v1.sqlite")
-        FinancialOwner.restore_continuity(package_bytes=source.export_continuity(), recovered_path=shadow_path, trusted_authority=self.authority, clock=_Clock())
-        with closing(sqlite3.connect(str(shadow_path), isolation_level=None)) as connection:
-            connection.execute('DROP INDEX "rr_financial_v2_events_aggregate_kind"')
-            connection.execute("PRAGMA user_version=1")
-        before = hashlib.sha256(shadow_path.read_bytes()).hexdigest()
-        FinancialOwner(path=shadow_path, config=source.config, trusted_authority=self.authority, clock=_Clock(), mode="SHADOW", owner_id=owner._SHADOW_OWNER_ID)
-        self.assertEqual(hashlib.sha256(shadow_path.read_bytes()).hexdigest(), before)
-        with closing(sqlite3.connect(str(shadow_path))) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+        package = source.export_continuity()
+        stores = {  # a v1 index set is read as it is; a store a writing owner would migrate is refused
+            None: ('DROP INDEX "rr_financial_v2_events_aggregate_kind"', "PRAGMA user_version=1"),
+            "pre-segment": tuple(f"DROP TABLE {table}" for table in ("history_segments", "history_pending", "history_open")),
+            "no-append-only": tuple(f'DROP TRIGGER "{name}"' for name in owner._HISTORY_APPEND_ONLY_TRIGGERS),
+            "no-index-set": (*(f'DROP INDEX "{name}"' for name, _table, _columns in owner._PRIVATE_INDEX_SETS[2]), "PRAGMA user_version=0"),
+        }
+        for refusal, statements in stores.items():
+            with self.subTest(refusal=refusal):
+                path = self._path(f"shadow-{refusal}.sqlite")
+                FinancialOwner.restore_continuity(package_bytes=package, recovered_path=path, trusted_authority=self.authority, clock=_Clock())
+                with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    for statement in statements:
+                        connection.execute(statement)
+                before = hashlib.sha256(path.read_bytes()).hexdigest()
+                with self.assertRaisesRegex(FinancialIntegrityError, "^shadow_requires_migration$") if refusal else nullcontext():
+                    FinancialOwner(path=path, config=source.config, trusted_authority=self.authority, clock=_Clock(), mode="SHADOW", owner_id=owner._SHADOW_OWNER_ID)
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+                with closing(sqlite3.connect(str(path))) as connection:
+                    self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0 if refusal == "no-index-set" else 1 if refusal is None else 2)
 
     def test_private_snapshot_index_upgrade_serializes_concurrent_openers(self) -> None:
         source = self._make_owner(schema_version=8)

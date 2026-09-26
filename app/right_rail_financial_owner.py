@@ -1350,7 +1350,7 @@ def _install_private_index_set(connection: sqlite3.Connection) -> None:
         _fail(FinancialIntegrityError, "schema_private_indexes")
 
 
-def _install_history_append_only(connection: sqlite3.Connection) -> None:
+def _install_history_append_only(connection: sqlite3.Connection, *, read_only: bool) -> None:
     actual: dict[str, str] = {}
     for row in connection.execute(
         "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'"
@@ -1360,6 +1360,8 @@ def _install_history_append_only(connection: sqlite3.Connection) -> None:
             _fail(FinancialIntegrityError, "schema_history_triggers")
         actual[name] = sql
     if not actual:
+        if read_only:
+            _fail(FinancialIntegrityError, "shadow_requires_migration")
         for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
             connection.execute(sql)
         return
@@ -2153,17 +2155,19 @@ class FinancialOwner:
                     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
                     if tables in (_TABLES, _TABLES | {"right_rail_continuity_admission"}):
                         # A v8 store from before history segments: replayed, then its whole history opens the first segment.
+                        if self.mode == "SHADOW":  # read-only: only a writing owner migrates
+                            _fail(FinancialIntegrityError, "shadow_requires_migration")
                         migrated = True
                         connection.execute("DROP TABLE IF EXISTS right_rail_continuity_admission")
                         _execute_script(connection, _SEGMENT_SCHEMA)
                         self._track_all(connection)
                     elif tables != _TABLES | _SEGMENT_TABLES:
                         _fail(FinancialIntegrityError, "schema_tables")
-                    if self.mode == "SHADOW":
-                        _private_index_set_version(connection)  # read-only: checked, never upgraded
-                    else:
+                    if self.mode != "SHADOW":
                         _install_private_index_set(connection)
-                    _install_history_append_only(connection)
+                    elif _private_index_set_version(connection) == 0:  # read-only: checked, never upgraded
+                        _fail(FinancialIntegrityError, "shadow_requires_migration")
+                    _install_history_append_only(connection, read_only=self.mode == "SHADOW")
                     if verify_history or migrated:
                         self._verify_history_in_transaction(connection)
                     connection.execute("COMMIT")
