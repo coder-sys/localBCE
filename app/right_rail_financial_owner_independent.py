@@ -15,7 +15,6 @@ import math
 from pathlib import Path
 import re
 import sqlite3
-import sys
 from typing import Any, NoReturn
 from urllib.parse import quote
 
@@ -30,9 +29,9 @@ FinancialIndependentError = IndependentFinancialError
 FinancialVerificationError = IndependentFinancialError
 
 
-def _fail(code: str) -> NoReturn:
-    handling = sys.exc_info()[1]  # a read refused by another connection's lock is retryable, never a finding
-    if isinstance(handling, sqlite3.OperationalError) and getattr(handling, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+def _fail(code: str, caught: BaseException | None = None) -> NoReturn:
+    # Only the checker's own caught read error can be a lock: another connection's lock is retryable, never a finding.
+    if isinstance(caught, sqlite3.OperationalError) and getattr(caught, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
         code = "database:busy"
     error = IndependentFinancialError(code)
     error.__cause__ = None
@@ -978,14 +977,14 @@ def _open_readonly(path: str | Path) -> sqlite3.Connection:
         connection = sqlite3.connect(uri, uri=True, timeout=5.0, isolation_level=None)
     except IndependentFinancialError:
         raise
-    except (OSError, sqlite3.Error, ValueError):
-        _fail("database:open")
+    except (OSError, sqlite3.Error, ValueError) as error:
+        _fail("database:open", error)
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("PRAGMA query_only=ON")
-    except sqlite3.Error:
+    except sqlite3.Error as error:
         connection.close()
-        _fail("database:query-only")
+        _fail("database:query-only", error)
     return connection
 
 
@@ -1044,8 +1043,8 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
         return schema_version
     except IndependentFinancialError:
         raise
-    except sqlite3.Error:
-        _fail("schema:read")
+    except sqlite3.Error as error:
+        _fail("schema:read", error)
 
 
 def _bounded_rows(connection: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
@@ -1055,8 +1054,8 @@ def _bounded_rows(connection: sqlite3.Connection, table: str) -> list[sqlite3.Ro
         return list(connection.execute(f"SELECT * FROM {table}"))
     except IndependentFinancialError:
         raise
-    except sqlite3.Error:
-        _fail(f"rows:read:{table}")
+    except sqlite3.Error as error:
+        _fail(f"rows:read:{table}", error)
 
 
 def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], schema_version: int) -> dict[str, object]:
@@ -1064,8 +1063,8 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
         if int(connection.execute("SELECT COUNT(*) FROM financial_meta").fetchone()[0]) != 1:
             _fail("meta:cardinality")
         row = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-    except (sqlite3.Error, TypeError, ValueError):
-        _fail("meta:read")
+    except (sqlite3.Error, TypeError, ValueError) as error:
+        _fail("meta:read", error)
     if row is None:
         _fail("meta:missing")
     if row["id"] != 1 or row["schema_version"] != SCHEMA_VERSION or row["schema"] != SCHEMA:
@@ -1106,8 +1105,8 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
         if int(connection.execute("SELECT COUNT(*) FROM financial_identity").fetchone()[0]) != 1:
             _fail("identity:cardinality")
         identity_row = connection.execute("SELECT * FROM financial_identity WHERE id=1").fetchone()
-    except (sqlite3.Error, TypeError, ValueError):
-        _fail("identity:read")
+    except (sqlite3.Error, TypeError, ValueError) as error:
+        _fail("identity:read", error)
     if identity_row is None:
         _fail("identity:missing")
     identity_contract = _identity_record(
@@ -4219,8 +4218,8 @@ def _verify_connection(
         _fail("schema:index-integrity")
     try:
         orphan = connection.execute("PRAGMA foreign_key_check").fetchone()
-    except sqlite3.Error:
-        _fail("foreign-keys:read")
+    except sqlite3.Error as error:
+        _fail("foreign-keys:read", error)
     if orphan is not None:
         _fail(f"foreign-keys:{orphan[0]}")
     meta = _verify_meta(connection, identity, schema_version)
@@ -4373,8 +4372,8 @@ def _mapped(check: Any) -> dict[str, object]:
         return check()
     except IndependentFinancialError:
         raise
-    except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
-        _fail("database:malformed")
+    except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError) as error:
+        _fail("database:malformed", error)
 
 
 def verify_database(
@@ -4407,7 +4406,14 @@ def verify_database(
     )
     connection = _open_readonly(path)
     try:
-        return _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)
+        # Each read sees the latest commit, so another connection's commit during the check could mix two states:
+        # that is retryable, never a finding. A check the store sat still for keeps its verdict.
+        version = _mapped(lambda: connection.execute("PRAGMA data_version").fetchone()[0])
+        try:
+            return _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)
+        finally:
+            if _mapped(lambda: connection.execute("PRAGMA data_version").fetchone()[0]) != version:
+                _fail("database:busy")
     finally:
         connection.close()
 
@@ -4981,10 +4987,10 @@ def verify_decision_package(
             if connection.in_transaction:
                 connection.execute("ROLLBACK")
             raise
-        except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
+        except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError) as error:
             if connection.in_transaction:
                 connection.execute("ROLLBACK")
-            _fail("decision-package:malformed")
+            _fail("decision-package:malformed", error)
     finally:
         connection.close()
 

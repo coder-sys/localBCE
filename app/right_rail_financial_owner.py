@@ -1949,8 +1949,16 @@ class FinancialOwner:
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
-        if existed and path.stat().st_size == 0:
-            _fail(FinancialIntegrityError, "empty_database")
+        if existed and path.stat().st_size == 0:  # a creator holds its new file empty until its schema commits: wait for it
+            with closing(sqlite3.connect(str(path), timeout=5.0, isolation_level=None)) as probe:
+                try:
+                    probe.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError as error:
+                    _raise_if_busy(error)
+                    raise
+                probe.execute("ROLLBACK")
+            if path.stat().st_size == 0:
+                _fail(FinancialIntegrityError, "empty_database")
         if existed and identity_contract is not None:
             _fail(FinancialIntegrityError, "identity_contract_destination")
         if not existed:
@@ -1991,6 +1999,9 @@ class FinancialOwner:
                 except sqlite3.OperationalError as error:  # another creator holds the new file
                     _raise_if_busy(error)
                     raise
+                if connection.execute("SELECT 1 FROM sqlite_master").fetchone() is not None:  # another creator won: a retry opens its store
+                    connection.execute("ROLLBACK")
+                    _fail(FinancialBusyError, "store_busy")
                 _sql_schema(connection)
                 connection.execute(
                     "INSERT INTO financial_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

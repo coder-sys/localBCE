@@ -6,6 +6,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -241,6 +243,75 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         with mock.patch.object(FinancialOwner, "_connect", another_creator_holds_it), busy("create"):
             _open(created)
         self.assertEqual(owner.run_batch([_support("evidence:busy")])[0]["status"], "RECORDED")  # retryable: nothing was written
+
+    def test_a_whole_store_check_during_writes_is_busy_never_a_tamper_finding(self) -> None:
+        owner, commands = self._store("checked-under-load.sqlite"), _commands(160)
+        owner.run_batch(commands[:20])
+
+        def checks_while_writing(writes):
+            seen, writer = [], threading.Thread(target=lambda: [getattr(owner, name)(**arguments) for name, arguments in writes])
+            writer.start()
+            while writer.is_alive():
+                try:
+                    seen.append(verify_database(owner.path, **owner._checker_expectations())["integrity"])
+                except IndependentFinancialError as error:
+                    seen.append(str(error))
+            writer.join()
+            return set(seen)
+
+        seen = checks_while_writing(commands[20:90])
+        self.assertIn("database:busy", seen)  # the check saw commits land mid-read
+        self.assertLessEqual(seen, {"VERIFIED", "database:busy"})
+        with closing(sqlite3.connect(owner.path)) as connection, connection:
+            connection.execute("UPDATE program_funding_projection SET amount_cents=amount_cents+1")
+        seen = checks_while_writing(commands[90:160])
+        self.assertLessEqual(seen, {"funding:projection-reconstruction", "database:busy"})
+        other = self.directory / "other.sqlite"
+        with closing(sqlite3.connect(other, isolation_level=None)) as holder, closing(sqlite3.connect(other, timeout=0)) as waiter:
+            holder.execute("BEGIN EXCLUSIVE")
+            try:
+                waiter.execute("SELECT * FROM sqlite_master").fetchall()
+            except sqlite3.OperationalError:  # a lock timeout on another file is not this check's
+                with self.assertRaisesRegex(IndependentFinancialError, "^funding:projection-reconstruction$"):
+                    verify_database(owner.path, **owner._checker_expectations())  # quiet: the true verdict
+            else:
+                self.fail("the other file was not locked")
+            holder.execute("ROLLBACK")
+
+    def test_a_store_being_created_is_waited_for_and_an_empty_file_is_refused(self) -> None:
+        created, real_schema, real_exists, first = self.directory / "raced.sqlite", owner_module._sql_schema, Path.exists, threading.Event()
+
+        def slow_schema(connection):
+            if not first.is_set():
+                first.set()
+                time.sleep(1.0)  # the first creator holds its new, still empty file
+            real_schema(connection)
+        for loser_saw_no_file in (False, True):
+            first.clear()
+            created.unlink(missing_ok=True)
+            outcome = {}
+
+            def create(name):
+                try:
+                    outcome[name] = _open(created).summary()["sequence"]
+                except Exception as error:  # noqa: BLE001 - the outcome is the assertion
+                    outcome[name] = repr(error)
+            hidden = lambda path: False if loser_saw_no_file and path == created and threading.current_thread().name == "second" else real_exists(path)
+            with mock.patch.object(owner_module, "_sql_schema", slow_schema), mock.patch.object(Path, "exists", hidden):
+                a = threading.Thread(target=create, args=("first",), name="first")
+                a.start()
+                first.wait()
+                b = threading.Thread(target=create, args=("second",), name="second")
+                b.start()
+                a.join()
+                b.join()
+            second = "FinancialBusyError('store_busy')" if loser_saw_no_file else 0  # it saw an empty file: waited, then opened it
+            self.assertEqual(outcome, {"first": 0, "second": second}, loser_saw_no_file)
+        empty = self.directory / "empty.sqlite"
+        empty.touch()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^empty_database$"):  # nobody holds it: a real empty file
+            _open(empty)
+        self.assertEqual(empty.stat().st_size, 0)
 
     def test_an_exact_retry_is_duplicate_and_a_changed_meaning_conflicts_as_alone(self) -> None:
         owner = self._store("retry.sqlite")
