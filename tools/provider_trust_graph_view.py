@@ -169,6 +169,12 @@ def _make_handler(routes: Mapping[str, tuple[str, bytes]]) -> type[BaseHTTPReque
             self._respond(200, body, content_type)
 
         def _method_not_allowed(self) -> None:
+            try:  # Read a small body first: closing with unread bytes sends RST on Windows.
+                length = int(self.headers.get("Content-Length", "0"))
+                if 0 < length <= _MAX_BUNDLE_BYTES:
+                    self.rfile.read(length)
+            except (ValueError, OSError):
+                pass
             self._respond(405, b"Read-only GET routes only.\n")
 
         do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _method_not_allowed
