@@ -6,21 +6,23 @@ namespace BlindLedger.Gate.Rules.Run
 open BlindLedger.Gate.Rules
 
 /-! Runs a rules vector file through `decideBatch`.  Directives, one per line:
-    `case NAME` clears the batch, the totals and the lines earlier commits
-    released or left unresolved; `today D`; `snap KIND ASOF COUNT PIN`
-    (re)declares a snapshot (`dmf`, `pdeath`, `excl`, `span`) or the
-    `released` or `unresolved` set (rows `FLOW M PAYEE REND DATE PROC UNITS
-    CENTS`; it also drops the lines earlier commits added to that set), whose
-    rows are the following lines starting with KIND.  PIN is the SHA3-512 hex
+    `case NAME` clears the batch, the totals, the lines earlier commits
+    released or left unresolved and the gate's checkpoints; `today D`;
+    `snap KIND ASOF COUNT PIN` (re)declares a snapshot (`dmf`, `pdeath`,
+    `excl`, `span`) or the `released` or `unresolved` set (rows `ID FLOW M
+    PAYEE REND DATE PROC UNITS CENTS`; it also drops the lines earlier commits
+    added to that set), whose rows are the following lines starting with KIND.  PIN is the SHA3-512 hex
     of `RR/GATE/RELEASED/v1`, `RR/GATE/UNRESOLVED/v1` (for those sets) or
     `RR/GATE/SNAPSHOT/v1`, then `KIND ASOF COUNT` and the rows, joined by
     newlines; a snapshot whose pin does not match or with a row that does not
     parse is treated as missing, as is one after `drop KIND`.
-    `line ...released row fields... [OUTCOME REASONS]` adds a line to the batch;
-    `commit` decides it, checks the expectations (all lines or none) and that
-    the reversed batch decides the same, then adds its ALLOW lines to the
-    released set and its other enrolled lines to the unresolved set; `report` prints totals; `end N` is the number of checked
-    lines.  Test-only; never a payment path. -/
+    `line ...row fields... [OUTCOME REASONS [with=IDS]]` adds a line to the
+    batch; `commit` decides it, checks the expectations (all lines or none)
+    and that the reversed batch decides the same, adds its ALLOW lines to the
+    released set and its other new identities to the unresolved set, and
+    moves the checkpoint of each set it read chained to the result; `report`
+    prints totals; `end N` is the number of checked lines.  Test-only; never
+    a payment path. -/
 
 def name {α : Type} [Repr α] (x : α) : String := ((reprStr x).splitOn ".").getLast!
 
@@ -39,6 +41,8 @@ structure St where
   rows : List (String × List String) := []
   extra : List Line := []
   held : List Line := []
+  rprior : Snapshot Line := ⟨0, 0, []⟩
+  uprior : Snapshot Line := ⟨0, 0, []⟩
   batch : List (Line × Option String) := []
   done : List Decision := []
   checked : Nat := 0
@@ -55,8 +59,8 @@ def snapshot {α : Type} (st : St) (kind : String) (row : List String → Option
   pure ⟨asOf, count, ← rows.mapM row⟩
 
 def parseLine : List String → Option Line
-  | [f, m, p, r, d, c, u, a] => do
-    pure ⟨← parse [Flow.FFS_CYCLE, .FFS_CLAIM, .CAP_820] f, ← m.toNat?, ← p.toNat?, ← r.toNat?,
+  | [i, f, m, p, r, d, c, u, a] => do
+    pure ⟨← i.toNat?, ← parse [Flow.FFS_CYCLE, .FFS_CLAIM, .CAP_820] f, ← m.toNat?, ← p.toNat?, ← r.toNat?,
       ← d.toNat?, ← c.toNat?, ← u.toNat?, ← a.toNat?⟩
   | _ => none
 
@@ -80,13 +84,16 @@ def St.ctx (st : St) : Ctx where
     | _ => none
   released := grow (snapshot st "released" parseLine) st.extra
   unresolved := grow (snapshot st "unresolved" parseLine) st.held
+  releasedPrior := st.rprior
+  unresolvedPrior := st.uprior
 
 def lineText (l : Line) : String :=
-  s!"{name l.flow} {l.member} {l.payee} {l.rendering} {l.date} {l.proc} {l.units} {l.cents}"
+  s!"{l.id} {name l.flow} {l.member} {l.payee} {l.rendering} {l.date} {l.proc} {l.units} {l.cents}"
 
 def render (d : Decision) : String :=
   let rs := if d.reasons.isEmpty then "-" else ",".intercalate (d.reasons.map name)
-  s!"{lineText d.line} {name d.outcome} {rs}"
+  let w := if d.counterparts.isEmpty then "" else s!" with={",".intercalate (d.counterparts.map toString)}"
+  s!"{lineText d.line} {name d.outcome} {rs}{w}"
 
 def sorted (xs : List String) : List String := xs.mergeSort fun a b => decide (a < b) || a == b
 
@@ -97,6 +104,12 @@ def money (cents : Nat) : String :=
 def tally (ds : List Decision) : String :=
   let c := ds.foldl (· + ·.line.cents) 0
   s!"lines={ds.length} cents={c} ({money c})"
+
+/-- The gate's checkpoint of a set after a commit: the resulting set when the set read was chained. -/
+def advance (today : Nat) (p : Snapshot Line) (o : Option (Snapshot Line)) (xs : List Line) : Snapshot Line :=
+  match o with
+  | some s => if chained today p o then ⟨s.asOf, xs.length, xs⟩ else p
+  | none => p
 
 def commit (st : St) : St × List String :=
   let c := st.ctx
@@ -111,11 +124,14 @@ def commit (st : St) : St × List String :=
     else (false, 0, ((sorted got).filter (!exp.contains ·)).map ("RULES_GOT " ++ ·))
   ({ st with extra := st.extra ++ r.released.drop (entries c.released).length,
              held := st.held ++ r.unresolved.drop (entries c.unresolved).length,
+             rprior := advance c.today st.rprior c.released r.released,
+             uprior := advance c.today st.uprior c.unresolved r.unresolved,
              batch := [], done := st.done ++ r.decisions, checked := st.checked + n, failed := st.failed + (if ok then 0 else 1) },
    if ok then [] else s!"RULES_VECTOR_MISMATCH commit determinism={det}" :: msg)
 
 def step (st : St) : List String → Option (St × List String)
-  | ["case", _] => pure ({ st with extra := [], held := [], batch := [], done := [] }, [])
+  | ["case", _] => pure ({ st with extra := [], held := [], rprior := ⟨0, 0, []⟩, uprior := ⟨0, 0, []⟩,
+                                   batch := [], done := [] }, [])
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),
@@ -123,13 +139,10 @@ def step (st : St) : List String → Option (St × List String)
                     held := if k == "unresolved" then [] else st.held }, [])
   | ["drop", k] => pure ({ st with snaps := st.snaps.filter (·.1 != k) }, [])
   | "line" :: fs => do
-    let (fs, e) := (fs.take 8, fs.drop 8)
-    let l ← parseLine fs
-    let e ← match e with
-      | [] => pure none
-      | [o, rs] => pure (some s!"{lineText l} {o} {rs}")
-      | _ => none
-    pure ({ st with batch := st.batch ++ [(l, e)] }, [])
+    let l ← parseLine (fs.take 9)
+    let e := fs.drop 9
+    guard ([0, 2, 3].contains e.length)
+    pure ({ st with batch := st.batch ++ [(l, if e.isEmpty then none else some (" ".intercalate (lineText l :: e)))] }, [])
   | ["commit"] => pure (commit st)
   | ["report"] =>
     let by_ (p : Decision → Bool) := tally (st.done.filter p)

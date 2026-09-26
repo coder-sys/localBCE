@@ -113,7 +113,8 @@ def demo():
     def expect(why):
         return "ALLOW -" if not why else f"HUMAN_REVIEW {why}" if why == "FFS_NEAR_DUPLICATE" else f"HOLD {why}"
 
-    body = [x for b in batches for x in [f"line {c} {expect(why)}" for c, why in b] + ["commit"]]
+    ids = iter(range(1, sum(map(len, batches)) + 1))
+    body = [x for b in batches for x in [f"line {next(ids)} {c} {expect(why)}" for c, why in b] + ["commit"]]
     return pin(head) + body + ["report", f"end {sum(map(len, batches))}"], seeded
 
 
