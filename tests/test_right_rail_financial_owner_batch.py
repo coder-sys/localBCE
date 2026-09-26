@@ -244,28 +244,46 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             _open(created)
         self.assertEqual(owner.run_batch([_support("evidence:busy")])[0]["status"], "RECORDED")  # retryable: nothing was written
 
-    def test_a_whole_store_check_during_writes_is_busy_never_a_tamper_finding(self) -> None:
+    def test_a_whole_store_check_during_writes_is_never_a_false_finding_and_a_tamper_is_never_busy(self) -> None:
         owner, commands = self._store("checked-under-load.sqlite"), _commands(160)
         owner.run_batch(commands[:20])
 
         def checks_while_writing(writes):
-            seen, writer = [], threading.Thread(target=lambda: [getattr(owner, name)(**arguments) for name, arguments in writes])
+            seen, written, failures = set(), [], []
+
+            def write():
+                try:
+                    for name, arguments in writes:
+                        while True:
+                            try:
+                                getattr(owner, name)(**arguments)
+                                break
+                            except FinancialBusyError:  # accepted: a consistent re-check holds the store for its length
+                                continue
+                        written.append(name)
+                except BaseException as error:  # noqa: BLE001 - a dead writer would make the checks vacuous
+                    failures.append(error)
+            writer = threading.Thread(target=write)
             writer.start()
             while writer.is_alive():
                 try:
                     verify_database(owner.path, **owner._checker_expectations())
-                    seen.append("accepted")
+                    outcome = "accepted"
                 except IndependentFinancialError as error:
-                    seen.append(str(error))
+                    outcome = str(error)
+                if writer.is_alive():  # answered while writes continue
+                    seen.add(outcome)
             writer.join()
-            return set(seen)
+            self.assertEqual((failures, len(written)), ([], len(writes)))
+            return seen
 
         seen = checks_while_writing(commands[20:90])
-        self.assertIn("database:busy", seen)  # the check saw commits land mid-read
+        self.assertTrue(seen)
         self.assertLessEqual(seen, {"accepted", "database:busy"})
         with closing(sqlite3.connect(owner.path)) as connection, connection:
             connection.execute("UPDATE program_funding_projection SET amount_cents=amount_cents+1")
         seen = checks_while_writing(commands[90:160])
+        self.assertIn("funding:projection-reconstruction", seen)  # refused while writes continue, not only when quiet
         self.assertLessEqual(seen, {"funding:projection-reconstruction", "database:busy"})
         other = self.directory / "other.sqlite"
         with closing(sqlite3.connect(other, isolation_level=None)) as holder, closing(sqlite3.connect(other, timeout=0)) as waiter:

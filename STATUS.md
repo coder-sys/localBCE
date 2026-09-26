@@ -102,7 +102,7 @@ evidence-only prototype track (Constitution IX.4); old code under `parked/` is r
 The native work in `pq-wide-seed-native-20260913` is frozen as history. Retired research
 history lives in bundles under `work/_retired-research-20260924`.
 
-## Next 5 concrete steps
+## Next 6 concrete steps
 
 1. **Run the service kit end-to-end**: assemble, verify, run the scenario, serve the
    staff app on loopback. Needs the build receipt from step 2.
@@ -115,6 +115,7 @@ history lives in bundles under `work/_retired-research-20260924`.
    corrections, repeat messages, crash recovery and restore, all visible in Mirror.
 5. **Second, nonfinancial workflow via the Provider Trust Graph**: run its 12 written
    tests, then expose it read-only through an authenticated staff route.
+6. **Owner writes don't re-verify the funding projection**: a tampered projection still accepted 70 writes on top.
 
 ## Change log
 

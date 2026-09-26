@@ -4405,15 +4405,27 @@ def verify_database(
         expected_continuity_epoch=expected_continuity_epoch,
     )
     connection = _open_readonly(path)
+    check = lambda: _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)  # noqa: E731
+    data_version = lambda: _mapped(lambda: connection.execute("PRAGMA data_version").fetchone()[0])  # noqa: E731
     try:
-        # Each read sees the latest commit, so another connection's commit during the check could mix two states:
-        # that is retryable, never a finding. A check the store sat still for keeps its verdict.
-        version = _mapped(lambda: connection.execute("PRAGMA data_version").fetchone()[0])
+        # Unlocked, each read sees the latest commit, so a commit landing mid-check can mix two states. A check the
+        # store sat still for keeps its verdict; a mixed pass with no finding is busy (retry). A mixed pass with a
+        # finding is judged again on one snapshot, so a tamper never looks retryable; writers wait meanwhile.
+        version = data_version()
         try:
-            return _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)
-        finally:
-            if _mapped(lambda: connection.execute("PRAGMA data_version").fetchone()[0]) != version:
-                _fail("database:busy")
+            result = check()
+        except IndependentFinancialError as finding:
+            if str(finding) == "database:busy" or data_version() == version:
+                raise
+            _mapped(lambda: (connection.execute("BEGIN"), connection.execute("SELECT 1 FROM financial_meta").fetchone()))
+            try:
+                return check()
+            finally:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+        if data_version() != version:
+            _fail("database:busy")
+        return result
     finally:
         connection.close()
 
