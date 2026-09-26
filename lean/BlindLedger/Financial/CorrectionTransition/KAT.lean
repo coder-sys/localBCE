@@ -421,23 +421,39 @@ private def correctionKatRequestOn (input : FinancialInput) (claimId actionId : 
             ({ evidenceId := evidenceId, recordDigest := correctionKatDigest 68 } : EvidenceBinding)) }
       | none => correctionKatCurrentReceipt }
 
-/-- H1: on the KAT obligation (300,000 unpaid), reject an offset claim of
-    `firstCents`, then a second claim of `secondCents` on the resulting state. -/
-private def correctionKatSequence (firstCents secondCents : Nat) :
+/-- H1: on the KAT obligation with `cashCents` received (by default 300,000
+    unpaid), reject an offset claim of `firstCents`; record `paidCents` more
+    cash, paid against that correction request when `linked`; then reject a
+    second claim of `secondCents`. -/
+private def correctionKatSequence (firstCents secondCents : Nat)
+    (cashCents : Nat := 9_700_000) (paidCents : Nat := 0) (linked : Bool := true) :
     CorrectionTransitionResult × Option CorrectionTransitionResult :=
   let secondClaimId := "claim:h:offset2"
+  let paidEvidence := { katCashEvidence (some paidCents) with
+    evidenceId := "evidence:p2", commonOriginId := "origin:cash:h:p2", localRef := "ref:cash:h:p2" }
+  let paidPayment := { katPayment paidCents with
+    paymentId := "payment:h:p2", evidenceId := "evidence:p2", commonOriginId := "origin:cash:h:p2" }
   let input := { correctionKatInput with
+    payments := [katPayment cashCents]
     claims := [{ katClaim .CLAIMED with amountCents := firstCents },
       { katClaim .CLAIMED with
         claimId := secondClaimId, evidenceId := "evidence:offset2", amountCents := secondCents }]
-    evidence := [katCashEvidence, { katOffsetEvidence with amountCents := some firstCents },
+    evidence := [katCashEvidence (some cashCents),
+      { katOffsetEvidence with amountCents := some firstCents },
       { katOffsetEvidence with
         evidenceId := "evidence:offset2", commonOriginId := secondClaimId
         localRef := "ref:offset2:h:approval", amountCents := some secondCents }] }
   let first := applyCorrectionTransition
     (correctionKatRequestOn input katCorrectionClaimId katCorrectionActionId 10)
-  (first, first.mutation.map (fun mutation => applyCorrectionTransition
-    (correctionKatRequestOn mutation.resultingInput secondClaimId "action:correction:h:v2" 11)))
+  (first, first.mutation.map (fun mutation =>
+    let after := if paidCents = 0 then mutation.resultingInput else
+      { mutation.resultingInput with
+        payments := mutation.resultingInput.payments ++ [paidPayment]
+        evidence := mutation.resultingInput.evidence ++ [paidEvidence] }
+    let second := correctionKatRequestOn after secondClaimId "action:correction:h:v2" 11
+    applyCorrectionTransition { second with command := { second.command with
+      correctionPaid := if linked && paidCents > 0 then
+        [{ actionId := katCorrectionActionId, paidCents := paidCents }] else [] } }))
 
 private def correctionKatActionAmount (result : CorrectionTransitionResult) : Option Nat :=
   result.mutation.map (fun mutation => mutation.action.amountCents)
@@ -456,6 +472,27 @@ def gateCorrectionSecondPartialRequest : Bool :=
   | (first, some second) => correctionKatActionAmount first = some 200_000 &&
       correctionKatActionAmount second = some 100_000
   | _ => false
+
+/-- 600,000 unpaid, two 300,000 claims, then 300,000 paid against the first
+    request: the second requests 300,000.  The same payment unlinked leaves the
+    first request counted in full and nothing requestable. -/
+def gateCorrectionPaidRequestFreesBalance : Bool :=
+  match correctionKatSequence 300_000 300_000 9_400_000 300_000,
+      correctionKatSequence 300_000 300_000 9_400_000 300_000 false with
+  | (first, some linked), (_, some unlinked) => correctionKatActionAmount first = some 300_000 &&
+      correctionKatActionAmount linked = some 300_000 &&
+      resultHasReason unlinked .NO_REQUESTABLE_BALANCE
+  | _, _ => false
+
+/-- 600,000 unpaid, claims of 300,000 and 400,000, then 100,000 paid against the
+    first request: 500,000 short, 200,000 of the first request unpaid, so the
+    second requests 300,000 (200,000 if the payment were unlinked). -/
+def gateCorrectionPartlyPaidRequestCountsUnpaidPart : Bool :=
+  match correctionKatSequence 300_000 400_000 9_400_000 100_000,
+      correctionKatSequence 300_000 400_000 9_400_000 100_000 false with
+  | (_, some linked), (_, some unlinked) => correctionKatActionAmount linked = some 300_000 &&
+      correctionKatActionAmount unlinked = some 200_000
+  | _, _ => false
 
 private def correctionKatReuseReceipt (mutation : CorrectionMutation) : EvaluationReceipt :=
   { correctionKatReceiptFor correctionKatCurrentReceipt mutation.followUps.resultingEvaluationId
@@ -653,6 +690,9 @@ def correctionTransitionKatLines : List (String × Bool) := [
   ("shortfall_above_claim_requests_claim_amount", gateCorrectionShortfallAboveClaimAmount),
   ("second_correction_on_fully_requested_shortfall_rejected", gateCorrectionSecondFullRequestRejected),
   ("second_correction_requests_remaining_balance", gateCorrectionSecondPartialRequest),
+  ("paid_correction_request_frees_its_balance", gateCorrectionPaidRequestFreesBalance),
+  ("partly_paid_correction_request_counts_unpaid_part",
+    gateCorrectionPartlyPaidRequestCountsUnpaidPart),
   ("owner_domain_digest_vectors", gateCorrectionOwnerDigestVectors),
   ("current_owner_evaluation_receipt_binding", gateCorrectionInputReceiptBound),
   ("exact_retry_after_ack_is_noop", gateCorrectionExactRetryNoEffects),

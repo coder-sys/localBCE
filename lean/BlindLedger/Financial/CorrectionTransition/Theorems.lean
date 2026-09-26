@@ -45,14 +45,17 @@ theorem applyCorrectionTransition_mutation_links
 
 /-- B2: a correction requests exactly the smaller of the rejected claim and the
     requestable balance: the shortfall Lean evaluated before the decision less
-    what outstanding correction requests already ask for. -/
+    what outstanding correction requests still ask for once the payments linked
+    to them are taken off. -/
 theorem applyCorrectionTransition_action_amount_eq_b2
     (request : CorrectionTransitionRequest) (mutation : CorrectionMutation)
     (hMutation : (applyCorrectionTransition request).mutation = some mutation) :
     ∃ result, evaluate request.currentInput = some result ∧
-      outstandingCorrectionCents request.currentInput.actions < result.shortfallCents ∧
+      outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions <
+        result.shortfallCents ∧
       mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents
-        (result.shortfallCents - outstandingCorrectionCents request.currentInput.actions) ∧
+        (result.shortfallCents -
+          outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions) ∧
       mutation.action.amountCents ≤ result.shortfallCents := by
   have hLinks := (applyCorrectionTransition_mutation_links request mutation hMutation).2.2.2.2.2.2
   obtain ⟨result, hEval, hShortfall, hBelow⟩ := hLinks.inputShortfall
@@ -61,32 +64,34 @@ theorem applyCorrectionTransition_action_amount_eq_b2
   · rw [hLinks.amountRule, hShortfall]
     exact Nat.le_trans (Nat.min_le_right _ _) (Nat.sub_le _ _)
 
-private theorem outstandingCorrectionCents_cons_ready (action : ActionRecord)
-    (rest : List ActionRecord) (hKind : action.kind = "CORRECTION_PAYMENT_REQUEST")
-    (hReady : action.status = .READY) :
-    outstandingCorrectionCents (action :: rest) =
-      action.amountCents + outstandingCorrectionCents rest := by
+private theorem outstandingCorrectionCents_cons_ready (paid : List CorrectionPaid)
+    (action : ActionRecord) (rest : List ActionRecord)
+    (hKind : action.kind = "CORRECTION_PAYMENT_REQUEST") (hReady : action.status = .READY) :
+    outstandingCorrectionCents paid (action :: rest) =
+      (action.amountCents - correctionPaidCents paid action.actionId) +
+        outstandingCorrectionCents paid rest := by
   have hCounted : action.kind = "CORRECTION_PAYMENT_REQUEST" ∧ action.status ≠ .CANCELLED :=
     ⟨hKind, by rw [hReady]; decide⟩
   simp only [outstandingCorrectionCents, if_pos hCounted]
 
-/-- H1: after an accepted correction, the outstanding correction requests on
-    the obligation (the input's plus the new one) never exceed the shortfall
-    Lean evaluated before the decision. -/
+/-- H1: after an accepted correction, what the correction requests on the
+    obligation (the input's plus the new one) still ask for, less the payments
+    linked to them, never exceeds the shortfall Lean evaluated before the
+    decision. -/
 theorem applyCorrectionTransition_outstanding_within_shortfall
     (request : CorrectionTransitionRequest) (mutation : CorrectionMutation)
     (hMutation : (applyCorrectionTransition request).mutation = some mutation) :
     ∃ result, evaluate request.currentInput = some result ∧
-      outstandingCorrectionCents (mutation.action :: request.currentInput.actions) ≤
-        result.shortfallCents := by
+      outstandingCorrectionCents request.command.correctionPaid
+          (mutation.action :: request.currentInput.actions) ≤ result.shortfallCents := by
   have hLinks := (applyCorrectionTransition_mutation_links request mutation hMutation).2.2.2.2.2.2
   obtain ⟨result, hEval, hShortfall, hBelow⟩ := hLinks.inputShortfall
-  have hAmount : mutation.action.amountCents ≤
-      result.shortfallCents - outstandingCorrectionCents request.currentInput.actions := by
+  have hAmount : mutation.action.amountCents ≤ result.shortfallCents -
+      outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions := by
     rw [hLinks.amountRule, hShortfall]
     exact Nat.min_le_right _ _
   refine ⟨result, hEval, ?_⟩
-  rw [outstandingCorrectionCents_cons_ready _ _ hLinks.correctionKind hLinks.readyAction]
+  rw [outstandingCorrectionCents_cons_ready _ _ _ hLinks.correctionKind hLinks.readyAction]
   omega
 
 /-- When nothing is short, no correction payment request is created. -/

@@ -186,6 +186,9 @@ def actionLookupWireAdmissible : ActionIdentityLookup → Prop
   | .existing identity => actionIdentityWireAdmissible identity
   | _ => True
 
+def correctionPaidWireAdmissible (entry : CorrectionPaid) : Prop :=
+  stringWireAdmissible entry.actionId ∧ nat8WireAdmissible entry.paidCents
+
 def commandWireAdmissible (command : CorrectionCommand) : Prop :=
   stringWireAdmissible command.itemId ∧ stringWireAdmissible command.claimId ∧
     stringWireAdmissible command.actionId ∧ stringWireAdmissible command.actorId ∧
@@ -198,7 +201,8 @@ def commandWireAdmissible (command : CorrectionCommand) : Prop :=
     actionLookupWireAdmissible command.actionLookup ∧
     queryObservationsWireAdmissible command.queryObservations ∧
     nat8WireAdmissible command.currentEventSequence ∧
-    digestWireAdmissible command.previousHistoryHead
+    digestWireAdmissible command.previousHistoryHead ∧
+    wireListAdmissible command.correctionPaid correctionPaidWireAdmissible
 
 def evidenceBindingWireAdmissible (binding : EvidenceBinding) : Prop :=
   stringWireAdmissible binding.evidenceId ∧ digestWireAdmissible binding.recordDigest
@@ -248,7 +252,8 @@ def dependencyFactsWireAdmissible (facts : CorrectionDependencyFacts) : Prop :=
     nat8WireAdmissible facts.ownerNowMs ∧ claimWireAdmissible facts.claimBefore ∧
     wireListAdmissible facts.supportingEvidence evidenceBindingWireAdmissible ∧
     queryObservationsWireAdmissible facts.queryObservations ∧
-    nat8WireAdmissible facts.currentEventSequence ∧ digestWireAdmissible facts.previousHistoryHead
+    nat8WireAdmissible facts.currentEventSequence ∧ digestWireAdmissible facts.previousHistoryHead ∧
+    wireListAdmissible facts.correctionPaid correctionPaidWireAdmissible
 
 def followUpsWireAdmissible (followUps : CorrectionFollowUps) : Prop :=
   stringWireAdmissible followUps.actionId ∧ stringWireAdmissible followUps.outboxActionId ∧
@@ -347,6 +352,19 @@ theorem readEvidenceBindings_append (bindings : List EvidenceBinding) (rest : By
   readList_encodeList_append_of_mem _ _ bindings rest h.1.1 h.1.2
     (fun binding hMember tail => readEvidenceBinding_append binding tail (h.2 binding hMember))
 
+theorem readCorrectionPaid_append (entry : CorrectionPaid) (rest : Bytes)
+    (h : correctionPaidWireAdmissible entry) :
+    readCorrectionPaid (encodeCorrectionPaid entry ++ rest) = some (entry, rest) := by
+  simp [readCorrectionPaid, encodeCorrectionPaid, List.append_assoc,
+    readString_encodeString_append _ _ h.1, readNat8_natBE_append _ _ h.2]
+
+theorem readCorrectionPaids_append (paid : List CorrectionPaid) (rest : Bytes)
+    (h : wireListAdmissible paid correctionPaidWireAdmissible) :
+    readList readCorrectionPaid (encodeList encodeCorrectionPaid paid ++ rest) =
+      some (paid, rest) :=
+  readList_encodeList_append_of_mem _ _ paid rest h.1.1 h.1.2
+    (fun entry hMember tail => readCorrectionPaid_append entry tail (h.2 entry hMember))
+
 theorem readOptionalDigest_append (value : Option Bytes) (rest : Bytes)
     (h : optionDigestWireAdmissible value) :
     readOptional readDigest (encodeOptional encodeDigest value ++ rest) = some (value, rest) := by
@@ -399,7 +417,7 @@ theorem readDependencyFacts_append (facts : CorrectionDependencyFacts) (rest : B
     (h : dependencyFactsWireAdmissible facts) :
     readDependencyFacts (encodeDependencyFacts facts ++ rest) = some (facts, rest) := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18,
-    h19, h20, h21⟩ := h
+    h19, h20, h21, h22⟩ := h
   delta readDependencyFacts encodeDependencyFacts
   simp [List.append_assoc,
     readString_encodeString_append _ _ h1, readNat8_natBE_append _ _ h2,
@@ -412,7 +430,7 @@ theorem readDependencyFacts_append (facts : CorrectionDependencyFacts) (rest : B
     readNat8_natBE_append _ _ h15, readNat8_natBE_append _ _ h16,
     decodeClaim_encodeClaim_append _ _ h17, readEvidenceBindings_append _ _ h18,
     readQueryObservations_append _ _ h19, readNat8_natBE_append _ _ h20,
-    readDigest_wire_append _ _ h21]
+    readDigest_wire_append _ _ h21, readCorrectionPaids_append _ _ h22]
 
 theorem readFollowUps_append (followUps : CorrectionFollowUps) (rest : Bytes)
     (h : followUpsWireAdmissible followUps) :

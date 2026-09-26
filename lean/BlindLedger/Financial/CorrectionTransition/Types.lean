@@ -6,8 +6,8 @@ open BlindLedger.Financial
 open BlindLedger.Financial.DecisionPackage
 
 def correctionTransitionContract : String := "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-def correctionTransitionInputMagic : Bytes := "BLFCMD01".toUTF8.toList
-def correctionTransitionResultMagic : Bytes := "BLFCRES2".toUTF8.toList
+def correctionTransitionInputMagic : Bytes := "BLFCMD02".toUTF8.toList
+def correctionTransitionResultMagic : Bytes := "BLFCRES3".toUTF8.toList
 def maxCorrectionTransitionBytes : Nat := maxTotalEncodedBytes
 
 inductive TransitionStatus where
@@ -107,13 +107,25 @@ def requiredTransitionCondition : TransitionRejectReason → TransitionRequireme
   | .NO_SHORTFALL => .POSITIVE_SHORTFALL
   | .NO_REQUESTABLE_BALANCE => .UNREQUESTED_SHORTFALL
 
-/-- What correction requests already ask for: every READY or ACKNOWLEDGED
-    CORRECTION_PAYMENT_REQUEST (a CANCELLED one asks for nothing). -/
-def outstandingCorrectionCents : List ActionRecord → Nat
+/-- What the payments linked to one correction request have paid against it. -/
+structure CorrectionPaid where
+  actionId : String
+  paidCents : Nat
+deriving DecidableEq, Repr
+
+def correctionPaidCents (paid : List CorrectionPaid) (actionId : String) : Nat :=
+  paid.foldr (fun entry total =>
+    (if entry.actionId = actionId then entry.paidCents else 0) + total) 0
+
+/-- What correction requests still ask for: every READY or ACKNOWLEDGED
+    CORRECTION_PAYMENT_REQUEST less what has been paid against it (a CANCELLED
+    one asks for nothing). -/
+def outstandingCorrectionCents (paid : List CorrectionPaid) : List ActionRecord → Nat
   | [] => 0
   | action :: rest =>
       (if action.kind = "CORRECTION_PAYMENT_REQUEST" ∧ action.status ≠ .CANCELLED then
-        action.amountCents else 0) + outstandingCorrectionCents rest
+        action.amountCents - correctionPaidCents paid action.actionId else 0) +
+        outstandingCorrectionCents paid rest
 
 inductive CorrectionQueryPredicate where
   | ACTION_ID
@@ -190,9 +202,10 @@ inductive ActionIdentityLookup where
 deriving DecidableEq, Repr
 
 /-! The command's evaluation ID/digest/revision/time are mandatory even on a
-    retry. This closes the Owner API's optional retry fields into one exact v1
-    command identity. The current authority and global lookup facts are read by
-    State, not caller-authenticated values. -/
+    retry. This closes the Owner API's optional retry fields into one exact
+    command identity. The current authority, global lookup facts and the
+    payments linked to earlier correction requests are read by State, not
+    caller-authenticated values. -/
 structure CorrectionCommand where
   itemId : String
   claimId : String
@@ -211,6 +224,7 @@ structure CorrectionCommand where
   queryObservations : CorrectionQueryObservations
   currentEventSequence : Nat
   previousHistoryHead : Bytes
+  correctionPaid : List CorrectionPaid := []
 deriving DecidableEq, Repr
 
 structure CorrectionTransitionRequest where
@@ -269,6 +283,7 @@ structure CorrectionDependencyFacts where
   queryObservations : CorrectionQueryObservations
   currentEventSequence : Nat
   previousHistoryHead : Bytes
+  correctionPaid : List CorrectionPaid
 deriving DecidableEq, Repr
 
 inductive CorrectionCalculationValidity where

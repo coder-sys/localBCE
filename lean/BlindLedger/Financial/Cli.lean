@@ -109,7 +109,7 @@ def runProjectDecisionPackage : IO Unit := do
                 stdout.flush
 
 def runCorrectionTransitionKat : IO Unit := do
-  IO.println "BLFCMD01/BLFCRES2"
+  IO.println "BLFCMD02/BLFCRES3"
   IO.println "contract=RR/FINANCIAL/CORRECTION-TRANSITION/v1"
   IO.println "claim=PURE_SYNTHETIC_NONACTIVATING"
   IO.println ("CORRECTION_TRANSITION_KAT_COUNT=" ++ toString correctionTransitionKatCount)

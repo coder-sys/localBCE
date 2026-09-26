@@ -146,6 +146,20 @@ def decodeCorrectionQueryObservations (bytes : Bytes) : Option CorrectionQueryOb
   if rest.isEmpty && correctionQueryObservationsWellFormed observations
     then some observations else none
 
+def encodeCorrectionPaid (entry : CorrectionPaid) : Bytes :=
+  encodeString entry.actionId ++ natBE 8 entry.paidCents
+
+def readCorrectionPaid (bytes : Bytes) : Option (CorrectionPaid × Bytes) := do
+  let (actionId, rest) ← readString bytes
+  let (paidCents, rest) ← readNatBE 8 rest
+  pure ({ actionId := actionId, paidCents := paidCents }, rest)
+
+/-- One positive entry per request, in canonical action-ID order. -/
+def correctionPaidWellFormed (paid : List CorrectionPaid) : Bool :=
+  paid.length ≤ maxRows && canonicalIdList (paid.map CorrectionPaid.actionId) &&
+    paid.all (fun entry => idWellFormed entry.actionId && entry.paidCents ≥ 1 &&
+      amountWellFormed entry.paidCents)
+
 def commandWellFormed (command : CorrectionCommand) : Bool :=
   [command.itemId, command.claimId, command.actionId, command.actorId,
     command.currentAuthorityId, command.evaluationId].all idWellFormed &&
@@ -155,7 +169,8 @@ def commandWellFormed (command : CorrectionCommand) : Bool :=
   digestWellFormed command.evaluationResultDigest && timeWellFormed command.decisionAtMs &&
   timeWellFormed command.ownerNowMs && actionLookupWellFormed command.actionLookup &&
   correctionQueryObservationsWellFormed command.queryObservations &&
-  command.currentEventSequence ≤ maxRows && digestWellFormed command.previousHistoryHead
+  command.currentEventSequence ≤ maxRows && digestWellFormed command.previousHistoryHead &&
+  correctionPaidWellFormed command.correctionPaid
 
 def encodeInputBody (request : CorrectionTransitionRequest) : Option Bytes := do
   if !commandWellFormed request.command ||
@@ -164,7 +179,7 @@ def encodeInputBody (request : CorrectionTransitionRequest) : Option Bytes := do
     none
   let inputBytes ← encodeFinancialInput request.currentInput
   let receiptBytes := encodeEvaluationReceipt request.currentReceipt
-  pure (correctionTransitionInputMagic ++ natBE 2 1 ++
+  pure (correctionTransitionInputMagic ++ natBE 2 2 ++
     encodeString correctionTransitionContract ++
     encodeString request.command.itemId ++ encodeString request.command.claimId ++
     encodeString request.command.actionId ++ encodeString request.command.actorId ++
@@ -175,21 +190,22 @@ def encodeInputBody (request : CorrectionTransitionRequest) : Option Bytes := do
     natBE 8 request.command.ownerNowMs ++ encodeActionLookup request.command.actionLookup ++
     encodeQueryObservations request.command.queryObservations ++
     natBE 8 request.command.currentEventSequence ++
-    encodeDigest request.command.previousHistoryHead ++ encodeSizedBytes inputBytes ++
+    encodeDigest request.command.previousHistoryHead ++
+    encodeList encodeCorrectionPaid request.command.correctionPaid ++ encodeSizedBytes inputBytes ++
     encodeSizedBytes receiptBytes)
 
 def encodeCorrectionTransitionRequest (request : CorrectionTransitionRequest) : Option Bytes := do
   let body ← encodeInputBody request
   if body.length > maxCorrectionTransitionBytes then none else pure body
 
-/-- Reads one BLFCMD01 request and returns the unread bytes.  The decoder below
+/-- Reads one BLFCMD02 request and returns the unread bytes.  The decoder below
     accepts only an empty remainder and the canonical re-encoding. -/
 def parseCorrectionTransitionRequest (bytes : Bytes) :
     Option (CorrectionTransitionRequest × Bytes) := do
   if !correctionTransitionInputMagic.isPrefixOf bytes then none
   let rest := bytes.drop correctionTransitionInputMagic.length
   let (version, rest) ← readNatBE 2 rest
-  if version ≠ 1 then none
+  if version ≠ 2 then none
   let (contract, rest) ← readString rest
   if contract ≠ correctionTransitionContract then none
   let (itemId, rest) ← readString rest
@@ -209,6 +225,7 @@ def parseCorrectionTransitionRequest (bytes : Bytes) :
   let (queryObservations, rest) ← readQueryObservations rest
   let (currentEventSequence, rest) ← readNatBE 8 rest
   let (previousHistoryHead, rest) ← readDigest rest
+  let (correctionPaid, rest) ← readList readCorrectionPaid rest
   let (inputBytes, rest) ← readSizedBytes maxCorrectionTransitionBytes rest
   let (receiptBytes, rest) ← readSizedBytes maxCorrectionTransitionBytes rest
   let currentInput ← decodeFinancialInput inputBytes
@@ -232,7 +249,8 @@ def parseCorrectionTransitionRequest (bytes : Bytes) :
       actionLookup := actionLookup
       queryObservations := queryObservations
       currentEventSequence := currentEventSequence
-      previousHistoryHead := previousHistoryHead }
+      previousHistoryHead := previousHistoryHead
+      correctionPaid := correctionPaid }
     currentInput := currentInput
     currentReceipt := currentReceipt }
   pure (request, rest)
@@ -423,7 +441,7 @@ def encodeDependencyFacts (facts : CorrectionDependencyFacts) : Bytes :=
     encodeList encodeEvidenceBinding facts.supportingEvidence ++
     encodeQueryObservations facts.queryObservations ++
     natBE 8 facts.currentEventSequence ++
-    encodeDigest facts.previousHistoryHead
+    encodeDigest facts.previousHistoryHead ++ encodeList encodeCorrectionPaid facts.correctionPaid
 
 def readDependencyFacts (bytes : Bytes) : Option (CorrectionDependencyFacts × Bytes) := do
   let (artifactContract, rest) ← readString bytes
@@ -447,6 +465,7 @@ def readDependencyFacts (bytes : Bytes) : Option (CorrectionDependencyFacts × B
   let (queryObservations, rest) ← readQueryObservations rest
   let (currentEventSequence, rest) ← readNatBE 8 rest
   let (previousHistoryHead, rest) ← readDigest rest
+  let (correctionPaid, rest) ← readList readCorrectionPaid rest
   pure ({
     artifactContract := artifactContract
     artifactVersion := artifactVersion
@@ -468,7 +487,8 @@ def readDependencyFacts (bytes : Bytes) : Option (CorrectionDependencyFacts × B
     supportingEvidence := supportingEvidence
     queryObservations := queryObservations
     currentEventSequence := currentEventSequence
-    previousHistoryHead := previousHistoryHead }, rest)
+    previousHistoryHead := previousHistoryHead
+    correctionPaid := correctionPaid }, rest)
 
 def encodeFollowUps (followUps : CorrectionFollowUps) : Bytes :=
   encodeString followUps.actionId ++ encodeString followUps.outboxActionId ++
@@ -671,10 +691,12 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.action.kind = "CORRECTION_PAYMENT_REQUEST" &&
       mutation.dependencies.inputShortfallCents > 0 &&
       mutation.dependencies.inputShortfallCents ≤ maxCents &&
-      -- Only the balance that earlier correction requests have not already asked for.
+      -- Only the balance that earlier correction requests, less what was paid
+      -- against them, do not already ask for.
+      correctionPaidWellFormed mutation.dependencies.correctionPaid &&
       mutation.action.amountCents =
         min mutation.determination.amountCents (mutation.dependencies.inputShortfallCents -
-          outstandingCorrectionCents
+          outstandingCorrectionCents mutation.dependencies.correctionPaid
             (mutation.resultingInput.actions.filter (fun action => action.actionId ≠ actionId))) &&
       mutation.action.currency = mutation.resultingInput.context.currency &&
       mutation.action.revision = mutation.determination.resultingRevision &&
@@ -796,20 +818,20 @@ def encodeCorrectionTransitionResult (result : CorrectionTransitionResult) : Opt
     | .DUPLICATE => UInt8.ofNat 2
     | .REJECTED => UInt8.ofNat 3
   let mutationBytes ← encodeOptionalMutation result.mutation
-  let wire := correctionTransitionResultMagic ++ natBE 2 2 ++ [status] ++
+  let wire := correctionTransitionResultMagic ++ natBE 2 3 ++ [status] ++
     encodeString correctionTransitionContract ++
     encodeOptionalRejectReason result.rejectReason ++ encodeExplanation result.explanation ++
     encodeOptionString result.actionId ++
     encodeOptionString result.determinationId ++ mutationBytes
   if wire.length ≤ maxCorrectionTransitionBytes then some wire else none
 
-/-- Reads one BLFCRES2 result and returns the unread bytes. -/
+/-- Reads one BLFCRES3 result and returns the unread bytes. -/
 def parseCorrectionTransitionResult (bytes : Bytes) :
     Option (CorrectionTransitionResult × Bytes) := do
   if !correctionTransitionResultMagic.isPrefixOf bytes then none
   let rest := bytes.drop correctionTransitionResultMagic.length
   let (version, rest) ← readNatBE 2 rest
-  if version ≠ 2 then none
+  if version ≠ 3 then none
   let (statusByte, rest) ← readByte rest
   let status ← match statusByte.toNat with
     | 1 => some TransitionStatus.ACCEPTED

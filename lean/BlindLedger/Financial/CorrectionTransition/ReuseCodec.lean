@@ -90,7 +90,7 @@ def encodeCorrectionReuseRequest (request : CorrectionReuseRequest) : Option Byt
   let acceptedBytes ← encodeCorrectionTransitionResult request.acceptedResult
   let inputBytes ← encodeFinancialInput request.currentInput
   let receiptBytes := encodeEvaluationReceipt request.currentReceipt
-  let body := correctionReuseInputMagic ++ natBE 2 1 ++ encodeString correctionReuseContract ++
+  let body := correctionReuseInputMagic ++ natBE 2 2 ++ encodeString correctionReuseContract ++
     reuseSizedBytes acceptedBytes ++ reuseSizedBytes inputBytes ++ reuseSizedBytes receiptBytes ++
     encodeOptionDetermination request.currentDetermination ++
     encodeOptionOutbox request.currentOutbox ++
@@ -103,7 +103,7 @@ def decodeCorrectionReuseRequest (bytes : Bytes) : Option CorrectionReuseRequest
   if bytes.length > maxCorrectionReuseBytes || !correctionReuseInputMagic.isPrefixOf bytes then none
   let rest := bytes.drop correctionReuseInputMagic.length
   let (version, rest) ← readNatBE 2 rest
-  if version ≠ 1 then none
+  if version ≠ 2 then none
   let (contract, rest) ← readString rest
   if contract ≠ correctionReuseContract then none
   let (acceptedBytes, rest) ← readReuseSizedBytes maxCorrectionTransitionBytes rest
@@ -311,7 +311,7 @@ private def assessmentWellFormed (assessment : CorrectionReuseAssessment) : Bool
 
 def encodeCorrectionReuseAssessment (assessment : CorrectionReuseAssessment) : Option Bytes := do
   if !assessmentWellFormed assessment then none
-  let body := correctionReuseResultMagic ++ natBE 2 1 ++ encodeString correctionReuseContract ++
+  let body := correctionReuseResultMagic ++ natBE 2 2 ++ encodeString correctionReuseContract ++
     [encodeCalculationValidity assessment.calculationValidity] ++
     encodeOptionCalculationReason assessment.calculationReason ++
     [encodeHumanApprovalValidity assessment.humanApprovalValidity] ++
@@ -327,7 +327,7 @@ def decodeCorrectionReuseAssessment (bytes : Bytes) : Option CorrectionReuseAsse
   if bytes.length > maxCorrectionReuseBytes || !correctionReuseResultMagic.isPrefixOf bytes then none
   let rest := bytes.drop correctionReuseResultMagic.length
   let (version, rest) ← readNatBE 2 rest
-  if version ≠ 1 then none
+  if version ≠ 2 then none
   let (contract, rest) ← readString rest
   if contract ≠ correctionReuseContract then none
   let (calculationValidity, rest) ← readCalculationValidity rest
