@@ -20,8 +20,10 @@ FFS_KEY = "[1, l.member, l.payee, l.date, l.proc, l.units, l.cents]"
 NEAR_KEY = "[2, l.member, l.rendering, l.date, l.proc]"
 CAP_KEY = "[0, l.member, l.date / 100]"
 OVERLAP = "max first (max s.start t.start) ≤ min last (min s.stop t.stop)"
-REVIEW = ("| .FFS_NEAR_DUPLICATE | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID | .STALE_DMF\n"
-          "  | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .STALE_RELEASED => true")
+REVIEW = ("| .COLLIDES_WITH_UNRESOLVED | .FFS_NEAR_DUPLICATE | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID\n"
+          "  | .STALE_DMF | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .STALE_RELEASED\n"
+          "  | .STALE_UNRESOLVED => true")
+UNRESOLVED = "((entries c.unresolved).flatMap keys)"
 MUTANTS = [
     ("R1 off", "d.id == l.member && d.date < l.date", "false"),
     ("R1 death on the service date", "d.id == l.member && d.date < l.date", "d.id == l.member && d.date ≤ l.date"),
@@ -122,8 +124,17 @@ MUTANTS = [
     ("HOLD reasons reviewed", "  | _ => false", "  | _ => true"),
     ("near duplicate is HOLD", REVIEW, REVIEW.replace("| .FFS_NEAR_DUPLICATE ", "")),
     ("future service date is HOLD", REVIEW, REVIEW.replace("| .SERVICE_DATE_FUTURE ", "")),
-    ("invalid service date is HOLD", REVIEW, REVIEW.replace("| .SERVICE_DATE_INVALID ", "")),
+    ("invalid service date is HOLD", REVIEW, REVIEW.replace(" | .SERVICE_DATE_INVALID", "")),
     ("stale released set is HOLD", REVIEW, REVIEW.replace(" | .STALE_RELEASED", "")),
+    ("unresolved collision is HOLD", REVIEW, REVIEW.replace("| .COLLIDES_WITH_UNRESOLVED ", "")),
+    ("stale unresolved set is HOLD", REVIEW, REVIEW.replace("\n  | .STALE_UNRESOLVED", "")),
+    ("unresolved keys ignored (ALLOW)", f"(keys l).any {UNRESOLVED}.contains", "false"),
+    ("unresolved near keys ignored", UNRESOLVED, "((entries c.unresolved).map key)"),
+    ("unresolved set unchecked", "| .STALE_UNRESOLVED => !whole c.unresolved", "| .STALE_UNRESOLVED => false"),
+    ("gate leaves nothing unresolved", "unresolved := entries c.unresolved ++ unresolvedLines c ds",
+     "unresolved := entries c.unresolved"),
+    ("unenrolled lines unresolved", "d.outcome != .ALLOW && enrolled c d.line", "d.outcome != .ALLOW"),
+    ("ALLOW lines unresolved", "d.outcome != .ALLOW && enrolled", "enrolled"),
     ("arrival order", "batch.mergeSort lineLe", "batch"),
 ]
 
