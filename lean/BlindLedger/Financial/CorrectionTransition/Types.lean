@@ -8,10 +8,6 @@ open BlindLedger.Financial.DecisionPackage
 def correctionTransitionContract : String := "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 def correctionTransitionInputMagic : Bytes := "BLFCMD01".toUTF8.toList
 def correctionTransitionResultMagic : Bytes := "BLFCRES2".toUTF8.toList
-/-- BLFCRES2 carries no Owner storage digest.  Lean places this all-zero value
-    in the new action's `payloadDigest`; the Owner adapter computes the real
-    digest from the approved fields and substitutes it before storage. -/
-def pendingPayloadDigest : Bytes := List.replicate digestBytes 0
 def maxCorrectionTransitionBytes : Nat := maxTotalEncodedBytes
 
 inductive TransitionStatus where
@@ -61,6 +57,7 @@ inductive TransitionRejectReason where
   | INPUT_SNAPSHOT_MISSING
   | CAPACITY
   | NO_SHORTFALL
+  | NO_REQUESTABLE_BALANCE
 deriving DecidableEq, Repr
 
 inductive TransitionRequirement where
@@ -84,6 +81,7 @@ inductive TransitionRequirement where
   | INPUT_SNAPSHOT_DIGEST_AVAILABLE
   | HISTORY_CAPACITY_AVAILABLE
   | POSITIVE_SHORTFALL
+  | UNREQUESTED_SHORTFALL
 deriving DecidableEq, Repr
 
 def requiredTransitionCondition : TransitionRejectReason → TransitionRequirement
@@ -107,6 +105,15 @@ def requiredTransitionCondition : TransitionRejectReason → TransitionRequireme
   | .INPUT_SNAPSHOT_MISSING => .INPUT_SNAPSHOT_DIGEST_AVAILABLE
   | .CAPACITY => .HISTORY_CAPACITY_AVAILABLE
   | .NO_SHORTFALL => .POSITIVE_SHORTFALL
+  | .NO_REQUESTABLE_BALANCE => .UNREQUESTED_SHORTFALL
+
+/-- What correction requests already ask for: every READY or ACKNOWLEDGED
+    CORRECTION_PAYMENT_REQUEST (a CANCELLED one asks for nothing). -/
+def outstandingCorrectionCents : List ActionRecord → Nat
+  | [] => 0
+  | action :: rest =>
+      (if action.kind = "CORRECTION_PAYMENT_REQUEST" ∧ action.status ≠ .CANCELLED then
+        action.amountCents else 0) + outstandingCorrectionCents rest
 
 inductive CorrectionQueryPredicate where
   | ACTION_ID

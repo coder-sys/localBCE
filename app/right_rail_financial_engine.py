@@ -41,9 +41,6 @@ CORRECTION_TRANSITION_RESULT_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
     "6858FC3684D1243EB12F2FC038AD8D2107239E92C520C388B7D5719741FE13D2"
 )
 _SHA256_BYTES: Final[int] = 32
-# BLFCRES2: Lean leaves the new action's payload digest at this sentinel; the
-# owner computes every storage digest from the approved fields.
-PENDING_PAYLOAD_DIGEST: Final[bytes] = bytes(64)
 _MAX_SQLITE_INTEGER: Final[int] = 2**63 - 1
 
 
@@ -1113,6 +1110,7 @@ _CORRECTION_REJECT_REASON_TAGS: Final[dict[int, str]] = {
     18: "QUERY_OBSERVATION_INVALID",
     19: "INPUT_SNAPSHOT_MISSING",
     20: "NO_SHORTFALL",
+    21: "NO_REQUESTABLE_BALANCE",
 }
 _CORRECTION_REQUIREMENT_TAGS: Final[dict[int, str]] = {
     1: "VALID_COMMAND",
@@ -1135,6 +1133,7 @@ _CORRECTION_REQUIREMENT_TAGS: Final[dict[int, str]] = {
     18: "COMPLETE_QUERY_OBSERVATIONS",
     19: "INPUT_SNAPSHOT_DIGEST_AVAILABLE",
     20: "POSITIVE_SHORTFALL",
+    21: "UNREQUESTED_SHORTFALL",
 }
 _CORRECTION_REJECT_REQUIREMENTS: Final[dict[str, str]] = {
     "INVALID_REQUEST": "VALID_COMMAND",
@@ -1157,6 +1156,7 @@ _CORRECTION_REJECT_REQUIREMENTS: Final[dict[str, str]] = {
     "QUERY_OBSERVATION_INVALID": "COMPLETE_QUERY_OBSERVATIONS",
     "INPUT_SNAPSHOT_MISSING": "INPUT_SNAPSHOT_DIGEST_AVAILABLE",
     "NO_SHORTFALL": "POSITIVE_SHORTFALL",
+    "NO_REQUESTABLE_BALANCE": "UNREQUESTED_SHORTFALL",
 }
 
 
@@ -1244,8 +1244,6 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             or action["kind"] != "CORRECTION_PAYMENT_REQUEST"
             or action["status"] != "READY"
             or deps["input_shortfall_cents"] <= 0
-            or action["amount_cents"] != min(det["amount_cents"], deps["input_shortfall_cents"])
-            or action["payload_digest"] != PENDING_PAYLOAD_DIGEST
             or outbox["action_id"] != action_id
             or outbox["status"] != "READY"
             or outbox["attempt"] != 0
@@ -1454,7 +1452,6 @@ __all__ = (
     "MAX_CORRECTION_TRANSITION_BYTES",
     "MAX_ENGINE_INPUT_BYTES",
     "MAX_ENGINE_JOB_MEMORY_CAP_BYTES",
-    "PENDING_PAYLOAD_DIGEST",
     "evaluate_financial_snapshot",
     "encode_correction_transition_request",
     "load_correction_transition_release",

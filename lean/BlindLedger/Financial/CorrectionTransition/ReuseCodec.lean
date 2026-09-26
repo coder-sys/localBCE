@@ -8,7 +8,7 @@ open BlindLedger.Financial.DecisionPackage
 
 def correctionReuseContract : String := "RR/FINANCIAL/CORRECTION-REUSE/v1"
 def correctionReuseInputMagic : Bytes := "BLFCRU02".toUTF8.toList
-def correctionReuseResultMagic : Bytes := "BLFCRV01".toUTF8.toList
+def correctionReuseResultMagic : Bytes := "BLFCRV02".toUTF8.toList
 def maxCorrectionReuseBytes : Nat := maxCorrectionTransitionBytes * 3
 
 private def reuseSizedBytes (value : Bytes) : Bytes := natBE 4 value.length ++ value

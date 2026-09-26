@@ -40,14 +40,6 @@ private def withoutCorrectionDetermination (rows : List OffsetDetermination)
     (determinationId : String) : List OffsetDetermination :=
   rows.filter (fun row => row.determinationId ≠ determinationId)
 
-/-- BLFCRES2 leaves the correction action's storage digest to the Owner, so
-    the saved post-state holds `pendingPayloadDigest` where the stored row holds
-    the Owner's digest of the same approved fields. -/
-private def withPendingCorrectionDigest (rows : List ActionRecord)
-    (actionId : String) : List ActionRecord :=
-  rows.map (fun row =>
-    if row.actionId = actionId then { row with payloadDigest := pendingPayloadDigest } else row)
-
 private def casesWithoutUpdateTimes (rows : List CaseRecord) : List CaseRecord :=
   rows.map (fun row => { row with updatedAt := 0 })
 
@@ -56,7 +48,7 @@ private def casesWithoutUpdateTimes (rows : List CaseRecord) : List CaseRecord :
     Every other field that affects this obligation's calculation or projection
     remains part of the comparison. -/
 private def calculationInputMatches (saved current : FinancialInput)
-    (correctionDeterminationId correctionActionId : String) : Bool :=
+    (correctionDeterminationId : String) : Bool :=
   current.context = saved.context && current.authority = saved.authority &&
     current.pack = saved.pack && current.obligation = saved.obligation &&
     current.beforeRevision = saved.beforeRevision && current.payments = saved.payments &&
@@ -65,7 +57,7 @@ private def calculationInputMatches (saved current : FinancialInput)
       withoutCorrectionDetermination saved.determinations correctionDeterminationId &&
     current.evidence = saved.evidence && current.conflicts = saved.conflicts &&
     casesWithoutUpdateTimes current.cases = casesWithoutUpdateTimes saved.cases &&
-    withPendingCorrectionDigest current.actions correctionActionId = saved.actions
+    current.actions = saved.actions
 
 private def resultMatchesPostState (saved current : FinancialResult) : Bool :=
   { current with evaluatedAt := saved.evaluatedAt } = saved
@@ -90,7 +82,7 @@ def calculationReason (request : CorrectionReuseRequest)
       request.currentHistoryHead then
     some .QUERY_OBSERVATION_INVALID
   else if !calculationInputMatches mutation.resultingInput request.currentInput
-      mutation.determination.determinationId mutation.action.actionId then
+      mutation.determination.determinationId then
     some .RELEVANT_FINANCIAL_FACT_CHANGED
   else if request.currentReceipt.evidenceBindings ≠ mutation.dependencies.supportingEvidence then
     some .EVIDENCE_BINDING_CHANGED
@@ -126,7 +118,8 @@ private def actionIdentityMatches (expected current : ActionRecord) : Bool :=
   current.actionId = expected.actionId && current.obligationId = expected.obligationId &&
     current.determinationId = expected.determinationId && current.kind = expected.kind &&
     current.amountCents = expected.amountCents && current.currency = expected.currency &&
-    current.revision = expected.revision && current.createdAt = expected.createdAt
+    current.revision = expected.revision && current.payloadDigest = expected.payloadDigest &&
+    current.createdAt = expected.createdAt
 
 private def outboxIdentityMatches (expected current : CorrectionOutboxDelta) : Bool :=
   current.actionId = expected.actionId && current.attempt = expected.attempt &&

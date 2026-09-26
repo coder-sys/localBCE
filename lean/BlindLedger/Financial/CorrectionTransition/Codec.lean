@@ -267,6 +267,7 @@ def encodeRejectReason : TransitionRejectReason → UInt8
   | .QUERY_OBSERVATION_INVALID => UInt8.ofNat 18
   | .INPUT_SNAPSHOT_MISSING => UInt8.ofNat 19
   | .NO_SHORTFALL => UInt8.ofNat 20
+  | .NO_REQUESTABLE_BALANCE => UInt8.ofNat 21
 
 def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   match byte.toNat with
@@ -290,6 +291,7 @@ def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   | 18 => some .QUERY_OBSERVATION_INVALID
   | 19 => some .INPUT_SNAPSHOT_MISSING
   | 20 => some .NO_SHORTFALL
+  | 21 => some .NO_REQUESTABLE_BALANCE
   | _ => none
 
 def encodeOptionalRejectReason : Option TransitionRejectReason → Bytes
@@ -367,6 +369,7 @@ def encodeTransitionRequirement : TransitionRequirement → UInt8
   | .COMPLETE_QUERY_OBSERVATIONS => UInt8.ofNat 18
   | .INPUT_SNAPSHOT_DIGEST_AVAILABLE => UInt8.ofNat 19
   | .POSITIVE_SHORTFALL => UInt8.ofNat 20
+  | .UNREQUESTED_SHORTFALL => UInt8.ofNat 21
 
 def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement × Bytes) := do
   let (tag, rest) ← readByte bytes
@@ -391,6 +394,7 @@ def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement ×
     | 18 => some .COMPLETE_QUERY_OBSERVATIONS
     | 19 => some .INPUT_SNAPSHOT_DIGEST_AVAILABLE
     | 20 => some .POSITIVE_SHORTFALL
+    | 21 => some .UNREQUESTED_SHORTFALL
     | _ => none
   pure (requirement, rest)
 
@@ -661,14 +665,17 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.determination.resultingRevision = mutation.determination.expectedRevision + 1 &&
       timeWellFormed mutation.determination.decidedAt &&
       mutation.determination.obligationId = mutation.resultingInput.context.obligationId &&
-      mutation.action.actionId = actionId && mutation.action.payloadDigest = pendingPayloadDigest &&
+      mutation.action.actionId = actionId && digestWellFormed mutation.action.payloadDigest &&
       mutation.action.obligationId = mutation.determination.obligationId &&
       mutation.action.determinationId = some determinationId &&
       mutation.action.kind = "CORRECTION_PAYMENT_REQUEST" &&
       mutation.dependencies.inputShortfallCents > 0 &&
       mutation.dependencies.inputShortfallCents ≤ maxCents &&
+      -- Only the balance that earlier correction requests have not already asked for.
       mutation.action.amountCents =
-        min mutation.determination.amountCents mutation.dependencies.inputShortfallCents &&
+        min mutation.determination.amountCents (mutation.dependencies.inputShortfallCents -
+          outstandingCorrectionCents
+            (mutation.resultingInput.actions.filter (fun action => action.actionId ≠ actionId))) &&
       mutation.action.currency = mutation.resultingInput.context.currency &&
       mutation.action.revision = mutation.determination.resultingRevision &&
       mutation.action.status = .READY &&

@@ -352,6 +352,16 @@ _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
 }
 
 
+def _retired_correction_rule(sha256: object) -> str | None:
+    """The checker's retired-pin lookup; a missing or altered registry is an integrity refusal."""
+    from app.right_rail_financial_owner_independent import IndependentFinancialError, retired_correction_rule
+
+    try:
+        return retired_correction_rule(sha256)
+    except IndependentFinancialError as error:
+        _fail(FinancialIntegrityError, str(error))
+
+
 def _canonical(value: Mapping[str, Any]) -> bytes:
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
@@ -4382,12 +4392,19 @@ class FinancialOwner:
             and dependencies["query_observations"] == query_observations,
             "correction_read_set_binding",
         )
-        # Lean requests only the unpaid balance: min(claim, input shortfall) (B2).
+        # Lean requests only the unpaid balance no outstanding correction request
+        # already asks for: min(claim, max(input shortfall - outstanding, 0)) (B2, H1).
+        (outstanding,) = connection.execute(
+            "SELECT COALESCE(SUM(json_extract(payload_json,'$.amount_cents')),0) FROM actions "
+            "WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST' AND status!='CANCELLED'",
+            (obligation_id,),
+        ).fetchone()
         action_amount = int(action["amount_cents"])
         require_binding(
             action["obligation_id"] == obligation_id
             and action["currency"] == self.config.currency
-            and action_amount == min(expected_claim["amount_cents"], int(input_receipt["shortfall_cents"])),
+            and action_amount
+            == min(expected_claim["amount_cents"], max(int(input_receipt["shortfall_cents"]) - outstanding, 0)),
             "correction_action_binding",
         )
 
@@ -4426,6 +4443,7 @@ class FinancialOwner:
             "revision": resulting_revision,
         }
         action_payload_digest = _digest(_ACTION_DOMAIN, _canonical(action_payload))
+        require_binding(action["payload_digest"] == action_payload_digest, "correction_digest_binding")
         action_idempotency_key = _digest(_IDEMPOTENCY_DOMAIN, action_id.encode("ascii"))
         prior_case = connection.execute(
             "SELECT * FROM cases WHERE case_id=? AND obligation_id=?",
@@ -4649,7 +4667,7 @@ class FinancialOwner:
             after_revision=int(event["after_revision"]),
             payload={
                 "action_id": action_id,
-                "amount_cents": action_amount,
+                "amount_cents": expected_claim["amount_cents"],
                 "determination_id": determination_id,
                 "evaluation_id": evaluation_id,
                 "correction_followup": correction_followup,
@@ -4998,6 +5016,7 @@ class FinancialOwner:
                     "QUERY_OBSERVATION_INVALID": (FinancialIntegrityError, "correction_read_set_invalid"),
                     "INPUT_SNAPSHOT_MISSING": (FinancialIntegrityError, "correction_input_snapshot_missing"),
                     "NO_SHORTFALL": (FinancialConflictError, "correction_no_shortfall"),
+                    "NO_REQUESTABLE_BALANCE": (FinancialConflictError, "correction_no_requestable_balance"),
                     "CAPACITY": (FinancialIntegrityError, "history_capacity"),
                 }
                 error_type, error_code = rejected_errors.get(
@@ -5830,7 +5849,6 @@ class FinancialOwner:
         ):
             return "REVIEW_REQUIRED"
         from app import right_rail_financial_engine as financial_engine
-        from app.right_rail_financial_owner_independent import retired_correction_artifact
 
         is_digest = _is_upper_hex128
 
@@ -5874,7 +5892,7 @@ class FinancialOwner:
             or type(artifact.get("version")) is not int
             or artifact.get("version") != 1
             or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
-            and not retired_correction_artifact(artifact.get("sha256"))
+            and _retired_correction_rule(artifact.get("sha256")) is None
             or source.get("action_id") != payload.get("action_id")
             or source.get("outbox_action_id") != payload.get("action_id")
             or source.get("resulting_evaluation_id") != payload.get("evaluation_id")
@@ -6013,7 +6031,6 @@ class FinancialOwner:
         }
         artifact = accepted_basis.get("artifact") if type(accepted_basis) is dict else None
         from app import right_rail_financial_engine as financial_engine
-        from app.right_rail_financial_owner_independent import retired_correction_artifact
 
         if (
             type(artifact) is not dict
@@ -6022,7 +6039,7 @@ class FinancialOwner:
             or type(artifact.get("version")) is not int
             or artifact.get("version") != 1
             or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
-            and not retired_correction_artifact(artifact.get("sha256"))
+            and _retired_correction_rule(artifact.get("sha256")) is None
         ):
             artifact = None
         failure = {

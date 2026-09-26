@@ -28,12 +28,13 @@ private def correctionKatQuery (predicate : CorrectionQueryPredicate) (subject :
   versionSequence := sequence
   versionHead := correctionKatDigest head }
 
-private def correctionKatAbsentQueries (sequence head : Nat) : CorrectionQueryObservations := {
-  actionId := correctionKatQuery .ACTION_ID katCorrectionActionId sequence head
+private def correctionKatAbsentQueries (sequence head : Nat)
+    (actionId : String := katCorrectionActionId)
+    (evaluationId : String := katCorrectionEvaluationId) : CorrectionQueryObservations := {
+  actionId := correctionKatQuery .ACTION_ID actionId sequence head
   determinationId := correctionKatQuery .DETERMINATION_ID
-    ("determination:" ++ katCorrectionActionId) sequence head
-  evaluationConsumed := correctionKatQuery .EVALUATION_CONSUMED
-    katCorrectionEvaluationId sequence head }
+    ("determination:" ++ actionId) sequence head
+  evaluationConsumed := correctionKatQuery .EVALUATION_CONSUMED evaluationId sequence head }
 
 private def correctionKatRetryQueries (sequence head : Nat) : CorrectionQueryObservations := {
   actionId := correctionKatQuery .ACTION_ID katCorrectionActionId sequence head
@@ -190,7 +191,6 @@ def gateCorrectionAcceptedTransition : Bool :=
       mutation.resultingResult.receivedCashCents = 9_700_000 &&
       mutation.dependencies.inputShortfallCents = 300_000 &&
       mutation.determination.amountCents = 300_000 && mutation.action.amountCents = 300_000 &&
-      mutation.action.payloadDigest = pendingPayloadDigest &&
       mutation.determination.decision = .OFFSET_REJECTED_CORRECTION_AUTHORIZED &&
       mutation.determination.expectedRevision = 4 && mutation.determination.resultingRevision = 5 &&
       mutation.action.kind = "CORRECTION_PAYMENT_REQUEST" && mutation.action.status = .READY &&
@@ -203,6 +203,18 @@ def gateCorrectionAcceptedTransition : Bool :=
         "evaluation:obligation:item-h:period-01:r5" &&
       mutation.orderedEffects = [ .DETERMINATION_RECORDED, .CLAIM_REJECTED, .CASE_UPSERTED,
         .ACTION_CREATED, .OUTBOX_CREATED, .PROJECTION_RECOMPUTED, .EVENT_APPENDED ]
+
+/-- The Owner's storage digest of the accepted action payload; the Owner
+    recomputes it from the row it writes (`correction_digest_binding`). -/
+def gateCorrectionOwnerDigestVectors : Bool :=
+  match correctionKatAccepted.mutation with
+  | none => false
+  | some mutation =>
+      mutation.action.payloadDigest = [
+        0xcf, 0xe3, 0x09, 0x53, 0xf5, 0x92, 0xf0, 0x86, 0x03, 0x69, 0x82, 0x12, 0x9e, 0x5c, 0x1c, 0x66,
+        0x84, 0x97, 0x09, 0xa5, 0x88, 0x17, 0x47, 0xcf, 0xd9, 0x07, 0x5d, 0x49, 0xdb, 0x56, 0xdc, 0x12,
+        0x89, 0x0c, 0x82, 0xe3, 0x7c, 0xa9, 0x49, 0x31, 0x82, 0x4b, 0xd2, 0x8a, 0x79, 0xcb, 0x22, 0x35,
+        0x0c, 0xd7, 0x7e, 0xd9, 0xb6, 0x08, 0xe0, 0x02, 0x3c, 0xf2, 0x4a, 0x8c, 0x36, 0xb8, 0x20, 0xc2 ]
 
 def gateCorrectionInputReceiptBound : Bool :=
   match evaluate correctionKatInput with
@@ -385,6 +397,65 @@ def gateCorrectionFullShortfallAmount : Bool :=
 /-- 800,000 unpaid against a 300,000 offset: the request is capped at the claim. -/
 def gateCorrectionShortfallAboveClaimAmount : Bool :=
   correctionKatOwedAction 10_500_000 = some (800_000, 300_000, 300_000)
+
+/-- A correction of `claimId` by `actionId` on `input`, decided 10 ms after
+    `input` was evaluated at event `sequence`; the receipt is Lean's projection. -/
+private def correctionKatRequestOn (input : FinancialInput) (claimId actionId : String)
+    (sequence : Nat) : CorrectionTransitionRequest :=
+  let revision := input.beforeRevision + 1
+  let evaluationId := "evaluation:" ++ input.context.obligationId ++ ":r" ++ toString revision
+  { command := { correctionKatCommand with
+      claimId := claimId
+      actionId := actionId
+      expectedRevision := revision
+      evaluationId := evaluationId
+      decisionAtMs := input.evaluatedAt + 10
+      ownerNowMs := input.evaluatedAt + 20
+      queryObservations := correctionKatAbsentQueries sequence sequence actionId evaluationId
+      currentEventSequence := sequence
+      previousHistoryHead := correctionKatDigest sequence }
+    currentInput := input
+    currentReceipt := match evaluate input with
+      | some result => { correctionKatReceiptFor correctionKatCurrentReceipt evaluationId result with
+          evidenceBindings := result.evidenceIds.map (fun evidenceId =>
+            ({ evidenceId := evidenceId, recordDigest := correctionKatDigest 68 } : EvidenceBinding)) }
+      | none => correctionKatCurrentReceipt }
+
+/-- H1: on the KAT obligation (300,000 unpaid), reject an offset claim of
+    `firstCents`, then a second claim of `secondCents` on the resulting state. -/
+private def correctionKatSequence (firstCents secondCents : Nat) :
+    CorrectionTransitionResult × Option CorrectionTransitionResult :=
+  let secondClaimId := "claim:h:offset2"
+  let input := { correctionKatInput with
+    claims := [{ katClaim .CLAIMED with amountCents := firstCents },
+      { katClaim .CLAIMED with
+        claimId := secondClaimId, evidenceId := "evidence:offset2", amountCents := secondCents }]
+    evidence := [katCashEvidence, { katOffsetEvidence with amountCents := some firstCents },
+      { katOffsetEvidence with
+        evidenceId := "evidence:offset2", commonOriginId := secondClaimId
+        localRef := "ref:offset2:h:approval", amountCents := some secondCents }] }
+  let first := applyCorrectionTransition
+    (correctionKatRequestOn input katCorrectionClaimId katCorrectionActionId 10)
+  (first, first.mutation.map (fun mutation => applyCorrectionTransition
+    (correctionKatRequestOn mutation.resultingInput secondClaimId "action:correction:h:v2" 11)))
+
+private def correctionKatActionAmount (result : CorrectionTransitionResult) : Option Nat :=
+  result.mutation.map (fun mutation => mutation.action.amountCents)
+
+/-- 300,000 unpaid, two 300,000 claims: the first correction requests 300,000;
+    the second finds nothing left to request. -/
+def gateCorrectionSecondFullRequestRejected : Bool :=
+  match correctionKatSequence 300_000 300_000 with
+  | (first, some second) => correctionKatActionAmount first = some 300_000 &&
+      resultHasReason second .NO_REQUESTABLE_BALANCE
+  | _ => false
+
+/-- 300,000 unpaid, two 200,000 claims: 200,000, then the 100,000 left. -/
+def gateCorrectionSecondPartialRequest : Bool :=
+  match correctionKatSequence 200_000 200_000 with
+  | (first, some second) => correctionKatActionAmount first = some 200_000 &&
+      correctionKatActionAmount second = some 100_000
+  | _ => false
 
 private def correctionKatReuseReceipt (mutation : CorrectionMutation) : EvaluationReceipt :=
   { correctionKatReceiptFor correctionKatCurrentReceipt mutation.followUps.resultingEvaluationId
@@ -580,6 +651,9 @@ def correctionTransitionKatLines : List (String × Bool) := [
   ("partial_shortfall_requests_unpaid_balance", gateCorrectionPartialShortfallAmount),
   ("full_shortfall_requests_claim_amount", gateCorrectionFullShortfallAmount),
   ("shortfall_above_claim_requests_claim_amount", gateCorrectionShortfallAboveClaimAmount),
+  ("second_correction_on_fully_requested_shortfall_rejected", gateCorrectionSecondFullRequestRejected),
+  ("second_correction_requests_remaining_balance", gateCorrectionSecondPartialRequest),
+  ("owner_domain_digest_vectors", gateCorrectionOwnerDigestVectors),
   ("current_owner_evaluation_receipt_binding", gateCorrectionInputReceiptBound),
   ("exact_retry_after_ack_is_noop", gateCorrectionExactRetryNoEffects),
   ("changed_retry_identity_rejected", gateCorrectionRetryChangedIdentityRejected),

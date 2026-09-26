@@ -829,12 +829,10 @@ def _write_actions(writer: _WireWriter, actions: object, *, currency: object) ->
     writer.list(actions, "actions", encode_action)
 
 
-def encode_blfin02_input(snapshot: LockedSemanticSnapshot, *, pending_action_id: str | None = None) -> bytes:
+def encode_blfin02_input(snapshot: LockedSemanticSnapshot) -> bytes:
     """Encode one authenticated owner snapshot using the Engine BLFIN02 wire contract."""
 
     data = _require_validated_snapshot(snapshot).data
-    if pending_action_id is not None:  # BLFCRES2: Lean leaves a new action's payload digest at zero.
-        data = {**data, "actions": [{**a, "payload_digest": "00" * 64} if a["action_id"] == pending_action_id else a for a in data["actions"]]}
     try:
         scope = _wire_mapping(data["scope"], "scope", {"state_id", "deployment_id", "program_id", "period_id", "currency"})
         owner_body = _wire_mapping(data["owner"], "owner")
@@ -2129,7 +2127,7 @@ def bind_resulting_state(
         connection, obligation_id=before.obligation_id, authority_context=authority_context, evaluation_time_ms=evaluation_time_ms,
         expected_config=None, expected_scope=None, expected_mode=identity["mode"], expected_owner_id=identity["owner_id"], verified_by=before,
     )
-    if encode_blfin02_input(post, pending_action_id=mutation["action"]["action_id"]) != mutation["resulting_input_wire"]:
+    if encode_blfin02_input(post) != mutation["resulting_input_wire"]:
         _fail(SemanticAdapterIntegrityError, "resulting_input")
     _bind_result_context(mutation["resulting_result"], post.data)
 

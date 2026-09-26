@@ -1,5 +1,6 @@
 import BlindLedger.Financial.DecisionPackage.Projection
 import BlindLedger.Financial.Evaluation
+import BlindLedger.Sha3
 import BlindLedger.Financial.CorrectionTransition.Types
 
 namespace BlindLedger.Financial.CorrectionTransition
@@ -11,6 +12,63 @@ private def correctionDecision : DeterminationDecision :=
   .OFFSET_REJECTED_CORRECTION_AUTHORIZED
 
 private def actionKind : String := "CORRECTION_PAYMENT_REQUEST"
+
+private def actionDomain : Bytes := "RR/FINANCIAL/ACTION/v1".toUTF8.toList ++ [UInt8.ofNat 0]
+
+private def appendBytes (parts : List Bytes) : Bytes :=
+  parts.foldl (fun output part => output ++ part) []
+
+private def ownerFramedDigest (domain : Bytes) (parts : List Bytes) : Bytes :=
+  (BlindLedger.Semantic.sha3_512
+    ((domain ++ appendBytes (parts.map (fun part => natBE 8 part.length ++ part))).toByteArray)).toList
+
+private def hexDigit (value : Nat) : Char :=
+  Char.ofNat (if value < 10 then 48 + value else 55 + value)
+
+private def digestHex (value : Bytes) : String :=
+  String.ofList (value.foldr (fun byte output =>
+    hexDigit (byte.toNat / 16) :: hexDigit (byte.toNat % 16) :: output) [])
+
+/-! Every string in this canonical JSON payload has already passed the
+    Owner's ASCII identifier/role/kind grammar. That grammar excludes JSON
+    quotation marks, backslashes, control bytes, and non-ASCII text. -/
+private def jsonId (value : String) : String := "\"" ++ value ++ "\""
+
+inductive CorrectionActionDispatchMode where
+  | SYNTHETIC_RECORD_ONLY
+deriving DecidableEq, Repr
+
+def CorrectionActionDispatchMode.wireValue : CorrectionActionDispatchMode → String
+  | .SYNTHETIC_RECORD_ONLY => "SYNTHETIC_RECORD_ONLY"
+
+structure CorrectionActionPayload where
+  dispatchMode : CorrectionActionDispatchMode
+  canonicalJson : String
+deriving DecidableEq, Repr
+
+def canonicalActionPayload (request : CorrectionTransitionRequest)
+    (determinationId : String) (resultingRevision amountCents : Nat) : CorrectionActionPayload :=
+  let command := request.command
+  let input := request.currentInput
+  let dispatchMode := CorrectionActionDispatchMode.SYNTHETIC_RECORD_ONLY
+  { dispatchMode := dispatchMode
+    canonicalJson :=
+      "{\"action_id\":" ++ jsonId command.actionId ++
+        ",\"amount_cents\":" ++ toString amountCents ++
+        ",\"claim_id\":" ++ jsonId command.claimId ++
+        ",\"currency\":" ++ jsonId input.context.currency ++
+        ",\"determination_id\":" ++ jsonId determinationId ++
+        ",\"dispatch\":" ++ jsonId dispatchMode.wireValue ++
+        ",\"input_evaluation_id\":" ++ jsonId command.evaluationId ++
+        ",\"input_evaluation_result_digest\":" ++ jsonId (digestHex command.evaluationResultDigest) ++
+        ",\"kind\":\"CORRECTION_PAYMENT_REQUEST\"" ++
+        ",\"obligation_id\":" ++ jsonId input.context.obligationId ++
+        ",\"revision\":" ++ toString resultingRevision ++ "}" }
+
+/-- The Owner's storage digest of the action payload. The Owner recomputes it
+    from the row it writes and refuses any difference (`correction_digest_binding`). -/
+def correctionActionPayloadDigest (payload : CorrectionActionPayload) : Bytes :=
+  ownerFramedDigest actionDomain [payload.canonicalJson.toUTF8.toList]
 
 structure CorrectionMutationLinkFacts (request : CorrectionTransitionRequest)
     (mutation : CorrectionMutation) : Prop where
@@ -86,12 +144,20 @@ structure CorrectionMutationLinkFacts (request : CorrectionTransitionRequest)
   outboxAttempt : mutation.outbox.attempt = 0
   noAcknowledgment : mutation.outbox.acknowledgmentReference = none
   outboxActionTime : mutation.outbox.updatedAtMs = mutation.action.createdAt
-  pendingActionDigest : mutation.action.payloadDigest = pendingPayloadDigest
+  actionPayloadDispatchMode : (canonicalActionPayload request
+    mutation.determination.determinationId (request.command.expectedRevision + 1)
+      mutation.action.amountCents).dispatchMode = .SYNTHETIC_RECORD_ONLY
+  actionPayloadDigest : mutation.action.payloadDigest = correctionActionPayloadDigest
+    (canonicalActionPayload request mutation.determination.determinationId
+      (request.command.expectedRevision + 1) mutation.action.amountCents)
+  correctionKind : mutation.action.kind = "CORRECTION_PAYMENT_REQUEST"
   claimAmount : mutation.determination.amountCents = mutation.dependencies.claimBefore.amountCents
   amountRule : mutation.action.amountCents =
-    min mutation.determination.amountCents mutation.dependencies.inputShortfallCents
+    min mutation.determination.amountCents (mutation.dependencies.inputShortfallCents -
+      outstandingCorrectionCents request.currentInput.actions)
   inputShortfall : ∃ result, evaluate request.currentInput = some result ∧
-    result.shortfallCents = mutation.dependencies.inputShortfallCents ∧ 0 < result.shortfallCents
+    result.shortfallCents = mutation.dependencies.inputShortfallCents ∧
+    outstandingCorrectionCents request.currentInput.actions < result.shortfallCents
 
 def sameOwnerResult (result : FinancialResult) (receipt : EvaluationReceipt)
     (expectedEvaluationId : String) : Bool :=
@@ -481,7 +547,8 @@ private theorem correctionCase_found_links {cases : List CaseRecord}
 def buildAccepted (request : CorrectionTransitionRequest)
     (currentResult : FinancialResult) (claim : Claim)
     (hEvaluates : evaluate request.currentInput = some currentResult)
-    (hShortfall : 0 < currentResult.shortfallCents) :
+    (hRequestable : outstandingCorrectionCents request.currentInput.actions <
+      currentResult.shortfallCents) :
     Except TransitionRejectReason { mutation : CorrectionMutation // CorrectionMutationLinkFacts request mutation } := do
   let command := request.command
   let input := request.currentInput
@@ -506,17 +573,21 @@ def buildAccepted (request : CorrectionTransitionRequest)
     expectedRevision := command.expectedRevision
     resultingRevision := afterRevision
     decidedAt := command.decisionAtMs }
+  -- The correction requests only what the rejected offset left unpaid and no
+  -- earlier correction request already asks for.
+  let amountCents := min claim.amountCents
+    (currentResult.shortfallCents - outstandingCorrectionCents input.actions)
   let action := {
     actionId := command.actionId
     obligationId := input.context.obligationId
     determinationId := some determinationId
     kind := actionKind
-    -- The correction requests only what the rejected offset left unpaid.
-    amountCents := min claim.amountCents currentResult.shortfallCents
+    amountCents := amountCents
     currency := input.context.currency
     revision := afterRevision
     status := .READY
-    payloadDigest := pendingPayloadDigest
+    payloadDigest := correctionActionPayloadDigest
+      (canonicalActionPayload request determinationId afterRevision amountCents)
     createdAt := mutationTime }
   let changedClaim := { claim with status := .REJECTED }
   let newClaims := input.claims.map (fun existing =>
@@ -677,10 +748,12 @@ def buildAccepted (request : CorrectionTransitionRequest)
       outboxAttempt := rfl
       noAcknowledgment := rfl
       outboxActionTime := rfl
-      pendingActionDigest := rfl
+      actionPayloadDispatchMode := rfl
+      actionPayloadDigest := rfl
+      correctionKind := rfl
       claimAmount := rfl
       amountRule := rfl
-      inputShortfall := ⟨currentResult, hEvaluates, rfl, hShortfall⟩ }
+      inputShortfall := ⟨currentResult, hEvaluates, rfl, hRequestable⟩ }
     pure ⟨mutation, linkFacts⟩
   else
     throw .REVISION_CONFLICT
@@ -690,7 +763,8 @@ inductive CorrectionTransitionPreflight (request : CorrectionTransitionRequest) 
   | ready (currentResult : FinancialResult) (claim : Claim)
       (inputRevisionMatches : request.currentInput.beforeRevision + 1 = request.command.expectedRevision)
       (evaluates : evaluate request.currentInput = some currentResult)
-      (positiveShortfall : 0 < currentResult.shortfallCents)
+      (requestable : outstandingCorrectionCents request.currentInput.actions <
+        currentResult.shortfallCents)
 
 def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
     Except TransitionRejectReason (CorrectionTransitionPreflight request) := do
@@ -760,10 +834,12 @@ def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
         ("determination:" ++ command.actionId) ∈ input.determinations.map OffsetDetermination.determinationId then
       throw .ACTION_CONFLICT
     -- Nothing is short: rejecting the offset leaves no balance to request.
-    if hShortfall : 0 < currentResult.shortfallCents then
-      pure (.ready currentResult claim hInputRevision currentCertificate.property hShortfall)
+    if currentResult.shortfallCents = 0 then throw .NO_SHORTFALL
+    -- Earlier correction requests already ask for the whole unpaid balance.
+    if hRequestable : outstandingCorrectionCents input.actions < currentResult.shortfallCents then
+      pure (.ready currentResult claim hInputRevision currentCertificate.property hRequestable)
     else
-      throw .NO_SHORTFALL
+      throw .NO_REQUESTABLE_BALANCE
   else
     throw .REVISION_CONFLICT
 
@@ -771,8 +847,8 @@ def applyCorrectionTransition (request : CorrectionTransitionRequest) : Correcti
   match preflightCorrectionTransition request with
   | .error reason => reject request.command reason
   | .ok .duplicate => duplicate request.command
-  | .ok (.ready currentResult claim _ hEvaluates hShortfall) =>
-      match buildAccepted request currentResult claim hEvaluates hShortfall with
+  | .ok (.ready currentResult claim _ hEvaluates hRequestable) =>
+      match buildAccepted request currentResult claim hEvaluates hRequestable with
       | .error reason => reject request.command reason
       | .ok certified =>
           let mutation := certified.val

@@ -97,18 +97,28 @@ CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARTIFACT_SHA256 = "88D853961AB127EE33C65A57F6E35D03244FB5CCE2067F4A0FDF592ECC730992"
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
-RETIRED_PINS_SHA256 = "0a1b27008f1633f7ce37b2db98c300af6463a6dcdc21b041881279886116e832"
+RETIRED_PINS_SHA256 = "6d70bd61eb2f4da8497834e4337cafe4b9538bf61f6079b48fe0e80073032157"
 
 
-def retired_correction_artifact(sha256: object) -> bool:
-    """True for an engine a re-pin retired: valid for committed history, never for new work (append-only, digest-pinned)."""
+def retired_correction_rule(sha256: object) -> str | None:
+    """The correction-amount rule of an engine a re-pin retired, else None: valid for committed history,
+    never for new work (append-only, digest-pinned; line = sha, date, retiring commit, rule, reason)."""
     try:
         registry = RETIRED_PINS_PATH.read_bytes()
     except OSError:
         registry = b""
     if hashlib.sha256(registry).hexdigest() != RETIRED_PINS_SHA256:
         _fail("history:correction-retired-pins")
-    return sha256 in [line.split(b"\t", 1)[0].decode("ascii") for line in registry.splitlines()]
+    return next((fields[3] for fields in (line.decode("ascii").split("\t") for line in registry.splitlines()) if fields[0] == sha256), None)
+
+
+# What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
+# what earlier outstanding correction requests on the obligation already ask for) -> amount.
+_CORRECTION_AMOUNT_RULES = {
+    "correction-rule-v1": lambda claim, shortfall, requested: claim,  # E911: the whole claim
+    "b2-v1": lambda claim, shortfall, requested: min(claim, shortfall),  # 88D8: the unpaid balance
+    None: lambda claim, shortfall, requested: min(claim, max(shortfall - requested, 0)),  # H1: not yet requested
+}
 
 
 CORRECTION_FOLLOWUP_DEPENDENCIES = [
@@ -1381,7 +1391,7 @@ def _verify_correction_followup_records(
         if (
             artifact["contract"] != CORRECTION_TRANSITION_OPERATION
             or _integer(artifact["version"], "history:correction-followup-artifact-version", minimum=1, maximum=MAX_ROWS) != 1
-            or artifact["sha256"] != CORRECTION_TRANSITION_ARTIFACT_SHA256 and not retired_correction_artifact(artifact["sha256"])
+            or artifact["sha256"] != CORRECTION_TRANSITION_ARTIFACT_SHA256 and retired_correction_rule(artifact["sha256"]) is None
         ):
             _fail("history:correction-followup-artifact-binding")
 
@@ -2917,10 +2927,12 @@ def _verify_actions(
     outbox_rows = _bounded_rows(connection, "action_outbox")
     outbox = {str(row["action_id"]): row for row in outbox_rows}
     acks = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.action_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='ACTION_ACKNOWLEDGED'")}
+    engines = dict(connection.execute("SELECT json_extract(payload_json,'$.action_id'),json_extract(payload_json,'$.correction_followup.artifact.sha256') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED'").fetchall())
     if len(outbox) != len(outbox_rows):
         _fail("outbox:duplicate")
     actions: dict[str, sqlite3.Row] = {}
-    for row in rows:
+    requested: dict[str, int] = {}  # per obligation, in revision order: outstanding correction requests
+    for row in sorted(rows, key=lambda row: (str(row["obligation_id"]), _integer(row["revision"], "action:revision"))):
         action_id = _id(row["action_id"], "action:id")
         if action_id in actions:
             _fail("action:duplicate")
@@ -2946,8 +2958,11 @@ def _verify_actions(
             _fail("action:payload-object")
         claim_id = determination["claim_id"]
         amount = claims[str(claim_id)]["amount_cents"]
-        if kind == "CORRECTION_PAYMENT_REQUEST":  # B2: only the input evaluation's unpaid balance
-            amount = min(amount, _cents(next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["evaluation_id"] == determination["input_evaluation_id"]), None), "action:input-shortfall", positive=True))
+        if kind == "CORRECTION_PAYMENT_REQUEST":  # the input evaluation's unpaid balance, by the deciding engine's rule
+            shortfall = _cents(next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["evaluation_id"] == determination["input_evaluation_id"]), None), "action:input-shortfall", positive=True)
+            amount = _CORRECTION_AMOUNT_RULES[retired_correction_rule(engines.get(action_id))](amount, shortfall, requested.get(obligation_id, 0))
+            if row["status"] != "CANCELLED":
+                requested[obligation_id] = requested.get(obligation_id, 0) + amount
         expected_payload = {
             "action_id": action_id,
             "obligation_id": obligation_id,
