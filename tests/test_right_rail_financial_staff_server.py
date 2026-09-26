@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import http.client
 import hashlib
 import json
 import os
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -1048,6 +1050,47 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         with patch.object(workflow, "acknowledge_correction_action", side_effect=FinancialBusyError("store_busy")):  # a transient lock is not a 409
             status, headers, body = call("POST", "/api/action/acknowledge", post, b'{"revision":0}')
         self.assertEqual((status, headers.get("Retry-After"), body), (503, "1", {"error": {"code": "store_busy"}, "changed": False}))
+
+    def test_a_lock_taken_right_after_a_commit_never_answers_changed_false(self) -> None:
+        for released in (False, True):  # held through the answer: cannot tell; released after the failed read-back: it committed
+            (workspace := Path(self.temp_dir.name) / f"released-{released}").mkdir()
+            workflow = self._workflow(workspace_dir=workspace)
+            self.addCleanup(workflow.close)
+            server = _LoopbackServer(("127.0.0.1", 0), _handler_for(workflow))
+            self.addCleanup(server.server_close)
+            threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+            self.addCleanup(server.shutdown)
+            owner, port, body = workflow.mirror.owner, int(server.server_address[1]), json.dumps(self._revision_body(workflow))
+            holder = sqlite3.connect(owner.path, isolation_level=None, check_same_thread=False)  # used from the server thread
+            self.addCleanup(holder.close)
+            real_record, real_snapshot, before = workflow.mirror.record_reporting_evidence, owner._read_snapshot, owner.summary()["sequence"]
+
+            def commit_then_lock(**arguments: object) -> object:
+                result = real_record(**arguments)  # the owner has committed
+                holder.execute("BEGIN EXCLUSIVE")
+                return result
+
+            @contextmanager
+            def snapshot(**arguments: object):  # type: ignore[no-untyped-def]
+                try:
+                    with real_snapshot(**arguments) as connection:
+                        yield connection
+                except FinancialBusyError:
+                    if released and holder.in_transaction:
+                        holder.execute("ROLLBACK")
+                    raise
+
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+            self.addCleanup(connection.close)
+            with patch.object(workflow.mirror, "record_reporting_evidence", commit_then_lock), patch.object(owner, "_read_snapshot", snapshot):
+                connection.request("POST", "/api/reporting/record", body, {"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"})
+                response = connection.getresponse()
+                answer = (response.status, response.getheader("Retry-After"), json.loads(response.read().decode("utf-8")))
+            if holder.in_transaction:
+                holder.execute("ROLLBACK")
+            code = "store_busy" if released else "store_busy_outcome_unknown"
+            self.assertEqual(answer, (503, None, {"error": {"code": code}, "changed": True if released else None}))
+            self.assertGreater(owner.summary()["sequence"], before)  # it did commit
 
 
 if __name__ == "__main__":

@@ -567,6 +567,28 @@ class StaffWorkflow:
             result = self._gate_attempt(body, stale=False)
             return {"gate": result, "workspace": self._workspace_locked()}
 
+    def command(self, name: str, body: object) -> dict[str, Any]:
+        """Run one staff command. A busy store says whether the owner committed, from its position before and after."""
+        with self._lock:
+            try:
+                before = self._store_position()
+            except FinancialBusyError as error:
+                error.changed = False  # nothing has run yet
+                raise
+            try:
+                return getattr(self, name)(body)
+            except FinancialBusyError as error:  # the command's own write, or its read-back after a commit
+                try:
+                    error.changed = self._store_position() != before
+                except FinancialBusyError:
+                    error.changed = None  # cannot tell: never claim it did not happen
+                raise
+
+    def _store_position(self) -> tuple[object, ...]:
+        owner = self._mirror.owner
+        with owner._read_snapshot() as connection:
+            return (str(owner.path), *connection.execute("SELECT sequence,history_head FROM financial_meta WHERE id=1").fetchone())
+
     def attempt_stale_revision(self, body: object) -> dict[str, Any]:
         with self._lock:
             result = self._gate_attempt(body, stale=True)
@@ -915,9 +937,11 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 self._respond(400, {"error": {"code": "invalid_request"}})
                 return
             try:
-                result = getattr(workflow, command)(body)
-            except FinancialBusyError as exc:  # a transient lock, not a conflict: nothing changed, retry
-                self._respond(503, {"error": {"code": str(exc)}, "changed": False}, retry_after=True)
+                result = workflow.command(command, body)
+            except FinancialBusyError as exc:  # a transient lock: retry only a command that provably did not commit
+                changed = getattr(exc, "changed", None)
+                code = "store_busy_outcome_unknown" if changed is None else str(exc)
+                self._respond(503, {"error": {"code": code}, "changed": changed}, retry_after=changed is False)
             except FinancialRevisionError as exc:
                 self._respond(409, {"error": {"code": str(exc)}, "changed": False})
             except FinancialAuthorityError as exc:
