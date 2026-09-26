@@ -5215,9 +5215,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._reject(store, "claim:obligation-item-h:offset-a")
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
         self.assertEqual(receipt["shortfall_cents"], expected.UNAPPROVED_OFFSET_CENTS)  # rejecting A leaves it unpaid
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS + 1_000)  # B is decided after A committed
         return store, lambda: store.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-b", expected_revision=receipt["revision"],
-            action_id="action:obligation-item-h:correction-b", decision_at_ms=expected.CORRECTION_AUTH_MS,
+            action_id="action:obligation-item-h:correction-b", decision_at_ms=expected.CORRECTION_AUTH_MS + 1_000,
             evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"],
         )
 
