@@ -71,6 +71,8 @@ class El {
     return null;
   }
   scrollIntoView() {}
+  focus() { this.focused = true; }
+  setAttribute(k, v) { this.attrs = { ...this.attrs, [k]: String(v) }; }
 }
 const track = (p) => { pending += 1; return p.finally(() => { pending -= 1; }); };
 function browserFetch(url, o = {}) {
@@ -121,7 +123,7 @@ function newPage(elements, actions) {
   const context = { document, fetch: browserFetch, TextEncoder, console,
     location: { pathname: navPath },
     crypto: { subtle: { digest: (a, b) => track(globalThis.crypto.subtle.digest(a, b)) } },
-    setInterval: (_f, ms) => intervals.push(ms) };
+    setInterval: (_f, ms) => intervals.push(ms), matchMedia: (q) => ({ matches: false, media: q, addEventListener() {}, addListener() {} }) };
   context.window = context;
   vm.createContext(context);
   return { byId, buttons, grid, intervals, context };
@@ -130,14 +132,15 @@ async function settle() {
   for (let quiet = 0; quiet < 5;) { await new Promise((r) => setImmediate(r)); quiet = pending ? 0 : quiet + 1; }
 }
 function view() {
-  const texts = {}, tables = {}, hidden = {}, buttons = {};
+  const texts = {}, tables = {}, hidden = {}, disabled = {}, buttons = {};
   for (const [id, el] of page.byId) {
     texts[id] = el.textContent;
     if (el.children.length) tables[id] = el.children.map((r) => (r.children.length ? r.children.map((c) => c.textContent) : [r.textContent]));
     if (el.hidden) hidden[id] = true;
+    if (el.disabled) disabled[id] = true;
   }
   for (const [name, b] of page.buttons) buttons[name] = { disabled: b.disabled, hidden: Boolean(b.hidden) };
-  return { texts, tables, hidden, buttons, intervals: page.intervals.slice() };
+  return { texts, tables, hidden, disabled, buttons, intervals: page.intervals.slice() };
 }
 async function handle(m) {
   if (m.op === "navigate") {

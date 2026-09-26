@@ -550,10 +550,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         for ordinal in range(rows_per_table)
                     ),
                 )
-            self.assertLessEqual(
-                store._continuity_admission_package_size(connection),
-                owner._MAX_PACKAGE_BYTES,
-            )
             connection.execute("DELETE FROM temp.rr_captured_rows")  # plan-only rows: no event carries them
         return rows_per_table
 
@@ -2188,12 +2184,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 "UPDATE obligations SET owed_cents=owed_cents+1 WHERE obligation_id=?",
                 (expected.H_OBLIGATION_ID,),
             )
-            # Same length: the admission size cache still matches, so only a replay can see the edit.
-            cached = {
-                str(row["table_name"]): (int(row["row_count"]), int(row["row_bytes"]))
-                for row in connection.execute("SELECT table_name,row_count,row_bytes FROM right_rail_continuity_admission")
-            }
-            self.assertEqual(store._recompute_continuity_admission(connection), cached)
         with self.assertRaises(IndependentFinancialError) as checker:
             verify_database(tampered_path, expected_config=store.config, expected_authority=self.authority)
         expected_code = f"open_verification:{checker.exception}"
@@ -2344,17 +2334,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         # does not claim event-history or financial-semantic validity.
         store = self._make_owner(schema_version=8)
         rows_per_table = self._populate_private_index_fixture(store)
-        with store._read_snapshot() as connection:
-            admission = store._continuity_admission_values(connection)
-            package_bytes = store._continuity_admission_package_size(connection)
         self.assertEqual(rows_per_table, 400)
-        for table in (
-            "evidence", "payments", "claimed_adjustments", "cases", "actions",
-            "action_outbox", "financial_conflicts", "evaluations", "determinations",
-        ):
-            self.assertEqual(admission[table][0], rows_per_table)
-            self.assertLessEqual(admission[table][0], owner._MAX_ROWS)
-        self.assertLessEqual(package_bytes, owner._MAX_PACKAGE_BYTES)
 
         queries = (
             (
@@ -2530,7 +2510,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         "obligations": 20,
                         "rows_per_obligation_per_table": 20,
                         "rows_per_table": rows_per_table,
-                        "package_bytes": package_bytes,
                     },
                     "storage_bytes": {
                         "without_private_indexes": baseline_storage,
@@ -2548,7 +2527,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         )
 
-    def test_continuity_admission_migration_prevalidates_identity(self) -> None:
+    def test_history_segment_migration_prevalidates_identity(self) -> None:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
             deployment_id=expected.DEPLOYMENT_ID,
@@ -2566,7 +2545,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         legacy_path = self._path("admission-migration-legacy.sqlite")
         legacy_path.write_bytes(source.path.read_bytes())
         with closing(sqlite3.connect(legacy_path, isolation_level=None)) as connection:
-            connection.execute("DROP TABLE right_rail_continuity_admission")
+            for table in ("history_segments", "history_pending", "history_open"):
+                connection.execute(f"DROP TABLE {table}")
         legacy_bytes = legacy_path.read_bytes()
         wrong_config = FinancialOwnerConfig(
             state_id="state:wrong-admission-scope",
@@ -2593,78 +2573,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(migrated.export_continuity(), source_package)
         self._assert_verified(migrated)
 
-    def test_continuity_admission_cache_is_independently_recomputed(self) -> None:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=expected.PERIOD_ONE_ID,
-            currency=expected.CURRENCY,
-        )
-        store = FinancialOwner(
-            path=self._path("admission-cache.sqlite"),
-            config=config,
-            trusted_authority=self.authority,
-            clock=_Clock(initial=1_700_000_000_000),
-        )
-        self._assert_verified(store)
-        tampered = self._path("admission-cache-tampered.sqlite")
-        tampered.write_bytes(store.path.read_bytes())
-        with closing(sqlite3.connect(tampered, isolation_level=None)) as connection:
-            connection.execute(
-                "UPDATE right_rail_continuity_admission SET row_bytes=row_bytes+1 "
-                "WHERE table_name='financial_events'"
-            )
-        with self.assertRaisesRegex(IndependentFinancialError, "continuity-admission:mismatch"):
-            verify_database(
-                tampered,
-                expected_config=config,
-                expected_authority=self.authority,
-            )
-        self._assert_verified(store)
-
-    def test_continuity_admission_row_cap_rolls_back_all_deltas(self) -> None:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=expected.PERIOD_ONE_ID,
-            currency=expected.CURRENCY,
-            schema_version=8,
-        )
-        store = FinancialOwner(
-            path=self._path("v7-admission-row-cap.sqlite"),
-            config=config,
-            trusted_authority=self.authority,
-            clock=_Clock(initial=1_700_000_000_000),
-        )
-        package_before = store.export_continuity()
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_row_cap"):
-            with store._write() as connection:
-                for index in range(owner._MAX_ROWS + 1):
-                    connection.execute(
-                        "INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)",
-                        (
-                            f"conflict:v7-cap:{index:05d}",
-                            "obligation:v7-cap",
-                            f"origin:v7-cap:{index:05d}",
-                            None,
-                            f"evidence:v7-cap:{index:05d}",
-                            None,
-                            1,
-                            "CAP_TEST",
-                            index,
-                        ),
-                    )
-        self.assertEqual(store.export_continuity(), package_before)
-        with store._read_snapshot() as connection:
-            self.assertEqual(
-                store._continuity_admission_values(connection)["financial_conflicts"],
-                (0, 0),
-            )
-        self._assert_verified(store)
-
-    def test_continuity_admission_cost_tracks_changed_work(self) -> None:
+    def test_per_write_cost_tracks_changed_work(self) -> None:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
             deployment_id=expected.DEPLOYMENT_ID,
@@ -2690,7 +2599,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         class _RollbackMeasurement(Exception):
             pass
 
-        # The derived command log is not exported, so v8 keeps v7's capacity.
+        # IX.3: a commit tracks only its own rows for the next history segment.
         for history_size in (0, 250, 1_000, 3_000):
             store = FinancialOwner(
                 path=self._path(f"admission-measure-{history_size}.sqlite"),
@@ -2707,11 +2616,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         )
                         self.assertEqual(status, "RECORDED")
             package_before = store.export_continuity()
-            with store._read_snapshot() as connection:
-                self.assertEqual(
-                    store._continuity_admission_package_size(connection),
-                    len(package_before),
-                )
             full_package_ms: list[float] = []
             incremental_commit_ms: list[float] = []
             first_index = history_size
@@ -2735,12 +2639,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 result = store.record_program_funding_receipt(receipt)
                 incremental_commit_ms.append((time.perf_counter() - started) * 1_000)
                 self.assertEqual(result["status"], "RECORDED")
-                committed_package = store.export_continuity()
-                with store._read_snapshot() as connection:
-                    self.assertEqual(
-                        store._continuity_admission_package_size(connection),
-                        len(committed_package),
-                    )
             measurements.append(
                 {
                     "unrelated_funding_records_before_samples": history_size,
@@ -2752,10 +2650,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 }
             )
             self._assert_verified(store)
-        print("CONTINUITY_ADMISSION_MEASUREMENT " + json.dumps(measurements, sort_keys=True))
+        print("PER_WRITE_COST_MEASUREMENT " + json.dumps(measurements, sort_keys=True))
 
-    def test_continuity_package_cap_is_checked_before_commit(self) -> None:
-        package_cap = owner._MAX_PACKAGE_BYTES
+    def test_writes_continue_past_the_continuity_package_cap(self) -> None:
+        # Writes no longer re-check the whole-history package: past its 8 MiB cap the package export
+        # refuses, while writes and the segmented history export (docs/CORE_REDESIGN.md) continue.
         scope = {
             "state_id": "s" * 128,
             "deployment_id": "d" * 128,
@@ -2763,13 +2662,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "period_id": "r" * 128,
             "currency": expected.CURRENCY,
         }
-        config = FinancialOwnerConfig(**scope)
-        clock = _Clock(initial=1_700_000_000_000)
         store = FinancialOwner(
             path=self._path("continuity-cap.sqlite"),
-            config=config,
+            config=FinancialOwnerConfig(**scope),
             trusted_authority=self.authority,
-            clock=clock,
+            clock=_Clock(initial=1_700_000_000_000),
             owner_id="o" * 128,
         )
 
@@ -2778,131 +2675,110 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             source_prefix = f"state-payment-record-cap:{index:05d}:"
             return ProgramFundingReceipt(
                 receipt_id=receipt_prefix + "r" * (128 - len(receipt_prefix)),
-                state_id=scope["state_id"],
-                deployment_id=scope["deployment_id"],
-                program_id=scope["program_id"],
-                period_id=scope["period_id"],
-                currency=scope["currency"],
                 source_record_ref=source_prefix + "x" * (128 - len(source_prefix)),
                 amount_cents=1,
                 event_at_ms=1_700_000_000_000,
+                **scope,
             )
 
-        def append_batch(start: int, count: int) -> None:
-            with store._write() as connection:
-                for index in range(start, start + count):
-                    status, _receipt = store._record_program_funding_receipt_in_transaction(
-                        connection,
-                        receipt_for(index),
-                    )
-                    self.assertEqual(status, "RECORDED")
-
-        package_before_first = store.export_continuity()
-        self.assertLess(len(package_before_first), package_cap)
-        self.assertEqual(store.record_program_funding_receipt(receipt_for(0))["status"], "RECORDED")
-        package = store.export_continuity()
-        first_delta = len(package) - len(package_before_first)
-        self.assertGreater(first_delta, 0)
-        self.assertLess(len(package), package_cap)
-
-        next_index = 1
-        target_margin = max(256_000, (first_delta + 16) * 8)
-        while package_cap - len(package) > target_margin:
-            remaining = package_cap - len(package)
-            batch_count = min(256, max(1, (remaining - target_margin) // (first_delta + 16)))
-            while True:
-                try:
-                    append_batch(next_index, batch_count)
-                except FinancialContinuityError as error:
-                    self.assertRegex(str(error), "continuity_package_size")
-                    self.assertGreater(batch_count, 1)
-                    batch_count //= 2
-                    continue
-                break
-            next_index += batch_count
-            package = store.export_continuity()
-            self.assertLess(len(package), package_cap)
-        self.assertLessEqual(package_cap - len(package), target_margin + 4_096)
-        self.assertLess(store.summary()["sequence"], owner._MAX_ROWS)
-
-        before_positive = package
-        self.assertEqual(store.record_program_funding_receipt(receipt_for(next_index))["status"], "RECORDED")
-        next_index += 1
-        package = store.export_continuity()
-        self.assertGreater(len(package), len(before_positive))
-        self.assertLess(len(package), package_cap)
-        self._assert_verified(store)
-
-        def verify_and_restore(raw_package: bytes, destination_name: str) -> None:
-            binding = json.loads(raw_package.decode("ascii"))
-            independent = verify_continuity_package(
-                raw_package,
-                expected_scope=binding["scope"],
-                expected_authority=self.authority,
-                expected_schema_version=8,
-            )
-            self.assertEqual(independent["version"], 8)
-            restored = FinancialMirror(store).restore_test_continuity(
-                raw_package,
-                self._path(destination_name),
-            )
-            restored_package = restored.owner.export_continuity()
-            self.assertLessEqual(len(restored_package), package_cap)
-            self.assertEqual(restored.owner.mode, "TEST")
-            self._assert_verified(restored.owner, current_snapshot_package=restored_package)
-
-        class _RollbackPackagePreview(Exception):
-            pass
-
-        def preview_receipt_package(receipt: ProgramFundingReceipt) -> bool:
-            """Measure a candidate using the exact in-transaction package builder, then roll it back."""
-
+        index, batch = 0, 256
+        while batch:  # a batch whose package would pass the cap rolls back and halves: stop one receipt short
             try:
                 with store._write() as connection:
-                    status, _receipt = store._record_program_funding_receipt_in_transaction(
-                        connection,
-                        receipt,
-                    )
-                    self.assertEqual(status, "RECORDED")
-                    serialized = store._continuity_package_bytes(connection)
-                    self.assertEqual(
-                        store._continuity_admission_package_size(connection),
-                        len(serialized),
-                    )
-                    raise _RollbackPackagePreview()
-            except _RollbackPackagePreview:
-                return True
+                    for offset in range(batch):
+                        self.assertEqual(store._record_program_funding_receipt_in_transaction(connection, receipt_for(index + offset))[0], "RECORDED")
+                    store._continuity_package_bytes(connection)
             except FinancialContinuityError as error:
-                self.assertRegex(str(error), "continuity_package_size")
-                return False
+                self.assertEqual(str(error), "continuity_package_size")
+                batch //= 2
+            else:
+                index += batch
+        package = store.export_continuity()  # the largest package, one receipt under the cap, restores and verifies
+        self.assertLess(owner._MAX_PACKAGE_BYTES - len(package), 8_000)
+        verify_continuity_package(package, expected_scope=json.loads(package)["scope"], expected_authority=self.authority)
+        restored_package = FinancialMirror(store).restore_test_continuity(package, self._path("continuity-cap-largest.sqlite")).owner.export_continuity()
+        self.assertLessEqual(len(restored_package), owner._MAX_PACKAGE_BYTES)
+        self.assertEqual(store.record_program_funding_receipt(receipt_for(index))["status"], "RECORDED")
+        with self.assertRaisesRegex(FinancialContinuityError, "^continuity_package_size$"):
+            store.export_continuity()
+        self._assert_verified(store)
+        history = self._path("continuity-cap-history")
+        manifest = json.loads(store.export_history(history))
+        restored = FinancialOwner.restore_continuity(
+            history=history,
+            recovered_path=self._path("continuity-cap-restored.sqlite"),
+            trusted_authority=self.authority,
+        )
+        self.assertEqual(restored.verify_integrity()["sequence"], manifest["meta"]["sequence"])
 
-        rejected = False
-        for _attempt in range(128):
-            candidate = receipt_for(next_index)
-            if not preview_receipt_package(candidate):
-                self.assertGreater(package_cap - len(package), 0)
-                self.assertLessEqual(package_cap - len(package), target_margin + 4_096)
-                verify_and_restore(package, "continuity-before-cap-rejection.sqlite")
-                before_counts = self._durable_counts(store.path)
-                before_meta = self._durable_meta(store.path)
-                with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_size"):
-                    store.record_program_funding_receipt(candidate)
-                package_after_rejection = store.export_continuity()
-                self.assertEqual(package_after_rejection, package)
-                self.assertEqual(self._durable_counts(store.path), before_counts)
-                self.assertEqual(self._durable_meta(store.path), before_meta)
-                self._assert_verified(store)
-                verify_and_restore(package_after_rejection, "continuity-after-cap-rejection.sqlite")
-                rejected = True
-                break
+    def test_history_stops_at_lean_max_rows_before_commit(self) -> None:
+        # Lean's maxRows (Types.lean): a correction at sequence 9,999 commits event 10,000; one at 10,000 is refused.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        index = 0
 
-            before_candidate = package
-            self.assertEqual(store.record_program_funding_receipt(candidate)["status"], "RECORDED")
-            next_index += 1
-            package = store.export_continuity()
-            self.assertGreater(len(package), len(before_candidate))
-            self.assertLess(len(package), package_cap)
-        self.assertTrue(rejected, "the 8 MiB Continuity boundary was not reached within the bounded receipt window")
+        def fill(target: int, owner_store: FinancialOwner) -> None:
+            nonlocal index
+            while (sequence := owner_store.summary()["sequence"]) < target:
+                with owner_store._write() as connection:  # batches keep each open segment under its hard bound
+                    for _ in range(min(2_000, target - sequence)):
+                        receipt = self._funding_receipt(receipt_id=f"funding:cap:{index:05d}", supersedes_receipt_id=f"funding:cap:{index - 1:05d}" if index else None)
+                        self.assertEqual(owner_store._record_program_funding_receipt_in_transaction(connection, receipt)[0], "RECORDED")
+                        index += 1
+
+        fill(owner._MAX_ROWS - 1, store)
+        full_path = self._path("history-full.sqlite")
+        full_path.write_bytes(store.path.read_bytes())
+        full = self._make_owner(
+            path=full_path,
+            clock=_Clock(initial=store.clock.value),
+            correction_transition_release=_correction_transition_test_release(workspace=Path(self.temp_dir.name) / "history-full-engine"),
+        )
+        fill(owner._MAX_ROWS, full)
+        before = full.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
+            self._reject(full, claim_id)
+        self.assertEqual(full.path.read_bytes(), before)
+        self._assert_verified(full)
+        self.assertEqual(self._reject(store, claim_id)["status"], "CORRECTION_AUTHORIZED")
+        self.assertEqual(store.summary()["sequence"], owner._MAX_ROWS)
+        self._assert_verified(store)
+        index -= 1  # the copy's last receipt is not in this store
+        with patch.object(owner, "_MAX_ROWS", owner._MAX_ROWS + 1):  # an Owner past the cap: its 10,001-event export does not restore
+            fill(owner._MAX_ROWS, store)
+            store.export_history(history := self._path("history-past-cap"))
+        with self.assertRaisesRegex(FinancialContinuityError, "^history_export:history:row-cap$"):
+            FinancialOwner.restore_continuity(history=history, recovered_path=self._path("history-past-cap.sqlite"), trusted_authority=self.authority)
+
+    def test_revision_past_lean_max_revision_is_refused_before_commit(self) -> None:
+        # Each revision step is its own event, so the event cap reaches first; the revision guard is exercised directly.
+        store = self._make_owner()
+        before = store.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
+            with store._write() as connection:
+                store._append_event(connection, aggregate_type="CONTROL_PACK", aggregate_id="pack:revision-cap", kind="CONTROL_PACK_PUBLISHED", before_revision=owner._MAX_ROWS, after_revision=owner._MAX_ROWS + 1, payload={}, committed_at_ms=1)
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
+
+    def test_control_pack_version_past_max_rows_is_refused(self) -> None:
+        # The checker reads pack versions up to maxRows.
+        self.assertEqual(replace(self._pack(expected.CONTROL_PACK_V1), version=owner._MAX_ROWS).version, owner._MAX_ROWS)
+        with self.assertRaisesRegex(FinancialInputError, "^pack_version$"):
+            replace(self._pack(expected.CONTROL_PACK_V1), version=owner._MAX_ROWS + 1)
+
+    def test_population_manifest_members_stop_at_max_rows_before_commit(self) -> None:
+        # The checker caps each manifest table at maxRows: two 6,000-member versions would hold 12,000 member rows.
+        store = self._make_owner()
+        store.publish_control_pack(self._pack(expected.CONTROL_PACK_V1))
+        members = tuple(f"member:{index:05d}" for index in range(6_000))
+        root = self._population_manifest(member_ids=members)
+        store.register_population_manifest(root)
+        before = store.path.read_bytes()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
+            store.register_population_manifest(self._population_manifest(manifest_id="population-manifest:fixture-2026-01:v2", supersedes=root, member_ids=members))
+        self.assertEqual(store.path.read_bytes(), before)
+        self._assert_verified(store)
 
     def test_program_funding_receipt_process_crash_boundaries(self) -> None:
         receipt = self._funding_receipt()
@@ -4922,6 +4798,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(FinancialIntegrityError, code):
                     self._make_owner(path=tampered)
                 self.assertEqual(tampered.read_bytes(), tampered_bytes)
+        # A v7 store at the event cap has no room for its opening balance, and one whose history exceeds the
+        # segment bound cannot be sealed: both refuse inside the conversion transaction. The v7 writer's own
+        # whole-history cap stops near 900 commands, so the bound is lowered to this store's size instead.
+        for bound, code in (("_MAX_ROWS", "^history_capacity$"), ("_MAX_SEGMENT_EVENTS", "^history_segment_size$")):
+            with self.subTest(bound=bound), patch.object(owner, bound, len(v7_events)):
+                with self.assertRaisesRegex((FinancialIntegrityError, FinancialContinuityError), code):
+                    self._make_owner(path=v7_path)
+                self.assertEqual(v7_path.read_bytes(), v7_bytes)
 
         converted = self._make_owner(path=v7_path)
         # CONSTITUTION V.4: conversion appends one sealed opening balance holding every converted row
@@ -5002,8 +4886,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=_Clock(),
         )
-        with closing(sqlite3.connect(str(restored.path))) as connection:
-            self.assertEqual(connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall(), commands)
+        history = self._path("command-log-history")
+        store.export_history(history)  # the full journey also restores by replaying its history segments
+        replayed = FinancialOwner.restore_continuity(history=history, recovered_path=self._path("command-log-replay.sqlite"), trusted_authority=self.authority, clock=_Clock())
+        for copy in (restored, replayed):
+            with closing(sqlite3.connect(str(copy.path))) as connection:
+                self.assertEqual(connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall(), commands)
+        self._assert_verified(replayed)
         first = "(SELECT min(event_sequence) FROM commands)"
         edits = {
             "request": f"UPDATE commands SET request_json=replace(request_json,'\"key\"','\"key\" ') WHERE event_sequence={first}",
@@ -5077,7 +4966,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     tamper(connection)
                     connection.execute("DELETE FROM commands")
                     store._derive_command_log(connection)
-                    store._rebuild_continuity_admission(connection)
                     connection.execute(f"CREATE TRIGGER command_update_immutable {_COMMAND_TRIGGER_BODY.format('UPDATE')}")
                     connection.execute(f"CREATE TRIGGER command_delete_immutable {_COMMAND_TRIGGER_BODY.format('DELETE')}")
                 tampered_bytes = tampered.read_bytes()
@@ -5274,7 +5162,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             images = [{"table": table, "row": {column: store._export_value(row[column]) for column in owner._TABLE_COLUMNS[table]}} for table in owner._CAPTURED_TABLES for row in connection.execute(f"SELECT * FROM {table}")]
             last = int(connection.execute("SELECT max(committed_at_ms) FROM financial_events").fetchone()[0])
             store._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=last)
-            store._rebuild_continuity_admission(connection)
             connection.execute("COMMIT")
         with self.assertRaisesRegex(IndependentFinancialError, "^replay:opening-balance$"):
             self._assert_verified(store)
