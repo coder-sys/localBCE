@@ -55,12 +55,22 @@ class FinancialDispatchError(FinancialError):
     pass
 
 
+class FinancialBusyError(FinancialError):
+    """Retryable: another connection held the store's lock past the busy timeout; nothing was written."""
+
+
 def _fail(error_type: type[FinancialError], code: str) -> None:
     error = error_type(code)
     error.__cause__ = None
     error.__context__ = None
     error.__suppress_context__ = True
     raise error
+
+
+def _raise_if_busy(error: BaseException) -> None:
+    """A lock held past the busy timeout is ``store_busy``, never an integrity finding or a raw sqlite error."""
+    if isinstance(error, sqlite3.OperationalError) and getattr(error, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+        _fail(FinancialBusyError, "store_busy")
 
 
 # The owner opens one store version, v8; any other fails closed.
@@ -1984,6 +1994,7 @@ class FinancialOwner:
                 connection.execute("COMMIT")
 
     def _connect(self, *, capture_triggers: bool = False) -> sqlite3.Connection:
+        connection = None
         try:
             connection = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
             connection.row_factory = sqlite3.Row
@@ -1995,7 +2006,10 @@ class FinancialOwner:
             if capture_triggers:
                 self._install_capture_triggers(connection)
             return connection
-        except sqlite3.Error:
+        except sqlite3.Error as error:
+            if connection is not None:
+                connection.close()  # a refused open leaves no handle on the store
+            _raise_if_busy(error)
             _fail(FinancialIntegrityError, "database_open")
 
     def _captured_row_for_sql(self, table: str, *values: object) -> str | None:
@@ -2150,7 +2164,8 @@ class FinancialOwner:
                     if connection.in_transaction:
                         connection.execute("ROLLBACK")
                     raise
-        except sqlite3.DatabaseError:
+        except sqlite3.DatabaseError as error:
+            _raise_if_busy(error)
             _fail(FinancialIntegrityError, "schema_read")
 
     def _verify_meta_identity(self, connection: sqlite3.Connection, meta: sqlite3.Row) -> None:
@@ -2256,9 +2271,10 @@ class FinancialOwner:
                     after = (tuple(connection.execute(_HISTORY_MARK).fetchone()), rows)
                     connection.execute("COMMIT")
                     self._row_cache = after
-            except BaseException:
+            except BaseException as error:
                 if began and connection.in_transaction:
                     connection.execute("ROLLBACK")
+                _raise_if_busy(error)
                 raise
             finally:
                 if began:
@@ -2293,8 +2309,12 @@ class FinancialOwner:
             yield _connection
             return
         with closing(self._connect()) as connection:  # closing ends the read; nothing to commit
-            connection.execute("BEGIN")
-            yield connection
+            try:
+                connection.execute("BEGIN")
+                yield connection
+            except sqlite3.OperationalError as error:
+                _raise_if_busy(error)
+                raise
 
     def _now(self) -> int:
         value = self.clock.now_ms()
@@ -7195,6 +7215,7 @@ __all__ = (
     "ControlPack",
     "EvidenceRecord",
     "FinancialAuthorityError",
+    "FinancialBusyError",
     "FinancialConflictError",
     "FinancialContinuityError",
     "FinancialDispatchError",

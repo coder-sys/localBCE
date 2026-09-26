@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import app.right_rail_financial_owner as owner_module
-from app.right_rail_financial_owner import FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority
+from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority
 from tests.test_right_rail_financial_acceptance import _Clock
 from tools import load_synthetic as harness
 
@@ -197,6 +197,22 @@ class FinancialOwnerBatchTests(unittest.TestCase):
                     with self.assertRaises(_AtCap):  # exactly at the cap: the counter lets it through to the seal
                         _insert_copies(at_cap, table, 2, stop_after_seal=True)
                     self.assertEqual(owner.path.read_bytes(), before)
+
+    def test_a_lock_held_past_the_busy_timeout_is_store_busy(self) -> None:
+        owner = self._store("busy.sqlite")
+        busy = lambda label: self.assertRaisesRegex(FinancialBusyError, "^store_busy$", msg=label)
+        with closing(sqlite3.connect(owner.path, isolation_level=None)) as holder:
+            holder.execute("BEGIN IMMEDIATE")  # another writer
+            with busy("write"):
+                owner.run_batch([_support("evidence:busy")])
+            holder.execute("ROLLBACK")
+            with busy("read"), owner._read_snapshot() as connection:
+                holder.execute("BEGIN EXCLUSIVE")  # taken after this read began
+                owner.summary(_connection=connection)
+            with busy("open"):
+                _open(owner.path)
+            holder.execute("ROLLBACK")
+        self.assertEqual(owner.run_batch([_support("evidence:busy")])[0]["status"], "RECORDED")  # retryable: nothing was written
 
     def test_an_exact_retry_is_duplicate_and_a_changed_meaning_conflicts_as_alone(self) -> None:
         owner = self._store("retry.sqlite")
