@@ -78,10 +78,19 @@ in that archive that holds the raw record.
     review; neither ALLOWs. The key guarantees are `allow_clear` (an ALLOW line shares
     no key with a released or unresolved line but that member-month) and
     `allowed_decideAll` (ALLOW lines of a batch share none); `ids_disjoint` keeps an
-    identity in at most one set. Both sets are append-only in v1: each must extend the
-    gate's checkpoint of it, else `STALE_*`. `gate_rules` passes 210 of 210 vectors and
-    all 3,616 demo lines (134 held, $46,987.00; 6 review; state ZZ), also as a unittest;
-    all 155 mutants are killed on a scratch copy. Tests only, not the token path.
+    identity in at most one set. Both sets are append-only in v1: a set read that does
+    not extend the gate's checkpoint of it gives `STALE_*`, and every set-drawn reason
+    then reads the checkpoint instead, so no HOLD rests on unusable data. The next
+    checkpoint is that view plus the batch's own additions, chained or not (`advance`,
+    in Spec); a store that rolls back or drops them no longer chains, and
+    `later_allow_clear` is proved under exactly this rule. A stale snapshot that still
+    lists the fact adds a review `*_UNVERIFIED` reason; a death dated after its
+    snapshot makes the snapshot stale. `with=` names released and unresolved
+    counterparts, not same-batch ones (the batch prefix is carried as keys, not lines).
+    `gate_rules` passes 233 of 233 vectors (probes P8a-P8d, P9) and all 3,616 demo lines
+    (134 held, $46,987.00; 6 review; state ZZ); the unittest fails if the runner is older
+    than Spec or Run and skips loudly only when it is missing. All 176 mutants
+    (174 Spec, 2 demo) are killed on a scratch copy. Tests only, not the token path.
     REQUIRED trusted input: the gate's signed checkpoint of both sets (gate-v1); the
     runner holds it in memory. REQUIRED for the unbuilt release path: it removes lines
     from the unresolved set by identity, on release and on reject, under a new signed
@@ -91,10 +100,6 @@ in that archive that holds the raw record.
     decision and bind each release to the exact reviewed row's identity. Before
     releasing a stale-feed review it must re-run R1, R3 and R5 on fresh snapshots: that
     review can hide known-bad facts. Corrections of held CAP member-months wait on it.
-    OPEN, fixed next on gate-rules-2 and REQUIRED before any token-path use: the
-    checkpoint must also take the gate's own new identities when the read set was
-    unusable; until then a rollback after an unresolved-set outage lets a later batch
-    ALLOW.
 
 ## What is written but has never run
 
