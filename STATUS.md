@@ -46,6 +46,7 @@ in that archive that holds the raw record.
 4. **Private snapshot indexes** (fast per-obligation reads, safe migration).
    2026-09-24: 6 of 6 passed; no tested query still scans a whole table.
    Evidence: `rightrail-financial-workflow-20260913-STATE.md`.
+   Downgrade index set v2 to v1 (no owner open): `DROP INDEX rr_financial_v2_events_aggregate_kind; PRAGMA user_version=1;` — a writing (LIVE/TEST) owner re-upgrades on open; SHADOW never does.
 5. **Queue claim path (Python).** 2026-09-24: 29 of 29 focused tests passed. The last
    broader Queue run (122 tests) still has 1 failure and 5 errors. Earlier Lean/Rust
    admission integration (2026-09-19): 4 of 4. Evidence: `lean-queue-20260913-STATE.md`.

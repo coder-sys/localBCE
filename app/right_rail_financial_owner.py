@@ -1770,6 +1770,7 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
     for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
         connection.execute(sql)
     _execute_script(connection, _SEGMENT_SCHEMA)
+    _install_private_index_set(connection)  # born current: a read-only (SHADOW) open never upgrades
 
 
 # Sealed segments keep only what history cannot regenerate (their row images);
@@ -2137,7 +2138,10 @@ class FinancialOwner:
                         self._track_all(connection)
                     elif tables != _TABLES | _SEGMENT_TABLES:
                         _fail(FinancialIntegrityError, "schema_tables")
-                    _install_private_index_set(connection)
+                    if self.mode == "SHADOW":
+                        _private_index_set_version(connection)  # read-only: checked, never upgraded
+                    else:
+                        _install_private_index_set(connection)
                     _install_history_append_only(connection)
                     if verify_history or migrated:
                         self._verify_history_in_transaction(connection)

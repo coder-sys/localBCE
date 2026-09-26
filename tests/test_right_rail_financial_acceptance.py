@@ -2282,6 +2282,19 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(upgraded.export_continuity(), source_package)
         verify_database(v1_path, expected_config=source.config, expected_authority=self.authority)
 
+    def test_a_shadow_open_of_a_v1_store_writes_nothing(self) -> None:
+        source = self._make_owner()
+        shadow_path = self._path("shadow-v1.sqlite")
+        FinancialOwner.restore_continuity(package_bytes=source.export_continuity(), recovered_path=shadow_path, trusted_authority=self.authority, clock=_Clock())
+        with closing(sqlite3.connect(str(shadow_path), isolation_level=None)) as connection:
+            connection.execute('DROP INDEX "rr_financial_v2_events_aggregate_kind"')
+            connection.execute("PRAGMA user_version=1")
+        before = hashlib.sha256(shadow_path.read_bytes()).hexdigest()
+        FinancialOwner(path=shadow_path, config=source.config, trusted_authority=self.authority, clock=_Clock(), mode="SHADOW", owner_id=owner._SHADOW_OWNER_ID)
+        self.assertEqual(hashlib.sha256(shadow_path.read_bytes()).hexdigest(), before)
+        with closing(sqlite3.connect(str(shadow_path))) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+
     def test_private_snapshot_index_upgrade_serializes_concurrent_openers(self) -> None:
         source = self._make_owner(schema_version=8)
         source_package = source.export_continuity()
