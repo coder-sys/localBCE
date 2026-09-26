@@ -71,7 +71,9 @@ digest-bound roster.
   explicit immutable `FinancialCorrectionTransitionRelease`; without one, the
   command fails closed. There is no Python fallback decision.
 - **Pinned executable:** `artifacts/engine-correction/`, rebuilt twice
-  byte-identically from the `lean/` commit its `PROVENANCE.md` names.
+  byte-identically from the `lean/` commit its `PROVENANCE.md` names. Engines
+  a re-pin retired are listed in its digest-pinned `RETIRED_PINS`: their
+  committed follow-ups stay valid history, but only the current pin decides.
 - **Evaluation comparison:** `BLFIN02`/`BLFRES02` in
   `app/right_rail_financial_engine.py` with
   `app/right_rail_financial_semantic_adapter.py` is a read-only comparison of

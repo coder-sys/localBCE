@@ -73,8 +73,10 @@ in that archive that holds the raw record.
   restore). 0 runs; archive never assembled; needs an Engine build receipt.
 - **Switch** shadow replay module and CLI: 10 tests written, 0 run.
 - **Staff server additions** (read bundle, envelope, browser checks): 3 test files skipped.
-- **Release producer script** `tools/build_financial_correction_release.ps1`: still
-  names the retired pin's reuse vectors; never run against `artifacts/engine-correction/`.
+- **Release producer script and service kit** (`tools/build_financial_correction_release.ps1`,
+  `tools/right_rail_financial_service_kit.py`): still expect the retired pin's reuse vectors,
+  whose request embeds a BLFCRES1 result; a BLFCRU01 vector from the current engine has
+  yet to be produced. Never run against `artifacts/engine-correction/`.
 - **Queue source-bound lifecycle mode**: still closed; the program is on its old pin.
 - **State BLSDRQ01 clearance route**: run r2 (2026-09-24) was 45 passed, 1 failing (a
   retry-conflict test got the wrong error type). Later fixes are unrun; the production
@@ -85,13 +87,7 @@ in that archive that holds the raw record.
 
 ## Known blockers
 
-1. **History from a retired engine pin does not reopen.** Checker and owner require a
-   correction follow-up's recorded engine artifact to equal the current pin, so after
-   the 2026-09-26 re-pin a store with E911-era corrections fails
-   `open_verification:history:correction-followup-artifact-binding` (the v7 conversion
-   test). Lead decision: admit a closed set of past pins for history only, accept it
-   before production, or re-merge trunk (deletes that test, not the issue).
-2. **One heavy run at a time.** All builds and tests share one guarded lane.
+1. **One heavy run at a time.** All builds and tests share one guarded lane.
 
 ## Parked
 
@@ -104,8 +100,9 @@ history lives in bundles under `work/_retired-research-20260924`.
 
 1. **Run the service kit end-to-end**: assemble, verify, run the scenario, serve the
    staff app on loopback, on the `artifacts/engine-correction/` pin.
-2. **Decide blocker 1**, then make correction reuse recompute the input shortfall
-   instead of trusting the accepted result's recorded one.
+2. **Correction reuse recomputes B2 from source**: it trusts the accepted result's
+   recorded input shortfall today; fix before any app path calls `--assess-correction-reuse`
+   (none does).
 3. **Make `rightrail-main` the only place code changes**; old checkouts become read-only.
 4. **Hospital-payment full cycle demo** per the plan: 20 hospitals, $1M, Hospital H
    short $3,000, with incomplete files, disputed offsets, late records, partial
@@ -115,7 +112,8 @@ history lives in bundles under `work/_retired-research-20260924`.
 
 ## Change log
 
-- 2026-09-26 — B2 correction amount and engine re-pin (branch `correction-v2`; Art. V, X, XI.2; founder-approved protected exception). Gate change, `actionBindingWellFormed` (`Financial/Types.lean`): before `action.amountCents = determination.amountCents`; after `≤` for `OFFSET_REJECTED_CORRECTION_AUTHORIZED`, exact otherwise. The exact amount min(claim, input shortfall) is pinned by theorem `applyCorrectionTransition_action_amount_eq_b2`, BLFCRES2 `resultWellFormed` and KATs at B2−1 and B2+1 (100,000 of 300,000 unpaid) and full shortfall; no protected statement changed. Engine built twice byte-identically from fbb06aa (SHA-256 88D85396…0992, 6,237,184 B), KAT 37/37; old pin `engine-correction-e911` removed (in f1de262). The semantic gate's manifest pin was stale since 11ff5ee, so all 14 of its runnable unit tests errored; fixed. Ceilings: checker +2, adapter +1 (founder-approved), engine 1,482->1,464. Guarded full suite `cv2-full2-a5` at ddb0f8b: 378 run, 367 passed, 0 failed, 10 env skips, 1 error (the v7 test, blocker 1). Open: blocker 1; reuse trusts the accepted result's recorded shortfall. Felt: a hospital short part of its claim is asked for exactly the unpaid balance.
+- 2026-09-26 — Retired engine pins (branch `correction-v2`, after merging trunk fbf3995; lead decision C plus a general A; Art. V, XI.6). A pin has two roles: the current pin decides every new correction; retired pins, listed in the append-only `artifacts/engine-correction/RETIRED_PINS` (first entry E911, full pin at f1de262), are accepted for committed history only. The checker reads the registry itself and pins its SHA-256 (0a1b2700…e832); a missing or edited registry fails `history:correction-retired-pins`, an unlisted engine still fails `history:correction-followup-artifact-binding`. Checker +15, owner +4 lines; live-code ceiling recounted 83,341->75,200. Felt: a program that upgrades its decision engine keeps opening its store, and corrections already committed stay valid.
+- 2026-09-26 — B2 correction amount and engine re-pin (branch `correction-v2`; Art. V, X, XI.2; founder-approved protected exception). Gate change, `actionBindingWellFormed` (`Financial/Types.lean`): before `action.amountCents = determination.amountCents`; after `≤` for `OFFSET_REJECTED_CORRECTION_AUTHORIZED`, exact otherwise. The exact amount min(claim, input shortfall) is pinned by theorem `applyCorrectionTransition_action_amount_eq_b2`, BLFCRES2 `resultWellFormed` and KATs at B2−1 and B2+1 (100,000 of 300,000 unpaid) and full shortfall; no protected statement changed. Engine built twice byte-identically from fbb06aa (SHA-256 88D85396…0992, 6,237,184 B), KAT 37/37; old pin `engine-correction-e911` removed (in f1de262). The semantic gate's manifest pin was stale since 11ff5ee, so all 14 of its runnable unit tests errored; fixed. Ceilings: checker +2, adapter +1 (founder-approved), engine 1,482->1,464. Guarded full suite `cv2-full2-a5` at ddb0f8b: 378 run, 367 passed, 0 failed, 10 env skips, 1 error (the v7 test; fixed by the retired-pin entry above). Open: reuse trusts the accepted result's recorded shortfall. Felt: a hospital short part of its claim is asked for exactly the unpaid balance.
 - 2026-09-25 — Gate failover TLA+ model and configs added under `docs/formal/gate_failover/` (Art. IV, XI); safety and small-model liveness checks passed under the guard. Deeper model still to run (memory).
 - 2026-09-24 — Private-ZK / Profile 11-12 track moved to `parked/private_zk/` (96 files); default `pytest` run excludes it (`pytest parked` runs it). Dead `tools/direct_mask_*` duplicates removed (newer copies live in `native/tools/`). New constitution tests: `tests/test_right_rail_financial_constitution_invariants.py` (written, not yet run).
 - 2026-09-24 — Audit fixes (Art. III.1, III.5, V.2, VI.1, XI.10, XI.13): checker now enforces actor roles against a digest-bound roster (the check never fired before); database verification requires trusted authority (no default-digest shortcut, no `authority_*` aliases); owner constructor backdoor removed; 11 `assert` safety checks replaced by typed errors; staff server measures cash/state before and after instead of hard-coding them, resume checks real integrity fields, import-order and owner-id bugs fixed. 4 new tests. Not yet run (RAM below floor).
