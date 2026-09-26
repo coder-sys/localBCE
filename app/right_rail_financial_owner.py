@@ -95,6 +95,9 @@ _SEAL_SEGMENT_BYTES: Final[int] = _MAX_PACKAGE_BYTES // 2  # soft bounds: seal a
 _SEAL_SEGMENT_EVENTS: Final[int] = 4096
 _SEGMENT_FRAME_BYTES: Final[int] = 4096  # seal, digests and framing, which records do not count
 _SEGMENT_TABLES: Final[frozenset[str]] = frozenset({"history_segments", "history_pending", "history_open"})
+# Moves on every committed insert into a history table: the new row adds a pending key, or a seal adds a segment.
+_HISTORY_MARK: Final[str] = "SELECT (SELECT MAX(segment_index) FROM history_segments),(SELECT COUNT(*) FROM history_pending)"
+_CHECK_ROW_CACHE: Final[bool] = os.environ.get("RIGHTRAIL_CHECK_ROW_CACHE") == "1"  # tests: recount after every write
 _PRIVATE_INDEX_SET_VERSION: Final[int] = 2  # v2 adds the events lookup the checker runs per obligation
 # The history is append-only in the database itself (Art. III.4); stores
 # created before these triggers get them once, atomically, on open.
@@ -1324,6 +1327,10 @@ def _private_index_set_version(connection: sqlite3.Connection) -> int:
     return version
 
 
+def _count_rows(connection: sqlite3.Connection) -> dict[str, int]:
+    return {table: connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in ("financial_events", *_PROJECTION_TABLES)}
+
+
 def _install_private_index_set(connection: sqlite3.Connection) -> None:
     found = _private_index_set_version(connection)
     if found == _PRIVATE_INDEX_SET_VERSION:
@@ -1932,7 +1939,8 @@ class FinancialOwner:
         self.clock: FinancialClock = clock if clock is not None else _SystemClock()
         self.mode = mode
         self.owner_id = _id(owner_id, "owner_id")
-        self._batch = threading.local()  # .connection: the open run_batch transaction on this thread
+        self._batch = threading.local()  # .connection: the open run_batch transaction on this thread; .rows: its base counts
+        self._row_cache: tuple[tuple[object, ...], dict[str, int]] | None = None  # (history mark, rows per table) at our last commit
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
@@ -2008,13 +2016,15 @@ class FinancialOwner:
         return _canonical({"table": table, "key": old[columns[0]], "set": changed}).decode("ascii") if changed else None
 
     def _install_capture_triggers(self, connection: sqlite3.Connection) -> None:
+        connection.execute("CREATE TEMP TABLE rr_row_inserts(table_name TEXT PRIMARY KEY, n INTEGER NOT NULL)")  # rolls back with the write
         # The open history segment tracks each event and changed row with its record size: O(this write) (IX.3).
         for table in ("financial_events", *_PROJECTION_TABLES):
             new_values = ",".join(f'NEW."{column}"' for column in _TABLE_COLUMNS[table])
             track = f"INSERT INTO history_pending VALUES ('{table}',NEW.rowid,rr_segment_bytes('{table}',{new_values})) ON CONFLICT (table_name,row_key) DO UPDATE SET record_bytes=excluded.record_bytes"
             changed = " OR ".join(f'NEW."{column}" IS NOT OLD."{column}"' for column in _TABLE_COLUMNS[table])  # as capture: an UPDATE that changes nothing is not a write
-            for operation, when in (("INSERT", ""), ("UPDATE", f" WHEN {changed}")):
-                connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_{operation}" AFTER {operation} ON main."{table}"{when} BEGIN {track}; END')
+            count = f"INSERT INTO rr_row_inserts VALUES ('{table}',1) ON CONFLICT (table_name) DO UPDATE SET n=n+1"
+            for operation, when, body in (("INSERT", "", f"{track}; {count}"), ("UPDATE", f" WHEN {changed}", track)):
+                connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_{operation}" AFTER {operation} ON main."{table}"{when} BEGIN {body}; END')
             connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_DELETE" BEFORE DELETE ON main."{table}" BEGIN SELECT RAISE(ABORT,\'history_row_delete\'); END')
         connection.execute("CREATE TEMP TRIGGER rr_track_pending_insert AFTER INSERT ON main.history_pending BEGIN UPDATE history_open SET event_count=event_count+(NEW.table_name='financial_events'),byte_count=byte_count+NEW.record_bytes; END")
         connection.execute("CREATE TEMP TRIGGER rr_track_pending_update AFTER UPDATE ON main.history_pending BEGIN UPDATE history_open SET byte_count=byte_count+NEW.record_bytes-OLD.record_bytes; END")
@@ -2046,7 +2056,22 @@ class FinancialOwner:
         connection.execute("UPDATE history_open SET event_count=(SELECT COUNT(*) FROM history_pending WHERE table_name='financial_events'),byte_count=(SELECT COALESCE(SUM(record_bytes),0) FROM history_pending)")
         self._seal_segment(connection, force=True)
 
-    def _seal_segment(self, connection: sqlite3.Connection, *, force: bool = False) -> bytes | None:
+    def _row_counts(self, connection: sqlite3.Connection, base: dict[str, int]) -> dict[str, int]:
+        """Rows per history table now: the transaction's starting counts plus the rows it inserted (deletes abort)."""
+        counts = dict(base)
+        for table, inserted in connection.execute("SELECT table_name,n FROM temp.rr_row_inserts"):
+            counts[table] += inserted
+        return counts
+
+    def _committed_row_counts(self, connection: sqlite3.Connection) -> dict[str, int]:
+        """Rows per history table at BEGIN. The owner's cache from its last commit is used only if the history
+        has not moved since; any other writer or failed write moved it, so the tables are counted afresh."""
+        mark, cache = tuple(connection.execute(_HISTORY_MARK).fetchone()), self._row_cache
+        if cache is not None and cache[0] == mark:
+            return cache[1]
+        return _count_rows(connection)
+
+    def _seal_segment(self, connection: sqlite3.Connection, *, force: bool = False, rows: dict[str, int] | None = None) -> bytes | None:
         """Seal the open segment at a soft bound (or when forced); refuse a write past a hard bound."""
         opened = connection.execute("SELECT event_count,byte_count FROM history_open WHERE id=1").fetchone()
         if opened is None or {type(opened[0]), type(opened[1])} != {int}:
@@ -2055,7 +2080,7 @@ class FinancialOwner:
         if count > _MAX_SEGMENT_EVENTS or size + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:
             _fail(FinancialContinuityError, "history_segment_size")
         for (table,) in connection.execute("SELECT DISTINCT table_name FROM history_pending").fetchall():  # the Checker reads at most Lean's maxRows per table
-            if connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] > _MAX_ROWS:
+            if (rows[table] if rows is not None else connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]) > _MAX_ROWS:
                 _fail(FinancialIntegrityError, "history_capacity")
         if count == 0 or not force and count < _SEAL_SEGMENT_EVENTS and size < _SEAL_SEGMENT_BYTES:
             return None
@@ -2278,16 +2303,25 @@ class FinancialOwner:
             try:
                 if began:
                     connection.execute("BEGIN IMMEDIATE")
+                    self._batch.rows = self._committed_row_counts(connection)
                 yield connection
-                self._seal_segment(connection)
+                rows = self._row_counts(connection, self._batch.rows)
+                self._seal_segment(connection, rows=rows)
                 if connection.execute("SELECT 1 FROM temp.rr_captured_rows").fetchone() is not None:
                     _fail(FinancialIntegrityError, "captured_rows_without_event")  # refused, never stranded
                 if began:
+                    if _CHECK_ROW_CACHE and rows != _count_rows(connection):
+                        raise AssertionError(f"row_count_cache: {rows} != {_count_rows(connection)}")
+                    after = (tuple(connection.execute(_HISTORY_MARK).fetchone()), rows)
                     connection.execute("COMMIT")
+                    self._row_cache = after
             except BaseException:
                 if began and connection.in_transaction:
                     connection.execute("ROLLBACK")
                 raise
+            finally:
+                if began:
+                    self._batch.rows = None
 
     def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]]) -> list[dict[str, Any]]:
         """Up to 1,000 commands in one transaction, each run exactly as its method alone (same checks,

@@ -2807,6 +2807,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             store.register_population_manifest(self._population_manifest(manifest_id="population-manifest:fixture-2026-01:v2", supersedes=root, member_ids=members))
         self.assertEqual(store.path.read_bytes(), before)
         self._assert_verified(store)
+        # The Owner's cached row counts keep the cap exact: 10,000 member rows are accepted and the next is refused,
+        # by the Owner that counted them and by a fresh one.
+        full = self._population_manifest(manifest_id="population-manifest:fixture-2026-01:v2", supersedes=root, member_ids=members[:4_000])
+        self.assertEqual(store.register_population_manifest(full)["status"], "SUPERSEDED")
+        before = store.path.read_bytes()
+        for owner_at_cap in (store, self._make_owner(path=store.path, clock=store.clock)):
+            with self.subTest(fresh=owner_at_cap is not store), self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
+                owner_at_cap.register_population_manifest(self._population_manifest(manifest_id="population-manifest:fixture-2026-01:v3", supersedes=full, member_ids=members[:1]))
+            self.assertEqual(store.path.read_bytes(), before)
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM population_manifest_members").fetchone()[0], owner._MAX_ROWS)
 
     def test_program_funding_receipt_process_crash_boundaries(self) -> None:
         receipt = self._funding_receipt()

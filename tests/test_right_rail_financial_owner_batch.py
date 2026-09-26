@@ -54,6 +54,11 @@ def _history(path):
         return [connection.execute(f"SELECT * FROM {table} ORDER BY 1,2").fetchall() for table in ("financial_events", "history_segments", "history_pending", "history_open")]
 
 
+def _rows(path):
+    with closing(sqlite3.connect(path)) as connection:
+        return owner_module._count_rows(connection)
+
+
 def _support(evidence_id, origin="origin:batch"):
     return ("record_support_evidence", {"item_id": "item:000001", "evidence_id": evidence_id, "common_origin_id": origin, "received_at_ms": 1_700_000_000_000})  # a retry repeats its receipt time
 
@@ -91,6 +96,25 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         self.assertEqual(_history(owner.path), history)
         with closing(sqlite3.connect(owner.path)) as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM evidence WHERE evidence_id IN ('evidence:kept-1','evidence:refused','evidence:kept-2')").fetchone()[0], 0)
+        owner.verify_integrity()
+
+    def test_cached_row_counts_stay_exact_through_batches_rollback_other_writers_and_reopen(self) -> None:
+        self.assertTrue(owner_module._CHECK_ROW_CACHE)  # every commit below also recounts every table and compares
+        owner, commands = self._store("counts.sqlite", _Owner), _commands(40)
+        another = lambda: FinancialOwner(path=owner.path, config=owner.config, trusted_authority=_AUTHORITY, clock=owner.clock)  # same time line
+        owner.run_batch(commands[:20])
+        with self.assertRaisesRegex(FinancialIntegrityError, "synthetic_refusal_after_writes"):
+            owner.run_batch([*commands[20:25], _support("evidence:refused")])  # its inserts roll back, uncounted
+        another().run_batch(commands[20:30])  # another writer moves the history under this owner's cache
+        for name, arguments in commands[30:]:
+            getattr(owner, name)(**arguments)
+        other, evaluate = another(), {"item_id": "item:000001"}
+        for _ in range(3):  # two writers alternate: each cache must notice the other's commits
+            other.evaluate_obligation(**evaluate)
+            owner.evaluate_obligation(**evaluate)
+        another().evaluate_obligation(**evaluate)  # a reopened owner counts afresh
+        owner.evaluate_obligation(**evaluate)
+        self.assertEqual(owner._row_cache[1], _rows(owner.path))
         owner.verify_integrity()
 
     def test_an_exact_retry_is_duplicate_and_a_changed_meaning_conflicts_as_alone(self) -> None:
