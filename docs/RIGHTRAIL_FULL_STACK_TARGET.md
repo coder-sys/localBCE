@@ -93,9 +93,11 @@ fence; not expired; payment fields match exactly; the token comes from the
 shard the member key routes to; outcome is ALLOW; `rule_version` and
 `engine_release` are on the payer's approved list; the payment has not
 already been released; no fork is recorded for the tenant and epoch; and
-the member key is the one the payer pinned at its first command for the
-payment (a changed key is refused as `member_key_changed` until an official
-determination, not in v1). These twelve checks are one Lean predicate
+the payer sent a command for the payment and the member key is the one its
+first command pinned (a changed key is refused as `member_key_changed` until
+an official determination, not in v1). The pin is durably persisted before
+the first command leaves the payer, and every command path (retry, new
+command key, another flow) checks the same pin store. These twelve checks are one Lean predicate
 (`verifyToken`), proved to accept only when all twelve hold, and published to
 payers as a reference verifier with conformance vectors. A release with no
 token and no bypass is a payer-side violation visible in Mirror.
@@ -122,9 +124,14 @@ Every batch commit produces a checkpoint (tenant, program, shard, sequence
 range, epoch, previous-checkpoint digest, event-chain head, token/evidence/
 projection roots, count, time), signed with the epoch's ML-DSA-87 key.
 There is one sequence counter per (tenant, shard, epoch), shared by all of
-the tenant's programs: no two checkpoints in that scope share a sequence,
-whatever their program, and each names the checkpoint ending just before it
-as its previous. Checkpoints stream to an independent witness — a separate
+the tenant's programs and starting at 0 in each epoch: no two checkpoints in
+that scope share a sequence, whatever their program, each names the
+checkpoint ending just before it as its previous, and an epoch's first
+checkpoint has an all-zero previous digest. The gate produces checkpoints
+serially per (tenant, shard), persists each before publishing it, and checks
+it against its own stored checkpoints for a fork before publishing. The
+KEY-CERT that carries an epoch key signs every field, the tenant's shard
+count included. Checkpoints stream to an independent witness — a separate
 state agency or auditor, outside the database administrator's control —
 which cosigns only after checking sequence monotonicity, epoch monotonicity,
 and that no two checkpoints of one (tenant, shard, epoch) share a sequence

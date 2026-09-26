@@ -72,23 +72,29 @@ in that archive that holds the raw record.
    gate decision per payment (any flow) within the member's shard, which the payer
    checks before releasing it. Each payment routes to one shard from its tenant and
    32-byte member key (`shardOf`; the shard count, 1 to 2^32-1, is in the epoch cert,
-   fixed per tenant). The payer pins the member key per (tenant, program, payment) at
-   its first command, write-once, and refuses a changed key as `member_key_changed`;
-   it accepts only a token under the pinned key from that key's shard, so across cert
-   installs, checkpoint stores, pins and releases every token it accepts for one
-   payment has one member key and one shard (theorem `verifyToken_one_route`); inside
-   that shard the writer's PAYMENT_ALREADY_DECIDED answer is authoritative. A
-   checkpoint fork (overlapping sequences, or a neighbour not linked by its previous
-   digest) blocks its whole (tenant, epoch) on every shard: nothing more releases, no
-   later checkpoint of that epoch is stored, both signed headers are kept; failover to
-   a new epoch recovers. A newer cert with a valid chain raises the fence even when
-   refused. Offline payer verification is not claimed: in the Lean model the ML-DSA-87
-   check and KEY-CERT chain are supplied inputs. 2026-09-26 (round 5): Lean
-   `verifyToken` (twelve checks, one predicate) judges 159 of 159 golden vectors; 25
+   fixed per tenant). Sending a command pins the member key per (tenant, program,
+   payment), write-once (Lean `send`, the only step that pins); the pin is durably
+   persisted before the command leaves, every command path uses the one pin store,
+   and a changed key is refused as `member_key_changed` and sends nothing. The payer
+   accepts only a token for a sent payment, under the pinned key, from that key's
+   shard: every token it accepts for one payment has one member key and one shard
+   (`verifyToken_one_route`), that key was pinned by the payment's first send
+   (`verifyToken_first_send`), and every command sent for it, a HOLD included, went
+   to that shard (`verifyToken_after_send`), where the writer's
+   PAYMENT_ALREADY_DECIDED answer is authoritative. Each epoch's checkpoint seq
+   starts at 0 with an all-zero previous digest. A checkpoint fork within one epoch
+   (overlapping sequences, or a neighbour not linked by its previous digest) blocks
+   its whole (tenant, epoch) on every shard: nothing more releases, no later
+   checkpoint of that epoch is stored, both signed headers are kept; other tenants
+   are unaffected, and failover to a new epoch recovers. A newer cert with a valid
+   chain raises its tenant's fence even when refused. Offline payer verification is not claimed: in the Lean model the ML-DSA-87
+   check and KEY-CERT chain are supplied inputs. 2026-09-26 (round 6): Lean
+   `verifyToken` (twelve checks, one predicate) judges 172 of 172 golden vectors; 31
    theorems compile using only `propext`/`Quot.sound`, pinned by `lake build
-   gate_axioms` (printed output: `lean/BlindLedger/Gate/AXIOMS.txt`, log
-   `gate-rr5-axioms2-a4`); 78 of 78 spec mutants killed (`tools/gate_mutants.py`); 6
-   of 6 Python tests pass. Logs: `native/guard/guarded-command-gate-rr5-*`. The signer
+   gate_axioms` (printed by `tools/gate_print_axioms.lean` into
+   `lean/BlindLedger/Gate/AXIOMS.txt`, log `gate-rr6-axioms-a4`; a Python test checks
+   the two agree); 86 of 86 spec mutants killed (`tools/gate_mutants.py`); 7 of 7
+   Python tests pass. Logs: `native/guard/guarded-command-gate-rr6-*`. The signer
    build is reproducible on this machine: two directories gave SHA-256
    `af8743c7...116b` (recipe and limits: `rust/gate_mldsa87/README.md`; logs
    `gate-rr4-sign*`). Lead decision: the signer keeps its AWS-LC verify mode, the only
@@ -96,11 +102,13 @@ in that archive that holds the raw record.
    Known limits: a legitimate member-key change needs an official determination, not
    built in v1. Resharding is out of scope (changing a tenant's shard count needs a
    migration spec). An older ALLOW token stays valid until it expires even after a
-   later HOLD revision; a re-issue carries only the latest revision (Lean `reissues`),
+   later HOLD revision; a re-issue carries only the latest revision at a later
+   (epoch, seq) (Lean `reissues`),
    and a HOLD raising the fence is a possible later fix, not built. Deferred: LOW-6
    (the F6 re-issue rule stays gate-side) and M2 (the grant has no flow scope).
-   Process: the bloat-ceiling raises and the round-4/5 scope calls on this branch are
-   lead decisions (2026-09-26) under the founder's "u have all auth" grant.
+   Process: the bloat-ceiling raises and the round-4 to 6 scope calls on this branch
+   are lead decisions (2026-09-26) under the founder's grant of 2026-09-25 ("u have
+   all auth", relayed by the lead; scope: internal engineering decisions).
 
 ## What is written but has never run
 
