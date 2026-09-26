@@ -331,6 +331,16 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "^empty_database$"):  # nobody holds it: a real empty file
             _open(empty)
         self.assertEqual(empty.stat().st_size, 0)
+        unwritable, folder = self.directory / "read-only.sqlite", self.directory / "folder.sqlite"
+        unwritable.touch()
+        folder.mkdir()
+        os.chmod(unwritable, 0o444)
+        try:
+            for unopenable in (unwritable, folder):  # the wait cannot open these: still an empty store, never a raw error
+                with self.subTest(unopenable.name), self.assertRaisesRegex(FinancialIntegrityError, "^empty_database$"):
+                    _open(unopenable)
+        finally:
+            os.chmod(unwritable, 0o666)
 
     def test_an_exact_retry_is_duplicate_and_a_changed_meaning_conflicts_as_alone(self) -> None:
         owner = self._store("retry.sqlite")

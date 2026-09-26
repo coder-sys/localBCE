@@ -1950,13 +1950,12 @@ class FinancialOwner:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
         if existed and path.stat().st_size == 0:  # a creator holds its new file empty until its schema commits: wait for it
-            with closing(sqlite3.connect(str(path), timeout=5.0, isolation_level=None)) as probe:
-                try:
+            try:
+                with closing(sqlite3.connect(str(path), timeout=5.0, isolation_level=None)) as probe:
                     probe.execute("BEGIN IMMEDIATE")
-                except sqlite3.OperationalError as error:
-                    _raise_if_busy(error)
-                    raise
-                probe.execute("ROLLBACK")
+                    probe.execute("ROLLBACK")
+            except sqlite3.Error as error:  # a file nobody can open or write stays empty: refused just below
+                _raise_if_busy(error)
             if path.stat().st_size == 0:
                 _fail(FinancialIntegrityError, "empty_database")
         if existed and identity_contract is not None:
