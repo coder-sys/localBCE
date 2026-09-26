@@ -29,7 +29,10 @@ FinancialIndependentError = IndependentFinancialError
 FinancialVerificationError = IndependentFinancialError
 
 
-def _fail(code: str) -> NoReturn:
+def _fail(code: str, caught: BaseException | None = None) -> NoReturn:
+    # Only the checker's own caught read error can be a lock: another connection's lock is retryable, never a finding.
+    if isinstance(caught, sqlite3.OperationalError) and getattr(caught, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+        code = "database:busy"
     error = IndependentFinancialError(code)
     error.__cause__ = None
     error.__context__ = None
@@ -55,43 +58,18 @@ SEGMENT_FORMAT = "RR/GATE/SEGMENT/v1"  # docs/CORE_REDESIGN.md "History segments
 SEGMENT_DOMAIN = b"RR/GATE/SEGMENT/v1\x00"
 MAX_SEGMENT_BYTES = 2 * MAX_PACKAGE_BYTES
 SEAL_SEGMENT_EVENTS, SEAL_SEGMENT_BYTES = 4096, MAX_PACKAGE_BYTES // 2  # every Owner write leaves the open segment below both
-PRIVATE_INDEX_SET_VERSION = 1
-PRIVATE_INDEX_DEFS_V1 = {
-    "rr_financial_v1_evidence_item_id": (
-        "evidence",
-        ("item_id", "evidence_id"),
-        "CREATE INDEX rr_financial_v1_evidence_item_id ON evidence(item_id,evidence_id)",
-    ),
-    "rr_financial_v1_claims_obligation_id": (
-        "claimed_adjustments",
-        ("obligation_id", "claim_id"),
-        "CREATE INDEX rr_financial_v1_claims_obligation_id ON claimed_adjustments(obligation_id,claim_id)",
-    ),
-    "rr_financial_v1_cases_obligation_id": (
-        "cases",
-        ("obligation_id", "case_id"),
-        "CREATE INDEX rr_financial_v1_cases_obligation_id ON cases(obligation_id,case_id)",
-    ),
-    "rr_financial_v1_actions_obligation_id": (
-        "actions",
-        ("obligation_id", "action_id"),
-        "CREATE INDEX rr_financial_v1_actions_obligation_id ON actions(obligation_id,action_id)",
-    ),
-    "rr_financial_v1_conflicts_obligation_id": (
-        "financial_conflicts",
-        ("obligation_id", "conflict_id"),
-        "CREATE INDEX rr_financial_v1_conflicts_obligation_id ON financial_conflicts(obligation_id,conflict_id)",
-    ),
-    "rr_financial_v1_evaluations_obligation_revision": (
-        "evaluations",
-        ("obligation_id", "revision"),
-        "CREATE INDEX rr_financial_v1_evaluations_obligation_revision ON evaluations(obligation_id,revision)",
-    ),
-    "rr_financial_v1_determinations_obligation_id": (
-        "determinations",
-        ("obligation_id", "determination_id"),
-        "CREATE INDEX rr_financial_v1_determinations_obligation_id ON determinations(obligation_id,determination_id)",
-    ),
+PRIVATE_INDEX_DEFS_V1 = {  # name -> (table, key columns); each is exactly CREATE INDEX name ON table(columns)
+    "rr_financial_v1_evidence_item_id": ("evidence", ("item_id", "evidence_id")),
+    "rr_financial_v1_claims_obligation_id": ("claimed_adjustments", ("obligation_id", "claim_id")),
+    "rr_financial_v1_cases_obligation_id": ("cases", ("obligation_id", "case_id")),
+    "rr_financial_v1_actions_obligation_id": ("actions", ("obligation_id", "action_id")),
+    "rr_financial_v1_conflicts_obligation_id": ("financial_conflicts", ("obligation_id", "conflict_id")),
+    "rr_financial_v1_evaluations_obligation_revision": ("evaluations", ("obligation_id", "revision")),
+    "rr_financial_v1_determinations_obligation_id": ("determinations", ("obligation_id", "determination_id")),
+}
+PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; the Owner upgrades 1 to 2 on open
+    1: PRIVATE_INDEX_DEFS_V1,
+    2: {**PRIVATE_INDEX_DEFS_V1, "rr_financial_v2_events_aggregate_kind": ("financial_events", ("aggregate_type", "aggregate_id", "kind"))},
 }
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
@@ -592,6 +570,14 @@ def _digest(domain: bytes, *parts: bytes) -> bytes:
     return digest.digest()
 
 
+def _group(rows: Iterable[sqlite3.Row], *columns: str) -> dict[object, list[sqlite3.Row]]:
+    """Rows by their raw column values, in row order: a dict lookup equal to filtering every row with ==."""
+    groups: dict[object, list[sqlite3.Row]] = {}
+    for row in rows:
+        groups.setdefault(tuple(row[column] for column in columns) if len(columns) > 1 else row[columns[0]], []).append(row)
+    return groups
+
+
 def _duplicate_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
@@ -820,18 +806,19 @@ def _normal_sql(value: object) -> str:
 def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
     version_row = connection.execute("PRAGMA user_version").fetchone()
     version = version_row[0] if version_row is not None else None
-    if type(version) is not int or version != PRIVATE_INDEX_SET_VERSION:
+    if type(version) is not int or version not in PRIVATE_INDEX_DEFS:
         _fail("schema:private-index-version")
+    defs = PRIVATE_INDEX_DEFS[version]
     actual = {
         str(row[0]): row[1]
         for row in connection.execute(
             "SELECT name,sql FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
         )
     }
-    if set(actual) != set(PRIVATE_INDEX_DEFS_V1):
+    if set(actual) != set(defs):
         _fail("schema:private-indexes")
-    for name, (table, columns, expected_sql) in PRIVATE_INDEX_DEFS_V1.items():
-        if _normal_sql(actual[name]) != _normal_sql(expected_sql):
+    for name, (table, columns) in defs.items():
+        if _normal_sql(actual[name]) != _normal_sql(f"CREATE INDEX {name} ON {table}({','.join(columns)})"):
             _fail(f"schema:private-index:{name}")
         listed = [
             row
@@ -990,14 +977,14 @@ def _open_readonly(path: str | Path) -> sqlite3.Connection:
         connection = sqlite3.connect(uri, uri=True, timeout=5.0, isolation_level=None)
     except IndependentFinancialError:
         raise
-    except (OSError, sqlite3.Error, ValueError):
-        _fail("database:open")
+    except (OSError, sqlite3.Error, ValueError) as error:
+        _fail("database:open", error)
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("PRAGMA query_only=ON")
-    except sqlite3.Error:
+    except sqlite3.Error as error:
         connection.close()
-        _fail("database:query-only")
+        _fail("database:query-only", error)
     return connection
 
 
@@ -1056,8 +1043,8 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
         return schema_version
     except IndependentFinancialError:
         raise
-    except sqlite3.Error:
-        _fail("schema:read")
+    except sqlite3.Error as error:
+        _fail("schema:read", error)
 
 
 def _bounded_rows(connection: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
@@ -1067,8 +1054,8 @@ def _bounded_rows(connection: sqlite3.Connection, table: str) -> list[sqlite3.Ro
         return list(connection.execute(f"SELECT * FROM {table}"))
     except IndependentFinancialError:
         raise
-    except sqlite3.Error:
-        _fail(f"rows:read:{table}")
+    except sqlite3.Error as error:
+        _fail(f"rows:read:{table}", error)
 
 
 def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], schema_version: int) -> dict[str, object]:
@@ -1076,8 +1063,8 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
         if int(connection.execute("SELECT COUNT(*) FROM financial_meta").fetchone()[0]) != 1:
             _fail("meta:cardinality")
         row = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-    except (sqlite3.Error, TypeError, ValueError):
-        _fail("meta:read")
+    except (sqlite3.Error, TypeError, ValueError) as error:
+        _fail("meta:read", error)
     if row is None:
         _fail("meta:missing")
     if row["id"] != 1 or row["schema_version"] != SCHEMA_VERSION or row["schema"] != SCHEMA:
@@ -1118,8 +1105,8 @@ def _verify_meta(connection: sqlite3.Connection, identity: dict[str, object], sc
         if int(connection.execute("SELECT COUNT(*) FROM financial_identity").fetchone()[0]) != 1:
             _fail("identity:cardinality")
         identity_row = connection.execute("SELECT * FROM financial_identity WHERE id=1").fetchone()
-    except (sqlite3.Error, TypeError, ValueError):
-        _fail("identity:read")
+    except (sqlite3.Error, TypeError, ValueError) as error:
+        _fail("identity:read", error)
     if identity_row is None:
         _fail("identity:missing")
     identity_contract = _identity_record(
@@ -2553,13 +2540,14 @@ def _verify_evidence(
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "evidence")
     evidence: dict[str, sqlite3.Row] = {}
+    obligation_items = {str(item["item_id"]) for item in obligations.values()}
     for row in rows:
         evidence_id = _id(row["evidence_id"], "evidence:id")
         if evidence_id in evidence:
             _fail("evidence:duplicate")
         evidence[evidence_id] = row
         item_id = _id(row["item_id"], "evidence:item")
-        if item_id not in items or item_id not in {str(item["item_id"]) for item in obligations.values()}:
+        if item_id not in items or item_id not in obligation_items:
             _fail("evidence:item-binding")
         _kind(row["kind"], "evidence:kind")
         _id(row["common_origin_id"], "evidence:common-origin")
@@ -3014,13 +3002,14 @@ def _verify_conflicts(
         keys.add(key)
     # Every payment confirmation that is not the persisted payment itself must
     # be either an equal duplicate or an explicitly visible amount conflict.
+    obligations_by_item, payments_by_origin = _group(obligations.values(), "item_id"), _group(payments.values(), "obligation_id", "common_origin_id")
     for candidate_id, candidate in evidence.items():
         if candidate["kind"] != "PAYMENT_CONFIRMATION":
             continue
-        obligation = next((row for row in obligations.values() if row["item_id"] == candidate["item_id"]), None)
+        obligation = obligations_by_item.get(candidate["item_id"], [None])[0]
         if obligation is None:
             _fail("conflict:orphan-confirmation")
-        matching = [row for row in payments.values() if row["obligation_id"] == obligation["obligation_id"] and row["common_origin_id"] == candidate["common_origin_id"]]
+        matching = payments_by_origin.get((obligation["obligation_id"], candidate["common_origin_id"]), [])
         if not matching:
             _fail("conflict:unaccounted-confirmation")
         payment = matching[0]
@@ -3664,6 +3653,8 @@ def _verify_projections(
     determinations_by_obligation: dict[str, list[sqlite3.Row]] = {}
     for row in determinations.values():
         determinations_by_obligation.setdefault(str(row["obligation_id"]), []).append(row)
+    payments_by, claims_by, evidence_by, conflicts_by, actions_by = (_group(rows.values(), column) for rows, column in (
+        (payments, "obligation_id"), (claims, "obligation_id"), (evidence, "item_id"), (conflicts, "obligation_id"), (actions, "obligation_id")))
     for obligation_id, obligation in obligations.items():
         population = populations[str(obligation["population_id"])]
         pack = packs[str(population["pack_id"])]
@@ -3671,8 +3662,8 @@ def _verify_projections(
         calculation, adjustment = _control_pack_policy(pack["calculation_rule_id"], pack["adjustment_rule_id"], authorized_roles, _values_json(pack["expected_tests_json"], "pack:tests"))
         if calculation != "PER_RECIPIENT" or adjustment != "AUTHORIZED_OFFSET":
             _fail("projection:policy")
-        active_payments = [row for row in payments.values() if row["obligation_id"] == obligation_id and row["active"] == 1]
-        obligation_claims = [row for row in claims.values() if row["obligation_id"] == obligation_id]
+        active_payments = [row for row in payments_by.get(obligation_id, []) if row["active"] == 1]
+        obligation_claims = claims_by.get(obligation_id, [])
         cash = _sum_cents([int(row["amount_cents"]) for row in active_payments], "projection:cash")
         claimed = _sum_cents([int(row["amount_cents"]) for row in obligation_claims if row["status"] in {"CLAIMED", "AUTHORIZED"}], "projection:claimed")
         lawful = _sum_cents([int(row["amount_cents"]) for row in obligation_claims if row["status"] == "AUTHORIZED"], "projection:lawful")
@@ -3680,16 +3671,15 @@ def _verify_projections(
         owed = int(obligation["owed_cents"])
         shortfall = max(owed - total, 0)
         overage = max(total - owed, 0)
-        item_evidence = [row for row in evidence.values() if row["item_id"] == obligation["item_id"]]
-        evidence_count = len(item_evidence)
-        conflict_count = sum(1 for row in conflicts.values() if row["obligation_id"] == obligation_id)
+        evidence_count = len(evidence_by.get(obligation["item_id"], []))
+        conflict_count = len(conflicts_by.get(obligation_id, []))
         verification = "CONFLICT_VISIBLE" if conflict_count else ("SUPPORTED" if evidence_count else "MISSING_EVIDENCE")
         completion = _completion_time(obligation, active_payments, determinations_by_obligation.get(obligation_id, []))
         timely = int(completion is not None and completion <= obligation["due_at_ms"])
         amount_satisfied = int(total >= owed)
         cash_satisfied = int(cash >= owed)
         reporting_complete = int(obligation["reporting_complete"])
-        action_rows = [row for row in actions.values() if row["obligation_id"] == obligation_id]
+        action_rows = actions_by.get(obligation_id, [])
         delivery = "NONE" if not action_rows else str(
             max(action_rows, key=lambda row: (row["revision"], row["action_id"]))["status"]
         )
@@ -4223,10 +4213,13 @@ def _verify_connection(
     restore_source_package: bytes | None,
 ) -> dict[str, object]:
     schema_version = _verify_schema(connection)
+    # Whole-store mode only: the lookups below trust index contents the Owner wrote, so every index entry must match its row.
+    if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
+        _fail("schema:index-integrity")
     try:
         orphan = connection.execute("PRAGMA foreign_key_check").fetchone()
-    except sqlite3.Error:
-        _fail("foreign-keys:read")
+    except sqlite3.Error as error:
+        _fail("foreign-keys:read", error)
     if orphan is not None:
         _fail(f"foreign-keys:{orphan[0]}")
     meta = _verify_meta(connection, identity, schema_version)
@@ -4379,8 +4372,8 @@ def _mapped(check: Any) -> dict[str, object]:
         return check()
     except IndependentFinancialError:
         raise
-    except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
-        _fail("database:malformed")
+    except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError) as error:
+        _fail("database:malformed", error)
 
 
 def verify_database(
@@ -4412,8 +4405,27 @@ def verify_database(
         expected_continuity_epoch=expected_continuity_epoch,
     )
     connection = _open_readonly(path)
+    check = lambda: _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)  # noqa: E731
+    data_version = lambda: _mapped(lambda: connection.execute("PRAGMA data_version").fetchone()[0])  # noqa: E731
     try:
-        return _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)
+        # Unlocked, each read sees the latest commit, so a commit landing mid-check can mix two states. A check the
+        # store sat still for keeps its verdict; a mixed pass with no finding is busy (retry). A mixed pass with a
+        # finding is judged again on one snapshot, so a tamper never looks retryable; writers wait meanwhile.
+        version = data_version()
+        try:
+            result = check()
+        except IndependentFinancialError as finding:
+            if str(finding) == "database:busy" or data_version() == version:
+                raise
+            _mapped(lambda: (connection.execute("BEGIN"), connection.execute("SELECT 1 FROM financial_meta").fetchone()))
+            try:
+                return check()
+            finally:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+        if data_version() != version:
+            _fail("database:busy")
+        return result
     finally:
         connection.close()
 
@@ -4987,10 +4999,10 @@ def verify_decision_package(
             if connection.in_transaction:
                 connection.execute("ROLLBACK")
             raise
-        except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError):
+        except (sqlite3.Error, KeyError, IndexError, TypeError, ValueError, OverflowError, UnicodeError) as error:
             if connection.in_transaction:
                 connection.execute("ROLLBACK")
-            _fail("decision-package:malformed")
+            _fail("decision-package:malformed", error)
     finally:
         connection.close()
 
