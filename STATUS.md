@@ -67,17 +67,25 @@ in that archive that holds the raw record.
    Bypass reconciliation (liveness) holds on a 1-payment model. A design model,
    not the code. Evidence: `docs/formal/gate_failover/README.md`.
 10. **Gate decision rules R1-R5 (Lean).** 2026-09-26: `BlindLedger.Gate.Rules` builds;
-    six theorems proved (sound, complete, fail-closed, released keys unique, monotone,
-    arrival-order deterministic), axioms pinned. Invalid dates, miscounted, empty or
-    missing snapshots, a missing released set, future service dates and near
-    duplicates go to human review, never ALLOW. Enrolled HOLD and review lines join a
-    pinned unresolved set; a later line sharing a key with one is reviewed
-    (`COLLIDES_WITH_UNRESOLVED`), and `later_allow_clear` proves no later ALLOW shares a
-    key with an earlier released or unresolved line. `gate_rules` passes 148 of 148 vectors
-    and all 3,616 demo lines line by line (134 held, $46,987.00; 6 review; state ZZ);
-    all 116 mutants are killed on a scratch copy. Runs in tests only, not in the token path.
-    REQUIRED for the unbuilt release path: releasing a held line must first check it
-    against the released set (and move it out of the unresolved set); the gate cannot.
+    sound, complete, hold_complete, fail_closed, monotone and arrival-order deterministic
+    are proved, axioms pinned. Each line has an identity and claims its exact key, near
+    key and identity whatever its outcome or enrollment (only a CAP_820 line known not
+    enrolled with its plan claims no member-month). Certain reasons, a duplicate of an
+    unresolved line and a reused identity (`ALREADY_DECIDED`) HOLD; unusable data, bad
+    or future dates, near duplicates and FFS near collisions with unresolved lines
+    review; neither ALLOWs. The key guarantees are `allow_clear` (an ALLOW line shares
+    no key with a released or unresolved line but that member-month) and
+    `allowed_decideAll` (ALLOW lines of a batch share none); `ids_disjoint` keeps an
+    identity in at most one set. Both sets are append-only in v1: each must extend the
+    gate's checkpoint of it, else `STALE_*`. `gate_rules` passes 210 of 210 vectors and
+    all 3,616 demo lines (134 held, $46,987.00; 6 review; state ZZ), also as a unittest;
+    all 155 mutants are killed on a scratch copy. Tests only, not the token path.
+    REQUIRED trusted input: the gate's signed checkpoint of both sets (gate-v1); the
+    runner holds it in memory. REQUIRED for the unbuilt release path: it removes lines
+    from the unresolved set by identity, on release and on reject, under a new signed
+    checkpoint; before releasing it checks exact keys, near keys and member-months,
+    not-enrolled lines included, against the released set; a retry after an outage
+    must reuse the original identities.
 
 ## What is written but has never run
 
