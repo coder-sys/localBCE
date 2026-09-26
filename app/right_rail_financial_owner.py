@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import closing, contextmanager, nullcontext
 from dataclasses import dataclass
+import ctypes
 import hashlib
 import json
 import os
@@ -85,7 +86,15 @@ _STAFF_SNAPSHOT_ID_CONTRACT: Final[str] = "RR/FINANCIAL/STAFF-SNAPSHOT-ID/v1"
 _STAFF_WORKSPACE_QUERY: Final[str] = "workspace"
 _STAFF_DECISION_PACKAGE_QUERY: Final[str] = "decision_package"
 _MAX_CORRECTION_FOLLOWUP_PAGE_BYTES: Final[int] = 32 * 1024 * 1024
-_CONTINUITY_ADMISSION_TABLE: Final[str] = "right_rail_continuity_admission"
+# History segments (docs/CORE_REDESIGN.md "History segments"): one format with the gate.
+_SEGMENT_FORMAT: Final[str] = "RR/GATE/SEGMENT/v1"
+_SEGMENT_DOMAIN: Final[bytes] = b"RR/GATE/SEGMENT/v1\x00"
+_MAX_SEGMENT_BYTES: Final[int] = 2 * _MAX_PACKAGE_BYTES  # holds the one catch-up segment of any store the old 8 MiB cap admitted
+_MAX_SEGMENT_EVENTS: Final[int] = _MAX_ROWS
+_SEAL_SEGMENT_BYTES: Final[int] = _MAX_PACKAGE_BYTES // 2  # soft bounds: seal after the write that reaches either
+_SEAL_SEGMENT_EVENTS: Final[int] = 4096
+_SEGMENT_FRAME_BYTES: Final[int] = 4096  # seal, digests and framing, which records do not count
+_SEGMENT_TABLES: Final[frozenset[str]] = frozenset({"history_segments", "history_pending", "history_open"})
 _PRIVATE_INDEX_SET_VERSION: Final[int] = 1
 # The history is append-only in the database itself (Art. III.4); stores
 # created before these triggers get them once, atomically, on open.
@@ -298,6 +307,8 @@ _TABLES: Final[frozenset[str]] = frozenset(_TABLE_COLUMNS)
 _PACKAGE_TABLES: Final[frozenset[str]] = _TABLES - {"commands"}  # the command log is derived, never exported
 # Every write to these rows is carried in the next event's ``rows`` (step 6): the chain holds their full facts.
 _CAPTURED_TABLES: Final = ("action_outbox", "cases", "claimed_adjustments", "evidence", "financial_conflicts")
+# A history segment carries its events and the end-of-segment image of every row these tables changed in it.
+_PROJECTION_TABLES: Final = tuple(sorted(_PACKAGE_TABLES - {"financial_events", "financial_identity", "financial_meta"}))
 
 # The command log (Art. III.3): one row per request the Owner accepted, keyed by
 # the caller's natural key and bound to the history event that request produced.
@@ -523,7 +534,7 @@ def _identity_digest(
     if bound_mode not in _MODES:
         _fail(FinancialIntegrityError, "identity_mode")
     _id(bound_owner_id, "identity_owner_id")
-    if type(anchor_sequence) is not int or not 0 <= anchor_sequence <= _MAX_ROWS:
+    if type(anchor_sequence) is not int or not 0 <= anchor_sequence < 2**63:
         _fail(FinancialIntegrityError, "identity_anchor_sequence")
     source_package_digest = _blob(source_package_digest, 64, "identity_source_package_digest")
     return _digest(
@@ -581,7 +592,7 @@ def _identity_record(
         if bound_owner_id != expected_owner_id:
             _fail(error_type, f"{code_prefix}:restore-owner")
     anchor_sequence = value["anchor_sequence"]
-    if type(anchor_sequence) is not int or not 0 <= anchor_sequence <= _MAX_ROWS:
+    if type(anchor_sequence) is not int or not 0 <= anchor_sequence < 2**63:
         _fail(error_type, f"{code_prefix}:anchor-sequence")
     byte_values: dict[str, bytes] = {}
     for field in ("anchor_head", "genesis_head", "source_package_digest", "identity_digest"):
@@ -722,7 +733,7 @@ class ControlPack:
             _id(value, label)
         if self.period_id in _WILDCARD_PERIODS:
             _fail(FinancialInputError, "period_scope_required")
-        if type(self.version) is not int or self.version < 1:
+        if type(self.version) is not int or not 1 <= self.version <= _MAX_ROWS:
             _fail(FinancialInputError, "pack_version")
         if type(self.source_refs) is not tuple or not self.source_refs:
             _fail(FinancialInputError, "pack_source_refs")
@@ -1756,21 +1767,59 @@ def _sql_schema(connection: sqlite3.Connection) -> None:
     )
     for sql in _HISTORY_APPEND_ONLY_TRIGGERS.values():
         connection.execute(sql)
-    _create_continuity_admission_table(connection, _PACKAGE_TABLES)
+    _execute_script(connection, _SEGMENT_SCHEMA)
 
 
-def _create_continuity_admission_table(connection: sqlite3.Connection, tables: Iterable[str]) -> None:
-    connection.execute(
-        f"CREATE TABLE {_CONTINUITY_ADMISSION_TABLE} ("
-        "table_name TEXT NOT NULL PRIMARY KEY,"
-        "row_count INTEGER NOT NULL CHECK (row_count>=0),"
-        "row_bytes INTEGER NOT NULL CHECK (row_bytes>=0)"
-        ")"
-    )
-    connection.executemany(
-        f"INSERT INTO {_CONTINUITY_ADMISSION_TABLE} (table_name,row_count,row_bytes) VALUES (?,?,?)",
-        ((table, 0, 0) for table in sorted(tables)),
-    )
+# Sealed segments keep only what history cannot regenerate (their row images);
+# pending holds the events and rows the open segment has touched, open its size.
+_SEGMENT_SCHEMA: Final[str] = """
+    CREATE TABLE history_segments (
+        segment_index INTEGER PRIMARY KEY CHECK (segment_index>=0),
+        first_sequence INTEGER NOT NULL CHECK (first_sequence>=1),
+        last_sequence INTEGER NOT NULL UNIQUE CHECK (last_sequence>=first_sequence),
+        previous_digest BLOB NOT NULL CHECK (length(previous_digest)=64),
+        event_head BLOB NOT NULL CHECK (length(event_head)=64),
+        projection_root BLOB NOT NULL CHECK (length(projection_root)=64),
+        segment_digest BLOB NOT NULL UNIQUE CHECK (length(segment_digest)=64),
+        rows_json TEXT NOT NULL
+    );
+    CREATE TRIGGER history_segment_update_immutable BEFORE UPDATE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END;
+    CREATE TRIGGER history_segment_delete_immutable BEFORE DELETE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END;
+    CREATE TABLE history_pending (
+        table_name TEXT NOT NULL,
+        row_key INTEGER NOT NULL,
+        record_bytes INTEGER NOT NULL CHECK (record_bytes>0),
+        PRIMARY KEY (table_name,row_key)
+    ) WITHOUT ROWID;
+    CREATE TABLE history_open (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        event_count INTEGER NOT NULL CHECK (event_count>=0),
+        byte_count INTEGER NOT NULL CHECK (byte_count>=0)
+    );
+    INSERT INTO history_open VALUES (1,0,0);
+"""
+
+
+def _replace_file(path: Path, data: bytes) -> None:
+    temporary = path.with_name(f"{path.name}.tmp")
+    with temporary.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if os.name == "nt":  # Windows cannot sync a directory; the rename itself is written through
+        if not ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW(str(temporary), str(path), 0x1 | 0x8):  # REPLACE_EXISTING | WRITE_THROUGH
+            raise ctypes.WinError(ctypes.get_last_error())
+    else:
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+
+def _segment_seal(index: int, first: int, last: int, previous: bytes, head: bytes, root: bytes) -> dict[str, Any]:
+    return {"format": _SEGMENT_FORMAT, "segment_index": index, "first_sequence": first, "last_sequence": last, "event_count": last - first + 1, "previous_digest": _hex(previous), "event_head": _hex(head), "projection_root": _hex(root)}
 
 
 class FinancialOwner:
@@ -1802,8 +1851,7 @@ class FinancialOwner:
     def _verify_history_in_transaction(self, connection: sqlite3.Connection) -> None:
         """Replay the stored history against its projections before any use (Art. III.5).
 
-        The admission cache only bounds row counts and sizes, so a same-length raw
-        edit passes it. The independent checker recomputes the hash chain and the
+        The independent checker recomputes the hash chain and the
         history-to-projection bindings on this uncommitted open transaction; on a
         mismatch the open (and any migration in it) rolls back, so the Owner never
         writes on top of state its own history does not explain.
@@ -1924,7 +1972,6 @@ class FinancialOwner:
             with closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 _sql_schema(connection)
-                self._install_continuity_admission_triggers(connection)
                 connection.execute(
                     "INSERT INTO financial_meta VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (1, self.schema_version, self.schema, config.state_id, config.deployment_id, config.program_id, config.period_id, config.currency, initial_sequence, initial_history_head, 1, 0, 0, trusted_authority.authority_id, trusted_authority.epoch, trusted_authority.digest, mode, self.owner_id),
@@ -1932,35 +1979,20 @@ class FinancialOwner:
                 self._insert_row(connection, "financial_identity", identity)
                 connection.execute("COMMIT")
 
-    def _connect(self, *, admission_triggers: bool = False) -> sqlite3.Connection:
+    def _connect(self, *, capture_triggers: bool = False) -> sqlite3.Connection:
         try:
             connection = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
-            connection.create_function("rr_continuity_row_bytes", -1, self._continuity_row_bytes_for_sql)
+            connection.create_function("rr_segment_bytes", -1, lambda table, *values: len(_canonical(self._segment_record(table, values))) + 1)
             connection.create_function("rr_captured_row", -1, self._captured_row_for_sql)
             connection.execute("CREATE TEMP TABLE rr_captured_rows(image TEXT NOT NULL)")
-            if admission_triggers:
-                self._install_continuity_admission_triggers(connection)
+            if capture_triggers:
+                self._install_capture_triggers(connection)
             return connection
         except sqlite3.Error:
             _fail(FinancialIntegrityError, "database_open")
-
-    def _continuity_row_bytes_for_sql(self, table: object, *values: object) -> int:
-        if type(table) is not str or table not in self._table_columns:
-            return -1
-        columns = self._table_columns[table]
-        if len(values) != len(columns):
-            return -1
-        try:
-            row = {
-                column: self._export_value(value)
-                for column, value in zip(columns, values, strict=True)
-            }
-            return len(_canonical(row))
-        except (FinancialContinuityError, TypeError, ValueError, OverflowError):
-            return -1
 
     def _captured_row_for_sql(self, table: str, *values: object) -> str | None:
         """One row image for the next event: an insert's full row, or an update's changed columns."""
@@ -1972,40 +2004,17 @@ class FinancialOwner:
         changed = {column: value for column, value in new.items() if old[column] != value}
         return _canonical({"table": table, "key": old[columns[0]], "set": changed}).decode("ascii") if changed else None
 
-    def _install_continuity_admission_triggers(self, connection: sqlite3.Connection) -> None:
-        helper = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (_CONTINUITY_ADMISSION_TABLE,),
-        ).fetchone()
-        if helper is None:
-            _fail(FinancialIntegrityError, "continuity_admission_missing")
-        for table in sorted(self._tables):
-            quoted_table = f'"{table}"'
-            new_values = ",".join(f'NEW."{column}"' for column in self._table_columns[table])
-            old_values = ",".join(f'OLD."{column}"' for column in self._table_columns[table])
-            row_bytes_new = f"rr_continuity_row_bytes('{table}',{new_values})"
-            row_bytes_old = f"rr_continuity_row_bytes('{table}',{old_values})"
-            connection.execute(
-                f"CREATE TEMP TRIGGER rr_admission_{table}_insert "
-                f"AFTER INSERT ON main.{quoted_table} BEGIN "
-                f"UPDATE {_CONTINUITY_ADMISSION_TABLE} "
-                f"SET row_count=row_count+1,row_bytes=row_bytes+{row_bytes_new} "
-                f"WHERE table_name='{table}'; END"
-            )
-            connection.execute(
-                f"CREATE TEMP TRIGGER rr_admission_{table}_update "
-                f"AFTER UPDATE ON main.{quoted_table} BEGIN "
-                f"UPDATE {_CONTINUITY_ADMISSION_TABLE} "
-                f"SET row_bytes=row_bytes+{row_bytes_new}-{row_bytes_old} "
-                f"WHERE table_name='{table}'; END"
-            )
-            connection.execute(
-                f"CREATE TEMP TRIGGER rr_admission_{table}_delete "
-                f"AFTER DELETE ON main.{quoted_table} BEGIN "
-                f"UPDATE {_CONTINUITY_ADMISSION_TABLE} "
-                f"SET row_count=row_count-1,row_bytes=row_bytes-{row_bytes_old} "
-                f"WHERE table_name='{table}'; END"
-            )
+    def _install_capture_triggers(self, connection: sqlite3.Connection) -> None:
+        # The open history segment tracks each event and changed row with its record size: O(this write) (IX.3).
+        for table in ("financial_events", *_PROJECTION_TABLES):
+            new_values = ",".join(f'NEW."{column}"' for column in _TABLE_COLUMNS[table])
+            track = f"INSERT INTO history_pending VALUES ('{table}',NEW.rowid,rr_segment_bytes('{table}',{new_values})) ON CONFLICT (table_name,row_key) DO UPDATE SET record_bytes=excluded.record_bytes"
+            changed = " OR ".join(f'NEW."{column}" IS NOT OLD."{column}"' for column in _TABLE_COLUMNS[table])  # as capture: an UPDATE that changes nothing is not a write
+            for operation, when in (("INSERT", ""), ("UPDATE", f" WHEN {changed}")):
+                connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_{operation}" AFTER {operation} ON main."{table}"{when} BEGIN {track}; END')
+            connection.execute(f'CREATE TEMP TRIGGER "rr_track_{table}_DELETE" BEFORE DELETE ON main."{table}" BEGIN SELECT RAISE(ABORT,\'history_row_delete\'); END')
+        connection.execute("CREATE TEMP TRIGGER rr_track_pending_insert AFTER INSERT ON main.history_pending BEGIN UPDATE history_open SET event_count=event_count+(NEW.table_name='financial_events'),byte_count=byte_count+NEW.record_bytes; END")
+        connection.execute("CREATE TEMP TRIGGER rr_track_pending_update AFTER UPDATE ON main.history_pending BEGIN UPDATE history_open SET byte_count=byte_count+NEW.record_bytes-OLD.record_bytes; END")
         for table in _CAPTURED_TABLES:
             new_values = ",".join(f'NEW."{column}"' for column in self._table_columns[table])
             old_values = ",".join(f'OLD."{column}"' for column in self._table_columns[table])
@@ -2019,84 +2028,87 @@ class FinancialOwner:
                 f"WHERE image IS NOT NULL; END"
             )
 
-    def _continuity_admission_table_shape(self, connection: sqlite3.Connection) -> None:
-        actual = tuple(
-            (str(row[1]), str(row[2]).upper(), int(row[3]))
-            for row in connection.execute(f"PRAGMA table_info({_CONTINUITY_ADMISSION_TABLE})")
-        )
-        if actual != (("table_name", "TEXT", 1), ("row_count", "INTEGER", 1), ("row_bytes", "INTEGER", 1)):
-            _fail(FinancialIntegrityError, "continuity_admission_schema")
+    def _segment_record(self, table: str, values: Iterable[object]) -> dict[str, Any]:
+        """One segment record: an event row, or a projection row's full image."""
+        row = {column: self._export_value(value) for column, value in zip(_TABLE_COLUMNS[table], values, strict=True)}
+        return row if table == "financial_events" else {"table": table, "row": row}
 
-    def _recompute_continuity_admission(self, connection: sqlite3.Connection) -> dict[str, tuple[int, int]]:
-        result: dict[str, tuple[int, int]] = {}
-        for table in sorted(self._tables):
-            columns = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
-            if columns != self._table_columns[table]:
-                _fail(FinancialIntegrityError, "continuity_schema_columns")
-            row_count = 0
-            row_bytes = 0
-            for row in connection.execute(f"SELECT * FROM {table}"):
-                row_count += 1
-                if row_count > _MAX_ROWS:
-                    _fail(FinancialContinuityError, "continuity_row_cap")
-                encoded_row = {
-                    column: self._export_value(row[column])
-                    for column in columns
-                }
-                row_bytes += len(_canonical(encoded_row))
-            result[table] = (row_count, row_bytes)
-        return result
+    def _track_all(self, connection: sqlite3.Connection) -> None:
+        """Seal a store from before segments as one segment, inside the conversion transaction."""
+        for table in ("financial_events", *_PROJECTION_TABLES):
+            connection.executemany(
+                "INSERT INTO history_pending VALUES (?,?,?)",
+                ((table, row[0], len(_canonical(self._segment_record(table, tuple(row)[1:]))) + 1) for row in connection.execute(f'SELECT rowid,* FROM "{table}"').fetchall()),
+            )
+        connection.execute("UPDATE history_open SET event_count=(SELECT COUNT(*) FROM history_pending WHERE table_name='financial_events'),byte_count=(SELECT COALESCE(SUM(record_bytes),0) FROM history_pending)")
+        self._seal_segment(connection, force=True)
 
-    def _continuity_admission_values(self, connection: sqlite3.Connection) -> dict[str, tuple[int, int]]:
-        self._continuity_admission_table_shape(connection)
-        values: dict[str, tuple[int, int]] = {}
-        rows = connection.execute(
-            f"SELECT table_name,row_count,row_bytes FROM {_CONTINUITY_ADMISSION_TABLE}"
-        ).fetchall()
-        for row in rows:
-            table = row["table_name"]
-            row_count = row["row_count"]
-            row_bytes = row["row_bytes"]
-            if (
-                type(table) is not str
-                or table not in self._tables
-                or type(row_count) is not int
-                or row_count < 0
-                or type(row_bytes) is not int
-                or row_bytes < 0
-                or table in values
-            ):
-                _fail(FinancialIntegrityError, "continuity_admission_values")
-            values[table] = (row_count, row_bytes)
-        if set(values) != self._tables:
-            _fail(FinancialIntegrityError, "continuity_admission_tables")
-        return values
+    def _seal_segment(self, connection: sqlite3.Connection, *, force: bool = False) -> bytes | None:
+        """Seal the open segment at a soft bound (or when forced); refuse a write past a hard bound."""
+        opened = connection.execute("SELECT event_count,byte_count FROM history_open WHERE id=1").fetchone()
+        if opened is None or {type(opened[0]), type(opened[1])} != {int}:
+            _fail(FinancialIntegrityError, "history_segment_events")
+        count, size = opened
+        if count > _MAX_SEGMENT_EVENTS or size + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:
+            _fail(FinancialContinuityError, "history_segment_size")
+        for (table,) in connection.execute("SELECT DISTINCT table_name FROM history_pending").fetchall():  # the Checker reads at most Lean's maxRows per table
+            if connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] > _MAX_ROWS:
+                _fail(FinancialIntegrityError, "history_capacity")
+        if count == 0 or not force and count < _SEAL_SEGMENT_EVENTS and size < _SEAL_SEGMENT_BYTES:
+            return None
+        # The chain continues from the last sealed segment only if its stored seal still recomputes.
+        last = connection.execute("SELECT * FROM history_segments ORDER BY segment_index DESC LIMIT 2").fetchall()
+        index, first, previous = 0, 1, _ZERO_DIGEST
+        if last:
+            stored = tuple(last[0])
+            if [type(value) for value in stored] != [int, int, int, bytes, bytes, bytes, bytes, str] or stored[3] != (last[1][6] if len(last) == 2 else _ZERO_DIGEST) or stored[5] != _digest(_SEGMENT_DOMAIN, b"rows", stored[7].encode()) or stored[6] != _digest(_SEGMENT_DOMAIN, b"seal", _canonical(_segment_seal(*stored[:6]))):
+                _fail(FinancialIntegrityError, "history_segment_chain")
+            index, first, previous = stored[0] + 1, stored[2] + 1, stored[6]
+        meta = self._meta(connection)
+        pending = connection.execute("SELECT COALESCE(SUM(table_name='financial_events'),0),COALESCE(SUM(record_bytes),0),COALESCE(SUM(record_bytes*(table_name='financial_events')),0) FROM history_pending").fetchone()
+        if int(meta["sequence"]) - first + 1 != count or tuple(pending[:2]) != (count, size):
+            _fail(FinancialIntegrityError, "history_segment_events")
+        images = []
+        for table, key in connection.execute("SELECT table_name,row_key FROM history_pending WHERE table_name<>'financial_events'").fetchall():
+            images.append(_canonical(self._segment_record(table, tuple(connection.execute(f'SELECT * FROM "{table}" WHERE rowid=?', (key,)).fetchone()))))
+        rows_json = b"[" + b",".join(sorted(images)) + b"]"
+        if len(rows_json) + pending[2] + _SEGMENT_FRAME_BYTES > _MAX_SEGMENT_BYTES:  # measured as built, before it is stored
+            _fail(FinancialContinuityError, "history_segment_size")
+        seal = (index, first, int(meta["sequence"]), previous, bytes(meta["history_head"]), _digest(_SEGMENT_DOMAIN, b"rows", rows_json))
+        digest = _digest(_SEGMENT_DOMAIN, b"seal", _canonical(_segment_seal(*seal)))
+        connection.execute("INSERT INTO history_segments VALUES (?,?,?,?,?,?,?,?)", (*seal, digest, rows_json.decode("ascii")))
+        connection.execute("DELETE FROM history_pending")
+        connection.execute("UPDATE history_open SET event_count=0,byte_count=0")
+        return digest
 
     def _migrate_v7_store(self, connection: sqlite3.Connection) -> None:
         """Convert a v7 store to v8 inside the caller's open transaction (all-or-nothing).
 
         v8 adds the derived ``commands`` table and declared foreign keys, which
         SQLite can add only by rebuilding tables. A present v7 size cache must
-        equal a recompute first; the rows are then rewritten unchanged except the
-        schema version and the command log is derived from history. The caller's
-        replay must still explain every row before COMMIT, so a v7 store its
-        history does not explain is refused and left byte-identical.
+        equal a recompute first; the rows are rewritten unchanged except the
+        schema version, the command log is derived from history, and the whole
+        history opens the first history segment. The
+        caller's replay must still explain every row before COMMIT, so a v7
+        store its history does not explain is refused and left byte-identical.
         """
 
         tables = {
             str(row[0])
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         }
-        if tables not in (set(_PACKAGE_TABLES), set(_PACKAGE_TABLES) | {_CONTINUITY_ADMISSION_TABLE}):
+        if tables not in (set(_PACKAGE_TABLES), set(_PACKAGE_TABLES) | {"right_rail_continuity_admission"}):
             _fail(FinancialIntegrityError, "schema_tables")
-        if _CONTINUITY_ADMISSION_TABLE in tables and self._continuity_admission_values(connection) != self._recompute_continuity_admission(connection):
-            _fail(FinancialIntegrityError, "continuity_admission_mismatch")
         rows: dict[str, list[sqlite3.Row]] = {}
         for table in sorted(_PACKAGE_TABLES):
             columns = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
             if columns != _TABLE_COLUMNS[table]:
                 _fail(FinancialIntegrityError, "continuity_schema_columns")
             rows[table] = connection.execute(f"SELECT * FROM {table}").fetchall()
+        if "right_rail_continuity_admission" in tables and dict((str(row[0]), (row[1], row[2])) for row in connection.execute("SELECT table_name,row_count,row_bytes FROM right_rail_continuity_admission")) != {
+            table: (len(table_rows), sum(len(_canonical({column: self._export_value(row[column]) for column in _TABLE_COLUMNS[table]})) for row in table_rows)) for table, table_rows in rows.items()
+        }:
+            _fail(FinancialIntegrityError, "continuity_admission_mismatch")
         for object_type in ("trigger", "index", "table"):
             names = [
                 str(row[0])
@@ -2122,11 +2134,7 @@ class FinancialOwner:
         last = connection.execute("SELECT committed_at_ms FROM financial_events ORDER BY event_sequence DESC LIMIT 1").fetchone()
         images = [{"table": table, "row": {column: self._export_value(row[column]) for column in _TABLE_COLUMNS[table]}} for table in _CAPTURED_TABLES for row in rows[table]]
         self._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=0 if last is None else int(last[0]))
-        self._rebuild_continuity_admission(connection)
-
-    def _rebuild_continuity_admission(self, connection: sqlite3.Connection) -> None:
-        rebuilt = self._recompute_continuity_admission(connection)
-        connection.executemany(f"UPDATE {_CONTINUITY_ADMISSION_TABLE} SET row_count=?,row_bytes=? WHERE table_name=?", ((count, size, table) for table, (count, size) in rebuilt.items()))
+        self._track_all(connection)
 
     def _derive_command_log(self, connection: sqlite3.Connection) -> None:
         """Rebuild the command log from history (conversion and restore; it is never exported)."""
@@ -2141,73 +2149,37 @@ class FinancialOwner:
                 payload=_stored_object(event["payload_json"], "command_event_payload"),
             )
 
-    def _ensure_continuity_admission(self, connection: sqlite3.Connection, *, verify_history: bool) -> None:
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-            if meta is None:
-                _fail(FinancialIntegrityError, "schema_meta")
-            migrated = (meta["schema_version"], meta["schema"]) == (7, _V7_SCHEMA)
-            if migrated:
-                self._migrate_v7_store(connection)
-                meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-            self._verify_meta_identity(connection, meta)
-            private_indexes_current = _private_index_set_is_current(connection)
-            tables = {
-                str(row[0])
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                )
-            }
-            expected_tables = _TABLES | {_CONTINUITY_ADMISSION_TABLE}
-            if tables == _TABLES:
-                _create_continuity_admission_table(connection, self._tables)
-                self._rebuild_continuity_admission(connection)
-                size = self._continuity_admission_package_size(connection)
-                if size > _MAX_PACKAGE_BYTES:
-                    _fail(FinancialContinuityError, "continuity_package_size")
-            elif tables == expected_tables:
-                self._continuity_admission_table_shape(connection)
-            else:
-                _fail(FinancialIntegrityError, "schema_tables")
-            if tables == expected_tables and (verify_history or not private_indexes_current):
-                # The cheap size cache first, then (below) the replay it cannot replace.
-                self._verify_continuity_admission_cache(connection)
-            _install_private_index_set(connection)
-            _install_history_append_only(connection)
-            if verify_history or migrated:
-                self._verify_history_in_transaction(connection)
-            connection.execute("COMMIT")
-        except BaseException:
-            if connection.in_transaction:
-                connection.execute("ROLLBACK")
-            raise
-
-    def _verify_continuity_admission_cache(self, connection: sqlite3.Connection) -> None:
-        actual = self._continuity_admission_values(connection)
-        rebuilt = self._recompute_continuity_admission(connection)
-        if actual != rebuilt:
-            _fail(FinancialIntegrityError, "continuity_admission_mismatch")
-        if self._continuity_admission_package_size(connection) > _MAX_PACKAGE_BYTES:
-            _fail(FinancialContinuityError, "continuity_package_size")
-
     def _verify_open_identity(self, *, verify_history: bool) -> None:
         try:
             with closing(self._connect()) as connection:
-                self._ensure_continuity_admission(connection, verify_history=verify_history)
-                row = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-                if row is None:
-                    _fail(FinancialIntegrityError, "schema_meta")
-                if row["schema_version"] != self.schema_version:
-                    _fail(FinancialIntegrityError, "schema_identity")
-                tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-                expected_tables = _TABLES | {_CONTINUITY_ADMISSION_TABLE}
-                if tables != expected_tables:
-                    _fail(FinancialIntegrityError, "schema_tables")
-                self._verify_meta_identity(connection, row)
-                if not verify_history:
-                    # A verified open already checked the cache inside its transaction.
-                    self._verify_continuity_admission_cache(connection)
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
+                    if meta is None:
+                        _fail(FinancialIntegrityError, "schema_meta")
+                    migrated = (meta["schema_version"], meta["schema"]) == (7, _V7_SCHEMA)
+                    if migrated:
+                        self._migrate_v7_store(connection)
+                        meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
+                    self._verify_meta_identity(connection, meta)
+                    tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+                    if tables in (_TABLES, _TABLES | {"right_rail_continuity_admission"}):
+                        # A v8 store from before history segments: replayed, then its whole history opens the first segment.
+                        migrated = True
+                        connection.execute("DROP TABLE IF EXISTS right_rail_continuity_admission")
+                        _execute_script(connection, _SEGMENT_SCHEMA)
+                        self._track_all(connection)
+                    elif tables != _TABLES | _SEGMENT_TABLES:
+                        _fail(FinancialIntegrityError, "schema_tables")
+                    _install_private_index_set(connection)
+                    _install_history_append_only(connection)
+                    if verify_history or migrated:
+                        self._verify_history_in_transaction(connection)
+                    connection.execute("COMMIT")
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.execute("ROLLBACK")
+                    raise
         except sqlite3.DatabaseError:
             _fail(FinancialIntegrityError, "schema_read")
 
@@ -2295,20 +2267,16 @@ class FinancialOwner:
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
-        """One atomic command; inside ``run_batch`` the batch owns the connection, BEGIN, COMMIT and ROLLBACK."""
+        """One atomic command; inside ``run_batch`` the batch owns the connection, BEGIN, COMMIT and ROLLBACK,
+        while each command still seals as it would alone, so a batch's segments equal its commands' run singly."""
         batch = getattr(self._batch, "connection", None)
         began = batch is None
-        with closing(self._connect(admission_triggers=True)) if began else nullcontext(batch) as connection:
+        with closing(self._connect(capture_triggers=True)) if began else nullcontext(batch) as connection:
             try:
                 if began:
                     connection.execute("BEGIN IMMEDIATE")
-                changes_before = connection.total_changes
                 yield connection
-                if connection.total_changes != changes_before:
-                    # The committed local ledger preserves the exact export bound
-                    # without serializing rows that this transaction did not touch.
-                    if self._continuity_admission_package_size(connection) > _MAX_PACKAGE_BYTES:
-                        _fail(FinancialContinuityError, "continuity_package_size")
+                self._seal_segment(connection)
                 if connection.execute("SELECT 1 FROM temp.rr_captured_rows").fetchone() is not None:
                     _fail(FinancialIntegrityError, "captured_rows_without_event")  # refused, never stranded
                 if began:
@@ -2410,7 +2378,8 @@ class FinancialOwner:
         payload_bytes = _canonical(event_payload)
         payload_digest = _digest(_OPENING_BALANCE_DOMAIN if kind == "OPENING_BALANCE" else _EVENT_DOMAIN, payload_bytes)
         meta = self._meta(connection)
-        if int(meta["sequence"]) >= _MAX_ROWS:
+        # Lean's maxRows/maxRevision (Types.lean): the checker refuses a history or revision past them.
+        if int(meta["sequence"]) >= _MAX_ROWS or after_revision > _MAX_ROWS:
             _fail(FinancialIntegrityError, "history_capacity")
         sequence = int(meta["sequence"]) + 1
         previous_head = bytes(meta["history_head"])
@@ -6155,7 +6124,7 @@ class FinancialOwner:
     ) -> dict[str, Any]:
         """Read a bounded, repeatable page of event-backed correction follow-up work."""
 
-        if type(after_event_sequence) is not int or not 0 <= after_event_sequence <= _MAX_ROWS:
+        if type(after_event_sequence) is not int or not 0 <= after_event_sequence < 2**63:
             _fail(FinancialInputError, "correction_followup_cursor")
         if type(limit) is not int or not 1 <= limit <= 100:
             _fail(FinancialInputError, "correction_followup_limit")
@@ -6916,24 +6885,11 @@ class FinancialOwner:
             "tables": exported_rows,
         }
 
-    def _continuity_admission_package_size(self, connection: sqlite3.Connection) -> int:
-        """Return exact canonical package size from the transactionally maintained row ledger."""
-
-        admission = self._continuity_admission_values(connection)
-        for row_count, _row_bytes in admission.values():
-            if row_count > _MAX_ROWS:
-                _fail(FinancialContinuityError, "continuity_row_cap")
-        empty_tables = {table: [] for table in sorted(self._tables)}
-        body = self._continuity_package_body(connection, empty_tables)
-        package = {**body, "package_digest": _hex(_digest(_CONTINUITY_DOMAIN, _canonical(body)))}
-        total = len(_canonical(package))
-        for row_count, row_bytes in admission.values():
-            total += row_bytes + max(0, row_count - 1)
-        return total
-
     def _continuity_package_bytes(self, connection: sqlite3.Connection) -> bytes:
         """Serialize the exact bounded Continuity package from this connection."""
-
+        # Refused before any row is loaded when the event payloads alone exceed the cap.
+        if connection.execute("SELECT COALESCE(SUM(length(payload_json)),0) FROM financial_events").fetchone()[0] > _MAX_PACKAGE_BYTES:
+            _fail(FinancialContinuityError, "continuity_package_size")
         exported_rows: dict[str, list[dict[str, Any]]] = {}
         for table in sorted(self._tables):
             columns = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
@@ -6957,27 +6913,88 @@ class FinancialOwner:
         with self._read_snapshot() as connection:
             return self._continuity_package_bytes(connection)
 
+    def export_history(self, directory: Path) -> bytes:
+        """Export all history as sealed segments and a manifest (docs/CORE_REDESIGN.md "History segments").
+
+        The manifest is read in the sealing transaction; sealed segments are append-only,
+        so their files may be written after it. A segment file already in ``directory``
+        is never rewritten, only compared byte for byte (IX.3).
+        """
+        with self._write() as connection:
+            self._seal_segment(connection, force=True)
+            rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
+            count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
+        body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
+        directory.mkdir(exist_ok=True)
+        with self._read_snapshot() as connection:
+            for segment in connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall():
+                events = connection.execute("SELECT * FROM financial_events WHERE event_sequence BETWEEN ? AND ? ORDER BY event_sequence", (segment["first_sequence"], segment["last_sequence"]))
+                data = _canonical({"events": [self._segment_record("financial_events", tuple(row)) for row in events], "rows": json.loads(segment["rows_json"]), "seal": _segment_seal(*tuple(segment)[:6]), "segment_digest": _hex(bytes(segment["segment_digest"])), "signature": None})
+                path = directory / f"segment-{segment['segment_index']:08d}.json"
+                if not path.exists():
+                    _replace_file(path, data)
+                else:
+                    with path.open("rb") as handle:
+                        if handle.read(len(data) + 1) != data:
+                            _fail(FinancialContinuityError, "history_export_mismatch")
+        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
+        _replace_file(directory / "manifest.json", manifest)
+        return manifest
+
+    def _replay_segment(self, connection: sqlite3.Connection, path: Path) -> None:
+        """Apply one checked segment's events and final row images, then reseal it; the seal must match."""
+        with path.open("rb") as handle:
+            segment = json.loads(handle.read(_MAX_SEGMENT_BYTES + 1))
+        columns = _TABLE_COLUMNS["financial_events"]
+        connection.executemany(f"INSERT INTO financial_events ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", ([self._import_value(event[column]) for column in columns] for event in segment["events"]))
+        keys = {table: [str(info[1]) for info in sorted(connection.execute(f"PRAGMA table_info({table})"), key=lambda info: info[5]) if info[5]] for table in _PROJECTION_TABLES}
+        for record in segment["rows"]:
+            table, values = record["table"], {column: self._import_value(record["row"][column]) for column in _TABLE_COLUMNS[record["table"]]}
+            where, key = " AND ".join(f"{column}=?" for column in keys[table]), [values[column] for column in keys[table]]
+            current = connection.execute(f"SELECT * FROM {table} WHERE {where}", key).fetchone()
+            if current is None:
+                connection.execute(f"INSERT INTO {table} ({','.join(values)}) VALUES ({','.join('?' for _ in values)})", list(values.values()))
+            elif changed := [column for column in values if current[column] != values[column]]:
+                connection.execute(f"UPDATE {table} SET {','.join(f'{column}=?' for column in changed)} WHERE {where}", [values[column] for column in changed] + key)
+            connection.execute(f"INSERT OR IGNORE INTO history_pending SELECT ?,rowid,? FROM {table} WHERE {where}", [table, len(_canonical(record)) + 1, *key])
+        last = segment["events"][-1]
+        connection.execute("UPDATE financial_meta SET sequence=?,history_head=? WHERE id=1", (last["event_sequence"], self._import_value(last["head"])))
+        connection.execute("DELETE FROM temp.rr_captured_rows")
+        if self._seal_segment(connection, force=True) != bytes.fromhex(segment["segment_digest"]):
+            _fail(FinancialContinuityError, "history_replay_mismatch")
+
     @classmethod
     def restore_continuity(
         cls,
         *,
-        package_bytes: bytes,
+        package_bytes: bytes | None = None,
+        history: Path | None = None,
         recovered_path: Path,
         trusted_authority: SyntheticTrustedAuthority | None,
         clock: FinancialClock | None = None,
         restore_mode: str = "SHADOW",
         correction_transition_release: object | None = None,
     ) -> "FinancialOwner":
-        """Restore into a new SHADOW or explicitly approved TEST owner."""
+        """Restore into a new SHADOW or explicitly approved TEST owner, from a package or by replaying a history export."""
+        from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database, verify_history_export
+
         sidecar_paths = (Path(f"{recovered_path}-wal"), Path(f"{recovered_path}-shm")) if isinstance(recovered_path, Path) else ()
         occupied = lambda path: path.exists() or path.is_symlink()
         if not isinstance(recovered_path, Path) or any(occupied(path) for path in (recovered_path, *sidecar_paths)) or not recovered_path.parent.is_dir():
             _fail(FinancialContinuityError, "continuity_destination")
         if restore_mode not in {"SHADOW", "TEST"}:
             _fail(FinancialContinuityError, "continuity_restore_mode")
-        package = cls.validate_continuity_package(package_bytes)
+        if history is None:
+            package = cls.validate_continuity_package(package_bytes)
+        elif package_bytes is not None:
+            _fail(FinancialContinuityError, "continuity_source")
         if trusted_authority is None or type(trusted_authority) is not SyntheticTrustedAuthority:
             _fail(FinancialAuthorityError, "trusted_authority_required")
+        if history is not None:
+            try:
+                package = verify_history_export(history, expected_authority=_checker_authority(trusted_authority))
+            except IndependentFinancialError as error:
+                _fail(FinancialContinuityError, f"history_export:{error}")
         authority = package["authority"]
         if (str(authority.get("authority_id")), int(authority.get("epoch", 0)), str(authority.get("digest"))) != (trusted_authority.authority_id, trusted_authority.epoch, _hex(trusted_authority.digest)):
             _fail(FinancialAuthorityError, "continuity_authority_mismatch")
@@ -7074,8 +7091,10 @@ class FinancialOwner:
                 "population_manifest_heads", "population_manifest_bindings",
             )
             with owner._write() as connection:
-                for table in insertion_order:
+                for table in insertion_order if history is None else ():
                     connection.execute(f"DELETE FROM {table}")
+                for index in range(int(package["segment_count"]) if history is not None else 0):
+                    owner._replay_segment(connection, history / f"segment-{index:08d}.json")
                 meta_rows = package["tables"]["financial_meta"]
                 if len(meta_rows) != 1:
                     _fail(FinancialContinuityError, "continuity_meta_rows")
@@ -7087,7 +7106,7 @@ class FinancialOwner:
                 meta_values = [overrides.get(column, value) for column, value in zip(meta_columns, meta_values)]
                 assignments = ",".join(f"{column}=?" for column in meta_columns)
                 connection.execute(f"UPDATE financial_meta SET {assignments} WHERE id=1", tuple(meta_values))
-                for table in insertion_order:
+                for table in insertion_order if history is None else ():
                     columns = owner._table_columns[table]
                     rows = package["tables"][table]
                     placeholders = ",".join("?" for _ in columns)
@@ -7100,8 +7119,6 @@ class FinancialOwner:
                 owner._derive_command_log(connection)
             # The restore-source verification below is strictly stronger than the open replay.
             owner._verify_open_identity(verify_history=False)
-            from app.right_rail_financial_owner_independent import verify_database
-
             verify_database(
                 owner.path,
                 expected_config=config,
@@ -7111,6 +7128,8 @@ class FinancialOwner:
                 expected_continuity_epoch=int(package["continuity_epoch"]),
                 restore_source_package=package_bytes,
             )
+            if history is not None:
+                verify_history_export(history, expected_authority=_checker_authority(trusted_authority), restored=owner.path)
             owner.close()
             attempt_stat = attempt_path.stat()
             attempt_identity = (int(attempt_stat.st_dev), int(attempt_stat.st_ino))

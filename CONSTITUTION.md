@@ -23,8 +23,12 @@ responsibility is complete — and it keeps the state free to leave.
    follows through; it never decides for the state.
 2. Any power to approve, hold, release or redirect an external action needs
    separate, explicit state authority. Expanding scope needs state approval.
+   The inline payment gate may allow or hold a payment only to the extent a
+   signed state authority grant permits; its fail policy and any emergency
+   bypass are themselves signed by the state; the gate ships off by default.
 3. Human judgment stays human. A model output is a lead, never a determination.
-4. Existing payment systems move money. RightRail never does.
+4. Existing payment systems move money. RightRail never does. BLOCK remains a
+   human or state action, never an automated one.
 
 ## Article II — Facts stay separate
 
@@ -84,6 +88,9 @@ silent default.
    data is the plan, not a gap. Do not list the absence of a state, official
    receiver, real data or live payments as a blocker, caveat or limit of
    progress; keep the standing claims in VI.2 in the status file and move on.
+5. Signatures are post-quantum only (ML-DSA or another NIST post-quantum
+   algorithm). There is no RSA or ECDSA fallback, even if certification
+   timing delays a pilot.
 
 ## Article VII — The state can always leave
 
@@ -107,7 +114,9 @@ operational authority.
 
 1. **One codebase.** All product code lives in this trunk (`rightrail-main`).
    Per-team copies of the same module are forbidden; a module has one home and
-   one owner.
+   one owner. Private zero-knowledge work is the one exception: it lives in
+   its own repository, `rightrail-zk`; the trunk pins its verifier binary by
+   hash, as it does for the engine.
 2. Prefer existing primitives: typed data, Lean functions, narrow adapters,
    owner-local SQLite transactions, durable outboxes, ordinary files. No generic
    workflow engine, custom database, service-per-module, universal query
@@ -116,18 +125,22 @@ operational authority.
 3. Ordinary work scales with the change, not with total history. Every input,
    queue, report, export and proof has explicit bounds. Measure before
    claiming performance.
-4. Build what the plan needs now. Research tracks that the plan marks
-   conditional (the private zero-knowledge evidence mode) are **parked** until a
-   customer need selects them; parked work does not consume the critical path.
+4. Build what the plan needs now. The private zero-knowledge evidence mode
+   (PRIVATE_ZK) is an active prototype track (founder, 2026-09-25). It produces
+   evidence only, never a hold or payment directive. It never blocks core, gate
+   or product work, and the non-ZK evidence path ships first. No PRIVATE_ZK
+   claim is made before a third-party audit.
 
 ## Article X — Lean process
 
-1. Software over paperwork. Each change updates `STATUS.md` in a few lines.
-   Raw logs live in log files, not in markdown. No hash tables in status
-   documents except the pinned-artifact list.
-2. Heavy runs (builds, tests, provers) go through the guarded wrapper
-   (`native/guard/run_guarded_v4.ps1`) with its memory floor; it is never
-   bypassed or weakened.
+1. Software over paperwork. `STATUS.md` holds current truth only — what runs,
+   what is blocked, the next step — in a few lines; it keeps no change log,
+   since `git log` is the log. Raw logs live in log files, not in markdown.
+   No hash tables in status documents except the pinned-artifact list.
+2. Heavy runs (builds, tests, provers) on the laptop go through the guarded
+   wrapper (`native/guard/run_guarded_v4.ps1`) with its memory floor; it is
+   never bypassed or weakened there. CI and cloud runners use their own
+   resource limits.
 3. Never destroy uncommitted work, raw evidence, keys, or the only copy of
    anything. Deletions are recoverable first (Recycle Bin, Git bundle, archive).
 4. Every session leaves a working increment and a clear next step.
@@ -141,13 +154,16 @@ revision). These are binding working principles, not suggestions.
    to be safe, then build the smallest implementation that makes it executable
    and independently checkable. An existing workflow, benchmark, digest, caller
    boolean or green gate is not authority just because it exists.
-2. **Gates serve invariants.** A gate can be stale, wrong or over-broad. Change
-   one only in the open, recording: the exact predicate; the invariant and
-   failure it protects; the raw evidence it is unsuitable; the disposition
+2. **Gates serve invariants.** A gate can be stale, wrong or over-broad. For a
+   protected gate — Lean theorem statements, `artifacts/**`, the
+   constitution-invariants test, wire formats, digest domains and the guard —
+   change it only in the open, recording: the exact predicate; the invariant
+   and failure it protects; the raw evidence it is unsuitable; the disposition
    (retain, replace, weaken, disable, suspend, relabel); the replacement
    control; scope and duration; and the claims withdrawn. A changed gate
    inherits none of the old assurance. Never bypass a gate silently or change
-   policy bytes to get a pass.
+   policy bytes to get a pass. An ordinary test edit outside this list needs
+   only a clear commit message.
 3. **Disciplined creativity.** The current implementation is a hypothesis. When
    evidence shows it cannot meet the invariant, bound or throughput target,
    return to first principles and look for a materially simpler composition,
@@ -209,11 +225,6 @@ revision). These are binding working principles, not suggestions.
 15. **Privacy is measured.** Privacy is tested as a property — output shape,
     timing, memory, errors, logs, temp files, artifacts and retries must not
     depend on hidden values — not asserted by a label.
-16. **Customer effect.** For any substantial workflow change, assess staff
-    effort, repeated evidence requests, data movement, troubleshooting,
-    installation and updates, recovery, independent exit and reuse; compare a
-    materially simpler approach and show the chosen tradeoff in the affected
-    workflow.
 
 ## Article XII — Felt value
 
@@ -240,14 +251,19 @@ Rules:
 - Work that moves none of these units for any role is deprioritized, however
   elegant. Invisible correctness work is justified only by the felt outcome it
   protects, and is named as such.
+- A substantial workflow change also assesses staff effort, repeated evidence
+  requests, data movement, troubleshooting, installation and updates,
+  recovery, independent exit and reuse; it compares a materially simpler
+  approach and shows the chosen tradeoff in the affected workflow.
 - The synthetic demonstration (the Hospital H cycle and later workflows) is
   the scorecard: it measures these units per role, and a change that makes a
   measured unit worse is a regression, reviewed like a failing safety test.
 - The staff-facing surface (Mirror and the staff workspace) is held to the
   same standard as the owner: it runs, is tested, and is where value is
   demonstrated.
-- Each STATUS.md change-log entry for product work states its felt effect in
-  one line, or says "none (infrastructure for: …)".
+- A product-change description states its felt effect in one line, or says
+  "none (infrastructure for: …)"; this is required in product-change
+  descriptions, not in every STATUS.md entry.
 
 ## Article XIII — Design and interaction integrity
 
@@ -285,8 +301,7 @@ what is added.
 
 ## Enforcement
 
-- Every change, human or AI, must name which articles it touches and show it
-  complies. Reviewers reject changes that violate an article, however useful.
+- Reviewers reject changes that violate an article, however useful.
 - Automated checks enforce what they can (one-writer boundary, retry identity,
   forbidden outputs, pinned artifacts, bounded inputs, protected tests); the
   rest is enforced in review.
@@ -313,3 +328,18 @@ never an amendment.
   feel expensive, restrained and intuitive, and every control and pathway is
   proven over a declared interaction model with no dead buttons, orphan
   screens, traps, dead connections or illogical paths.
+- 2026-09-25 — Article IX.4 amended at the founder's direction: private
+  zero-knowledge is un-parked as an active, evidence-only prototype track that
+  never blocks core or gate work.
+- 2026-09-25 — Articles IX.1, I.2, I.4, X.1, Enforcement, XI.2, XI.16/XII and
+  X.2 amended, and a post-quantum-only signature line added to Article VI:
+  ZK moves to its own repository (`rightrail-zk`) pinned by hash; the payment
+  gate's authority, fail policy, emergency bypass and off-by-default state are
+  named explicitly, and BLOCK stays human or state action; STATUS.md is
+  current truth only, with no change log; the "every change names its
+  articles" rule is dropped; the full 8-field gate-change record applies only
+  to a named protected-paths list; XI.16 folds into Article XII, whose
+  felt-value line applies to product-change descriptions, not every STATUS
+  entry; and the guard memory floor applies to laptop runs, not CI/cloud.
+  Decided by the lead under the founder's 2026-09-25 grant; founder decided
+  the PQ-only line.

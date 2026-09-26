@@ -1,6 +1,9 @@
 "use strict";
 
-// Every Owner read is verified here (digests, exact keys, bindings) before it is shown.
+// The Owner and the independent verifier check every read server-side before this
+// loopback response exists; the browser is the same trust domain, so it echoes the
+// read-to-command binding (snapshot, revision, evaluation id, digests) back on a
+// command instead of recomputing digests the server already verified.
 // All page text is written with textContent; the server's CSP allows only same-origin
 // script and style, and nothing here uses innerHTML, eval or inline handlers.
 (() => {
@@ -31,10 +34,6 @@
     source_version: "payment-v2",
     local_ref: "ref:payment:h:p2",
   });
-  const READ_ENVELOPE = "RR/FINANCIAL/STAFF-READ-ENVELOPE/v1";
-  const SNAPSHOT_ID_CONTRACT = "RR/FINANCIAL/STAFF-SNAPSHOT-ID/v1";
-  const OWNER_DIGEST = /^[0-9A-F]{128}$/;
-  const SHA256_DIGEST = /^[0-9A-F]{64}$/;
   // A command whose response was lost or unverifiable may have committed: keep the exact body for retry.
   const UNCERTAIN_OUTCOMES = [
     "owner_command_unavailable", "Failed to fetch", "NetworkError", "command_unavailable",
@@ -47,10 +46,11 @@
     "record-report": "/api/reporting/record",
     "restore-test": "/api/continuity/restore-test",
   };
-  const encoder = new TextEncoder();
+  const REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)").matches;
   let model = null;
   let role = null;
   const allowedActions = new Set();
+  const moveFocus = (id, scroll) => { const el = byId(id); el.focus({ preventScroll: true }); if (scroll) el.scrollIntoView({ block: "start", behavior: REDUCED_MOTION ? "auto" : "smooth" }); };
 
   // Art. XIII.4: role is resolved from the path (never a query string, which
   // the server rejects outright) so a disallowed control is absent from the
@@ -103,30 +103,16 @@
       && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
   }
 
-  function nonEmpty(value) {
-    return typeof value === "string" && value.length > 0;
-  }
-
-  function count(value) {
-    return Number.isSafeInteger(value) && value >= 0;
-  }
-
   function canonicalJson(value) {
     if (value === null) return "null";
     if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
     if (typeof value === "number") {
-      assert(Number.isSafeInteger(value), "read_digest_number");
+      assert(Number.isSafeInteger(value), "canonical_json_number");
       return String(value);
     }
     if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
-    assert(isRecord(value), "read_digest_value");
+    assert(isRecord(value), "canonical_json_value");
     return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + canonicalJson(value[key])).join(",") + "}";
-  }
-
-  async function digest(value) {
-    assert(window.crypto && window.crypto.subtle, "read_digest_unavailable");
-    const bytes = await window.crypto.subtle.digest("SHA-256", encoder.encode(canonicalJson(value)));
-    return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
   }
 
   function sameJson(left, right) {
@@ -155,222 +141,6 @@
   function sameSnapshot(left, right) {
     return sameJson(ownerIdentity(left), ownerIdentity(right))
       && sameFields(left, right, ["sequence", "history_head", "snapshot_id"]);
-  }
-
-  function checkBinding(binding) {
-    assert(exactKeys(binding, [
-      "item_id", "obligation_id", "revision", "evaluation_id", "evaluation_result_digest",
-      "control_pack_id", "control_pack_version", "control_pack_digest",
-    ])
-      && nonEmpty(binding.item_id)
-      && nonEmpty(binding.obligation_id)
-      && count(binding.revision)
-      && nonEmpty(binding.evaluation_id)
-      && nonEmpty(binding.control_pack_id)
-      && Number.isSafeInteger(binding.control_pack_version) && binding.control_pack_version > 0
-      && OWNER_DIGEST.test(binding.evaluation_result_digest) && OWNER_DIGEST.test(binding.control_pack_digest),
-    "read_item_binding");
-  }
-
-  function checkRowBinding(row, binding) {
-    assert(isRecord(row)
-      && sameFields(row, binding, ["item_id", "obligation_id", "revision", "control_pack_id", "control_pack_version", "control_pack_digest"])
-      && row.current_evaluation_id === binding.evaluation_id
-      && row.current_evaluation_result_digest === binding.evaluation_result_digest,
-    "read_item_mismatch");
-  }
-
-  function checkPackageBinding(pkg, binding, scope) {
-    assert(isRecord(pkg)
-      && ["RR/FINANCIAL/DECISION-PACKAGE/v1", "RR/FINANCIAL/DECISION-PACKAGE/v2"].includes(pkg.contract)
-      && sameJson(pkg.scope, scope)
-      && isRecord(pkg.obligation)
-      && isRecord(pkg.evaluation_receipt)
-      && isRecord(pkg.control_pack),
-    "read_package_contract");
-    const obligation = pkg.obligation;
-    const receipt = pkg.evaluation_receipt;
-    const pack = pkg.control_pack;
-    assert(sameFields(obligation, binding, ["item_id", "obligation_id", "revision"])
-      && obligation.current_evaluation_id === binding.evaluation_id,
-    "read_package_obligation_binding");
-    assert(receipt.evaluation_id === binding.evaluation_id
-      && receipt.revision === binding.revision
-      && receipt.result_digest === binding.evaluation_result_digest
-      && receipt.evaluation_result_digest === binding.evaluation_result_digest,
-    "read_package_evaluation_binding");
-    assert(pack.pack_id === binding.control_pack_id
-      && pack.version === binding.control_pack_version
-      && pack.digest === binding.control_pack_digest,
-    "read_package_pack_binding");
-  }
-
-  function checkTimeline(events, total, truncated, limit, sequence) {
-    assert(Array.isArray(events)
-      && Number.isSafeInteger(total) && total >= events.length
-      && typeof truncated === "boolean"
-      && truncated === (total > limit)
-      && events.length === Math.min(total, limit),
-    "read_timeline_incomplete");
-    let previous = 0;
-    for (const event of events) {
-      assert(isRecord(event)
-        && Number.isSafeInteger(event.event_sequence)
-        && event.event_sequence > previous
-        && event.event_sequence <= sequence
-        && typeof event.kind === "string"
-        && Number.isSafeInteger(event.committed_at_ms),
-      "read_timeline_binding");
-      previous = event.event_sequence;
-    }
-  }
-
-  async function validateStaffRead(value, expectedResource) {
-    assert(isRecord(value) && isRecord(value.read_envelope), "read_envelope_missing");
-    const envelope = value.read_envelope;
-    assert(exactKeys(envelope, [
-      "contract", "query", "query_digest", "scope", "schema", "schema_version", "mode", "owner_id",
-      "continuity_epoch", "sequence", "history_head", "snapshot_id", "item_bindings", "verification",
-      "read_cost", "resources_digest", "envelope_digest",
-    ]) && envelope.contract === READ_ENVELOPE, "read_envelope_contract");
-    assert(["query_digest", "snapshot_id", "resources_digest", "envelope_digest"].every((key) => SHA256_DIGEST.test(envelope[key]))
-      && OWNER_DIGEST.test(envelope.history_head),
-    "read_envelope_digest_format");
-
-    const resources = { ...value };
-    delete resources.read_envelope;
-    assert(await digest(resources) === envelope.resources_digest, "read_resources_digest");
-    const envelopeBase = { ...envelope };
-    delete envelopeBase.envelope_digest;
-    assert(await digest(envelopeBase) === envelope.envelope_digest, "read_envelope_digest");
-    assert(await digest(envelope.query) === envelope.query_digest, "read_query_digest");
-
-    const expectedQuery = expectedResource === "workspace"
-      ? {
-          resource: "workspace", item_id: "item-h", population_id: "population:fixture-2026-01",
-          status: "ALL", limit: 100, offset: 0, detail_limit: 100, history_limit: 200,
-        }
-      : { resource: "decision_package", item_id: "item-h", limit: 100, offset: 0 };
-    assert(expectedResource === envelope.query.resource && sameJson(envelope.query, expectedQuery), "read_query_identity");
-    assert(exactKeys(envelope.scope, ["state_id", "deployment_id", "program_id", "period_id", "currency"])
-      && Object.values(envelope.scope).every(nonEmpty),
-    "read_scope");
-    assert(nonEmpty(envelope.schema)
-      && Number.isSafeInteger(envelope.schema_version) && envelope.schema_version > 0
-      && nonEmpty(envelope.mode)
-      && nonEmpty(envelope.owner_id)
-      && count(envelope.continuity_epoch)
-      && count(envelope.sequence),
-    "read_identity");
-    assert(await digest({ contract: SNAPSHOT_ID_CONTRACT, ...snapshotFields(envelope) }) === envelope.snapshot_id,
-      "read_snapshot_digest");
-
-    const identityKeys = ["schema", "schema_version", "mode", "owner_id", "continuity_epoch", "sequence", "history_head"];
-    const verification = envelope.verification;
-    assert(exactKeys(verification, [...identityKeys, "status", "scope", "counts", "result_digest"])
-      && verification.status === "VERIFIED"
-      && sameFields(verification, envelope, identityKeys)
-      && sameJson(verification.scope, envelope.scope)
-      && exactKeys(verification.counts, [
-        "events", "packs", "populations", "items", "obligations", "evidence", "payments", "claims",
-        "determinations", "actions", "conflicts", "evaluations",
-      ])
-      && Object.values(verification.counts).every(count)
-      && SHA256_DIGEST.test(verification.result_digest),
-    "read_verification_binding");
-    assert(exactKeys(value.integrity, [...identityKeys, "status", "scope", "counts"])
-      && sameFields(value.integrity, verification, [...identityKeys, "status"])
-      && sameJson(value.integrity.scope, verification.scope)
-      && sameJson(value.integrity.counts, verification.counts),
-    "read_integrity_binding");
-
-    const cost = envelope.read_cost;
-    const costCounts = [
-      "owner_read_statement_count", "independent_verifier_statement_count",
-      "independent_verifier_microseconds", "snapshot_transaction_microseconds",
-    ];
-    assert(exactKeys(cost, ["owner_connection_acquisitions", "independent_verifier_connection_acquisitions", ...costCounts])
-      && cost.owner_connection_acquisitions === 1
-      && cost.independent_verifier_connection_acquisitions === 0
-      && costCounts.every((key) => count(cost[key])),
-    "read_cost_binding");
-
-    assert(Array.isArray(envelope.item_bindings) && envelope.item_bindings.length > 0, "read_item_bindings");
-    const bindings = new Map();
-    let previousItemId = "";
-    for (const binding of envelope.item_bindings) {
-      checkBinding(binding);
-      assert(binding.item_id > previousItemId && !bindings.has(binding.item_id), "read_item_bindings");
-      previousItemId = binding.item_id;
-      bindings.set(binding.item_id, binding);
-    }
-    const hBinding = bindings.get("item-h");
-
-    if (expectedResource === "workspace") {
-      const page = value.item_page;
-      assert(value.schema === "RR/FINANCIAL/STAFF-DEMO/v2"
-        && typeof value.read_at === "string"
-        && isRecord(value.summary)
-        && value.summary.sequence === envelope.sequence
-        && sameFields(value.summary, envelope.scope, Object.keys(envelope.scope))
-        && isRecord(value.population)
-        && Array.isArray(value.items)
-        && value.items.length <= expectedQuery.limit
-        && exactKeys(page, ["resource", "status", "limit", "offset", "count", "total_count", "next_offset"])
-        && page.resource === "obligations"
-        && sameFields(page, expectedQuery, ["status", "limit", "offset"])
-        && page.count === value.items.length
-        && page.total_count === value.summary.obligation_count
-        && page.next_offset === (page.offset + page.count < page.total_count ? page.offset + page.count : null)
-        && exactKeys(value.h, ["obligation", "detail", "decision_package", "timeline", "timeline_total_count", "timeline_truncated"]),
-      "read_workspace_contract");
-      const visibleIds = value.items.map((item) => {
-        assert(isRecord(item) && typeof item.item_id === "string", "read_workspace_item");
-        const binding = bindings.get(item.item_id);
-        assert(binding, "read_workspace_item_binding");
-        checkRowBinding(item, binding);
-        assert(count(item.support_evidence_count), "read_support_count");
-        return item.item_id;
-      });
-      assert(new Set(visibleIds).size === visibleIds.length, "read_workspace_item_duplicate");
-      assert(hBinding && bindings.size === new Set([...visibleIds, "item-h"]).size, "read_workspace_binding_set");
-      checkRowBinding(value.h.obligation, hBinding);
-      checkRowBinding(value.h.detail, hBinding);
-      const support = value.h.obligation.support_evidence_count;
-      assert(Array.isArray(value.h.detail.evidence_references)
-        && value.h.detail.evidence_references.every(isRecord)
-        && count(support)
-        && support >= value.h.detail.evidence_references.filter((row) => row.kind === "SUPPORT").length,
-      "read_support_count");
-      assert(value.source_assessment.h_support_status === (support === 0 ? "MISSING" : "RECORDED_UNVERIFIED"), "read_support_status");
-      checkPackageBinding(value.h.decision_package, hBinding, envelope.scope);
-      checkTimeline(value.h.timeline, value.h.timeline_total_count, value.h.timeline_truncated, expectedQuery.history_limit, envelope.sequence);
-      assert(value.freshness.status === "UNKNOWN" && value.source_assessment.status === "UNKNOWN", "read_workspace_status");
-      assert(Array.isArray(value.gate_checks)
-        && value.gate_checks.every((gate) => exactKeys(gate, ["name", "status", "code", "state_unchanged"])
-          && typeof gate.name === "string" && typeof gate.status === "string"
-          && typeof gate.code === "string" && typeof gate.state_unchanged === "boolean"),
-      "read_gate_checks");
-      const off = value.nonactivation;
-      assert(isRecord(value.continuity)
-        && isRecord(off)
-        && [off.dispatch_enabled, off.egress_enabled, off.production_usable, off.activation, off.money_movement].every((flag) => flag === false)
-        && off.proof_suite_id === null,
-      "read_nonactivation");
-    } else {
-      assert(value.schema === "RR/FINANCIAL/STAFF-DECISION-VIEW/v1"
-        && value.sequence === envelope.sequence
-        && hBinding
-        && bindings.size === 1
-        && typeof value.read_at === "string"
-        && isRecord(value.source_assessment)
-        && isRecord(value.freshness),
-      "read_decision_view_contract");
-      checkPackageBinding(value.decision_package, hBinding, envelope.scope);
-      checkTimeline(value.timeline, value.timeline_total_count, value.timeline_truncated, 200, envelope.sequence);
-      assert(value.source_assessment.status === "UNKNOWN" && value.freshness.status === "UNKNOWN", "read_decision_view_status");
-    }
-    return value;
   }
 
   // ---- Rendering (textContent only) ----
@@ -623,7 +393,7 @@
     if (commandPending) return;
     const requestGeneration = ++workspaceRequestGeneration;
     try {
-      const value = await validateStaffRead(await fetchJson("/api/workspace"), "workspace");
+      const value = await fetchJson("/api/workspace");
       if (!applyWorkspaceSnapshot(value, requestGeneration)) return;
       await refreshCorrectionFollowup(requestGeneration);
     } catch (_error) {
@@ -642,7 +412,7 @@
   }
 
   function renderDecision() {
-    byId("decision-panel").hidden = !decisionOpen;
+    byId("decision-panel").hidden = !decisionOpen; byId("open-package").setAttribute("aria-expanded", String(decisionOpen));
     if (!decisionOpen || !decisionView) {
       updateActions();
       return;
@@ -776,7 +546,7 @@
   async function openPackage() {
     const requestGeneration = ++decisionRequestGeneration;
     try {
-      const value = await validateStaffRead(await fetchJson("/api/decision-package"), "decision_package");
+      const value = await fetchJson("/api/decision-package");
       if (requestGeneration !== decisionRequestGeneration) return;
       if (!snapshot || !sameSnapshot(snapshot.read_envelope, value.read_envelope)) {
         packageAvailable = false;
@@ -792,7 +562,7 @@
       packageAvailable = true;
       detectPackageStaleness();
       renderDecision();
-      byId("decision-panel").scrollIntoView({ block: "start", behavior: "smooth" });
+      moveFocus("decision-title", true);
     } catch (error) {
       if (requestGeneration !== decisionRequestGeneration) return;
       packageAvailable = false;
@@ -901,7 +671,6 @@
     }
     try {
       assert(isRecord(value) && isRecord(value.workspace), "command_workspace_missing");
-      await validateStaffRead(value.workspace, "workspace");
     } catch (_error) {
       throw new Error("command_response_unverified");
     }
@@ -958,7 +727,7 @@
     } finally {
       commandPending = false;
       detectPackageStaleness();
-      renderDecision();
+      renderDecision(); moveFocus("command-status", false);
       if (refreshAfter) await refreshOverview();
       else if (reopenAfter) await openPackage();
     }

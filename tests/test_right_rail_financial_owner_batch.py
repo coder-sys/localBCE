@@ -8,7 +8,9 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest import mock
 
+import app.right_rail_financial_owner as owner_module
 from app.right_rail_financial_owner import FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority
 from tests.test_right_rail_financial_acceptance import _Clock
 from tools import load_synthetic as harness
@@ -36,7 +38,7 @@ class _Owner(FinancialOwner):
 
 
 def _open(path, owner_type=FinancialOwner):
-    config = FinancialOwnerConfig(state_id=harness._STATE_ID, deployment_id=harness._DEPLOYMENT_ID, program_id=harness._PROGRAM_ID, period_id=harness._PERIOD_ID)
+    config = FinancialOwnerConfig(**harness._SCOPE)
     return owner_type(path=Path(path), config=config, trusted_authority=_AUTHORITY, clock=_Clock(1_700_000_000_000))
 
 
@@ -47,8 +49,9 @@ def _commands(n):
 
 
 def _history(path):
+    """Events, sealed segments and the open segment's tracking: all of history."""
     with closing(sqlite3.connect(path)) as connection:
-        return connection.execute("SELECT * FROM financial_events ORDER BY event_sequence").fetchall()
+        return [connection.execute(f"SELECT * FROM {table} ORDER BY 1,2").fetchall() for table in ("financial_events", "history_segments", "history_pending", "history_open")]
 
 
 def _support(evidence_id, origin="origin:batch"):
@@ -67,19 +70,23 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         return owner
 
     def test_batched_history_is_byte_identical_to_the_same_commands_run_singly(self) -> None:
-        single, batched = self._store("single.sqlite"), self._store("batched.sqlite")
-        commands = _commands(40)
-        single_results = [getattr(single, name)(**arguments) for name, arguments in commands]
-        batched_results = [result for start in range(0, 40, 7) for result in batched.run_batch(commands[start:start + 7])]
-        self.assertEqual(batched_results, single_results)
-        self.assertEqual(_history(batched.path), _history(single.path))
-        batched.verify_integrity()
+        for seal_every in (4096, 5):  # 5: batches of 7 cross several seals, some mid-batch
+            with self.subTest(seal_every=seal_every), mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", seal_every):
+                single, batched = self._store(f"single-{seal_every}.sqlite"), self._store(f"batched-{seal_every}.sqlite")
+                commands = _commands(40)
+                single_results = [getattr(single, name)(**arguments) for name, arguments in commands]
+                batched_results = [result for start in range(0, 40, 7) for result in batched.run_batch(commands[start:start + 7])]
+                self.assertEqual(batched_results, single_results)
+                self.assertEqual(_history(batched.path), _history(single.path))
+                if seal_every == 5:
+                    self.assertGreater(len(_history(batched.path)[1]), 8)  # the batches really crossed seals
+                batched.verify_integrity()
 
-    def test_a_refusal_mid_batch_rolls_back_the_whole_batch(self) -> None:
+    def test_a_refusal_mid_batch_rolls_back_the_whole_batch_and_its_seals(self) -> None:
         owner = self._store("isolation.sqlite", _Owner)
         history = _history(owner.path)
-        with self.assertRaisesRegex(FinancialIntegrityError, "synthetic_refusal_after_writes") as refused:
-            owner.run_batch([_support("evidence:kept-1"), _support("evidence:refused"), _support("evidence:kept-2")])
+        with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1), self.assertRaisesRegex(FinancialIntegrityError, "synthetic_refusal_after_writes") as refused:
+            owner.run_batch([_support("evidence:kept-1"), _support("evidence:refused"), _support("evidence:kept-2")])  # kept-1 sealed a segment
         self.assertIn("batch_index=1", refused.exception.__notes__)
         self.assertEqual(_history(owner.path), history)
         with closing(sqlite3.connect(owner.path)) as connection:

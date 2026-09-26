@@ -63,6 +63,37 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 9. Switch and Mirror reuse the replay.
 10. After a guarded Lean rebuild: BLFIN02 becomes the live evaluator; more transitions move to Lean.
 
+## History segments (approved by the founder 2026-09-25)
+
+Replaces the per-write whole-history size admission, which refused every write after
+~900 commands. Kept (not approved for removal): the v7 reader and size-cache check,
+`OPENING_BALANCE`, `tools/continuity_successor_v7.py`, and the 8 MiB package export,
+now refused at export, not at write.
+
+Ceiling: 10,000 events, because Lean's `maxRows`/`maxRevision` (Types.lean) bound what the
+proof and checker accept. The owner refuses the 10,001st event, revision or row of any
+table with `history_capacity` before commit; raising it is a Lean change.
+
+- Domain `RR/GATE/SEGMENT/v1` (one format for Continuity and the gate): SHA3-512 over
+  `RR/GATE/SEGMENT/v1\0` and length-prefixed parts; `projection_root = D("rows", rows)`,
+  `segment_digest = D("seal", seal)`, `manifest_digest = D("manifest", body)`; canonical JSON.
+- Seal: `format`, `segment_index`, `first_sequence`, `last_sequence`, `event_count`,
+  `previous_digest` (zero for segment 0), `event_head`, `projection_root`. A segment file adds
+  its events, the sorted final images of the rows they touched, `segment_digest`, and a
+  reserved `signature` (null; ML-DSA-87 later, outside the digest).
+- Bounds: seal after the write reaching 4,096 events or 4 MiB; a write carrying the open
+  segment past 10,000 events or 16 MiB (so any store the old cap admitted fits one segment)
+  fails `history_segment_size`.
+- Writes note touched rows in `history_pending`: O(this write) (IX.3). Older stores (v7,
+  v8 before segments) are replayed on open and sealed as segment 0 in the same transaction.
+- The checker recomputes sealed segments' chain, counts and event heads from the events and
+  the open segment's bookkeeping; sealed rows are append-only, bound by digest.
+- `export_history`: one fsynced file per segment; an existing file is compared, never rewritten.
+  `restore_continuity(history=...)`: the checker verifies manifest, chain, event chains and
+  seals; a fresh owner replays each segment and must reseal it byte-identically;
+  `verify_database` replays the result and the checker binds its rows to the final images.
+- Next: Lean codec for the seal with a round-trip proof; then the signature.
+
 Protected throughout (V.4): `tests/rightrail_financial_expected_cases.py`, Lean KAT/vector
 files, `artifacts/engine-correction-e911/vectors/`, the E911 pin, wire formats and digest
 domains, theorem statements, `tests/test_right_rail_financial_constitution_invariants.py`,
