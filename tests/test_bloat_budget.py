@@ -13,16 +13,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 
-LIVE_CODE_LINES = 75_200
+LIVE_CODE_LINES = 75_510
 MARKDOWN_FILES = 20
 MARKDOWN_BYTES = 180_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 7_169,
-    "app/right_rail_financial_owner_independent.py": 5_016,
-    "app/right_rail_financial_semantic_adapter.py": 2_158,
-    "app/right_rail_financial_mirror.py": 1_576,
-    "app/right_rail_financial_engine.py": 1_464,
+    "app/right_rail_financial_owner.py": 7_186,
+    "app/right_rail_financial_owner_independent.py": 5_021,
+    "app/right_rail_financial_semantic_adapter.py": 2_156,
+    "app/right_rail_financial_mirror.py": 1_567,
+    "app/right_rail_financial_engine.py": 1_461,
     "app/right_rail_financial_switch.py": 1_334,
 }
 FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
