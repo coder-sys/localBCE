@@ -87,7 +87,14 @@ in that archive that holds the raw record.
     from the unresolved set by identity, on release and on reject, under a new signed
     checkpoint; before releasing it checks exact keys, near keys and member-months,
     not-enrolled lines included, against the released set; a retry after an outage
-    must reuse the original identities.
+    must reuse the original identities. It must refuse to release an `ALREADY_DECIDED`
+    decision and bind each release to the exact reviewed row's identity. Before
+    releasing a stale-feed review it must re-run R1, R3 and R5 on fresh snapshots: that
+    review can hide known-bad facts. Corrections of held CAP member-months wait on it.
+    OPEN, fixed next on gate-rules-2 and REQUIRED before any token-path use: the
+    checkpoint must also take the gate's own new identities when the read set was
+    unusable; until then a rollback after an unresolved-set outage lets a later batch
+    ALLOW.
 
 ## What is written but has never run
 
