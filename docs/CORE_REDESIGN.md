@@ -71,8 +71,8 @@ Replaces the per-write whole-history size admission, which refused every write a
 now refused at export, not at write.
 
 Ceiling: 10,000 events, because Lean's `maxRows`/`maxRevision` (Types.lean) bound what the
-proof and checker accept. The owner refuses the 10,001st event, a revision or manifest members
-past 10,000 with `history_capacity` before commit; raising it is a Lean change.
+proof and checker accept. The owner refuses the 10,001st event, revision or row of any
+table with `history_capacity` before commit; raising it is a Lean change.
 
 - Domain `RR/GATE/SEGMENT/v1` (one format for Continuity and the gate): SHA3-512 over
   `RR/GATE/SEGMENT/v1\0` and length-prefixed parts; `projection_root = D("rows", rows)`,
