@@ -11,7 +11,8 @@ open BlindLedger.Gate
     `grants`, `now` and `payment` lines set context.  The `sig` lines are the
     only ML-DSA-87 triples treated as valid; the Python test verifies each of
     them with AWS-LC.  Accepted request, response and checkpoint lines list
-    the decoded fields they must yield.  The last line, `end N`, is the number
+    the decoded fields they must yield; a response line names the decoded
+    request it answers, and a `reissue` line checks `reissues` on two tokens.  The last line, `end N`, is the number
     of checked lines; anything else is a FAIL.  Test-only: this executable is
     never a release path. -/
 
@@ -71,9 +72,9 @@ def renderResponse (r : Response) : List String :=
 
 def renderCheckpoint (x : SignedCheckpoint) : List String :=
   let c := x.checkpoint
-  [text c.tenantId, text c.programId, toString c.seqFrom, toString c.seqTo, toString c.epoch,
+  [text c.tenantId, text c.programId, toString c.shardId, toString c.seqFrom, toString c.seqTo, toString c.epoch,
    toHex c.prevCheckpoint, toHex c.eventHead, toHex c.tokenRoot, toHex c.evidenceRoot,
-   toHex c.projections, toString c.count, toString c.createdAt, toHex (sha3 x.header)]
+   toHex c.engineRelease, toString c.count, toString c.createdAt, toHex (sha3 x.header)]
 
 structure Ctx where
   state : PayerState :=
@@ -81,6 +82,7 @@ structure Ctx where
   chains : List (Bytes × Bool) := []
   sigs : List (Bytes × Bytes × Bytes) := []
   payments : List (String × Payment) := []
+  requests : List (String × Request) := []
   expected : Option Nat := none
 
 def Ctx.crypto (x : Ctx) : Crypto where
@@ -143,13 +145,20 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
     pure (x, some ok)
   | ["release", expect, _, payment, bytes] =>
     stepped x expect (release x.crypto x.state (← List.lookup payment x.payments) (← hex bytes))
-  | "request" :: expect :: _ :: bytes :: rest =>
-    pure (x, some (← decoded expect renderRequest (decodeRequest (← hex bytes)) rest))
-  | "response" :: expect :: _ :: bytes :: rest =>
-    pure (x, some (← decoded expect renderResponse (decodeResponse sha3 (← hex bytes)) rest))
-  | ["decision-id", _, tenant, program, flow, payment, rev, out] =>
-    pure (x, some (decisionId sha3 (ascii tenant) (ascii program) (← flowNames.lookup flow)
-      (ascii payment) (← rev.toNat?) == (← hex out)))
+  | "request" :: expect :: name :: bytes :: rest =>
+    let r := decodeRequest (← hex bytes)
+    pure ({ x with requests := x.requests ++ (r.map (name, ·)).toList },
+      some (← decoded expect renderRequest r rest))
+  | "response" :: expect :: _ :: request :: bytes :: rest =>
+    let r ← List.lookup request x.requests
+    pure (x, some (← decoded expect renderResponse (decodeResponse r (← hex bytes)) rest))
+  | ["reissue", expect, _, old, new] =>
+    let a ← decodeToken (← hex old)
+    let b ← decodeToken (← hex new)
+    pure (x, some (reissues a.leaf b.leaf == (← verdict expect)))
+  | ["decision-id", _, tenant, program, payment, rev, out] =>
+    pure (x, some (decisionId sha3 (ascii tenant) (ascii program) (ascii payment) (← rev.toNat?) ==
+      (← hex out)))
   | ["input", _, request, readSet, out] =>
     pure (x, some (inputCommitment sha3 (← hex request) (← hex readSet) == (← hex out)))
   | ["lines-root", _, lines, out] => pure (x, some (linesRoot sha3 (← list hex lines) == (← hex out)))

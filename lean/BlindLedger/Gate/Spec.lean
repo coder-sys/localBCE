@@ -29,7 +29,8 @@ def maxRequestBytes : Nat := 8 * 1024 * 1024
 def maxTokenBytes : Nat := 4 * 1024
 def maxCheckpointBytes : Nat := 8 * 1024
 def mlDsa87Signature : Nat := 4627
-def clockSkew : Nat := 60
+/-- Seconds of clock difference a payer allows on either side of a token's lifetime. -/
+def clockSkew : Nat := 300
 /-- Seven days: the longest `expires_at - issued_at` a token may carry. -/
 def maxTokenLifetime : Nat := 7 * 24 * 3600
 def zeroDigest : Bytes := List.replicate digestBytes 0
@@ -39,8 +40,9 @@ def domain (name : String) : Bytes := ("RR/GATE/" ++ name ++ "/v1").toUTF8.toLis
 inductive Flow | FFS_CYCLE | FFS_CLAIM | CAP_820 | SDP | PLAN_PAY deriving DecidableEq, Repr
 inductive Outcome | ALLOW | HOLD | HUMAN_REVIEW | BLOCK deriving DecidableEq, Repr
 inductive Authority | OBSERVE | HOLD | TRANSFER deriving DecidableEq, Repr
-/-- `PAYMENT_ALREADY_DECIDED`: a new command key for a payment that already has
-    a decision; the existing token comes back.  Only a state official's
+/-- `PAYMENT_ALREADY_DECIDED`: a new command key, under any flow, for a payment
+    that already has a decision; the existing decision comes back, re-issued
+    (`reissues`) if its token is fenced or expired.  Only a state official's
     determination (a later format) changes a decision, never a re-decide. -/
 inductive Status | DECIDED | DUPLICATE | REJECTED | UNAVAILABLE | PAYMENT_ALREADY_DECIDED
   deriving DecidableEq, Repr
@@ -138,11 +140,13 @@ def flows : List Flow := [.FFS_CYCLE, .FFS_CLAIM, .CAP_820, .SDP, .PLAN_PAY]
 def Flow.tag : Flow → UInt8
   | .FFS_CYCLE => 1 | .FFS_CLAIM => 2 | .CAP_820 => 3 | .SDP => 4 | .PLAN_PAY => 5
 
-/-- One decision per payment and revision; the command key only maps to it. -/
-def decisionId (H : Bytes → Bytes) (tenant program : Bytes) (flow : Flow) (paymentId : Bytes)
-    (revision : Nat) : Bytes :=
-  H (domain "DECISION-ID" ++ identField tenant ++ identField program ++ [flow.tag] ++
-    identField paymentId ++ natBE 8 revision)
+
+/-- One decision per payment and revision.  Neither the command key nor the
+    flow is part of it, so a resubmission under another key or flow finds the
+    existing decision. -/
+def decisionId (H : Bytes → Bytes) (tenant program paymentId : Bytes) (revision : Nat) : Bytes :=
+  H (domain "DECISION-ID" ++ identField tenant ++ identField program ++ identField paymentId ++
+    natBE 8 revision)
 
 def inputCommitment (H : Bytes → Bytes) (request readSet : Bytes) : Bytes :=
   H (domain "INPUT" ++ natBE 4 request.length ++ request ++ readSet)
@@ -166,6 +170,7 @@ def treeRoot (H : Bytes → Bytes) (d : Bytes) : Nat → List Bytes → Bytes
 /-- Bounded depth: 65,535 lines or 1,000 batch leaves need at most 16 levels. -/
 def treeFuel : Nat := 17
 
+/-- A payment's lines root; it also fixes their number, so no line count travels. -/
 def linesRoot (H : Bytes → Bytes) (lines : List Bytes) : Bytes :=
   let d := domain "LINES-NODE"
   if lines.isEmpty then zeroDigest else treeRoot H d treeFuel (lines.map (leafHash H d))
@@ -254,11 +259,14 @@ def pRequest : P Request := do
 def decodeRequest : Bytes → Option Request := parse pRequest maxRequestBytes
 
 /-! ## #4 CHECKPOINT/v1 (ML-DSA-87 per-batch variant): header ‖ signature.
-    A payer fetches it once per batch. -/
+    A payer fetches it once per batch.  The ledger is sharded by member key and
+    each shard has its own seq; one shard's writer runs one engine release, so
+    a batch closes when the engine is upgraded. -/
 
 structure Checkpoint where
   tenantId : Bytes
   programId : Bytes
+  shardId : Nat
   seqFrom : Nat
   seqTo : Nat
   epoch : Nat
@@ -266,7 +274,7 @@ structure Checkpoint where
   eventHead : Bytes
   tokenRoot : Bytes
   evidenceRoot : Bytes
-  projections : Bytes
+  engineRelease : Bytes
   count : Nat
   createdAt : Nat
 
@@ -276,6 +284,7 @@ def pCheckpoint : P Checkpoint := do
   let _ ← nat 1 1 1
   let tenantId ← ident
   let programId ← ident
+  let shardId ← nat 4
   let seqFrom ← nat 8
   let seqTo ← nat 8
   let epoch ← nat 8
@@ -283,12 +292,14 @@ def pCheckpoint : P Checkpoint := do
   let eventHead ← digest
   let tokenRoot ← digest
   let evidenceRoot ← digest
-  let projections ← digest
+  let engineRelease ← digest
+  -- The state digest: defined in a later version; all zeros in v1.
+  expect zeroDigest
   let count ← nat 2 1 maxBatch
   let createdAt ← nat 8
   need (seqTo + 1 == seqFrom + count)
-  pure { tenantId, programId, seqFrom, seqTo, epoch, prevCheckpoint, eventHead, tokenRoot,
-         evidenceRoot, projections, count, createdAt }
+  pure { tenantId, programId, shardId, seqFrom, seqTo, epoch, prevCheckpoint, eventHead, tokenRoot,
+         evidenceRoot, engineRelease, count, createdAt }
 
 structure SignedCheckpoint where
   checkpoint : Checkpoint
@@ -302,82 +313,86 @@ def pSignedCheckpoint : P SignedCheckpoint := do
 
 def decodeCheckpoint : Bytes → Option SignedCheckpoint := parse pSignedCheckpoint maxCheckpointBytes
 
-/-! ## #3 TOKEN/v1: leaf ‖ path ‖ checkpoint_digest ‖ epoch_cert_id -/
+/-! ## #3 TOKEN/v1: leaf ‖ path ‖ checkpoint_digest.  The decision id is
+    recomputed from the leaf, the engine release is the checkpoint's, and the
+    checkpoint was verified under the installed certificate for its tenant and
+    epoch, so none of them travels in the token. -/
 
 structure Leaf where
   tenantId : Bytes
   programId : Bytes
+  shardId : Nat
   flow : Flow
-  decisionId : Bytes
   revision : Nat
-  supersedes : Option Bytes
   paymentId : Bytes
   payeeRef : Bytes
   amountCents : Nat
   period : Bytes
   linesRoot : Bytes
-  lineCount : Nat
   outcome : Outcome
   reasonCodes : List Bytes
   authority : Authority
   grantId : Bytes
   ruleVersion : Bytes
-  engineRelease : Bytes
   inputCommitment : Bytes
   epoch : Nat
   seq : Nat
   issuedAt : Nat
   expiresAt : Nat
+  deriving DecidableEq
 
 def pLeaf : P Leaf := do
   expect (domain "TOKEN")
   let tenantId ← ident
   let programId ← ident
+  let shardId ← nat 4
   let flow ← tag flows
-  let decisionId ← digest
   let revision ← nat 8
-  let supersedes ← if (← nat 1 0 1) == 1 then some <$> digest else pure none
   let paymentId ← ident
   let payeeRef ← ident
   let amountCents ← nat 8
   let period ← ident
   let linesRoot ← digest
-  let lineCount ← nat 2 0 maxLines
   let outcome ← tag outcomes
   let reasonCodes ← many code (← nat 1 0 maxReasonCodes)
   let authority ← tag authorities
   let grantId ← digest
   let ruleVersion ← digest
-  let engineRelease ← digest
   let inputCommitment ← digest
   let epoch ← nat 8
   let seq ← nat 8
   let issuedAt ← nat 8
   let expiresAt ← nat 8
-  need ((revision == 0) == supersedes.isNone)
-  need ((lineCount == 0) == (linesRoot == zeroDigest))
-  need (flow != .FFS_CLAIM || lineCount == 0)
+  need (flow != .FFS_CLAIM || linesRoot == zeroDigest)
   need (ascending reasonCodes)
   need (issuedAt ≤ expiresAt && expiresAt ≤ issuedAt + maxTokenLifetime)
-  pure { tenantId, programId, flow, decisionId, revision, supersedes, paymentId, payeeRef,
-         amountCents, period, linesRoot, lineCount, outcome, reasonCodes, authority, grantId,
-         ruleVersion, engineRelease, inputCommitment, epoch, seq, issuedAt, expiresAt }
+  pure { tenantId, programId, shardId, flow, revision, paymentId, payeeRef, amountCents, period, linesRoot,
+         outcome, reasonCodes, authority, grantId, ruleVersion, inputCommitment, epoch, seq,
+         issuedAt, expiresAt }
 
 structure Token where
   leaf : Leaf
   leafBytes : Bytes
   siblings : List Bytes
   checkpointDigest : Bytes
-  epochCertId : Bytes
 
 def pToken : P Token := do
   let (leaf, leafBytes) ← consumed pLeaf
   let siblings ← many digest (← nat 1 0 maxTokenPath)
   let checkpointDigest ← digest
-  let epochCertId ← digest
-  pure { leaf, leafBytes, siblings, checkpointDigest, epochCertId }
+  pure { leaf, leafBytes, siblings, checkpointDigest }
 
 def decodeToken : Bytes → Option Token := parse pToken maxTokenBytes
+
+/-- Re-issue (the model's `EmitToken`).  When the stored token of an
+    unreleased decision is fenced by a newer epoch or has expired, the gate
+    answers `DUPLICATE` or `PAYMENT_ALREADY_DECIDED` with the same decision
+    signed again: every leaf field equal except a later seq, an epoch no
+    older, and a new lifetime.  It never decides again. -/
+def reissues (old new : Leaf) : Bool :=
+  decide ({ new with epoch := old.epoch, seq := old.seq, issuedAt := old.issuedAt,
+                     expiresAt := old.expiresAt } = old) &&
+    old.epoch ≤ new.epoch && old.seq < new.seq
 
 /-! ## #2 DECIDE-RESPONSE/v1: outcome and reasons travel only inside the token -/
 
@@ -390,13 +405,17 @@ structure Response where
   rejectCode : Option RejectCode
   retryAfterMs : Option Nat
 
-/-- A carried token must decode, be in the response's scope, and carry the
-    decision id its own payment and revision determine. -/
-def pResponse (H : Bytes → Bytes) : P Response := do
+/-- The requester's decoder: the response answers its own request, and a
+    carried token is for the requested payment.  `PAYMENT_ALREADY_DECIDED`
+    carries the existing decision, whose flow may differ from the request's. -/
+def pResponse (r : Request) : P Response := do
   expect (domain "DECIDE-RESPONSE")
   let tenantId ← ident
   let programId ← ident
   let commandKey ← ident
+  need (tenantId == r.tenantId)
+  need (programId == r.programId)
+  need (commandKey == r.commandKey)
   let status ← tag statuses
   let base : Response := { tenantId, programId, commandKey, status, token := none,
                            rejectCode := none, retryAfterMs := none }
@@ -406,15 +425,16 @@ def pResponse (H : Bytes → Bytes) : P Response := do
     match decodeToken bytes with
     | none => fail
     | some t =>
-      let l := t.leaf
-      need (l.tenantId == tenantId && l.programId == programId &&
-        l.decisionId == decisionId H l.tenantId l.programId l.flow l.paymentId l.revision)
+      need (t.leaf.tenantId == r.tenantId)
+      need (t.leaf.programId == r.programId)
+      need (t.leaf.paymentId == r.paymentId)
+      need (status == .PAYMENT_ALREADY_DECIDED || t.leaf.flow == r.flow)
       pure { base with token := some bytes }
   | .REJECTED => pure { base with rejectCode := some (← tag rejectCodes) }
   | .UNAVAILABLE => pure { base with retryAfterMs := some (← nat 4 1 maxRetryAfterMs) }
 
-def decodeResponse (H : Bytes → Bytes) : Bytes → Option Response :=
-  parse (pResponse H) (maxTokenBytes + 1024)
+def decodeResponse (r : Request) : Bytes → Option Response :=
+  parse (pResponse r) (maxTokenBytes + 1024)
 
 /-! ## The payer: certificates and checkpoints once, then one release decision per payment -/
 
@@ -441,8 +461,9 @@ structure Stored where
   digest : Bytes
   checkpoint : Checkpoint
 
-/-- What a release is recorded against: tenant, program, flow and payment id. -/
-abbrev PayKey := Bytes × Bytes × Flow × Bytes
+/-- What a release is recorded against: tenant, program and payment id.  Flow
+    is not part of it, so a payment is released at most once across flows. -/
+abbrev PayKey := Bytes × Bytes × Bytes
 
 /-- Payer-side state.  `fence` is per tenant; `certs` hold only chain-verified
     certificates; `grants` only active grants. -/
@@ -464,18 +485,27 @@ def installCert (c : Crypto) (s : PayerState) (e : EpochCert) : Option PayerStat
     some { s with certs := e :: s.certs, fence := raiseFence s.fence e.tenantId e.epoch }
   else none
 
-/-- Admit a signed checkpoint: one ML-DSA-87 verification per batch, under an
-    installed certificate for the checkpoint's tenant and epoch. -/
+/-- Two different checkpoints fork when they cover a common seq of one
+    tenant, shard and epoch.  Shards of one tenant share epochs but not seqs. -/
+def forks (a b : Stored) : Bool :=
+  a.digest != b.digest && a.checkpoint.tenantId == b.checkpoint.tenantId &&
+    a.checkpoint.shardId == b.checkpoint.shardId && a.checkpoint.epoch == b.checkpoint.epoch &&
+    a.checkpoint.seqFrom ≤ b.checkpoint.seqTo && b.checkpoint.seqFrom ≤ a.checkpoint.seqTo
+
+/-- Store a signed checkpoint: one ML-DSA-87 verification per batch, under an
+    installed certificate for the checkpoint's tenant and epoch (check 2).  A
+    checkpoint that forks a stored one is refused. -/
 def storeCheckpoint (c : Crypto) (s : PayerState) (bytes : Bytes) : Option PayerState :=
   match decodeCheckpoint bytes with
   | none => none
   | some x =>
-    if s.certs.any fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
-        c.sigOk e.publicKey x.header x.signature then
-      some { s with checkpoints := ⟨c.hash x.header, x.checkpoint⟩ :: s.checkpoints }
+    let new : Stored := ⟨c.hash x.header, x.checkpoint⟩
+    if (s.certs.any fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
+        c.sigOk e.publicKey x.header x.signature) && !s.checkpoints.any (forks new) then
+      some { s with checkpoints := new :: s.checkpoints }
     else none
 
-/-- The payment the payer is about to release. -/
+/-- The payment the payer is about to release, from the payer's own records. -/
 structure Payment where
   tenantId : Bytes
   programId : Bytes
@@ -486,34 +516,28 @@ structure Payment where
   period : Bytes
   lines : List Bytes
 
-def payKey (t : Token) : PayKey := (t.leaf.tenantId, t.leaf.programId, t.leaf.flow, t.leaf.paymentId)
+def payKey (t : Token) : PayKey := (t.leaf.tenantId, t.leaf.programId, t.leaf.paymentId)
 
-/-- Check 2: the named epoch certificate is installed and names the token's epoch and tenant. -/
-def certValid (s : PayerState) (t : Token) : Bool :=
-  match s.certs.find? (·.certId == t.epochCertId) with
-  | some e => e.epoch == t.leaf.epoch && e.tenantId == t.leaf.tenantId
-  | none => false
+/-- Check 2: the token names a stored checkpoint (verified under its tenant's epoch certificate). -/
+def batchOf (s : PayerState) (t : Token) : Option Stored :=
+  s.checkpoints.find? (·.digest == t.checkpointDigest)
 
-/-- Check 3: the named checkpoint was stored, is the token's own batch, and
+/-- Check 3: the checkpoint is the token's own batch, on its own shard, and
     the Merkle path hashes the leaf to its `token_root`. -/
-def batchSigned (c : Crypto) (s : PayerState) (t : Token) : Bool :=
-  match s.checkpoints.find? (·.digest == t.checkpointDigest) with
-  | some st =>
-    let cp := st.checkpoint
-    cp.tenantId == t.leaf.tenantId && cp.programId == t.leaf.programId &&
-      cp.epoch == t.leaf.epoch && cp.seqFrom ≤ t.leaf.seq &&
-      verifyPath c.hash (domain "MERKLE-NODE") t.leafBytes (t.leaf.seq - cp.seqFrom) cp.count
-        t.siblings cp.tokenRoot
-  | none => false
+def inBatch (c : Crypto) (cp : Checkpoint) (t : Token) : Bool :=
+  cp.tenantId == t.leaf.tenantId && cp.programId == t.leaf.programId &&
+    cp.shardId == t.leaf.shardId && cp.epoch == t.leaf.epoch && cp.seqFrom ≤ t.leaf.seq &&
+    verifyPath c.hash (domain "MERKLE-NODE") t.leafBytes (t.leaf.seq - cp.seqFrom) cp.count
+      t.siblings cp.tokenRoot
 
 /-- Check 4: epoch ≥ the tenant's fence. -/
 def aboveFence (s : PayerState) (t : Token) : Bool := s.fence t.leaf.tenantId ≤ t.leaf.epoch
 
-/-- Check 5: not expired, allowing `clockSkew` seconds. -/
-def unexpired (s : PayerState) (t : Token) : Bool := s.now < t.leaf.expiresAt + clockSkew
+/-- Check 5: issued and not expired, each allowing `clockSkew` seconds. -/
+def unexpired (s : PayerState) (t : Token) : Bool :=
+  t.leaf.issuedAt ≤ s.now + clockSkew && s.now < t.leaf.expiresAt + clockSkew
 
-/-- Check 6: the payment matches field for field and its lines hash to
-    `lines_root` (which also fixes their number). -/
+/-- Check 6: the payment matches field for field and its lines hash to `lines_root`. -/
 def paymentMatches (c : Crypto) (p : Payment) (t : Token) : Bool :=
   let l := t.leaf
   l.tenantId == p.tenantId && l.programId == p.programId && l.flow == p.flow &&
@@ -523,10 +547,10 @@ def paymentMatches (c : Crypto) (p : Payment) (t : Token) : Bool :=
 /-- Check 7. -/
 def allows (t : Token) : Bool := t.leaf.outcome == .ALLOW
 
-/-- Check 8: an active grant approves this rule version and engine release. -/
-def granted (s : PayerState) (t : Token) : Bool :=
+/-- Check 8: an active grant approves this rule version and the batch's engine release. -/
+def granted (s : PayerState) (cp : Checkpoint) (t : Token) : Bool :=
   s.grants.any fun g => g.grantId == t.leaf.grantId &&
-    g.ruleVersions.contains t.leaf.ruleVersion && g.engineReleases.contains t.leaf.engineRelease
+    g.ruleVersions.contains t.leaf.ruleVersion && g.engineReleases.contains cp.engineRelease
 
 /-- Check 9. -/
 def unreleased (s : PayerState) (t : Token) : Bool := !s.released.contains (payKey t)
@@ -535,19 +559,19 @@ def unreleased (s : PayerState) (t : Token) : Bool := !s.released.contains (payK
 def verifyToken (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) : Bool :=
   match decodeToken bytes with
   | none => false
-  | some t => certValid s t && batchSigned c s t && aboveFence s t && unexpired s t &&
-      paymentMatches c p t && allows t && granted s t && unreleased s t
+  | some t =>
+    match batchOf s t with
+    | none => false
+    | some st => inBatch c st.checkpoint t && aboveFence s t && unexpired s t &&
+        paymentMatches c p t && allows t && granted s st.checkpoint t && unreleased s t
 
-/-- The payer's release on the token bytes `verifyToken` accepts, as
-    `PayerRelease` in `docs/formal/gate_failover/gate_failover.tla`: record the
-    payment key and raise the tenant's fence to the token's epoch. -/
+/-- The payer's release on the token bytes `verifyToken` accepts: record the
+    payment key.  The fence needs no raise: on every reachable state it already
+    equals the token's epoch (`verifyToken_fence_eq_epoch`), which is where
+    `PayerRelease` in `docs/formal/gate_failover/gate_failover.tla` puts it. -/
 def release (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) : Option PayerState :=
   match decodeToken bytes with
   | none => none
-  | some t =>
-    if verifyToken c s p bytes then
-      some { s with fence := raiseFence s.fence t.leaf.tenantId t.leaf.epoch,
-                    released := payKey t :: s.released }
-    else none
+  | some t => if verifyToken c s p bytes then some { s with released := payKey t :: s.released } else none
 
 end BlindLedger.Gate

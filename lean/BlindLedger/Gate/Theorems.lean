@@ -4,25 +4,29 @@ namespace BlindLedger.Gate
 
 /-! What the payer's steps and the Merkle path guarantee, for every `Crypto`. -/
 
-/-- The nine payer checks, as one proposition. -/
-def NineChecks (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) (t : Token) : Prop :=
-  decodeToken bytes = some t ∧ certValid s t = true ∧ batchSigned c s t = true ∧
+/-- The nine payer checks, as one proposition; check 2 names the stored batch `st`. -/
+def Checks (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) (t : Token) (st : Stored) :
+    Prop :=
+  decodeToken bytes = some t ∧ batchOf s t = some st ∧ inBatch c st.checkpoint t = true ∧
     aboveFence s t = true ∧ unexpired s t = true ∧ paymentMatches c p t = true ∧
-    allows t = true ∧ granted s t = true ∧ unreleased s t = true
+    allows t = true ∧ granted s st.checkpoint t = true ∧ unreleased s t = true
 
 /-- `verifyToken` accepts exactly when all nine checks hold. -/
 theorem verifyToken_iff (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) :
-    verifyToken c s p bytes = true ↔ ∃ t, NineChecks c s p bytes t := by
-  unfold verifyToken NineChecks
+    verifyToken c s p bytes = true ↔ ∃ t st, Checks c s p bytes t st := by
+  unfold verifyToken Checks
   cases h : decodeToken bytes with
   | none => simp
-  | some t => simp [Bool.and_eq_true, and_assoc]
+  | some t =>
+    cases hb : batchOf s t with
+    | none => simp [hb]
+    | some st => simp [hb, Bool.and_eq_true, and_assoc]
 
 /-- No accepted token is below its tenant's fence (the model's `NoFencedTokenAccepted`). -/
 theorem verifyToken_epoch_ge_fence {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes}
     (h : verifyToken c s p bytes = true) :
     ∃ t, decodeToken bytes = some t ∧ s.fence t.leaf.tenantId ≤ t.leaf.epoch := by
-  obtain ⟨t, hd, -, -, h4, -⟩ := (verifyToken_iff c s p bytes).1 h
+  obtain ⟨t, -, hd, -, -, h4, -⟩ := (verifyToken_iff c s p bytes).1 h
   exact ⟨t, hd, by simpa [aboveFence] using h4⟩
 
 theorem raiseFence_ge {f : Bytes → Nat} {tenant : Bytes} {e : Nat} (x : Bytes) :
@@ -32,6 +36,12 @@ theorem raiseFence_ge {f : Bytes → Nat} {tenant : Bytes} {e : Nat} (x : Bytes)
   · exact Nat.le_max_left _ _
   · exact Nat.le_refl _
 
+theorem raiseFence_self (f : Bytes → Nat) (tenant : Bytes) (e : Nat) :
+    e ≤ raiseFence f tenant e tenant := by
+  unfold raiseFence
+  rw [if_pos rfl]
+  exact Nat.le_max_right _ _
+
 /-- Installing a certificate never lowers a fence and lifts its tenant's to
     at least its epoch (the model's `PayerLearnFence`). -/
 theorem installCert_raises_fence {c : Crypto} {s s' : PayerState} {e : EpochCert}
@@ -40,12 +50,78 @@ theorem installCert_raises_fence {c : Crypto} {s s' : PayerState} {e : EpochCert
   unfold installCert at h
   split at h
   · obtain rfl := Option.some.inj h
-    refine ⟨?_, fun x => raiseFence_ge x⟩
-    show e.epoch ≤ raiseFence s.fence e.tenantId e.epoch e.tenantId
-    unfold raiseFence
-    rw [if_pos rfl]
-    exact Nat.le_max_right _ _
+    exact ⟨raiseFence_self _ _ _, fun x => raiseFence_ge x⟩
   · simp at h
+
+/-- The payer invariant: each tenant's fence is at or above every installed
+    certificate's epoch, and every stored checkpoint was verified under an
+    installed certificate for its tenant and epoch. -/
+def Coherent (s : PayerState) : Prop :=
+  (∀ e ∈ s.certs, e.epoch ≤ s.fence e.tenantId) ∧
+    ∀ x ∈ s.checkpoints, ∃ e ∈ s.certs,
+      e.tenantId = x.checkpoint.tenantId ∧ e.epoch = x.checkpoint.epoch
+
+theorem coherent_empty {s : PayerState} (hc : s.certs = []) (hk : s.checkpoints = []) :
+    Coherent s := by
+  simp [Coherent, hc, hk]
+
+theorem installCert_coherent {c : Crypto} {s s' : PayerState} {e : EpochCert}
+    (hs : Coherent s) (h : installCert c s e = some s') : Coherent s' := by
+  unfold installCert at h
+  split at h
+  · obtain rfl := Option.some.inj h
+    refine ⟨fun e' he' => ?_, fun x hx => ?_⟩
+    · rcases List.mem_cons.1 he' with rfl | he'
+      · exact raiseFence_self _ _ _
+      · exact Nat.le_trans (hs.1 e' he') (raiseFence_ge _)
+    · obtain ⟨e', he', h1, h2⟩ := hs.2 x hx
+      exact ⟨e', List.mem_cons_of_mem _ he', h1, h2⟩
+  · simp at h
+
+theorem storeCheckpoint_coherent {c : Crypto} {s s' : PayerState} {bytes : Bytes}
+    (hs : Coherent s) (h : storeCheckpoint c s bytes = some s') : Coherent s' := by
+  unfold storeCheckpoint at h
+  cases hd : decodeCheckpoint bytes with
+  | none => rw [hd] at h; simp at h
+  | some x =>
+    rw [hd] at h
+    dsimp only at h
+    split at h
+    · rename_i hany
+      simp only [Bool.and_eq_true] at hany
+      obtain rfl := Option.some.inj h
+      refine ⟨hs.1, fun y hy => ?_⟩
+      rcases List.mem_cons.1 hy with rfl | hy
+      · obtain ⟨e, he, hm⟩ := List.any_eq_true.1 hany.1
+        simp only [Bool.and_eq_true, beq_iff_eq] at hm
+        exact ⟨e, he, hm.1.1, hm.1.2⟩
+      · exact hs.2 y hy
+    · simp at h
+
+theorem release_coherent {c : Crypto} {s s' : PayerState} {p : Payment} {bytes : Bytes}
+    (hs : Coherent s) (h : release c s p bytes = some s') : Coherent s' := by
+  unfold release at h
+  split at h
+  · simp at h
+  · split at h
+    · obtain rfl := Option.some.inj h
+      exact hs
+    · simp at h
+
+/-- On a coherent state an accepted token's epoch is exactly its tenant's
+    fence.  So `release` raises nothing: the model's `PayerRelease` sets
+    `fence' = t.ep`, which already holds. -/
+theorem verifyToken_fence_eq_epoch {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes}
+    {t : Token} (hs : Coherent s) (h : verifyToken c s p bytes = true)
+    (hd : decodeToken bytes = some t) : s.fence t.leaf.tenantId = t.leaf.epoch := by
+  obtain ⟨t', st, hd', hb, hin, hf, -⟩ := (verifyToken_iff c s p bytes).1 h
+  obtain rfl : t' = t := Option.some.inj (hd'.symm.trans hd)
+  obtain ⟨e, he, ht, hep⟩ := hs.2 st (List.mem_of_find?_eq_some hb)
+  simp only [inBatch, Bool.and_eq_true, beq_iff_eq] at hin
+  simp only [aboveFence, decide_eq_true_eq] at hf
+  have hle := hs.1 e he
+  rw [ht, hin.1.1.1.1.1, hep, hin.1.1.2] at hle
+  exact Nat.le_antisymm hf hle
 
 /-- `release` happens exactly on the bytes `verifyToken` accepts. -/
 theorem release_isSome (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) :
@@ -55,20 +131,9 @@ theorem release_isSome (c : Crypto) (s : PayerState) (p : Payment) (bytes : Byte
   | none => simp [verifyToken, hd]
   | some t => by_cases hv : verifyToken c s p bytes = true <;> simp [hv]
 
-/-- The fence never moves down (the model's `EpochMonotone` on the payer side). -/
-theorem release_fence_monotone {c : Crypto} {s s' : PayerState} {p : Payment} {bytes : Bytes}
-    (h : release c s p bytes = some s') (x : Bytes) : s.fence x ≤ s'.fence x := by
-  unfold release at h
-  split at h
-  · simp at h
-  · split at h
-    · obtain rfl := Option.some.inj h
-      exact raiseFence_ge x
-    · simp at h
-
 /-- At most one release per payment (the model's `AtMostOnceRelease`): after a
-    release, every token for the same tenant, program, flow and payment id is
-    rejected. -/
+    release, every token for the same tenant, program and payment id, under
+    any flow, is rejected. -/
 theorem release_at_most_once {c : Crypto} {s s' : PayerState} {p p' : Payment}
     {bytes bytes' : Bytes} {t t' : Token} (h : release c s p bytes = some s')
     (hd : decodeToken bytes = some t) (hd' : decodeToken bytes' = some t')
@@ -79,19 +144,8 @@ theorem release_at_most_once {c : Crypto} {s s' : PayerState} {p p' : Payment}
   split at h
   · obtain rfl := Option.some.inj h
     simp [verifyToken, hd', unreleased, hk]
+    split <;> rfl
   · simp at h
-
-/-- Honest but weak: `verifyPath` compares one fold against one root, so a
-    path cannot pass under two different roots.  This says nothing about the
-    hash; the reduction below is the security statement. -/
-theorem verifyPath_rejects_other_root {H : Bytes → Bytes} {d x : Bytes} {i n : Nat}
-    {path : List Bytes} {r r' : Bytes} (h : verifyPath H d x i n path r = true) (hr : r' ≠ r) :
-    verifyPath H d x i n path r' = false := by
-  cases h' : verifyPath H d x i n path r' with
-  | false => rfl
-  | true =>
-    simp only [verifyPath, Bool.and_eq_true, beq_iff_eq] at h h'
-    exact absurd (Option.some.inj (h'.2.symm.trans h.2)) hr
 
 /-- Whatever `pathCollision` returns is a collision: distinct inputs, one output. -/
 theorem pathCollision_sound {H : Bytes → Bytes} {d : Bytes} (fuel : Nat) :

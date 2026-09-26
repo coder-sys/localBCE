@@ -39,9 +39,11 @@ LINES_NODE: Final = b"RR/GATE/LINES-NODE/v1\x00"
 FLOWS: Final = ("FFS_CYCLE", "FFS_CLAIM", "CAP_820", "SDP", "PLAN_PAY")
 OUTCOMES: Final = ("ALLOW", "HOLD", "HUMAN_REVIEW", "BLOCK")
 AUTHORITIES: Final = ("OBSERVE", "HOLD", "TRANSFER")
-# PAYMENT_ALREADY_DECIDED: a new command key for a payment that already has a
-# decision; the existing token is returned.  Only a state official's
-# determination (a later format) can change a decision, never a re-decide.
+# PAYMENT_ALREADY_DECIDED: a new command key, under any flow, for a payment
+# that already has a decision; the existing decision is returned.  A fenced or
+# expired unreleased decision is re-issued (same leaf, current epoch, new seq
+# and lifetime; Lean ``reissues``), never re-decided.  Only a state official's
+# determination (a later format) can change a decision.
 STATUSES: Final = ("DECIDED", "DUPLICATE", "REJECTED", "UNAVAILABLE", "PAYMENT_ALREADY_DECIDED")
 TOKEN_STATUSES: Final = ("DECIDED", "DUPLICATE", "PAYMENT_ALREADY_DECIDED")
 REJECT_CODES: Final = ("MALFORMED", "COMMAND_KEY_CONFLICT")
@@ -59,7 +61,7 @@ MAX_TOKEN_PATH: Final = 10  # ceil(log2(MAX_BATCH))
 MAX_TOKEN_LIFETIME: Final = 7 * 24 * 3600  # seconds from issued_at to expires_at
 MAX_RETRY_AFTER_MS: Final = 3_600_000
 MAX_REQUEST_BYTES: Final = 8 * 1024 * 1024
-MAX_TOKEN_BYTES: Final = 4 * 1024  # the largest canonical token is 4,051 bytes
+MAX_TOKEN_BYTES: Final = 4 * 1024  # the largest canonical token is 3,796 bytes
 ML_DSA_87_SIGNATURE: Final = 4627
 ML_DSA_87_PUBLIC_KEY: Final = 2592
 
@@ -114,13 +116,12 @@ def _sorted_unique(values: Sequence[object], label: str) -> None:
 # ---------------------------------------------------------------- #12 digests
 
 
-def decision_id(tenant_id: str, program_id: str, flow: str, payment_id: str, revision: int) -> bytes:
-    """SHA3-512(RR/GATE/DECISION-ID/v1 || tenant || program || flow || payment_id || revision).
-    One decision per payment and revision; the command key only maps to it."""
+def decision_id(tenant_id: str, program_id: str, payment_id: str, revision: int) -> bytes:
+    """SHA3-512(RR/GATE/DECISION-ID/v1 || tenant || program || payment_id || revision).
+    One decision per payment and revision, whatever the command key or flow."""
     w = _Writer(DECISION_ID)
     w.ident(tenant_id, "tenant_id")
     w.ident(program_id, "program_id")
-    w.tag(FLOWS, flow, "flow")
     w.ident(payment_id, "payment_id")
     w.int(revision, 8, "revision")
     return sha3_512(bytes(w.out))
@@ -211,6 +212,7 @@ def encode_decide_request(request: DecideRequest) -> bytes:
 class Checkpoint:
     tenant_id: str
     program_id: str
+    shard_id: int
     seq_from: int
     seq_to: int
     epoch: int
@@ -218,12 +220,12 @@ class Checkpoint:
     event_head: bytes
     token_root: bytes
     evidence_root: bytes
-    projections_digest: bytes
+    engine_release: bytes
     count: int
     created_at: int
 
 
-_CHECKPOINT_DIGESTS = ("prev_checkpoint_digest", "event_head", "token_root", "evidence_root", "projections_digest")
+_CHECKPOINT_DIGESTS = ("prev_checkpoint_digest", "event_head", "token_root", "evidence_root", "engine_release")
 
 
 def encode_checkpoint_header(cp: Checkpoint) -> bytes:
@@ -232,11 +234,13 @@ def encode_checkpoint_header(cp: Checkpoint) -> bytes:
     w.int(SIG_ML_DSA_87_BATCH, 1, "sig_alg")
     w.ident(cp.tenant_id, "tenant_id")
     w.ident(cp.program_id, "program_id")
+    w.int(cp.shard_id, 4, "shard_id")
     w.int(cp.seq_from, 8, "seq_from")
     w.int(cp.seq_to, 8, "seq_to")
     w.int(cp.epoch, 8, "epoch")
     for name in _CHECKPOINT_DIGESTS:
         w.digest(getattr(cp, name), name)
+    w.out += ZERO_DIGEST  # the state digest: defined in a later version; all zeros in v1
     w.int(cp.count, 2, "count", low=1, high=MAX_BATCH)
     w.int(cp.created_at, 8, "created_at")
     if cp.seq_to - cp.seq_from + 1 != cp.count:
@@ -262,25 +266,24 @@ def encode_checkpoint(cp: Checkpoint, signature: bytes) -> bytes:
 
 @dataclass(frozen=True)
 class TokenLeaf:
-    """Leaf fields in design order; ``decision_id`` is derived, never supplied."""
+    """Leaf fields in wire order.  The decision id is recomputed from the leaf
+    and the engine release is the checkpoint's, so neither travels here."""
 
     tenant_id: str
     program_id: str
+    shard_id: int
     flow: str
     revision: int
-    supersedes: bytes | None
     payment_id: str
     payee_ref: str
     amount_cents: int
     period: str
     lines_root: bytes
-    line_count: int
     outcome: str
     reason_codes: tuple[str, ...]
     authority: str
     grant_id: bytes
     rule_version: bytes
-    engine_release: bytes
     input_commitment: bytes
     epoch: int
     seq: int
@@ -293,7 +296,6 @@ class Token:
     leaf: TokenLeaf
     siblings: tuple[bytes, ...]
     checkpoint_digest: bytes
-    epoch_cert_id: bytes
 
 
 def encode_token_leaf(leaf: TokenLeaf) -> bytes:
@@ -301,23 +303,15 @@ def encode_token_leaf(leaf: TokenLeaf) -> bytes:
     w = _Writer(TOKEN)
     w.ident(leaf.tenant_id, "tenant_id")
     w.ident(leaf.program_id, "program_id")
+    w.int(leaf.shard_id, 4, "shard_id")
     w.tag(FLOWS, leaf.flow, "flow")
-    w.digest(decision_id(leaf.tenant_id, leaf.program_id, leaf.flow, leaf.payment_id, leaf.revision), "decision_id")
     w.int(leaf.revision, 8, "revision")
-    if (leaf.revision == 0) != (leaf.supersedes is None):
-        _fail("supersedes")
-    if leaf.supersedes is not None:
-        w.out.append(1)
-        w.digest(leaf.supersedes, "supersedes")
-    else:
-        w.out.append(0)
     w.ident(leaf.payment_id, "payment_id")
     w.ident(leaf.payee_ref, "payee_ref")
     w.int(leaf.amount_cents, 8, "amount_cents")
     w.ident(leaf.period, "period")
     w.digest(leaf.lines_root, "lines_root")
-    w.int(leaf.line_count, 2, "line_count", high=MAX_LINES)
-    if (leaf.line_count == 0) != (leaf.lines_root == ZERO_DIGEST) or (leaf.flow == "FFS_CLAIM" and leaf.line_count):
+    if leaf.flow == "FFS_CLAIM" and leaf.lines_root != ZERO_DIGEST:
         _fail("lines_root")
     w.tag(OUTCOMES, leaf.outcome, "outcome")
     if type(leaf.reason_codes) is not tuple:
@@ -327,7 +321,7 @@ def encode_token_leaf(leaf: TokenLeaf) -> bytes:
         w.ident(code, "reason_code", _CODE)
     _sorted_unique(leaf.reason_codes, "reason_codes")
     w.tag(AUTHORITIES, leaf.authority, "authority")
-    for name in ("grant_id", "rule_version", "engine_release", "input_commitment"):
+    for name in ("grant_id", "rule_version", "input_commitment"):
         w.digest(getattr(leaf, name), name)
     for name in ("epoch", "seq", "issued_at", "expires_at"):
         w.int(getattr(leaf, name), 8, name)
@@ -337,8 +331,8 @@ def encode_token_leaf(leaf: TokenLeaf) -> bytes:
 
 
 def encode_token(token: Token) -> bytes:
-    """leaf || path || checkpoint_digest || epoch_cert_id.  The signed checkpoint
-    travels separately, once per batch (``encode_checkpoint``)."""
+    """leaf || path || checkpoint_digest.  The signed checkpoint travels
+    separately, once per batch (``encode_checkpoint``)."""
     w = _Writer(encode_token_leaf(token.leaf))
     if type(token.siblings) is not tuple:
         _fail("path")
@@ -346,7 +340,6 @@ def encode_token(token: Token) -> bytes:
     for sibling in token.siblings:
         w.digest(sibling, "path")
     w.digest(token.checkpoint_digest, "checkpoint_digest")
-    w.digest(token.epoch_cert_id, "epoch_cert_id")
     return bytes(w.out)
 
 
@@ -356,32 +349,34 @@ def sign_batch(
     prev_checkpoint_digest: bytes,
     event_head: bytes,
     evidence_root: bytes,
-    projections_digest: bytes,
+    engine_release: bytes,
     created_at: int,
-    epoch_cert_id: bytes,
     sign: Callable[[bytes], bytes],
 ) -> tuple[Checkpoint, bytes, list[Token]]:
     """One checkpoint and one ML-DSA-87 signature for a whole batch (the batching
     invariant); each payment's token is its leaf plus a Merkle path to token_root.
-    Leaves must be one writer's consecutive commits: same scope and epoch, seq
-    increasing by one, and at most one leaf per payment.  ``sign`` is the only
+    Leaves must be one shard writer's consecutive commits: same scope, shard,
+    epoch and engine release, seq increasing by one, and at most one leaf per payment id
+    across flows.  ``sign`` is the only
     signing call (see right_rail_gate_signer)."""
     if not 1 <= len(leaves) <= MAX_BATCH:
         _fail("batch")
     first = leaves[0]
     for index, leaf in enumerate(leaves):
-        if (leaf.tenant_id, leaf.program_id, leaf.epoch, leaf.seq) != (first.tenant_id, first.program_id, first.epoch, first.seq + index):
+        if (leaf.tenant_id, leaf.program_id, leaf.shard_id, leaf.epoch, leaf.seq) != (
+                first.tenant_id, first.program_id, first.shard_id, first.epoch, first.seq + index):
             _fail("batch")
-    if len({(leaf.flow, leaf.payment_id) for leaf in leaves}) != len(leaves):
+    if len({leaf.payment_id for leaf in leaves}) != len(leaves):
         _fail("batch_payment")
     root, paths = merkle_tree(MERKLE_NODE, [encode_token_leaf(leaf) for leaf in leaves])
     checkpoint = Checkpoint(
-        first.tenant_id, first.program_id, first.seq, first.seq + len(leaves) - 1, first.epoch,
-        prev_checkpoint_digest, event_head, root, evidence_root, projections_digest, len(leaves), created_at,
+        first.tenant_id, first.program_id, first.shard_id, first.seq, first.seq + len(leaves) - 1, first.epoch,
+        prev_checkpoint_digest, event_head, root, evidence_root, engine_release,
+        len(leaves), created_at,
     )
     digest = checkpoint_digest(checkpoint)
     signature = sign(encode_checkpoint_header(checkpoint))
-    return checkpoint, signature, [Token(leaf, tuple(path), digest, epoch_cert_id) for leaf, path in zip(leaves, paths)]
+    return checkpoint, signature, [Token(leaf, tuple(path), digest) for leaf, path in zip(leaves, paths)]
 
 
 # -------------------------------------------------------- #2 DECIDE-RESPONSE/v1
@@ -400,7 +395,8 @@ class DecideResponse:
 
 def encode_decide_response(response: DecideResponse) -> bytes:
     """Outcome and reason codes travel inside the token; the response never
-    carries a second copy of them."""
+    carries a second copy of them.  The requester's Lean decoder binds the
+    response to its request."""
     w = _Writer(DECIDE_RESPONSE)
     w.ident(response.tenant_id, "tenant_id")
     w.ident(response.program_id, "program_id")
@@ -410,8 +406,6 @@ def encode_decide_response(response: DecideResponse) -> bytes:
     if carries != (response.status in TOKEN_STATUSES, response.status == "REJECTED", response.status == "UNAVAILABLE"):
         _fail("status")
     if response.token is not None:
-        if (response.token.leaf.tenant_id, response.token.leaf.program_id) != (response.tenant_id, response.program_id):
-            _fail("token_binding")
         token = encode_token(response.token)
         w.int(len(token), 4, "token", high=MAX_TOKEN_BYTES)
         w.out += token
