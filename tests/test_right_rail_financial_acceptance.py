@@ -43,6 +43,7 @@ from app.right_rail_financial_owner import (
     SyntheticTrustedAuthority,
 )
 from app.right_rail_financial_mirror import FinancialMirror
+from app import right_rail_financial_owner_independent as independent
 from app.right_rail_financial_owner_independent import (
     IndependentFinancialError,
     continuity_package_digest,
@@ -70,6 +71,7 @@ _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
 _EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
     "6858FC3684D1243EB12F2FC038AD8D2107239E92C520C388B7D5719741FE13D2"
 )
+_RETIRED_CORRECTION_ARTIFACT_SHA256 = "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
 _EXPECTED_PRIVATE_INDEX_SET_VERSION = 1
 _EXPECTED_PRIVATE_INDEXES = (
     (
@@ -5045,26 +5047,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:event-kind$"):
             self._make_owner(path=store.path)
 
-    def test_a_rehashed_row_image_cannot_change_the_accepted_acknowledgment(self) -> None:
-        # The acknowledgment event names the reference it accepted; the stored row must match it even
-        # when the row and its history image are edited together and the chain is re-hashed.
-        store = self._build_base_for_correction()
-        self._prepare_acknowledged(store)
-        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+    @staticmethod
+    def _rehash_history(path: Path, edit) -> int:
+        """Apply ``edit`` to every event payload and re-hash the chain, as a writer with file access could."""
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
             triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'").fetchall()
             for name, _sql in triggers:
                 connection.execute(f'DROP TRIGGER "{name}"')
-            ref = connection.execute("SELECT acknowledgment_ref FROM action_outbox WHERE status='ACKNOWLEDGED'").fetchone()[0]
-            forged = ref[:-1] + ("8" if ref.endswith("9") else "9")
-            connection.execute("UPDATE action_outbox SET acknowledgment_ref=? WHERE acknowledgment_ref=?", (forged, ref))
             events = connection.execute("SELECT event_sequence,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,previous_head,committed_at_ms FROM financial_events ORDER BY event_sequence").fetchall()
             previous, edited = bytes(events[0][7]), 0
             for sequence, aggregate_type, aggregate_id, kind, before, after, payload_json, _previous, committed_at in events:
                 payload = json.loads(payload_json)
-                for image in payload.get("rows", ()):
-                    values = image.get("row") or image.get("set")
-                    if image["table"] == "action_outbox" and values.get("acknowledgment_ref") == ref:
-                        values["acknowledgment_ref"], edited = forged, edited + 1
+                edited += bool(edit(payload))
                 payload_bytes = owner._canonical(payload)
                 payload_digest = owner._digest(owner._EVENT_DOMAIN, payload_bytes)
                 header = b"".join(value.to_bytes(8, "big") for value in (before, after, committed_at))
@@ -5075,11 +5069,81 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
             for _name, sql in triggers:
                 connection.execute(sql)
-        self.assertGreaterEqual(edited, 1)
+        return edited
+
+    def test_a_rehashed_row_image_cannot_change_the_accepted_acknowledgment(self) -> None:
+        # The acknowledgment event names the reference it accepted; the stored row must match it even
+        # when the row and its history image are edited together and the chain is re-hashed.
+        store = self._build_base_for_correction()
+        self._prepare_acknowledged(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            ref = connection.execute("SELECT acknowledgment_ref FROM action_outbox WHERE status='ACKNOWLEDGED'").fetchone()[0]
+            forged = ref[:-1] + ("8" if ref.endswith("9") else "9")
+            connection.execute("UPDATE action_outbox SET acknowledgment_ref=? WHERE acknowledgment_ref=?", (forged, ref))
+
+        def forge(payload: dict) -> bool:
+            images = [image.get("row") or image.get("set") for image in payload.get("rows", ()) if image["table"] == "action_outbox"]
+            for values in images:
+                if values.get("acknowledgment_ref") == ref:
+                    values["acknowledgment_ref"] = forged
+            return any(values.get("acknowledgment_ref") == forged for values in images)
+
+        self.assertGreaterEqual(self._rehash_history(store.path, forge), 1)
         with self.assertRaisesRegex(IndependentFinancialError, "^replay:acknowledgment$"):
             self._assert_verified(store)
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:acknowledgment$"):
             self._make_owner(path=store.path)
+
+    def _correction_decided_by_engine(self, sha256: str) -> FinancialOwner:
+        # A correction as an earlier pinned engine committed it: the follow-up names that engine.
+        store = self._build_base_for_correction()
+        self._prepare_rejected(store)
+
+        def name_engine(payload: dict) -> bool:
+            artifact = payload.get("correction_followup", {}).get("artifact")
+            if artifact is not None:
+                artifact["sha256"] = sha256
+            return artifact is not None
+
+        self.assertEqual(self._rehash_history(store.path, name_engine), 1)
+        return store
+
+    def test_a_correction_decided_by_a_retired_engine_pin_still_opens(self) -> None:
+        store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
+        self._assert_verified(store)
+        outputs = self._make_owner(path=store.path).correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)
+        self.assertEqual(outputs["followup_status"], "CURRENT")
+        self.assertEqual(outputs["corporate_support"]["artifact"]["sha256"], _RETIRED_CORRECTION_ARTIFACT_SHA256)
+
+    def test_a_correction_naming_an_unknown_engine_is_refused(self) -> None:
+        store = self._correction_decided_by_engine("AB" * 32)
+        with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-followup-artifact-binding$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-followup-artifact-binding$"):
+            self._make_owner(path=store.path)
+
+    def test_a_retired_pin_registry_with_an_extra_line_is_refused(self) -> None:
+        store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
+        registry = self._path("RETIRED_PINS")
+        registry.write_bytes(independent.RETIRED_PINS_PATH.read_bytes() + b"AB" * 32 + b"\t2026-09-26\tforged\tforged\n")
+        with patch.object(independent, "RETIRED_PINS_PATH", registry):
+            with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-retired-pins$"):
+                self._assert_verified(store)
+            with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-retired-pins$"):
+                self._make_owner(path=store.path)
+
+    def test_a_retired_engine_pin_never_decides_a_new_correction(self) -> None:
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        retired = replace(
+            _correction_transition_test_release(workspace=Path(self.temp_dir.name) / "correction-engine-workspace"),
+            executable_sha256=bytes.fromhex(_RETIRED_CORRECTION_ARTIFACT_SHA256),
+        )
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^correction_transition_failed$"):
+            self._reject(self._make_owner(path=store.path, correction_transition_release=retired), claim_id)
+        self.assertEqual(self._durable_counts(store.path), counts)
 
     def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:
         # Final review of 75a5517, finding 5: publish opened the case after the first evaluation,

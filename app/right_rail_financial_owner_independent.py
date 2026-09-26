@@ -96,6 +96,21 @@ PRIVATE_INDEX_DEFS_V1 = {
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARTIFACT_SHA256 = "88D853961AB127EE33C65A57F6E35D03244FB5CCE2067F4A0FDF592ECC730992"
+RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
+RETIRED_PINS_SHA256 = "0a1b27008f1633f7ce37b2db98c300af6463a6dcdc21b041881279886116e832"
+
+
+def retired_correction_artifact(sha256: object) -> bool:
+    """True for an engine a re-pin retired: valid for committed history, never for new work (append-only, digest-pinned)."""
+    try:
+        registry = RETIRED_PINS_PATH.read_bytes()
+    except OSError:
+        registry = b""
+    if hashlib.sha256(registry).hexdigest() != RETIRED_PINS_SHA256:
+        _fail("history:correction-retired-pins")
+    return sha256 in [line.split(b"\t", 1)[0].decode("ascii") for line in registry.splitlines()]
+
+
 CORRECTION_FOLLOWUP_DEPENDENCIES = [
     "OBLIGATION_REVISION",
     "CURRENT_EVALUATION_RECEIPT",
@@ -1366,7 +1381,7 @@ def _verify_correction_followup_records(
         if (
             artifact["contract"] != CORRECTION_TRANSITION_OPERATION
             or _integer(artifact["version"], "history:correction-followup-artifact-version", minimum=1, maximum=MAX_ROWS) != 1
-            or artifact["sha256"] != CORRECTION_TRANSITION_ARTIFACT_SHA256
+            or artifact["sha256"] != CORRECTION_TRANSITION_ARTIFACT_SHA256 and not retired_correction_artifact(artifact["sha256"])
         ):
             _fail("history:correction-followup-artifact-binding")
 

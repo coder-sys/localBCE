@@ -5830,6 +5830,7 @@ class FinancialOwner:
         ):
             return "REVIEW_REQUIRED"
         from app import right_rail_financial_engine as financial_engine
+        from app.right_rail_financial_owner_independent import retired_correction_artifact
 
         is_digest = _is_upper_hex128
 
@@ -5873,6 +5874,7 @@ class FinancialOwner:
             or type(artifact.get("version")) is not int
             or artifact.get("version") != 1
             or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
+            and not retired_correction_artifact(artifact.get("sha256"))
             or source.get("action_id") != payload.get("action_id")
             or source.get("outbox_action_id") != payload.get("action_id")
             or source.get("resulting_evaluation_id") != payload.get("evaluation_id")
@@ -6011,6 +6013,7 @@ class FinancialOwner:
         }
         artifact = accepted_basis.get("artifact") if type(accepted_basis) is dict else None
         from app import right_rail_financial_engine as financial_engine
+        from app.right_rail_financial_owner_independent import retired_correction_artifact
 
         if (
             type(artifact) is not dict
@@ -6019,6 +6022,7 @@ class FinancialOwner:
             or type(artifact.get("version")) is not int
             or artifact.get("version") != 1
             or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
+            and not retired_correction_artifact(artifact.get("sha256"))
         ):
             artifact = None
         failure = {

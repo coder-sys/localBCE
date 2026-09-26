@@ -32,6 +32,14 @@ with the SHA-256 above. `blind_financial --correction-transition-kat` passed
 The request is the BLFCMD01 request of the previous pin (commit `f1de262`,
 `artifacts/engine-correction-e911/`), whose format is unchanged.
 
+## Retired pins
+
+`RETIRED_PINS` lists engines a re-pin retired, one per line: SHA-256, retire
+date, retiring commit, reason (tab-separated, append-only). A correction
+follow-up already committed under one of them stays valid history; only the
+pin above decides new work. The independent checker pins the file's SHA-256,
+so appending a line means updating `RETIRED_PINS_SHA256` too.
+
 ## Status
 
 Synthetic evidence only. Non-activating and non-payment:
