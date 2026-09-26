@@ -604,6 +604,14 @@ def _digest(domain: bytes, *parts: bytes) -> bytes:
     return digest.digest()
 
 
+def _group(rows: Iterable[sqlite3.Row], *columns: str) -> dict[object, list[sqlite3.Row]]:
+    """Rows by their raw column values, in row order: a dict lookup equal to filtering every row with ==."""
+    groups: dict[object, list[sqlite3.Row]] = {}
+    for row in rows:
+        groups.setdefault(tuple(row[column] for column in columns) if len(columns) > 1 else row[columns[0]], []).append(row)
+    return groups
+
+
 def _duplicate_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
@@ -2571,13 +2579,14 @@ def _verify_evidence(
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "evidence")
     evidence: dict[str, sqlite3.Row] = {}
+    obligation_items = {str(item["item_id"]) for item in obligations.values()}
     for row in rows:
         evidence_id = _id(row["evidence_id"], "evidence:id")
         if evidence_id in evidence:
             _fail("evidence:duplicate")
         evidence[evidence_id] = row
         item_id = _id(row["item_id"], "evidence:item")
-        if item_id not in items or item_id not in {str(item["item_id"]) for item in obligations.values()}:
+        if item_id not in items or item_id not in obligation_items:
             _fail("evidence:item-binding")
         _kind(row["kind"], "evidence:kind")
         _id(row["common_origin_id"], "evidence:common-origin")
@@ -3032,13 +3041,14 @@ def _verify_conflicts(
         keys.add(key)
     # Every payment confirmation that is not the persisted payment itself must
     # be either an equal duplicate or an explicitly visible amount conflict.
+    obligations_by_item, payments_by_origin = _group(obligations.values(), "item_id"), _group(payments.values(), "obligation_id", "common_origin_id")
     for candidate_id, candidate in evidence.items():
         if candidate["kind"] != "PAYMENT_CONFIRMATION":
             continue
-        obligation = next((row for row in obligations.values() if row["item_id"] == candidate["item_id"]), None)
+        obligation = obligations_by_item.get(candidate["item_id"], [None])[0]
         if obligation is None:
             _fail("conflict:orphan-confirmation")
-        matching = [row for row in payments.values() if row["obligation_id"] == obligation["obligation_id"] and row["common_origin_id"] == candidate["common_origin_id"]]
+        matching = payments_by_origin.get((obligation["obligation_id"], candidate["common_origin_id"]), [])
         if not matching:
             _fail("conflict:unaccounted-confirmation")
         payment = matching[0]
@@ -3682,6 +3692,8 @@ def _verify_projections(
     determinations_by_obligation: dict[str, list[sqlite3.Row]] = {}
     for row in determinations.values():
         determinations_by_obligation.setdefault(str(row["obligation_id"]), []).append(row)
+    payments_by, claims_by, evidence_by, conflicts_by, actions_by = (_group(rows.values(), column) for rows, column in (
+        (payments, "obligation_id"), (claims, "obligation_id"), (evidence, "item_id"), (conflicts, "obligation_id"), (actions, "obligation_id")))
     for obligation_id, obligation in obligations.items():
         population = populations[str(obligation["population_id"])]
         pack = packs[str(population["pack_id"])]
@@ -3689,8 +3701,8 @@ def _verify_projections(
         calculation, adjustment = _control_pack_policy(pack["calculation_rule_id"], pack["adjustment_rule_id"], authorized_roles, _values_json(pack["expected_tests_json"], "pack:tests"))
         if calculation != "PER_RECIPIENT" or adjustment != "AUTHORIZED_OFFSET":
             _fail("projection:policy")
-        active_payments = [row for row in payments.values() if row["obligation_id"] == obligation_id and row["active"] == 1]
-        obligation_claims = [row for row in claims.values() if row["obligation_id"] == obligation_id]
+        active_payments = [row for row in payments_by.get(obligation_id, []) if row["active"] == 1]
+        obligation_claims = claims_by.get(obligation_id, [])
         cash = _sum_cents([int(row["amount_cents"]) for row in active_payments], "projection:cash")
         claimed = _sum_cents([int(row["amount_cents"]) for row in obligation_claims if row["status"] in {"CLAIMED", "AUTHORIZED"}], "projection:claimed")
         lawful = _sum_cents([int(row["amount_cents"]) for row in obligation_claims if row["status"] == "AUTHORIZED"], "projection:lawful")
@@ -3698,16 +3710,15 @@ def _verify_projections(
         owed = int(obligation["owed_cents"])
         shortfall = max(owed - total, 0)
         overage = max(total - owed, 0)
-        item_evidence = [row for row in evidence.values() if row["item_id"] == obligation["item_id"]]
-        evidence_count = len(item_evidence)
-        conflict_count = sum(1 for row in conflicts.values() if row["obligation_id"] == obligation_id)
+        evidence_count = len(evidence_by.get(obligation["item_id"], []))
+        conflict_count = len(conflicts_by.get(obligation_id, []))
         verification = "CONFLICT_VISIBLE" if conflict_count else ("SUPPORTED" if evidence_count else "MISSING_EVIDENCE")
         completion = _completion_time(obligation, active_payments, determinations_by_obligation.get(obligation_id, []))
         timely = int(completion is not None and completion <= obligation["due_at_ms"])
         amount_satisfied = int(total >= owed)
         cash_satisfied = int(cash >= owed)
         reporting_complete = int(obligation["reporting_complete"])
-        action_rows = [row for row in actions.values() if row["obligation_id"] == obligation_id]
+        action_rows = actions_by.get(obligation_id, [])
         delivery = "NONE" if not action_rows else str(
             max(action_rows, key=lambda row: (row["revision"], row["action_id"]))["status"]
         )
