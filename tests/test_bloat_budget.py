@@ -13,12 +13,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 
-LIVE_CODE_LINES = 76_531
+LIVE_CODE_LINES = 78_019
 MARKDOWN_FILES = 20
 MARKDOWN_BYTES = 180_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 7_318,
+    "app/right_rail_financial_owner.py": 7_321,
     "app/right_rail_financial_owner_independent.py": 5_075,
     "app/right_rail_financial_semantic_adapter.py": 2_156,
     "app/right_rail_financial_mirror.py": 1_541,

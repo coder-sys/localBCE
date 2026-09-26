@@ -3987,12 +3987,8 @@ class FinancialOwner:
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
             if existing is not None:  # existing_id is None here: that retry path returned or failed above
                 if int(existing["amount_cents"]) == amount_cents:
-                    (recorded_link,) = connection.execute(
-                        "SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' "
-                        "AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')=?",
-                        (obligation["obligation_id"], existing["payment_id"]),
-                    ).fetchone()
-                    if pays_action_id is not None and pays_action_id != recorded_link:
+                    recorded_link = connection.execute("SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')=?", (obligation["obligation_id"], existing["payment_id"])).fetchone()[0]
+                    if pays_action_id not in (None, recorded_link):  # a re-sent source may not change or add its link
                         _fail(FinancialConflictError, "payment_request_conflict")
                     now_ms = self._now()
                     if evidence_status == "INSERTED":
