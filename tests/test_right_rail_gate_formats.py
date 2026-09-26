@@ -24,14 +24,15 @@ from app import right_rail_gate_signer as signer
 VECTORS = Path(__file__).resolve().parent / "gate_vectors" / "gate_v1.vectors"
 TENANT, OTHER, PROGRAM, PERIOD = "nc-dhhs", "nc-other", "medicaid-ffs", "2026-09"
 EPOCH, NOW, EXPIRES = 7, 1_790_000_000, 1_790_086_400
-D = [gate.sha3_512(bytes([i])) for i in range(14)]
+D = [gate.sha3_512(bytes([i])) for i in range(17)]
 SHARDS, SHARD, OTHER_SHARDS = 8, 3, 4  # shard counts, and the shard of the main batch
 # Epoch certificates: id, epoch, tenant, shard count.  Each has its own test-only key.
 CERTS = {"e7": (D[5], EPOCH, TENANT, SHARDS), "e6": (D[8], EPOCH - 1, TENANT, SHARDS), "other": (D[9], EPOCH, OTHER, OTHER_SHARDS),
          "bad": (D[10], EPOCH, TENANT, SHARDS), "reshard": (D[12], EPOCH, TENANT, 2 * SHARDS),
          "no-shards": (D[13], EPOCH, "nc-third", 0), "other8": (D[11], EPOCH + 1, OTHER, OTHER_SHARDS),
-         "e8": (D[1], EPOCH + 1, TENANT, SHARDS)}
-CHECKED = ("cert", "checkpoint", "token", "release", "request", "response", "reissue", "decision-id", "input",
+         "e8": (D[1], EPOCH + 1, TENANT, SHARDS), "huge-shards": (D[14], EPOCH, "nc-third", 2**32),
+         "reshard-e9": (D[15], EPOCH + 2, TENANT, 2 * SHARDS), "no-shards-e9": (D[16], EPOCH + 2, TENANT, 0)}
+CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "decision-id", "input",
            "lines-root")
 
 
@@ -130,6 +131,7 @@ def build_vectors(sign) -> str:
     cert("bad", "reject", "bad")
     cert("reshard", "reject")  # a second shard count for the tenant: v1 has no resharding
     cert("no-shards", "reject")
+    cert("huge-shards", "reject")  # shard counts are u32
     add(f"grants {h(D[3])} {h(D[4])} {h(D[6])}")
     add(f"now {NOW}")
 
@@ -186,8 +188,10 @@ def build_vectors(sign) -> str:
     ):
         add(f"checkpoint reject {name} {h(data)}")
     # A second decision for pay-0004 and pay-0000 under CAP_820, as a gate that
-    # keyed decisions by flow would sign it (review scenarios A and B)
-    rogue_cp, _, rogue = _batch([_leaf(4, 45, flow="CAP_820"), _leaf(0, 46, flow="CAP_820")],
+    # keyed decisions by flow would sign it (review scenarios A and B), and one
+    # for pay-0001 under an edited member key that routes to the same shard
+    rogue_cp, _, rogue = _batch([_leaf(4, 45, flow="CAP_820"), _leaf(0, 46, flow="CAP_820"),
+                                 _leaf(1, 47, member_key=member(91))],
                                 lambda m: sign("e7", m), gate.checkpoint_digest(cp))
     checkpoint_line("cross-flow", rogue_cp, signed(rogue_cp))
     # Shard 7 decides pay-0004 again under a mistyped member key that routes
@@ -197,8 +201,8 @@ def build_vectors(sign) -> str:
     checkpoint_line("shard-7", typo_cp, signed(typo_cp))
 
     # #3 TOKEN/v1: the batch, then one reject per check, each one field away
-    def payment_line(name: str, leaf: gate.TokenLeaf) -> None:
-        add(f"payment {name} {TENANT} {PROGRAM} {leaf.flow} {leaf.payment_id} {h(leaf.member_key)} {leaf.payee_ref} "
+    def payment_line(name: str, leaf: gate.TokenLeaf, verdict: str = "accept") -> None:
+        add(f"payment {verdict} {name} {TENANT} {PROGRAM} {leaf.flow} {leaf.payment_id} {h(leaf.member_key)} {leaf.payee_ref} "
             f"{leaf.amount_cents} {PERIOD} {hexes(_lines(int(leaf.payment_id[4:])))}")
 
     raw = [gate.encode_token(t) for t in tokens]
@@ -211,8 +215,9 @@ def build_vectors(sign) -> str:
                                ("payment-id", 3, "pay-0009"), ("member-key", 4, h(member(90))),
                                ("payee", 5, "payee-9"), ("amount", 6, "124999"), ("period", 7, "2026-10"),
                                ("cap", 2, "CAP_820")):
-        add(f"payment p0-{name} {' '.join(p0[:index] + [value] + p0[index + 1 :])}")
-    add(f"payment p1-lines {TENANT} {PROGRAM} FFS_CYCLE pay-0001 {h(member(1))} payee-1 125001 {PERIOD} {h(b'line:1:9:units=1')}")
+        verdict = "member_key_changed" if name == "member-key" else "accept"
+        add(f"payment {verdict} p0-{name} {' '.join(p0[:index] + [value] + p0[index + 1 :])}")
+    add(f"payment accept p1-lines {TENANT} {PROGRAM} FFS_CYCLE pay-0001 {h(member(1))} payee-1 125001 {PERIOD} {h(b'line:1:9:units=1')}")
     t0, leaf0 = tokens[0], gate.encode_token_leaf(tokens[0].leaf)
 
     def lifetime(expires: int) -> bytes:
@@ -245,6 +250,13 @@ def build_vectors(sign) -> str:
     ]
     for name, payment, data in isolated:
         add(f"token reject decode-ok {name} {payment} {h(data)}")
+    # Each payment's member key was pinned at its first command.  The payer's
+    # record edited to another key is refused, and a token under that key never
+    # verifies, whether it routes elsewhere (pay-0004's HOLD on shard 3 re-decided
+    # ALLOW on shard 7) or to the same shard
+    for name, token in (("other-shard", typo[0]), ("same-shard", rogue[2])):
+        payment_line(f"member-changed-{name}", token.leaf, "member_key_changed")
+        add(f"token reject decode-ok member-changed-{name} member-changed-{name} {h(gate.encode_token(token))}")
     for name, grant in (("grant-id", (D[0], D[4], D[6])), ("grant-rule", (D[3], D[0], D[6])),
                         ("grant-release", (D[3], D[4], D[0]))):
         add(f"grants {' '.join(map(h, grant))}")
@@ -255,22 +267,6 @@ def build_vectors(sign) -> str:
         add(f"now {now}")
         add(f"token {verdict} decode-ok {name} p1 {h(raw[1])}")
     add(f"now {NOW}")
-    # A fork on shard 5 blocks every release under (tenant, shard 5, epoch 7),
-    # the batch it forks and any later one; shard 3 is unaffected
-    fork_cp, _, fork = _batch([_leaf(20, 1, shard=5, member_key=member(20, 5)),
-                               _leaf(21, 2, shard=5, member_key=member(21, 5))], lambda m: sign("e7", m))
-    later_cp, _, (later,) = _batch([_leaf(22, 3, shard=5, member_key=member(22, 5))], lambda m: sign("e7", m),
-                                   gate.checkpoint_digest(fork_cp))
-    checkpoint_line("fork-base", fork_cp, signed(fork_cp))
-    payment_line("p20", fork[0].leaf)
-    add(f"token accept decode-ok before-fork p20 {h(gate.encode_token(fork[0]))}")
-    for name, c in (("fork-same-seq", replace(fork_cp, token_root=_flip(fork_cp.token_root, 0, 0x01))),
-                    ("fork-overlapping-seq", replace(fork_cp, seq_from=2, seq_to=3))):
-        add(f"checkpoint fork {name} {h(signed(c))}")
-    add(f"token reject decode-ok forked-batch p20 {h(gate.encode_token(fork[0]))}")
-    checkpoint_line("after-fork", later_cp, signed(later_cp))
-    payment_line("p22", later.leaf)
-    add(f"token reject decode-ok forked-later-batch p22 {h(gate.encode_token(later))}")
     cross = h(gate.encode_token(rogue[1]))
     add(f"token accept decode-ok cross-flow-before-release p0-cap {cross}")
     add(f"release accept t0 p0 {h(raw[0])}")
@@ -279,8 +275,28 @@ def build_vectors(sign) -> str:
     add(f"token reject decode-ok cross-flow-after-release p0-cap {cross}")
     cert("other8")
     add(f"token accept decode-ok other-tenant-fence p1 {h(raw[1])}")
+    # A fork on shard 5 (overlapping seqs, or a neighbour on either side that
+    # does not link to it) blocks tenant and epoch on every shard: no later
+    # checkpoint of the epoch is stored and shard 3 releases nothing more
+    fork_cp, _, fork = _batch([_leaf(20, 1, shard=5, member_key=member(20, 5)),
+                               _leaf(21, 2, shard=5, member_key=member(21, 5))], lambda m: sign("e7", m))
+    later_cp = _batch([_leaf(22, 3, shard=5, member_key=member(22, 5))], lambda m: b"",
+                      gate.checkpoint_digest(fork_cp))[0]
+    earlier_cp = _batch([_leaf(23, 0, shard=5, member_key=member(23, 5))], lambda m: b"")[0]
+    checkpoint_line("fork-base", fork_cp, signed(fork_cp))
+    payment_line("p20", fork[0].leaf)
+    add(f"token accept decode-ok before-fork p20 {h(gate.encode_token(fork[0]))}")
+    for name, c in (("fork-unlinked-next", replace(later_cp, prev_checkpoint_digest=D[0])),
+                    ("fork-unlinked-previous", earlier_cp),
+                    ("fork-same-seq", replace(fork_cp, token_root=_flip(fork_cp.token_root, 0, 0x01))),
+                    ("fork-overlapping-seq", replace(fork_cp, seq_from=2, seq_to=3))):
+        add(f"checkpoint fork {name} {h(signed(c))}")
+    add(f"token reject decode-ok forked-batch p20 {h(gate.encode_token(fork[0]))}")
+    add(f"checkpoint reject linked-after-fork {h(signed(later_cp))}")
+    add(f"token reject decode-ok shard-3-after-fork p2 {h(raw[2])}")
+    add(f"release reject shard-3-after-fork p3 {h(raw[3])}")
+    # Failover recovers: epoch 8 is not blocked
     cert("e8")
-    add(f"token reject decode-ok stale-epoch p1 {h(raw[1])}")
     # Re-issue: the fenced, unreleased t1 comes back as the same decision at epoch 8
     new = replace(tokens[1].leaf, epoch=EPOCH + 1, seq=47, issued_at=NOW, expires_at=NOW + 2 * 86_400)
     e8_cp, _, (t1_e8,) = _batch([new], lambda m: sign("e8", m), gate.checkpoint_digest(rogue_cp))
@@ -289,6 +305,11 @@ def build_vectors(sign) -> str:
     # The grant moves to engine D[7]: the re-issued leaf still carries D[6], its deciding release
     add(f"grants {h(D[3])} {h(D[4])} {h(D[7])}")
     add(f"token reject decode-ok reissued-revoked-engine p1 {h(gate.encode_token(t1_e8))}")
+    add(f"grants {h(D[3])} {h(D[4])} {h(D[6])}")
+    # A newer certificate with a valid chain raises the fence even when refused
+    for name in ("reshard-e9", "no-shards-e9"):
+        cert(name, "reject")
+        add(f"token reject decode-ok fenced-by-{name} p1 {h(gate.encode_token(t1_e8))}")
     for verdict, name, latest, leaf in (
         ("accept", "same-decision-e8", 1, new), ("reject", "re-decided", 1, replace(new, outcome="HOLD")),
         ("reject", "other-engine", 1, replace(new, engine_release=D[7])),
@@ -363,7 +384,7 @@ def _verify(pk: bytes, message: bytes, signature: bytes) -> bool:
 class GoldenVectorTests(unittest.TestCase):
     def test_python_reproduces_every_vector_byte(self) -> None:
         recorded = {(r[1], r[2]): bytes.fromhex(r[3]) for r in _records() if r[0] == "sig"}
-        self.assertEqual(len(recorded), 18)
+        self.assertEqual(len(recorded), 20)
         pks = {name: signer.public_key(seed(name)).hex() for name in CERTS}
         self.assertEqual(build_vectors(lambda key, m: recorded[(pks[key], m.hex())]), VECTORS.read_text("ascii"))
 

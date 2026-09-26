@@ -8,8 +8,9 @@ namespace BlindLedger.Gate
 
     These decoders are the specification; `app/right_rail_gate_codec.py` only
     produces bytes.  A payer installs epoch certificates and stores each signed
-    checkpoint once; `verifyToken` is then its whole per-payment release
-    decision, one predicate over eleven checks.  Hashing, the epoch-certificate
+    checkpoint once, and pins each payment's member key when it first sends a
+    command for it; `verifyToken` is then its whole per-payment release
+    decision, one predicate over twelve checks.  Hashing, the epoch-certificate
     chain (format #5, not yet built) and ML-DSA-87 verification enter only
     through `Crypto`, so every statement here holds for any instantiation.
     Synthetic, nonpayment, activation=false. -/
@@ -272,8 +273,12 @@ def decodeRequest : Bytes → Option Request := parse pRequest maxRequestBytes
 
 /-! ## #4 CHECKPOINT/v1 (ML-DSA-87 per-batch variant): header ‖ signature.
     A payer fetches it once per batch.  The ledger is sharded by member key
-    (`shardOf`) and each shard has its own seq.  The engine release travels in
-    each leaf, since a re-issued leaf keeps the release that decided it. -/
+    (`shardOf`).  Normative: there is one seq counter per (tenant, shard,
+    epoch), shared by all of the tenant's programs, so within one tenant, shard
+    and epoch no two checkpoints cover a common seq whatever their program, and
+    `prevCheckpoint` is the digest of the checkpoint ending at `seqFrom - 1`
+    (`forks` checks both).  The engine release travels in each leaf, since a
+    re-issued leaf keeps the release that decided it. -/
 
 structure Checkpoint where
   tenantId : Bytes
@@ -468,6 +473,12 @@ structure EpochCert where
   /-- The tenant's shard count (u32, at least 1), the same in all its certificates. -/
   shardCount : Nat
 
+/-- Why the payer refuses to send a command.  `member_key_changed`: the
+    payment's member key differs from the one pinned by its first command;
+    only a state official's determination (a later format, not built) could
+    change it. -/
+inductive Refusal | member_key_changed deriving DecidableEq, Repr
+
 structure Crypto where
   hash : Bytes → Bytes
   /-- KEY-CERT (#5) chain validity; supplied until that format exists. -/
@@ -493,7 +504,8 @@ abbrev PayKey := Bytes × Bytes × Bytes
 
 /-- Payer-side state.  `fence` is per tenant; `certs` hold only chain-verified
     certificates; `grants` only active grants; `forked` holds each detected
-    fork as (stored side, new side), both signed checkpoints as evidence. -/
+    fork as (stored side, new side), both signed checkpoints as evidence;
+    `pins` holds each payment's member key from its first command. -/
 structure PayerState where
   fence : Bytes → Nat
   now : Nat
@@ -502,30 +514,54 @@ structure PayerState where
   grants : List Grant
   released : List PayKey
   forked : List (Stored × Stored)
+  pins : List (PayKey × Bytes)
 
 def raiseFence (fence : Bytes → Nat) (tenant : Bytes) (epoch : Nat) : Bytes → Nat :=
   fun x => if x = tenant then max (fence x) epoch else fence x
 
-/-- Install a chain-verified epoch certificate; a newer epoch raises that
-    tenant's fence (the model's `PayerLearnFence`).  Its shard count must be
-    at least 1 and equal every installed one of its tenant: v1 has no resharding. -/
-def installCert (c : Crypto) (s : PayerState) (e : EpochCert) : Option PayerState :=
-  if c.certChainOk e && 0 < e.shardCount &&
-      s.certs.all (fun x => x.tenantId != e.tenantId || x.shardCount == e.shardCount) then
-    some { s with certs := e :: s.certs, fence := raiseFence s.fence e.tenantId e.epoch }
-  else none
+/-- An epoch certificate the payer can install: its shard count is a u32 of
+    at least 1 and equals every installed one of its tenant (v1 has no
+    resharding). -/
+def fits (s : PayerState) (e : EpochCert) : Bool :=
+  0 < e.shardCount && e.shardCount < 2 ^ 32 &&
+    s.certs.all (fun x => x.tenantId != e.tenantId || x.shardCount == e.shardCount)
 
-/-- Two different checkpoints fork when they cover a common seq of one
-    tenant, shard and epoch.  Shards of one tenant share epochs but not seqs. -/
+/-- Install an epoch certificate: the new state and whether it was installed.
+    A valid chain raises the tenant's fence to its epoch (the model's
+    `PayerLearnFence`) even when the certificate does not fit, so a refused
+    newer certificate fails closed until a fitting one arrives. -/
+def installCert (c : Crypto) (s : PayerState) (e : EpochCert) : PayerState × Bool :=
+  if c.certChainOk e then
+    ({ s with certs := if fits s e then e :: s.certs else s.certs,
+              fence := raiseFence s.fence e.tenantId e.epoch }, fits s e)
+  else (s, false)
+
+/-- The tenant's shard count, from its installed certificates (all equal). -/
+def shardCountOf (s : PayerState) (tenant : Bytes) : Option Nat :=
+  (s.certs.find? (·.tenantId == tenant)).map (·.shardCount)
+
+/-- `b` starts right after `a` ends but does not name `a` as its previous checkpoint. -/
+def misLinked (a b : Stored) : Bool :=
+  a.checkpoint.seqTo + 1 == b.checkpoint.seqFrom && b.checkpoint.prevCheckpoint != a.digest
+
+/-- Two different checkpoints of one tenant, shard and epoch fork when they
+    cover a common seq or one follows the other without linking to it. -/
 def forks (a b : Stored) : Bool :=
   a.digest != b.digest && a.checkpoint.tenantId == b.checkpoint.tenantId &&
     a.checkpoint.shardId == b.checkpoint.shardId && a.checkpoint.epoch == b.checkpoint.epoch &&
-    a.checkpoint.seqFrom ≤ b.checkpoint.seqTo && b.checkpoint.seqFrom ≤ a.checkpoint.seqTo
+    (a.checkpoint.seqFrom ≤ b.checkpoint.seqTo && b.checkpoint.seqFrom ≤ a.checkpoint.seqTo ||
+      misLinked a b || misLinked b a)
+
+/-- A recorded fork blocks its tenant and epoch on every shard: a fork on one
+    shard means the epoch's key or writer cannot be trusted on any. -/
+def blocked (s : PayerState) (tenant : Bytes) (epoch : Nat) : Bool :=
+  s.forked.any fun f => f.1.checkpoint.tenantId == tenant && f.1.checkpoint.epoch == epoch
 
 /-- Store a signed checkpoint: one ML-DSA-87 verification per batch, under an
     installed certificate for the checkpoint's tenant and epoch (check 2).  A
     verified checkpoint that forks a stored one is not stored; the pair is
-    recorded, which blocks release for its tenant, shard and epoch (check 11). -/
+    recorded, which blocks its tenant and epoch (check 11), and no other
+    checkpoint of a blocked tenant and epoch is stored. -/
 def storeCheckpoint (c : Crypto) (s : PayerState) (bytes : Bytes) : Option PayerState :=
   match decodeCheckpoint bytes with
   | none => none
@@ -535,7 +571,9 @@ def storeCheckpoint (c : Crypto) (s : PayerState) (bytes : Bytes) : Option Payer
         c.sigOk e.publicKey x.header x.signature then
       match s.checkpoints.find? (forks new) with
       | some old => some { s with forked := (old, new) :: s.forked }
-      | none => some { s with checkpoints := new :: s.checkpoints }
+      | none =>
+        if blocked s x.checkpoint.tenantId x.checkpoint.epoch then none
+        else some { s with checkpoints := new :: s.checkpoints }
     else none
 
 /-- The payment the payer is about to release, from the payer's own records. -/
@@ -551,6 +589,15 @@ structure Payment where
   lines : List Bytes
 
 def payKey (t : Token) : PayKey := (t.leaf.tenantId, t.leaf.programId, t.leaf.paymentId)
+
+/-- The payer pins a payment's member key when it first sends a command for
+    it, before any response (so a lost HOLD response opens no gap), and runs
+    every later command through the same check.  A pin is never changed. -/
+def pinPayment (s : PayerState) (p : Payment) : Except Refusal PayerState :=
+  let k : PayKey := (p.tenantId, p.programId, p.paymentId)
+  match s.pins.lookup k with
+  | none => .ok { s with pins := (k, p.memberKey) :: s.pins }
+  | some m => if m == p.memberKey then .ok s else .error .member_key_changed
 
 /-- Check 2: the token names a stored checkpoint (verified under its tenant's epoch certificate). -/
 def batchOf (s : PayerState) (t : Token) : Option Stored :=
@@ -583,8 +630,7 @@ def paymentMatches (c : Crypto) (p : Payment) (t : Token) : Bool :=
     other shard is refused.  Within that shard `PAYMENT_ALREADY_DECIDED` is
     authoritative. -/
 def routed (c : Crypto) (s : PayerState) (p : Payment) (t : Token) : Bool :=
-  (s.certs.find? (·.tenantId == p.tenantId)).any fun e =>
-    t.leaf.shardId == shardOf c.hash p.tenantId p.memberKey e.shardCount
+  (shardCountOf s p.tenantId).any fun n => t.leaf.shardId == shardOf c.hash p.tenantId p.memberKey n
 
 /-- Check 8. -/
 def allows (t : Token) : Bool := t.leaf.outcome == .ALLOW
@@ -598,12 +644,14 @@ def granted (s : PayerState) (t : Token) : Bool :=
 /-- Check 10. -/
 def unreleased (s : PayerState) (t : Token) : Bool := !s.released.contains (payKey t)
 
-/-- Check 11: no fork was recorded for the token's tenant, shard and epoch. -/
-def unforked (s : PayerState) (t : Token) : Bool :=
-  !s.forked.any fun f => (f.1.checkpoint.tenantId, f.1.checkpoint.shardId, f.1.checkpoint.epoch) ==
-    (t.leaf.tenantId, t.leaf.shardId, t.leaf.epoch)
+/-- Check 11: no fork was recorded for the token's tenant and epoch, on any shard. -/
+def unforked (s : PayerState) (t : Token) : Bool := !blocked s t.leaf.tenantId t.leaf.epoch
 
-/-- Release only when all eleven checks hold; check 1 is a canonical `TOKEN/v1` parse. -/
+/-- Check 12: the token carries the member key pinned for its payment
+    (`pinPayment`), so an edited member key never reaches a decision. -/
+def keyPinned (s : PayerState) (t : Token) : Bool := s.pins.lookup (payKey t) == some t.leaf.memberKey
+
+/-- Release only when all twelve checks hold; check 1 is a canonical `TOKEN/v1` parse. -/
 def verifyToken (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) : Bool :=
   match decodeToken bytes with
   | none => false
@@ -612,7 +660,7 @@ def verifyToken (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) : Bo
     | none => false
     | some st => inBatch c st.checkpoint t && aboveFence s t && unexpired s t &&
         paymentMatches c p t && routed c s p t && allows t && granted s t && unreleased s t &&
-        unforked s t
+        unforked s t && keyPinned s t
 
 /-- The payer's release on the token bytes `verifyToken` accepts: record the
     payment key.  The fence needs no raise: on every reachable state it already

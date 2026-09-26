@@ -7,8 +7,10 @@ open BlindLedger.Gate
 
 /-! Conformance check of `tests/gate_vectors/gate_v1.vectors` against the Lean
     specification.  Lines run in order against one payer state: `cert`,
-    `checkpoint` and `release` lines are the payer's own steps (and are checked);
-    `grants`, `now` and `payment` lines set context.  The `sig` lines are the
+    `payment` (the pin before a command), `checkpoint` and `release` lines are
+    the payer's own steps (and are checked); `grants` and `now` lines set
+    context.  A payment line is kept under its name even when its pin is
+    refused.  The `sig` lines are the
     only ML-DSA-87 triples treated as valid; the Python test verifies each of
     them with AWS-LC.  A checkpoint line expects `accept` (stored), `fork`
     (recorded as a fork) or `reject`.  Accepted request, response and
@@ -81,7 +83,7 @@ def renderCheckpoint (x : SignedCheckpoint) : List String :=
 structure Ctx where
   state : PayerState :=
     { fence := fun _ => 0, now := 0, certs := [], checkpoints := [], grants := [], released := [],
-      forked := [] }
+      forked := [], pins := [] }
   chains : List (Bytes × Bool) := []
   sigs : List (Bytes × Bytes × Bytes) := []
   payments : List (String × Payment) := []
@@ -122,19 +124,23 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
     let e : EpochCert := { certId := (← hex id), epoch := (← epoch.toNat?), tenantId := ascii tenant,
                            publicKey := (← hex pk), shardCount := (← shards.toNat?) }
     let x := { x with chains := x.chains ++ [(e.certId, (← chainFlag chain))] }
-    stepped x expect (installCert x.crypto x.state e)
+    let (s, ok) := installCert x.crypto x.state e
+    pure ({ x with state := s }, some (ok == (← verdict expect)))
   | ["grants", id, rules, releases] =>
     let g : Grant := { grantId := (← hex id), ruleVersions := (← list hex rules),
                        engineReleases := (← list hex releases) }
     pure ({ x with state := { x.state with grants := [g] } }, none)
   | ["now", now] => pure ({ x with state := { x.state with now := (← now.toNat?) } }, none)
   | ["sig", pk, msg, sig] => pure ({ x with sigs := x.sigs ++ [((← hex pk), (← hex msg), (← hex sig))] }, none)
-  | ["payment", name, tenant, program, flow, id, member, payee, amount, period, lines] =>
+  | ["payment", expect, name, tenant, program, flow, id, member, payee, amount, period, lines] =>
     let p : Payment := { tenantId := ascii tenant, programId := ascii program,
                          flow := (← flowNames.lookup flow), paymentId := ascii id,
                          memberKey := (← hex member), payeeRef := ascii payee, amountCents := (← amount.toNat?),
                          period := ascii period, lines := (← list hex lines) }
-    pure ({ x with payments := x.payments ++ [(name, p)] }, none)
+    let x := { x with payments := x.payments ++ [(name, p)] }
+    match pinPayment x.state p with
+    | .ok s => pure ({ x with state := s }, some (expect == "accept"))
+    | .error .member_key_changed => pure (x, some (expect == "member_key_changed"))
   | "checkpoint" :: expect :: _ :: bytes :: rest =>
     let b ← hex bytes
     let result := storeCheckpoint x.crypto x.state b
