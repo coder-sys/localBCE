@@ -3986,7 +3986,14 @@ class FinancialOwner:
             evidence_status = self._insert_evidence(connection, evidence)
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
             if existing is not None:  # existing_id is None here: that retry path returned or failed above
-                if int(existing["amount_cents"]) == amount_cents and str(existing["common_origin_id"]) == common_origin_id:
+                if int(existing["amount_cents"]) == amount_cents:
+                    (recorded_link,) = connection.execute(
+                        "SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' "
+                        "AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')=?",
+                        (obligation["obligation_id"], existing["payment_id"]),
+                    ).fetchone()
+                    if pays_action_id is not None and pays_action_id != recorded_link:
+                        _fail(FinancialConflictError, "payment_request_conflict")
                     now_ms = self._now()
                     if evidence_status == "INSERTED":
                         self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=now_ms)

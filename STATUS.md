@@ -37,6 +37,11 @@ in that archive that holds the raw record.
    and exact retries were checked. 2026-09-26 (branch `correction-v2`): the pinned
    engine is built from the current source and asks for exactly min(claim, the unpaid
    balance no earlier unpaid request asks for). Evidence: `rightrail-financial-workflow-20260913-STATE.md`; change log.
+   A payment counts against a correction request only when it names it (`pays_action_id`;
+   owner, Mirror and CLI `--pays-action-id`); a source re-sent with a different link is
+   `payment_request_conflict`. By design (only synthetic data exists; as decision C3), a store
+   from before links whose cash stayed unlinked is refused a second correction; no grandfather path.
+   Known gap: the staff demo's cash command never links (its cash may precede the request).
 2. **Engine correction program self-checks (current source).** 2026-09-26: two clean
    guarded builds byte-identical, correction KAT 42 of 42 (`cv2-r3-kat-clean-a1`).
    Evidence: `artifacts/engine-correction/PROVENANCE.md`.
@@ -108,7 +113,10 @@ history lives in bundles under `work/_retired-research-20260924`.
    shortfall without writing a correction; L1, retired pins ignore time: add a
    pin-transition event. Also: correction reuse trusts the accepted result's recorded input
    shortfall and ignores the paid list; fix before any app path calls
-   `--assess-correction-reuse` (none does).
+   `--assess-correction-reuse` (none does). From round 3: a tighter theorem (amount +
+   outstanding(existing) <= shortfall) and paid-list well-formedness, with no existing
+   statement changed; and why a duplicate payment after an evaluation gives
+   `correction_transition_failed` with a "reopen and try again" message.
 3. **Make `rightrail-main` the only place code changes**; old checkouts become read-only.
 4. **Hospital-payment full cycle demo** per the plan: 20 hospitals, $1M, Hospital H
    short $3,000, with incomplete files, disputed offsets, late records, partial

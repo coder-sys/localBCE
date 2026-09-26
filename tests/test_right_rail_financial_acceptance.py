@@ -5419,6 +5419,30 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
             verify_database(early, expected_config=store.config, expected_authority=self.authority)
 
+    def test_a_resent_payment_source_cannot_change_its_link(self) -> None:
+        # rr-review round 3 LOW #3: a source already recorded is a duplicate only if the link it carries matches.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 100_000)
+        self._pay_a(store, 50_000, "p3", linked=False)
+
+        def resend(suffix: str, pays_action_id: str | None) -> dict[str, object]:
+            return store.record_payment_evidence(
+                item_id=expected.H_ITEM_ID, payment_id=f"payment:h:resent-{suffix}", common_origin_id=f"origin:payment:h:{suffix}",
+                amount_cents=100_000 if suffix == "p2" else 50_000, evidence_id=f"evidence:payment-h:resent-{suffix}",
+                event_at_ms=expected.CORRECTION_AUTH_MS + 500, pays_action_id=pays_action_id,
+            )
+
+        counts = self._durable_counts(store.path)
+        for suffix, link in (("p2", _ACTION_B), ("p3", expected.ACTION_CORRECTION_ID), ("p3", _ACTION_B)):
+            with self.subTest(suffix=suffix, link=link), self.assertRaisesRegex(FinancialConflictError, "^payment_request_conflict$"):
+                resend(suffix, link)
+        self.assertEqual(self._durable_counts(store.path), counts)
+        self.assertEqual(resend("p2", expected.ACTION_CORRECTION_ID)["status"], "DUPLICATE")
+        self.assertEqual(resend("p3", None)["status"], "DUPLICATE")
+        self._assert_verified(store)
+
     def test_a_relabelled_second_correction_is_refused(self) -> None:
         # rr-review round 3 #1: 300,000 unpaid, claims A and B of 200,000; honest requests are 200,000
         # then 100,000. Relabelling B as decided by a retired engine that requests 200,000 (400,000 on
