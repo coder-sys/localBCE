@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import closing, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
-import gzip
 import hashlib
 import io
 import json
@@ -206,22 +205,6 @@ _V8_COMMAND_KINDS = frozenset({
 
 
 _COMMAND_TRIGGER_BODY = "BEFORE {} ON commands BEGIN SELECT RAISE(ABORT,'command_immutable'); END"
-
-
-def _v7_package_from_v8(package_bytes: bytes) -> bytes:
-    """Test fixture: the v7 package the same history exported before v8."""
-
-    package = json.loads(package_bytes.decode("ascii"))
-    package["schema"] = "RR/FINANCIAL/CONTINUITY/v7"
-    package["version"] = 7
-    package["tables"]["financial_meta"][0].update(schema_version=7, schema="RR/FINANCIAL/OWNER/v7")
-    package["tables"]["financial_identity"][0]["schema_version"] = 7
-    body = dict(package)
-    del body["package_digest"]
-    package["package_digest"] = _independent_hex(
-        _independent_digest(b"RR/FINANCIAL/CONTINUITY/v7\x00", _independent_canonical(body))
-    )
-    return _independent_canonical(package)
 
 
 def _independent_evidence_digest(row: dict[str, object]) -> str:
@@ -4748,10 +4731,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.path.read_bytes(), before)
         self._assert_verified(store)
 
-    def test_retired_v2_to_v6_tagged_store_and_package_inputs_reject_without_creation(self) -> None:
+    def test_retired_v2_to_v7_tagged_store_and_package_inputs_reject_without_creation(self) -> None:
         store = self._build_base()
         source_before = store.path.read_bytes()
-        for version in (2, 3, 4, 5, 6):
+        for version in (2, 3, 4, 5, 6, 7):
             target = self._path(f"tag-only-owner-v{version}.sqlite")
             target.write_bytes(source_before)
             with closing(sqlite3.connect(target, isolation_level=None)) as connection:
@@ -4760,7 +4743,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     (version, f"RR/FINANCIAL/OWNER/v{version}"),
                 )
             target_before = target.read_bytes()
-            with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^unsupported_store_version$"):
                 FinancialOwner(
                     path=target,
                     config=store.config,
@@ -4804,113 +4787,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.path.read_bytes(), source_before)
         self._assert_verified(store)
 
-    def test_v7_store_converts_to_v8_on_owner_open_all_or_nothing(self) -> None:
-        # A genuine v7 store: the v7 owner (d70ad50) ran the final correction journey and one funding receipt.
-        v7_bytes = gzip.decompress((Path(__file__).parent / "fixtures" / "v7-owner-store.sqlite.gz").read_bytes())
-        v7_path = self._path("v7-store.sqlite")
-        v7_path.write_bytes(v7_bytes)
-        with closing(sqlite3.connect(str(v7_path))) as connection:
-            self.assertEqual(connection.execute("SELECT schema_version,schema FROM financial_meta").fetchone(), (7, "RR/FINANCIAL/OWNER/v7"))
-            native = {table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in owner._CAPTURED_TABLES}
-            v7_events = connection.execute("SELECT * FROM financial_events ORDER BY event_sequence").fetchall()
-        # The checker verifies stores at v8 only: the owner converts a v7 store first.
-        with self.assertRaisesRegex(IndependentFinancialError, "^schema"):
-            verify_database(v7_path, expected_config=self._make_owner().config, expected_authority=self.authority)
-        self.assertEqual(v7_path.read_bytes(), v7_bytes)
-
-        # A v7 store its history does not explain is refused and left byte-identical.
-        tampers = {
-            "UPDATE obligations SET owed_cents=owed_cents+1": "^open_verification",
-            # Review 466178b: the v7 size cache is compared before conversion drops anything.
-            "UPDATE claimed_adjustments SET owner_role='FINANCE_DECISION'": "^continuity_admission_mismatch$",
-            # Review 466178b finding 4: a same-length acknowledgment edit passes the size cache, but every
-            # history, v7 included, names the reference its acknowledgment event accepted.
-            "UPDATE action_outbox SET acknowledgment_ref=substr(acknowledgment_ref,1,length(acknowledgment_ref)-1)||'9'": "^open_verification:replay:acknowledgment$",
-        }
-        for statement, code in tampers.items():
-            with self.subTest(statement=statement):
-                tampered = self._path("v7-store-tampered.sqlite")
-                tampered.write_bytes(v7_bytes)
-                with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
-                    connection.execute(statement)
-                tampered_bytes = tampered.read_bytes()
-                with self.assertRaisesRegex(FinancialIntegrityError, code):
-                    self._make_owner(path=tampered)
-                self.assertEqual(tampered.read_bytes(), tampered_bytes)
-        # A v7 store at the event cap has no room for its opening balance, and one whose history exceeds the
-        # segment bound cannot be sealed: both refuse inside the conversion transaction. The v7 writer's own
-        # whole-history cap stops near 900 commands, so the bound is lowered to this store's size instead.
-        for bound, code in (("_MAX_ROWS", "^history_capacity$"), ("_MAX_SEGMENT_EVENTS", "^history_segment_size$")):
-            with self.subTest(bound=bound), patch.object(owner, bound, len(v7_events)):
-                with self.assertRaisesRegex((FinancialIntegrityError, FinancialContinuityError), code):
-                    self._make_owner(path=v7_path)
-                self.assertEqual(v7_path.read_bytes(), v7_bytes)
-
-        converted = self._make_owner(path=v7_path)
-        # CONSTITUTION V.4: conversion appends one sealed opening balance holding every converted row
-        # (v7 history carried none); every row and every v7 event is otherwise unchanged.
-        with closing(sqlite3.connect(str(v7_path))) as connection:
-            self.assertEqual({table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in owner._CAPTURED_TABLES}, native)
-            events = connection.execute("SELECT * FROM financial_events ORDER BY event_sequence").fetchall()
-            commands = {row[0] for row in connection.execute("SELECT kind FROM commands")}
-            meta = connection.execute("SELECT schema_version,schema FROM financial_meta").fetchone()
-        self.assertEqual(events[:-1], v7_events)
-        self.assertEqual((events[-1][2], events[-1][4]), ("OPENING_BALANCE", "OPENING_BALANCE"))
-        self.assertEqual(
-            sorted(json.dumps(image, sort_keys=True) for image in json.loads(events[-1][7])["rows"]),
-            sorted(json.dumps({"table": table, "row": row}, sort_keys=True) for table, rows in json.loads(converted.export_continuity().decode("ascii"))["tables"].items() if table in owner._CAPTURED_TABLES for row in rows),
-        )
-        self.assertTrue(_V8_COMMAND_KINDS <= commands)
-        self.assertEqual(meta, (8, "RR/FINANCIAL/OWNER/v8"))
-        self._assert_verified(converted, current_snapshot_package=converted.export_continuity())
-
-    def test_v7_package_stays_verifiable_but_restores_only_through_a_v7_store(self) -> None:
-        store = self._build_base_for_correction()
-        self._prepare_final(store)
-        package = store.export_continuity()
-        v7_package = _v7_package_from_v8(package)
-        scope = json.loads(package.decode("ascii"))["scope"]
-        verified = verify_continuity_package(
-            v7_package,
-            expected_scope=scope,
-            expected_schema_version=7,
-            expected_authority=self.authority,
-        )
-        self.assertEqual((verified["schema"], verified["version"]), ("RR/FINANCIAL/CONTINUITY/v7", 7))
-        self.assertNotIn("commands", verified["table_counts"])
-        with self.assertRaisesRegex(IndependentFinancialError, "continuity:schema-version-binding"):
-            verify_continuity_package(
-                v7_package,
-                expected_scope=scope,
-                expected_schema_version=8,
-                expected_authority=self.authority,
-            )
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
-            FinancialOwner.validate_continuity_package(v7_package)
-        destination = self._path("v7-package-restore.sqlite")
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
-            FinancialOwner.restore_continuity(
-                package_bytes=v7_package,
-                recovered_path=destination,
-                trusted_authority=self.authority,
-                clock=_Clock(),
-            )
-        self.assertFalse(destination.exists())
-
-        # The digest domains are distinct: a v8 body sealed under the v7 domain fails.
-        resealed = json.loads(package.decode("ascii"))
-        body = dict(resealed)
-        del body["package_digest"]
-        resealed["package_digest"] = _independent_hex(
-            _independent_digest(b"RR/FINANCIAL/CONTINUITY/v7\x00", _independent_canonical(body))
-        )
-        with self.assertRaisesRegex(IndependentFinancialError, "continuity:package-digest"):
-            verify_continuity_package(
-                _independent_canonical(resealed),
-                expected_scope=scope,
-                expected_authority=self.authority,
-            )
-
     def test_command_log_is_derived_from_history_and_recomputed_by_the_checker(self) -> None:
         store = self._build_base_for_correction()
         self._prepare_final(store)
@@ -4919,6 +4795,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with closing(sqlite3.connect(str(store.path))) as connection:
             commands = connection.execute("SELECT * FROM commands ORDER BY event_sequence").fetchall()
         self.assertEqual(len(commands), len({row[0] for row in commands}))
+        self.assertTrue(_V8_COMMAND_KINDS <= {row[1] for row in commands})
         restored = FinancialOwner.restore_continuity(
             package_bytes=package,
             recovered_path=self._path("command-log-restore.sqlite"),
@@ -5189,9 +5066,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
                     verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
 
-    def test_an_opening_balance_cannot_launder_a_row_history_carried(self) -> None:
-        # Final review of 75a5517, finding 4: an opening balance appended to a native store restarted
-        # replay from rows of the writer's choosing. This edit is inside every bound but replay's.
+    def test_a_forged_opening_balance_event_is_refused_on_a_native_store(self) -> None:
+        # Final review of 75a5517, finding 4, kept after C3: an OPENING_BALANCE event appended to a native
+        # store would restart replay from rows of the writer's choosing. The kind no longer exists.
         store = self._build_base_for_correction()
         self._prepare_acknowledged(store)
         with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
@@ -5202,9 +5079,45 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             last = int(connection.execute("SELECT max(committed_at_ms) FROM financial_events").fetchone()[0])
             store._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=last)
             connection.execute("COMMIT")
-        with self.assertRaisesRegex(IndependentFinancialError, "^replay:opening-balance$"):
+        with self.assertRaisesRegex(IndependentFinancialError, "^history:event-kind$"):
             self._assert_verified(store)
-        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:opening-balance$"):
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:event-kind$"):
+            self._make_owner(path=store.path)
+
+    def test_a_rehashed_row_image_cannot_change_the_accepted_acknowledgment(self) -> None:
+        # The acknowledgment event names the reference it accepted; the stored row must match it even
+        # when the row and its history image are edited together and the chain is re-hashed.
+        store = self._build_base_for_correction()
+        self._prepare_acknowledged(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'").fetchall()
+            for name, _sql in triggers:
+                connection.execute(f'DROP TRIGGER "{name}"')
+            ref = connection.execute("SELECT acknowledgment_ref FROM action_outbox WHERE status='ACKNOWLEDGED'").fetchone()[0]
+            forged = ref[:-1] + ("8" if ref.endswith("9") else "9")
+            connection.execute("UPDATE action_outbox SET acknowledgment_ref=? WHERE acknowledgment_ref=?", (forged, ref))
+            events = connection.execute("SELECT event_sequence,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,previous_head,committed_at_ms FROM financial_events ORDER BY event_sequence").fetchall()
+            previous, edited = bytes(events[0][7]), 0
+            for sequence, aggregate_type, aggregate_id, kind, before, after, payload_json, _previous, committed_at in events:
+                payload = json.loads(payload_json)
+                for image in payload.get("rows", ()):
+                    values = image.get("row") or image.get("set")
+                    if image["table"] == "action_outbox" and values.get("acknowledgment_ref") == ref:
+                        values["acknowledgment_ref"], edited = forged, edited + 1
+                payload_bytes = owner._canonical(payload)
+                payload_digest = owner._digest(owner._EVENT_DOMAIN, payload_bytes)
+                header = b"".join(value.to_bytes(8, "big") for value in (before, after, committed_at))
+                event_id = owner._digest(owner._EVENT_DOMAIN, sequence.to_bytes(8, "big"), aggregate_type.encode("ascii"), aggregate_id.encode("ascii"), kind.encode("ascii"), header, payload_digest)
+                head = owner._digest(owner._HEAD_DOMAIN, previous, event_id, header, payload_digest)
+                connection.execute("UPDATE financial_events SET event_id=?,payload_json=?,payload_digest=?,previous_head=?,head=? WHERE event_sequence=?", (event_id, payload_bytes.decode("ascii"), payload_digest, previous, head, sequence))
+                previous = head
+            connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
+            for _name, sql in triggers:
+                connection.execute(sql)
+        self.assertGreaterEqual(edited, 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^replay:acknowledgment$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:acknowledgment$"):
             self._make_owner(path=store.path)
 
     def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:

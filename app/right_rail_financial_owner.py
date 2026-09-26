@@ -63,13 +63,10 @@ def _fail(error_type: type[FinancialError], code: str) -> None:
     raise error
 
 
-# The owner writes one store version, v8. A v7 store is converted to v8,
-# all-or-nothing, inside the owner's open transaction (docs/CORE_REDESIGN.md
-# step 6); v5/v6 stores and packages are retired and fail closed like v2-v4.
+# The owner opens one store version, v8; any other fails closed.
 _SCHEMA_VERSION: Final[int] = 8
 _SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v8"
 _CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v8"
-_V7_SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v7"
 _DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v2"
 _POPULATION_MANIFEST_CONTRACT: Final[str] = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 _CURRENCY: Final[str] = "USD"
@@ -187,7 +184,6 @@ _EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 _EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
 _CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v8\x00"
 _COMMAND_DOMAIN = b"RR/FINANCIAL/COMMAND/v1\x00"
-_OPENING_BALANCE_DOMAIN = b"RR/FINANCIAL/OPENING-BALANCE/v1\x00"  # CONSTITUTION V.4: the v7 conversion's sealed rows
 _POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 _POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
 _POPULATION_STAGING_DOMAIN = b"RR/FINANCIAL/POPULATION-STAGING/v1\x00"
@@ -319,8 +315,7 @@ _PROJECTION_TABLES: Final = tuple(sorted(_PACKAGE_TABLES - {"financial_events", 
 
 # The command log (Art. III.3): one row per request the Owner accepted, keyed by
 # the caller's natural key and bound to the history event that request produced.
-# The request fields are read back from the rows that request wrote, so a v7
-# history converts to exactly the rows a v8 Owner would have recorded, and the
+# The request fields are read back from the rows that request wrote, so the
 # independent checker can recompute every row.
 _COMMAND_EVENTS: Final[dict[str, tuple[str, str | None]]] = {
     # event kind: (command kind, payload field naming the key; None = aggregate id)
@@ -1365,11 +1360,7 @@ def _install_history_append_only(connection: sqlite3.Connection) -> None:
 
 
 def _execute_script(connection: sqlite3.Connection, script: str) -> None:
-    """Run DDL one statement at a time inside the caller's transaction.
-
-    ``executescript`` would COMMIT first, which would break the all-or-nothing
-    v7 -> v8 conversion on open.
-    """
+    """Run DDL one statement at a time inside the caller's transaction (``executescript`` would COMMIT first)."""
     statement = ""
     for part in script.split(";"):
         statement += part + ";"
@@ -2109,63 +2100,8 @@ class FinancialOwner:
         connection.execute("UPDATE history_open SET event_count=0,byte_count=0")
         return digest
 
-    def _migrate_v7_store(self, connection: sqlite3.Connection) -> None:
-        """Convert a v7 store to v8 inside the caller's open transaction (all-or-nothing).
-
-        v8 adds the derived ``commands`` table and declared foreign keys, which
-        SQLite can add only by rebuilding tables. A present v7 size cache must
-        equal a recompute first; the rows are rewritten unchanged except the
-        schema version, the command log is derived from history, and the whole
-        history opens the first history segment. The
-        caller's replay must still explain every row before COMMIT, so a v7
-        store its history does not explain is refused and left byte-identical.
-        """
-
-        tables = {
-            str(row[0])
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-        }
-        if tables not in (set(_PACKAGE_TABLES), set(_PACKAGE_TABLES) | {"right_rail_continuity_admission"}):
-            _fail(FinancialIntegrityError, "schema_tables")
-        rows: dict[str, list[sqlite3.Row]] = {}
-        for table in sorted(_PACKAGE_TABLES):
-            columns = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
-            if columns != _TABLE_COLUMNS[table]:
-                _fail(FinancialIntegrityError, "continuity_schema_columns")
-            rows[table] = connection.execute(f"SELECT * FROM {table}").fetchall()
-        if "right_rail_continuity_admission" in tables and dict((str(row[0]), (row[1], row[2])) for row in connection.execute("SELECT table_name,row_count,row_bytes FROM right_rail_continuity_admission")) != {
-            table: (len(table_rows), sum(len(_canonical({column: self._export_value(row[column]) for column in _TABLE_COLUMNS[table]})) for row in table_rows)) for table, table_rows in rows.items()
-        }:
-            _fail(FinancialIntegrityError, "continuity_admission_mismatch")
-        for object_type in ("trigger", "index", "table"):
-            names = [
-                str(row[0])
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type=? AND name NOT LIKE 'sqlite_%'",
-                    (object_type,),
-                )
-            ]
-            for name in names:
-                connection.execute(f'DROP {object_type.upper()} "{name}"')
-        connection.execute("PRAGMA user_version=0")
-        _sql_schema(connection)
-        for table, table_rows in rows.items():
-            for row in table_rows:
-                values = dict(zip(_TABLE_COLUMNS[table], tuple(row), strict=True))
-                if table in {"financial_identity", "financial_meta"}:
-                    values["schema_version"] = _SCHEMA_VERSION
-                if table == "financial_meta":
-                    values["schema"] = _SCHEMA
-                self._insert_row(connection, table, values)
-        self._derive_command_log(connection)
-        # CONSTITUTION V.4: one sealed opening balance holds the converted rows the v7 history did not carry.
-        last = connection.execute("SELECT committed_at_ms FROM financial_events ORDER BY event_sequence DESC LIMIT 1").fetchone()
-        images = [{"table": table, "row": {column: self._export_value(row[column]) for column in _TABLE_COLUMNS[table]}} for table in _CAPTURED_TABLES for row in rows[table]]
-        self._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=0 if last is None else int(last[0]))
-        self._track_all(connection)
-
     def _derive_command_log(self, connection: sqlite3.Connection) -> None:
-        """Rebuild the command log from history (conversion and restore; it is never exported)."""
+        """Rebuild the command log from history (restore; it is never exported)."""
         for event in connection.execute(
             "SELECT event_sequence,aggregate_id,kind,payload_json FROM financial_events ORDER BY event_sequence"
         ).fetchall():
@@ -2185,10 +2121,9 @@ class FinancialOwner:
                     meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
                     if meta is None:
                         _fail(FinancialIntegrityError, "schema_meta")
-                    migrated = (meta["schema_version"], meta["schema"]) == (7, _V7_SCHEMA)
-                    if migrated:
-                        self._migrate_v7_store(connection)
-                        meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
+                    if (meta["schema_version"], meta["schema"]) != (_SCHEMA_VERSION, _SCHEMA):
+                        _fail(FinancialIntegrityError, "unsupported_store_version")
+                    migrated = False
                     self._verify_meta_identity(connection, meta)
                     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
                     if tables in (_TABLES, _TABLES | {"right_rail_continuity_admission"}):
@@ -2231,7 +2166,6 @@ class FinancialOwner:
             )
         )
         if actual != expected:
-            # Any other store version, including the retired v5/v6, fails closed here.
             _fail(FinancialIntegrityError, "schema_identity")
         if int(meta["dispatch_enabled"]) != 0 or int(meta["egress_enabled"]) != 0 or str(meta["mode"]) != self.mode:
             _fail(FinancialIntegrityError, "nonactivating_boundary")
@@ -2413,7 +2347,7 @@ class FinancialOwner:
             event_payload["rows"] = [json.loads(row[0]) for row in captured]
             connection.execute("DELETE FROM temp.rr_captured_rows")
         payload_bytes = _canonical(event_payload)
-        payload_digest = _digest(_OPENING_BALANCE_DOMAIN if kind == "OPENING_BALANCE" else _EVENT_DOMAIN, payload_bytes)
+        payload_digest = _digest(_EVENT_DOMAIN, payload_bytes)
         meta = self._meta(connection)
         # Lean's maxRows/maxRevision (Types.lean): the checker refuses a history or revision past them.
         if int(meta["sequence"]) >= _MAX_ROWS or after_revision > _MAX_ROWS:
@@ -6791,8 +6725,7 @@ class FinancialOwner:
         if set(package) != required:
             _fail(FinancialContinuityError, "continuity_package_shape")
         package_version = package["version"]
-        # The Owner restores Continuity v8 only (a v7 package stays verifiable by the
-        # independent checker; its v7 source store converts on open). v2-v7 fail closed here.
+        # The Owner restores Continuity v8 only; every other version fails closed here.
         if type(package_version) is not int or package_version != _SCHEMA_VERSION:
             _fail(FinancialContinuityError, "continuity_package_schema")
         if package["schema"] != _CONTINUITY_SCHEMA:
