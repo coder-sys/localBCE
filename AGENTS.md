@@ -15,9 +15,9 @@ Working rules (details in the constitution):
   (`run_guarded_v4.ps1`, SHA-256 `57F9EC8AEFE1D0E281B3BB0D76F2F057C8295F99AFDD04305DFC777703ED99FB`)
   with its 2,190,433,321-byte physical-free floor. Never weaken or bypass it.
 - Lean decides; Python adapters commit. No duplicate policy, no silent fallback.
-- The pinned engine binary in `artifacts/engine-correction-e911/` was built
-  from an older source; see its `PROVENANCE.md`. Never describe it as built
-  from the current `lean/` source.
+- The pinned engine binary in `artifacts/engine-correction/` is built from
+  the `lean/` commit its `PROVENANCE.md` names. Any later `lean/` change
+  voids that claim until a guarded rebuild re-pins it.
 - Private zero-knowledge is an active prototype track (Constitution IX.4). It
   is evidence only and never blocks core or gate work. The old code under
   `parked/` stays reference material.

@@ -68,12 +68,12 @@ digest-bound roster.
   computes every storage digest itself, checks the accepted delta against its
   own reconstructed post-transition snapshot, and commits it inside its
   existing transaction. A zero shortfall is rejected with no mutation; the
-  action amount is the lesser of the claim and the unpaid balance. The release is an
+  action amount is exactly the lesser of the claim and the unpaid balance
+  (theorem `applyCorrectionTransition_action_amount_eq_b2`). The release is an
   explicit immutable `FinancialCorrectionTransitionRelease`; without one, the
   command fails closed. There is no Python fallback decision.
-- **Pinned executable:** `artifacts/engine-correction-e911/`. It was built from
-  an older Engine source; see its `PROVENANCE.md`. The current `lean/`
-  source must be rebuilt through the guard to replace it.
+- **Pinned executable:** `artifacts/engine-correction/`, rebuilt twice
+  byte-identically from the `lean/` commit its `PROVENANCE.md` names.
 - **Evaluation comparison:** `BLFIN02`/`BLFRES02` in
   `app/right_rail_financial_engine.py` with
   `app/right_rail_financial_semantic_adapter.py` is a read-only comparison of
@@ -162,11 +162,10 @@ What exists today toward it:
   (`reject_offset_and_authorize_correction`); Python still decides
   population, evidence, payment/reversal, offset authorization,
   acknowledgment, reporting, funding and evaluation recording.
-- The live correction codec (`BLFCMD01`/`BLFCRES1`) has no codec laws; only
-  the comparison-only `BLFIN02`/`BLFRES02` codec does.
-- The pinned decision binary (`artifacts/engine-correction-e911/`) was built
-  from Lean source that cannot be recovered; the current `lean/` source has
-  never been compiled into a pinned artifact.
+- The live correction codec (`BLFCMD01`/`BLFCRES2`) proves canonicity (P2)
+  unconditionally, but round-trip (P1) and trailing-byte rejection (P3) only
+  for admissible values; nothing yet proves every value Lean emits is
+  admissible.
 - There is no batch decide API, no ML-DSA-87 checkpoint signing, no
   Merkle-inclusion token, no independent witness, no member-key sharding, no
   fenced primary/standby, and no Bypass outcome.

@@ -244,10 +244,9 @@ evaluated by the interpreter (section 10), not baked into a bespoke theorem,
 so it stays on the interpreter's proof, not a new one.
 
 Today, of 14 command types, Lean decides exactly one —
-`reject_offset_and_authorize_correction` — and the live command codec
-(`BLFCMD01`/`BLFCRES1`) carries zero codec laws, while a comparison-only
-codec that nothing decides with has full ones; the pinned decision binary
-was built from source that can no longer be recovered. Closing that gap —
+`reject_offset_and_authorize_correction`; its codec (`BLFCMD01`/`BLFCRES2`)
+has codec laws (round-trip only for admissible values) and its pinned binary
+is rebuilt reproducibly from `lean/`. Closing the rest of the gap —
 proof hygiene, a reproducible rebuild, codec parity, then the live
 evaluator, then the remaining thirteen commands, then the signed token and
 checkpoint predicates, then a Lean checker — is `fv-plan.md`'s ordered
