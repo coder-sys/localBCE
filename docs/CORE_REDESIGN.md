@@ -160,7 +160,5 @@ domains, theorem statements, and `tests/test_right_rail_financial_constitution_i
 8. Withdrawn claims: old tests and profile/envelope/graph/receipt identities do
    not establish the new rule. FRESH means marker age at synthetic capture time,
    never current source truth. Independent post-edit review found no remaining
-   source-boundary blocker. Whole-suite r35 completed with one unrelated test
-   helper error, subsequently repaired. The final-code r37 recorded 379 passes,
-   four skips and one interrupted test before its memory-floor stop; cleanup
-   passed. No completed whole-system verdict is claimed for this increment.
+   source-boundary blocker. Current combined-source regression evidence and
+   outstanding build requirements are recorded only in `STATUS.md`.

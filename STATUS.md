@@ -2,9 +2,8 @@
 
 Updated: 2026-09-26. Current candidate: `codex/connected-workflows`, based on
 main `6cccb84`, integrating `correction-v2` (`70f87c7`) in local development
-commit `595e611`, followed by funding/source-clock fixes in `2c61ae8`.
-The current increment consolidates test setup. Main has not received this
-combination. Git state,
+commit `595e611`, followed by funding/source-clock fixes in `2c61ae8` and
+test-setup consolidation in `e026658`. Main has not received this combination. Git state,
 raw guard logs and artifact provenance govern; a branch's pass does not verify
 another branch or their combination. `CONSTITUTION.md` is supreme.
 
@@ -23,24 +22,32 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   setup, removing 131 lines while retaining all 75 test methods, 440
   `self.assert` calls and the Mirror mock-call assertion. Static review found
   no blocker. Product code, independent expected answers and size/resource gates
-  are unchanged. Guarded checks of all three edited test modules are complete;
-  this local development increment does not claim a full-suite pass.
-- Completed consolidation checks: r40 ran 81 (79 passed, 2 skips); r42/r43
-  ran all 95 acceptance tests (95 passed); r44 ran 89 source/privacy/smoke
-  tests (88 passed, 1 skip). Total: 265 unique tests, 262 passed, 3 skipped,
-  zero failures/errors; every outer/child exit 0 and cleanup PASS. The skips
-  are Windows symlink privilege, the absent old accepted-engine artifact,
-  and the unbuilt gate runner. All six unchanged size gates passed in r40.
-  r41 collected exactly 420 unique test IDs; group selection preserves that
-  inventory, and the interaction-model and scorecard class fixtures stay intact.
+  are unchanged. The complete discovered inventory now has completed guarded
+  results across ten groups: 420 unique tests, 409 passed, 11 skipped, zero
+  failures/errors, no duplicate, missing or unknown IDs. This is grouped
+  regression coverage, not one uninterrupted full-suite run.
+- Completed groups: r40 81 (79 passed, 2 skipped); r42/r43 95/95 acceptance;
+  r44 89 (88 passed, 1 skipped); r54 50 (42 passed, 8 skipped); r55/r56 17/17
+  owner batch; r57 48/48 storage, independent checker, protected invariants and
+  Switch CLI; r58 24/24 staff; r59 16/16 interaction model and scorecard. Each
+  guard and grouped Command exited 0; cleanup PASS. All six size gates passed
+  in r40. r41's 420-ID inventory exactly matches the completed logs; the
+  interaction-model and scorecard class fixtures stayed intact. The staff
+  partial-engine-configuration test emitted its expected argparse refusal.
+- Eleven skips remain unverified: Windows symlink privilege (1), absent old
+  accepted-engine artifact (1), unbuilt gate runner (1), no fresh evaluation
+  engine handoff (1), and real semantic-assurance mutation tests requiring a
+  configured external candidate (7). The interaction-model crawl is not the
+  constitution's exhaustive real-browser crawl; a new combined-source Lean
+  build and assembled offline-kit run remain outstanding.
 - Broader core r45 hit the memory floor at 2,182,610,944 free bytes: 54 passes,
   1 interrupted test, 60 not started in that group; outer exit 1, cleanup PASS,
   no recorded test failure/error. The subsequent staff/journey groups (40 tests)
   were not launched. After memory recovered to 2,527,105,024 bytes, r48's fresh
   preflight measured 2,297,405,440 < 2,400,000,000 and refused launch: zero tests,
-  outer exit 1, mutex released. No later groups launched. Excluding partial r45
-  evidence leaves 155 of the 420 catalogued tests outside completed runs; their
-  raw partial results remain evidence, not a completed regression verdict.
+  outer exit 1, mutex released. No later groups launched in that attempt.
+  All 155 remaining tests subsequently completed in r54-r59; partial r45 and
+  refused r48 contribute no tests to the successful aggregate above.
 - Consolidation full run `cx-consolidation-r39-a1`: 207 completed passes,
   2 skips (missing gate runner, Windows symlink privilege), 1 interrupted test
   and 210 not started, no recorded test failure/error. The 210 started tests
@@ -48,14 +55,15 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   cleanup PASS. All six size checks passed. Process tests reached 42 passes
   and 1 skip; the 32 Engine/Mirror tests were not reached on their edited files.
   Subsequent free memory was 1,791,819,776 bytes, below the 2,400,000,000-byte
-  launch minimum, so no shorter run was launched. No complete suite verdict.
+  launch minimum, so no shorter run was launched then. r39 remains an incomplete
+  run and contributes no tests to the successful grouped aggregate above.
 - Final repair and budget check, `cx-preconsolidation-r38-a1`: 8/8 passed,
   zero failures/errors/skips, guard exit 0, cleanup PASS. This reruns the NULL-ID
   successor rejection and borrowed crash helper, plus every unchanged size gate.
 - Funding boundary, `cx-funding-r31-a1`: 24/24 passed, no failures, errors or
   skips, guard exit 0, cleanup PASS. Current-projection mutations refuse single
   writes, batches, retries and summaries; post-body drift rolls back. Acceptance
-  test setup was subsequently consolidated; full regression remains required.
+  test setup was subsequently consolidated; the completed groups above cover it.
 - Source clock/admission and consumers, `cx-clock-contract-r32-a1`: 72/72
   passed, no failures, errors or skips, guard exit 0, cleanup PASS, 2.991 s.
   Inclusive age bounds, malformed/future dates, six context fields, numeric-ID
@@ -255,12 +263,14 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 - Private ZK is active in its separate prototype repository, evidence-only and
   never a core/gate prerequisite; old `parked/` sources remain reference.
 
-Next: when the unchanged memory guard permits, finish the remaining grouped
-regression. The consolidation's changed-file checks are complete. The
-78,019-line cap is unchanged (current tree: 77,887; 132 lines
+Next: the consolidation's grouped regression is complete. The 78,019-line cap
+is unchanged (current tree: 77,887; 132 lines
 of room). The full financial input contract remains unimplemented; the reviewed
 500-650-line estimate exceeds that room and is not a measured implementation.
-Further structural consolidation is needed before implementing it under the cap;
+Further structural consolidation is needed before implementing it under the cap.
+Read-only review found only modest remaining duplication in the owner and
+population-status adapters; their differing retry, validation and error behavior
+must remain intact. These are proposals, not implemented savings. Also
 complete the real-browser error-state crawl; when memory permits, rebuild
 and repin the final Lean tree, then assemble/verify/extract/run the offline kit.
 The founder requested local commits; this candidate is not a qualified release.
