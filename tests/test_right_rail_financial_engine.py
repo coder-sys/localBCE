@@ -140,6 +140,20 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         )
 
     @staticmethod
+    def _evaluate_snapshot(store, connection, release):
+        return engine.evaluate_financial_snapshot(
+            connection,
+            release=release,
+            obligation_id=expected.H_OBLIGATION_ID,
+            authority_context=adapter.TrustedAuthorityContext.from_authority(store.trusted_authority),
+            evaluation_time_ms=2**63 - 2,
+            expected_config=store.config,
+            expected_scope=store.config,
+            expected_mode=store.mode,
+            expected_owner_id=store.owner_id,
+        )
+
+    @staticmethod
     def _result_for_snapshot(snapshot: adapter.LockedSemanticSnapshot) -> adapter.DecodedLeanResult:
         data = snapshot.data
         scope = data["scope"]
@@ -322,17 +336,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
             },
         ):
             with patch.object(engine.process, "run_contained_verifier_stream", side_effect=runner):
-                execution = engine.evaluate_financial_snapshot(
-                    connection,
-                    release=release,
-                    obligation_id=expected.H_OBLIGATION_ID,
-                    authority_context=adapter.TrustedAuthorityContext.from_authority(store.trusted_authority),
-                    evaluation_time_ms=2**63 - 2,
-                    expected_config=store.config,
-                    expected_scope=store.config,
-                    expected_mode=store.mode,
-                    expected_owner_id=store.owner_id,
-                )
+                execution = self._evaluate_snapshot(store, connection, release)
 
         self.assertEqual(execution.result, expected_result)
         self.assertEqual(execution.input_sha256, hashlib.sha256(captured["args"][2]).digest())
@@ -370,17 +374,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
             with self.subTest(code=code, output=contained.stdout[:8]):
                 with patch.object(engine.process, "run_contained_verifier_stream", return_value=contained):
                     with self.assertRaisesRegex(engine.FinancialEngineError, code) as raised:
-                        engine.evaluate_financial_snapshot(
-                            connection,
-                            release=release,
-                            obligation_id=expected.H_OBLIGATION_ID,
-                            authority_context=adapter.TrustedAuthorityContext.from_authority(store.trusted_authority),
-                            evaluation_time_ms=2**63 - 2,
-                            expected_config=store.config,
-                            expected_scope=store.config,
-                            expected_mode=store.mode,
-                            expected_owner_id=store.owner_id,
-                        )
+                        self._evaluate_snapshot(store, connection, release)
                 if leaked_text:
                     self.assertNotIn(leaked_text, str(raised.exception))
                 self.assertTrue(connection.in_transaction)
@@ -388,17 +382,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         limited_release = self._release(output_max_bytes=len(valid_output) - 1)
         with patch.object(engine.process, "run_contained_verifier_stream", return_value=self._contained(valid_output, cap=limited_release.job_memory_cap_bytes)):
             with self.assertRaisesRegex(engine.FinancialEngineContainmentError, "engine_containment"):
-                engine.evaluate_financial_snapshot(
-                    connection,
-                    release=limited_release,
-                    obligation_id=expected.H_OBLIGATION_ID,
-                    authority_context=adapter.TrustedAuthorityContext.from_authority(store.trusted_authority),
-                    evaluation_time_ms=2**63 - 2,
-                    expected_config=store.config,
-                    expected_scope=store.config,
-                    expected_mode=store.mode,
-                    expected_owner_id=store.owner_id,
-                )
+                self._evaluate_snapshot(store, connection, limited_release)
 
     def test_owner_savepoints_and_pending_writes_survive_success_and_failure(self) -> None:
         store = self._owner_with_cash_claim()
@@ -426,17 +410,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         )
         with patch.object(engine.semantic, "build_locked_semantic_snapshot", side_effect=capture_build):
             with patch.object(engine.process, "run_contained_verifier_stream", side_effect=accepted_runner):
-                engine.evaluate_financial_snapshot(
-                    connection,
-                    release=release,
-                    obligation_id=expected.H_OBLIGATION_ID,
-                    authority_context=adapter.TrustedAuthorityContext.from_authority(store.trusted_authority),
-                    evaluation_time_ms=2**63 - 2,
-                    expected_config=store.config,
-                    expected_scope=store.config,
-                    expected_mode=store.mode,
-                    expected_owner_id=store.owner_id,
-                )
+                self._evaluate_snapshot(store, connection, release)
         self.assertIs(seen_connections[-1], connection)
         self.assertEqual(
             connection.execute("SELECT marker FROM caller_pending_marker").fetchone()[0],
@@ -459,17 +433,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         with patch.object(engine.semantic, "build_locked_semantic_snapshot", side_effect=capture_build):
             with patch.object(engine.process, "run_contained_verifier_stream", return_value=failed_result):
                 with self.assertRaisesRegex(engine.FinancialEngineContainmentError, "engine_containment"):
-                    engine.evaluate_financial_snapshot(
-                        connection,
-                        release=release,
-                        obligation_id=expected.H_OBLIGATION_ID,
-                        authority_context=adapter.TrustedAuthorityContext.from_authority(store.trusted_authority),
-                        evaluation_time_ms=2**63 - 2,
-                        expected_config=store.config,
-                        expected_scope=store.config,
-                        expected_mode=store.mode,
-                        expected_owner_id=store.owner_id,
-                    )
+                    self._evaluate_snapshot(store, connection, release)
         self.assertIs(seen_connections[-1], connection)
         self.assertEqual(
             connection.execute("SELECT marker FROM caller_pending_marker").fetchone()[0],
@@ -507,17 +471,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
             job_memory_cap_bytes=engine.MAX_ENGINE_JOB_MEMORY_CAP_BYTES,
         )
         release.workspace.mkdir()
-        execution = engine.evaluate_financial_snapshot(
-            connection,
-            release=release,
-            obligation_id=expected.H_OBLIGATION_ID,
-            authority_context=adapter.TrustedAuthorityContext.from_authority(store.trusted_authority),
-            evaluation_time_ms=2**63 - 2,
-            expected_config=store.config,
-            expected_scope=store.config,
-            expected_mode=store.mode,
-            expected_owner_id=store.owner_id,
-        )
+        execution = self._evaluate_snapshot(store, connection, release)
         self.assertEqual(execution.input_size_bytes, 2526)
         self.assertEqual(execution.input_sha256, ACCEPTED_INPUT_SHA256)
         self.assertEqual(execution.output_size_bytes, 552)

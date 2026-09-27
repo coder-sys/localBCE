@@ -2,8 +2,9 @@
 
 Updated: 2026-09-26. Current candidate: `codex/connected-workflows`, based on
 main `6cccb84`, integrating `correction-v2` (`70f87c7`) in local development
-commit `595e611`, with the funding and source-clock fixes below in this local
-development increment. Main has not received this combination. Git state,
+commit `595e611`, followed by funding/source-clock fixes in `2c61ae8`.
+The current increment consolidates test setup. Main has not received this
+combination. Git state,
 raw guard logs and artifact provenance govern; a branch's pass does not verify
 another branch or their combination. `CONSTITUTION.md` is supreme.
 
@@ -18,6 +19,36 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification
 
+- Consolidation: process, Engine and Mirror tests share repeated invocation
+  setup, removing 131 lines while retaining all 75 test methods, 440
+  `self.assert` calls and the Mirror mock-call assertion. Static review found
+  no blocker. Product code, independent expected answers and size/resource gates
+  are unchanged. Guarded checks of all three edited test modules are complete;
+  this local development increment does not claim a full-suite pass.
+- Completed consolidation checks: r40 ran 81 (79 passed, 2 skips); r42/r43
+  ran all 95 acceptance tests (95 passed); r44 ran 89 source/privacy/smoke
+  tests (88 passed, 1 skip). Total: 265 unique tests, 262 passed, 3 skipped,
+  zero failures/errors; every outer/child exit 0 and cleanup PASS. The skips
+  are Windows symlink privilege, the absent old accepted-engine artifact,
+  and the unbuilt gate runner. All six unchanged size gates passed in r40.
+  r41 collected exactly 420 unique test IDs; group selection preserves that
+  inventory, and the interaction-model and scorecard class fixtures stay intact.
+- Broader core r45 hit the memory floor at 2,182,610,944 free bytes: 54 passes,
+  1 interrupted test, 60 not started in that group; outer exit 1, cleanup PASS,
+  no recorded test failure/error. The subsequent staff/journey groups (40 tests)
+  were not launched. After memory recovered to 2,527,105,024 bytes, r48's fresh
+  preflight measured 2,297,405,440 < 2,400,000,000 and refused launch: zero tests,
+  outer exit 1, mutex released. No later groups launched. Excluding partial r45
+  evidence leaves 155 of the 420 catalogued tests outside completed runs; their
+  raw partial results remain evidence, not a completed regression verdict.
+- Consolidation full run `cx-consolidation-r39-a1`: 207 completed passes,
+  2 skips (missing gate runner, Windows symlink privilege), 1 interrupted test
+  and 210 not started, no recorded test failure/error. The 210 started tests
+  reconcile. The guard stopped at 2,149,863,424 free bytes; outer exit 1,
+  cleanup PASS. All six size checks passed. Process tests reached 42 passes
+  and 1 skip; the 32 Engine/Mirror tests were not reached on their edited files.
+  Subsequent free memory was 1,791,819,776 bytes, below the 2,400,000,000-byte
+  launch minimum, so no shorter run was launched. No complete suite verdict.
 - Final repair and budget check, `cx-preconsolidation-r38-a1`: 8/8 passed,
   zero failures/errors/skips, guard exit 0, cleanup PASS. This reruns the NULL-ID
   successor rejection and borrowed crash helper, plus every unchanged size gate.
@@ -224,10 +255,12 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 - Private ZK is active in its separate prototype repository, evidence-only and
   never a core/gate prerequisite; old `parked/` sources remain reference.
 
-Next: consolidate duplicated test setup first, as directed by the founder;
-preserve every test, assertion and the 78,019-line cap (current tree: 78,018).
-Commit the reviewed increments with their actual evidence, then complete the
-combined regression and the independently reviewed financial input contract;
+Next: when the unchanged memory guard permits, finish the remaining grouped
+regression. The consolidation's changed-file checks are complete. The
+78,019-line cap is unchanged (current tree: 77,887; 132 lines
+of room). The full financial input contract remains unimplemented; the reviewed
+500-650-line estimate exceeds that room and is not a measured implementation.
+Further structural consolidation is needed before implementing it under the cap;
 complete the real-browser error-state crawl; when memory permits, rebuild
 and repin the final Lean tree, then assemble/verify/extract/run the offline kit.
 The founder requested local commits; this candidate is not a qualified release.

@@ -390,6 +390,28 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             cleanup_complete=True,
         )
 
+    @staticmethod
+    def _run_pinned_stream(
+        executable: Path,
+        payload: bytes,
+        workspace: Path,
+        *,
+        frame: bytes = b"frame",
+        arguments: tuple[str, ...] = (),
+        timeout_seconds: float = 1.0,
+        **options: object,
+    ) -> process.ContainedVerifierResult:
+        return process.run_contained_verifier_stream(
+            executable,
+            arguments,
+            frame,
+            workspace=workspace,
+            timeout_seconds=timeout_seconds,
+            expected_executable_size_bytes=len(payload),
+            expected_executable_sha256=hashlib.sha256(payload).digest(),
+            **options,
+        )
+
     def test_handle_list_is_exact_and_attribute_cleanup_is_ordered(self):
         kernel = _Kernel()
         parent, readers = self._descriptors()
@@ -505,16 +527,7 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             for name, kwargs, error_code in stream_cases:
                 with self.subTest(name=name):
                     with self.assertRaisesRegex(process.VerifierProcessError, error_code):
-                        process.run_contained_verifier_stream(
-                            executable,
-                            (),
-                            b"frame",
-                            workspace=root,
-                            timeout_seconds=1.0,
-                            expected_executable_size_bytes=len(payload),
-                            expected_executable_sha256=digest,
-                            **kwargs,
-                        )
+                        self._run_pinned_stream(executable, payload, root, **kwargs)
 
     def test_stream_expected_input_length_rejects_off_by_one_before_pipe(self):
         executable = Path(sys.executable)
@@ -524,14 +537,11 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             for length in (9_467, 9_469):
                 with self.subTest(length=length):
                     with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_input_length"):
-                        process.run_contained_verifier_stream(
+                        self._run_pinned_stream(
                             executable,
-                            (),
-                            b"x" * length,
-                            workspace=workspace,
-                            timeout_seconds=1.0,
-                            expected_executable_size_bytes=len(payload),
-                            expected_executable_sha256=hashlib.sha256(payload).digest(),
+                            payload,
+                            workspace,
+                            frame=b"x" * length,
                             expected_input_bytes=9_468,
                         )
 
@@ -562,14 +572,10 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root_name:
             workspace = Path(root_name)
             with patch.object(process, "run_contained_verifier", side_effect=runner):
-                result = process.run_contained_verifier_stream(
+                result = self._run_pinned_stream(
                     executable,
-                    (),
-                    b"frame",
-                    workspace=workspace,
-                    timeout_seconds=1.0,
-                    expected_executable_size_bytes=len(payload),
-                    expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    payload,
+                    workspace,
                     stdout_cap_bytes=64,
                     stderr_cap_bytes=8,
                     stdout_ascii=False,
@@ -601,15 +607,11 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root_name:
             workspace = Path(root_name)
             with patch.object(process, "run_contained_verifier", side_effect=runner):
-                result = process.run_contained_verifier_stream(
+                result = self._run_pinned_stream(
                     executable,
-                    (),
-                    b"frame",
-                    workspace=workspace,
-                    timeout_seconds=1.0,
+                    payload,
+                    workspace,
                     job_memory_cap_bytes=2_000_000_000,
-                    expected_executable_size_bytes=len(payload),
-                    expected_executable_sha256=hashlib.sha256(payload).digest(),
                 )
             self.assertIs(result, contained)
             self.assertEqual(captured["job_memory_cap_bytes"], 2_000_000_000)
@@ -622,15 +624,11 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                         side_effect=AssertionError("invalid stream cap reached runner"),
                     ):
                         with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_memory_cap"):
-                            process.run_contained_verifier_stream(
+                            self._run_pinned_stream(
                                 executable,
-                                (),
-                                b"frame",
-                                workspace=workspace,
-                                timeout_seconds=1.0,
+                                payload,
+                                workspace,
                                 job_memory_cap_bytes=invalid,
-                                expected_executable_size_bytes=len(payload),
-                                expected_executable_sha256=hashlib.sha256(payload).digest(),
                             )
 
     def test_stream_writer_start_failure_releases_known_open_descriptors(self):
@@ -1510,27 +1508,11 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             stale = workspace / "stale-entry"
             stale.write_bytes(b"stale")
             with self.assertRaisesRegex(process.VerifierProcessError, "verifier_workspace_not_empty"):
-                process.run_contained_verifier_stream(
-                    executable,
-                    (),
-                    b"frame",
-                    workspace=workspace,
-                    timeout_seconds=30.0,
-                    expected_executable_size_bytes=len(payload),
-                    expected_executable_sha256=hashlib.sha256(payload).digest(),
-                )
+                self._run_pinned_stream(executable, payload, workspace, timeout_seconds=30.0)
             stale.unlink()
             with patch.object(process, "_is_reparse_point", return_value=True):
                 with self.assertRaisesRegex(process.VerifierProcessError, "verifier_workspace"):
-                    process.run_contained_verifier_stream(
-                        executable,
-                        (),
-                        b"frame",
-                        workspace=workspace,
-                        timeout_seconds=30.0,
-                        expected_executable_size_bytes=len(payload),
-                        expected_executable_sha256=hashlib.sha256(payload).digest(),
-                    )
+                    self._run_pinned_stream(executable, payload, workspace, timeout_seconds=30.0)
 
     def test_workspace_identity_ignores_volatile_windows_attribute_bits(self):
         class _Metadata:

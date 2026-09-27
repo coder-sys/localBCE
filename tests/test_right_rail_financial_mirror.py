@@ -75,6 +75,30 @@ class FinancialMirrorTests(unittest.TestCase):
             path.write_text(json.dumps(cli.authority_file_record(self.authority)), encoding="ascii")
         return path
 
+    def _cli_prefix(self, *, include_authority: bool = True) -> list[str]:
+        prefix = ["--database", str(self.db)]
+        if include_authority:
+            prefix += ["--authority-file", str(self._authority_file())]
+        return prefix + [
+            "--state-id", self.config.state_id,
+            "--deployment-id", self.config.deployment_id,
+            "--program-id", self.config.program_id,
+            "--period-id", self.config.period_id,
+        ]
+
+    @staticmethod
+    def _invoke_cli(args: list[str]) -> tuple[int, str, str]:
+        from tools import right_rail_financial_cli as cli
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            status = cli.main(args)
+        return status, stdout.getvalue(), stderr.getvalue()
+
+    def _invoke_cli_json(self, args: list[str]) -> tuple[int, dict[str, object], str]:
+        status, stdout, stderr = self._invoke_cli(args)
+        return status, json.loads(stdout) if stdout else {}, stderr
+
     def _populate_owner(self) -> None:
         scope = CONTROL_PACK_V1.scope
         pack = owner.ControlPack(
@@ -499,21 +523,13 @@ class FinancialMirrorTests(unittest.TestCase):
         self.mirror.verify_integrity()
 
     def test_cli_reporting_correction_default_retry_and_identity_conflicts(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
         self.mirror.record_reporting_evidence(
             item_id=H_ITEM_ID,
             report_id="report:cli:prior:h",
             evidence_id="evidence:report:cli:prior:h",
             event_at_ms=1_700_000_000_000,
         )
-        common = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
+        common = self._cli_prefix() + [
             "record-reporting-correction",
             "--item-id", H_ITEM_ID,
             "--report-id", "report:cli:correction:h",
@@ -524,15 +540,7 @@ class FinancialMirrorTests(unittest.TestCase):
             "--expected-revision", "1",
         ]
 
-        def invoke(args: list[str]) -> tuple[int, dict[str, object], str]:
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = cli.main(args)
-            output = json.loads(stdout.getvalue()) if stdout.getvalue() else {}
-            return status, output, stderr.getvalue()
-
-        status, first, stderr = invoke(common)
+        status, first, stderr = self._invoke_cli_json(common)
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(first["status"], "RECORDED")
@@ -540,7 +548,7 @@ class FinancialMirrorTests(unittest.TestCase):
         before_summary = self.mirror.summary()
         before_row = next(row for row in before["evidence_references"] if row["evidence_id"] == "evidence:report:cli:correction:h")
 
-        status, duplicate, stderr = invoke(common)
+        status, duplicate, stderr = self._invoke_cli_json(common)
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(duplicate["status"], "DUPLICATE")
@@ -548,10 +556,10 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(next(row for row in after["evidence_references"] if row["evidence_id"] == "evidence:report:cli:correction:h")["record_digest"], before_row["record_digest"])
         self.assertEqual(self.mirror.summary()["sequence"], before_summary["sequence"])
 
-        status, _changed_time, stderr = invoke(common + ["--event-at-ms", str(int(before_row["event_at_ms"]) + 1)])
+        status, _changed_time, stderr = self._invoke_cli_json(common + ["--event-at-ms", str(int(before_row["event_at_ms"]) + 1)])
         self.assertEqual(status, 2)
         self.assertEqual(stderr, "ERROR:evidence_identity_conflict\n")
-        status, _changed_payload, stderr = invoke(
+        status, _changed_payload, stderr = self._invoke_cli_json(
             [value if value != "report:cli:correction:h" else "report:cli:changed:h" for value in common]
         )
         self.assertEqual(status, 2)
@@ -560,8 +568,6 @@ class FinancialMirrorTests(unittest.TestCase):
         self.mirror.verify_integrity()
 
     def test_v5_evaluation_receipt_is_mirror_and_cli_reference(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
         self._prepare_claim()
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
         self.assertEqual(receipt["schema"], "RR/FINANCIAL/MIRROR/v1")
@@ -569,24 +575,9 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(receipt["evaluation_result_digest"], receipt["result_digest"])
         self.assertNotIn("raw_evidence", receipt)
         self.assertNotIn("payload", receipt)
-        common = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
-        ]
+        common = self._cli_prefix()
 
-        def invoke(args: list[str]) -> tuple[int, dict[str, object], str]:
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = cli.main(args)
-            output = json.loads(stdout.getvalue()) if stdout.getvalue() else {}
-            return status, output, stderr.getvalue()
-
-        status, cli_receipt, stderr = invoke(common + ["current-evaluation-receipt", "--item-id", H_ITEM_ID])
+        status, cli_receipt, stderr = self._invoke_cli_json(common + ["current-evaluation-receipt", "--item-id", H_ITEM_ID])
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(cli_receipt["evaluation_id"], receipt["evaluation_id"])
@@ -594,7 +585,7 @@ class FinancialMirrorTests(unittest.TestCase):
 
         cli_engine_workspace = self.root / "cli-correction-engine-workspace"
         cli_engine_workspace.mkdir()
-        status, command, stderr = invoke(
+        status, command, stderr = self._invoke_cli_json(
             common
             + [
                 "--correction-transition-executable", str(self.store.correction_transition_release.executable),
@@ -617,17 +608,9 @@ class FinancialMirrorTests(unittest.TestCase):
         self.mirror.verify_integrity()
 
     def test_cli_authorize_offset_success_retry_and_binding_conflict(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
         self._prepare_claim()
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
-        common = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
+        common = self._cli_prefix() + [
             "authorize-offset",
             "--item-id", H_ITEM_ID,
             "--claim-id", "claim:offset:h",
@@ -640,20 +623,13 @@ class FinancialMirrorTests(unittest.TestCase):
             "--evaluation-result-digest", str(receipt["result_digest"]),
         ]
 
-        def invoke(args: list[str]) -> tuple[int, dict[str, object], str]:
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = cli.main(args)
-            return status, json.loads(stdout.getvalue()) if stdout.getvalue() else {}, stderr.getvalue()
-
-        status, first, stderr = invoke(common)
+        status, first, stderr = self._invoke_cli_json(common)
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(first["status"], "AUTHORIZED")
         after_first = self.mirror.summary()
 
-        status, duplicate, stderr = invoke(common)
+        status, duplicate, stderr = self._invoke_cli_json(common)
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(duplicate["status"], "DUPLICATE")
@@ -661,40 +637,26 @@ class FinancialMirrorTests(unittest.TestCase):
 
         changed = list(common)
         changed[changed.index("--decision-at-ms") + 1] = "1774864800001"
-        status, _changed, stderr = invoke(changed)
+        status, _changed, stderr = self._invoke_cli_json(changed)
         self.assertEqual(status, 2)
         self.assertEqual(stderr, "ERROR:determination_request_conflict\n")
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
         self.mirror.verify_integrity()
 
     def test_cli_payment_link_reaches_the_owner(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
         sequence = self.mirror.summary()["sequence"]
-        stderr = io.StringIO()
-        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
-            status = cli.main([
-                "--database", str(self.db), "--authority-file", str(self._authority_file()),
-                "--state-id", self.config.state_id, "--deployment-id", self.config.deployment_id,
-                "--program-id", self.config.program_id, "--period-id", self.config.period_id,
-                "record-payment", "--item-id", H_ITEM_ID, "--payment-id", "payment:cli:h", "--common-origin-id", "origin:cli:h",
-                "--amount-cents", "1", "--evidence-id", "evidence:cli:h", "--event-at-ms", "1",
-                "--expected-revision", str(self.mirror.obligation_detail(H_ITEM_ID)["revision"]), "--pays-action-id", "action:cli:none",
-            ])
-        self.assertEqual((status, stderr.getvalue()), (2, "ERROR:payment_request_unknown\n"))
+        status, _output, stderr = self._invoke_cli(self._cli_prefix() + [
+            "record-payment", "--item-id", H_ITEM_ID, "--payment-id", "payment:cli:h", "--common-origin-id", "origin:cli:h",
+            "--amount-cents", "1", "--evidence-id", "evidence:cli:h", "--event-at-ms", "1",
+            "--expected-revision", str(self.mirror.obligation_detail(H_ITEM_ID)["revision"]), "--pays-action-id", "action:cli:none",
+        ])
+        self.assertEqual((status, stderr), (2, "ERROR:payment_request_unknown\n"))
         self.assertEqual(self.mirror.summary()["sequence"], sequence)
 
     def test_cli_mutations_require_explicit_actor_and_expected_revision(self) -> None:
         from tools import right_rail_financial_cli as cli
 
-        common = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
-        ]
+        common = self._cli_prefix()
         actor = ["--actor-id", "synthetic-official", "--actor-role", "FINANCE_DECISION", "--expected-revision", "1"]
         offset = ["--item-id", H_ITEM_ID, "--claim-id", "claim:offset:h", "--evaluation-id", "evaluation:h", "--evaluation-result-digest", "0" * 64]
         commands = {
@@ -731,9 +693,8 @@ class FinancialMirrorTests(unittest.TestCase):
 
         # The supplied actor and revision reach the Mirror exactly, for acknowledge too.
         with mock.patch.object(FinancialMirror, "acknowledge_action", return_value={"status": "STUB"}) as acknowledge:
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                self.assertEqual(cli.main(common + ["acknowledge-action", "--action-id", "action:h", "--acknowledgment-ref", "ack:h",
-                                                    "--actor-id", "synthetic-receiver", "--actor-role", "RECEIVER", "--expected-revision", "7"]), 0)
+            self.assertEqual(self._invoke_cli(common + ["acknowledge-action", "--action-id", "action:h", "--acknowledgment-ref", "ack:h",
+                                                       "--actor-id", "synthetic-receiver", "--actor-role", "RECEIVER", "--expected-revision", "7"])[0], 0)
         acknowledge.assert_called_once_with(
             "action:h", "ack:h", actor_id="synthetic-receiver", actor_role="RECEIVER", expected_revision=7
         )
@@ -742,10 +703,9 @@ class FinancialMirrorTests(unittest.TestCase):
         stale = list(commands["record-payment-evidence"])
         stale[stale.index("--expected-revision") + 1] = str(revision - 1)
         sequence = self.mirror.summary()["sequence"]
-        stderr = io.StringIO()
-        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
-            self.assertEqual(cli.main(common + ["record-payment-evidence"] + stale), 2)
-        self.assertEqual(stderr.getvalue(), "ERROR:obligation_revision_conflict\n")
+        status, _output, stderr = self._invoke_cli(common + ["record-payment-evidence"] + stale)
+        self.assertEqual(status, 2)
+        self.assertEqual(stderr, "ERROR:obligation_revision_conflict\n")
         self.assertEqual(self.mirror.summary()["sequence"], sequence)
 
     def test_population_status_reports_manifest_completeness_without_roster(self) -> None:
@@ -899,43 +859,16 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(verified["package_digest"], json.loads(package.decode("ascii"))["package_digest"])
 
     def test_cli_requires_explicit_trusted_authority_file(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        argv = [
-            "--database", str(self.db),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
-            "summary",
-        ]
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            status = cli.main(argv)
+        status, stdout, stderr = self._invoke_cli(self._cli_prefix(include_authority=False) + ["summary"])
         self.assertEqual(status, 2)
-        self.assertEqual(stdout.getvalue(), "")
-        self.assertEqual(stderr.getvalue(), "ERROR:trusted_authority_missing\n")
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "ERROR:trusted_authority_missing\n")
 
     def test_cli_summary_is_local_and_redacted(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        argv = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
-            "summary",
-        ]
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            status = cli.main(argv)
+        status, stdout, stderr = self._invoke_cli(self._cli_prefix() + ["summary"])
         self.assertEqual(status, 0)
-        self.assertEqual(stderr.getvalue(), "")
-        summary = json.loads(stdout.getvalue())
+        self.assertEqual(stderr, "")
+        summary = json.loads(stdout)
         self.assertEqual(summary["schema"], "RR/FINANCIAL/MIRROR/v1")
         self.assertFalse(summary["dispatch_enabled"])
         self.assertFalse(summary["egress_enabled"])
