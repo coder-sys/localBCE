@@ -46,6 +46,9 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   bytecode files written by the extra restart test in the old extraction; r88
   freshly extracted the unchanged archive and passed both serve/restart cycles
   with stricter harness cleanup. The r88 extraction is the clean handoff.
+  Clean checkout `e3fb69f` passed all 24 kit/size/protected-invariant checks in
+  r89 (19.393 s, zero failures/errors/skips); child/guard exits zero, cleanup PASS.
+  Its Lean tree is unchanged from the fresh build and formal proof evidence.
   r71 launched no tests (4,146,638,848 free
   bytes below the unchanged 4,190,433,321 start floor); r72 began after recovery.
 - Receiver cash-file increment: 20/20 new checks pass in guarded r63, including
