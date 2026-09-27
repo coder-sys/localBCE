@@ -7,44 +7,29 @@ unit, the friction removed). The full production target stays in
 `docs/RIGHTRAIL_FULL_STACK_TARGET.md`; this file is the order of work and the
 honest gap, not a second target.
 
-## 1. Honest position
+## 1. Position and evidence
 
-Built (synthetic, single machine, one workflow):
-- Blind Ledger financial owner and an independent checker for one recurring
-  responsibility (obligations, offsets, corrections), with append-only history,
-  tamper refusal on open, exact-retry handling, and Lean-proven correction rules
-  (13 gated theorems, 32 test vectors).
-- Continuity export/restore/verify and Switch shadow comparison, as engines
-  without a staff-facing flow.
-- A thin staff workspace (one page) and Mirror read model.
-- Provider App checking core (rules and Lean model, no app); Provider Trust Graph
-  read model and basic viewer on synthetic NC-Medicaid-shaped data.
-
-Not built: rule authoring/approval/publishing, a real daily staff workspace,
-director and audit reporting, any real-data connector (MCO payment reports,
-X12 820/835, MMIS extracts), login/SSO and role administration, hosting, key
-custody, backups and restore drills, monitoring and on-call, accessibility
-conformance, security attestations, and any second workflow.
-
-Rough share of a first sellable version: 20-25% (engineering estimate, not a
-measurement). The built part is the part that is hardest to retrofit; the rest
-is where customers feel the product.
+The original September 24 inventory and percentage estimate are superseded.
+`STATUS.md` records the current candidate, raw tests, browser coverage and gaps;
+`ARCHITECTURE.md` distinguishes running connections from the target. The staff
+workspace now connects correction, acknowledgment, linked cash, reporting and
+isolated restore; Switch remains read-only. NC FHIR captured-file intake connects
+source admission to the graph view, retaining unknown freshness and source truth.
+Financial-file adapters, approved live-source transport, shared provider/gate
+rules and identity consumption still require their own complete boundaries.
+The sequence below is a roadmap, not evidence that a feature is absent or done.
 
 ## 2. Is this headed for production grade?
 
-The core's safety design already exceeds what most state Medicaid financial
-tooling has (proven rules, tamper evidence, single writer, exact retries,
-independent re-check, tested exit). The code is a prototype: Python and SQLite
-on one machine. Production grade additionally requires, per target doc
-section 9: a multi-user hosted service with state SSO and storage-boundary
-authorization; state-controlled key custody; restore-tested encrypted backups;
-monitoring, incident runbooks and a human on call; measured capacity; real
-connectors; WCAG 2.1 AA accessibility; third-party security attestation; and an
-independent reviewer. A supplier cannot certify its own consequential work
-(target doc 9, "Independent assurance"), so some of this needs outside people
-(auditors, penetration testers, an implementation lead who has run Medicaid
-finance). Engineering can build nearly all of the software; attestation, on-call
-and state relationships need humans.
+Current evidence establishes specific synthetic workflows, not production
+qualification or superiority to other Medicaid systems. The constitution's
+honest-claims boundary still applies. A production service also needs state SSO,
+storage-boundary authorization, state-controlled key custody, restore-tested
+encrypted backups, monitoring and incident runbooks, measured capacity,
+qualified connectors, accessibility conformance and independent assessment.
+The full-stack target's proof and deployment roadmap governs that work; local
+tests alone cannot establish those operational properties. Attestation and
+on-call operations additionally require independent people and assigned owners.
 
 ## 3. Build order (each item: role, moment, measured unit, friction)
 
@@ -88,8 +73,8 @@ and state relationships need humans.
    searches the draft rule for loopholes (split claims, timing games). Unit:
    post-release corrections. Friction: gaming discovered years later in audit.
 10. **Cross-state benchmarks without sharing data.** Director, quarterly:
-    comparisons against other states computed without raw data leaving any
-    state (the parked private-proof track is the route). Network effect; only
+   comparisons against other states computed without raw data leaving any
+   state (the separate private-proof prototype is an evidence-only research route). Network effect; only
     after a second state exists.
 
 ## 4. Rules for every AI-assisted feature

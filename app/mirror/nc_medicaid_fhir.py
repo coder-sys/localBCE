@@ -211,16 +211,17 @@ def _success_page(profile: NcMedicaidFhirSourceProfile, sequence: int, request_u
 def _fetch_page(profile: NcMedicaidFhirSourceProfile, transport: FhirTransport, sequence: int, request_url: str, context: DynamicCaptureContext) -> dict[str, object]:
     attempts: list[int] = []
     retry_after_values: list[int | None] = []
-    response: FhirTransportResponse | None = None
-    transport_error: str | None = None
     failure_code: str | None = None
     for attempt in range(profile.transport_caps["max_retries"] + 1):
+        response: FhirTransportResponse | None = None
+        transport_error: str | None = None
         try:
             response = transport.fetch(request_url, timeout_seconds=profile.transport_caps["timeout_seconds"], attempt=attempt)
             attempts.append(response.status)
             try:
                 retry_after_values.append(_retry_after(response))
             except NcMedicaidFhirError:
+                retry_after_values.append(None)
                 return _failure_page(profile, sequence, request_url, response, attempts, retry_after_values, "retry-after", context=context)
             failure_code = _response_failure(response, request_url)
             if failure_code not in ("rate-limit", "server-error") or attempt >= profile.transport_caps["max_retries"]:

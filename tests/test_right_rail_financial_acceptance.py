@@ -43,6 +43,7 @@ from app.right_rail_financial_owner import (
     SyntheticTrustedAuthority,
 )
 from app.right_rail_financial_mirror import FinancialMirror
+from app import right_rail_financial_owner_independent as independent
 from app.right_rail_financial_owner_independent import (
     IndependentFinancialError,
     continuity_package_digest,
@@ -56,21 +57,24 @@ from tests import rightrail_financial_expected_cases as expected
 
 
 _CORRECTION_ENGINE_PATH = (
-    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction-e911" / "blind_financial_correction.exe"
+    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "blind_financial_correction.exe"
 )
 _CORRECTION_VECTOR_DIR = (
-    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction-e911" / "vectors"
+    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
 )
-_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_245_376
+_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_279_168
 _EXPECTED_CORRECTION_ARTIFACT_SHA256 = bytes.fromhex(
-    "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+    "1A7A18333726484A0737DA7B005EC699F73E99EA0CFACFB409B000F964BED3AF"
 )
 _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
-    "13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537"
+    "B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067"
 )
 _EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
-    "312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E"
+    "83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6"
 )
+_RETIRED_CORRECTION_ARTIFACT_SHA256 = "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+_B2_CORRECTION_ARTIFACT_SHA256 = "88D853961AB127EE33C65A57F6E35D03244FB5CCE2067F4A0FDF592ECC730992"
+_ACTION_B = "action:obligation-item-h:correction-b"
 _EXPECTED_PRIVATE_INDEX_SET_VERSION = 2
 _EXPECTED_PRIVATE_INDEXES = (
     (
@@ -4942,10 +4946,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 before = store.path.read_bytes()
                 declared: dict = {}
 
-                def encode(snapshot: object) -> bytes:
+                def encode(snapshot: object, **options: object) -> bytes:
                     # Lean also declares the post-state the wrong rows encode, so the checker's own
                     # derivation is what stands between them and COMMIT.
-                    wire = real_encode(snapshot)
+                    wire = real_encode(snapshot, **options)
                     if "mutation" in declared:
                         declared["mutation"]["resulting_input_wire"] = wire
                     return wire
@@ -5108,26 +5112,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:event-kind$"):
             self._make_owner(path=store.path)
 
-    def test_a_rehashed_row_image_cannot_change_the_accepted_acknowledgment(self) -> None:
-        # The acknowledgment event names the reference it accepted; the stored row must match it even
-        # when the row and its history image are edited together and the chain is re-hashed.
-        store = self._build_base_for_correction()
-        self._prepare_acknowledged(store)
-        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+    @staticmethod
+    def _rehash_history(path: Path, edit) -> int:
+        """Apply ``edit`` to every event payload and re-hash the chain, as a writer with file access could,
+        moving a correction follow-up's observed history head along with the chain."""
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
             triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'").fetchall()
             for name, _sql in triggers:
                 connection.execute(f'DROP TRIGGER "{name}"')
-            ref = connection.execute("SELECT acknowledgment_ref FROM action_outbox WHERE status='ACKNOWLEDGED'").fetchone()[0]
-            forged = ref[:-1] + ("8" if ref.endswith("9") else "9")
-            connection.execute("UPDATE action_outbox SET acknowledgment_ref=? WHERE acknowledgment_ref=?", (forged, ref))
             events = connection.execute("SELECT event_sequence,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,previous_head,committed_at_ms FROM financial_events ORDER BY event_sequence").fetchall()
             previous, edited = bytes(events[0][7]), 0
             for sequence, aggregate_type, aggregate_id, kind, before, after, payload_json, _previous, committed_at in events:
                 payload = json.loads(payload_json)
-                for image in payload.get("rows", ()):
-                    values = image.get("row") or image.get("set")
-                    if image["table"] == "action_outbox" and values.get("acknowledgment_ref") == ref:
-                        values["acknowledgment_ref"], edited = forged, edited + 1
+                edited += bool(edit(payload))
+                for observation in payload.get("correction_followup", {}).get("read_observations", {}).values():
+                    if observation.get("version_head") == bytes(_previous).hex().upper():
+                        observation["version_head"] = previous.hex().upper()
                 payload_bytes = owner._canonical(payload)
                 payload_digest = owner._digest(owner._EVENT_DOMAIN, payload_bytes)
                 header = b"".join(value.to_bytes(8, "big") for value in (before, after, committed_at))
@@ -5138,11 +5138,364 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
             for _name, sql in triggers:
                 connection.execute(sql)
-        self.assertGreaterEqual(edited, 1)
+        return edited
+
+    def test_a_rehashed_row_image_cannot_change_the_accepted_acknowledgment(self) -> None:
+        # The acknowledgment event names the reference it accepted; the stored row must match it even
+        # when the row and its history image are edited together and the chain is re-hashed.
+        store = self._build_base_for_correction()
+        self._prepare_acknowledged(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            ref = connection.execute("SELECT acknowledgment_ref FROM action_outbox WHERE status='ACKNOWLEDGED'").fetchone()[0]
+            forged = ref[:-1] + ("8" if ref.endswith("9") else "9")
+            connection.execute("UPDATE action_outbox SET acknowledgment_ref=? WHERE acknowledgment_ref=?", (forged, ref))
+
+        def forge(payload: dict) -> bool:
+            images = [image.get("row") or image.get("set") for image in payload.get("rows", ()) if image["table"] == "action_outbox"]
+            for values in images:
+                if values.get("acknowledgment_ref") == ref:
+                    values["acknowledgment_ref"] = forged
+            return any(values.get("acknowledgment_ref") == forged for values in images)
+
+        self.assertGreaterEqual(self._rehash_history(store.path, forge), 1)
         with self.assertRaisesRegex(IndependentFinancialError, "^replay:acknowledgment$"):
             self._assert_verified(store)
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:acknowledgment$"):
             self._make_owner(path=store.path)
+
+    def _correction_decided_by_engine(self, sha256: str) -> FinancialOwner:
+        # A correction as an earlier pinned engine committed it: the follow-up names that engine.
+        store = self._build_base_for_correction()
+        self._prepare_rejected(store)
+
+        def name_engine(payload: dict) -> bool:
+            artifact = payload.get("correction_followup", {}).get("artifact")
+            if artifact is not None:
+                artifact["sha256"] = sha256
+            return artifact is not None
+
+        self.assertEqual(self._rehash_history(store.path, name_engine), 1)
+        return store
+
+    def test_a_correction_decided_by_a_retired_engine_pin_still_opens(self) -> None:
+        store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
+        self._assert_verified(store)
+        outputs = self._make_owner(path=store.path).correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)
+        self.assertEqual(outputs["followup_status"], "CURRENT")
+        self.assertEqual(outputs["corporate_support"]["artifact"]["sha256"], _RETIRED_CORRECTION_ARTIFACT_SHA256)
+
+    def test_a_correction_naming_an_unknown_engine_is_refused(self) -> None:
+        store = self._correction_decided_by_engine("AB" * 32)
+        with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-followup-artifact-binding$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-followup-artifact-binding$"):
+            self._make_owner(path=store.path)
+
+    def test_a_retired_pin_registry_with_an_extra_line_is_refused(self) -> None:
+        store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
+        registry = self._path("RETIRED_PINS")
+        registry.write_bytes(independent.RETIRED_PINS_PATH.read_bytes() + b"AB" * 32 + b"\t2026-09-26\tforged\tcorrection-rule-v1\tforged\n")
+        with patch.object(independent, "RETIRED_PINS_PATH", registry):
+            with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-retired-pins$"):
+                self._assert_verified(store)
+            with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-retired-pins$"):
+                self._make_owner(path=store.path)
+
+    def test_a_malformed_retired_pin_registry_is_refused_even_when_pinned(self) -> None:
+        store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
+        current = financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper().encode("ascii")
+        original = independent.RETIRED_PINS_PATH.read_bytes()
+        for name, content in (
+            ("four-fields", original + b"AB" * 32 + b"\t2026-09-26\tforged\tb2-v1\n"),
+            ("unknown-rule", original + b"AB" * 32 + b"\t2026-09-26\tforged\tforged-rule\tforged\n"),
+            ("lower-case-sha", original + b"ab" * 32 + b"\t2026-09-26\tforged\tb2-v1\tforged\n"),
+            ("duplicate", original + original.splitlines(keepends=True)[0]),
+            ("lists-current", original + current + b"\t2026-09-26\tforged\tb2-v1\tforged\n"),
+            ("not-ascii", original + "\u00e9".encode("utf-8")),
+        ):
+            with self.subTest(name):
+                registry = self._path(f"RETIRED_PINS-{name}")
+                registry.write_bytes(content)
+                with patch.object(independent, "RETIRED_PINS_PATH", registry), patch.object(independent, "RETIRED_PINS_SHA256", hashlib.sha256(content).hexdigest()):
+                    with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-retired-pins$"):
+                        self._assert_verified(store)
+                    with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-retired-pins$"):
+                        self._make_owner(path=store.path)
+
+    def test_a_retired_engine_pin_never_decides_a_new_correction(self) -> None:
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        retired = replace(
+            _correction_transition_test_release(workspace=Path(self.temp_dir.name) / "correction-engine-workspace"),
+            executable_sha256=bytes.fromhex(_RETIRED_CORRECTION_ARTIFACT_SHA256),
+        )
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^correction_transition_failed$"):
+            self._reject(self._make_owner(path=store.path, correction_transition_release=retired), claim_id)
+        self.assertEqual(self._durable_counts(store.path), counts)
+
+    def _as_decided(self, path: Path, sha256: str, requested_cents: int, action_id: str = expected.ACTION_CORRECTION_ID) -> None:
+        """Rewrite correction ``action_id`` as engine ``sha256`` decided it, requesting ``requested_cents``: rows, row images, chain."""
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+            (payload_json,) = connection.execute("SELECT payload_json FROM actions WHERE action_id=?", (action_id,)).fetchone()
+            payload_text = owner._canonical({**json.loads(payload_json), "amount_cents": requested_cents}).decode("ascii")
+            digest = owner._digest(owner._ACTION_DOMAIN, payload_text.encode("ascii"))
+            triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('actions','action_outbox')").fetchall()
+            for name, _sql in triggers:
+                connection.execute(f'DROP TRIGGER "{name}"')
+            connection.execute("UPDATE actions SET payload_json=?,payload_digest=? WHERE action_id=?", (payload_text, digest, action_id))
+            connection.execute("UPDATE action_outbox SET payload_digest=? WHERE action_id=?", (digest, action_id))
+            for _name, sql in triggers:
+                connection.execute(sql)
+
+        def as_decided(payload: dict) -> bool:
+            for image in payload.get("rows", ()):
+                values = image.get("row", {})
+                if image["table"] == "action_outbox" and values.get("action_id") == action_id:
+                    values["payload_digest"] = {"hex": digest.hex().upper()}
+            artifact = payload.get("correction_followup", {}).get("artifact") if payload.get("action_id") == action_id else None
+            if artifact is not None:
+                artifact["sha256"] = sha256
+            return artifact is not None
+
+        self.assertEqual(self._rehash_history(path, as_decided), 1)
+
+    def test_history_is_judged_by_the_amount_rule_of_the_engine_that_decided_it(self) -> None:
+        # rr-review M1: E911 requested the whole claim (correction-rule-v1), 88D8 the unpaid balance (b2-v1).
+        # A 300,000 claim rejected on 100,000 unpaid is valid history only as the engine it names decided it,
+        # and never requesting more than was requestable: E911's whole claim is refused (round 3 #1).
+        store = self._build_base_for_correction()
+        cash = expected.H_CASH_EVIDENCE
+        store.record_payment_evidence(
+            item_id=cash.item_id, payment_id="payment:h:cash", common_origin_id=cash.common_origin_id,
+            amount_cents=expected.H_OWED_CENTS - 100_000, evidence_id=cash.evidence_id, event_at_ms=cash.event_at_ms,
+            source_id=cash.source_id, source_version=cash.source_version, local_ref=cash.local_ref,
+        )
+        self._reject(store, self._record_claim(store))
+        current = financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
+        for name, sha256, requested_cents, refusal in (
+            ("e911-whole-claim", _RETIRED_CORRECTION_ARTIFACT_SHA256, 300_000, "action:requestable"),
+            ("e911-unpaid-balance", _RETIRED_CORRECTION_ARTIFACT_SHA256, 100_000, "action:payload-binding"),
+            ("88d8-unpaid-balance", _B2_CORRECTION_ARTIFACT_SHA256, 100_000, None),
+            ("current-whole-claim", current, 300_000, "action:payload-binding"),
+        ):
+            with self.subTest(name):
+                path = self._path(f"{name}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                self._as_decided(path, sha256, requested_cents)
+                if refusal is None:
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+                    self._make_owner(path=path)
+                else:
+                    with self.assertRaisesRegex(IndependentFinancialError, f"^{refusal}$"):
+                        verify_database(path, expected_config=store.config, expected_authority=self.authority)
+
+    def _two_claim_corrections(self, first_cents: int, second_cents: int, unpaid_cents: int = expected.UNAPPROVED_OFFSET_CENTS) -> tuple[FinancialOwner, object]:
+        """``unpaid_cents`` unpaid with claims A and B; A is rejected with a correction; returns B's rejection to call."""
+        store = self._build_base_for_correction()
+        cash = expected.H_CASH_EVIDENCE
+        store.record_payment_evidence(
+            item_id=cash.item_id, payment_id="payment:h:cash", common_origin_id=cash.common_origin_id,
+            amount_cents=expected.H_OWED_CENTS - unpaid_cents, evidence_id=cash.evidence_id, event_at_ms=cash.event_at_ms,
+            source_id=cash.source_id, source_version=cash.source_version, local_ref=cash.local_ref,
+        )
+        for suffix, cents in (("a", first_cents), ("b", second_cents)):
+            store.record_offset_claim(
+                item_id=expected.H_ITEM_ID, claim_id=f"claim:obligation-item-h:offset-{suffix}", amount_cents=cents,
+                evidence_id=f"evidence:offset-h:claim-{suffix}", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS,
+            )
+        self._reject(store, "claim:obligation-item-h:offset-a")
+        self.assertEqual(store.current_evaluation_receipt(expected.H_ITEM_ID)["shortfall_cents"], unpaid_cents)  # rejecting A leaves it unpaid
+
+        def reject_b() -> dict[str, object]:
+            receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+            self._advance_clock(store, expected.CORRECTION_AUTH_MS + 1_000)  # B is decided after A committed
+            return store.reject_offset_and_authorize_correction(
+                item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-b", expected_revision=receipt["revision"],
+                action_id=_ACTION_B, decision_at_ms=expected.CORRECTION_AUTH_MS + 1_000,
+                evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"],
+            )
+
+        return store, reject_b
+
+    @staticmethod
+    def _pay_a(store: FinancialOwner, cents: int, suffix: str = "p2", *, linked: bool = True) -> dict[str, object]:
+        """A cash payment of ``cents`` after A's decision, answering A's correction request when ``linked``."""
+        RightRailFinancialAcceptanceTests._advance_clock(store, expected.CORRECTION_AUTH_MS + 500)
+        return store.record_payment_evidence(
+            item_id=expected.H_ITEM_ID, payment_id=f"payment:h:{suffix}", common_origin_id=f"origin:payment:h:{suffix}",
+            amount_cents=cents, evidence_id=f"evidence:payment-h:{suffix}", event_at_ms=expected.CORRECTION_AUTH_MS + 500,
+            source_id="fixture-payment-file", source_version="payment-v2", local_ref=f"ref:payment:h:{suffix}",
+            pays_action_id=expected.ACTION_CORRECTION_ID if linked else None,
+        )
+
+    @staticmethod
+    def _requested_and_claimed(store: FinancialOwner) -> tuple[list[int], list[int]]:
+        """Correction request amounts (action rows) and decision event amounts, in decision order."""
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            requested = [json.loads(row[0])["amount_cents"] for row in connection.execute("SELECT payload_json FROM actions WHERE kind='CORRECTION_PAYMENT_REQUEST' ORDER BY revision")]
+            claimed = [row[0] for row in connection.execute("SELECT json_extract(payload_json,'$.amount_cents') FROM financial_events WHERE kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence")]
+        return requested, claimed
+
+    def test_a_second_correction_on_a_fully_requested_balance_is_refused(self) -> None:
+        # rr-review H1: two 300,000 claims on 300,000 unpaid requested 600,000; the second now requests nothing.
+        store, reject_b = self._two_claim_corrections(300_000, 300_000)
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialConflictError, "^correction_no_requestable_balance$"):
+            reject_b()
+        self.assertEqual(self._durable_counts(store.path), counts)
+        self.assertEqual(self._requested_and_claimed(store), ([300_000], [300_000]))
+        self._assert_verified(store)
+        self._make_owner(path=store.path)
+
+    def test_a_second_correction_requests_only_what_is_left(self) -> None:
+        # rr-review H1: claims of 200,000 and 200,000 on 300,000 unpaid request 200,000, then the 100,000 left.
+        # The decision events keep each claim's amount (L4); only the action rows carry the request.
+        store, reject_b = self._two_claim_corrections(200_000, 200_000)
+        reject_b()
+        self.assertEqual(self._requested_and_claimed(store), ([200_000, 100_000], [200_000, 200_000]))
+        self._assert_verified(store)
+        self._make_owner(path=store.path)
+
+    def test_a_paid_correction_request_no_longer_blocks_the_next(self) -> None:
+        # rr-review round 3 #2: 600,000 unpaid, claims A and B of 300,000. A requests 300,000 and is paid;
+        # 300,000 is still unpaid and no unpaid request covers it, so B requests it. A payment that
+        # names no request is plain cash: A still looks unpaid and B has nothing left to request. A
+        # reversed payment pays nothing: 600,000 is unpaid again, A asks for 300,000, so B's 400,000
+        # claim requests the other 300,000.
+        for linked, reversed_, b_cents, requested in ((True, False, 300_000, [300_000, 300_000]), (False, False, 300_000, [300_000]), (True, True, 400_000, [300_000, 300_000])):
+            with self.subTest(linked=linked, reversed=reversed_):
+                store, reject_b = self._two_claim_corrections(300_000, b_cents, unpaid_cents=600_000)
+                self._pay_a(store, 300_000, linked=linked)
+                if reversed_:
+                    store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+                if linked:
+                    reject_b()
+                else:
+                    with self.assertRaisesRegex(FinancialConflictError, "^correction_no_requestable_balance$"):
+                        reject_b()
+                self.assertEqual(self._requested_and_claimed(store)[0], requested)
+                self._assert_verified(store)
+                self._make_owner(path=store.path)
+
+    def test_a_partly_paid_correction_request_counts_only_its_unpaid_part(self) -> None:
+        # 600,000 unpaid; A requests 300,000 and 100,000 of it is paid; B's 400,000 claim requests the
+        # 500,000 still unpaid less A's unpaid 200,000.
+        store, reject_b = self._two_claim_corrections(300_000, 400_000, unpaid_cents=600_000)
+        self._pay_a(store, 100_000)
+        reject_b()
+        self.assertEqual(self._requested_and_claimed(store), ([300_000, 300_000], [300_000, 400_000]))
+        self._assert_verified(store)
+        self._make_owner(path=store.path)
+
+    def test_a_payment_never_pays_more_than_its_request_leaves_unpaid(self) -> None:
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self.assertEqual(self._pay_a(store, 200_000)["status"], "RECORDED")
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_request$"):
+            self._pay_a(store, 100_001, "p3")
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_request_unknown$"):
+            store.record_payment_evidence(
+                item_id=expected.H_ITEM_ID, payment_id="payment:h:p4", common_origin_id="origin:payment:h:p4", amount_cents=1,
+                evidence_id="evidence:payment-h:p4", event_at_ms=expected.CORRECTION_AUTH_MS + 500, pays_action_id=_ACTION_B,
+            )
+        self.assertEqual(self._durable_counts(store.path), counts)
+        self.assertEqual(self._pay_a(store, 100_000, "p3")["status"], "RECORDED")  # exactly what is left
+        self._assert_verified(store)
+        # The checker refuses a link the Owner would not have written.
+
+        def link_cash(payload: dict) -> bool:  # the cash paid before the request existed
+            if payload.get("payment_id") == "payment:h:cash" and "common_origin_id" in payload:
+                payload["pays_action_id"] = expected.ACTION_CORRECTION_ID
+                return True
+            return False
+
+        early = self._path("early-link.sqlite")
+        early.write_bytes(store.path.read_bytes())
+        self.assertEqual(self._rehash_history(early, link_cash), 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
+            verify_database(early, expected_config=store.config, expected_authority=self.authority)
+
+    def test_a_resent_payment_source_cannot_change_its_link(self) -> None:
+        # rr-review round 3 LOW #3: a source already recorded is a duplicate only if the link it carries matches.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 100_000)
+        self._pay_a(store, 50_000, "p3", linked=False)
+
+        def resend(suffix: str, pays_action_id: str | None) -> dict[str, object]:
+            return store.record_payment_evidence(
+                item_id=expected.H_ITEM_ID, payment_id=f"payment:h:resent-{suffix}", common_origin_id=f"origin:payment:h:{suffix}",
+                amount_cents=100_000 if suffix == "p2" else 50_000, evidence_id=f"evidence:payment-h:resent-{suffix}",
+                event_at_ms=expected.CORRECTION_AUTH_MS + 500, pays_action_id=pays_action_id,
+            )
+
+        counts = self._durable_counts(store.path)
+        for suffix, link in (("p2", None), ("p2", _ACTION_B), ("p3", expected.ACTION_CORRECTION_ID), ("p3", _ACTION_B)):
+            with self.subTest(suffix=suffix, link=link), self.assertRaisesRegex(FinancialConflictError, "^payment_request_conflict$"):
+                resend(suffix, link)
+        self.assertEqual(self._durable_counts(store.path), counts)
+        self.assertEqual(resend("p2", expected.ACTION_CORRECTION_ID)["status"], "DUPLICATE")
+        self.assertEqual(resend("p3", None)["status"], "DUPLICATE")
+        self._assert_verified(store)
+
+    def test_a_relabelled_second_correction_is_refused(self) -> None:
+        # rr-review round 3 #1: 300,000 unpaid, claims A and B of 200,000; honest requests are 200,000
+        # then 100,000. Relabelling B as decided by a retired engine that requests 200,000 (400,000 on
+        # 300,000) is refused whichever retired engine it names, and so is a retired engine deciding
+        # after a newer one even when the amount fits (only the engine-order check sees that).
+        store, reject_b = self._two_claim_corrections(200_000, 200_000)
+        reject_b()
+        for name, sha256, cents, refusal in (
+            ("b2-v1", _B2_CORRECTION_ARTIFACT_SHA256, 200_000, "action:engine-order"),
+            ("e911", _RETIRED_CORRECTION_ARTIFACT_SHA256, 200_000, "action:engine-order"),
+        ):
+            with self.subTest(name):
+                path = self._path(f"relabel-{name}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                self._as_decided(path, sha256, cents, _ACTION_B)
+                with self.assertRaisesRegex(IndependentFinancialError, f"^{refusal}$"):
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        order_only, reject_b = self._two_claim_corrections(200_000, 100_000)
+        reject_b()
+        self.assertEqual(self._requested_and_claimed(order_only)[0], [200_000, 100_000])
+        path = self._path("relabel-order-only.sqlite")
+        path.write_bytes(order_only.path.read_bytes())
+        self._as_decided(path, _B2_CORRECTION_ARTIFACT_SHA256, 100_000, _ACTION_B)
+        with self.assertRaisesRegex(IndependentFinancialError, "^action:engine-order$"):
+            verify_database(path, expected_config=order_only.config, expected_authority=self.authority)
+        # Retired before current is the order history really has: A as E911 decided it, then B.
+        path = self._path("retired-then-current.sqlite")
+        path.write_bytes(store.path.read_bytes())
+        self._as_decided(path, _RETIRED_CORRECTION_ARTIFACT_SHA256, 200_000)
+        verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        self._make_owner(path=path)
+
+    def test_a_cancelled_correction_or_changed_decision_amount_is_refused(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_rejected(store)
+        cancelled = self._path("cancelled.sqlite")
+        cancelled.write_bytes(store.path.read_bytes())
+        with closing(sqlite3.connect(str(cancelled), isolation_level=None)) as connection:  # actions rows carry no history image
+            self.assertEqual(connection.execute("UPDATE actions SET status='CANCELLED' WHERE action_id=?", (expected.ACTION_CORRECTION_ID,)).rowcount, 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^action:status$"):
+            verify_database(cancelled, expected_config=store.config, expected_authority=self.authority)
+
+        def change_amount(payload: dict) -> bool:
+            if payload.get("action_id") == expected.ACTION_CORRECTION_ID and "correction_followup" in payload:
+                payload["amount_cents"] += 1
+                return True
+            return False
+
+        changed = self._path("decision-amount.sqlite")
+        changed.write_bytes(store.path.read_bytes())
+        self.assertEqual(self._rehash_history(changed, change_amount), 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^action:event-amount$"):
+            verify_database(changed, expected_config=store.config, expected_authority=self.authority)
 
     def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:
         # Final review of 75a5517, finding 5: publish opened the case after the first evaluation,

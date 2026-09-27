@@ -78,6 +78,8 @@
         "determination_authority_stale": { "screen": "decision", "message": "The signing authority has changed. Reopen the package before deciding." },
         "offset_claim_missing": { "screen": "decision", "message": "Plan A's offset claim is missing from H's record." },
         "offset_claim_not_claimed": { "screen": "decision", "message": "Plan A's offset was never actually claimed; there is nothing to reject." },
+        "correction_no_shortfall": { "screen": "decision", "message": "H has no unpaid balance, so there is nothing to correct; nothing was recorded." },
+        "correction_no_requestable_balance": { "screen": "decision", "message": "Earlier correction requests count as outstanding until a payment is linked to them, and they already ask for all of H's unpaid balance; nothing was recorded." },
         "history_capacity": { "screen": "decision", "message": "The Owner's history is full; no more decisions can be recorded in this demo." },
         "history_segment_size": { "screen": "decision", "message": "This decision would overfill the open history segment; nothing was recorded." },
         "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },

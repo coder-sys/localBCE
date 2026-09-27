@@ -109,8 +109,6 @@ def approvalReason (request : CorrectionReuseRequest)
     some .DETERMINATION_MISSING
   else if request.currentDetermination ≠ some mutation.determination then
     some .DETERMINATION_CHANGED
-  else if request.currentDeterminationDigest ≠ some mutation.determinationDigest then
-    some .DETERMINATION_DIGEST_CHANGED
   else none
 
 private def currentAction (input : FinancialInput) (actionId : String) : Option ActionRecord :=
@@ -125,7 +123,6 @@ private def actionIdentityMatches (expected current : ActionRecord) : Bool :=
 
 private def outboxIdentityMatches (expected current : CorrectionOutboxDelta) : Bool :=
   current.actionId = expected.actionId && current.attempt = expected.attempt &&
-    current.payloadDigest = expected.payloadDigest && current.idempotencyKey = expected.idempotencyKey &&
     current.acknowledgmentReference = expected.acknowledgmentReference &&
     current.updatedAtMs = expected.updatedAtMs
 

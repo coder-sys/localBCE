@@ -68,10 +68,12 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             release = _correction_transition_test_release(
                 workspace=workspace / "correction-engine-workspace"
             )
-        return StaffWorkflow(
+        workflow = StaffWorkflow(
             workspace,
             correction_transition_release=release,
         )
+        self.addCleanup(workflow.close)
+        return workflow
 
     def test_server_cli_loads_only_an_explicit_exact_engine_artifact(self) -> None:
         from app import right_rail_financial_staff_server as staff_server
@@ -116,174 +118,146 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                 staff_server.main(["--correction-transition-executable", "C:\\fixture\\engine.exe"])
         serve.assert_not_called()
 
+    def _http_json(self, port: int, path: str, body: dict[str, object] | None = None, *, timeout: float = 5) -> dict[str, object]:
+        host = f"127.0.0.1:{port}"
+        headers = {"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json"}
+        with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)) as connection:
+            connection.request("GET" if body is None else "POST", path,
+                               body=None if body is None else json.dumps(body, separators=(",", ":")), headers=headers)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            return json.loads(response.read().decode("utf-8"))
+
+    def _serve_workflow(self, workflow: StaffWorkflow, handler_type=None):
+        server = _LoopbackServer(("127.0.0.1", 0), handler_type or _handler_for(workflow))
+        self.addCleanup(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.shutdown)
+        return server
+
+    def _second_owner(self, owner: FinancialOwner) -> FinancialOwner:
+        writer = FinancialOwner(path=owner.path, config=owner.config,
+                                trusted_authority=owner.trusted_authority, clock=owner.clock,
+                                mode=owner.mode, owner_id=owner.owner_id)
+        self.addCleanup(writer.close)
+        return writer
+
+    @staticmethod
+    def _lose_first_response(handler_type, route: str) -> list[bool]:
+        original_respond, lost = handler_type._respond, []
+        def respond(handler, status, payload, content_type="application/json"):
+            if not lost and handler.command == "POST" and handler.path == route and status == 200:
+                lost.append(True)  # drop the whole response only after the Owner committed
+                handler.close_connection = True
+                try:
+                    handler.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                handler.connection.close()
+            else:
+                original_respond(handler, status, payload, content_type)
+        handler_type._respond = respond
+        return lost
+
     def test_service_kit_correction_lost_response_retry_and_shadow_restore(self) -> None:
         run_workspace = Path(os.environ.get("RR_FINANCIAL_SERVICE_KIT_TEST_WORKSPACE", self.temp_dir.name))
         workflow = self._workflow(with_correction_release=True, workspace_dir=run_workspace)
-        self.addCleanup(workflow.close)
         owner = workflow.mirror.owner
         self.assertEqual(owner.mode, "TEST")
         handler_type = _handler_for(workflow)
-        original_respond = handler_type._respond
-        lose_first_correction_response = True
-
-        def respond_with_lost_correction_result(self, status, payload, content_type="application/json"):
-            nonlocal lose_first_correction_response
-            if (
-                lose_first_correction_response
-                and self.command == "POST"
-                and self.path == "/api/decision/reject-offset"
-                and status == 200
-            ):
-                # The Owner command has returned after commit; drop the entire
-                # HTTP response before the client receives any status or body.
-                lose_first_correction_response = False
-                self.close_connection = True
-                try:
-                    self.connection.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-                self.connection.close()
-                return
-            original_respond(self, status, payload, content_type)
-
-        handler_type._respond = respond_with_lost_correction_result
-        server = _LoopbackServer(("127.0.0.1", 0), handler_type)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
-        thread.start()
+        lost = self._lose_first_response(handler_type, "/api/decision/reject-offset")
+        server = self._serve_workflow(workflow, handler_type)
         port = int(server.server_address[1])
-        host = f"127.0.0.1:{port}"
-        origin = f"http://{host}"
+        before_view = self._http_json(port, "/api/decision-package")
+        before_package = owner.export_continuity()
+        before_integrity = owner.verify_integrity()
+        sequence_before = int(before_integrity["sequence"])
+        counts_before = before_integrity["counts"]
+        command = self._review_body(workflow, view=before_view)
 
-        def get_decision() -> dict[str, object]:
-            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-            try:
-                connection.request("GET", "/api/decision-package", headers={"Host": host})
-                response = connection.getresponse()
-                self.assertEqual(response.status, 200)
-                return json.loads(response.read().decode("utf-8"))
-            finally:
-                connection.close()
+        # The server drops the entire response after the Owner command commits.
+        with self.assertRaises(http.client.RemoteDisconnected):
+            self._http_json(port, "/api/decision/reject-offset", command)
+        self.assertEqual(lost, [True])
+        committed_package = owner.export_continuity()
+        committed_integrity = owner.verify_integrity()
+        self.assertEqual(int(committed_integrity["sequence"]), sequence_before + 1)
+        for table in ("determinations", "actions", "events"):
+            self.assertEqual(
+                int(committed_integrity["counts"][table]),
+                int(counts_before[table]) + 1,
+            )
 
-        def post_correction(body: dict[str, object]) -> dict[str, object]:
-            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-            try:
-                connection.request(
-                    "POST",
-                    "/api/decision/reject-offset",
-                    body=json.dumps(body, separators=(",", ":")),
-                    headers={
-                        "Host": host,
-                        "Origin": origin,
-                        "Content-Type": "application/json",
-                    },
-                )
-                response = connection.getresponse()
-                self.assertEqual(response.status, 200)
-                return json.loads(response.read().decode("utf-8"))
-            finally:
-                connection.close()
+        retry = self._http_json(port, "/api/decision/reject-offset", command)
+        self.assertEqual(retry["command"]["status"], "DUPLICATE")
+        self.assertEqual(owner.export_continuity(), committed_package)
+        self.assertEqual(int(owner.verify_integrity()["sequence"]), sequence_before + 1)
 
-        try:
-            before_view = get_decision()
-            before_package = owner.export_continuity()
-            before_integrity = owner.verify_integrity()
-            sequence_before = int(before_integrity["sequence"])
-            counts_before = before_integrity["counts"]
-            initial_package = before_view["decision_package"]
-            command = {
-                "revision": initial_package["obligation"]["revision"],
-                "evaluation_id": initial_package["evaluation_receipt"]["evaluation_id"],
-                "evaluation_result_digest": initial_package["evaluation_receipt"]["result_digest"],
-                # The endpoint requires the reviewed-read binding (as staff.js
-                # sends it), built from the exact view this client fetched.
-                "read_binding": StaffWorkflow._staff_command_binding(before_view),
-            }
+        staff_readback = self._http_json(port, "/api/decision-package")
+        mirror_readback = workflow.mirror.decision_package(H_ITEM_ID, limit=100, offset=0)
+        self.assertIs(workflow.mirror.owner, owner)
+        for field in (
+            "contract", "scope", "obligation", "evaluation_receipt", "control_pack",
+            "case", "current_determination", "current_action", "cash", "reporting",
+            "references", "conclusions",
+        ):
+            self.assertEqual(staff_readback["decision_package"][field], mirror_readback[field])
+        self.assertNotEqual(before_view["decision_package"], staff_readback["decision_package"])
+        self.assertEqual(owner.verify_integrity()["mode"], "TEST")
 
-            # The server drops the entire response after the Owner command commits.
-            with self.assertRaises(http.client.RemoteDisconnected):
-                post_correction(command)
-            self.assertFalse(lose_first_correction_response)
-            committed_package = owner.export_continuity()
-            committed_integrity = owner.verify_integrity()
-            self.assertEqual(int(committed_integrity["sequence"]), sequence_before + 1)
-            for table in ("determinations", "actions", "events"):
-                self.assertEqual(
-                    int(committed_integrity["counts"][table]),
-                    int(counts_before[table]) + 1,
-                )
+        shadow_path = run_workspace / "service-kit-shadow.sqlite"
+        shadow = workflow.mirror.restore_continuity(committed_package, shadow_path)
+        self.addCleanup(shadow.owner.close)
+        self.assertEqual(shadow.verify_integrity()["mode"], "SHADOW")
+        self.assertIs(shadow.summary()["dispatch_enabled"], False)
+        self.assertIs(shadow.summary()["egress_enabled"], False)
+        self.assertEqual(shadow.decision_package(H_ITEM_ID, limit=100, offset=0), mirror_readback)
 
-            retry = post_correction(command)
-            self.assertEqual(retry["command"]["status"], "DUPLICATE")
-            self.assertEqual(owner.export_continuity(), committed_package)
-            self.assertEqual(int(owner.verify_integrity()["sequence"]), sequence_before + 1)
+        shadow_package_before_write = shadow.export_continuity()
+        with self.assertRaises(FinancialDispatchError) as read_only:
+            shadow.owner.record_support_evidence(
+                item_id=H_ITEM_ID,
+                evidence_id="evidence:shadow-write-must-fail",
+                common_origin_id="origin:shadow-write-must-fail",
+            )
+        self.assertEqual(str(read_only.exception), "shadow_owner_read_only")
+        with self.assertRaises(FinancialMirrorDispatchError) as dispatch:
+            shadow.dispatch_outbox()
+        self.assertEqual(str(dispatch.exception), "dispatch_disabled")
+        self.assertEqual(shadow.export_continuity(), shadow_package_before_write)
 
-            staff_readback = get_decision()
-            mirror_readback = workflow.mirror.decision_package(H_ITEM_ID, limit=100, offset=0)
-            self.assertIs(workflow.mirror.owner, owner)
-            for field in (
-                "contract", "scope", "obligation", "evaluation_receipt", "control_pack",
-                "case", "current_determination", "current_action", "cash", "reporting",
-                "references", "conclusions",
-            ):
-                self.assertEqual(staff_readback["decision_package"][field], mirror_readback[field])
-            self.assertNotEqual(initial_package, staff_readback["decision_package"])
-            self.assertEqual(owner.verify_integrity()["mode"], "TEST")
-
-            shadow_path = run_workspace / "service-kit-shadow.sqlite"
-            shadow = workflow.mirror.restore_continuity(committed_package, shadow_path)
-            self.addCleanup(shadow.owner.close)
-            self.assertEqual(shadow.verify_integrity()["mode"], "SHADOW")
-            self.assertIs(shadow.summary()["dispatch_enabled"], False)
-            self.assertIs(shadow.summary()["egress_enabled"], False)
-            self.assertEqual(shadow.decision_package(H_ITEM_ID, limit=100, offset=0), mirror_readback)
-
-            shadow_package_before_write = shadow.export_continuity()
-            with self.assertRaises(FinancialDispatchError) as read_only:
-                shadow.owner.record_support_evidence(
-                    item_id=H_ITEM_ID,
-                    evidence_id="evidence:shadow-write-must-fail",
-                    common_origin_id="origin:shadow-write-must-fail",
-                )
-            self.assertEqual(str(read_only.exception), "shadow_owner_read_only")
-            with self.assertRaises(FinancialMirrorDispatchError) as dispatch:
-                shadow.dispatch_outbox()
-            self.assertEqual(str(dispatch.exception), "dispatch_disabled")
-            self.assertEqual(shadow.export_continuity(), shadow_package_before_write)
-
-            restored_bytes = shadow_path.read_bytes()
-            with self.assertRaises(FinancialMirrorContinuityError) as replacement:
-                workflow.mirror.restore_continuity(committed_package, shadow_path)
-            self.assertEqual(str(replacement.exception), "continuity_destination")
-            self.assertEqual(shadow_path.read_bytes(), restored_bytes)
-            self.assertIs(workflow.mirror.owner, owner)
-            self.assertEqual(owner.export_continuity(), committed_package)
-            self.assertNotEqual(before_package, committed_package)
-            print("SERVICE_KIT_SCENARIO " + json.dumps({
-                "contract": "RR/FINANCIAL/SERVICE-KIT-SCENARIO/v1",
-                "status": "PASS",
-                "source_mode": "TEST",
-                "owner_sequence_before": sequence_before,
-                "owner_sequence_after_exact_retry": int(owner.verify_integrity()["sequence"]),
-                "correction_commit_count": 1,
-                "exact_retry": "DUPLICATE_NO_SECOND_WRITE",
-                "staff_mirror_same_owner": True,
-                "independent_integrity": "VERIFIED",
-                "shadow_restore": "VERIFIED_READ_ONLY",
-                "replacement_attempt": "REJECTED",
-                "dispatch_enabled": False,
-                "egress_enabled": False,
-                "production_usable": False,
-                "activation": False,
-                "proof_suite_id": None,
-            }, sort_keys=True, separators=(",", ":")))
-        finally:
-            server.shutdown()
-            thread.join(timeout=5)
-            server.server_close()
+        restored_bytes = shadow_path.read_bytes()
+        with self.assertRaises(FinancialMirrorContinuityError) as replacement:
+            workflow.mirror.restore_continuity(committed_package, shadow_path)
+        self.assertEqual(str(replacement.exception), "continuity_destination")
+        self.assertEqual(shadow_path.read_bytes(), restored_bytes)
+        self.assertIs(workflow.mirror.owner, owner)
+        self.assertEqual(owner.export_continuity(), committed_package)
+        self.assertNotEqual(before_package, committed_package)
+        print("SERVICE_KIT_SCENARIO " + json.dumps({
+            "contract": "RR/FINANCIAL/SERVICE-KIT-SCENARIO/v1",
+            "status": "PASS",
+            "source_mode": "TEST",
+            "owner_sequence_before": sequence_before,
+            "owner_sequence_after_exact_retry": int(owner.verify_integrity()["sequence"]),
+            "correction_commit_count": 1,
+            "exact_retry": "DUPLICATE_NO_SECOND_WRITE",
+            "staff_mirror_same_owner": True,
+            "independent_integrity": "VERIFIED",
+            "shadow_restore": "VERIFIED_READ_ONLY",
+            "replacement_attempt": "REJECTED",
+            "dispatch_enabled": False,
+            "egress_enabled": False,
+            "production_usable": False,
+            "activation": False,
+            "proof_suite_id": None,
+        }, sort_keys=True, separators=(",", ":")))
 
     @staticmethod
-    def _review_body(workflow: StaffWorkflow) -> dict[str, object]:
-        view = workflow.decision_view()
+    def _review_body(workflow: StaffWorkflow, *, view: dict[str, object] | None = None) -> dict[str, object]:
+        view = workflow.decision_view() if view is None else view
         package = view["decision_package"]
         return {
             "revision": package["obligation"]["revision"],
@@ -294,10 +268,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     @staticmethod
     def _revision_body(workflow: StaffWorkflow) -> dict[str, object]:
-        view = workflow.decision_view()
-        return {
-            "revision": view["decision_package"]["obligation"]["revision"],
-        }
+        return {"revision": workflow.decision_view()["decision_package"]["obligation"]["revision"]}
 
     @staticmethod
     def _cash_body(workflow: StaffWorkflow) -> dict[str, object]:
@@ -308,7 +279,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_population_gate_denials_and_unknown_source_are_visible(self) -> None:
         workflow = self._workflow()
-        self.addCleanup(workflow.close)
         reviewed = self._review_body(workflow)
         wrong_role = workflow.attempt_wrong_role(reviewed)
         stale_revision = workflow.attempt_stale_revision(reviewed)
@@ -353,8 +323,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_ack_cash_reporting_and_test_restore_remain_separate(self) -> None:
         workflow = self._workflow(with_correction_release=True)
-        self.addCleanup(workflow.close)
-
         decision = workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         self.assertEqual(decision["command"]["status"], "CORRECTION_AUTHORIZED")
 
@@ -364,6 +332,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(acknowledgment["cash_effect_cents"], 0)
         ack_package = workflow.decision_view()["decision_package"]
         self.assertEqual(ack_package["current_action"]["status"], "ACKNOWLEDGED")
+        self.assertGreaterEqual(ack_package["current_action"]["acknowledgment"]["updated_at_ms"], ack_package["current_action"]["created_at_ms"])
         self.assertEqual(ack_package["cash"]["shortfall_cents"], H_SHORTFALL_CENTS)
         self.assertEqual(ack_package["reporting"]["complete"], False)
 
@@ -373,6 +342,11 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(cash_package["cash"]["recorded_received_cash_cents"], H_OWED_CENTS)
         self.assertEqual(cash_package["cash"]["shortfall_cents"], 0)
         self.assertEqual(cash_package["reporting"]["complete"], False)
+        with closing(sqlite3.connect(workflow.mirror.owner.path)) as check:
+            self.assertEqual(check.execute(
+                "SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events "
+                "WHERE kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')='payment:h:p2'"
+            ).fetchone(), ("action:obligation-item-h:correction-v1",))
 
         workflow.record_reporting_evidence(self._revision_body(workflow))
         report_package = workflow.decision_view()["decision_package"]
@@ -392,7 +366,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_gate_state_unchanged_is_measured_before_and_after_the_attempt(self) -> None:
         workflow = self._workflow()
-        self.addCleanup(workflow.close)
         reviewed = self._review_body(workflow)
         position = workflow._owner_position()
         self.assertTrue(workflow.attempt_wrong_role(reviewed)["gate"]["state_unchanged"])
@@ -409,7 +382,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_ack_cash_effect_is_measured_before_and_after_the_command(self) -> None:
         workflow = self._workflow(with_correction_release=True)
-        self.addCleanup(workflow.close)
         workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         reviewed = self._revision_body(workflow)
         with patch.object(
@@ -524,33 +496,23 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                 if process.poll() is not None:
                     stdout, stderr = process.communicate()
                     self.fail(f"staff server exited before read: stdout={stdout!r} stderr={stderr!r}")
-                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
-                host = f"127.0.0.1:{port}"
-                headers = {"Host": host}
-                request_body = None
-                if method == "POST":
-                    headers.update({"Origin": f"http://{host}", "Content-Type": "application/json"})
-                    request_body = json.dumps(body, separators=(",", ":"))
                 try:
-                    connection.request(method, path, body=request_body, headers=headers)
-                    response = connection.getresponse()
-                    payload = response.read()
-                    if response.status == 200:
-                        return json.loads(payload.decode("utf-8"))
-                    last_error = f"http_{response.status}:{payload[:256]!r}"
-                except (OSError, http.client.HTTPException, TimeoutError) as error:
+                    return self._http_json(port, path, body, timeout=1)
+                except (OSError, http.client.HTTPException, AssertionError) as error:
                     last_error = str(error)
                     if method == "POST":
                         self.fail(f"staff command response unresolved: {last_error}")
-                finally:
-                    connection.close()
-                if method == "POST":
-                    self.fail(f"staff command rejected: {last_error}")
                 time.sleep(0.05)
             self.fail(f"staff server did not become ready: {last_error}")
 
         first_process, first_port = start_server(resume_existing=False)
         try:
+            view = request_json(first_process, first_port, "/api/decision-package")
+            package = view["decision_package"]
+            request_json(first_process, first_port, "/api/decision/reject-offset", method="POST", body={
+                "revision": package["obligation"]["revision"], "evaluation_id": package["evaluation_receipt"]["evaluation_id"],
+                "evaluation_result_digest": package["evaluation_receipt"]["result_digest"], "read_binding": StaffWorkflow._staff_command_binding(view),
+            })
             first = request_json(first_process, first_port, "/api/workspace")
             first_package = request_json(first_process, first_port, "/api/decision-package")["decision_package"]
             cash_result = request_json(
@@ -610,8 +572,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(resumed["integrity"]["status"], "VERIFIED")
 
     def test_cash_exact_postcommit_retry_is_inert(self) -> None:
-        workflow = self._workflow()
-        self.addCleanup(workflow.close)
+        workflow = self._workflow(with_correction_release=True)
+        workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         owner = workflow.mirror.owner
         body = self._cash_body(workflow)
         original_revision = body["revision"]
@@ -630,78 +592,29 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(owner.export_continuity(), committed_bytes)
 
     def test_http_cash_lost_response_retries_original_revision_once(self) -> None:
-        workflow = self._workflow()
-        self.addCleanup(workflow.close)
+        workflow = self._workflow(with_correction_release=True)
+        workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         owner = workflow.mirror.owner
         handler_type = _handler_for(workflow)
-        original_respond = handler_type._respond
-        lose_first_cash_response = True
-
-        def respond_with_lost_cash_result(self, status, payload, content_type="application/json"):
-            nonlocal lose_first_cash_response
-            if (
-                lose_first_cash_response
-                and self.command == "POST"
-                and self.path == "/api/correction/record-cash"
-                and status == 200
-            ):
-                lose_first_cash_response = False
-                self.close_connection = True
-                try:
-                    self.connection.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-                self.connection.close()
-                return
-            original_respond(self, status, payload, content_type)
-
-        handler_type._respond = respond_with_lost_cash_result
-        server = _LoopbackServer(("127.0.0.1", 0), handler_type)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
-        thread.start()
+        lost = self._lose_first_response(handler_type, "/api/correction/record-cash")
+        server = self._serve_workflow(workflow, handler_type)
         port = int(server.server_address[1])
-        host = f"127.0.0.1:{port}"
-        origin = f"http://{host}"
         body = self._cash_body(workflow)
         original_revision = body["revision"]
         sequence_before = int(owner.verify_integrity()["sequence"])
 
-        def post_cash() -> dict[str, object]:
-            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-            try:
-                connection.request(
-                    "POST",
-                    "/api/correction/record-cash",
-                    body=json.dumps(body, separators=(",", ":")),
-                    headers={
-                        "Host": host,
-                        "Origin": origin,
-                        "Content-Type": "application/json",
-                    },
-                )
-                response = connection.getresponse()
-                self.assertEqual(response.status, 200)
-                return json.loads(response.read().decode("utf-8"))
-            finally:
-                connection.close()
+        with self.assertRaises(http.client.RemoteDisconnected):
+            self._http_json(port, "/api/correction/record-cash", body)
+        self.assertEqual(lost, [True])
+        committed_bytes = owner.export_continuity()
+        committed_sequence = int(owner.verify_integrity()["sequence"])
+        self.assertEqual(committed_sequence, sequence_before + 1)
 
-        try:
-            with self.assertRaises(http.client.RemoteDisconnected):
-                post_cash()
-            self.assertFalse(lose_first_cash_response)
-            committed_bytes = owner.export_continuity()
-            committed_sequence = int(owner.verify_integrity()["sequence"])
-            self.assertEqual(committed_sequence, sequence_before + 1)
-
-            duplicate = post_cash()
-            self.assertEqual(duplicate["command"]["status"], "DUPLICATE")
-            self.assertFalse(duplicate["money_movement"])
-            self.assertEqual(int(owner.verify_integrity()["sequence"]), committed_sequence)
-            self.assertEqual(owner.export_continuity(), committed_bytes)
-        finally:
-            server.shutdown()
-            thread.join(timeout=5)
-            server.server_close()
+        duplicate = self._http_json(port, "/api/correction/record-cash", body)
+        self.assertEqual(duplicate["command"]["status"], "DUPLICATE")
+        self.assertFalse(duplicate["money_movement"])
+        self.assertEqual(int(owner.verify_integrity()["sequence"]), committed_sequence)
+        self.assertEqual(owner.export_continuity(), committed_bytes)
 
         changed_input = dict(CASH_CORRECTION_COMMAND)
         changed_input["amount_cents"] += 1
@@ -716,7 +629,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_staff_correction_rejects_changed_binding_and_unrelated_snapshot(self) -> None:
         workflow = self._workflow()
-        self.addCleanup(workflow.close)
         owner = workflow.mirror.owner
 
         altered = self._review_body(workflow)
@@ -749,7 +661,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_staff_mutations_require_revision_and_never_take_an_actor_from_the_request(self) -> None:
         workflow = self._workflow()
-        self.addCleanup(workflow.close)
         bodies = {
             workflow.reject_offset_and_authorize_correction: self._review_body(workflow),
             workflow.acknowledge_correction_action: self._revision_body(workflow),
@@ -803,7 +714,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_staff_binding_v2_withholds_input_snapshot_and_refuses_the_v1_shape(self) -> None:
         workflow = self._workflow()
-        self.addCleanup(workflow.close)
         owner = workflow.mirror.owner
         body = self._review_body(workflow)
         # One binding scheme: v2 names the receipt digest and never the input snapshot the Mirror withholds.
@@ -822,16 +732,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_workspace_uses_one_verified_snapshot_and_has_no_item_detail_fanout(self) -> None:
         workflow = self._workflow(with_correction_release=True)
-        self.addCleanup(workflow.close)
         first_owner = workflow.mirror.owner
-        writer = FinancialOwner(
-            path=first_owner.path,
-            config=first_owner.config,
-            trusted_authority=first_owner.trusted_authority,
-            clock=first_owner.clock,
-            mode=first_owner.mode,
-            owner_id=first_owner.owner_id,
-        )
+        writer = self._second_owner(first_owner)
         self.assertEqual((writer.mode, writer.owner_id), ("TEST", "continuity-test-owner-v1"))
         before = first_owner.obligation_detail("item-01")
         connections = []
@@ -927,7 +829,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_decision_route_reads_only_the_bounded_verified_package(self) -> None:
         workflow = self._workflow()
-        self.addCleanup(workflow.close)
         with (
             patch.object(workflow.mirror, "list_obligations", side_effect=AssertionError("workspace list read")),
             patch.object(workflow.mirror, "obligation_detail", side_effect=AssertionError("workspace detail read")),
@@ -945,7 +846,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_mirror_fails_closed_on_unallowlisted_snapshot_resource(self) -> None:
         workflow = self._workflow()
-        self.addCleanup(workflow.close)
         owner = workflow.mirror.owner
         original_snapshot = owner.read_verified_staff_snapshot
 
@@ -961,18 +861,10 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
     def test_unrelated_owner_write_does_not_conflict_with_reviewed_ack_and_retry_order_is_preserved(self) -> None:
         # The correction runs only through the pinned Lean release (Art. V.2).
         workflow = self._workflow(with_correction_release=True)
-        self.addCleanup(workflow.close)
         workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         reviewed = self._revision_body(workflow)
         owner = workflow.mirror.owner
-        writer = FinancialOwner(
-            path=owner.path,
-            config=owner.config,
-            trusted_authority=owner.trusted_authority,
-            clock=owner.clock,
-            mode=owner.mode,
-            owner_id=owner.owner_id,
-        )
+        writer = self._second_owner(owner)
         self.assertEqual((writer.mode, writer.owner_id), ("TEST", "continuity-test-owner-v1"))
         unrelated = owner.obligation_detail("item-01")
         sequence_before = owner.summary()["sequence"]
@@ -1007,12 +899,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_http_surface_serves_snapshot_and_rejects_cross_origin_mutation(self) -> None:
         workflow = self._workflow()
-        self.addCleanup(workflow.close)
-        server = _LoopbackServer(("127.0.0.1", 0), _handler_for(workflow))
-        self.addCleanup(server.server_close)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
-        thread.start()
-        self.addCleanup(server.shutdown)
+        server = self._serve_workflow(workflow)
         port = int(server.server_address[1])
         host = ("Host", f"127.0.0.1:{port}")
         post = (host, ("Origin", f"http://127.0.0.1:{port}"), ("Content-Type", "application/json"))
@@ -1042,7 +929,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         for body_bytes, length in ((b'{"revision":0,"revision":0}', ""), (b"[" * 5000, ""), (b'{"revision":0}', "1_4")):
             self.assertEqual(call("POST", "/api/action/acknowledge", post, body_bytes, length)[:3:2], (400, {"error": {"code": "invalid_request"}}))
         # Framework refusals and unexpected read failures are JSON with the same headers, and no detail.
-        status, headers, body = call("PUT", "/api/workspace", post)
+        status, headers, body = call("PUT", "/api/workspace", post, b'{"revision":0}')
         self.assertEqual((status, body), (501, {"error": {"code": "invalid_request"}}))
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         with patch.object(workflow, "workspace", side_effect=RuntimeError("internal detail")):
@@ -1051,15 +938,52 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             status, headers, body = call("POST", "/api/action/acknowledge", post, b'{"revision":0}')
         self.assertEqual((status, headers.get("Retry-After"), body), (503, "1", {"error": {"code": "store_busy"}, "changed": False}))
 
+    def test_http_refuses_ambiguous_short_and_slow_bodies_before_dispatch(self) -> None:
+        workflow = self._workflow()
+        server = self._serve_workflow(workflow)
+        port = int(server.server_address[1])
+        before = workflow.mirror.owner.export_continuity()
+        cases = (
+            ("Content-Length: 2\r\nContent-Length: 2", b"{}", True),
+            ("Content-Length: 1\r\nContent-Length: 2", b"{}", True),
+            ("Content-Length: 2\r\nTransfer-Encoding: chunked", b"{}", True),
+            ("Transfer-Encoding: identity", b"{}", True),
+            ("Content-Length: 2\r\nContent-Type: text/plain", b"{}", True),
+            ("Content-Length: 3", b"{}", True),  # valid JSON, truncated frame
+            ("Content-Length: 3", b"{}", False),  # peer never finishes or half-closes
+            ("Content-Length: 8193", b"x" * 8193, True),
+        )
+        with patch.object(workflow, "command", return_value={}) as command, patch("app.right_rail_financial_staff_server.HTTP_BODY_TIMEOUT_SECONDS", 0.15):
+            for framing, body, eof in cases:
+                with self.subTest(framing=framing, eof=eof), socket.create_connection(("127.0.0.1", port), timeout=2) as peer:
+                    request = f"POST /api/action/acknowledge HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\n{framing}\r\n\r\n".encode() + body
+                    peer.sendall(request)
+                    if eof:
+                        peer.shutdown(socket.SHUT_WR)
+                    response = http.client.HTTPResponse(peer)
+                    response.begin()
+                    self.assertEqual((response.status, response.getheader("Connection"), json.loads(response.read())),
+                                     (400, "close", {"error": {"code": "invalid_request"}}))
+            command.assert_not_called()
+        self.assertEqual(workflow.mirror.owner.export_continuity(), before)
+
+    def test_http_head_refusal_has_no_body_and_closes(self) -> None:
+        workflow = self._workflow()
+        port = int(self._serve_workflow(workflow).server_address[1])
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as peer:
+            peer.sendall(f"HEAD /api/workspace HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n".encode())
+            peer.shutdown(socket.SHUT_WR)
+            with peer.makefile("rb") as received:
+                headers, body = received.read(8192).split(b"\r\n\r\n", 1)
+        self.assertTrue(headers.startswith(b"HTTP/1.1 501"))
+        self.assertIn(b"Connection: close", headers)
+        self.assertEqual(body, b"")
+
     def test_a_lock_taken_right_after_a_commit_never_answers_changed_false(self) -> None:
         for released in (False, True):  # held through the answer: cannot tell; released after the failed read-back: it committed
             (workspace := Path(self.temp_dir.name) / f"released-{released}").mkdir()
             workflow = self._workflow(workspace_dir=workspace)
-            self.addCleanup(workflow.close)
-            server = _LoopbackServer(("127.0.0.1", 0), _handler_for(workflow))
-            self.addCleanup(server.server_close)
-            threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
-            self.addCleanup(server.shutdown)
+            server = self._serve_workflow(workflow)
             owner, port, body = workflow.mirror.owner, int(server.server_address[1]), json.dumps(self._revision_body(workflow))
             holder = sqlite3.connect(owner.path, isolation_level=None, check_same_thread=False)  # used from the server thread
             self.addCleanup(holder.close)
@@ -1094,10 +1018,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_another_process_committing_during_a_busy_command_is_not_claimed_as_its_change(self) -> None:
         workflow = self._workflow()
-        self.addCleanup(workflow.close)
         owner, body = workflow.mirror.owner, self._revision_body(workflow)
-        other = FinancialOwner(path=owner.path, config=owner.config, trusted_authority=workflow._authority, clock=workflow._clock, mode="TEST", owner_id=owner.owner_id)
-        self.addCleanup(other.close)  # a second server process on the same store
+        other = self._second_owner(owner)  # a second server process on the same store
         holder = sqlite3.connect(owner.path, isolation_level=None, check_same_thread=False)
         self.addCleanup(holder.close)
         real_record, before = workflow.mirror.record_reporting_evidence, owner.summary()["sequence"]

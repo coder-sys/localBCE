@@ -1,6 +1,6 @@
-# RightRail full-stack target: the payment gate
+# RightRail full-stack target
 
-Updated: 2026-09-25. Owner: the target architecture for the complete RightRail
+Updated: 2026-09-26. Owner: the target architecture for the complete RightRail
 government service and, within it, Blind Ledger as an inline payment gate.
 
 `CONSTITUTION.md` is supreme; this document elaborates it and cannot weaken
@@ -18,6 +18,14 @@ built, run, or approved: `proofSuiteId=null`, `production_usable=false`,
 `activation=false`.
 
 ## 1. The end state
+
+RightRail connects state-approved rules, evidence, unresolved work, official
+decisions and follow-through across plans, providers and contractors. Control
+Pack, Blind Ledger, Mirror, Continuity and Switch share one foundation;
+Provider App is a separate provider-side consumer. The gate below is one
+authority level within that product, not the whole product. The core financial
+cycle, provider evidence, independent exit and reuse remain useful without an
+inline payment gate.
 
 Every Medicaid payment a state routes through RightRail — fee-for-service and
 managed care alike — passes Blind Ledger before money goes out, at full state
@@ -192,7 +200,8 @@ one). A TLA+ model (`gate_failover.tla`) checks these properties —
 `NoLostDecision`, `StaleCannotSign`, `EpochMonotone`,
 `BypassEventuallyReconciled` — as bounded state-space search, not proof;
 finding a counterexample interleaving is worth more here than a proof that
-covers only the model. The bounds have not yet been run.
+covers only the model. The checked bounds and remaining larger runs belong in
+`STATUS.md` and `docs/formal/gate_failover/README.md`.
 
 This architecture makes 99.8% achievable; it does not make it automatic. The
 engineering red-team's finding stands: the trunk today has no CI, no on-call
@@ -244,10 +253,10 @@ evaluated by the interpreter (section 10), not baked into a bespoke theorem,
 so it stays on the interpreter's proof, not a new one.
 
 Today, of 14 command types, Lean decides exactly one —
-`reject_offset_and_authorize_correction` — and the live command codec
-(`BLFCMD01`/`BLFCRES1`) carries zero codec laws, while a comparison-only
-codec that nothing decides with has full ones; the pinned decision binary
-was built from source that can no longer be recovered. Closing that gap —
+`reject_offset_and_authorize_correction`; its codec (`BLFCMD02`/`BLFCRES3`)
+has codec laws (round-trip only for admissible values). The pinned binary's exact
+build source is recorded in its provenance; later combined source needs its own
+guarded rebuild. Closing the rest of the gap —
 proof hygiene, a reproducible rebuild, codec parity, then the live
 evaluator, then the remaining thirteen commands, then the signed token and
 checkpoint predicates, then a Lean checker — is `fv-plan.md`'s ordered
@@ -261,8 +270,9 @@ roadmap; its first four steps remove most of the risk in the fewest weeks.
 - **`AUTHORITATIVE_ASSERTION`** uses a narrowly scoped, signed assertion from
   a qualified source; signature acceptance proves provenance, not truth,
   population completeness, or state disposition.
-- **`PRIVATE_ZK`** stays parked and conditional (Constitution IX.4): it
-  verifies a source-bound hidden predicate without disclosing its inputs.
+- **`PRIVATE_ZK`** is an active, evidence-only prototype (Constitution IX.4):
+  it verifies a source-bound hidden predicate without disclosing its inputs.
+  It never creates hold or payment authority and never blocks the core or gate.
 
 **The non-ZK evidence path ships first, as the whole answer for most
 auditors:** signed batch checkpoints, the independent witness cosign chain,
@@ -322,40 +332,29 @@ machine-checked proofs (HOL Light and CBMC, for ML-KEM and, as it lands,
 ML-DSA), run ACVP/KAT vectors in CI against the exact library build, and
 prove only the binding — that signed bytes name exactly one decision. ML-DSA
 integration into AWS-LC's FIPS-validated path was still landing as of the
-most recent research pass; a non-PQ fallback signature for token and
-checkpoint signing until that validation completes is open (section 12).
+most recent research pass. Certification availability must be checked for the
+selected deployment. Constitution VI.5 forbids RSA/ECDSA fallback signatures;
+certification delay does not authorize a downgrade.
 
-## 12. What exists today vs. the target
+## 12. Evidence and integration
 
-Labelled honestly, per Constitution VI and XI.11. See `STATUS.md` for the
-current source of truth on anything marked measured.
+`STATUS.md` is the current evidence record; `ARCHITECTURE.md` describes the
+connected implementation. A format model, compiled rules, a pinned executable,
+and an integrated workflow are separate claims. Results from one branch do not
+verify another branch or their combination. Engine source identity, executable
+pin and rebuild evidence live in `artifacts/engine-correction/PROVENANCE.md`.
 
-- **Measured.** The Lean-controlled correction transition (9 of 9 focused
-  tests passed) — but the pinned binary it runs was built from Lean source
-  that can no longer be recovered, so no proof today covers the binary that
-  actually runs. Continuity admission and correction follow-up through
-  Mirror. The felt-value scorecard and the Article XIII interaction-model
-  crawl. The local store is `RR/FINANCIAL/OWNER/v8` with
-  `RR/FINANCIAL/CONTINUITY/v8` and a derived `RR/FINANCIAL/COMMAND/v1` log
-  (founder-approved 2026-09-24); any non-v8 store fails closed with
-  `unsupported_store_version`, and non-v8 packages are refused.
-- **Designed, not built.** The gate API (decide/decide-batch), the token and
-  checkpoint formats, the independent witness, batch signing, segmented
-  Continuity, member-key sharding, the fenced primary/standby protocol, the
-  Bypass outcome and its theorem, and all thirteen remaining command ports
-  into Lean. `gate-design.md` states this explicitly: nothing in it is
-  built, run, or approved.
-- **Not yet run.** The single most important missing measurement, named by
-  both `fv-plan.md` and the engineering red-team: a warm-worker Lean
-  evaluator benchmark against a batch of synthetic decisions, with no
-  process spawn. Every throughput number in this document (the batch
-  window, the worker pool sizing, the "about 0.66 s" per-batch latency
-  budget) is a target, not a measurement, until that benchmark exists. The
-  TLA+ failover model is written but not checked. The `PRIVATE_ZK` spike's
-  corrected speed estimate (about 150–350 ms p50, up to about 500 ms p95,
-  per 2^11–2^12-line segment, roughly 3x the original estimate) is itself
-  unmeasured and carries an explicit ±2–3x uncertainty band until a spike
-  runs it.
+The payer gate needs both authenticated checkpoint ancestry and admission of
+signed, tenant/program-scoped, current authority grants. A checkpoint signature
+alone does not establish continuity with an unseen predecessor. An in-memory
+list of active grant identifiers does not establish state authority. Persisted
+fences, released/unresolved identities, rules, tokens and payer release must be
+connected and exercised through restart, retry and partial failure before an
+end-to-end gate claim. The existing format model assumes some of those inputs.
+
+Batch windows, worker counts and private-proof latency estimates remain targets
+until measured against the exact executed source and artifact. A model crawl
+does not replace Article XIII's real-browser crawl.
 
 ## 13. Path
 
@@ -368,42 +367,32 @@ impact. In parallel: the warm-worker throughput benchmark and the owner
 throughput harness (branch `load-test`), which must exist before any claim
 about batch sizing or worker-pool count is more than a guess. Signed token,
 checkpoint, and segment formats, the Lean checker, and the TLA+ failover
-model follow, each gated on founder approval where it touches a protected
-format (Constitution V.4). `CAP-REL` as a plain Lean rule and the X12/NCPDP
+model follow, with explicit change records and independent review for protected
+formats (Constitution V.4 and XI.2). `CAP-REL` as a plain Lean rule and the X12/NCPDP
 tokenizer are scheduled with the adapter build, not ahead of it. `PRIVATE_ZK`
-work stays parked (Constitution IX.4) until a state, CMS, or OIG asks for a
-hidden-input proof.
+continues in its separate prototype repository under Constitution IX.4; it
+produces evidence only and requires a third-party audit before a PRIVATE_ZK claim.
 
-## 14. PENDING FOUNDER DECISION
+## 14. Remaining design decisions
 
-None of the following is decided. Each needs an explicit founder call before
-it is built, under Constitution V.4 (protected formats) or IX.4 (parked
-work):
+Protected format, digest and theorem changes require the explicit record and
+review in Constitution XI.2. Existing implementations and their evidence belong
+in `STATUS.md`; do not treat an old all-formats-pending list as current authority.
 
-1. **The 13 new gate wire and storage formats** named in `gate-design.md`
-   (decide-request/response, token, checkpoint, key-cert, authority-grant,
-   bypass-grant, release-record, witness-cosig, segment, the Lean worker
-   batch frame, three digest domains, and the CAP-REL evidence entry) —
-   named only; none is built.
-2. **Un-parking `PRIVATE_ZK` under Constitution IX.4**, and where its work
-   lives (a separate proof/Lake workspace, never the product library with
-   its zero external dependencies).
-3. **A non-PQ fallback signature** for tokens and checkpoints, to use until
-   a FIPS-140-3-validated ML-DSA implementation is confirmed available in a
-   consumable library.
-4. **The default fail policy**, and which flows may offer `FAIL_OPEN` at
-   all — a real addition to Constitution III.5's unconditional fail-closed
-   invariant, not a tuning knob, per the engineering red-team.
-5. **Salt custody for any future `PRIVATE_ZK` use**: a 7-year HSM-wrapped
-   salt vault (which itself becomes a PHI-equivalent asset) versus scheduled
-   destruction (which drops the 7-year selective-disclosure promise). Not
-   both.
-6. **Segmented Continuity as a new store/package version** (day- or
-   million-event-sealed segments bound to checkpoints, replacing the
-   current 10,000-row cap) — a protected format change.
-7. **Done 2026-09-25 (decision C3):** v7 store-version compatibility, the
-   `OPENING_BALANCE` migration path and `tools/continuity_successor_v7.py`
-   were removed (about 2,950 lines); all data was synthetic.
+- Complete the authority-grant, bypass, release and witness admission contracts,
+  including checkpoint ancestry, scope, revocation and durable recovery.
+- A state selects its flows, fail policy and any bounded emergency bypass through
+  signed authority. Fail-closed remains the default; there is no implicit outage
+  permission to release.
+- Resolve salt custody for any future private-proof deployment: retained wrapped
+  salts and scheduled destruction have different disclosure guarantees.
+- Establish measured segment and worker bounds before increasing the current
+  store/export limits. Existing segmented Continuity does not prove million-event
+  operation.
+
+Already governed by the constitution: private ZK is active in its own repository,
+post-quantum signatures have no classical fallback, and production activation is
+not granted by local build or test results.
 
 ## 15. Beyond the gate
 
@@ -435,4 +424,4 @@ date.
 - [How the code fits together](../ARCHITECTURE.md)
 - [Design ideology](DESIGN_IDEOLOGY.md)
 - [Provider App](../provider_app/README.md)
-- [Parked private-proof track](../parked/README.md)
+- [Historical private-proof reference](../parked/README.md)

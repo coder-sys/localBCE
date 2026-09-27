@@ -550,13 +550,19 @@ def to_verified_source_coverage(result: Mapping[str, object], *, profile: NcMedi
 
 
 class NcMedicaidFhirVerifier:
-    def __init__(self, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE) -> None:
+    def __init__(self, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE, *, expected_context: DynamicCaptureContext | None = None) -> None:
         if profile != NC_MEDICAID_PROFILE:
             raise IndependentNcMedicaidFhirError("profile:downgrade")
+        if expected_context is not None and type(expected_context) is not DynamicCaptureContext:
+            raise IndependentNcMedicaidFhirError("profile:context")
+        self.expected_context = expected_context
         self.profile = profile; self.identity = profile.graph_profile.verifier_id; self.epoch = profile.graph_profile.verifier_epoch
 
     def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
-        return to_verified_source_coverage(verify_bytes(adapter_bytes, profile=self.profile), profile=self.profile)
+        result = verify_bytes(adapter_bytes, profile=self.profile)
+        if self.expected_context is not None and result["capture_context"] != self.expected_context.material():
+            raise_redacted(IndependentNcMedicaidFhirError, "source:context-mismatch")
+        return to_verified_source_coverage(result, profile=self.profile)
 
 
 __all__ = ["ENVELOPE_SCHEMA", "ENVELOPE_SCHEMA_VERSION", "IndependentNcMedicaidFhirError", "NcMedicaidFhirVerifier", "to_verified_source_coverage", "verify_bytes", "_canonical", "_digest", "_raw_digest"]

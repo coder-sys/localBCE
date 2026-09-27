@@ -138,6 +138,16 @@ def _conflict_selection() -> producer.ProviderEvidenceSelectionV1:
 
 
 class ProviderEvidenceExportV1Tests(unittest.TestCase):
+    def _assert_response_mutations(self, mutations) -> None:
+        operation_ref = secrets.token_hex(32)
+        original = json.loads(producer.build_export(_request(operation_ref), _selection(), now=7_000))
+        for label, (key, value) in mutations.items():
+            with self.subTest(label=label):
+                mutated = dict(original)
+                mutated[key] = value
+                with self.assertRaises(independent.IndependentProviderEvidenceExportError):
+                    independent.verify_export(_canonical(mutated), expected_operation_ref=operation_ref, now=7_000)
+
     def test_valid_request_graph_export_and_independent_verification(self) -> None:
         operation_ref = secrets.token_hex(32)
         raw = producer.build_export(_request(operation_ref), _selection(), now=7_000)
@@ -252,10 +262,7 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
                     producer.build_export(raw, _selection(), now=7_000)
 
     def test_wrong_response_profile_domain_enum_count_and_operation_binding_reject(self) -> None:
-        operation_ref = secrets.token_hex(32)
-        raw = producer.build_export(_request(operation_ref), _selection(), now=7_000)
-        original = json.loads(raw.decode("ascii"))
-        mutations = {
+        self._assert_response_mutations({
             "domain": ("domain", "wrong"),
             "version-bool": ("version", True),
             "profile": ("evidence_profile", "old"),
@@ -264,17 +271,7 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
             "count": ("source_count", 99),
             "one-source": ("source_count", 1),
             "ref": ("operation_ref", secrets.token_hex(32)),
-        }
-        for label, (key, value) in mutations.items():
-            with self.subTest(label=label):
-                mutated = dict(original)
-                mutated[key] = value
-                with self.assertRaises(independent.IndependentProviderEvidenceExportError):
-                    independent.verify_export(
-                        _canonical(mutated),
-                        expected_operation_ref=operation_ref,
-                        now=7_000,
-                    )
+        })
 
     def test_real_graph_conflict_shape_is_accepted_and_unreachable_mutations_reject(self) -> None:
         operation_ref = secrets.token_hex(32)
@@ -427,20 +424,11 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
             independent.verify_export(duplicate, expected_operation_ref=operation_ref, now=7_000)
 
     def test_independent_rejects_unproducible_aggregate_relabel_and_count_mutations(self) -> None:
-        operation_ref = secrets.token_hex(32)
-        raw = producer.build_export(_request(operation_ref), _selection(), now=7_000)
-        original = json.loads(raw.decode("ascii"))
-        mutations = {
-            "finding-count": {"finding_count": 8},
-            "discrepancy-count": {"discrepancy_count": 8},
-            "outcome-relabel": {"outcome": "CONTINUITY_CONFIRMED"},
-        }
-        for label, changes in mutations.items():
-            with self.subTest(label=label):
-                mutated = dict(original)
-                mutated.update(changes)
-                with self.assertRaises(independent.IndependentProviderEvidenceExportError):
-                    independent.verify_export(_canonical(mutated), expected_operation_ref=operation_ref, now=7_000)
+        self._assert_response_mutations({
+            "finding-count": ("finding_count", 8),
+            "discrepancy-count": ("discrepancy_count", 8),
+            "outcome-relabel": ("outcome", "CONTINUITY_CONFIRMED"),
+        })
 
     def test_nested_parse_and_selection_failures_are_redacted_and_bounded(self) -> None:
         sentinel = "NESTED_SYNTHETIC_SENTINEL"
@@ -487,10 +475,7 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
             independent.verify_export(_canonical(response), expected_operation_ref=operation_ref, now=7_000)
 
     def test_qualification_authority_and_synthetic_flips_reject(self) -> None:
-        operation_ref = secrets.token_hex(32)
-        raw = producer.build_export(_request(operation_ref), _selection(), now=7_000)
-        original = json.loads(raw.decode("ascii"))
-        for key, value in (
+        self._assert_response_mutations({key: (key, value) for key, value in (
             ("qualification_status", "PRODUCTION"),
             ("synthetic_only", False),
             ("production_usable", True),
@@ -499,12 +484,7 @@ class ProviderEvidenceExportV1Tests(unittest.TestCase):
             ("payment_authority", True),
             ("economic_mutation", True),
             ("proofSuiteId", "classical"),
-        ):
-            with self.subTest(key=key):
-                mutated = dict(original)
-                mutated[key] = value
-                with self.assertRaises(independent.IndependentProviderEvidenceExportError):
-                    independent.verify_export(_canonical(mutated), expected_operation_ref=operation_ref, now=7_000)
+        )})
 
     def test_no_shared_contract_implementation_or_classical_authentication(self) -> None:
         producer_source = inspect.getsource(producer)

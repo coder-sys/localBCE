@@ -39,13 +39,9 @@ class _LocalViewError(ValueError):
     """One fixed, path-free local view setup error."""
 
 
-def _load_selection(
-    artifact_path: str,
-    request_path: str,
-    operation_ref: str,
-) -> read_model.ProviderTrustGraphReadSelectionV1:
+def _load_selection(args: argparse.Namespace, *, prefix: str = "") -> read_model.ProviderTrustGraphReadSelectionV1:
     try:
-        return read_model.load_selection(artifact_path, request_path, operation_ref)
+        return read_model._cli_selection(args, prefix=prefix)
     except read_model.ProviderTrustGraphReadModelV1Error:
         raise _LocalViewError("view:local-input") from None
 
@@ -232,38 +228,30 @@ def _parse_port(raw: str) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m tools.provider_trust_graph_view",
-        description="Serve an already verified synthetic PTG selection on loopback.",
+        description="Verify a synthetic graph or NC FHIR capture and serve its safe view on loopback.",
     )
-    parser.add_argument("--artifact", required=True, help="local graph artifact path")
-    parser.add_argument("--request", required=True, help="local provider-evidence request path")
-    parser.add_argument("--operation-ref", required=True, help="expected export operation reference")
+    read_model._add_cli_selection_arguments(parser)
     parser.add_argument("--now", required=True, type=int, help="verifier time used for export checks")
     parser.add_argument("--port", type=_parse_port, default=8765, help="loopback port; 0 selects an ephemeral port")
-    parser.add_argument("--compare-artifact", help="second local graph artifact path")
-    parser.add_argument("--compare-request", help="second local provider-evidence request path")
-    parser.add_argument("--compare-operation-ref", help="second expected export operation reference")
+    read_model._add_cli_selection_arguments(parser, prefix="compare-", required=False)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    comparison_values = (args.compare_artifact, args.compare_request, args.compare_operation_ref)
-    if any(value is not None for value in comparison_values) and not all(
+    comparison_values = (args.compare_artifact if args.compare_artifact is not None else args.compare_source_envelope, args.compare_request, args.compare_operation_ref)
+    if (args.compare_capture_context is not None or any(value is not None for value in comparison_values)) and not all(
         type(value) is str and value for value in comparison_values
     ):
         sys.stderr.write("REJECT view:compare-selection\n")
         return 2
 
     try:
-        left = _load_selection(args.artifact, args.request, args.operation_ref)
+        left = _load_selection(args)
         right = None
         if all(value is not None for value in comparison_values):
-            right = _load_selection(
-                args.compare_artifact,
-                args.compare_request,
-                args.compare_operation_ref,
-            )
+            right = _load_selection(args, prefix="compare_")
         bundle = _build_bundle(left, now=args.now, right=right)
         server = _make_server(bundle, port=args.port)
     except (read_model.ProviderTrustGraphReadModelV1Error, _LocalViewError) as error:

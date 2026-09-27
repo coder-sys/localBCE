@@ -1319,34 +1319,8 @@ class FinancialMirror:
     def retry_action(self, action_id: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         return self._command_result(self.owner.retry_action(action_id, payload=payload))
 
-    def record_payment_evidence(
-        self,
-        *,
-        item_id: str,
-        payment_id: str,
-        common_origin_id: str,
-        amount_cents: int,
-        evidence_id: str,
-        event_at_ms: int,
-        source_id: str = "synthetic-payment-source",
-        source_version: str = "fixture-v1",
-        local_ref: str | None = None,
-        expected_revision: int | None = None,
-    ) -> dict[str, Any]:
-        return self._command_result(
-            self.owner.record_payment_evidence(
-                item_id=item_id,
-                payment_id=payment_id,
-                common_origin_id=common_origin_id,
-                amount_cents=amount_cents,
-                evidence_id=evidence_id,
-                event_at_ms=event_at_ms,
-                source_id=source_id,
-                source_version=source_version,
-                local_ref=local_ref,
-                expected_revision=expected_revision,
-            )
-        )
+    def record_payment_evidence(self, **fields: Any) -> dict[str, Any]:
+        return self._command_result(self.owner.record_payment_evidence(**fields))
 
     def record_reporting_correction(
         self,
@@ -1554,13 +1528,6 @@ class FinancialMirror:
 
         return self._restore_continuity(package_bytes, recovered_path, restore_mode="TEST")
 
-    restore_shadow = restore_continuity
-    restore_test = restore_test_continuity
-
-
-RightRailFinancialMirror = FinancialMirror
-Mirror = FinancialMirror
-
 
 __all__ = (
     "CONTINUITY_SCHEMA",
@@ -1571,6 +1538,4 @@ __all__ = (
     "FinancialMirrorInputError",
     "MAX_PACKAGE_BYTES",
     "MIRROR_SCHEMA",
-    "Mirror",
-    "RightRailFinancialMirror",
 )

@@ -6,8 +6,8 @@ open BlindLedger.Financial
 open BlindLedger.Financial.DecisionPackage
 
 def correctionTransitionContract : String := "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-def correctionTransitionInputMagic : Bytes := "BLFCMD01".toUTF8.toList
-def correctionTransitionResultMagic : Bytes := "BLFCRES1".toUTF8.toList
+def correctionTransitionInputMagic : Bytes := "BLFCMD02".toUTF8.toList
+def correctionTransitionResultMagic : Bytes := "BLFCRES3".toUTF8.toList
 def maxCorrectionTransitionBytes : Nat := maxTotalEncodedBytes
 
 inductive TransitionStatus where
@@ -56,6 +56,8 @@ inductive TransitionRejectReason where
   | QUERY_OBSERVATION_INVALID
   | INPUT_SNAPSHOT_MISSING
   | CAPACITY
+  | NO_SHORTFALL
+  | NO_REQUESTABLE_BALANCE
 deriving DecidableEq, Repr
 
 inductive TransitionRequirement where
@@ -78,6 +80,8 @@ inductive TransitionRequirement where
   | COMPLETE_QUERY_OBSERVATIONS
   | INPUT_SNAPSHOT_DIGEST_AVAILABLE
   | HISTORY_CAPACITY_AVAILABLE
+  | POSITIVE_SHORTFALL
+  | UNREQUESTED_SHORTFALL
 deriving DecidableEq, Repr
 
 def requiredTransitionCondition : TransitionRejectReason → TransitionRequirement
@@ -100,6 +104,28 @@ def requiredTransitionCondition : TransitionRejectReason → TransitionRequireme
   | .QUERY_OBSERVATION_INVALID => .COMPLETE_QUERY_OBSERVATIONS
   | .INPUT_SNAPSHOT_MISSING => .INPUT_SNAPSHOT_DIGEST_AVAILABLE
   | .CAPACITY => .HISTORY_CAPACITY_AVAILABLE
+  | .NO_SHORTFALL => .POSITIVE_SHORTFALL
+  | .NO_REQUESTABLE_BALANCE => .UNREQUESTED_SHORTFALL
+
+/-- What the payments linked to one correction request have paid against it. -/
+structure CorrectionPaid where
+  actionId : String
+  paidCents : Nat
+deriving DecidableEq, Repr
+
+def correctionPaidCents (paid : List CorrectionPaid) (actionId : String) : Nat :=
+  paid.foldr (fun entry total =>
+    (if entry.actionId = actionId then entry.paidCents else 0) + total) 0
+
+/-- What correction requests still ask for: every READY or ACKNOWLEDGED
+    CORRECTION_PAYMENT_REQUEST less what has been paid against it (a CANCELLED
+    one asks for nothing). -/
+def outstandingCorrectionCents (paid : List CorrectionPaid) : List ActionRecord → Nat
+  | [] => 0
+  | action :: rest =>
+      (if action.kind = "CORRECTION_PAYMENT_REQUEST" ∧ action.status ≠ .CANCELLED then
+        action.amountCents - correctionPaidCents paid action.actionId else 0) +
+        outstandingCorrectionCents paid rest
 
 inductive CorrectionQueryPredicate where
   | ACTION_ID
@@ -176,9 +202,10 @@ inductive ActionIdentityLookup where
 deriving DecidableEq, Repr
 
 /-! The command's evaluation ID/digest/revision/time are mandatory even on a
-    retry. This closes the Owner API's optional retry fields into one exact v1
-    command identity. The current authority and global lookup facts are read by
-    State, not caller-authenticated values. -/
+    retry. This closes the Owner API's optional retry fields into one exact
+    command identity. The current authority, global lookup facts and the
+    payments linked to earlier correction requests are read by State, not
+    caller-authenticated values. -/
 structure CorrectionCommand where
   itemId : String
   claimId : String
@@ -197,6 +224,7 @@ structure CorrectionCommand where
   queryObservations : CorrectionQueryObservations
   currentEventSequence : Nat
   previousHistoryHead : Bytes
+  correctionPaid : List CorrectionPaid := []
 deriving DecidableEq, Repr
 
 structure CorrectionTransitionRequest where
@@ -218,8 +246,6 @@ structure CorrectionOutboxDelta where
   actionId : String
   status : ActionStatus
   attempt : Nat
-  payloadDigest : Bytes
-  idempotencyKey : Bytes
   acknowledgmentReference : Option String
   updatedAtMs : Nat
 deriving DecidableEq, Repr
@@ -233,7 +259,6 @@ structure CorrectionEventIntent where
   beforeRevision : Nat
   afterRevision : Nat
   committedAtMs : Nat
-  basePayloadJson : String
 deriving DecidableEq, Repr
 
 structure CorrectionDependencyFacts where
@@ -250,6 +275,7 @@ structure CorrectionDependencyFacts where
   inputEvaluationRevision : Nat
   inputEvaluationEvaluatedAtMs : Nat
   inputEvaluationSnapshotDigest : Bytes
+  inputShortfallCents : Nat
   decisionAtMs : Nat
   ownerNowMs : Nat
   claimBefore : Claim
@@ -257,6 +283,7 @@ structure CorrectionDependencyFacts where
   queryObservations : CorrectionQueryObservations
   currentEventSequence : Nat
   previousHistoryHead : Bytes
+  correctionPaid : List CorrectionPaid
 deriving DecidableEq, Repr
 
 inductive CorrectionCalculationValidity where
@@ -282,7 +309,6 @@ inductive CorrectionApprovalReason where
   | ACCEPTED_TRANSITION_REQUIRED
   | DETERMINATION_MISSING
   | DETERMINATION_CHANGED
-  | DETERMINATION_DIGEST_CHANGED
 deriving DecidableEq, Repr
 
 inductive CorrectionExecutionPermission where
@@ -338,10 +364,7 @@ structure CorrectionMutation where
   resultingInput : FinancialInput
   resultingResult : FinancialResult
   determination : OffsetDetermination
-  determinationDigest : Bytes
   action : ActionRecord
-  actionPayloadDigest : Bytes
-  actionIdempotencyKey : Bytes
   caseDelta : CorrectionCaseDelta
   outbox : CorrectionOutboxDelta
   event : CorrectionEventIntent
@@ -364,7 +387,6 @@ structure CorrectionReuseRequest where
   currentInput : FinancialInput
   currentReceipt : EvaluationReceipt
   currentDetermination : Option OffsetDetermination
-  currentDeterminationDigest : Option Bytes
   currentOutbox : Option CorrectionOutboxDelta
   currentQueries : CorrectionQueryObservations
   currentEventSequence : Nat

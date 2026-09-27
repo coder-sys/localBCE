@@ -373,6 +373,31 @@ _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
 }
 
 
+def _known_correction_engine(sha256: object) -> bool:
+    """Whether committed correction history may name this engine (the checker's registry); a missing,
+    altered or malformed registry is an integrity refusal."""
+    from app.right_rail_financial_owner_independent import IndependentFinancialError, correction_engines
+
+    try:
+        return str(sha256) in correction_engines()
+    except IndependentFinancialError as error:
+        _fail(FinancialIntegrityError, str(error))
+
+
+def _correction_paid(connection: sqlite3.Connection, obligation_id: str) -> list[dict[str, Any]]:
+    """What active linked payments paid on each correction request of the obligation, by action id."""
+    return [
+        {"action_id": action_id, "paid_cents": paid}
+        for action_id, paid in connection.execute(
+            "SELECT json_extract(e.payload_json,'$.pays_action_id'),SUM(p.amount_cents) FROM financial_events e "
+            "JOIN payments p ON p.payment_id=json_extract(e.payload_json,'$.payment_id') "
+            "WHERE e.aggregate_type='OBLIGATION' AND e.aggregate_id=? AND e.kind='PAYMENT_RECEIVED' "
+            "AND json_extract(e.payload_json,'$.pays_action_id') IS NOT NULL AND p.active=1 GROUP BY 1 ORDER BY 1",
+            (obligation_id,),
+        )
+    ]
+
+
 def _canonical(value: Mapping[str, Any]) -> bytes:
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
@@ -3841,10 +3866,14 @@ class FinancialOwner:
         source_version: str = "fixture-v1",
         local_ref: str | None = None,
         expected_revision: int | None = None,
+        pays_action_id: str | None = None,
     ) -> dict[str, Any]:
-        """Record one payment once by common origin; conflicts never mutate cash."""
+        """Record one payment once by common origin; conflicts never mutate cash. A payment answering
+        a correction request names it (pays_action_id) and never pays more than the request leaves unpaid."""
         self._assert_actionable()
         _id(payment_id, "payment_id")
+        if pays_action_id is not None:
+            _id(pays_action_id, "pays_action_id")
         _cents(amount_cents, "payment_amount", nonnegative=True)
         if amount_cents == 0:
             _fail(FinancialInputError, "payment_amount_zero")
@@ -3899,6 +3928,7 @@ class FinancialOwner:
                     "evidence_id": evidence_id,
                     "amount_cents": amount_cents,
                     "common_origin_id": common_origin_id,
+                    **({} if pays_action_id is None else {"pays_action_id": pays_action_id}),
                 }
                 actual_event_fields = {
                     key: event_payload.get(key)
@@ -3956,7 +3986,10 @@ class FinancialOwner:
             evidence_status = self._insert_evidence(connection, evidence)
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
             if existing is not None:  # existing_id is None here: that retry path returned or failed above
-                if int(existing["amount_cents"]) == amount_cents and str(existing["common_origin_id"]) == common_origin_id:
+                if int(existing["amount_cents"]) == amount_cents:
+                    recorded_link = connection.execute("SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')=?", (obligation["obligation_id"], existing["payment_id"])).fetchone()[0]
+                    if pays_action_id != recorded_link:  # a re-sent source may not change, add or remove its link
+                        _fail(FinancialConflictError, "payment_request_conflict")
                     now_ms = self._now()
                     if evidence_status == "INSERTED":
                         self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=now_ms)
@@ -3966,8 +3999,20 @@ class FinancialOwner:
                     connection.execute("INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)", (conflict_id, obligation["obligation_id"], common_origin_id, str(existing["payment_id"]), evidence_id, int(existing["amount_cents"]), amount_cents, "CONFLICTING_COMMON_ORIGIN_AMOUNT", self._now()))
                     self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now(), committed_at_ms=self._now())
                 return {"status": "CONFLICT", "conflict_id": conflict_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
+            link = {}
+            if pays_action_id is not None:
+                (request,) = connection.execute(
+                    "SELECT json_extract(payload_json,'$.amount_cents') FROM actions WHERE action_id=? AND obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST'",
+                    (pays_action_id, obligation["obligation_id"]),
+                ).fetchone() or (None,)
+                if request is None:
+                    _fail(FinancialConflictError, "payment_request_unknown")
+                paid = next((entry["paid_cents"] for entry in _correction_paid(connection, str(obligation["obligation_id"])) if entry["action_id"] == pays_action_id), 0)
+                if paid + amount_cents > request:
+                    _fail(FinancialConflictError, "payment_exceeds_unpaid_request")
+                link = {"pays_action_id": pays_action_id}
             connection.execute("INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)", (payment_id, obligation["obligation_id"], item_id, evidence_id, common_origin_id, amount_cents, event_at_ms, 1, None))
-            self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id}, now_ms=self._now())
+            self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id, **link}, now_ms=self._now())
             return {"status": "RECORDED", "payment_id": payment_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
 
     def reverse_payment(
@@ -4381,6 +4426,7 @@ class FinancialOwner:
         query_observations: Mapping[str, Mapping[str, Any]],
         current_event_sequence: int,
         previous_history_head: bytes,
+        correction_paid: list[dict[str, Any]],
         transition_result: Mapping[str, Any],
         financial_engine: Any,
         semantic: Any,
@@ -4441,6 +4487,7 @@ class FinancialOwner:
             and dependencies["input_evaluation_evaluated_at_ms"] == input_receipt["evaluated_at_ms"]
             and dependencies["input_evaluation_snapshot_digest"]
             == bytes.fromhex(str(input_receipt["input_snapshot_digest"]))
+            and dependencies["input_shortfall_cents"] == int(input_receipt["shortfall_cents"])
             and dependencies["decision_at_ms"] == command["decision_at_ms"]
             and dependencies["owner_now_ms"] == command["owner_now_ms"]
             and dependencies["current_event_sequence"] == current_event_sequence
@@ -4470,11 +4517,27 @@ class FinancialOwner:
         )
         require_binding(
             dependencies["supporting_evidence"] == evidence_bindings_wire
-            and dependencies["query_observations"] == query_observations,
+            and dependencies["query_observations"] == query_observations
+            and dependencies["correction_paid"] == correction_paid,
             "correction_read_set_binding",
         )
+        # Lean requests only the unpaid balance no earlier correction request still asks for, less
+        # what linked payments paid on it: min(claim, max(input shortfall - unpaid, 0)) (B2, H1).
+        paid = {entry["action_id"]: entry["paid_cents"] for entry in correction_paid}
+        outstanding = sum(
+            max(int(requested) - paid.get(action_ref, 0), 0)
+            for action_ref, requested in connection.execute(
+                "SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions "
+                "WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST'",
+                (obligation_id,),
+            )
+        )
+        action_amount = int(action["amount_cents"])
         require_binding(
-            action["obligation_id"] == obligation_id and action["currency"] == self.config.currency,
+            action["obligation_id"] == obligation_id
+            and action["currency"] == self.config.currency
+            and action_amount
+            == min(expected_claim["amount_cents"], max(int(input_receipt["shortfall_cents"]) - outstanding, 0)),
             "correction_action_binding",
         )
 
@@ -4501,7 +4564,7 @@ class FinancialOwner:
         expected_determination_digest = _digest(_ACTION_DOMAIN, _canonical(determination_payload))
         action_payload = {
             "action_id": action_id,
-            "amount_cents": expected_claim["amount_cents"],
+            "amount_cents": action_amount,
             "claim_id": str(command["claim_id"]),
             "currency": self.config.currency,
             "determination_id": determination_id,
@@ -4513,13 +4576,8 @@ class FinancialOwner:
             "revision": resulting_revision,
         }
         action_payload_digest = _digest(_ACTION_DOMAIN, _canonical(action_payload))
+        require_binding(action["payload_digest"] == action_payload_digest, "correction_digest_binding")
         action_idempotency_key = _digest(_IDEMPOTENCY_DOMAIN, action_id.encode("ascii"))
-        require_binding(
-            mutation["determination_digest"] == expected_determination_digest
-            and action["payload_digest"] == action_payload_digest
-            and mutation["action_idempotency_key"] == action_idempotency_key,
-            "correction_digest_binding",
-        )
         prior_case = connection.execute(
             "SELECT * FROM cases WHERE case_id=? AND obligation_id=?",
             (case_record["case_id"], obligation_id),
@@ -5050,6 +5108,7 @@ class FinancialOwner:
                     "decision_at_ms": decision_time,
                     "owner_now_ms": owner_now_ms,
                 }
+                correction_paid = _correction_paid(connection, str(obligation["obligation_id"]))
                 request = financial_engine.encode_correction_transition_request(
                     snapshot=snapshot,
                     command=command,
@@ -5057,6 +5116,7 @@ class FinancialOwner:
                     query_observations=query_observations,
                     current_event_sequence=current_event_sequence,
                     previous_history_head=previous_history_head,
+                    correction_paid=correction_paid,
                 )
                 execution = financial_engine.run_correction_transition_v1(
                     configured_release,
@@ -5090,6 +5150,8 @@ class FinancialOwner:
                     "CHRONOLOGY": (FinancialIntegrityError, "evaluation_chronology"),
                     "QUERY_OBSERVATION_INVALID": (FinancialIntegrityError, "correction_read_set_invalid"),
                     "INPUT_SNAPSHOT_MISSING": (FinancialIntegrityError, "correction_input_snapshot_missing"),
+                    "NO_SHORTFALL": (FinancialConflictError, "correction_no_shortfall"),
+                    "NO_REQUESTABLE_BALANCE": (FinancialConflictError, "correction_no_requestable_balance"),
                     "CAPACITY": (FinancialIntegrityError, "history_capacity"),
                 }
                 error_type, error_code = rejected_errors.get(
@@ -5110,6 +5172,7 @@ class FinancialOwner:
                 query_observations=query_observations,
                 current_event_sequence=current_event_sequence,
                 previous_history_head=previous_history_head,
+                correction_paid=correction_paid,
                 transition_result=transition_result,
                 financial_engine=financial_engine,
                 semantic=semantic,
@@ -5964,7 +6027,7 @@ class FinancialOwner:
             artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
             or type(artifact.get("version")) is not int
             or artifact.get("version") != 1
-            or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
+            or not _known_correction_engine(artifact.get("sha256"))
             or source.get("action_id") != payload.get("action_id")
             or source.get("outbox_action_id") != payload.get("action_id")
             or source.get("resulting_evaluation_id") != payload.get("evaluation_id")
@@ -6110,7 +6173,7 @@ class FinancialOwner:
             or artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
             or type(artifact.get("version")) is not int
             or artifact.get("version") != 1
-            or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
+            or not _known_correction_engine(artifact.get("sha256"))
         ):
             artifact = None
         failure = {

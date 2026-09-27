@@ -95,7 +95,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
     def _correction_release(self) -> financial_engine.FinancialCorrectionTransitionRelease:
         # The Owner fails closed without a release (Art. V.2); success-path
-        # correction histories run the pinned E911 release, each in its own
+        # correction histories run the pinned correction release, each in its own
         # empty workspace, exactly like the acceptance fixtures.
         self.path_counter += 1
         return _correction_transition_test_release(

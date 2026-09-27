@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from app.right_rail_financial_staff_server import _STATIC_FILES
 from tools.right_rail_financial_service_kit import (
@@ -8,9 +9,12 @@ from tools.right_rail_financial_service_kit import (
     KIT_CLAIMS,
     KIT_SCHEMA,
     RUNTIME_EXE,
+    RETIRED_PIN_REGISTRY,
     STATE_FILES,
     KitError,
     _check_names,
+    _check_contents,
+    _check_retired_pins,
     _check_runtime_member,
     _manifest_files,
     _strict_canonical_json,
@@ -69,6 +73,17 @@ class FinancialServiceKitManifestTests(unittest.TestCase):
     def test_kit_ships_every_file_the_staff_server_serves(self) -> None:
         # staff.js boots from /interaction-model.json; a kit without it serves a broken UI.
         self.assertLessEqual({"app/" + path for path, _type in _STATIC_FILES.values()}, set(STATE_FILES))
+
+    def test_kit_requires_the_exact_retired_engine_registry(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        self.assertIn(RETIRED_PIN_REGISTRY, STATE_FILES)
+        files = {path: (root / path).read_bytes() for path in (RETIRED_PIN_REGISTRY, "app/right_rail_financial_owner_independent.py")}
+        _check_retired_pins(files.__getitem__)
+        files[RETIRED_PIN_REGISTRY] += b"\n"
+        with self.assertRaisesRegex(KitError, "^kit_retired_pins_mismatch$"):
+            _check_retired_pins(files.__getitem__)
+        with self.assertRaisesRegex(KitError, "^kit_state_source_inventory$"):
+            _check_contents({p: (0, "0" * 64) for p in STATE_FILES if p != RETIRED_PIN_REGISTRY}, files.__getitem__)
 
 
 if __name__ == "__main__":

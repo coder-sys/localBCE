@@ -43,7 +43,7 @@ from app import right_rail_financial_staff_server as staff  # noqa: E402
 
 SCHEMA = "RR/FINANCIAL/FELT-VALUE-SCORECARD/v1"
 SCORECARD_PATH = _ROOT / "docs" / "scorecard" / "hospital_h.json"
-ENGINE_PATH = _ROOT / "artifacts" / "engine-correction-e911" / "blind_financial_correction.exe"
+ENGINE_PATH = _ROOT / "artifacts" / "engine-correction" / "blind_financial_correction.exe"
 _MODEL = json.loads((_ROOT / "app" / "staff_workspace" / "interaction-model.json").read_text(encoding="utf-8"))
 HOUR_MS = 3_600_000
 # Screens in the order a person reaches them; the overview is up on page load.

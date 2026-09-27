@@ -25,6 +25,7 @@
   let correctionFollowupRequestGeneration = 0;
   const CASH_CORRECTION_COMMAND = Object.freeze({
     item_id: "item-h",
+    pays_action_id: "action:obligation-item-h:correction-v1",
     payment_id: "payment:h:p2",
     common_origin_id: "origin:payment:h:p2",
     amount_cents: 300000,

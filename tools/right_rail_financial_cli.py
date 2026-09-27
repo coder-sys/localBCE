@@ -118,6 +118,7 @@ def _parser() -> argparse.ArgumentParser:
     payment.add_argument("--source-id", default="synthetic-payment-source")
     payment.add_argument("--source-version", default="fixture-v1")
     payment.add_argument("--local-ref")
+    payment.add_argument("--pays-action-id")
     payment.add_argument("--expected-revision", type=int, required=True)
 
     report = subparsers.add_parser("record-reporting-correction", aliases=("reporting-correction",))
@@ -604,6 +605,7 @@ def _run(args: argparse.Namespace) -> Any:
             source_id=args.source_id,
             source_version=args.source_version,
             local_ref=args.local_ref,
+            pays_action_id=args.pays_action_id,
             expected_revision=args.expected_revision,
         )
     if command in {"record-reporting-correction", "reporting-correction"}:

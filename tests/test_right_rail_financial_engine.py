@@ -15,6 +15,7 @@ from app import right_rail_financial_engine as engine
 from app import right_rail_financial_semantic_adapter as adapter
 from tests import rightrail_financial_expected_cases as expected
 from tests import test_right_rail_financial_semantic_adapter as semantic_tests
+from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
 
 
 EXPECTED_H_CASH_CENTS = semantic_tests.EXPECTED_H_CASH_CENTS
@@ -23,7 +24,7 @@ EXPECTED_OFFSET_CENTS = semantic_tests.EXPECTED_OFFSET_CENTS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# The digest-pinned snapshot evaluator (blind_financial.exe, not the E911 correction
+# The digest-pinned snapshot evaluator (blind_financial.exe, not the pinned correction
 # program). Repo-relative by default; RIGHTRAIL_ACCEPTED_ENGINE_PATH may point
 # elsewhere, but the size and SHA-256 pins below still decide acceptance.
 ACCEPTED_ENGINE_PATH = Path(
@@ -42,19 +43,28 @@ ACCEPTED_INPUT_SHA256 = bytes.fromhex(
 ACCEPTED_OUTPUT_SHA256 = bytes.fromhex(
     "278D98485EBE968C88AC0E85BCCD4F69C5B7FF1A38F0B20681DD7E79C82A7598"
 )
-EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_245_376
+EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_279_168
 EXPECTED_CORRECTION_ARTIFACT_SHA256 = bytes.fromhex(
-    "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+    "1A7A18333726484A0737DA7B005EC699F73E99EA0CFACFB409B000F964BED3AF"
 )
 EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
-    "13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537"
+    "B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067"
 )
 EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
-    "312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E"
+    "83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6"
 )
 
 
 class RightRailFinancialEngineTests(unittest.TestCase):
+    def test_current_engine_matches_independent_reuse_vector(self) -> None:
+        vectors = REPO_ROOT / "artifacts" / "engine-correction" / "vectors"
+        request, expected_result = (vectors / "reuse-request.bin").read_bytes(), (vectors / "reuse-result.expected.bin").read_bytes()
+        self.assertEqual(hashlib.sha256(request).hexdigest(), "9c203f6bf50da69d9d77cafc4adbf7bd3628724dfabf87e69e141a319f185b99")
+        self.assertEqual(expected_result.hex(), "424c4643525630320002002052522f46494e414e4349414c2f434f5252454354494f4e2d52455553452f7631010001000100020000")
+        release = _correction_transition_test_release(workspace=Path(self.release_dir.name) / "reuse")
+        actual = engine._run_pinned(release, ("--assess-correction-reuse",), request, failure_code="reuse_vector_failed")
+        self.assertEqual((actual.exit_code, actual.stdout, actual.stderr), (0, expected_result, b""))
+
     def setUp(self) -> None:
         self.fixture = semantic_tests.RightRailFinancialSemanticAdapterTests("runTest")
         self.fixture.setUp()

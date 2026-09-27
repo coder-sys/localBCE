@@ -6,12 +6,13 @@ from copy import deepcopy
 import json
 import traceback
 import unittest
+from unittest.mock import Mock
 
 from app.mirror import nc_medicaid_fhir as fhir
 from app.mirror import nc_medicaid_fhir_independent as independent
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import provider_trust_graph_independent as graph_independent
-from app.mirror.source_admission import SourceAdmissionService
+from app.mirror.source_admission import SourceAdmissionError, SourceAdmissionService
 
 
 def _practitioner() -> dict[str, object]:
@@ -309,6 +310,32 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         self.assertEqual("FAILED", failed_result["source_status"])
         self.assertEqual("retry-exhausted", failed_result["failure_code"])
 
+    def test_mixed_retries_preserve_verifiable_failure_evidence(self) -> None:
+        throttled = fhir.fixture_response(_bundle(), profile.REQUEST_URL, status=429, headers=(("Retry-After", "2"),))
+        malformed = fhir.fixture_response(_bundle(), profile.REQUEST_URL, status=429, headers=(("Retry-After", "invalid"),))
+        timeout = fhir.FhirTransportError("timeout")
+        transport_error = fhir.FhirTransportError("private-transport-detail")
+        cases = (
+            ((throttled, timeout, timeout), [429, 0, 0], [2, None, None], 0, "timeout", "timeout"),
+            ((throttled, transport_error, transport_error), [429, 0, 0], [2, None, None], 0, "transport", "retry-exhausted"),
+            ((timeout, throttled, throttled), [0, 429, 429], [None, 2, 2], 429, None, "retry-exhausted"),
+            ((malformed,), [429], [None], 429, None, "retry-after"),
+        )
+        service = SourceAdmissionService(profile.NC_MEDICAID_PROFILE.graph_profile, independent.NcMedicaidFhirVerifier())
+        for responses, statuses, delays, status, error, code in cases:
+            with self.subTest(statuses=statuses, error=error, code=code):
+                transport = Mock()
+                transport.fetch.side_effect = responses
+                raw = fhir.build_fixture_envelope(transport)
+                page = json.loads(raw)["pages"][0]
+                self.assertEqual((statuses, delays, status, error), (page["attempt_statuses"], page["retry_after_seconds"], page["status"], page["transport_error"]))
+                self.assertEqual(len(responses), transport.fetch.call_count)
+                result = independent.verify_bytes(raw)
+                self.assertEqual(("FAILED", code), (result["source_status"], result["failure_code"]))
+                self.assertEqual(error, result["page_evidence"][0]["attempts"][-1]["transport_error"])
+                with self.assertRaisesRegex(SourceAdmissionError, "^verifier:reject$"):
+                    service.admit(raw)
+
     def test_malformed_noncanonical_duplicate_nan_and_caps_fail_closed(self) -> None:
         raw = _envelope()
         with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "json:duplicate-key"):
@@ -356,25 +383,21 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
                 independent.verify_bytes(_rebind(mutated))
 
     def test_bad_identifier_period_address_endpoint_and_forbidden_field_reject(self) -> None:
-        mutations = []
-        value = json.loads(_envelope().decode("ascii"))
-        value["pages"][0]["bundle"]["entry"][0]["resource"]["unexpected"] = True
-        mutations.append(("forbidden-field", value))
-        value = json.loads(_envelope().decode("ascii"))
-        value["pages"][0]["bundle"]["entry"][0]["resource"]["identifier"][0]["system"] = "not a uri"
-        mutations.append(("practitioner:identifier:system", value))
-        value = json.loads(_envelope().decode("ascii"))
-        value["pages"][0]["bundle"]["entry"][1]["resource"]["period"] = {"start": "2026-12-31", "end": "2026-01-01"}
-        mutations.append(("resource:period-order", value))
-        value = json.loads(_envelope().decode("ascii"))
-        value["pages"][0]["bundle"]["entry"][2]["resource"]["address"]["postalCode"] = {"raw": "27601"}
-        mutations.append(("resource:address-postalCode:text", value))
-        value = json.loads(_envelope().decode("ascii"))
-        value["pages"][0]["bundle"]["entry"][2]["resource"]["endpoint"] = [{"reference": "Endpoint/SYNTH_ENDPOINT_001"}]
-        mutations.append(("location:endpoint:unlinked", value))
-        for code, mutated in mutations:
-            with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, code):
-                independent.verify_bytes(_rebind(mutated))
+        mutations = (
+            ("forbidden-field", 0, ("unexpected",), True),
+            ("practitioner:identifier:system", 0, ("identifier", 0, "system"), "not a uri"),
+            ("resource:period-order", 1, ("period",), {"start": "2026-12-31", "end": "2026-01-01"}),
+            ("resource:address-postalCode:text", 2, ("address", "postalCode"), {"raw": "27601"}),
+            ("location:endpoint:unlinked", 2, ("endpoint",), [{"reference": "Endpoint/SYNTH_ENDPOINT_001"}]),
+        )
+        for code, resource, path, replacement in mutations:
+            value = json.loads(_envelope())
+            target = value["pages"][0]["bundle"]["entry"][resource]["resource"]
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = replacement
+            with self.subTest(code=code), self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, code):
+                independent.verify_bytes(_rebind(value))
 
     def test_page_omission_reorder_duplicate_cycle_query_drift_and_marker_drift_reject(self) -> None:
         raw = _envelope(two_pages=True)
@@ -412,14 +435,11 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
 
     def test_caller_claim_upgrades_and_producer_forgery_reject(self) -> None:
         raw = _envelope()
-        value = json.loads(raw.decode("ascii"))
-        value["claims"]["completeness"] = "COMPLETE"
-        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "snapshot:claims"):
-            independent.verify_bytes(_rebind(value))
-        value = json.loads(raw.decode("ascii"))
-        value["claims"]["allow_nonmembership"] = True
-        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "snapshot:claims"):
-            independent.verify_bytes(_rebind(value))
+        for key, claim in (("completeness", "COMPLETE"), ("allow_nonmembership", True)):
+            value = json.loads(raw.decode("ascii"))
+            value["claims"][key] = claim
+            with self.subTest(claim=key), self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "snapshot:claims"):
+                independent.verify_bytes(_rebind(value))
         value = json.loads(raw.decode("ascii"))
         value["accepted"] = True
         with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "envelope:schema"):

@@ -583,7 +583,10 @@ def actionBindingWellFormed (input : FinancialInput) (action : ActionRecord) : B
       | some determination =>
           determination.determinationId = "determination:" ++ action.actionId &&
             action.kind = actionKindForDecision determination.decision &&
-            action.amountCents = determination.amountCents &&
+            -- A correction requests only the unpaid balance, at most the rejected claim.
+            (if determination.decision = .OFFSET_REJECTED_CORRECTION_AUTHORIZED then
+              action.amountCents ≤ determination.amountCents
+            else action.amountCents = determination.amountCents) &&
             action.revision = determination.resultingRevision &&
             determination.decidedAt ≤ action.createdAt &&
             action.createdAt ≤ input.evaluatedAt

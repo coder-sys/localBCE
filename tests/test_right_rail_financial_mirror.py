@@ -667,6 +667,23 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
         self.mirror.verify_integrity()
 
+    def test_cli_payment_link_reaches_the_owner(self) -> None:
+        from tools import right_rail_financial_cli as cli
+
+        sequence = self.mirror.summary()["sequence"]
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            status = cli.main([
+                "--database", str(self.db), "--authority-file", str(self._authority_file()),
+                "--state-id", self.config.state_id, "--deployment-id", self.config.deployment_id,
+                "--program-id", self.config.program_id, "--period-id", self.config.period_id,
+                "record-payment", "--item-id", H_ITEM_ID, "--payment-id", "payment:cli:h", "--common-origin-id", "origin:cli:h",
+                "--amount-cents", "1", "--evidence-id", "evidence:cli:h", "--event-at-ms", "1",
+                "--expected-revision", str(self.mirror.obligation_detail(H_ITEM_ID)["revision"]), "--pays-action-id", "action:cli:none",
+            ])
+        self.assertEqual((status, stderr.getvalue()), (2, "ERROR:payment_request_unknown\n"))
+        self.assertEqual(self.mirror.summary()["sequence"], sequence)
+
     def test_cli_mutations_require_explicit_actor_and_expected_revision(self) -> None:
         from tools import right_rail_financial_cli as cli
 

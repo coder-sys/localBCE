@@ -11,6 +11,38 @@ Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited 
 
 ## Verdict
 
+### Current-engine service-kit connection (2026-09-26, XI.2 record)
+
+- **Predicate:** the release producer requires four exact pinned vector inputs,
+  then requires transition and reuse actual bytes to equal their pinned
+  expected bytes; the kit checks the guarded receipt and the same inventory.
+- **Invariant / failure:** a package must exercise the exact engine protocol and
+  carry the checker's pinned retired-engine registry. Missing or stale inputs
+  must refuse packaging, not be omitted from its assurance.
+- **Evidence:** the producer still pins BLFCMD01/BLFCRES1 and BLFCRU01/BLFCRV01;
+  the current engine uses CMD02/RES3 and RU02/RV02, and lacks reuse fixtures.
+  `STATE_FILES` also omitted the registry that the checker always requires.
+- **Disposition:** replace stale fixture pins with current canonical vectors;
+  retain all comparisons, provenance, resource checks and exact inventory.
+- **Replacement control:** an independent reader derived the reuse baseline
+  from the old immutable fixture, replacing its embedded accepted result and
+  removing only fields removed by ReuseCodec v2. Expected assessment bytes were
+  specified before engine execution; provenance records hashes and construction.
+  Guarded actual/expected comparison, fresh release build and extracted-kit
+  scenario remain required before a packaged-runtime claim.
+- **Scope:** only this synthetic current-engine release and its kit inventory;
+  no theorem, protocol semantics, guard, authority or cash rule is weakened.
+- **Duration:** these fixtures remain pinned until another explicit release
+  record replaces them; prior fixtures remain in Git history.
+- **Claims withdrawn:** old reuse-vector evidence does not verify v2. This
+  unchanged-state baseline does not resolve paid-list/stale-shortfall reuse
+  limitations and does not authorize using reuse to decide live commands.
+
+Felt effect: replacement operators can install and verify the same correction
+engine and history checker, then exercise retry and restore without rebuilding
+missing package contents by hand. Finance staff's cash command now identifies
+the correction it pays; an acknowledgment still has zero cash effect.
+
 The core is roughly 2.5x larger than the invariants need. Root cause: state lives in
 ~20 editable tables with history as a side log, so every consumer (checker, successor,
 continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:
@@ -92,5 +124,5 @@ table with `history_capacity` before commit; raising it is a Lean change.
 - Next: Lean codec for the seal with a round-trip proof; then the signature.
 
 Protected throughout (V.4): `tests/rightrail_financial_expected_cases.py`, Lean KAT/vector
-files, `artifacts/engine-correction-e911/vectors/`, the E911 pin, wire formats and digest
+files, `artifacts/engine-correction/vectors/`, the correction engine pin, wire formats and digest
 domains, theorem statements, and `tests/test_right_rail_financial_constitution_invariants.py`.

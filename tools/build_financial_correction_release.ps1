@@ -28,10 +28,10 @@ $script:GuardPhysicalFloorBytes = [UInt64]2190433321
 $script:LeanCompilerStartFloorBytes = [UInt64]4190433321
 $script:Utf8Strict = [System.Text.UTF8Encoding]::new($false, $true)
 $script:PinnedVectorSpecs = @(
-    [pscustomobject]@{ SourceName = 'request.bin'; OutputName = 'request.bin'; Sha256 = '13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537' },
-    [pscustomobject]@{ SourceName = 'result.expected.bin'; OutputName = 'result.expected.bin'; Sha256 = '312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E' },
-    [pscustomobject]@{ SourceName = 'reuse-request.bin'; OutputName = 'reuse-request.bin'; Sha256 = 'DD7DDC27FEEDFDFD26540AB6B1F7D37E6BE49768583FB1EA3AB02F85C8390DC6' },
-    [pscustomobject]@{ SourceName = 'reuse-result.expected.bin'; OutputName = 'reuse-result.expected.bin'; Sha256 = '8C50EC33F30B520CC7452C3618577228B6B51B59B68A1935549461FAD2615379' }
+    [pscustomobject]@{ SourceName = 'request.bin'; OutputName = 'request.bin'; Sha256 = 'B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067' },
+    [pscustomobject]@{ SourceName = 'result.expected.bin'; OutputName = 'result.expected.bin'; Sha256 = '83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6' },
+    [pscustomobject]@{ SourceName = 'reuse-request.bin'; OutputName = 'reuse-request.bin'; Sha256 = '9C203F6BF50DA69D9D77CAFC4ADBF7BD3628724DFABF87E69E141A319F185B99' },
+    [pscustomobject]@{ SourceName = 'reuse-result.expected.bin'; OutputName = 'reuse-result.expected.bin'; Sha256 = '973B0CA003384170C5031B0E32295E02D8F34D80BFE095B30DE6142DBD378E4F' }
 )
 $script:RequiredSourcePaths = [string[]]@(
     'BlindLedger\Financial\CorrectionTransition\Transition.lean',
@@ -617,8 +617,8 @@ function Invoke-GuardedChild {
     $builtIdentity = Get-RegularFileIdentity -Path $builtExecutable
     if ($builtIdentity.SizeBytes -le 0) { throw 'freshly built executable is empty' }
     $vectorRoot = Join-Path $outputFull 'vectors'
-    $transition = Invoke-VectorOperation -Name TRANSITION -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'request.bin' -ExpectedName 'result.expected.bin' -ActualName 'result.actual.bin' -OperationArgument '--apply-correction-transition' -RequestSha256 '13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537' -ExpectedSha256 '312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E'
-    $reuse = Invoke-VectorOperation -Name REUSE -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'reuse-request.bin' -ExpectedName 'reuse-result.expected.bin' -ActualName 'reuse-result.actual.bin' -OperationArgument '--assess-correction-reuse' -RequestSha256 'DD7DDC27FEEDFDFD26540AB6B1F7D37E6BE49768583FB1EA3AB02F85C8390DC6' -ExpectedSha256 '8C50EC33F30B520CC7452C3618577228B6B51B59B68A1935549461FAD2615379'
+    $transition = Invoke-VectorOperation -Name TRANSITION -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'request.bin' -ExpectedName 'result.expected.bin' -ActualName 'result.actual.bin' -OperationArgument '--apply-correction-transition' -RequestSha256 'B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067' -ExpectedSha256 '83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6'
+    $reuse = Invoke-VectorOperation -Name REUSE -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'reuse-request.bin' -ExpectedName 'reuse-result.expected.bin' -ActualName 'reuse-result.actual.bin' -OperationArgument '--assess-correction-reuse' -RequestSha256 '9C203F6BF50DA69D9D77CAFC4ADBF7BD3628724DFABF87E69E141A319F185B99' -ExpectedSha256 '973B0CA003384170C5031B0E32295E02D8F34D80BFE095B30DE6142DBD378E4F'
     if ($transition.ExitCode -ne 0 -or -not $transition.OutputMatches -or $reuse.ExitCode -ne 0 -or -not $reuse.OutputMatches) {
         Write-ChildMarker -Text 'ENGINE_PRODUCER_CHILD_RESULT=FAIL'
         return 1
