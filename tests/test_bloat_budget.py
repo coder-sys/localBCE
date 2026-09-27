@@ -13,7 +13,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 
-LIVE_CODE_LINES = 78_019
+# Founder expanded the total to 80,000 on 2026-09-26 for connected-workflow work.
+LIVE_CODE_LINES = 80_000
 MARKDOWN_FILES = 20
 MARKDOWN_BYTES = 180_000
 STATUS_BYTES = 40_000
