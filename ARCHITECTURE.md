@@ -125,8 +125,10 @@ cutover.
 **service kit** (`tools/right_rail_financial_service_kit.py`) is the one
 packager: it assembles, verifies, extracts, runs the end-to-end scenario and
 serves the workspace from a digest-bound offline archive. Its current release
-producer and kit inventory now name the current vectors and retired-pin registry;
-an assembled kit still requires a fresh guarded build of the combined source.
+producer and kit inventory bind the current vectors, retired-pin registry and
+fresh guarded engine receipt. The kit checks canonical source paths and the
+exact v4 guard records with either LF or Windows CRLF line endings; raw log
+bytes remain digest-bound. Current exercised archives are recorded in provenance.
 Staff cash evidence names the
 correction request it pays; acknowledgment alone never provides that credit.
 The synthetic staff clock advances to the explicit decision time before issuing

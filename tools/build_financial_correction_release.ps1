@@ -43,7 +43,7 @@ $script:RequiredSourcePaths = [string[]]@(
 )
 
 function Get-Sha256FromBytes {
-    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return [Convert]::ToHexString($sha.ComputeHash($Bytes)).ToUpperInvariant() }
     finally { $sha.Dispose() }
@@ -75,7 +75,7 @@ function Read-RegularFileBytes {
 }
 
 function Write-FileCreateNew {
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
     $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
     try {
         $stream.Write($Bytes, 0, $Bytes.Length)
@@ -211,10 +211,12 @@ function Get-SelectedSourcePaths {
 
 function New-SourceManifestSnapshot {
     param([Parameter(Mandatory = $true)][string]$Root)
+    $portablePaths = [string[]]@((Get-SelectedSourcePaths -Root $Root) | ForEach-Object { $_.Replace('\', '/') })
+    [Array]::Sort($portablePaths, [System.StringComparer]::Ordinal)
     $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($relative in (Get-SelectedSourcePaths -Root $Root)) {
+    foreach ($relative in $portablePaths) {
         $identity = Get-RegularFileIdentity -Path (Join-Path $Root $relative)
-        $rows.Add([ordered]@{ path = 'engine/source/' + $relative.Replace('\', '/'); sha256 = $identity.Sha256; size_bytes = [Int64]$identity.SizeBytes })
+        $rows.Add([ordered]@{ path = 'engine/source/' + $relative; sha256 = $identity.Sha256; size_bytes = [Int64]$identity.SizeBytes })
     }
     $manifest = [ordered]@{ files = $rows.ToArray(); schema = $script:SourceManifestSchema }
     $bytes = $script:Utf8Strict.GetBytes((ConvertTo-CanonicalJsonText -Value $manifest))
@@ -271,8 +273,8 @@ function Invoke-RawProcess {
             $process.StandardInput.Close()
         }
         $process.WaitForExit()
-        $stdoutTask.GetAwaiter().GetResult()
-        $stderrTask.GetAwaiter().GetResult()
+        $null = $stdoutTask.GetAwaiter().GetResult()
+        $null = $stderrTask.GetAwaiter().GetResult()
         return [pscustomobject]@{ ExitCode = [Int32]$process.ExitCode; StdoutBytes = $stdout.ToArray(); StderrBytes = $stderr.ToArray() }
     } finally {
         $stderr.Dispose()
@@ -293,7 +295,7 @@ function Remove-FinalCrLf {
 }
 
 function Test-ByteArraysEqual {
-    param([Parameter(Mandatory = $true)][byte[]]$Left, [Parameter(Mandatory = $true)][byte[]]$Right)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Left, [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Right)
     if ($Left.Length -ne $Right.Length) { return $false }
     for ($index = 0; $index -lt $Left.Length; $index++) { if ($Left[$index] -ne $Right[$index]) { return $false } }
     return $true
@@ -508,7 +510,7 @@ function Get-V4GuardEvidence {
 }
 
 function Write-RawChildBytes {
-    param([Parameter(Mandatory = $true)][ValidateSet('stdout', 'stderr')][string]$Stream, [Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([Parameter(Mandatory = $true)][ValidateSet('stdout', 'stderr')][string]$Stream, [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
     if ($Stream -eq 'stdout') { $target = [Console]::OpenStandardOutput() }
     else { $target = [Console]::OpenStandardError() }
     if ($Bytes.Length -gt 0) { $target.Write($Bytes, 0, $Bytes.Length); $target.Flush() }

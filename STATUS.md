@@ -6,6 +6,8 @@ commit `595e611`, followed by funding/source-clock fixes in `2c61ae8` and
 test-setup consolidation in `e026658`. Main has not received this combination. Git state,
 raw guard logs and artifact provenance govern; a branch's pass does not verify
 another branch or their combination. `CONSTITUTION.md` is supreme.
+Connector/browser source and fixture consolidation remain uncommitted working
+changes while the separate Lean build/kit increment is committed.
 
 ## Product and standing claims
 
@@ -18,6 +20,50 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification
 
+- Lean build/proof/kit phase: r77 freshly reproduced the current pinned engine
+  with a canonical 46-file source manifest; both fixed vectors matched. r68 built all six Lake
+  targets (87 jobs); r69 passed 30 evaluator, 18 decision-package, 42 correction
+  KATs and 210 + 3,616 gate-rule cases. r70 passed the formal gate's 18 selected
+  correction declarations: fresh trust-zero checks, approved axiom closures,
+  independent leanchecker and 42 KATs. Each guard/child exited zero with cleanup
+  PASS. The 21 compile warnings and 30 fixed-vector native-axiom declarations
+  remain visible; this is not an all-theorem axiom-hygiene claim. All 21 verifier
+  tests now have passes: r72 passed 19, with two Windows cp1252 output errors;
+  r73 reran those two with `PYTHONIOENCODING=utf-8:strict` and passed both, zero
+  skips, cleanup PASS. This sets output encoding only; no gate/source changed.
+  The raw failed run remains. r79 passed 24/24 kit, size and protected-invariant
+  tests. r80 assembled/verified/extracted the 2,673-member offline kit and passed
+  its bundled correction/retry/SHADOW scenario. r84 passed actual kit serve and
+  restart, retaining the same owner/epoch/sequence/history and an empty engine
+  workspace; both owned servers were deliberately terminated for restart, then
+  post-stop checks and guard cleanup passed. Retained failures: r75 native-path
+  sort order, r78 CRLF parsing, r81-r83 smoke-harness issues. Exact evidence and
+  kit digest are in engine provenance. Connector/browser work remains paused.
+  r85 passed the packaged durable correction/cash restart test (1/1) and all six
+  final size gates; its outer run failed only in the subsequent count-print
+  command (unmatched parenthesis). The failed outer result remains recorded.
+  Corrected count-only r87 passed: 78,975/80,000 code lines. r86 refused nine
+  bytecode files written by the extra restart test in the old extraction; r88
+  freshly extracted the unchanged archive and passed both serve/restart cycles
+  with stricter harness cleanup. The r88 extraction is the clean handoff.
+  r71 launched no tests (4,146,638,848 free
+  bytes below the unchanged 4,190,433,321 start floor); r72 began after recovery.
+- Receiver cash-file increment: 20/20 new checks pass in guarded r63, including
+  isolated preview, independent pre/post replay, whole-file rollback, exact
+  retries after reversal, concurrency, process crashes and CLI setup refusing
+  mutation. Independent money/storage review found no remaining source blocker.
+  The grouped run was 77 tests: 75 passed, one total-size failure (78,812 >
+  78,019), one fresh-evaluation-engine skip, no errors; cleanup PASS. The founder
+  subsequently expanded only the total-code ceiling to 80,000; all six size
+  gates passed in r79. The fresh-engine comparison passed in r74.
+  Acceptance/Mirror fixture equivalence passed 117/117 in r65, zero skips/errors,
+  cleanup PASS. Browser work remains; the prior inventory covers old source.
+- Further fixture consolidation removes 148 lines without removing test methods
+  or assertions. The real Edge bridge and response model corrections are written;
+  exhaustive browser execution is pending. Fresh producer attempts found process
+  result and empty-output-stream bugs before compilation. Their corrections keep
+  all exit/resource/vector checks; the extended regression passed in r66 and the
+  fresh build passed in r67. Failed attempt r64's logs and stage are preserved.
 - Consolidation: process, Engine and Mirror tests share repeated invocation
   setup, removing 131 lines while retaining all 75 test methods, 440
   `self.assert` calls and the Mirror mock-call assertion. Static review found
@@ -34,12 +80,13 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   in r40. r41's 420-ID inventory exactly matches the completed logs; the
   interaction-model and scorecard class fixtures stayed intact. The staff
   partial-engine-configuration test emitted its expected argparse refusal.
-- Eleven skips remain unverified: Windows symlink privilege (1), absent old
+- The earlier inventory had eleven skips: Windows symlink privilege (1), absent old
   accepted-engine artifact (1), unbuilt gate runner (1), no fresh evaluation
   engine handoff (1), and real semantic-assurance mutation tests requiring a
   configured external candidate (7). The interaction-model crawl is not the
-  constitution's exhaustive real-browser crawl; a new combined-source Lean
-  build and assembled offline-kit run remain outstanding.
+  constitution's exhaustive real-browser crawl. r72/r73 resolved the seven real
+  semantic mutations, r74 the fresh evaluator comparison, and r69 separately
+  ran all gate-rule vectors. The old-artifact/symlink skips remain unverified.
 - Broader core r45 hit the memory floor at 2,182,610,944 free bytes: 54 passes,
   1 interrupted test, 60 not started in that group; outer exit 1, cleanup PASS,
   no recorded test failure/error. The subsequent staff/journey groups (40 tests)
@@ -200,13 +247,15 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   `B658DCEE...D067`, result `83BB53D1...E0D6`; reuse request `9C203F6B...5B99`,
   expected result `973B0CA0...78E4F`. Exact pins and construction are in
   `artifacts/engine-correction/PROVENANCE.md`.
-- That executable was built twice byte-identically from the source named in its
-  provenance, with 42/42 KATs. The combined candidate's Lean tree is newer.
-  No claim that the existing binary was built from this combined tree is valid.
-- Fresh build/repin and offline kit assemble/verify/extract/scenario/serve remain
-  unrun. The Lean build needs 4,190,433,321 free bytes to start; Python tests need
-  2,400,000,000. Both retain the 2,190,433,321-byte running floor. The founder
-  directed work on other fixes while compiler memory is unavailable.
+- The existing pin was reproduced byte-identically from the current combined
+  Lean tree in r67/r77; provenance retains its earlier historical origin separately.
+  No new binary pin or retired-engine entry was needed. r68/r69/r70 record the
+  whole build, executable checks and independently checked correction proofs.
+- Offline kit assemble/verify/extract/scenario passed r80; serve/restart passed
+  r84. The archive binds the assembly working tree, including frozen connector
+  and browser candidates; these checks do not qualify those other tracks. Lean builds
+  need 4,190,433,321 free bytes to start; Python tests need 2,400,000,000. Both
+  retain the 2,190,433,321-byte running floor.
 - Retired engines are historical verification only, through the append-only,
   digest-pinned registry. A missing, malformed or changed registry refuses
   verification. Only the current engine may decide new corrections.
@@ -263,15 +312,9 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 - Private ZK is active in its separate prototype repository, evidence-only and
   never a core/gate prerequisite; old `parked/` sources remain reference.
 
-Next: the consolidation's grouped regression is complete. The 78,019-line cap
-is unchanged (current tree: 77,887; 132 lines
-of room). The full financial input contract remains unimplemented; the reviewed
-500-650-line estimate exceeds that room and is not a measured implementation.
-Further structural consolidation is needed before implementing it under the cap.
-Read-only review found only modest remaining duplication in the owner and
-population-status adapters; their differing retry, validation and error behavior
-must remain intact. These are proposals, not implemented savings. Also
-complete the real-browser error-state crawl; when memory permits, rebuild
-and repin the final Lean tree, then assemble/verify/extract/run the offline kit.
+Next: connector/browser completion remains paused at the founder's
+request; the exhaustive browser crawl and final combined-source verification
+are still outstanding. The receiver cash-file implementation is synthetic-only; the distinct
+MCO/X12/MMIS formats listed above remain unsupported and refuse completely.
 The founder requested local commits; this candidate is not a qualified release.
 No production activation follows from any of these local checks.

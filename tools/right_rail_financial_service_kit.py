@@ -498,7 +498,7 @@ def _check_guard_log(raw: bytes, start_floor: int, minimum_free: int) -> None:
         raise KitError("engine_guard_log_failure_marker")
 
     def records(tag: str) -> list[str]:
-        return re.findall(rf"(?m)^{tag} ([^\r\n]+)$", text)
+        return re.findall(rf"(?m)^{tag} ([^\r\n]+)\r?$", text)
 
     reserve = {
         "reserve_floor_bytes": str(PHYSICAL_FREE_FLOOR_BYTES),
@@ -555,7 +555,7 @@ def _check_guard_log(raw: bytes, start_floor: int, minimum_free: int) -> None:
     targets = set(statuses) - {"child-exit-7", "child-exit-0"}
     if not targets or any(statuses[label] != 0 for label in targets):
         raise KitError("engine_guard_log_target_child_status")
-    if re.findall(r"(?m)^CLEANUP=([^\r\n]*)$", text) != [
+    if re.findall(r"(?m)^CLEANUP=([^\r\n]*)\r?$", text) != [
         f"PASS label={label} owned_process_tree=empty" for label in statuses
     ]:
         raise KitError("engine_guard_log_cleanup_inventory")
@@ -585,7 +585,7 @@ def _check_guard_log(raw: bytes, start_floor: int, minimum_free: int) -> None:
         raise KitError("engine_guard_log_summary_inventory")
     if min(summaries.values()) != minimum_free:
         raise KitError("engine_guard_log_minimum_free_mismatch")
-    if re.findall(r"(?m)^MUTEX=([^\r\n]+)$", text) != [f"RELEASED name={GUARD_MUTEX_NAME}"]:
+    if re.findall(r"(?m)^MUTEX=([^\r\n]+)\r?$", text) != [f"RELEASED name={GUARD_MUTEX_NAME}"]:
         raise KitError("engine_guard_log_mutex_release")
 
 

@@ -11,6 +11,51 @@ Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited 
 
 ## Verdict
 
+### Current-source Lean reproduction (2026-09-26, XI.2 record)
+
+- Guard-log line endings: r78 refused the fresh r77 kit with
+  `engine_guard_log_policy_mismatch`. Its 99 CRLF records contain the exact
+  required v4 policy, but the kit's LF-only line anchors match zero policies.
+  Predicate/invariant: parse the actual guard evidence and retain exact fields,
+  counts, floors, exits, cleanup and mutex release; do not infer a pass from a
+  receipt alone. Disposition: replace only the three record-ending patterns
+  with LF-or-CRLF anchors. Replacement control: positive checks for both forms,
+  malformed-ending and adverse-record mutations, independent review and a new
+  complete kit run. Raw log bytes and their digest binding remain unchanged.
+  Scope/duration: this v4 text-log parser until a separately reviewed format
+  change. Claims withdrawn: r78 verifies no kit; no prior run is relabelled.
+- Canonical manifest correction: r75 refused the r67 kit with
+  `engine_source_manifest_not_canonical_or_current`. The producer sorted native
+  Windows paths before replacing backslashes, placing `CodecLawsCheck.lean`
+  before `CodecLaws/Correction.lean`; the existing kit requires ordinal ordering
+  of the portable slash paths. Retain that exact canonical-byte predicate and
+  all source identity checks. Normalize before sorting in the producer, compare
+  its actual manifest against independently constructed Python canonical bytes,
+  then create a new guarded release. Scope/duration: prospective manifests only;
+  r67 evidence remains unchanged and does not acquire a kit-compatibility claim.
+- **Predicate:** an exact-source build claim binds the guarded producer receipt,
+  all selected Lean/config bytes, toolchain, executable and both pinned vectors.
+- **Invariant / failure:** an older binary's historical build does not establish
+  reproducibility from a later combined source tree.
+- **Evidence:** r67 built the 46-file current source manifest at `61a24519` and
+  reproduced the existing 6,279,168-byte executable byte-for-byte; transition
+  and reuse outputs match both independent expected files. Guard exits are zero,
+  cleanup PASS, mutex released. r68 separately compiled all six Lake targets.
+- **Disposition:** extend provenance with this separately identified reproduction;
+  retain the historical origin, executable pin and retired-pin registry unchanged.
+- **Replacement control:** the source-manifest and receipt hashes, original raw
+  guard/child logs and exact comparisons remain inspectable. The producer's empty
+  stream/process-result repairs passed a binary I/O regression and independent
+  review; resource, toolchain, source-identity and expected-answer checks remain.
+- **Scope:** local synthetic build evidence only; no theorem statement, wire
+  format, decision rule, executable bytes or allowed axiom is changed.
+- **Duration:** this evidence applies only to the recorded source and artifacts;
+  later changes require their own verification.
+- **Claims withdrawn:** no assurance for later source, whole-system qualification
+  or all-theorem axiom hygiene follows from reproducibility. Native diagnostic
+  axioms and 21 r68 linter warnings remain visible; the formal gate has its own
+  explicitly bounded declaration scope.
+
 ### Current-engine service-kit connection (2026-09-26, XI.2 record)
 
 - **Predicate:** the release producer requires four exact pinned vector inputs,
