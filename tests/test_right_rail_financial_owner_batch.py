@@ -284,9 +284,13 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         self.assertLessEqual(seen, {"accepted", "database:busy"})
         with closing(sqlite3.connect(owner.path)) as connection, connection:
             connection.execute("UPDATE program_funding_projection SET amount_cents=amount_cents+1")
-        seen = checks_while_writing(commands[90:160])
-        self.assertIn("funding:projection-reconstruction", seen)  # refused while writes continue, not only when quiet
-        self.assertLessEqual(seen, {"funding:projection-reconstruction", "database:busy"})
+        tampered_history, tampered_rows = _history(owner.path), _rows(owner.path)
+        for name, arguments in commands[90:160]:
+            with self.assertRaisesRegex(FinancialIntegrityError, "^funding_projection_drift$"):
+                getattr(owner, name)(**arguments)
+        self.assertEqual((_history(owner.path), _rows(owner.path)), (tampered_history, tampered_rows))
+        with self.assertRaisesRegex(IndependentFinancialError, "^funding:projection-reconstruction$"):
+            verify_database(owner.path, **owner._checker_expectations())
         other = self.directory / "other.sqlite"
         with closing(sqlite3.connect(other, isolation_level=None)) as holder, closing(sqlite3.connect(other, timeout=0)) as waiter:
             holder.execute("BEGIN EXCLUSIVE")
@@ -298,6 +302,75 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             else:
                 self.fail("the other file was not locked")
             holder.execute("ROLLBACK")
+
+    def test_funding_projection_drift_refuses_all_command_entry_points_and_reads(self) -> None:
+        mutations = {
+            "amount": "UPDATE program_funding_projection SET amount_cents=amount_cents+1",
+            "event-time": "UPDATE program_funding_projection SET event_at_ms=event_at_ms+1",
+            "revision": "UPDATE program_funding_projection SET revision=revision+1",
+            "digest": "UPDATE program_funding_projection SET receipt_digest=zeroblob(64)",
+            "receipt": "UPDATE program_funding_projection SET receipt_id='funding:unknown'",
+            "source": "UPDATE program_funding_projection SET source_record_ref='funding-source:unknown'",
+            "deleted": "DELETE FROM program_funding_projection",
+            "null-id-successor": "INSERT INTO program_funding_receipts SELECT NULL,state_id,deployment_id,program_id,period_id,currency,source_record_ref,amount_cents,confirmation_class,evidence_status,event_at_ms,recorded_at_ms,receipt_id,receipt_digest FROM program_funding_receipts WHERE receipt_id IN (SELECT receipt_id FROM program_funding_projection)",
+            "extra": "INSERT INTO program_funding_projection SELECT source_record_ref||':extra','funding:unknown',amount_cents,event_at_ms,revision,receipt_digest FROM program_funding_projection",
+        }
+        for label, statement in mutations.items():
+            with self.subTest(mutation=label):
+                owner = self._store(f"funding-{label}.sqlite")
+                original = owner.program_funding_summary()["current_receipts"][0]
+                duplicate = owner_module.ProgramFundingReceipt(
+                    receipt_id=original["receipt_id"], **harness._SCOPE,
+                    source_record_ref=original["source_record_ref"],
+                    amount_cents=original["amount_cents"], event_at_ms=original["event_at_ms"],
+                )
+                with closing(sqlite3.connect(owner.path)) as connection, connection:
+                    connection.execute(statement)
+                history, rows, sequence = _history(owner.path), _rows(owner.path), owner.summary()["sequence"]
+                for command in (
+                    lambda: owner.record_support_evidence(**_support("evidence:funding-refused", "origin:funding-refused")[1]),
+                    lambda: owner.run_batch([_support("evidence:funding-batch", "origin:funding-batch")]),
+                    lambda: owner.record_program_funding_receipt(duplicate),
+                    owner.program_funding_summary,
+                ):
+                    with self.assertRaisesRegex(FinancialIntegrityError, "^funding_projection_drift$"):
+                        command()
+                self.assertEqual((_history(owner.path), _rows(owner.path), owner.summary()["sequence"]), (history, rows, sequence))
+                with self.assertRaises(IndependentFinancialError):
+                    verify_database(owner.path, **owner._checker_expectations())
+
+    def test_funding_projection_guard_checks_outer_batch_once_and_rolls_back_its_own_drift(self) -> None:
+        owner = self._store("funding-outer-batch.sqlite")
+        with mock.patch.object(owner, "_verify_funding_projection", wraps=owner._verify_funding_projection) as guard:
+            results = owner.run_batch([_support("evidence:funding-1", "origin:funding-1"), _support("evidence:funding-2", "origin:funding-2")])
+        self.assertEqual([result["status"] for result in results], ["RECORDED", "RECORDED"])
+        self.assertEqual(guard.call_count, 2)
+        history, rows, funding = _history(owner.path), _rows(owner.path), owner.program_funding_summary()
+        with self.assertRaisesRegex(FinancialIntegrityError, "^funding_projection_drift$"):
+            with owner._write() as connection:
+                connection.execute("UPDATE program_funding_projection SET amount_cents=amount_cents+1")
+        self.assertEqual((_history(owner.path), _rows(owner.path), owner.program_funding_summary()), (history, rows, funding))
+        owner.verify_integrity()
+
+    def test_funding_projection_rejects_a_superseded_receipt_as_current(self) -> None:
+        owner = self._store("funding-stale-leaf.sqlite")
+        original = owner.program_funding_summary()["current_receipts"][0]
+        owner.record_program_funding_receipt(owner_module.ProgramFundingReceipt(
+            receipt_id="funding:harness-v2", **harness._SCOPE,
+            source_record_ref=original["source_record_ref"], amount_cents=original["amount_cents"],
+            event_at_ms=original["event_at_ms"] + 1, supersedes_receipt_id=original["receipt_id"],
+        ))
+        with closing(sqlite3.connect(owner.path)) as connection, connection:
+            connection.execute(
+                "UPDATE program_funding_projection SET receipt_id=?,amount_cents=?,event_at_ms=?,revision=1,receipt_digest=?",
+                (original["receipt_id"], original["amount_cents"], original["event_at_ms"], bytes.fromhex(original["receipt_digest"])),
+            )
+        history, rows = _history(owner.path), _rows(owner.path)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^funding_projection_drift$"):
+            owner.run_batch([_support("evidence:stale-leaf", "origin:stale-leaf")])
+        self.assertEqual((_history(owner.path), _rows(owner.path)), (history, rows))
+        with self.assertRaisesRegex(IndependentFinancialError, "^funding:projection-reconstruction$"):
+            verify_database(owner.path, **owner._checker_expectations())
 
     def test_a_clean_check_a_commit_lands_under_is_busy_never_accepted(self) -> None:
         owner, real = self._store("torn.sqlite"), checker_module._verify_mapped

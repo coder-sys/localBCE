@@ -21,10 +21,10 @@ class NcMedicaidFhirProfileError(ValueError):
     """Raised when the immutable fixture contract is inconsistent."""
 
 
-SOURCE_CONTRACT_SCHEMA = "mirror-ncmedicaid-fhir-source-contract-v2"
-SOURCE_CONTRACT_VERSION = 2
-SOURCE_PROFILE_ID = "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v4"
-SOURCE_PROFILE_VERSION = 4
+SOURCE_CONTRACT_SCHEMA = "mirror-ncmedicaid-fhir-source-contract-v3"
+SOURCE_CONTRACT_VERSION = 3
+SOURCE_PROFILE_ID = "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v5"
+SOURCE_PROFILE_VERSION = 5
 OWNER_ID = "NCDHHS"
 SYSTEM_ID = "NC Medicaid Provider Directory API"
 BASE_URL = "https://provider-directory-api.connect.medicaid.ncdhhs.gov/fhir"
@@ -35,8 +35,8 @@ TRANSPORT_PROVENANCE = "official-hostname-over-tls-unverified"
 RECORD_AUTHENTICATION = "undocumented"
 CAPABILITY_STATEMENT_IDENTITY = "NC_MEDICAID_FHIR_CAPABILITY_STATEMENT_UNBOUND_V4"
 CAPABILITY_STATEMENT_DIGEST: str | None = None
-VERIFIER_ID = "SYNTH_NC_MEDICAID_FHIR_VERIFIER_V4"
-VERIFIER_EPOCH = 4
+VERIFIER_ID = "SYNTH_NC_MEDICAID_FHIR_VERIFIER_V5"
+VERIFIER_EPOCH = 5
 SCOPE = SOURCE_PROFILE_ID
 
 # Capture defaults are fixture examples; the canonical resource variants below
@@ -49,6 +49,10 @@ FIXTURE_OBSERVATION_TIME = 7_000
 FIXTURE_FETCHED_AT = 7_010
 FIXTURE_LAST_UPDATED = "2026-08-14T12:00:00Z"
 MAX_SERVER_MARKER_AGE_DAYS = 365
+_CAPTURE_CLOCK = MappingProxyType({
+    "kind": "SYNTHETIC_LOGICAL_SECONDS_V1", "reference_tick": 7_010,
+    "reference_utc": "2026-08-14T12:00:00Z", "seconds_per_tick": 1,
+})
 # One contract-wide cap for the complete canonical intake frame.  The
 # envelope and evidence caps remain separately typed below; this value is the
 # bound that every boundary applies before parsing or copying the frame.
@@ -101,7 +105,7 @@ def _canonical(value: object) -> bytes:
 
 def _digest(label: str, value: object) -> str:
     digest = hashlib.sha3_512()
-    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/CONTRACT/" + label + "/v2\0").encode("ascii"))
+    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/CONTRACT/" + label + "/v3\0").encode("ascii"))
     digest.update(_canonical(value))
     return digest.hexdigest()
 
@@ -130,7 +134,7 @@ class DynamicCaptureContext:
     def __post_init__(self) -> None:
         for label, value in (("subject", self.subject_id), ("credential", self.credential_id), ("enrollment", self.enrollment_id), ("subject-locator", self.subject_locator_digest)):
             _opaque(value, label)
-        if type(self.observation_time) is not int or type(self.fetched_at) is not int or self.observation_time < 0 or self.fetched_at < self.observation_time:
+        if type(self.observation_time) is not int or type(self.fetched_at) is not int or self.observation_time < 0 or not self.observation_time <= self.fetched_at <= 2_147_483_647:
             raise NcMedicaidFhirProfileError("profile:context-time")
 
     def material(self) -> dict[str, object]:
@@ -251,6 +255,11 @@ class NcMedicaidFhirSourceProfile:
     def default_context(self) -> DynamicCaptureContext:
         return DEFAULT_CAPTURE_CONTEXT
 
+    @property
+    def capture_clock(self) -> Mapping[str, str | int]:
+        """Fixed synthetic mapping; capture and graph times remain logical ticks."""
+        return _CAPTURE_CLOCK
+
     def material(self) -> dict[str, object]:
         return {
             "schema": SOURCE_CONTRACT_SCHEMA, "schema_version": SOURCE_CONTRACT_VERSION,
@@ -267,6 +276,7 @@ class NcMedicaidFhirSourceProfile:
             "query_template": {"parameters": [list(value) for value in QUERY_PARAMETER_TEMPLATE], "page_parameter": self.page_parameter},
             "allowed_media_type": self.allowed_media_type, "transport_caps": dict(self.transport_caps),
             "max_server_marker_age_days": self.max_server_marker_age_days,
+            "capture_clock": dict(self.capture_clock),
             "evidence_mode": self.evidence_mode, "completeness": self.completeness,
             "require_complete": self.require_complete, "allow_nonmembership": self.allow_nonmembership,
             "live_transport_authorized": self.live_transport_authorized, "synthetic_only": self.synthetic_only,

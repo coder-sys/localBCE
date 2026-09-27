@@ -1,8 +1,9 @@
 # RightRail status
 
 Updated: 2026-09-26. Current candidate: `codex/connected-workflows`, based on
-main `6cccb84`, integrating `correction-v2` (`70f87c7`) and the connection
-repairs below as a local development commit. Main has not received this combination. Git state,
+main `6cccb84`, integrating `correction-v2` (`70f87c7`) in local development
+commit `595e611`, with the funding and source-clock fixes below in this local
+development increment. Main has not received this combination. Git state,
 raw guard logs and artifact provenance govern; a branch's pass does not verify
 another branch or their combination. `CONSTITUTION.md` is supreme.
 
@@ -17,6 +18,41 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification
 
+- Final repair and budget check, `cx-preconsolidation-r38-a1`: 8/8 passed,
+  zero failures/errors/skips, guard exit 0, cleanup PASS. This reruns the NULL-ID
+  successor rejection and borrowed crash helper, plus every unchanged size gate.
+- Funding boundary, `cx-funding-r31-a1`: 24/24 passed, no failures, errors or
+  skips, guard exit 0, cleanup PASS. Current-projection mutations refuse single
+  writes, batches, retries and summaries; post-body drift rolls back. Acceptance
+  test setup was subsequently consolidated; full regression remains required.
+- Source clock/admission and consumers, `cx-clock-contract-r32-a1`: 72/72
+  passed, no failures, errors or skips, guard exit 0, cleanup PASS, 2.991 s.
+  Inclusive age bounds, malformed/future dates, six context fields, numeric-ID
+  substitutions, failure precedence and body-discard evidence are checked.
+  All size gates passed unchanged. Independent source review found no blocker.
+- Combined r33 stopped on memory: 2,130,452,480 < 2,190,433,321 free bytes;
+  cleanup PASS, outer exit 1. It recorded 140 completed passes, 2 skips (missing
+  gate runner and Windows symlink privilege), and 1 interrupted test, with no
+  final suite verdict. r34 subsequently recorded 226 passes, the same 2 skips and
+  1 interrupted test before its own floor stop (2,159,529,984 free bytes), outer
+  exit 1 and cleanup PASS. Neither verifies the full combination.
+- Full r35 completed: 420 run, 408 passed, 0 failures, 1 error, 11 skips,
+  guard exit 1, cleanup PASS. A protected invariant test borrows the acceptance
+  process helper; its new child-helper lookup was missing from that borrowed
+  class. Explicit fixture-class dispatch fixes the helper without changing the
+  protected test; r36 confirms that invariant passes.
+- Independent funding review found a nullable receipt-ID successor missed by
+  the local join predicate. r36 reproduced the wrong refusal path: the later
+  row-count diagnostic raised instead of the required projection-integrity
+  error (1 pass, 1 failure, no skips; guard 1, cleanup PASS). The join now tests
+  `child.rowid`, preserving schema and limits. Both repaired tests pass in r37.
+- Combined r37 recorded 379 completed passes, 4 skips and 1 interrupted test
+  (384 started) before the memory floor stopped it: 2,185,838,592 free bytes
+  versus 2,190,433,321 required. Cleanup PASS; no final suite verdict or captured
+  outer exit. No test failure/error was recorded. All funding, source, acceptance,
+  protected invariant, staff and Switch tests reached their recorded outcomes;
+  the interaction-model restore-position test was interrupted. The remaining
+  36 tests were not started. This is not a completed full-suite pass.
 - Connector increment, `cx-connectors-final-r28-a1`: 65/65 passed, no failures,
   errors or skips, guard exit 0, cleanup PASS. It covers source retries, admission,
   all six expected context fields, source-file view/comparison, malformed and
@@ -35,10 +71,10 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   serving SINGLE. r19 had 42 passes and 3 incorrect-module import errors, resolved
   by the corrected 64/64 r20 run. r22 had 48 passes and one size-budget failure
   (78,074 > 78,019); setup deduplication and r28 pass preserve the original cap.
-- Whole current candidate, `cx-full-connectors-r29-a1`: 410 tests run, 399 passed, 0 failures,
+- Previous committed candidate, `cx-full-connectors-r29-a1`: 410 tests run, 399 passed, 0 failures,
   0 errors, 11 skipped, guard exit 0, cleanup PASS. Runtime 412.730 s;
   minimum free memory 2,569,719,808 bytes. This includes the attack modules and
-  final connector/clock fixes.
+  earlier connector/demo-clock fixes, not the new source-clock/funding fixes.
 - All 11 skips: 1 missing `gate_rules.exe` build; 1 Windows symlink privilege
   refusal (WinError 1314); 1 absent `engine-snapshot-398e/blind_financial.exe`;
   1 unset fresh-engine handoff (`BLIND_FINANCIAL_EXE`/SHA256); 7 real semantic
@@ -70,12 +106,20 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   The external runner's failing-subtest pass count is unreliable; raw unittest
   records govern those earlier red runs. Passing counts above reconcile.
 - Independent read-only review found no remaining blocker in the connection/HTTP
-  fixes after the test reference repair. Unstaged `git diff --check` passes;
-  the imported `artifacts/engine-correction/vectors/run-vectors.cmd` still has
-  six staged CRLF whitespace warnings (exit 2). Its historical bytes are retained.
+  fixes after the test reference repair. Unstaged `git diff --check` passes.
+  The merge retained six historical CRLF whitespace warnings in
+  `artifacts/engine-correction/vectors/run-vectors.cmd`; its bytes are unchanged.
 
 ## Connected behavior
 
+- Synthetic NC marker age now uses a pinned logical-seconds-to-UTC mapping and
+  independent calendar calculations. Contract v3/profile v5 reject old bindings,
+  future instants and contradictory failures; date-only/absent markers remain
+  UNKNOWN. FRESH describes age at capture only; graph freshness stays UNKNOWN.
+- Every outer owner write verifies current funding leaf projections before work
+  and before commit under the same lock; summaries check the same read snapshot.
+  The bounded check covers current sources, not arbitrary historical tampering;
+  full independent replay remains necessary for history and store integrity.
 - NC FHIR retries now retain only the final attempt's response/error and record
   invalid Retry-After with a matching empty delay slot. Failure envelopes verify
   as failures and cannot enter graph admission. V2/V3 admission checks the
@@ -130,11 +174,6 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Rules and unresolved work
 
-- Source freshness is unresolved: the profile says maximum marker age 365 days,
-  but producer/verifier use a 1900/197* prefix heuristic, with synthetic fetch
-  ticks (7010) lacking a UTC mapping. Do not trust raw FRESH labels; the connected
-  view explicitly retains UNKNOWN. An age-policy change needs an agreed time
-  base and protected-contract review. No age rule was invented here.
 - The NC capture path is synthetic file intake, with no live transport. Financial
   file adapters (MCO reports, X12 820/835 and MMIS extracts), shared provider/gate
   rules and payee-identity consumption remain unbuilt. Aggregate provider export
@@ -158,9 +197,10 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   transitions and excess-request accounting remain to build. Reuse still trusts
   recorded input shortfall and ignores the paid list; no application calls it.
   A new pin-transition event and stronger paid-list/amount proofs remain pending.
-- Funding-projection tampering previously accepted 70 later writes. Owner open
-  and staff reads recheck history, but writes do not reverify that projection.
-  Fix at the transaction/history boundary, without unbounded replay per write.
+- The prior funding drift reproduction accepted 70 later writes; r31 now refuses
+  all 70 after tampering, without a full history replay per write. The full-store
+  replay still owns detection of historical corruption outside current projection
+  links; the new local guard does not replace it.
 - Whole-history checking was about 27 s at 10,000 rows, above the 5 s target.
   Lock contention may return `store_busy`; retries must keep the reviewed body.
   TEST restore through segmented history and a Lean seal codec remain unbuilt.
@@ -184,7 +224,10 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 - Private ZK is active in its separate prototype repository, evidence-only and
   never a core/gate prerequisite; old `parked/` sources remain reference.
 
-Next: define the source clock/freshness contract and the financial input contract;
+Next: consolidate duplicated test setup first, as directed by the founder;
+preserve every test, assertion and the 78,019-line cap (current tree: 78,018).
+Commit the reviewed increments with their actual evidence, then complete the
+combined regression and the independently reviewed financial input contract;
 complete the real-browser error-state crawl; when memory permits, rebuild
 and repin the final Lean tree, then assemble/verify/extract/run the offline kit.
 The founder requested local commits; this candidate is not a qualified release.

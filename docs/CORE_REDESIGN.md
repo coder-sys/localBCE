@@ -126,3 +126,41 @@ table with `history_capacity` before commit; raising it is a Lean change.
 Protected throughout (V.4): `tests/rightrail_financial_expected_cases.py`, Lean KAT/vector
 files, `artifacts/engine-correction/vectors/`, the correction engine pin, wire formats and digest
 domains, theorem statements, and `tests/test_right_rail_financial_constitution_invariants.py`.
+
+## Synthetic NC capture clock (XI.2, 2026-09-26)
+
+1. Predicate: replace the 1900/197 prefix heuristic with strict calendar parsing
+   and `0 <= fetch_utc - marker <= 365 * 86400` seconds, inclusive. COMPLETE
+   requires no failure and complete pages; a failed capture never becomes FRESH
+   or enters graph admission. Date-only markers cannot establish instant age.
+2. Invariant/failure: an invalid, future or too-old marker cannot claim freshness;
+   logical capture ticks cannot silently become Unix time. Contradictory failure
+   fields cannot authorize admission.
+3. Evidence before editing: profile lines 48-51 define ticks 7000/7010 and a
+   365-day limit; producer line 310 checks only `startswith(("1900", "197"))`;
+   verifier lines 351-356 repeat it, and lines 528-533 omit failure_code from
+   admission. Guarded r32 now passes all 72 source/consumer/budget checks; the
+   independent post-edit review also closed a numeric-to-string context bypass.
+4. Disposition: replace the heuristic and refuse old profile bindings. Retain
+   raw-envelope v2, logical capture fields, graph windows, bounds and nonclaims.
+5. Replacement: immutable profile clock `SYNTHETIC_LOGICAL_SECONDS_V1`, reference
+   tick 7010 at `2026-08-14T12:00:00Z`, one second per tick. Producer and verifier
+   calculate age independently. Admission binds all six expected context fields;
+   omitted context means the fixed fixture, not envelope-supplied identity/time.
+   Source contract/schema/domain become v3; source profile and verifier become
+   v5/epoch 5. Envelope v2, resource digests v2, generic graph profile v3 and the
+   unbound capability-statement identity remain unchanged. Boundary, rebinding,
+   calendar, context and failure-state tests must pass before new claims.
+6. Scope: synthetic NC capture only. No live transport, payment authority,
+   read-model freshness upgrade or changed resource limit. Felt effect: the
+   implementation lead sees stale or invalid source captures refused during
+   onboarding instead of troubleshooting a falsely fresh observation downstream.
+7. Duration: the new synthetic contract remains until explicitly replaced;
+   old bytes remain historical evidence and fail the new binding.
+8. Withdrawn claims: old tests and profile/envelope/graph/receipt identities do
+   not establish the new rule. FRESH means marker age at synthetic capture time,
+   never current source truth. Independent post-edit review found no remaining
+   source-boundary blocker. Whole-suite r35 completed with one unrelated test
+   helper error, subsequently repaired. The final-code r37 recorded 379 passes,
+   four skips and one interrupted test before its memory-floor stop; cleanup
+   passed. No completed whole-system verdict is claimed for this increment.

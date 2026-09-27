@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 import traceback
 import unittest
@@ -27,13 +28,13 @@ def _location(variant: str = "baseline") -> dict[str, object]:
     return profile.synthetic_resource("Location", variant=variant)
 
 
-def _bundle(page: int = 0, *, resources: list[dict[str, object]] | None = None, next_page: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED, location_variant: str = "baseline") -> dict[str, object]:
+def _bundle(page: int = 0, *, resources: list[dict[str, object]] | None = None, next_page: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED, location_variant: str = "baseline", context: profile.DynamicCaptureContext | None = None) -> dict[str, object]:
     if resources is None:
         resources = [_practitioner(), _role(), _location(location_variant)]
-    request_url = profile.NC_MEDICAID_PROFILE.page_url(page)
+    request_url = profile.NC_MEDICAID_PROFILE.page_url(page, context)
     links: list[dict[str, str]] = [{"relation": "self", "url": request_url}]
     if next_page:
-        links.append({"relation": "next", "url": profile.NC_MEDICAID_PROFILE.page_url(page + 1)})
+        links.append({"relation": "next", "url": profile.NC_MEDICAID_PROFILE.page_url(page + 1, context)})
     value: dict[str, object] = {
         "resourceType": "Bundle",
         "type": "searchset",
@@ -54,28 +55,26 @@ def _bundle(page: int = 0, *, resources: list[dict[str, object]] | None = None, 
     return value
 
 
-def _transport(*bundles: dict[str, object], retries: dict[tuple[str, int], fhir.FhirTransportResponse] | None = None) -> fhir.SyntheticFhirTransport:
+def _transport(*bundles: dict[str, object], retries: dict[tuple[str, int], fhir.FhirTransportResponse] | None = None, context: profile.DynamicCaptureContext | None = None) -> fhir.SyntheticFhirTransport:
     responses: dict[tuple[str, int], fhir.FhirTransportResponse] = {}
     for index, bundle in enumerate(bundles):
-        request_url = profile.NC_MEDICAID_PROFILE.page_url(index)
+        request_url = profile.NC_MEDICAID_PROFILE.page_url(index, context)
         responses[(request_url, 0)] = fhir.fixture_response(bundle, request_url)
     if retries:
         responses.update(retries)
     return fhir.SyntheticFhirTransport(responses)
 
 
-def _envelope(*, two_pages: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED, location_variant: str = "baseline") -> bytes:
-    if not two_pages:
-        return fhir.build_fixture_envelope(_transport(_bundle(total=total, last_updated=last_updated, location_variant=location_variant)))
-    first = _bundle(0, resources=[_practitioner(), _role()], next_page=True, total=total, last_updated=last_updated)
-    second = _bundle(1, resources=[_location(location_variant)], total=total, last_updated=last_updated)
-    return fhir.build_fixture_envelope(_transport(first, second))
+def _envelope(*, two_pages: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED, location_variant: str = "baseline", context: profile.DynamicCaptureContext | None = None) -> bytes:
+    groups = [[_practitioner(), _role()], [_location(location_variant)]] if two_pages else [[_practitioner(), _role(), _location(location_variant)]]
+    bundles = [_bundle(index, resources=resources, next_page=index + 1 < len(groups), total=total, last_updated=last_updated, context=context) for index, resources in enumerate(groups)]
+    return fhir.build_fixture_envelope(_transport(*bundles, context=context), context=context)
 
 
-def _rebind(value: dict[str, object]) -> bytes:
+def _rebind(value: dict[str, object], *, expected_context: profile.DynamicCaptureContext | None = None) -> bytes:
     context_value = value["capture_context"]
     assert isinstance(context_value, dict)
-    context = profile.DynamicCaptureContext(
+    context = expected_context or profile.DynamicCaptureContext(
         context_value["subject_id"], context_value["credential_id"],
         context_value["enrollment_id"], context_value["subject_locator_digest"],
         context_value["observation_time"], context_value["fetched_at"],
@@ -115,8 +114,14 @@ def _rebind(value: dict[str, object]) -> bytes:
 
 
 class NcMedicaidFhirSourceTests(unittest.TestCase):
+    def assert_capture_failure(self, raw: bytes, code: str, *, status: str = "PARTIAL", freshness: str = "UNKNOWN") -> None:
+        result = independent.verify_bytes(raw)
+        self.assertEqual((status, code, freshness), (result["source_status"], result["failure_code"], result["freshness"]))
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "source:" + code):
+            independent.NcMedicaidFhirVerifier().verify(raw)
+
     def test_fixed_profile_and_contract_digest_are_verifier_owned(self) -> None:
-        self.assertEqual("ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v4", profile.SOURCE_PROFILE_ID)
+        self.assertEqual("ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v5", profile.SOURCE_PROFILE_ID)
         self.assertEqual("https://provider-directory-api.connect.medicaid.ncdhhs.gov/fhir", profile.BASE_URL)
         self.assertEqual("provider-directory-observation-associated-with-NCTracks-and-health-plan-contract-data", profile.NC_MEDICAID_PROFILE.source_meaning)
         self.assertEqual("official-hostname-over-tls-unverified", profile.NC_MEDICAID_PROFILE.transport_provenance)
@@ -130,6 +135,13 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         self.assertEqual(profile.NC_MEDICAID_GRAPH_PROFILE.profile_digest, graph_independent._profile_digest(profile.NC_MEDICAID_GRAPH_PROFILE))
         with self.assertRaises(profile.NcMedicaidFhirProfileError):
             profile.NcMedicaidFhirSourceProfile(capability_statement_identity="CALLER_OVERRIDE")
+        self.assertEqual((3, 5, 5, 2, 3), (profile.SOURCE_CONTRACT_VERSION, profile.SOURCE_PROFILE_VERSION, profile.VERIFIER_EPOCH, fhir.ENVELOPE_SCHEMA_VERSION, profile.NC_MEDICAID_GRAPH_PROFILE.version))
+        self.assertEqual({"kind": "SYNTHETIC_LOGICAL_SECONDS_V1", "reference_tick": 7010, "reference_utc": "2026-08-14T12:00:00Z", "seconds_per_tick": 1}, dict(profile.NC_MEDICAID_PROFILE.capture_clock))
+        with self.assertRaises(TypeError):
+            profile.NC_MEDICAID_PROFILE.capture_clock["reference_tick"] = 0
+        altered = profile.NC_MEDICAID_PROFILE.material()
+        altered["capture_clock"]["reference_tick"] = 0
+        self.assertNotEqual(profile.NC_MEDICAID_PROFILE.profile_digest, profile._digest("source-contract", altered))
 
     def test_profile_owned_location_variant_allowlist_rejects_unregistered_change(self) -> None:
         baseline = profile.synthetic_resource("Location")
@@ -158,10 +170,13 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "resource:synthetic-binding"):
             independent.verify_bytes(_rebind(value))
 
-    def test_v2_profile_envelope_is_rejected_without_migration(self) -> None:
+    def test_legacy_profile_envelope_is_rejected_without_migration(self) -> None:
         for field, replacement in (
             ("source_profile_id", "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v2"),
             ("source_profile_version", 2),
+            ("source_profile_id", "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v4"),
+            ("source_profile_version", 4),
+            ("source_profile_digest", "0" * 128),
         ):
             with self.subTest(field=field):
                 value = json.loads(_envelope().decode("ascii"))
@@ -188,22 +203,135 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         context = profile.DynamicCaptureContext(
             "1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070,
         )
-        bundle = _bundle()
-        request_url = profile.NC_MEDICAID_PROFILE.page_url(0, context)
-        bundle["link"][0]["url"] = request_url
-        transport = fhir.SyntheticFhirTransport({
-            (request_url, 0): fhir.fixture_response(bundle, request_url),
-        })
-        raw = fhir.build_fixture_envelope(transport, context=context)
+        raw = _envelope(context=context)
         result = independent.verify_bytes(raw)
         admission = SourceAdmissionService(
             profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context),
-            independent.NcMedicaidFhirVerifier(),
+            independent.NcMedicaidFhirVerifier(expected_context=context),
         ).admit(raw)
         self.assertEqual(profile.NC_MEDICAID_PROFILE.profile_digest, result["source_contract_digest"])
         self.assertEqual(profile.NC_MEDICAID_PROFILE.profile_digest, admission.source_contract_digest)
         graph_input = json.loads(admission.graph_input.decode("ascii"))
         self.assertEqual(context.subject_id, graph_input["provider_graph_subject"])
+
+    def test_marker_age_uses_inclusive_synthetic_seconds_and_unknown_precision(self) -> None:
+        for marker, freshness in (
+            ("2026-08-14T12:00:00Z", "FRESH"), ("2025-08-14T12:00:01Z", "FRESH"),
+            ("2025-08-14T12:00:00Z", "FRESH"), ("2025-08-14T11:59:59Z", "STALE"),
+            ("2000-01-01T00:00:00Z", "STALE"), ("2024-02-29T12:00:00Z", "STALE"),
+            (None, "UNKNOWN"), ("2026-08-14", "UNKNOWN"), ("2024-02-29", "UNKNOWN"),
+        ):
+            with self.subTest(marker=marker):
+                raw = _envelope(last_updated=marker)
+                result = independent.verify_bytes(raw)
+                expected = ("STALE", "stale") if freshness == "STALE" else ("COMPLETE", None)
+                self.assertEqual((freshness, *expected), (result["freshness"], result["source_status"], result["failure_code"]))
+                self.assertEqual(raw, _envelope(last_updated=marker))
+                if freshness == "STALE":
+                    with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "source:stale"):
+                        independent.NcMedicaidFhirVerifier().verify(raw)
+                else:
+                    self.assertEqual(freshness, independent.NcMedicaidFhirVerifier().verify(raw).freshness)
+
+    def test_future_invalid_calendar_and_non_utc_markers_fail_closed(self) -> None:
+        for marker in (
+            "2026-08-14T12:00:01Z", "9999-12-31T23:59:59Z", "0000-01-01T00:00:00Z",
+            "2025-02-29T00:00:00Z", "2026-04-31", "2026-13-01T00:00:00Z",
+            "2026-08-14T24:00:00Z", "2026-08-14T12:60:00Z", "2026-08-14T12:00:60Z",
+            "2026-08-14T12:00:00", "2026-08-14T12:00:00+00:00", "2026-08-14T12:00:00.0Z",
+            "2026-08-14 12:00:00Z", True, 7010, [], {},
+        ):
+            with self.subTest(marker=marker):
+                with self.assertRaisesRegex(fhir.NcMedicaidFhirError, "markers:(last-updated|future)"):
+                    _envelope(last_updated=marker)
+                value = json.loads(_envelope())
+                value["pages"][0]["bundle"]["meta"]["lastUpdated"] = marker
+                value["server_markers"]["last_updated"] = marker
+                with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "last-updated|markers:future"):
+                    independent.verify_bytes(_rebind(value))
+
+    def test_capture_clock_bounds_and_expected_context_prevent_time_substitution(self) -> None:
+        base = profile.DEFAULT_CAPTURE_CONTEXT
+        for field, replacement in (("subject_id", "1" * 128), ("credential_id", "2" * 128), ("enrollment_id", "3" * 128), ("subject_locator_digest", "4" * 128), ("observation_time", 7001), ("fetched_at", 7020)):
+            with self.subTest(field=field):
+                context = replace(base, **{field: replacement})
+                raw = _envelope(context=context)
+                with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "source:context-mismatch"):
+                    independent.NcMedicaidFhirVerifier().verify(raw)
+                admitted = SourceAdmissionService(profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context), independent.NcMedicaidFhirVerifier(expected_context=context)).admit(raw)
+                self.assertEqual(context.observation_time, json.loads(admitted.graph_input)["observation_time"])
+        later = replace(base, fetched_at=base.fetched_at + 365 * 86_400 + 1)
+        self.assertEqual("STALE", independent.verify_bytes(_envelope(context=later))["freshness"])
+        self.assertEqual("STALE", independent.verify_bytes(_envelope(context=replace(base, fetched_at=2_147_483_647)))["freshness"])
+        for fetched_at in (True, -1, base.observation_time - 1, 2_147_483_648, 10 ** 300):
+            with self.subTest(fetched_at=fetched_at):
+                with self.assertRaisesRegex(profile.NcMedicaidFhirProfileError, "profile:context-time"):
+                    replace(base, fetched_at=fetched_at)
+                value = json.loads(_envelope())
+                value["capture_context"]["fetched_at"] = value["fetched_at"] = fetched_at
+                with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "capture-context:binding"):
+                    independent.verify_bytes(fhir.canonical_json(value))
+
+    def test_contradictory_snapshot_status_and_failure_never_admit(self) -> None:
+        baseline = json.loads(_envelope())
+        for code in sorted(fhir.FAILURE_CODES):
+            with self.subTest(code=code):
+                value = deepcopy(baseline)
+                value["failure_code"] = code
+                with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "snapshot:status-failure"):
+                    independent.verify_bytes(_rebind(value))
+        failed = json.loads(fhir.build_fixture_envelope(fhir.SyntheticFhirTransport({})))
+        for status, code, complete in (("COMPLETE", "timeout", True), ("FAILED", "media-type", False)):
+            failed.update(source_status=status, failure_code=code, page_complete=complete)
+            with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "snapshot:(status-failure|timeout)"):
+                independent.verify_bytes(_rebind(failed))
+        for status, code, complete in (("FAILED", None, False), ("PARTIAL", None, False), ("STALE", None, False), ("STALE", "stale", False), ("COMPLETE", None, False)):
+            with self.subTest(status=status, code=code, complete=complete):
+                value = deepcopy(baseline)
+                value.update(source_status=status, failure_code=code, page_complete=complete)
+                with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "snapshot:(status-failure|claims)"):
+                    independent.verify_bytes(_rebind(value))
+        stale = json.loads(_envelope(last_updated="2000-01-01T00:00:00Z"))
+        stale.update(source_status="COMPLETE", page_complete=True)
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "snapshot:status-failure"):
+            independent.NcMedicaidFhirVerifier().verify(_rebind(stale))
+        result = independent.verify_bytes(_envelope())
+        result["failure_code"] = "stale"
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "source:stale"):
+            independent.to_verified_source_coverage(result)
+
+    def test_numeric_capture_id_coercion_cannot_match_trusted_string_ids(self) -> None:
+        context = profile.DynamicCaptureContext("1" * 128, "2" * 128, "3" * 128, "4" * 128, 7000, 7010)
+        verifier = independent.NcMedicaidFhirVerifier(expected_context=context)
+        service = SourceAdmissionService(profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context), verifier)
+        for field in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest"):
+            with self.subTest(field=field):
+                value = json.loads(_envelope(context=context))
+                value["capture_context"][field] = int(context.material()[field])
+                forged = _rebind(value, expected_context=context)
+                with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "capture-context:binding"):
+                    verifier.verify(forged)
+                with self.assertRaisesRegex(SourceAdmissionError, "verifier:reject"):
+                    service.admit(forged)
+
+    def test_partial_and_drift_failures_take_precedence_over_marker_age(self) -> None:
+        for marker, second, code in ((profile.FIXTURE_LAST_UPDATED, None, "timeout"), ("2000-01-01T00:00:00Z", None, "timeout"), ("2000-01-01T00:00:00Z", _bundle(1, resources=[_location()], last_updated=None), "marker-drift"), ("2000-01-01T00:00:00Z", _bundle(1, resources=[_location()], total=2), "marker-drift")):
+            with self.subTest(code=code, second=second):
+                first = _bundle(resources=[_practitioner(), _role()], next_page=True, last_updated=marker)
+                raw = fhir.build_fixture_envelope(_transport(first, *([] if second is None else [second])))
+                self.assert_capture_failure(raw, code)
+
+    def test_query_and_page_cap_failures_discard_body_and_remain_verifiable(self) -> None:
+        drift = _bundle(next_page=True)
+        drift["link"][1]["url"] = profile.REQUEST_URL + "&page=99"
+        pages = [_bundle(index, resources=resources, next_page=index < 3) for index, resources in enumerate(([_practitioner()], [_role()], [_location()], []))]
+        pages[-1]["link"].append({"relation": "next", "url": profile.REQUEST_URL + "&page=5"})
+        for bundles, code in (((drift,), "query-drift"), (pages, "partial-page")):
+            with self.subTest(code=code):
+                raw = fhir.build_fixture_envelope(_transport(*bundles))
+                self.assert_capture_failure(raw, code)
+                page = json.loads(raw)["pages"][-1]
+                self.assertEqual((0, fhir._raw_digest("page-bytes", b""), "", None, []), (page["byte_length"], page["body_digest"], page["body_hex"], page["bundle"], page["resource_digests"]))
 
     def test_two_page_chain_and_missing_total_are_explicitly_bounded(self) -> None:
         raw = _envelope(two_pages=True, total=None)
@@ -230,11 +358,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         request_url = profile.REQUEST_URL
         bad = fhir.SyntheticFhirTransport({(request_url, 0): fhir.fixture_response(_bundle(), request_url, media_type="application/json")})
         raw = fhir.build_fixture_envelope(bad)
-        result = independent.verify_bytes(raw)
-        self.assertEqual("FAILED", result["source_status"])
-        self.assertEqual("media-type", result["failure_code"])
-        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "source:media-type"):
-            independent.NcMedicaidFhirVerifier().verify(raw)
+        self.assert_capture_failure(raw, "media-type", status="FAILED")
         wrong_host = fhir.SyntheticFhirTransport({(request_url, 0): fhir.FhirTransportResponse("https://wrong.example/fhir", 200, fhir.ALLOWED_MEDIA_TYPE, fhir.canonical_json(_bundle()))})
         wrong_host_result = independent.verify_bytes(fhir.build_fixture_envelope(wrong_host))
         self.assertEqual("wrong-host", wrong_host_result["failure_code"])
@@ -306,9 +430,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         self.assertEqual("COMPLETE", independent.verify_bytes(raw)["source_status"])
         exhausted = fhir.SyntheticFhirTransport({(request_url, 0): throttled})
         failed = fhir.build_fixture_envelope(exhausted)
-        failed_result = independent.verify_bytes(failed)
-        self.assertEqual("FAILED", failed_result["source_status"])
-        self.assertEqual("retry-exhausted", failed_result["failure_code"])
+        self.assert_capture_failure(failed, "retry-exhausted", status="FAILED")
 
     def test_mixed_retries_preserve_verifiable_failure_evidence(self) -> None:
         throttled = fhir.fixture_response(_bundle(), profile.REQUEST_URL, status=429, headers=(("Retry-After", "2"),))
@@ -387,6 +509,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
             ("forbidden-field", 0, ("unexpected",), True),
             ("practitioner:identifier:system", 0, ("identifier", 0, "system"), "not a uri"),
             ("resource:period-order", 1, ("period",), {"start": "2026-12-31", "end": "2026-01-01"}),
+            ("resource:period-start:calendar", 1, ("period", "start"), "2026-02-29"),
             ("resource:address-postalCode:text", 2, ("address", "postalCode"), {"raw": "27601"}),
             ("location:endpoint:unlinked", 2, ("endpoint",), [{"reference": "Endpoint/SYNTH_ENDPOINT_001"}]),
         )
@@ -447,11 +570,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
 
     def test_stale_partial_and_failed_evidence_cannot_reach_graph(self) -> None:
         stale = _envelope(last_updated="1970-01-01T00:00:00Z")
-        stale_result = independent.verify_bytes(stale)
-        self.assertEqual("STALE", stale_result["source_status"])
-        self.assertEqual("stale", stale_result["failure_code"])
-        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "source:stale"):
-            independent.NcMedicaidFhirVerifier().verify(stale)
+        self.assert_capture_failure(stale, "stale", status="STALE", freshness="STALE")
         first = _bundle(0, resources=[_practitioner(), _role()], next_page=True)
         partial = fhir.build_fixture_envelope(_transport(first))
         partial_result = independent.verify_bytes(partial)
@@ -469,9 +588,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
 
         raw = fhir.build_fixture_envelope(ExplodingTransport())
         self.assertNotIn(canary.encode("ascii"), raw)
-        result = independent.verify_bytes(raw)
-        self.assertEqual(result["failure_code"], "retry-exhausted")
-        self.assertEqual(result["source_status"], "FAILED")
+        self.assert_capture_failure(raw, "retry-exhausted", status="FAILED")
 
         class StopSignal(BaseException):
             pass

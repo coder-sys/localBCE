@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 from app.mirror import provider_trust_graph as graph
 from app.mirror import provider_trust_graph_independent as graph_independent
-from app.mirror import nc_medicaid_fhir as nc_transport
 from app.mirror import nc_medicaid_fhir_independent as nc_fhir
 from app.mirror import nc_medicaid_fhir_profile as nc_profile
 from app.mirror.source_admission import (
@@ -292,20 +291,14 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
         self.assertIsNone(caught.exception.__context__)
 
     def test_v2_result_profile_is_required_and_owned_field_exact(self) -> None:
-        from tests.test_nc_medicaid_fhir_source import _bundle
+        from tests.test_nc_medicaid_fhir_source import _envelope
 
         context = nc_profile.DynamicCaptureContext(
             "1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070,
         )
-        request_url = nc_profile.NC_MEDICAID_PROFILE.page_url(0, context)
-        bundle = _bundle()
-        bundle["link"][0]["url"] = request_url  # type: ignore[index]
-        transport = nc_transport.SyntheticFhirTransport({
-            (request_url, 0): nc_transport.fixture_response(bundle, request_url),
-        })
-        raw = nc_transport.build_fixture_envelope(transport, context=context)
+        raw = _envelope(context=context)
         configured = nc_profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context)
-        verified = nc_fhir.NcMedicaidFhirVerifier().verify(raw)
+        verified = nc_fhir.NcMedicaidFhirVerifier(expected_context=context).verify(raw)
 
         class RebindingVerifier:
             identity = configured.verifier_id

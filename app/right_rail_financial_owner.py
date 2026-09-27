@@ -2221,36 +2221,18 @@ class FinancialOwner:
     def _verify_meta_identity(self, connection: sqlite3.Connection, meta: sqlite3.Row) -> None:
         """Bind persisted meta and identity rows to this Owner's config, mode, owner id and authority."""
 
-        expected = (
-            self.schema_version,
-            self.schema,
-            self.config.state_id,
-            self.config.deployment_id,
-            self.config.program_id,
-            self.config.period_id,
-            self.config.currency,
-        )
-        actual = tuple(
-            meta[key]
-            for key in (
-                "schema_version", "schema", "state_id", "deployment_id",
-                "program_id", "period_id", "currency",
-            )
-        )
-        if actual != expected:
+        scope = self._scope_value()
+        actual = (meta["schema_version"], meta["schema"], *(meta[key] for key in scope))
+        if actual != (self.schema_version, self.schema, *scope.values()):
             _fail(FinancialIntegrityError, "schema_identity")
         if int(meta["dispatch_enabled"]) != 0 or int(meta["egress_enabled"]) != 0 or str(meta["mode"]) != self.mode:
             _fail(FinancialIntegrityError, "nonactivating_boundary")
         if str(meta["owner_id"]) != self.owner_id:
             _fail(FinancialIntegrityError, "owner_identity")
-        if (
-            str(meta["trusted_authority_id"]),
-            int(meta["trusted_authority_epoch"]),
-            bytes(meta["trusted_authority_digest"]),
-        ) != (
-            self.trusted_authority.authority_id,
-            self.trusted_authority.epoch,
-            self.trusted_authority.digest,
+        authority = self.trusted_authority
+        if (str(meta["trusted_authority_id"]), int(meta["trusted_authority_epoch"]),
+                bytes(meta["trusted_authority_digest"])) != (
+            authority.authority_id, authority.epoch, authority.digest
         ):
             _fail(FinancialAuthorityError, "trusted_authority_stale")
         identity_rows = connection.execute("SELECT * FROM financial_identity WHERE id=1").fetchall()
@@ -2299,6 +2281,34 @@ class FinancialOwner:
             if first_event is None or bytes(first_event["previous_head"]) != identity["genesis_head"]:
                 _fail(FinancialIntegrityError, "identity_history_genesis")
 
+    @staticmethod
+    def _verify_funding_projection(connection: sqlite3.Connection) -> None:
+        """Check current funding leaves against receipt and event facts, without replaying history."""
+        drift = connection.execute(
+            "SELECT 1 FROM program_funding_projection AS p "
+            "LEFT JOIN program_funding_receipts AS r ON r.receipt_id=p.receipt_id "
+            "LEFT JOIN program_funding_receipts AS child ON child.supersedes_receipt_id=p.receipt_id "
+            "LEFT JOIN financial_events AS e ON e.aggregate_type='PROGRAM_FUNDING_RECEIPT' AND e.aggregate_id=p.receipt_id "
+            "WHERE r.receipt_id IS NULL OR child.rowid IS NOT NULL OR e.aggregate_id IS NULL "
+            "OR p.source_record_ref IS NOT r.source_record_ref OR p.amount_cents IS NOT r.amount_cents "
+            "OR p.event_at_ms IS NOT r.event_at_ms OR p.receipt_digest IS NOT r.receipt_digest "
+            "OR p.revision IS NOT e.after_revision OR e.before_revision IS NOT p.revision-1 "
+            "OR e.committed_at_ms IS NOT r.recorded_at_ms "
+            "OR e.kind IS NOT CASE WHEN r.supersedes_receipt_id IS NULL THEN 'FUNDING_RECEIPT_RECORDED' "
+            "ELSE 'FUNDING_RECEIPT_SUPERSEDED' END LIMIT 1"
+        ).fetchone()
+        roots = connection.execute(
+            "SELECT 1 FROM program_funding_receipts AS r WHERE r.supersedes_receipt_id IS NULL "
+            "GROUP BY r.source_record_ref HAVING COUNT(*) != 1 OR NOT EXISTS "
+            "(SELECT 1 FROM program_funding_projection AS p WHERE p.source_record_ref=r.source_record_ref) LIMIT 1"
+        ).fetchone()
+        counts = connection.execute(
+            "SELECT (SELECT COUNT(*) FROM program_funding_receipts WHERE supersedes_receipt_id IS NULL), "
+            "(SELECT COUNT(*) FROM program_funding_projection)"
+        ).fetchone()
+        if drift is not None or roots is not None or counts[0] != counts[1]:
+            _fail(FinancialIntegrityError, "funding_projection_drift")
+
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
         """One atomic command; inside ``run_batch`` the batch owns the connection, BEGIN, COMMIT and ROLLBACK,
@@ -2309,8 +2319,11 @@ class FinancialOwner:
             try:
                 if began:
                     connection.execute("BEGIN IMMEDIATE")
+                    self._verify_funding_projection(connection)
                     self._batch.rows = self._committed_row_counts(connection)
                 yield connection
+                if began:
+                    self._verify_funding_projection(connection)
                 rows = self._row_counts(connection, self._batch.rows)
                 self._seal_segment(connection, rows=rows)
                 if connection.execute("SELECT 1 FROM temp.rr_captured_rows").fetchone() is not None:
@@ -6291,6 +6304,7 @@ class FinancialOwner:
         """Return the separate, versioned program-funding evidence projection."""
 
         with self._read_snapshot() as connection:
+            self._verify_funding_projection(connection)
             projections = list(
                 connection.execute(
                     "SELECT p.*,r.confirmation_class,r.evidence_status,r.recorded_at_ms,r.supersedes_receipt_id "
@@ -6443,21 +6457,7 @@ class FinancialOwner:
         self._assert_actionable()
         if type(receipt) is not ProgramFundingReceipt:
             _fail(FinancialInputError, "program_funding_receipt_type")
-        expected_scope = (
-            self.config.state_id,
-            self.config.deployment_id,
-            self.config.program_id,
-            self.config.period_id,
-            self.config.currency,
-        )
-        receipt_scope = (
-            receipt.state_id,
-            receipt.deployment_id,
-            receipt.program_id,
-            receipt.period_id,
-            receipt.currency,
-        )
-        if receipt_scope != expected_scope:
+        if any(getattr(receipt, key) != value for key, value in self._scope_value().items()):
             _fail(FinancialInputError, "program_funding_scope")
         with self._write() as connection:
             result_status, result_receipt = self._record_program_funding_receipt_in_transaction(

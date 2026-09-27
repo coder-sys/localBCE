@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import hashlib
 import json
 import re
@@ -46,7 +47,7 @@ TRANSPORT_ERROR_CODES = {"timeout", "transport"}
 FAILURE_CODES = {"wrong-host", "redirect", "rate-limit", "server-error", "timeout", "retry-exhausted", "retry-after", "http-status", "media-type", "schema", "noncanonical", "partial-page", "query-drift", "total-drift", "marker-drift", "stale", "profile-downgrade", "capability-mismatch", "forbidden-resource", "forbidden-field", "reference", "identifier", "period", "address", "endpoint"}
 SOURCE_STATUSES = {"COMPLETE", "PARTIAL", "FAILED", "STALE"}
 _HEX = set("0123456789abcdef")
-_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$")
+_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?$")
 _SYSTEM = re.compile(r"^(?:urn:[A-Za-z0-9:._-]+|https://[A-Za-z0-9._:/-]+)$")
 _REFERENCE = re.compile(r"^(Practitioner|Location)/[A-Za-z0-9._-]{1,64}$")
 _RESOURCE_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -171,7 +172,7 @@ def _profile_binding(value: object, profile: NcMedicaidFhirSourceProfile, contex
 def _context(value: object) -> DynamicCaptureContext:
     item = _expect(value, CONTEXT_KEYS, "capture-context")
     try:
-        return DynamicCaptureContext(str(item["subject_id"]), str(item["credential_id"]), str(item["enrollment_id"]), str(item["subject_locator_digest"]), item["observation_time"], item["fetched_at"])  # type: ignore[arg-type]
+        return DynamicCaptureContext(item["subject_id"], item["credential_id"], item["enrollment_id"], item["subject_locator_digest"], item["observation_time"], item["fetched_at"])  # type: ignore[arg-type]
     except (TypeError, ValueError):
         raise IndependentNcMedicaidFhirError("capture-context:binding") from None
 
@@ -199,6 +200,10 @@ def _validate_date(value: object, label: str) -> str:
     text = _text(value, label, maximum=32)
     if _DATE.fullmatch(text) is None:
         raise IndependentNcMedicaidFhirError(label + ":format")
+    try:
+        datetime.strptime(text, "%Y-%m-%d" if len(text) == 10 else "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        raise_redacted(IndependentNcMedicaidFhirError, label + ":calendar")
     return text
 
 
@@ -348,12 +353,21 @@ def _validate_markers(value: object) -> dict[str, object]:
     return _expect(value, MARKER_KEYS, "markers")
 
 
-def _freshness(marker: str | None) -> str:
+def _freshness(marker: str | None, context: DynamicCaptureContext, profile: NcMedicaidFhirSourceProfile) -> str:
     if marker is None:
         return "UNKNOWN"
-    if not isinstance(marker, str) or _DATE.fullmatch(marker) is None:
-        raise IndependentNcMedicaidFhirError("markers:last-updated")
-    return "STALE" if marker.startswith(("1900", "197")) else "FRESH"
+    marker = _validate_date(marker, "markers:last-updated")
+    if len(marker) == 10:
+        return "UNKNOWN"
+    clock = profile.capture_clock
+    try:
+        fetched = datetime.strptime(str(clock["reference_utc"]), "%Y-%m-%dT%H:%M:%SZ") + timedelta(seconds=(context.fetched_at - int(clock["reference_tick"])) * int(clock["seconds_per_tick"]))
+        updated = datetime.strptime(marker, "%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, OverflowError):
+        raise_redacted(IndependentNcMedicaidFhirError, "markers:last-updated")
+    if updated > fetched:
+        raise IndependentNcMedicaidFhirError("markers:future")
+    return "STALE" if fetched - updated > timedelta(days=profile.max_server_marker_age_days) else "FRESH"
 
 
 def _verified_resource_digests(resources: object, profile: NcMedicaidFhirSourceProfile) -> dict[str, str]:
@@ -440,6 +454,8 @@ def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICA
     failure_code = value["failure_code"]
     if failure_code is not None and failure_code not in FAILURE_CODES:
         raise IndependentNcMedicaidFhirError("snapshot:failure-code")
+    if (source_status == "COMPLETE") != (failure_code is None) or (source_status == "STALE") != (failure_code == "stale"):
+        raise IndependentNcMedicaidFhirError("snapshot:status-failure")
     if value["source_completeness"] != "UNKNOWN" or value["claims"] != CLAIM_FLAGS or value["page_complete"] is not (source_status == "COMPLETE"):
         raise IndependentNcMedicaidFhirError("snapshot:claims")
     resources: list[dict[str, object]] = []; totals: list[int | None] = []; marker_values: list[str | None] = []
@@ -461,7 +477,9 @@ def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICA
     for sequence, page in enumerate(pages):
         request_url = profile.page_url(sequence, context)
         page_resources, next_url, total, marker = _validate_page(page, profile, sequence, request_url, context)
-        resources.extend(page_resources); totals.append(total); marker_values.append(marker)
+        resources.extend(page_resources)
+        if page.get("failure_code") is None:
+            totals.append(total); marker_values.append(marker)
         if page.get("failure_code") is not None and sequence != len(pages) - 1:
             raise IndependentNcMedicaidFhirError("pages:after-failure")
         if next_url is None and sequence != len(pages) - 1:
@@ -472,17 +490,26 @@ def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICA
         raise IndependentNcMedicaidFhirError("snapshot:failed-complete")
     total_values = {item for item in totals if item is not None}
     marker_values_unique = {item for item in marker_values if item is not None}
-    if len(total_values) > 1 and failure_code != "total-drift":
-        raise IndependentNcMedicaidFhirError("total-drift")
-    if len(marker_values_unique) > 1 and failure_code != "marker-drift":
-        raise IndependentNcMedicaidFhirError("marker-drift")
-    expected_total = next(iter(total_values), None)
-    expected_marker = next(iter(marker_values_unique), None)
-    if markers != {"total": expected_total, "last_updated": expected_marker} and failure_code not in {"total-drift", "marker-drift"}:
+    expected_total = next(iter(total_values)) if len(total_values) == 1 and all(item is not None for item in totals) else None
+    expected_marker = next(iter(marker_values_unique)) if len(marker_values_unique) == 1 and all(item is not None for item in marker_values) else None
+    expected_failure = pages[-1].get("failure_code")
+    expected_status = "COMPLETE"
+    if expected_failure is not None:
+        expected_status = "PARTIAL" if len(pages) > 1 or expected_failure in {"query-drift", "partial-page"} else "FAILED"
+    if expected_failure is None and pages[-1].get("next_url") is not None:
+        expected_failure, expected_status = "partial-page", "PARTIAL"
+    if len(total_values) > 1 or (total_values and any(item is None for item in totals)):
+        expected_failure, expected_status = "total-drift", "PARTIAL"
+    if len(marker_values_unique) > 1 or (marker_values_unique and any(item is None for item in marker_values)):
+        expected_failure, expected_status = "marker-drift", "PARTIAL"
+    marker_freshness = [_freshness(marker, context, profile) for marker in marker_values]
+    freshness = marker_freshness[0] if expected_failure is None and marker_freshness else "UNKNOWN"
+    if freshness == "STALE":
+        expected_failure, expected_status = "stale", "STALE"
+    if (source_status, failure_code) != (expected_status, expected_failure):
+        raise IndependentNcMedicaidFhirError("snapshot:" + (expected_failure or "status-failure"))
+    if markers != {"total": expected_total, "last_updated": expected_marker}:
         raise IndependentNcMedicaidFhirError("markers:binding")
-    freshness = _freshness(expected_marker)
-    if freshness == "STALE" and failure_code != "stale":
-        raise IndependentNcMedicaidFhirError("snapshot:stale")
     complete = source_status == "COMPLETE" and failure_code is None
     counts = {resource_type: sum(1 for resource in resources if resource["resourceType"] == resource_type) for resource_type in profile.allowed_resource_types}
     if len(resources) > profile.transport_caps["max_resources"] or complete and counts != dict(profile.resource_cardinality):
@@ -526,7 +553,7 @@ def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICA
 
 
 def to_verified_source_coverage(result: Mapping[str, object], *, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE) -> VerifiedSourceCoverage:
-    if result.get("accepted") is not True or result.get("source_status") != "COMPLETE" or result.get("page_complete") is not True:
+    if result.get("accepted") is not True or result.get("source_status") != "COMPLETE" or result.get("page_complete") is not True or result.get("failure_code") is not None or result.get("freshness") not in {"FRESH", "UNKNOWN"}:
         failure = result.get("failure_code")
         if not isinstance(failure, str) or failure not in FAILURE_CODES:
             raise_redacted(IndependentNcMedicaidFhirError, "source:invalid")
@@ -555,12 +582,12 @@ class NcMedicaidFhirVerifier:
             raise IndependentNcMedicaidFhirError("profile:downgrade")
         if expected_context is not None and type(expected_context) is not DynamicCaptureContext:
             raise IndependentNcMedicaidFhirError("profile:context")
-        self.expected_context = expected_context
+        self.expected_context = expected_context if expected_context is not None else profile.default_context
         self.profile = profile; self.identity = profile.graph_profile.verifier_id; self.epoch = profile.graph_profile.verifier_epoch
 
     def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
         result = verify_bytes(adapter_bytes, profile=self.profile)
-        if self.expected_context is not None and result["capture_context"] != self.expected_context.material():
+        if result["capture_context"] != self.expected_context.material():
             raise_redacted(IndependentNcMedicaidFhirError, "source:context-mismatch")
         return to_verified_source_coverage(result, profile=self.profile)
 

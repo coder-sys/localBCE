@@ -57,6 +57,16 @@ Missing, stale, malformed or unauthorized input raises a typed error and
 changes nothing. The independent checker enforces actor roles against a
 digest-bound roster.
 
+Every outer write now checks current funding projections against their immutable
+receipts, indexed funding events, successor status and root coverage under the
+same SQLite lock, before executing and before committing. The funding summary
+checks within its read snapshot. This bounded check scans current funding sources,
+not the complete event history, and runs twice per batch rather than per nested
+command. It detects current-projection drift; independent full replay still checks
+historical rows, digests and the whole store. Felt effect: finance staff cannot
+continue recording work or read a funding total after its current stored values
+have drifted from the recorded receipts. No new persistent format or trust root.
+
 ## Lean decides, the owner commits
 
 - **Correction transition** (`RR/FINANCIAL/CORRECTION-TRANSITION/v1`).

@@ -657,31 +657,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         fault: str,
         clock_value: int,
     ) -> subprocess.CompletedProcess[str]:
-        environment = os.environ.copy()
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                _PROCESS_BOUNDARY_CHILD,
-                str(store.path),
-                claim_id,
-                fault,
-                str(clock_value),
-            ],
-            cwd=str(Path(__file__).resolve().parents[1]),
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        return RightRailFinancialAcceptanceTests._run_boundary_child(
+            self, _PROCESS_BOUNDARY_CHILD, [str(store.path), claim_id, fault, str(clock_value)], "process_boundary"
         )
-        try:
-            stdout, stderr = process.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate(timeout=5)
-            self.fail(f"process_boundary_timeout stdout={stdout!r} stderr={stderr!r}")
-        return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     def _run_funding_process_boundary(
         self,
@@ -690,17 +668,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         fault: str,
         clock_value: int,
     ) -> subprocess.CompletedProcess[str]:
+        return RightRailFinancialAcceptanceTests._run_boundary_child(
+            self, _PROCESS_FUNDING_BOUNDARY_CHILD, [str(store.path), fault, str(clock_value)], "funding_process_boundary"
+        )
+
+    def _run_boundary_child(self, script: str, arguments: list[str], label: str) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         process = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                _PROCESS_FUNDING_BOUNDARY_CHILD,
-                str(store.path),
-                fault,
-                str(clock_value),
-            ],
+            [sys.executable, "-c", script, *arguments],
             cwd=str(Path(__file__).resolve().parents[1]),
             env=environment,
             stdout=subprocess.PIPE,
@@ -712,7 +688,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate(timeout=5)
-            self.fail(f"funding_process_boundary_timeout stdout={stdout!r} stderr={stderr!r}")
+            self.fail(f"{label}_timeout stdout={stdout!r} stderr={stderr!r}")
         return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     @staticmethod
@@ -895,17 +871,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _record_cash(store: FinancialOwner) -> None:
         evidence = expected.H_CASH_EVIDENCE
-        store.record_payment_evidence(
-            item_id=evidence.item_id,
-            payment_id="payment:h:cash",
-            common_origin_id=evidence.common_origin_id,
-            amount_cents=evidence.amount_cents or 0,
-            evidence_id=evidence.evidence_id,
-            event_at_ms=evidence.event_at_ms,
-            source_id=evidence.source_id,
-            source_version=evidence.source_version,
-            local_ref=evidence.local_ref,
-        )
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, evidence, payment_id="payment:h:cash")
 
     @staticmethod
     def _advance_clock(store: FinancialOwner, at_ms: int) -> None:
@@ -961,17 +927,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def _record_p2(store: FinancialOwner) -> None:
         evidence = expected.P2_PAYMENT_EVIDENCE
         RightRailFinancialAcceptanceTests._advance_clock(store, evidence.event_at_ms)
-        store.record_payment_evidence(
-            item_id=evidence.item_id,
-            payment_id="payment:h:p2",
-            common_origin_id=evidence.common_origin_id,
-            amount_cents=evidence.amount_cents or 0,
-            evidence_id=evidence.evidence_id,
-            event_at_ms=evidence.event_at_ms,
-            source_id=evidence.source_id,
-            source_version=evidence.source_version,
-            local_ref=evidence.local_ref,
-        )
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, evidence, payment_id="payment:h:p2")
 
     @staticmethod
     def _record_report(store: FinancialOwner) -> None:
@@ -1014,30 +970,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_p2(store)
         self._record_report(store)
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
-        duplicate_result = store.record_payment_evidence(
-            item_id=duplicate.item_id,
-            payment_id="payment:h:p2-confirmation",
-            common_origin_id=duplicate.common_origin_id,
-            amount_cents=duplicate.amount_cents or 0,
-            evidence_id=duplicate.evidence_id,
-            event_at_ms=duplicate.event_at_ms,
-            source_id=duplicate.source_id,
-            source_version=duplicate.source_version,
-            local_ref=duplicate.local_ref,
-        )
+        duplicate_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, duplicate, payment_id="payment:h:p2-confirmation")
         self.assertEqual(duplicate_result["status"], "DUPLICATE")
         conflict = expected.P2_CONFLICT_EVIDENCE
-        conflict_result = store.record_payment_evidence(
-            item_id=conflict.item_id,
-            payment_id="payment:h:p2-conflict",
-            common_origin_id=conflict.common_origin_id,
-            amount_cents=conflict.amount_cents or 0,
-            evidence_id=conflict.evidence_id,
-            event_at_ms=conflict.event_at_ms,
-            source_id=conflict.source_id,
-            source_version=conflict.source_version,
-            local_ref=conflict.local_ref,
-        )
+        conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
         reversal = expected.P2_REVERSAL_EVIDENCE
         self._advance_clock(store, reversal.event_at_ms)
@@ -1050,17 +986,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
-        store.record_payment_evidence(
-            item_id=replacement.item_id,
-            payment_id="payment:h:p3",
-            common_origin_id=replacement.common_origin_id,
-            amount_cents=replacement.amount_cents or 0,
-            evidence_id=replacement.evidence_id,
-            event_at_ms=replacement.event_at_ms,
-            source_id=replacement.source_id,
-            source_version=replacement.source_version,
-            local_ref=replacement.local_ref,
-        )
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
 
     def _prepare_final(self, store: FinancialOwner) -> str:
         claim_id = self._prepare_acknowledged(store)
@@ -1105,20 +1031,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(item_ids_with_evidence), expected_evidence_items)
 
     @staticmethod
-    def _record_expected_recipient_payment(
+    def _record_fixture_payment(
         store: FinancialOwner | FinancialMirror,
-        payment: expected.RecipientPaymentExpectation,
+        evidence: expected.EvidenceExpectation | expected.RecipientPaymentExpectation,
+        *,
+        payment_id: str,
     ) -> dict[str, object]:
         return store.record_payment_evidence(
-            item_id=payment.item_id,
-            payment_id=payment.payment_id,
-            common_origin_id=payment.common_origin_id,
-            amount_cents=payment.amount_cents,
-            evidence_id=payment.evidence_id,
-            event_at_ms=payment.event_at_ms,
-            source_id=payment.source_id,
-            source_version=payment.source_version,
-            local_ref=payment.local_ref,
+            item_id=evidence.item_id,
+            payment_id=payment_id,
+            common_origin_id=evidence.common_origin_id,
+            amount_cents=evidence.amount_cents or 0,
+            evidence_id=evidence.evidence_id,
+            event_at_ms=evidence.event_at_ms,
+            source_id=evidence.source_id,
+            source_version=evidence.source_version,
+            local_ref=evidence.local_ref,
         )
 
     def _first_service_decision_package(self, mirror: FinancialMirror) -> dict[str, object]:
@@ -1362,31 +1290,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store = self._build_base_for_correction()
         self._prepare_reported(store)
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
-        result = store.record_payment_evidence(
-            item_id=duplicate.item_id,
-            payment_id="payment:h:p2-confirmation",
-            common_origin_id=duplicate.common_origin_id,
-            amount_cents=duplicate.amount_cents or 0,
-            evidence_id=duplicate.evidence_id,
-            event_at_ms=duplicate.event_at_ms,
-            source_id=duplicate.source_id,
-            source_version=duplicate.source_version,
-            local_ref=duplicate.local_ref,
-        )
+        result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, duplicate, payment_id="payment:h:p2-confirmation")
         self.assertEqual(result["status"], "DUPLICATE")
         self._assert_snapshot(store, expected.H_P2_DUPLICATE_UNCHANGED)
         conflict = expected.P2_CONFLICT_EVIDENCE
-        result = store.record_payment_evidence(
-            item_id=conflict.item_id,
-            payment_id="payment:h:p2-conflict",
-            common_origin_id=conflict.common_origin_id,
-            amount_cents=conflict.amount_cents or 0,
-            evidence_id=conflict.evidence_id,
-            event_at_ms=conflict.event_at_ms,
-            source_id=conflict.source_id,
-            source_version=conflict.source_version,
-            local_ref=conflict.local_ref,
-        )
+        result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(result["status"], "CONFLICT")
         self._assert_snapshot(store, expected.H_P2_CONFLICT_VISIBLE)
         reversal = expected.P2_REVERSAL_EVIDENCE
@@ -1401,17 +1309,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_snapshot(store, expected.H_P2_REVERSED)
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
-        store.record_payment_evidence(
-            item_id=replacement.item_id,
-            payment_id="payment:h:p3",
-            common_origin_id=replacement.common_origin_id,
-            amount_cents=replacement.amount_cents or 0,
-            evidence_id=replacement.evidence_id,
-            event_at_ms=replacement.event_at_ms,
-            source_id=replacement.source_id,
-            source_version=replacement.source_version,
-            local_ref=replacement.local_ref,
-        )
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
         self._assert_snapshot(store, expected.H_P3_REPLACED)
         self._assert_verified(store)
 
@@ -1856,36 +1754,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             candidate["package_digest"] = owner._hex(owner._digest(owner._CONTINUITY_DOMAIN, owner._canonical(body)))
             return owner._canonical(candidate)
 
-        live_restore = _tamper_restore_identity("LIVE", "financial-owner-v1")
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:restore-live"):
-            FinancialOwner.validate_continuity_package(live_restore)
-        with self.assertRaisesRegex(IndependentFinancialError, "continuity:identity:restore-live"):
-            verify_continuity_package(
-                live_restore,
-                expected_scope={
-                    "state_id": test_config.state_id,
-                    "deployment_id": test_config.deployment_id,
-                    "program_id": test_config.program_id,
-                    "period_id": test_config.period_id,
-                    "currency": test_config.currency,
-                },
-                expected_authority=self.authority,
-            )
-        wrong_restore_owner = _tamper_restore_identity("SHADOW", owner._TEST_OWNER_ID)
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:restore-owner"):
-            FinancialOwner.validate_continuity_package(wrong_restore_owner)
-        with self.assertRaisesRegex(IndependentFinancialError, "continuity:identity:restore-owner"):
-            verify_continuity_package(
-                wrong_restore_owner,
-                expected_scope={
-                    "state_id": test_config.state_id,
-                    "deployment_id": test_config.deployment_id,
-                    "program_id": test_config.program_id,
-                    "period_id": test_config.period_id,
-                    "currency": test_config.currency,
-                },
-                expected_authority=self.authority,
-            )
+        restore_scope = {key: getattr(test_config, key) for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")}
+        for mode, owner_id, reason in (("LIVE", "financial-owner-v1", "restore-live"), ("SHADOW", owner._TEST_OWNER_ID, "restore-owner")):
+            with self.subTest(identity=reason):
+                candidate = _tamper_restore_identity(mode, owner_id)
+                with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:" + reason):
+                    FinancialOwner.validate_continuity_package(candidate)
+                with self.assertRaisesRegex(IndependentFinancialError, "continuity:identity:" + reason):
+                    verify_continuity_package(candidate, expected_scope=restore_scope, expected_authority=self.authority)
 
         mode_only = self._path("test-promotion-mode-only.sqlite")
         mode_only.write_bytes(test_bytes_after_completion)
@@ -1982,31 +1858,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.export_continuity(), first_package)
         self.assertEqual(self._durable_counts(store.path), first_counts)
 
-        changed_amount = replace(receipt, amount_cents=receipt.amount_cents + 1)
-        with self.assertRaisesRegex(FinancialConflictError, "program_funding_receipt_identity_conflict"):
-            mirror.record_program_funding_receipt(changed_amount)
-        self.assertEqual(store.export_continuity(), first_package)
-        self.assertEqual(self._durable_counts(store.path), first_counts)
-
-        changed_supersession = replace(receipt, supersedes_receipt_id="funding-receipt:unrelated")
-        with self.assertRaisesRegex(FinancialConflictError, "program_funding_receipt_identity_conflict"):
-            mirror.record_program_funding_receipt(changed_supersession)
-        self.assertEqual(store.export_continuity(), first_package)
-
-        missing_supersession = self._funding_receipt(
-            receipt_id="funding-receipt:state:period-01:missing-supersession",
+        refused = (
+            ("identity_conflict", replace(receipt, amount_cents=receipt.amount_cents + 1)),
+            ("identity_conflict", replace(receipt, supersedes_receipt_id="funding-receipt:unrelated")),
+            ("supersession_required", self._funding_receipt(receipt_id="funding-receipt:state:period-01:missing-supersession")),
+            ("supersession_missing", self._funding_receipt(receipt_id="funding-receipt:state:period-01:missing-parent", supersedes_receipt_id="funding-receipt:state:period-01:does-not-exist")),
         )
-        with self.assertRaisesRegex(FinancialConflictError, "program_funding_supersession_required"):
-            mirror.record_program_funding_receipt(missing_supersession)
-        self.assertEqual(store.export_continuity(), first_package)
-
-        missing_parent = self._funding_receipt(
-            receipt_id="funding-receipt:state:period-01:missing-parent",
-            supersedes_receipt_id="funding-receipt:state:period-01:does-not-exist",
-        )
-        with self.assertRaisesRegex(FinancialConflictError, "program_funding_supersession_missing"):
-            mirror.record_program_funding_receipt(missing_parent)
-        self.assertEqual(store.export_continuity(), first_package)
+        for reason, candidate in refused:
+            code = "program_funding_receipt_identity_conflict" if reason == "identity_conflict" else "program_funding_" + reason
+            with self.subTest(receipt=candidate), self.assertRaisesRegex(FinancialConflictError, code):
+                mirror.record_program_funding_receipt(candidate)
+            self.assertEqual(store.export_continuity(), first_package)
+            self.assertEqual(self._durable_counts(store.path), first_counts)
 
         replacement = self._funding_receipt(
             receipt_id="funding-receipt:state:period-01:v2",
@@ -2935,7 +2798,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_population(store, expected.CASE_01.expected_population_evidence_count)
         self._assert_snapshot(store, expected.H_MISSING)
         for payment in expected.OTHER_RECIPIENT_PAYMENTS[:18]:
-            result = self._record_expected_recipient_payment(mirror, payment)
+            result = self._record_fixture_payment(mirror, payment, payment_id=payment.payment_id)
             self.assertEqual(result["status"], "RECORDED")
 
         partial = mirror.summary()
@@ -2947,23 +2810,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(partial_rows[expected.H_ITEM_ID]["received_cash_cents"], 0)
         self.assertEqual(mirror.obligation_detail(expected.H_ITEM_ID)["verification_status"], "MISSING_EVIDENCE")
 
-        final_other = self._record_expected_recipient_payment(mirror, expected.OTHER_RECIPIENT_PAYMENTS[18])
+        final_payment = expected.OTHER_RECIPIENT_PAYMENTS[18]
+        final_other = self._record_fixture_payment(mirror, final_payment, payment_id=final_payment.payment_id)
         self.assertEqual(final_other["status"], "RECORDED")
         self.assertEqual(mirror.summary()["received_cash_cents"], expected.OTHER_TOTAL_CENTS)
         self.assertEqual(mirror.obligation_detail(expected.H_ITEM_ID)["verification_status"], "MISSING_EVIDENCE")
 
         h_cash = expected.H_CASH_EVIDENCE
-        h_cash_result = mirror.record_payment_evidence(
-            item_id=h_cash.item_id,
-            payment_id=expected.H_INITIAL_PAYMENT_ID,
-            common_origin_id=h_cash.common_origin_id,
-            amount_cents=h_cash.amount_cents or 0,
-            evidence_id=h_cash.evidence_id,
-            event_at_ms=h_cash.event_at_ms,
-            source_id=h_cash.source_id,
-            source_version=h_cash.source_version,
-            local_ref=h_cash.local_ref,
-        )
+        h_cash_result = RightRailFinancialAcceptanceTests._record_fixture_payment(mirror, h_cash, payment_id=expected.H_INITIAL_PAYMENT_ID)
         self.assertEqual(h_cash_result["status"], "RECORDED")
         claim = expected.OFFSET_CLAIM_EVIDENCE
         claim_result = store.record_offset_claim(
@@ -3086,48 +2940,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
         late_payment = expected.P2_PAYMENT_EVIDENCE
         self._advance_clock(test_store, late_payment.event_at_ms)
-        late_result = test_mirror.record_payment_evidence(
-            item_id=late_payment.item_id,
-            payment_id="payment:h:p2",
-            common_origin_id=late_payment.common_origin_id,
-            amount_cents=late_payment.amount_cents or 0,
-            evidence_id=late_payment.evidence_id,
-            event_at_ms=late_payment.event_at_ms,
-            source_id=late_payment.source_id,
-            source_version=late_payment.source_version,
-            local_ref=late_payment.local_ref,
-        )
+        late_result = RightRailFinancialAcceptanceTests._record_fixture_payment(test_mirror, late_payment, payment_id="payment:h:p2")
         self.assertEqual(late_result["status"], "RECORDED")
         self._assert_snapshot(test_store, expected.H_P2_RECEIVED_LATE)
 
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
         cash_before_duplicate = test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"]
-        duplicate_result = test_mirror.record_payment_evidence(
-            item_id=duplicate.item_id,
-            payment_id="payment:h:p2-confirmation",
-            common_origin_id=duplicate.common_origin_id,
-            amount_cents=duplicate.amount_cents or 0,
-            evidence_id=duplicate.evidence_id,
-            event_at_ms=duplicate.event_at_ms,
-            source_id=duplicate.source_id,
-            source_version=duplicate.source_version,
-            local_ref=duplicate.local_ref,
-        )
+        duplicate_result = RightRailFinancialAcceptanceTests._record_fixture_payment(test_mirror, duplicate, payment_id="payment:h:p2-confirmation")
         self.assertEqual(duplicate_result["status"], "DUPLICATE")
         self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"], cash_before_duplicate)
 
         conflict = expected.P2_CONFLICT_EVIDENCE
-        conflict_result = test_mirror.record_payment_evidence(
-            item_id=conflict.item_id,
-            payment_id="payment:h:p2-conflict",
-            common_origin_id=conflict.common_origin_id,
-            amount_cents=conflict.amount_cents or 0,
-            evidence_id=conflict.evidence_id,
-            event_at_ms=conflict.event_at_ms,
-            source_id=conflict.source_id,
-            source_version=conflict.source_version,
-            local_ref=conflict.local_ref,
-        )
+        conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(test_mirror, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
         self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"], cash_before_duplicate)
         self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["timely"], 0)
@@ -3272,57 +3096,30 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
 
     def test_continuity_restore_destination_race_preserves_foreign_database_and_sidecars(self) -> None:
-        store = self._build_base()
-        package = store.export_continuity()
-        destination = self._path("raced-continuity.sqlite")
-        sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"))
-        foreign_database = b"foreign-destination-bytes"
-        foreign_wal = b"foreign-wal-bytes"
-        foreign_shm = b"foreign-shm-bytes"
-        original_link = owner.os.link
-
-        def create_foreign_destination(source: str | os.PathLike[str], target: str | os.PathLike[str], *args: object, **kwargs: object) -> None:
-            destination.write_bytes(foreign_database)
-            sidecars[0].write_bytes(foreign_wal)
-            sidecars[1].write_bytes(foreign_shm)
-            original_link(source, target, *args, **kwargs)
-
-        owner.os.link = create_foreign_destination
-        try:
-            with self.assertRaisesRegex(FinancialContinuityError, "continuity_destination"):
-                FinancialOwner.restore_continuity(
-                    package_bytes=package,
-                    recovered_path=destination,
-                    trusted_authority=self.authority,
-                    clock=_Clock(),
-                )
-        finally:
-            owner.os.link = original_link
-        self.assertEqual(destination.read_bytes(), foreign_database)
-        self.assertEqual(sidecars[0].read_bytes(), foreign_wal)
-        self.assertEqual(sidecars[1].read_bytes(), foreign_shm)
-        self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
-        self._assert_verified(store)
+        self._assert_restore_race_preserves_foreign_files(after_link=False)
 
     def test_continuity_restore_post_link_replacement_preserves_foreign_database_and_sidecars(self) -> None:
+        self._assert_restore_race_preserves_foreign_files(after_link=True)
+
+    def _assert_restore_race_preserves_foreign_files(self, *, after_link: bool) -> None:
         store = self._build_base()
         package = store.export_continuity()
-        destination = self._path("post-link-raced-continuity.sqlite")
+        destination = self._path(f"raced-continuity-{after_link}.sqlite")
         sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"))
-        foreign_database = b"foreign-post-link-destination-bytes"
-        foreign_wal = b"foreign-post-link-wal-bytes"
-        foreign_shm = b"foreign-post-link-shm-bytes"
+        foreign_database, foreign_wal, foreign_shm = b"foreign-database", b"foreign-wal", b"foreign-shm"
         original_link = owner.os.link
 
-        def replace_after_link(source: str | os.PathLike[str], target: str | os.PathLike[str], *args: object, **kwargs: object) -> None:
-            original_link(source, target, *args, **kwargs)
-            Path(target).unlink()
+        def race_at_link(source: str | os.PathLike[str], target: str | os.PathLike[str], *args: object, **kwargs: object) -> None:
+            if after_link:
+                original_link(source, target, *args, **kwargs)
+                Path(target).unlink()
             destination.write_bytes(foreign_database)
             sidecars[0].write_bytes(foreign_wal)
             sidecars[1].write_bytes(foreign_shm)
+            if not after_link:
+                original_link(source, target, *args, **kwargs)
 
-        owner.os.link = replace_after_link
-        try:
+        with patch.object(owner.os, "link", race_at_link):
             with self.assertRaisesRegex(FinancialContinuityError, "continuity_destination"):
                 FinancialOwner.restore_continuity(
                     package_bytes=package,
@@ -3330,8 +3127,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     trusted_authority=self.authority,
                     clock=_Clock(),
                 )
-        finally:
-            owner.os.link = original_link
         self.assertEqual(destination.read_bytes(), foreign_database)
         self.assertEqual(sidecars[0].read_bytes(), foreign_wal)
         self.assertEqual(sidecars[1].read_bytes(), foreign_shm)
@@ -3925,24 +3720,20 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def test_reporting_evidence_default_retry_is_identity_stable_after_reopen(self) -> None:
         store = self._build_base()
         original_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
-        first = store.record_reporting_evidence(
+        request = dict(
             item_id=expected.H_ITEM_ID,
             report_id="report:retry-default-original",
             evidence_id="evidence:report:retry-default-original",
             expected_revision=original_revision,
         )
+        first = store.record_reporting_evidence(**request)
         self.assertEqual(first["status"], "RECORDED")
         before_detail = store.obligation_detail(expected.H_ITEM_ID)
         before_sequence = store.summary()["sequence"]
         before_row = next(row for row in before_detail["evidence"] if row["evidence_id"] == "evidence:report:retry-default-original")
         store.close()
         reopened = self._make_owner(path=store.path)
-        retry = reopened.record_reporting_evidence(
-            item_id=expected.H_ITEM_ID,
-            report_id="report:retry-default-original",
-            evidence_id="evidence:report:retry-default-original",
-            expected_revision=original_revision,
-        )
+        retry = reopened.record_reporting_evidence(**request)
         self.assertEqual(retry["status"], "DUPLICATE")
         after_detail = reopened.obligation_detail(expected.H_ITEM_ID)
         after_row = next(row for row in after_detail["evidence"] if row["evidence_id"] == "evidence:report:retry-default-original")
@@ -3951,10 +3742,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(reopened.summary()["sequence"], before_sequence)
         with self.assertRaisesRegex(FinancialConflictError, "evidence_identity_conflict"):
             reopened.record_reporting_evidence(
-                item_id=expected.H_ITEM_ID,
-                report_id="report:retry-default-original",
-                evidence_id="evidence:report:retry-default-original",
-                expected_revision=original_revision,
+                **request,
                 event_at_ms=int(before_row["event_at_ms"]) + 1,
             )
         self._assert_verified(reopened)
@@ -4058,17 +3846,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_p2(store)
         self._record_report(store)
         conflict = expected.P2_CONFLICT_EVIDENCE
-        conflict_result = store.record_payment_evidence(
-            item_id=conflict.item_id,
-            payment_id="payment:h:p2-conflict",
-            common_origin_id=conflict.common_origin_id,
-            amount_cents=conflict.amount_cents or 0,
-            evidence_id=conflict.evidence_id,
-            event_at_ms=conflict.event_at_ms,
-            source_id=conflict.source_id,
-            source_version=conflict.source_version,
-            local_ref=conflict.local_ref,
-        )
+        conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
         final_package = store.decision_package(expected.H_ITEM_ID)
         self.assertEqual(final_package["case"]["status"], "RESOLVED")
@@ -4636,46 +4414,19 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 evaluation_result_digest=evaluation_result_digest,
             )
 
-        before_malformed = store.export_continuity()
-        with self.assertRaisesRegex(FinancialInputError, "evaluation_result_digest"):
-            request(
-                action_id="action:malformed-evaluation-reference",
-                evaluation_id=str(receipt["evaluation_id"]),
-                evaluation_result_digest="not-a-digest",
-                expected_revision=int(receipt["revision"]),
-            )
-        self.assertEqual(store.export_continuity(), before_malformed)
-
-        before_bad_digest = store.export_continuity()
-        with self.assertRaisesRegex(FinancialRevisionError, "evaluation_reference_conflict"):
-            request(
-                action_id="action:bad-evaluation-digest",
-                evaluation_id=str(receipt["evaluation_id"]),
-                evaluation_result_digest="0" * 128,
-                expected_revision=int(receipt["revision"]),
-            )
-        self.assertEqual(store.export_continuity(), before_bad_digest)
-
-        before_missing_reference = store.export_continuity()
-        with self.assertRaisesRegex(FinancialInputError, "evaluation_reference_required"):
-            request(
-                action_id="action:decision-before-evaluation-reference",
-                evaluation_id=None,
-                evaluation_result_digest=None,
-                expected_revision=int(receipt["revision"]),
-            )
-        self.assertEqual(store.export_continuity(), before_missing_reference)
-
-        before_chronology = store.export_continuity()
-        with self.assertRaisesRegex(FinancialIntegrityError, "evaluation_chronology"):
-            request(
-                action_id="action:decision-before-evaluation-chronology",
-                evaluation_id=str(receipt["evaluation_id"]),
-                evaluation_result_digest=str(receipt["result_digest"]),
-                expected_revision=int(receipt["revision"]),
-                decision_at_ms=int(receipt["evaluated_at_ms"]) - 1,
-            )
-        self.assertEqual(store.export_continuity(), before_chronology)
+        reference = dict(evaluation_id=str(receipt["evaluation_id"]), evaluation_result_digest=str(receipt["result_digest"]), expected_revision=int(receipt["revision"]))
+        refusals = (
+            ("malformed-evaluation-reference", FinancialInputError, "evaluation_result_digest", {"evaluation_result_digest": "not-a-digest"}),
+            ("bad-evaluation-digest", FinancialRevisionError, "evaluation_reference_conflict", {"evaluation_result_digest": "0" * 128}),
+            ("decision-before-evaluation-reference", FinancialInputError, "evaluation_reference_required", {"evaluation_id": None, "evaluation_result_digest": None}),
+            ("decision-before-evaluation-chronology", FinancialIntegrityError, "evaluation_chronology", {"decision_at_ms": int(receipt["evaluated_at_ms"]) - 1}),
+        )
+        for label, error, code, changes in refusals:
+            with self.subTest(refusal=label):
+                before = store.export_continuity()
+                with self.assertRaisesRegex(error, code):
+                    request(action_id="action:" + label, **{**reference, **changes})
+                self.assertEqual(store.export_continuity(), before)
 
         store.record_support_evidence(
             item_id=expected.H_ITEM_ID,
