@@ -524,9 +524,21 @@ These were found by reading the code. None has been run.
      compares the list for equality.
    - It skips the revision bounds (≤ 10,000).
 
-   This audit did not establish whether the Owner's commit binding covers every
-   one of these. If another engine replaced the pinned one, the Lean decoder's
-   rules would be the only full bar.
+   Lead audit (2026-09-28, by reading `app/right_rail_financial_owner.py`
+   4458-4840) found that every one of these is covered at commit, so the Owner
+   does not depend on the Python decoder for them:
+   - The Owner derives the determination id, `evaluation:<obligation>:r<n>`,
+     the resulting revision (expected + 1) and the mutation time (the max rule)
+     itself, and writes only those.
+   - It requires the action amount to match the rule in A1.
+   - It requires correctionPaid to equal its own SQL-ordered list.
+   - `bind_resulting_state` re-encodes the post-write snapshot and requires it
+     to equal the resulting BLFIN02 bytes, then binds the result context.
+   - Before COMMIT, the independent checker (`verify_obligation_connection`,
+     line 4833) recomputes the written evaluation from the exact rows.
+
+   A replacement engine that violates one of these rules is refused before
+   anything is committed.
 5. In DUPLICATE and REJECTED results, Python accepts an explanation
    expectedRevision up to 2^63-1, where Lean allows at most 10,000.
 
