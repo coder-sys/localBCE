@@ -83,14 +83,21 @@ in that archive that holds the raw record.
     then reads the checkpoint instead, so no HOLD rests on unusable data. The next
     checkpoint is that view plus the batch's own additions, chained or not (`advance`,
     in Spec); a store that rolls back or drops them no longer chains, and
-    `later_allow_clear` is proved under exactly this rule. A stale snapshot that still
-    lists the fact adds a review `*_UNVERIFIED` reason; a death dated after its
-    snapshot makes the snapshot stale. `with=` names released and unresolved
-    counterparts, not same-batch ones (the batch prefix is carried as keys, not lines).
-    `gate_rules` passes 233 of 233 vectors (probes P8a-P8d, P9) and all 3,616 demo lines
-    (134 held, $46,987.00; 6 review; state ZZ); the unittest fails if the runner is older
-    than Spec or Run and skips loudly only when it is missing. All 176 mutants
-    (174 Spec, 2 demo) are killed on a scratch copy. Tests only, not the token path.
+    `later_allow_clear` is proved under exactly this rule, and `later_allow_clear_many`
+    for every later batch of a chain; `allow_clear_store` states `allow_clear` over the
+    sets as read. A stale snapshot that still lists the fact adds a review `*_UNVERIFIED`
+    reason; a death dated after its snapshot makes the snapshot stale. Rows an unchained
+    set shows outside the checkpoint are never held on: an FFS exact copy of one adds
+    review `FFS_DUPLICATE_UNVERIFIED`. `with=` names released counterparts (by any key)
+    and unresolved ones, loose rows included, not same-batch ones (the batch prefix is
+    carried as keys, not lines).
+    `gate_rules` passes 242 of 242 vectors (probes P8a-P8d, P9) and all 3,616 demo lines
+    (134 held, $46,987.00; 6 review; state ZZ); the unittest fails unless the runner's
+    embedded source hash matches Spec, Run, Sha3, lakefile and toolchain, and skips loudly
+    only when it is missing. The mutant batch (Spec, 7 runner-commit and 2 demo mutants)
+    is being rerun (gr2-mut-r3); no kill count is claimed yet. Tests only, not the token path.
+    OPEN: this work puts live code at 85,717, over the 85,597 ceiling (test_bloat_budget
+    fails); a raise or the split evidence budget is the lead's call.
     REQUIRED trusted input: the gate's signed checkpoint of both sets (gate-v1); the
     runner holds it in memory. REQUIRED for the unbuilt release path: it removes lines
     from the unresolved set by identity, on release and on reject, under a new signed

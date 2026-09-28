@@ -39,6 +39,7 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .COLLIDES_WITH_UNRESOLVED_NEAR => l.flow ≠ .CAP_820 ∧ nearKey l ∈ pending c ∧ exactKey l ∉ pending c
   | .DUPLICATE_OF_UNRESOLVED => exactKey l ∈ pending c ∨ l.flow = .CAP_820 ∧ nearKey l ∈ pending c
   | .FFS_DUPLICATE_LINE => l.flow ≠ .CAP_820 ∧ exactKey l ∈ seen
+  | .FFS_DUPLICATE_UNVERIFIED => l.flow ≠ .CAP_820 ∧ exactKey l ∈ looseKeys c
   | .FFS_NEAR_DUPLICATE => l.flow ≠ .CAP_820 ∧ nearKey l ∈ seen ∧ exactKey l ∉ seen
   | .MEMBER_DECEASED => Usable c.today 90 okDeath c.dmf ∧ validDate l.date = true ∧ MemberDead c l
   | .MEMBER_DECEASED_UNVERIFIED => c.dmf.isSome ∧ ¬Usable c.today 90 okDeath c.dmf ∧ validDate l.date = true ∧
@@ -307,6 +308,38 @@ theorem prior_view {t p o x} (h : x ∈ p.entries) : x ∈ (view t p o).entries 
     exact hp.subset h
   · exact h
 
+/-- A chained set's view is the set read. -/
+theorem view_chained {t p o} (h : Chained t p o) : (view t p o).entries = entries o := by
+  rw [view, if_pos (chained_iff.mpr h)]
+  obtain ⟨s, rfl, -⟩ := h
+  rfl
+
+/-- `allow_clear` for the sets as read: an ALLOWed line has both sets chained, so each view is the
+    set read (`view_chained`). -/
+theorem allow_clear_store {c b d} (hd : d ∈ (decideBatch c b).decisions) (ha : d.outcome = .ALLOW) :
+    ∀ x ∈ entries c.released ++ entries c.unresolved, ∀ k ∈ keys d.line, k ∈ keys x →
+      x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled c x = true := by
+  have hr : Chained c.today c.releasedPrior c.released := chained_iff.mp (by
+    cases h : chained c.today c.releasedPrior c.released
+    · obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := (releasedSet c).flatMap keys) (ls := canonical b) hd
+      exact (fires_blocks (r := .STALE_RELEASED) (by simp [fires, h]) ha).elim
+    · rfl)
+  have hu : Chained c.today c.unresolvedPrior c.unresolved := chained_iff.mp (by
+    cases h : chained c.today c.unresolvedPrior c.unresolved
+    · obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := (releasedSet c).flatMap keys) (ls := canonical b) hd
+      exact (fires_blocks (r := .STALE_UNRESOLVED) (by simp [fires, h]) ha).elim
+    · rfl)
+  have := allow_clear hd ha
+  rwa [releasedSet, unresolvedSet, view_chained hr, view_chained hu] at this
+
+theorem prior_advance {t p o adds x} (h : x ∈ p.entries) : x ∈ (advance t p o adds).entries :=
+  List.mem_append_left _ (prior_view h)
+
+theorem mem_iterate {P : Nat → List Line} {x} :
+    ∀ {m}, (∀ k < m, x ∈ P k → x ∈ P (k + 1)) → x ∈ P 0 → x ∈ P m
+  | 0, _, h => h
+  | m + 1, step, h => step m (Nat.lt_add_one m) (mem_iterate (fun k hk => step k (Nat.lt_succ_of_lt hk)) h)
+
 /-- Across batches, under the checkpoint rule: when the next batch's
     checkpoints are the ones this batch produced (`advance`), whether or not
     this batch's sets were chained, no line it ALLOWs shares an exact key, near
@@ -324,6 +357,24 @@ theorem later_allow_clear {c c₂ : Ctx} {b₁ b₂ x d}
   rcases decided_kept (c := c) hx with h | h | h
   · exact Or.inr (allow_clear hd ha x (List.mem_append_left _ (prior_view (by rw [hr]; exact h))))
   · exact Or.inr (allow_clear hd ha x (List.mem_append_right _ (prior_view (by rw [hu]; exact h))))
+  · exact Or.inl h
+
+/-- `later_allow_clear` for any later batch of a chain in which each batch takes the checkpoints the
+    one before produced (batches `0` to `m + 1`): a line of the first batch stays in every later
+    checkpoint. -/
+theorem later_allow_clear_many {c : Nat → Ctx} {b : Nat → List Line} {m x d}
+    (hr : ∀ k ≤ m, (c (k + 1)).releasedPrior = (decideBatch (c k) (b k)).released)
+    (hu : ∀ k ≤ m, (c (k + 1)).unresolvedPrior = (decideBatch (c k) (b k)).unresolved)
+    (hx : x ∈ b 0) (hd : d ∈ (decideBatch (c (m + 1)) (b (m + 1))).decisions) (ha : d.outcome = .ALLOW) :
+    (∃ e ∈ (decideBatch (c 0) (b 0)).decisions, e.line = x ∧ Reason.ALREADY_DECIDED ∈ e.reasons) ∨
+      ∀ k ∈ keys d.line, k ∈ keys x → x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled (c (m + 1)) x = true := by
+  rcases decided_kept (c := c 0) hx with h | h | h
+  · have h := mem_iterate (P := fun k => (decideBatch (c k) (b k)).released.entries) (m := m)
+      (fun k hk h => prior_advance (by rw [hr k (Nat.le_of_lt hk)]; exact h)) h
+    exact Or.inr (allow_clear hd ha x (List.mem_append_left _ (prior_view (by rw [hr m m.le_refl]; exact h))))
+  · have h := mem_iterate (P := fun k => (decideBatch (c k) (b k)).unresolved.entries) (m := m)
+      (fun k hk h => prior_advance (by rw [hu k (Nat.le_of_lt hk)]; exact h)) h
+    exact Or.inr (allow_clear hd ha x (List.mem_append_right _ (prior_view (by rw [hu m m.le_refl]; exact h))))
   · exact Or.inl h
 
 /-! ## Uniqueness -/
@@ -440,12 +491,16 @@ theorem pending_grows {c c'} (g : Grows c c') : pending c' = pending c := by
 theorem seenAt_grows {c c'} (g : Grows c c') (b : List Line) (i : Nat) : seenAt c' b i = seenAt c b i := by
   simp only [seenAt, releasedSet, claim_grows g, g.today, g.released, g.releasedPrior]
 
+theorem looseKeys_grows {c c'} (g : Grows c c') : looseKeys c' = looseKeys c := by
+  simp only [looseKeys, g.today, g.released, g.releasedPrior, g.unresolved, g.unresolvedPrior]
+
 theorem isSome_of_mem {α : Type} {o : Option (Snapshot α)} {x : α} (h : x ∈ entries o) : o.isSome = true := by
   cases o <;> simp_all [entries]
 
 theorem fact_mono {c c' seen l} (g : Grows c c') : ∀ {r}, Fact c seen l r → Fact c' seen l r
   | .ALREADY_DECIDED, h | .COLLIDES_WITH_UNRESOLVED_NEAR, h | .DUPLICATE_OF_UNRESOLVED, h => by
     simpa only [Fact, pending_grows g] using h
+  | .FFS_DUPLICATE_UNVERIFIED, h => by simpa only [Fact, looseKeys_grows g] using h
   | .CAP_MEMBER_MONTH_DUPLICATE, h => by simpa only [Fact, overlap, g.enrollment, g.today] using h
   | .FFS_DUPLICATE_LINE, h | .FFS_NEAR_DUPLICATE, h | .SERVICE_DATE_INVALID, h => h
   | .MEMBER_DECEASED, ⟨hu, hv, d, hd, hp⟩ => ⟨usable_iff.mp (g.dmfOk.trans (usable_iff.mpr hu)), hv, d, g.dmf d hd, hp⟩
@@ -555,5 +610,9 @@ theorem deterministic {c b₁ b₂} (h : b₁.Perm b₂) : decideBatch c b₁ = 
 #guard_msgs in #print axioms fail_closed
 /-- info: 'BlindLedger.Gate.Rules.later_allow_clear' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms later_allow_clear
+/-- info: 'BlindLedger.Gate.Rules.allow_clear_store' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms allow_clear_store
+/-- info: 'BlindLedger.Gate.Rules.later_allow_clear_many' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms later_allow_clear_many
 
 end BlindLedger.Gate.Rules

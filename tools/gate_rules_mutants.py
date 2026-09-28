@@ -1,11 +1,12 @@
 """Mutation check of the gate rules (test-only).
 
-The lean tree is copied to a temporary directory; each spec mutant weakens one
-check in the copy's ``BlindLedger/Gate/Rules/Spec.lean``, rebuilds its
-``gate_rules`` and must make ``rules_v1.vectors`` FAIL.  Each demo mutant
-mislabels lines of the demo file and must FAIL against the unmutated rules.
-The tracked tree is never written; its Spec.lean hash is checked before and
-after.  Run only under the v4 guard:
+The lean tree is copied to a temporary directory; each mutant weakens one
+check in the copy's ``BlindLedger/Gate/Rules/Spec.lean`` (or, for the runner's
+commit, ``Run.lean``), rebuilds its ``gate_rules`` and must make
+``rules_v1.vectors`` FAIL; whether the demo file also fails is reported.  Each
+demo mutant mislabels lines of the demo file and must FAIL against the
+unmutated rules.  The tracked tree is never written; the hashes of its
+Spec.lean and Run.lean are checked before and after.  Run only under the v4 guard:
 ``python tools/gate_rules_mutants.py <lean dir> <rules vectors> <demo vectors> <lake.exe>``.
 """
 
@@ -26,13 +27,18 @@ OVERLAP = "max first (max s.start t.start) ≤ min last (min s.stop t.stop)"
 REVIEW = ("| .COLLIDES_WITH_UNRESOLVED_NEAR | .FFS_NEAR_DUPLICATE | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID\n"
           "  | .STALE_DMF | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .STALE_RELEASED\n"
           "  | .STALE_UNRESOLVED | .MEMBER_DECEASED_UNVERIFIED | .MEMBER_NOT_ENROLLED_UNVERIFIED\n"
-          "  | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED_UNVERIFIED => true")
+          "  | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED_UNVERIFIED | .FFS_DUPLICATE_UNVERIFIED => true")
 CHAINED = ("| some s => s.entries.length == s.count && validDate s.asOf && s.asOf ≤ today && prior.asOf ≤ s.asOf &&\n"
            "      prior.entries.isPrefixOf s.entries")
 KEPT = "d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED"
-RELEASED_CP = "(releasedSet c).filter (fun x => (keys l).any (keys x).contains)"
-UNRESOLVED_CP = "(unresolvedSet c).filter fun x => (keys l).any (claim c x).contains"
-COUNTERPARTS = f"({RELEASED_CP} ++\n      {UNRESOLVED_CP}).map (·.id)"
+LOOSE_R = " ++ loose c.today c.releasedPrior c.released"
+LOOSE_U = " ++ loose c.today c.unresolvedPrior\n      c.unresolved"
+RELEASED_CP = f"(releasedSet c{LOOSE_R}).filter\n      (fun x => (keys l).any (keys x).contains) ++ "
+UNRESOLVED_CP = ".filter fun x => (keys l).any (claim c x).contains"
+COUNTERPARTS = f"({RELEASED_CP}(unresolvedSet c{LOOSE_U}){UNRESOLVED_CP}).map (·.id)"
+LOOSE = "if chained today prior o then [] else "
+LOOSE_KEYS = "(loose c.today c.releasedPrior c.released ++ loose c.today c.unresolvedPrior c.unresolved)"
+FFS_UNVERIFIED = "| .FFS_DUPLICATE_UNVERIFIED => !isCap l && (looseKeys c).contains (exactKey l)"
 UNVERIFIED = "o.isSome && !usable c.today maxAge ok o && validDate l.date"
 ADVANCE = "  let v := view today prior o\n  ⟨v.asOf, v.entries.length + adds.length, v.entries ++ adds⟩"
 MUTANTS = [
@@ -42,6 +48,7 @@ MUTANTS = [
     ("R1 on an unusable DMF", "certain c 90 okDeath c.dmf l &&", "true &&"),
     ("R1 on a 91-day DMF", "certain c 90 okDeath c.dmf l", "certain c 91 okDeath c.dmf l"),
     ("R1 unverified off", "unverified c 90 okDeath c.dmf l && memberDead c l", "false"),
+    ("R1 unverified on an 89-day DMF", "unverified c 90 okDeath c.dmf l", "unverified c 89 okDeath c.dmf l"),
     ("R2 off", "isCap l &&\n      (" + R2 + ")", "false"),
     ("R2 released or earlier lines ignored", R2, "certain c 7 okSpan c.enrollment l && overlap c l"),
     ("R2 exact key ignored", "(seen.contains (exactKey l) || ", "("),
@@ -211,15 +218,39 @@ MUTANTS = [
     ("unresolved near keys ignored", "(unresolvedSet c).flatMap (claim c)",
      "(unresolvedSet c).flatMap fun x => (claim c x).filter (· != nearKey x)"),
     ("no counterparts", COUNTERPARTS, "[]"),
-    ("no released counterparts", RELEASED_CP + " ++\n      ", ""),
-    ("every released line a counterpart", RELEASED_CP, "releasedSet c"),
-    ("every unresolved line a counterpart", UNRESOLVED_CP, "unresolvedSet c"),
+    ("no released counterparts", RELEASED_CP, ""),
+    ("every released line a counterpart", ".filter\n      (fun x => (keys l).any (keys x).contains)", ""),
+    ("every unresolved line a counterpart", UNRESOLVED_CP, ""),
+    ("released counterparts by claim", "(keys l).any (keys x).contains", "(keys l).any (claim c x).contains"),
+    ("no loose released counterparts", LOOSE_R, ""),
+    ("no loose unresolved counterparts", LOOSE_U, ""),
+    ("unverified duplicate off", FFS_UNVERIFIED, "| .FFS_DUPLICATE_UNVERIFIED => false"),
+    ("unverified duplicate on capitation lines", FFS_UNVERIFIED, FFS_UNVERIFIED.replace("!isCap l && ", "")),
+    ("unverified duplicate by near key", FFS_UNVERIFIED, FFS_UNVERIFIED.replace("(exactKey l)", "(nearKey l)")),
+    ("unverified duplicate is HOLD", REVIEW, REVIEW.replace(" | .FFS_DUPLICATE_UNVERIFIED", "")),
+    ("chained rows loose", LOOSE, ""),
+    ("loose rows of the released set ignored", LOOSE_KEYS, "(" + LOOSE_KEYS.split(" ++ ")[1]),
+    ("loose rows of the unresolved set ignored", LOOSE_KEYS, LOOSE_KEYS.split(" ++ ")[0] + ")"),
     ("gate leaves nothing unresolved", "c.unresolved (unresolvedLines ds)", "c.unresolved []"),
     ("not-enrolled lines left out of the unresolved set", KEPT, KEPT + " && !d.reasons.contains .MEMBER_NOT_ENROLLED"),
     ("already decided lines unresolved", KEPT, "d.outcome != .ALLOW"),
     ("ALLOW lines unresolved", KEPT, "!d.reasons.contains .ALREADY_DECIDED"),
     ("arrival order", "batch.mergeSort lineLe", "batch"),
     ("canonical order without identity", "l.cents, l.id]", "l.cents]"),
+]
+
+# The runner's commit, which carries each batch's additions and checkpoints to the next.
+RUN_MUTANTS = [
+    ("commit drops the released store's length", "r.released.entries.drop (releasedSet c).length",
+     "r.released.entries.drop (entries c.released).length"),
+    ("commit drops the unresolved store's length", "r.unresolved.entries.drop (unresolvedSet c).length",
+     "r.unresolved.entries.drop (entries c.unresolved).length"),
+    ("commit adds nothing released", "extra := st.extra ++ r.released.entries.drop", "extra := st.extra ++ [].drop"),
+    ("commit adds nothing unresolved", "held := st.held ++ r.unresolved.entries.drop", "held := st.held ++ [].drop"),
+    ("commit adds every released line", "st.extra ++ r.released.entries.drop (releasedSet c).length",
+     "st.extra ++ r.released.entries"),
+    ("commit keeps the released checkpoint", "rprior := r.released", "rprior := st.rprior"),
+    ("commit keeps the unresolved checkpoint", "uprior := r.unresolved", "uprior := st.uprior"),
 ]
 
 
@@ -259,14 +290,12 @@ def vectors(lean: Path, path: Path) -> str:
 
 
 def main(lean_dir: str, rules: str, demo: str, lake: str) -> int:
-    tracked = Path(lean_dir) / "BlindLedger" / "Gate" / "Rules" / "Spec.lean"
-    before = hashlib.sha256(tracked.read_bytes()).hexdigest()
-    killed = 0
+    tracked = [Path(lean_dir) / "BlindLedger" / "Gate" / "Rules" / f for f in ("Spec.lean", "Run.lean")]
+    before = [hashlib.sha256(p.read_bytes()).hexdigest() for p in tracked]
+    killed = demo_killed = 0
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         lean = Path(tmp) / "lean"
         shutil.copytree(lean_dir, lean)
-        spec = lean / "BlindLedger" / "Gate" / "Rules" / "Spec.lean"
-        text = spec.read_text(encoding="utf-8")
         built = build(lean, lake)
         base = [vectors(lean, Path(p)) if built else "BUILD_ERROR" for p in (rules, demo)]
         print(f"BASELINE rules={base[0]} demo={base[1]}", flush=True)
@@ -278,18 +307,23 @@ def main(lean_dir: str, rules: str, demo: str, lake: str) -> int:
             result = vectors(lean, path)
             killed += result.startswith("RULES_VECTORS=FAIL")
             print(f"MUTANT {name}: {result}", flush=True)
-        for name, old, new in MUTANTS:
-            if text.count(old) != 1:
-                print(f"MUTANT {name}: SCRIPT_ERROR occurrences={text.count(old)}")
-                continue
-            spec.write_text(text.replace(old, new), encoding="utf-8")
-            result = vectors(lean, Path(rules)) if build(lean, lake) else "BUILD_ERROR"
-            killed += result.startswith("RULES_VECTORS=FAIL")
-            print(f"MUTANT {name}: {result}", flush=True)
-    after = hashlib.sha256(tracked.read_bytes()).hexdigest()
-    total = len(MUTANTS) + len(DEMO_MUTANTS)
-    print(f"TRACKED_SPEC sha256_before={before} sha256_after={after}")
-    print(f"MUTANTS total={total} killed={killed}")
+        for file, mutants in (("Spec.lean", MUTANTS), ("Run.lean", RUN_MUTANTS)):
+            src = lean / "BlindLedger" / "Gate" / "Rules" / file
+            text = src.read_text(encoding="utf-8")
+            for name, old, new in mutants:
+                if text.count(old) != 1:
+                    print(f"MUTANT {name}: SCRIPT_ERROR occurrences={text.count(old)}")
+                    continue
+                src.write_text(text.replace(old, new), encoding="utf-8")
+                got = [vectors(lean, Path(p)) for p in (rules, demo)] if build(lean, lake) else ["BUILD_ERROR"] * 2
+                killed += got[0].startswith("RULES_VECTORS=FAIL")
+                demo_killed += got[1].startswith("RULES_VECTORS=FAIL")
+                print(f"MUTANT {name}: {got[0]} demo={got[1]}", flush=True)
+            src.write_text(text, encoding="utf-8")
+    after = [hashlib.sha256(p.read_bytes()).hexdigest() for p in tracked]
+    total = len(MUTANTS) + len(RUN_MUTANTS) + len(DEMO_MUTANTS)
+    print(f"TRACKED_SOURCES sha256_before={before} sha256_after={after}")
+    print(f"MUTANTS total={total} killed={killed} demo_killed={demo_killed}/{len(MUTANTS) + len(RUN_MUTANTS)}")
     ok = base == ["RULES_VECTORS=PASS"] * 2 and killed == total and before == after
     return 0 if ok else 1
 

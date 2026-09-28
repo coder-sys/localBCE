@@ -35,6 +35,12 @@ def hexOf (b : ByteArray) : String :=
     let h := Nat.toDigits 16 x.toNat
     String.ofList (if h.length < 2 then '0' :: h else h))
 
+/-- SHA3-512 of the sources this runner was built from, CRLF read as LF; the unit test recomputes
+    it from the files, so a stale runner fails that test whatever its file times. -/
+def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [include_str "Spec.lean",
+  include_str "Run.lean", include_str "../../Sha3.lean", include_str "../../../lakefile.toml",
+  include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
+
 structure St where
   today : Nat := 0
   snaps : List (String × Nat × Nat × String) := []
@@ -149,6 +155,7 @@ def step (st : St) : List String → Option (St × List String)
   | [] => none
 
 def main (args : List String) : IO UInt32 := do
+  IO.println s!"RULES_SOURCE {source}"
   let [path] := args
     | IO.eprintln "RULES_VECTORS=USAGE gate_rules <path>"
       return 2
