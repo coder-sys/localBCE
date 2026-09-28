@@ -1,10 +1,10 @@
 # Financial core redesign (approved by the founder 2026-09-24)
 
-Approval (2026-09-24): founder approved the v8 rebuild and retiring v5/v6 stores, conditional on every step complying with CONSTITUTION.md. Any step that would weaken a safety property or protected answer needs a separate founder decision.
+Approval (2026-09-24): founder approved the v8 rebuild and retiring v5/v6 stores, conditional on every step complying with CONSTITUTION.md; any step weakening a safety property or protected answer needs a separate founder decision.
 
 Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to move to the v8 store/package format (RR/FINANCIAL/CONTINUITY/v8), with v7 stores migrating all-or-nothing on owner open and v7 packages still verifiable, the founder answered "Yes, approve v8". The only protected change is CASE_11's export version string in `tests/rightrail_financial_expected_cases.py`.
 
-History-completeness approval (2026-09-24, CONSTITUTION V.4): asked in session chat how v7 histories that lack full facts (payment item/time, evidence) become rebuildable, the founder chose "Opening balance": on conversion the owner writes one sealed opening-balance event holding every converted row, under a new, distinctly named digest domain, and from then on every event records the full facts needed to rebuild all projections by apply(event). The alternative (rebuild from events plus side tables) was declined.
+History-completeness approval (2026-09-24, CONSTITUTION V.4): asked in session chat how v7 histories lacking full facts (payment item/time, evidence) become rebuildable, the founder chose "Opening balance": on conversion the owner writes one sealed opening-balance event holding every converted row, under a new, distinctly named digest domain, and thereafter every event records the full facts needed to rebuild all projections by apply(event). The alternative (rebuild from events plus side tables) was declined.
 
 Source: first-principles review of the financial core (owner, checker, successor,
 Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited inline.
@@ -105,7 +105,7 @@ the correction it pays; an acknowledgment still has zero cash effect.
 - **Scope/duration:** provenance text only; no pin, digest, vector or gate changes.
 - **Claims withdrawn:** r80/r84/r85/r88 are not evidence for `86390ab`.
 
-The core is roughly 2.5x larger than the invariants need. Root cause: state lives in
+The core is ~2.5x larger than the invariants need. Root cause: state lives in
 ~20 editable tables with history as a side log, so every consumer (checker, successor,
 continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:
 one command log + one append-only, hash-chained history of complete facts + projections
@@ -115,9 +115,9 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 ## Gaps found (under-enforcement, not just size)
 
 - No command table: each handler invents its own retry/conflict rule (III.3).
-- `expected_revision` optional on 10 handlers; 5 handlers default the actor to a
+- `expected_revision` optional on 10 handlers; 5 default the actor to a
   synthetic identity (III.3, I.2, XI.13).
-- `financial_events` has no append-only trigger; foreign keys enabled but none declared (III.4).
+- `financial_events` has no append-only trigger; FKs enabled but none declared (III.4).
 - Python alone computes every evaluation; Lean's BLFIN02 evaluator runs only in tests (V.1/V.2).
 - Every staff read runs the full checker over the whole database (IX.3).
 - Two canonical encodings (SHA3/ASCII and SHA-256/UTF-8 staff snapshot).

@@ -16,7 +16,10 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Founder expanded the total to 80,000 on 2026-09-26 for connected-workflow work.
 LIVE_CODE_LINES = 80_000
 MARKDOWN_FILES = 20
-MARKDOWN_BYTES = 180_000
+# 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
+# contract, like test vectors, not compressible prose; it gets its own ceiling.
+MARKDOWN_BYTES = 160_000
+CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
     "app/right_rail_financial_owner.py": 7_321,
@@ -59,7 +62,11 @@ class BloatBudgetTest(unittest.TestCase):
     def test_markdown_stays_small(self):
         docs = [p for p in _live_files() if p.endswith(".md")]
         self.assertLessEqual(len(docs), MARKDOWN_FILES)
-        self.assertLessEqual(sum(os.path.getsize(p) for p in docs), MARKDOWN_BYTES)
+        conformance_root = os.path.join(ROOT, "conformance") + os.sep
+        prose = [p for p in docs if not p.startswith(conformance_root)]
+        conformance = [p for p in docs if p.startswith(conformance_root)]
+        self.assertLessEqual(sum(os.path.getsize(p) for p in prose), MARKDOWN_BYTES)
+        self.assertLessEqual(sum(os.path.getsize(p) for p in conformance), CONFORMANCE_MARKDOWN_BYTES)
         self.assertLessEqual(os.path.getsize(os.path.join(ROOT, "STATUS.md")), STATUS_BYTES)
 
     def test_no_per_team_status_files(self):
