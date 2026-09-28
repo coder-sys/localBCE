@@ -165,8 +165,8 @@ def _parser() -> argparse.ArgumentParser:
     switch_compare.add_argument("--candidate-spec", type=Path)
     switch_compare.add_argument("--report-output", type=Path, help="optional new canonical JSON report file")
 
-    line_pack = subparsers.add_parser("line-pack", help="write one documentation-only CMS-64.9 line pack; the store is never opened")
-    line_pack.add_argument("--package", type=Path, required=True, help="exact Continuity package bytes")
+    line_pack = subparsers.add_parser("line-pack", help="write one documentation-only CMS-64.9 line pack from --database, verified read-only")
+    line_pack.add_argument("--package", type=Path, required=True, help="that store's current Continuity package bytes")
     line_pack.add_argument("--line-map", type=Path, required=True, help="line map JSON listed by the approved Control Pack")
     line_pack.add_argument("--line", required=True)
     line_pack.add_argument("--quarter", required=True, help="federal fiscal quarter, e.g. FFY2025Q4")
@@ -586,6 +586,7 @@ def _run(args: argparse.Namespace) -> Any:
         return _switch_compare(args)
     if args.command == "line-pack":
         pack = build_line_pack(
+            args.database,
             _read_package(args.package),
             trusted_authority=_trusted_authority(args),
             expected_scope=_scope(args),

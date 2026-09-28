@@ -20,13 +20,12 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification
 
-- Line pack (B+, documentation-only CMS-64.9 pack): guarded bplus-r2 ran 37
-  tests. 36 passed, 0 errors, and 1 failed: the Markdown budget, already over
-  at base a5e249a (212,037 B; r2 read 214,284 B before these lines).
-  Kill criterion 1 held: a synthetic 19A pack reconciles to the synthetic line
-  to the cent (32,345 of 32,345, FULL); 23A matches a read-only SQL Ledger sum.
-  Code: 79,521/80,000. No Lean or Owner changes. The gap branch for an unbound
-  row and manifest is untested.
+- Line pack (B+, documentation-only CMS-64.9 pack): builds only from a store
+  that verify_database has fully verified (read-only), with the package as its
+  exact snapshot. Guarded bplus-fix-r1: 25 run, 24 passed, 1 failed (the
+  Markdown budget, already over at base: 215,227 B). Kill criterion 1 holds
+  (19A 32,345 of 32,345, FULL). Forged package rows and a raw store UPDATE are
+  refused. No Lean or Owner changes. The unbound-manifest gap is untested.
 - Lean build/proof/kit phase: r77 freshly reproduced the current pinned engine
   with a canonical 46-file source manifest; both fixed vectors matched. r68 built all six Lake
   targets (87 jobs); r69 passed 30 evaluator, 18 decision-package, 42 correction

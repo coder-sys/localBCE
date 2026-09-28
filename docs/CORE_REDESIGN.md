@@ -333,24 +333,29 @@ line and quarter reconciled to the cent in minutes, not weeks. Coverage is
 shown on the pack's face.
 
 - **Predicate:** `app/right_rail_financial_line_pack.py` emits canonical
-  `RR/LINE-PACK/CMS-64.9/v1` JSON from independently verified Continuity bytes
-  and a line map. The line map's SHA-256 is listed in an approved Control Pack
-  `source_refs` entry (`line-map:sha256:<hex>`), so the Control Pack schema is
-  unchanged.
+  `RR/LINE-PACK/CMS-64.9/v1` JSON from a Continuity package that
+  `verify_database` binds row for row to a fully verified store opened
+  read-only (the package digest is public, so package checks alone prove
+  nothing), and a line map. Exactly one `line-map:sha256:<hex>` entry in an
+  approved Control Pack's `source_refs` binds the map, so the schema is
+  unchanged. Verification holds a read transaction that writers wait on (busy
+  timeout): run it on a quiet store or a copy.
 - **What each pack carries:**
-  - rows of active payments whose payment time falls in the federal fiscal
-    quarter (UTC) and that match the map's program/source predicate;
+  - rows of payments matching the map's program/source predicate, paid in the
+    federal fiscal quarter (UTC boundaries) and active at its end; a later
+    reversal is listed, never netted, so a closed quarter never changes;
   - each row's evidence digest, evaluation receipt and rule version;
   - a service-period split, the member-manifest digest and a provenance root;
   - coverage as integer cents over the reported line.
 - **Invariant/failure:** the pack is documentation only and carries no
   determination.
   - A reversed payment, a row not decided under the bound pack, an unbound
-    manifest, and a cents gap in either direction are each listed in
-    `unavailable`.
+    manifest, a map window short of the quarter, a visible amount conflict,
+    and a cents gap in either direction are each listed in `unavailable`; any
+    gap rules out FULL.
   - Five never-held items are always listed.
-  - A superseding pack must have the same line, quarter and owner, a later
-    time, and no older sequence.
+  - A superseding pack must have the same line, quarter and store (genesis,
+    owner, mode, scope), a later time, and a later sequence or the same head.
 - **Evidence:** `tests/test_right_rail_financial_line_pack.py`.
 - **Scope:** derived artifact only. No tables or Owner, Lean, wire or digest
   changes. `signer` is null because no PQ signing path exists.
