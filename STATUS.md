@@ -21,6 +21,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 ## Current verification (latest state; earlier superseded runs collapsed)
 
 - **G2 dependency check** (`dep-check`): correction follow-up reopens only when a derived dependency key moves, named in `changed_dependencies` (XI.2 record in `docs/CORE_REDESIGN.md`). Acknowledgments, the correction's own requested payment and DUPLICATE confirmations do not reopen; new evidence does; an unexplained cancellation needs review. The checker refuses a forged DUPLICATE label (`duplicate-evidence:binding`). Guarded `g2dep-r3-a1-L2` (v6): run=184 passed=184, zero floor kills. On the merged line `int-g2-r2-a1-L1`: 176/177, the only failure the Markdown budget fixed by this merge.
+- **G4 support package v2** (XI.2 record in `docs/CORE_REDESIGN.md`): `CORPORATE-SUPPORT/v2` carries rule version, adapter versions, affected work and a vector reproduction (pinned engine only); software version and Trust Graph profile are NONE (no bound source). A failed Continuity restore is the second consumer; Mirror refuses any other shape; the privacy scan passes every package. Guarded run: see the commit message.
 - **Lean build/proof/kit**: r77 freshly reproduced the pinned engine from a
  canonical 46-file source manifest, both fixed vectors matched. r68 built all
  six Lake targets (87 jobs); r69 passed 30 evaluator, 18 decision-package, 42

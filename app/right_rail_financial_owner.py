@@ -401,6 +401,21 @@ _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
 }
 
 
+def _corporate_support(
+    status: str, component: str, failure_stage: str, error_class: str, *, artifact: dict[str, Any] | None = None,
+    rule_version: dict[str, Any] | str = "NONE", affected_ids: list[int] | None = None, reproduction: dict[str, str] | str = "NONE",
+) -> dict[str, Any]:
+    """RR/FINANCIAL/CORPORATE-SUPPORT/v2, built only from approved fields, never a redacted dump. A field without a
+    trustworthy existing source (software version, Trust Graph source profile) is the literal NONE."""
+    return {
+        "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v2", "status": status, "component": component,
+        "software_version": "NONE", "rule_version": rule_version,
+        "adapter_versions": {"population": _POPULATION_MANIFEST_CONTRACT, "trust_graph_source_profile": "NONE"},
+        "artifact": artifact, "failure_stage": failure_stage, "error_class": error_class,
+        "affected_work": {"count": len(affected_ids or ()), "ids": list(affected_ids or ())}, "reproduction": reproduction,
+    }
+
+
 def _known_correction_engine(sha256: object) -> bool:
     """Whether committed correction history may name this engine (the checker's registry); a missing,
     altered or malformed registry is an integrity refusal."""
@@ -6098,15 +6113,13 @@ class FinancialOwner:
             "REOPENED": ("FOLLOWUP_RECONCILIATION", "STALE_DEPENDENCY"),
             "REVIEW_REQUIRED": ("FOLLOWUP_RECONCILIATION", "UNSUPPORTED_DEPENDENCY"),
         }[status]
-        support = {
-            "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v1",
-            "status": status,
-            "component": "FINANCIAL_CORRECTION",
-            "artifact": artifact,
-            "failure_stage": failure_stage,
-            "error_class": error_class,
-            "reproduction": {"scenario": "SYNTHETIC_CORRECTION", "real_data": False},
-        }
+        support = _corporate_support(
+            status, "FINANCIAL_CORRECTION", failure_stage, error_class, artifact=artifact,
+            rule_version={key: package["control_pack"][key] for key in ("pack_id", "version", "digest")},
+            affected_ids=[] if status == "CURRENT" else [sequence],
+            reproduction=dict(financial_engine.CORRECTION_TRANSITION_REPRODUCTION)
+            if artifact and artifact["sha256"] == _hex(financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256) else "NONE",
+        )
         result = {
             "followup_status": status,
             "work_id": action_id,
@@ -6934,6 +6947,14 @@ class FinancialOwner:
         if self._seal_segment(connection, force=True) != bytes.fromhex(segment["segment_digest"]):
             _fail(FinancialContinuityError, "history_replay_mismatch")
 
+    @staticmethod
+    def continuity_restore_support(error: BaseException) -> dict[str, Any]:
+        """Support package for a failed Continuity restore: only its fixed failure code, never other text."""
+
+        code = str(error)
+        fixed = isinstance(error, RuntimeError) and re.fullmatch(r"continuity_[a-z_]{1,48}(:[a-z-]{1,32})?", code)
+        return _corporate_support("FAILED", "CONTINUITY", "RESTORE", code if fixed else "UNCLASSIFIED")
+
     @classmethod
     def restore_continuity(
         cls,
@@ -7140,27 +7161,6 @@ class FinancialOwner:
         if owner is None:
             _fail(FinancialContinuityError, "continuity_restore_owner")
         return owner
-
-    @classmethod
-    def restore_test_continuity(
-        cls,
-        *,
-        package_bytes: bytes,
-        recovered_path: Path,
-        trusted_authority: SyntheticTrustedAuthority | None,
-        clock: FinancialClock | None = None,
-        correction_transition_release: object | None = None,
-    ) -> "FinancialOwner":
-        """Restore into a separate non-live TEST owner for synthetic continuation."""
-
-        return cls.restore_continuity(
-            package_bytes=package_bytes,
-            recovered_path=recovered_path,
-            trusted_authority=trusted_authority,
-            clock=clock,
-            restore_mode="TEST",
-            correction_transition_release=correction_transition_release,
-        )
 
     def _checker_expectations(self) -> dict[str, Any]:
         """This Owner's trusted identity, as the independent checker expects it."""

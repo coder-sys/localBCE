@@ -137,6 +137,33 @@ the correction it pays; an acknowledgment still has zero cash effect.
   action identity, kind, status, reference or attempt. An acknowledgment no
   longer reopens.
 
+### Safe support package v2 (2026-09-28, XI.2 record)
+
+- **Predicate:** `CORPORATE-SUPPORT/v1` becomes `/v2`, built from approved fields
+  only (`_corporate_support`), never a redacted dump. Fields: software version,
+  rule version, adapter versions, affected work, reproduction. Second consumer:
+  a failed Continuity restore (`continuity_restore_support`, fixed codes).
+- **Sources:** rule version = the decision package's `control_pack`
+  `{pack_id, version, digest}`; adapter `population` = the population manifest
+  contract; affected work = `{count, ids}` with the correction's
+  `source_event_sequence` unless CURRENT; reproduction =
+  `{vector_file_digest, case_id}` of the published correction vector, only when
+  the artifact is the pinned engine (a retired engine has none). **NONE**:
+  software version (no commit or kit digest is bound to a running owner) and
+  the Trust Graph source profile (the owner has no source of it). A restore
+  failure carries its `continuity_*` code, else `UNCLASSIFIED`; never message text.
+- **Invariant / failure:** Mirror refuses any package that is not exactly the
+  approved shape (JSON equality, so `false` is not `0`); unapproved keys never
+  reach output. Every package passes `tools/privacy_artifact_scan.py`.
+- **Disposition:** v1 replaced, not versioned alongside: it is derived, synthetic
+  and has no outside consumer. Deleted: the Owner's `restore_test_continuity`
+  wrapper (callers use `restore_continuity(restore_mode="TEST")`) and Mirror's
+  restore re-check, which the Owner's package validation already made.
+- **Replacement control:** Mirror and acceptance tests, run through the guard.
+- **Scope / follow-ups:** correction follow-up and restore failure only. Real
+  software and Trust Graph versions need a bound source first.
+- **Claims withdrawn:** `reproduction {SYNTHETIC_CORRECTION, real_data: false}`.
+
 The core is ~2.5x larger than the invariants need. Root cause: state lives in
 ~20 editable tables with history as a side log, so every consumer (checker, successor,
 continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:

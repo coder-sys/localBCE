@@ -525,10 +525,11 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
     source_bytes_before_restore = database.read_bytes()
     test_database = sample_root / "test-continuation.sqlite"
     test_restore_start = time.perf_counter_ns()
-    test_owner = _MeasuredFinancialOwner.restore_test_continuity(
+    test_owner = _MeasuredFinancialOwner.restore_continuity(
         package_bytes=package,
         recovered_path=test_database,
         trusted_authority=authority,
+        restore_mode="TEST",
     )
     test_owner.verify_integrity()
     test_restore_receipt_matches = sum(

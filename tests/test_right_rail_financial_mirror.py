@@ -33,6 +33,7 @@ from tests.rightrail_financial_expected_cases import (
     PROGRAM_ITEMS,
     UNAPPROVED_OFFSET_CENTS,
 )
+from tools.privacy_artifact_scan import scan_artifacts
 from tests.test_right_rail_financial_acceptance import (
     _control_pack_from_fixture,
     _correction_transition_test_release,
@@ -161,6 +162,11 @@ class FinancialMirrorTests(unittest.TestCase):
         outputs = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
         return outputs["followup_status"], outputs["state_report"]["changed_dependencies"]
 
+    def _assert_privacy_clean(self, package: dict) -> None:  # the scanner reports the file itself, and nothing inside it
+        directory = Path(tempfile.mkdtemp(dir=self.root))
+        (directory / "support.json").write_text(json.dumps(package, sort_keys=True), encoding="utf-8")
+        self.assertEqual(scan_artifacts(directory), ["item[000001]:unapproved_json_artifact_schema"])
+
     def _cancel_correction(self) -> None:  # no command cancels a correction; only a raw store edit can
         with closing(sqlite3.connect(self.db)) as connection, connection:
             for table in ("actions", "action_outbox"):
@@ -180,24 +186,21 @@ class FinancialMirrorTests(unittest.TestCase):
         )
         self.assertEqual(explanation["decision_package"]["current_action"]["status"], "READY")
         support = current["corporate_support"]
-        self.assertEqual(
-            set(support),
-            {
-                "contract",
-                "status",
-                "component",
-                "artifact",
-                "failure_stage",
-                "error_class",
-                "reproduction",
+        self.assertEqual(support, {
+            "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v2", "status": "CURRENT", "component": "FINANCIAL_CORRECTION",
+            "software_version": "NONE",
+            "rule_version": {key: explanation["decision_package"]["control_pack"][key] for key in ("pack_id", "version", "digest")},
+            "adapter_versions": {"population": "RR/FINANCIAL/POPULATION-MANIFEST/v1", "trust_graph_source_profile": "NONE"},
+            "artifact": {
+                "contract": financial_engine.CORRECTION_TRANSITION_OPERATION, "version": 1,
+                "sha256": financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper(),
             },
-        )
-        self.assertEqual(support["status"], "CURRENT")
-        self.assertEqual(
-            support["artifact"]["sha256"],
-            financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper(),
-        )
-        support_json = json.dumps(support, sort_keys=True)
+            "failure_stage": "NONE", "error_class": "NONE", "affected_work": {"count": 0, "ids": []},
+            "reproduction": financial_engine.CORRECTION_TRANSITION_REPRODUCTION,
+        })
+        self._assert_privacy_clean(support)
+        # the fictional reproduction is the published vector's case (fixture ids), never this record
+        support_json = json.dumps({**support, "reproduction": None}, sort_keys=True)
         for private_value in (
             H_ITEM_ID,
             "action:correction:h",
@@ -215,7 +218,9 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(self._followup(), ("REVIEW_REQUIRED", []))
         drained = self.mirror.drain_correction_followups(limit=1)
         self.assertEqual(drained["count"], 1)
-        self.assertEqual(drained["items"][0]["corporate_support"]["error_class"], "UNSUPPORTED_DEPENDENCY")
+        review = drained["items"][0]["corporate_support"]
+        self.assertEqual((review["error_class"], review["affected_work"]), ("UNSUPPORTED_DEPENDENCY", {"count": 1, "ids": [drained["items"][0]["source_event_sequence"]]}))
+        self._assert_privacy_clean(review)
         self.assertFalse(drained["has_more"])
         self.assertEqual(drained["skipped"], {"count": 0, "reasons": {}})
 
@@ -238,6 +243,41 @@ class FinancialMirrorTests(unittest.TestCase):
             item_id=H_ITEM_ID, claim_id="claim:offset:h2", amount_cents=1, evidence_id="evidence:offset:claim:h2", deadline_ms=1_774_915_200_000,
         )
         self.assertEqual(self._followup(), ("REOPENED", [f"COLLECTION(OFFSET_EVIDENCE, {H_ITEM_ID})"]))
+        support = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")["corporate_support"]
+        self.assertEqual((support["error_class"], support["affected_work"]["count"]), ("STALE_DEPENDENCY", 1))
+        self._assert_privacy_clean(support)
+
+    def test_mirror_refuses_a_support_package_that_is_not_the_approved_v2_shape(self) -> None:
+        self._prepare_action()
+        good = json.loads(json.dumps(self.store.correction_followup_outputs(H_ITEM_ID, "action:correction:h")))
+        for name, edit in {
+            "software version": lambda s: s.update(software_version="abc123"),
+            "missing rule version": lambda s: s.pop("rule_version"),
+            "old contract": lambda s: s.update(contract="RR/FINANCIAL/CORPORATE-SUPPORT/v1"),
+            "another case": lambda s: s["reproduction"].update(case_id="case:other"),
+            "no reproduction for the pinned engine": lambda s: s.update(reproduction="NONE"),
+            "false is not a count of zero": lambda s: s["affected_work"].update(count=False),
+        }.items():
+            with self.subTest(name):
+                bad = json.loads(json.dumps(good))
+                edit(bad["corporate_support"])
+                with mock.patch.object(self.store, "correction_followup_outputs", return_value=bad):
+                    with self.assertRaisesRegex(FinancialMirrorContinuityError, "corporate_support_allowlist"):
+                        self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+
+    def test_a_failed_restore_gives_a_support_package_holding_only_its_fixed_failure_code(self) -> None:
+        with self.assertRaises(FinancialMirrorContinuityError) as mirror_failure:
+            self.mirror.restore_continuity(self.mirror.export_continuity(), self.db)
+        with self.assertRaises(owner.FinancialContinuityError) as owner_failure:
+            self.mirror.restore_continuity(b"{}", self.root / "not-a-package.sqlite")
+        for error, code in (
+            (mirror_failure.exception, "continuity_source_overwrite"), (owner_failure.exception, "continuity_package_shape"),
+            (ValueError("continuity_x member-name-private"), "UNCLASSIFIED"), (RuntimeError("continuity_Bad"), "UNCLASSIFIED"),
+        ):
+            support = FinancialMirror.continuity_restore_support(error)
+            self.assertEqual((support["status"], support["component"], support["failure_stage"], support["error_class"]), ("FAILED", "CONTINUITY", "RESTORE", code))
+            self.assertNotIn("private", json.dumps(support))
+            self._assert_privacy_clean(support)
 
     def test_a_resent_payment_confirmation_keeps_the_correction_closed(self) -> None:
         self._prepare_action()

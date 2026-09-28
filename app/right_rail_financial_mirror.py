@@ -14,10 +14,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import threading
 from collections.abc import Mapping
 from typing import Any, Final
 
+from app import right_rail_financial_engine as engine
 from app.right_rail_financial_owner import (
     FinancialContinuityError,
     FinancialDispatchError,
@@ -191,8 +193,9 @@ _FOLLOWUP_VIEW: Final = _fields(
 _FOLLOWUP: Final = _fields(
     "followup_status", "work_id", "source_event_sequence", mirror_explanation=_FOLLOWUP_VIEW, state_report=_FOLLOWUP_VIEW,
     corporate_support=_fields(
-        "contract", "status", "component", "failure_stage", "error_class", artifact=_ARTIFACT,
-        reproduction=_fields("scenario", "real_data"),
+        "contract", "status", "component", "software_version", "failure_stage", "error_class", artifact=_ARTIFACT,
+        rule_version=_PACK_REF, adapter_versions=_fields("population", "trust_graph_source_profile"),
+        affected_work=_fields("count", "ids"), reproduction=_fields("vector_file_digest", "case_id"),
     ),
 )
 _EVENT: Final = _fields(
@@ -293,6 +296,18 @@ def _safe_value(value: Any) -> Any:
     if value is None or type(value) in {str, int, float, bool}:
         return value
     _fail(FinancialMirrorContinuityError, "unsafe_owner_value")
+
+
+def _validated_support(support: Any, **expected: Any) -> dict[str, Any]:
+    """CORPORATE-SUPPORT/v2 must equal the approved shape exactly (Article IV.2); the defaults are the package with no work."""
+    approved = {
+        "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v2", "software_version": "NONE", "rule_version": "NONE", "artifact": None,
+        "adapter_versions": {"population": "RR/FINANCIAL/POPULATION-MANIFEST/v1", "trust_graph_source_profile": "NONE"},
+        "affected_work": {"count": 0, "ids": []}, "reproduction": "NONE", **expected,
+    }
+    if json.dumps(support, sort_keys=True) != json.dumps(approved, sort_keys=True):  # JSON: 1 is not True
+        _fail(FinancialMirrorContinuityError, "corporate_support_allowlist")
+    return support
 
 
 def _project(value: Any, table: Any) -> Any:
@@ -1039,36 +1054,29 @@ class FinancialMirror:
         ):
             _fail(FinancialMirrorContinuityError, "correction_followup_projection")
         support = result["corporate_support"]
-        if type(support) is not dict or set(support) != {
-            "contract", "status", "component", "artifact", "failure_stage", "error_class", "reproduction",
-        }:
-            _fail(FinancialMirrorContinuityError, "corporate_support_allowlist")
-        expected_failure = {
-            "CURRENT": ("NONE", "NONE"),
-            "REOPENED": ("FOLLOWUP_RECONCILIATION", "STALE_DEPENDENCY"),
-            "REVIEW_REQUIRED": ("FOLLOWUP_RECONCILIATION", "UNSUPPORTED_DEPENDENCY"),
-        }[status]
-        artifact = support["artifact"]
-        if artifact is not None and (
-            type(artifact) is not dict
-            or set(artifact) != {"contract", "version", "sha256"}
-            or type(artifact["contract"]) is not str
-            or type(artifact["version"]) is not int
-            or artifact["version"] < 1
-            or type(artifact["sha256"]) is not str
-            or len(artifact["sha256"]) != 64
-            or any(character not in "0123456789ABCDEF" for character in artifact["sha256"])
-        ):
+        artifact = support.get("artifact") if type(support) is dict else None
+        # the one engine contract, version 1 and a SHA-256 in upper hex
+        if artifact is not None and not re.fullmatch(rf'\{{"contract":"{engine.CORRECTION_TRANSITION_OPERATION}","sha256":"[0-9A-F]{{64}}","version":1\}}', json.dumps(artifact, sort_keys=True, separators=(",", ":"))):
             _fail(FinancialMirrorContinuityError, "corporate_support_artifact")
-        if (
-            support["contract"] != "RR/FINANCIAL/CORPORATE-SUPPORT/v1"
-            or support["status"] != status
-            or support["component"] != "FINANCIAL_CORRECTION"
-            or (support["failure_stage"], support["error_class"]) != expected_failure
-            or support["reproduction"] != {"scenario": "SYNTHETIC_CORRECTION", "real_data": False}
-        ):
-            _fail(FinancialMirrorContinuityError, "corporate_support_allowlist")
+        stage, error_class = {"CURRENT": ("NONE", "NONE"), "REOPENED": ("FOLLOWUP_RECONCILIATION", "STALE_DEPENDENCY"),
+                              "REVIEW_REQUIRED": ("FOLLOWUP_RECONCILIATION", "UNSUPPORTED_DEPENDENCY")}[status]
+        _validated_support(
+            support, status=status, component="FINANCIAL_CORRECTION", artifact=artifact, failure_stage=stage, error_class=error_class,
+            rule_version={key: (explanation["decision_package"].get("control_pack") or {}).get(key) for key in _PACK_REF},
+            affected_work={"count": int(status != "CURRENT"), "ids": [] if status == "CURRENT" else [result["source_event_sequence"]]},
+            reproduction=engine.CORRECTION_TRANSITION_REPRODUCTION
+            if artifact and artifact["sha256"] == engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper() else "NONE",
+        )
         return result
+
+    @staticmethod
+    def continuity_restore_support(error: BaseException) -> dict[str, Any]:
+        """Support package for a failed restore: the Owner's fixed failure code, re-checked, never other text."""
+        fixed = isinstance(error, RuntimeError) and re.fullmatch(r"continuity_[a-z_]{1,48}(:[a-z-]{1,32})?", str(error))
+        return _validated_support(
+            FinancialOwner.continuity_restore_support(error), status="FAILED", component="CONTINUITY",
+            failure_stage="RESTORE", error_class=str(error) if fixed else "UNCLASSIFIED",
+        )
 
     def correction_followup_outputs(self, item_id: str, action_id: str) -> dict[str, Any]:
         result = self._validated_correction_followup_output(
@@ -1461,14 +1469,6 @@ class FinancialMirror:
         self.validate_owner_continuity_package(package)
         return package
 
-    def _validate_restore_binding(self, package_bytes: bytes) -> None:
-        # Scope and authority were already bound by validate_owner_continuity_package.
-        package = FinancialOwner.validate_continuity_package(package_bytes)
-        if package.get("schema") != self.owner.continuity_schema or package.get("version") != self.owner.schema_version:
-            _fail(FinancialMirrorContinuityError, "continuity_package_schema")
-        if package.get("dispatch_enabled") is not False or package.get("egress_enabled") is not False:
-            _fail(FinancialMirrorContinuityError, "continuity_nonactivating_boundary")
-
     def _restore_continuity(self, package_bytes: bytes, recovered_path: Path, *, restore_mode: str) -> "FinancialMirror":
         """Validate and restore into a new independently verified non-live owner."""
 
@@ -1477,7 +1477,6 @@ class FinancialMirror:
         if not isinstance(recovered_path, Path):
             _fail(FinancialMirrorContinuityError, "continuity_destination")
         self.validate_owner_continuity_package(package_bytes)
-        self._validate_restore_binding(package_bytes)
         source_name = _normalized_path(self.owner.path)
         destination_name = _normalized_path(recovered_path)
         if source_name == destination_name:
