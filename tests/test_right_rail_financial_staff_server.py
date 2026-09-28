@@ -21,12 +21,14 @@ from unittest.mock import patch
 from app import right_rail_financial_owner_independent as independent
 from app import right_rail_financial_engine as financial_engine
 from app.right_rail_financial_mirror import (
+    FinancialMirror,
     FinancialMirrorContinuityError,
     FinancialMirrorDispatchError,
 )
 from app.right_rail_financial_owner import (
     FinancialBusyError,
     FinancialConflictError,
+    FinancialContinuityError,
     FinancialDispatchError,
     FinancialInputError,
     FinancialOwner,
@@ -363,6 +365,25 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertFalse(restored["workspace"]["nonactivation"]["activation"])
         self.assertIsNone(restored["workspace"]["nonactivation"]["proof_suite_id"])
         self.assertEqual(restored["workspace"]["h"]["obligation"]["shortfall_cents"], 0)
+
+    def test_a_failed_test_restore_returns_a_valid_support_package_over_http(self) -> None:
+        workflow = self._workflow()
+        port = self._serve_workflow(workflow).server_address[1]
+        host = f"127.0.0.1:{port}"
+        failure = FinancialContinuityError("continuity_history_head")
+        with patch.object(FinancialOwner, "restore_continuity", side_effect=failure):
+            with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as connection:
+                connection.request("POST", "/api/continuity/restore-test", body=json.dumps(self._review_body(workflow)),
+                                   headers={"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json"})
+                response = connection.getresponse()
+                body = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(response.status, 409)
+        self.assertEqual(body["error"]["code"], "continuity_history_head")
+        support = body["error"]["corporate_support"]
+        self.assertEqual(support, FinancialMirror.continuity_restore_support(failure))
+        self.assertEqual((support["contract"], support["status"], support["failure_stage"], support["error_class"]),
+                         ("RR/FINANCIAL/CORPORATE-SUPPORT/v2", "FAILED", "RESTORE", "continuity_history_head"))
+        self.assertEqual((support["rule_version"], support["adapter_versions"]["population"], support["work_ref_count"]), ("NONE", "NONE", 0))
 
     def test_gate_state_unchanged_is_measured_before_and_after_the_attempt(self) -> None:
         workflow = self._workflow()

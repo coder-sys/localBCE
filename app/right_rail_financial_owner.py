@@ -401,19 +401,20 @@ _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
 }
 
 
-def _corporate_support(
-    status: str, component: str, failure_stage: str, error_class: str, *, artifact: dict[str, Any] | None = None,
-    rule_version: dict[str, Any] | str = "NONE", affected_ids: list[int] | None = None, reproduction: dict[str, str] | str = "NONE",
-) -> dict[str, Any]:
-    """RR/FINANCIAL/CORPORATE-SUPPORT/v2, built only from approved fields, never a redacted dump. A field without a
-    trustworthy existing source (software version, Trust Graph source profile) is the literal NONE."""
-    return {
-        "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v2", "status": status, "component": component,
-        "software_version": "NONE", "rule_version": rule_version,
-        "adapter_versions": {"population": _POPULATION_MANIFEST_CONTRACT, "trust_graph_source_profile": "NONE"},
-        "artifact": artifact, "failure_stage": failure_stage, "error_class": error_class,
-        "affected_work": {"count": len(affected_ids or ()), "ids": list(affected_ids or ())}, "reproduction": reproduction,
-    }
+# Every code a Continuity restore can raise (FinancialError here, FinancialMirrorError in the Mirror); a support package
+# names one of these or UNCLASSIFIED, never other text. A test keeps this closed set equal to the codes in the source.
+CONTINUITY_ERROR_CODES: Final[tuple[str, ...]] = tuple("continuity_" + code for code in (
+    "authority_digest authority_epoch authority_id authority_mismatch columns destination destination_claim dispatch_boundary "
+    "expected_scope_required export_type hex history_head identity:shape identity:id identity:schema identity:provenance "
+    "identity:mode identity:owner identity:restore-live identity:restore-owner identity:anchor-sequence identity:anchor_head "
+    "identity:genesis_head identity:source_package_digest identity:identity_digest identity:digest identity_anchor "
+    "identity_binding identity_cardinality identity_genesis identity_history_anchor identity_id identity_rows meta_binding "
+    "meta_columns meta_rows owner_identity package_authority package_binding package_canonical package_digest package_epoch "
+    "package_json package_row package_rows package_schema package_scope package_sequence package_shape package_size "
+    "package_tables package_type restore_cleanup restore_integrity restore_mode restore_owner row_cap schema_columns "
+    "scope_currency scope_deployment_id scope_mismatch scope_period_id scope_program_id scope_state_id second_writer "
+    "shadow_boundary source source_overwrite test_boundary trusted_authority_required value"
+).split())
 
 
 def _known_correction_engine(sha256: object) -> bool:
@@ -6113,13 +6114,16 @@ class FinancialOwner:
             "REOPENED": ("FOLLOWUP_RECONCILIATION", "STALE_DEPENDENCY"),
             "REVIEW_REQUIRED": ("FOLLOWUP_RECONCILIATION", "UNSUPPORTED_DEPENDENCY"),
         }[status]
-        support = _corporate_support(
-            status, "FINANCIAL_CORRECTION", failure_stage, error_class, artifact=artifact,
-            rule_version={key: package["control_pack"][key] for key in ("pack_id", "version", "digest")},
-            affected_ids=[] if status == "CURRENT" else [sequence],
-            reproduction=dict(financial_engine.CORRECTION_TRANSITION_REPRODUCTION)
+        pack = accepted_basis.get("control_pack") if type(accepted_basis) is dict else None
+        support = {
+            "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v2", "status": status, "component": "FINANCIAL_CORRECTION",
+            "software_version": "NONE",  # no commit or kit digest is bound to a running owner
+            "rule_version": {key: pack.get(key) for key in ("pack_id", "version", "digest")} if type(pack) is dict else "NONE",
+            "adapter_versions": {"population": _POPULATION_MANIFEST_CONTRACT, "trust_graph_source_profile": "NONE"},
+            "artifact": artifact, "failure_stage": failure_stage, "error_class": error_class, "work_ref_count": int(status != "CURRENT"),
+            "reproduction": dict(financial_engine.CORRECTION_TRANSITION_REPRODUCTION)
             if artifact and artifact["sha256"] == _hex(financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256) else "NONE",
-        )
+        }
         result = {
             "followup_status": status,
             "work_id": action_id,
@@ -6946,14 +6950,6 @@ class FinancialOwner:
         connection.execute("DELETE FROM temp.rr_captured_rows")
         if self._seal_segment(connection, force=True) != bytes.fromhex(segment["segment_digest"]):
             _fail(FinancialContinuityError, "history_replay_mismatch")
-
-    @staticmethod
-    def continuity_restore_support(error: BaseException) -> dict[str, Any]:
-        """Support package for a failed Continuity restore: only its fixed failure code, never other text."""
-
-        code = str(error)
-        fixed = isinstance(error, RuntimeError) and re.fullmatch(r"continuity_[a-z_]{1,48}(:[a-z-]{1,32})?", code)
-        return _corporate_support("FAILED", "CONTINUITY", "RESTORE", code if fixed else "UNCLASSIFIED")
 
     @classmethod
     def restore_continuity(

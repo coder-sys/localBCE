@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from contextlib import ExitStack, closing, redirect_stderr, redirect_stdout
 import dataclasses
+import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -189,13 +191,13 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(support, {
             "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v2", "status": "CURRENT", "component": "FINANCIAL_CORRECTION",
             "software_version": "NONE",
-            "rule_version": {key: explanation["decision_package"]["control_pack"][key] for key in ("pack_id", "version", "digest")},
+            "rule_version": {key: explanation["accepted_basis"]["control_pack"][key] for key in ("pack_id", "version", "digest")},
             "adapter_versions": {"population": "RR/FINANCIAL/POPULATION-MANIFEST/v1", "trust_graph_source_profile": "NONE"},
             "artifact": {
                 "contract": financial_engine.CORRECTION_TRANSITION_OPERATION, "version": 1,
                 "sha256": financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper(),
             },
-            "failure_stage": "NONE", "error_class": "NONE", "affected_work": {"count": 0, "ids": []},
+            "failure_stage": "NONE", "error_class": "NONE", "work_ref_count": 0,
             "reproduction": financial_engine.CORRECTION_TRANSITION_REPRODUCTION,
         })
         self._assert_privacy_clean(support)
@@ -219,7 +221,8 @@ class FinancialMirrorTests(unittest.TestCase):
         drained = self.mirror.drain_correction_followups(limit=1)
         self.assertEqual(drained["count"], 1)
         review = drained["items"][0]["corporate_support"]
-        self.assertEqual((review["error_class"], review["affected_work"]), ("UNSUPPORTED_DEPENDENCY", {"count": 1, "ids": [drained["items"][0]["source_event_sequence"]]}))
+        self.assertEqual((review["error_class"], review["work_ref_count"]), ("UNSUPPORTED_DEPENDENCY", 1))
+        self.assertNotIn(str(drained["items"][0]["source_event_sequence"]), json.dumps(review))  # no store counter leaves the owner
         self._assert_privacy_clean(review)
         self.assertFalse(drained["has_more"])
         self.assertEqual(drained["skipped"], {"count": 0, "reasons": {}})
@@ -244,7 +247,7 @@ class FinancialMirrorTests(unittest.TestCase):
         )
         self.assertEqual(self._followup(), ("REOPENED", [f"COLLECTION(OFFSET_EVIDENCE, {H_ITEM_ID})"]))
         support = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")["corporate_support"]
-        self.assertEqual((support["error_class"], support["affected_work"]["count"]), ("STALE_DEPENDENCY", 1))
+        self.assertEqual((support["error_class"], support["work_ref_count"]), ("STALE_DEPENDENCY", 1))
         self._assert_privacy_clean(support)
 
     def test_mirror_refuses_a_support_package_that_is_not_the_approved_v2_shape(self) -> None:
@@ -256,7 +259,13 @@ class FinancialMirrorTests(unittest.TestCase):
             "old contract": lambda s: s.update(contract="RR/FINANCIAL/CORPORATE-SUPPORT/v1"),
             "another case": lambda s: s["reproduction"].update(case_id="case:other"),
             "no reproduction for the pinned engine": lambda s: s.update(reproduction="NONE"),
-            "false is not a count of zero": lambda s: s["affected_work"].update(count=False),
+            "false is not a count of zero": lambda s: s.update(work_ref_count=False),
+            "an old affected_work with ids": lambda s: s.update(affected_work={"count": 0, "ids": [1]}),
+            "an extra top-level key": lambda s: s.update(note="member-private"),
+            "an extra reproduction key": lambda s: s["reproduction"].update(extra="x"),
+            "an extra artifact key": lambda s: s["artifact"].update(extra="x"),
+            "an extra rule version key": lambda s: s["rule_version"].update(extra="x"),
+            "an extra adapter key": lambda s: s["adapter_versions"].update(extra="x"),
         }.items():
             with self.subTest(name):
                 bad = json.loads(json.dumps(good))
@@ -273,11 +282,38 @@ class FinancialMirrorTests(unittest.TestCase):
         for error, code in (
             (mirror_failure.exception, "continuity_source_overwrite"), (owner_failure.exception, "continuity_package_shape"),
             (ValueError("continuity_x member-name-private"), "UNCLASSIFIED"), (RuntimeError("continuity_Bad"), "UNCLASSIFIED"),
+            (RuntimeError("continuity_history_head"), "UNCLASSIFIED"),  # a known code from a class that is not ours
+            (owner.FinancialContinuityError("continuity_new_unlisted_code"), "UNCLASSIFIED"),  # ours, but not in the closed tuple
+            (owner.FinancialContinuityError("continuity_identity:member-name"), "UNCLASSIFIED"),
         ):
             support = FinancialMirror.continuity_restore_support(error)
+            self.assertEqual((support["rule_version"], support["adapter_versions"]["population"]), ("NONE", "NONE"))  # nothing was read
+            self.assertEqual(support["work_ref_count"], 0)
             self.assertEqual((support["status"], support["component"], support["failure_stage"], support["error_class"]), ("FAILED", "CONTINUITY", "RESTORE", code))
             self.assertNotIn("private", json.dumps(support))
             self._assert_privacy_clean(support)
+
+    def test_a_failed_restore_carries_its_support_package_on_the_raised_error(self) -> None:
+        with self.assertRaises(FinancialMirrorContinuityError) as failure:
+            self.mirror.restore_continuity(self.mirror.export_continuity(), self.db)
+        self.assertEqual(failure.exception.corporate_support, FinancialMirror.continuity_restore_support(failure.exception))
+        self.assertEqual(failure.exception.corporate_support["error_class"], "continuity_source_overwrite")
+
+    def test_the_restore_code_list_holds_every_code_the_restore_path_can_raise(self) -> None:
+        root = Path(financial_engine.__file__).parent
+        found = set()
+        for name in ("right_rail_financial_owner.py", "right_rail_financial_mirror.py"):
+            found |= set(re.findall(r'(?:_fail\(\w*Continuity\w*,|_id\(\w*,)\s*f?"(continuity_[a-z_]+)"', (root / name).read_text(encoding="utf-8")))
+        named = {"continuity_history_head", "continuity_package_digest", "continuity_shadow_boundary", "continuity_test_boundary"}
+        self.assertTrue(found)
+        self.assertEqual((found | named) - set(owner.CONTINUITY_ERROR_CODES), set())
+        self.assertEqual(len(set(owner.CONTINUITY_ERROR_CODES)), len(owner.CONTINUITY_ERROR_CODES))
+
+    def test_the_reproduction_names_a_case_in_the_pinned_vector_result(self) -> None:
+        vectors = Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
+        reproduction = financial_engine.CORRECTION_TRANSITION_REPRODUCTION
+        self.assertEqual(hashlib.sha256((vectors / "request.bin").read_bytes()).hexdigest().upper(), reproduction["vector_file_digest"])
+        self.assertIn(reproduction["case_id"].encode(), (vectors / "result.expected.bin").read_bytes())
 
     def test_a_resent_payment_confirmation_keeps_the_correction_closed(self) -> None:
         self._prepare_action()
@@ -985,7 +1021,8 @@ class FinancialMirrorTests(unittest.TestCase):
 
         def tag(value: object) -> object:
             if type(value) is dict:
-                return {**{key: tag(item) for key, item in value.items()}, marker: marker}
+                # the support package is refused, not projected, when it carries an extra key: its own test covers that
+                return {**{key: item if key == "corporate_support" else tag(item) for key, item in value.items()}, marker: marker}
             return [tag(item) for item in value] if type(value) is list else value
 
         def tagging(name: str) -> object:
