@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, closing, redirect_stderr, redirect_stdout
+import dataclasses
 import io
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -22,6 +24,7 @@ from app.right_rail_financial_mirror import (
 from tests.rightrail_financial_expected_cases import (
     CONTINUITY,
     CONTROL_PACK_V1,
+    CONTROL_PACK_V2,
     H_CASH_CENTS,
     H_ITEM_ID,
     H_OWED_CENTS,
@@ -154,6 +157,15 @@ class FinancialMirrorTests(unittest.TestCase):
             evaluation_result_digest=receipt["result_digest"],
         )
 
+    def _followup(self) -> tuple[str, list[str]]:
+        outputs = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        return outputs["followup_status"], outputs["state_report"]["changed_dependencies"]
+
+    def _cancel_correction(self) -> None:  # no command cancels a correction; only a raw store edit can
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            for table in ("actions", "action_outbox"):
+                connection.execute(f"UPDATE {table} SET status='CANCELLED' WHERE action_id='action:correction:h'")
+
     def test_correction_followup_outputs_resume_and_reopen_through_mirror(self) -> None:
         self._prepare_action()
 
@@ -194,15 +206,109 @@ class FinancialMirrorTests(unittest.TestCase):
         ):
             self.assertNotIn(private_value, support_json)
 
+        self.assertEqual(report["changed_dependencies"], [])
+        # A plain acknowledgment moves the head but no dependency value: the work stays closed.
         self.mirror.acknowledge_action("action:correction:h", "ack:correction:h:followup")
-        reopened = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
-        self.assertEqual(reopened["followup_status"], "REOPENED")
-        self.assertEqual(reopened["corporate_support"]["error_class"], "STALE_DEPENDENCY")
+        self.assertEqual(self._followup(), ("CURRENT", []))
+        # No command or event records a delivery rejection yet: a status no event explains needs review.
+        self._cancel_correction()
+        self.assertEqual(self._followup(), ("REVIEW_REQUIRED", []))
         drained = self.mirror.drain_correction_followups(limit=1)
         self.assertEqual(drained["count"], 1)
-        self.assertEqual(drained["items"][0]["followup_status"], "REOPENED")
+        self.assertEqual(drained["items"][0]["corporate_support"]["error_class"], "UNSUPPORTED_DEPENDENCY")
         self.assertFalse(drained["has_more"])
         self.assertEqual(drained["skipped"], {"count": 0, "reasons": {}})
+
+    def test_hospital_h_correction_reopens_only_when_its_offset_evidence_changes(self) -> None:
+        self._prepare_action()
+        other_item_id = next(item.item_id for item in PROGRAM_ITEMS if item.item_id != H_ITEM_ID)
+
+        self.store.record_support_evidence(item_id=other_item_id, evidence_id="evidence:support:other", common_origin_id="origin:support:other")
+        self.assertEqual(self._followup(), ("CURRENT", []))
+        # This owner is scoped to period 01: the period-02 pack cannot reach H at all ...
+        with self.assertRaisesRegex(owner.FinancialIntegrityError, "period_scope"):
+            self.store.publish_control_pack(_control_pack_from_fixture(CONTROL_PACK_V2))
+        # ... and a later period-01 pack touches RULE, but H stays bound to the pack it was decided under.
+        later_pack = dataclasses.replace(
+            _control_pack_from_fixture(CONTROL_PACK_V2), pack_id="control-pack:fixture-2026-01:v2", period_id=CONTROL_PACK_V1.scope.period_id,
+        )
+        self.assertEqual(self.store.publish_control_pack(later_pack)["status"], "PUBLISHED")
+        self.assertEqual(self._followup(), ("CURRENT", []))
+        self.store.record_offset_claim(
+            item_id=H_ITEM_ID, claim_id="claim:offset:h2", amount_cents=1, evidence_id="evidence:offset:claim:h2", deadline_ms=1_774_915_200_000,
+        )
+        self.assertEqual(self._followup(), ("REOPENED", [f"COLLECTION(OFFSET_EVIDENCE, {H_ITEM_ID})"]))
+
+    def test_a_resent_payment_confirmation_keeps_the_correction_closed(self) -> None:
+        self._prepare_action()
+
+        payment = {"item_id": H_ITEM_ID, "event_at_ms": 1_774_828_800_000}
+        resent = self.mirror.record_payment_evidence(
+            **payment, payment_id="payment:p1:resent", common_origin_id="origin:payment:p1",
+            amount_cents=H_CASH_CENTS, evidence_id="evidence:payment:p1:resent",
+        )
+        self.assertEqual(resent["status"], "DUPLICATE")
+        self.assertEqual(self._followup(), ("CURRENT", []))
+        self.mirror.record_payment_evidence(
+            **payment, payment_id="payment:p2", common_origin_id="origin:payment:p2", amount_cents=1, evidence_id="evidence:payment:p2",
+        )
+        self.assertEqual(self._followup(), ("REOPENED", [f"COLLECTION(PAYMENT_EVIDENCE, {H_ITEM_ID})"]))
+
+    def test_correction_followup_fails_closed_on_an_unknown_event_kind(self) -> None:
+        self._prepare_action()
+        other_item_id = next(item.item_id for item in PROGRAM_ITEMS if item.item_id != H_ITEM_ID)
+        with mock.patch.dict(owner._FOLLOWUP_TOUCHES):
+            del owner._FOLLOWUP_TOUCHES["EVALUATION_RECORDED"]
+            self.store.evaluate_obligation(other_item_id)
+            outputs = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        self.assertEqual((outputs["followup_status"], outputs["state_report"]["changed_dependencies"]), ("REVIEW_REQUIRED", []))
+        self.assertEqual(outputs["corporate_support"]["error_class"], "UNSUPPORTED_DEPENDENCY")
+        self.assertEqual(self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")["followup_status"], "CURRENT")
+
+    def test_each_later_fact_about_h_reopens_its_correction_and_nothing_else_does(self) -> None:
+        payment = {"item_id": H_ITEM_ID, "event_at_ms": 1_774_828_800_000}
+        cases = {
+            "the payment the correction requested": (lambda: self.store.record_payment_evidence(
+                **payment, payment_id="payment:own", common_origin_id="origin:payment:own", amount_cents=1,
+                evidence_id="evidence:payment:own", pays_action_id="action:correction:h"), "CURRENT", None),
+            "a same-inputs re-evaluation": (lambda: self.store.evaluate_obligation(H_ITEM_ID), "CURRENT", None),
+            "a reversal of the bound payment": (lambda: self.store.reverse_payment(
+                item_id=H_ITEM_ID, payment_id="payment:p1", evidence_id="evidence:reversal:p1"), "REOPENED", "PAYMENT_EVIDENCE"),
+            "a conflicting amount for the bound origin": (lambda: self.store.record_payment_evidence(
+                **payment, payment_id="payment:p1:conflict", common_origin_id="origin:payment:p1", amount_cents=H_CASH_CENTS - 1,
+                evidence_id="evidence:payment:p1:conflict"), "REOPENED", "PAYMENT_EVIDENCE"),
+            "new support evidence on H": (lambda: self.store.record_support_evidence(
+                item_id=H_ITEM_ID, evidence_id="evidence:support:h", common_origin_id="origin:support:h"), "REOPENED", "SUPPORT_EVIDENCE"),
+            "a cancellation no event explains": (self._cancel_correction, "REVIEW_REQUIRED", None),
+        }
+        for name, (act, status, family) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                self._prepare_action()
+                act()
+                self.assertEqual(self._followup(), (status, [f"COLLECTION({family}, {H_ITEM_ID})"] if family else []))
+
+    def test_mirror_refuses_an_inconsistent_changed_dependencies_list(self) -> None:
+        self._prepare_action()
+        current = self.store.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        self.mirror._validated_correction_followup_output(current)
+        key = f"COLLECTION(PAYMENT_EVIDENCE, {H_ITEM_ID})"
+        for status, changed, report_changed in (
+            ("REOPENED", [key, "A"], None),  # unsorted
+            ("REOPENED", [key, key], None),  # repeated
+            ("REOPENED", key, None),  # not a list
+            ("REOPENED", [1], None),  # not strings
+            ("REOPENED", [], None),  # REOPENED names what moved
+            ("CURRENT", [key], None),  # CURRENT names nothing
+            ("REOPENED", [key], []),  # the explanation and the report disagree
+        ):
+            with self.subTest(status=status, changed=changed, report_changed=report_changed):
+                raw = json.loads(json.dumps(current))
+                raw["followup_status"] = raw["mirror_explanation"]["followup_status"] = raw["state_report"]["followup_status"] = status
+                raw["mirror_explanation"]["changed_dependencies"] = changed
+                raw["state_report"]["changed_dependencies"] = changed if report_changed is None else report_changed
+                with self.assertRaisesRegex(FinancialMirrorContinuityError, "^correction_followup_projection$"):
+                    self.mirror._validated_correction_followup_output(raw)
 
     def test_queries_are_bounded_and_return_references_without_raw_payloads(self) -> None:
         first = self.mirror.list_obligations(status="ALL", limit=5, offset=0)

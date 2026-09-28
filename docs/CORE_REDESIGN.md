@@ -105,6 +105,38 @@ the correction it pays; an acknowledgment still has zero cash effect.
 - **Scope/duration:** provenance text only; no pin, digest, vector or gate changes.
 - **Claims withdrawn:** r80/r84/r85/r88 are not evidence for `86390ab`.
 
+### Correction follow-up changed dependencies (2026-09-28, XI.2 record)
+
+- **Predicate:** `CORRECTION-EXPLANATION/v1` and `CORRECTION-REPORT/v1` gain a
+  required `changed_dependencies`: sorted, unique keys such as
+  `COLLECTION(OFFSET_EVIDENCE, <item>)`. Mirror allowlists and checks it.
+- **Invariant / failure:** REOPENED iff a later event touches a key
+  (`_FOLLOWUP_TOUCHES`) and re-reading it at head gives a new value. An unknown
+  event kind, stored family or engine, or a moved key no event explains (a
+  cancelled action: no event records a delivery rejection yet) is
+  REVIEW_REQUIRED. An acknowledgment, the payment the correction requested
+  (`pays_action_id`), and a re-sent confirmation (DUPLICATE: no payment or
+  conflict of its own, same origin and amount as the named payment) do not
+  reopen; a new payment, reversal, conflict, support or offset evidence does.
+- **Evidence:** G2 Mirror and acceptance tests, including a forged DUPLICATE
+  label over a new payment, run through the guard.
+- **Disposition:** a derived field added to both v1 contracts without a version
+  bump, acceptable only because the output is derived, synthetic and has no
+  outside consumer. `OBLIGATION_REVISION` and `CURRENT_EVALUATION_RECEIPT` stay
+  in the stored `dependency_families` but are retired. No store, event, digest
+  or Lean change.
+- **Replacement control:** the independent checker verifies the stored basis at
+  open and refuses a DUPLICATE label that does not bind as above. Mirror refuses
+  the field unless it is sorted, unique, equal in both views, and non-empty
+  exactly when REOPENED.
+- **Scope / follow-ups:** financial correction follow-up. REPORT evidence has no
+  link to a correction, so the correction's own report still reopens it. The
+  status scan is O(corrections x events).
+- **Claims withdrawn:** reopening on any change to the obligation revision;
+  evaluation id, revision, result or receipt digests; case id or status; or
+  action identity, kind, status, reference or attempt. An acknowledgment no
+  longer reopens.
+
 The core is roughly 2.5x larger than the invariants need. Root cause: state lives in
 ~20 editable tables with history as a side log, so every consumer (checker, successor,
 continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:

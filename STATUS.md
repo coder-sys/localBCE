@@ -20,6 +20,9 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification
 
+- G2 dependency check (branch `dep-check`): correction follow-up reopens only when a derived dependency key moves, and names it in `changed_dependencies` (XI.2 record in `docs/CORE_REDESIGN.md`). Acknowledgments, the correction's own requested payment and DUPLICATE confirmations do not reopen; new evidence does, and a cancellation no event explains needs review. rr-review H1: the checker refuses a forged DUPLICATE label (`duplicate-evidence:binding`).
+  Guarded `g2dep-r3-a1-L2` (guard v6, same suites): SUMMARY run=184 passed=184 failed=0 errors=0 skipped=0, zero floor kills.
+  Guarded `g2dep-r2-a5-L3` (guard v6, floor 2,029,372,048): SUMMARY run=181 passed=181 failed=0 errors=0 skipped=0, zero floor kills. It covered the Mirror, acceptance, independent, staff-server, size-budget and constitution-invariant suites. The earlier `g2dep-r1-a7` (v4) ran 181: 180 passed, 1 error in the lead's resend test, since fixed.
 - Lean build/proof/kit phase: r77 freshly reproduced the current pinned engine
   with a canonical 46-file source manifest; both fixed vectors matched. r68 built all six Lake
   targets (87 jobs); r69 passed 30 evaluator, 18 decision-package, 42 correction

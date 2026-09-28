@@ -136,11 +136,39 @@ _CORRECTION_FOLLOWUP_DEPENDENCIES: Final[tuple[str, ...]] = (
     "CURRENT_DETERMINATION",
     "ACTION_DELIVERY",
 )
-_CORRECTION_FOLLOWUP_READ_OBSERVATIONS: Final[tuple[str, ...]] = (
-    "action_id",
-    "determination_id",
-    "evaluation_consumed",
-)
+# Which derived dependency families of a committed correction each event kind can move.
+# A kind missing here makes follow-up status REVIEW_REQUIRED, never CURRENT.
+_FOLLOWUP_TOUCHES: Final[dict[str, tuple[str, ...]]] = {
+    "CONTROL_PACK_PUBLISHED": ("RULE",),
+    "EVALUATION_RECORDED": ("AUTHORITY",),
+    "SUPPORT_EVIDENCE_RECORDED": ("AUTHORITY", "SUPPORT_EVIDENCE"),
+    "PAYMENT_RECEIVED": ("AUTHORITY", "PAYMENT_EVIDENCE"),
+    "PAYMENT_REVERSED": ("AUTHORITY", "PAYMENT_EVIDENCE"),
+    "PAYMENT_CONFLICT_VISIBLE": ("AUTHORITY", "PAYMENT_EVIDENCE"),
+    "PAYMENT_DUPLICATE_EVIDENCE": (),  # repeats an existing payment (the checker binds it); money is unchanged
+    "OFFSET_CLAIMED": ("AUTHORITY", "OFFSET_EVIDENCE"),
+    "OFFSET_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
+    "OFFSET_REJECTED_CORRECTION_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
+    "ACTION_ACKNOWLEDGED": ("AUTHORITY",),  # an acknowledgment never reopens; nothing records a rejection
+    "REPORTING_EVIDENCE_RECORDED": ("AUTHORITY", "REPORT_EVIDENCE"),
+    "REPORTING_CORRECTION_RECORDED": ("AUTHORITY", "REPORT_EVIDENCE"),
+    **dict.fromkeys(
+        (
+            "POPULATION_MANIFEST_REGISTERED", "POPULATION_MANIFEST_SUPERSEDED", "POPULATION_STAGED",
+            "POPULATION_IMPORT_OPENED", "POPULATION_SOURCE_COMPLETED", "POPULATION_VALIDATED",
+            "POPULATION_PUBLISHED", "FUNDING_RECEIPT_RECORDED", "FUNDING_RECEIPT_SUPERSEDED",
+        ),
+        (),
+    ),
+}
+_EVIDENCE_COLLECTION: Final[dict[str, str]] = {
+    "SUPPORT": "SUPPORT_EVIDENCE",
+    "PAYMENT_CONFIRMATION": "PAYMENT_EVIDENCE",
+    "PAYMENT_REVERSAL": "PAYMENT_EVIDENCE",
+    "OFFSET_CLAIM": "OFFSET_EVIDENCE",
+    "REPORT": "REPORT_EVIDENCE",
+    "REPORT_CORRECTION": "REPORT_EVIDENCE",
+}
 _MODES: Final[frozenset[str]] = frozenset({"LIVE", "SHADOW", "TEST"})
 _TEST_OWNER_ID: Final[str] = "continuity-test-owner-v1"
 _SHADOW_OWNER_ID: Final[str] = "continuity-shadow-owner-v1"
@@ -5936,275 +5964,140 @@ class FinancialOwner:
                 _fail(FinancialIntegrityError, "decision_package_size")
             return package
 
-    def _correction_followup_event(self, obligation_id: str, action_id: str) -> dict[str, Any]:
-        found: dict[str, Any] | None = None
-        with self._read_snapshot() as connection:
-            rows = connection.execute(
-                "SELECT event_sequence,payload_json,previous_head FROM financial_events "
-                "WHERE aggregate_type='OBLIGATION' AND aggregate_id=? "
-                "AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence DESC",
-                (obligation_id,),
-            )
-            for row in rows:
-                payload = _stored_object(row["payload_json"], "correction_followup_event")
-                if payload.get("action_id") != action_id:
-                    continue
-                if found is not None:
-                    _fail(FinancialIntegrityError, "correction_followup_duplicate")
-                followup = payload.get("correction_followup")
-                found = {
-                    "event_sequence": int(row["event_sequence"]),
-                    "previous_head": _hex(bytes(row["previous_head"])),
-                    "payload": payload,
-                    "followup": followup if type(followup) is dict else None,
-                }
-        if found is None:
-            _fail(FinancialIntegrityError, "correction_followup_missing")
-        return found
-
     def _correction_followup_status(
         self,
-        event_record: Mapping[str, Any],
+        connection: sqlite3.Connection,
         package: Mapping[str, Any],
-    ) -> str:
-        followup = event_record.get("followup")
-        if type(followup) is not dict:
-            return "REVIEW_REQUIRED"
-        expected_fields = {
-            "contract", "work_id", "determination_id", "source", "artifact", "control_pack",
-            "authority", "input_evaluation", "result_evaluation", "determination_digest",
-            "case_status", "action_status", "outbox_status", "supporting_evidence",
-            "dependency_families", "read_observations", "outputs",
-        }
-        if set(followup) != expected_fields or followup.get("contract") != _CORRECTION_FOLLOWUP_CONTRACT:
-            return "REVIEW_REQUIRED"
-        source = followup.get("source")
-        artifact = followup.get("artifact")
-        input_evaluation = followup.get("input_evaluation")
-        result_evaluation = followup.get("result_evaluation")
-        expected_pack = followup.get("control_pack")
-        expected_authority = followup.get("authority")
-        observations = followup.get("read_observations")
-        payload = event_record.get("payload")
-        event_sequence = event_record.get("event_sequence")
-        previous_head = event_record.get("previous_head")
-        if any(
-            type(value) is not dict
-            for value in (source, artifact, input_evaluation, result_evaluation, expected_pack, expected_authority, observations, payload)
-        ):
-            return "REVIEW_REQUIRED"
-        if (
-            set(source) != {"action_id", "outbox_action_id", "case_id", "resulting_evaluation_id", "event_sequence"}
-            or set(artifact) != {"contract", "version", "sha256"}
-            or set(input_evaluation) != {"evaluation_id", "revision", "result_digest", "receipt_digest"}
-            or set(result_evaluation) != {"evaluation_id", "revision", "result_digest", "receipt_digest"}
-            or set(expected_pack) != {"pack_id", "version", "digest"}
-            or set(expected_authority) != {"authority_id", "epoch", "digest"}
-            or set(observations) != set(_CORRECTION_FOLLOWUP_READ_OBSERVATIONS)
-            or followup.get("dependency_families") != list(_CORRECTION_FOLLOWUP_DEPENDENCIES)
-            or followup.get("outputs") != ["MIRROR_EXPLANATION", "STATE_REPORT", "CORPORATE_SUPPORT"]
-            or type(event_sequence) is not int
-            or not _is_upper_hex128(previous_head)
-        ):
-            return "REVIEW_REQUIRED"
-        from app import right_rail_financial_engine as financial_engine
+        item_id: str,
+        sequence: int,
+        followup: Any,
+        artifact: Any,
+    ) -> tuple[str, list[str]]:
+        """Derive which dependency keys of one committed correction moved, from its stored basis and later history.
 
-        is_digest = _is_upper_hex128
+        REOPENED iff a later event touches a key and re-reading that key at head gives a different value.
+        An unknown event kind, stored family or engine, or a moved key no later event explains, is REVIEW_REQUIRED.
+        """
 
-        supporting_evidence = followup.get("supporting_evidence")
-        if (
-            type(followup.get("work_id")) is not str
-            or type(source.get("action_id")) is not str
-            or type(source.get("case_id")) is not str
-            or type(source.get("resulting_evaluation_id")) is not str
-            or type(input_evaluation.get("evaluation_id")) is not str
-            or type(input_evaluation.get("revision")) is not int
-            or input_evaluation["revision"] < 0
-            or not is_digest(input_evaluation.get("result_digest"))
-            or not is_digest(input_evaluation.get("receipt_digest"))
-            or type(result_evaluation.get("revision")) is not int
-            or result_evaluation["revision"] < 0
-            or not is_digest(result_evaluation.get("result_digest"))
-            or not is_digest(result_evaluation.get("receipt_digest"))
-            or type(expected_pack.get("pack_id")) is not str
-            or type(expected_pack.get("version")) is not int
-            or expected_pack["version"] < 1
-            or not is_digest(expected_pack.get("digest"))
-            or type(expected_authority.get("authority_id")) is not str
-            or type(expected_authority.get("epoch")) is not int
-            or expected_authority["epoch"] < 1
-            or not is_digest(expected_authority.get("digest"))
-            or not is_digest(followup.get("determination_digest"))
-            or type(followup.get("case_status")) is not str
-            or type(supporting_evidence) is not list
-            or any(
-                type(value) is not dict
-                or set(value) != {"evidence_id", "record_digest"}
-                or type(value["evidence_id"]) is not str
-                or not is_digest(value["record_digest"])
-                for value in supporting_evidence
-            )
-        ):
-            return "REVIEW_REQUIRED"
-        if (
-            artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
-            or type(artifact.get("version")) is not int
-            or artifact.get("version") != 1
-            or not _known_correction_engine(artifact.get("sha256"))
-            or source.get("action_id") != payload.get("action_id")
-            or source.get("outbox_action_id") != payload.get("action_id")
-            or source.get("resulting_evaluation_id") != payload.get("evaluation_id")
-            or source.get("event_sequence") != event_sequence
-            or result_evaluation.get("evaluation_id") != payload.get("evaluation_id")
-            or followup.get("work_id") != source.get("action_id")
-            or followup.get("determination_id") != payload.get("determination_id")
-            or followup.get("action_status") != "READY"
-            or followup.get("outbox_status") != "READY"
-        ):
-            return "REVIEW_REQUIRED"
-        for key, predicate, subject in (
-            ("action_id", "ACTION_ID", source.get("action_id")),
-            ("determination_id", "DETERMINATION_ID", followup.get("determination_id")),
-            ("evaluation_consumed", "EVALUATION_CONSUMED", input_evaluation.get("evaluation_id")),
-        ):
-            observation = observations[key]
+        try:
             if (
-                type(observation) is not dict
-                or set(observation) != {
-                    "predicate", "subject", "complete", "match_count", "result_identity",
-                    "version_sequence", "version_head",
-                }
-                or observation.get("predicate") != predicate
-                or observation.get("subject") != subject
-                or observation.get("complete") is not True
-                or observation.get("match_count") != 0
-                or observation.get("result_identity") is not None
-                or observation.get("version_sequence") != event_sequence - 1
-                or observation.get("version_head") != previous_head
+                artifact is None
+                or followup["contract"] != _CORRECTION_FOLLOWUP_CONTRACT
+                or followup["dependency_families"] != list(_CORRECTION_FOLLOWUP_DEPENDENCIES)
             ):
-                return "REVIEW_REQUIRED"
-        current_evaluation = package.get("evaluation_receipt")
-        current_pack = package.get("control_pack")
-        current_determination = package.get("current_determination")
-        current_action = package.get("current_action")
-        current_case = package.get("case")
-        obligation = package.get("obligation")
-        if any(
-            type(value) is not dict
-            for value in (
-                source,
-                result_evaluation,
-                expected_pack,
-                expected_authority,
-                current_evaluation,
-                current_pack,
-                current_determination,
-                current_action,
-                current_case,
-                obligation,
-            )
-        ):
-            return "REVIEW_REQUIRED"
-        acknowledgment = current_action.get("acknowledgment")
-        current_authority = current_evaluation.get("authority")
-        if type(acknowledgment) is not dict or type(current_authority) is not dict:
-            return "REVIEW_REQUIRED"
-        current_evidence = current_evaluation.get("evidence_bindings")
-        expected_evidence = supporting_evidence
-        same = (
-            followup.get("work_id") == source.get("action_id")
-            and current_action.get("action_id") == source.get("action_id")
-            and current_action.get("determination_id") == followup.get("determination_id")
-            and current_action.get("kind") == "CORRECTION_PAYMENT_REQUEST"
-            and current_action.get("status") == followup.get("action_status")
-            and acknowledgment.get("status") == followup.get("outbox_status")
-            and acknowledgment.get("reference") is None
-            and acknowledgment.get("attempt") == 0
-            and current_case.get("case_id") == source.get("case_id")
-            and current_case.get("status") == followup.get("case_status")
-            and obligation.get("revision") == result_evaluation.get("revision")
-            and current_evaluation.get("evaluation_id") == result_evaluation.get("evaluation_id")
-            and current_evaluation.get("revision") == result_evaluation.get("revision")
-            and current_evaluation.get("result_digest") == result_evaluation.get("result_digest")
-            and current_evaluation.get("receipt_digest") == result_evaluation.get("receipt_digest")
-            and current_pack.get("pack_id") == expected_pack.get("pack_id")
-            and current_pack.get("version") == expected_pack.get("version")
-            and current_pack.get("digest") == expected_pack.get("digest")
-            and current_authority.get("authority_id") == expected_authority.get("authority_id")
-            and current_authority.get("epoch") == expected_authority.get("epoch")
-            and current_authority.get("digest") == expected_authority.get("digest")
-            and current_determination.get("determination_id") == followup.get("determination_id")
-            and current_determination.get("determination_digest") == followup.get("determination_digest")
-            and current_determination.get("input_evaluation_id") == input_evaluation.get("evaluation_id")
-            and current_determination.get("input_evaluation_result_digest") == input_evaluation.get("result_digest")
-            and current_evidence == expected_evidence
-        )
-        return "CURRENT" if same else "REOPENED"
+                return "REVIEW_REQUIRED", []
+            obligation_id, work_id = package["obligation"]["obligation_id"], followup["work_id"]
+            pack, authority, determination = followup["control_pack"], followup["authority"], package["current_determination"]
+            delivery = connection.execute(
+                "SELECT a.status,o.status FROM actions a JOIN action_outbox o USING(action_id) WHERE a.action_id=?", (work_id,)
+            ).fetchone()
+            moved = {
+                key
+                for key, value_moved in (
+                    (("RULE", f"RULE({pack['pack_id']})"), {k: package["control_pack"][k] for k in pack} != pack),
+                    (("AUTHORITY", f"AUTHORITY({authority['authority_id']})"), package["evaluation_receipt"]["authority"] != authority),
+                    (
+                        ("DETERMINATION", f"COLLECTION(DETERMINATION, {obligation_id})"),
+                        (determination["determination_id"], determination["determination_digest"])
+                        != (followup["determination_id"], followup["determination_digest"]),
+                    ),
+                    (
+                        ("DELIVERY_REJECTED", f"COLLECTION(DELIVERY_REJECTED, {work_id})"),
+                        delivery is None or not {*delivery} <= {"READY", "ACKNOWLEDGED"},
+                    ),
+                )
+                if value_moved
+            }
+            bound = {value["evidence_id"] for value in followup["supporting_evidence"]}
+            for evidence_id, kind in connection.execute(  # not new facts: the payment this correction requested, and a
+                # re-sent confirmation that made no payment or conflict of its own (the checker binds the label)
+                "SELECT e.evidence_id,e.kind FROM evidence e WHERE e.item_id=:item AND NOT (e.kind='PAYMENT_CONFIRMATION' AND ("
+                "EXISTS (SELECT 1 FROM payments p JOIN financial_events f ON json_extract(f.payload_json,'$.payment_id')=p.payment_id "
+                "WHERE p.evidence_id=e.evidence_id AND f.aggregate_type='OBLIGATION' AND f.aggregate_id=:obligation "
+                "AND f.kind='PAYMENT_RECEIVED' AND json_extract(f.payload_json,'$.pays_action_id')=:work) "
+                "OR NOT EXISTS (SELECT 1 FROM payments WHERE evidence_id=e.evidence_id) "
+                "AND NOT EXISTS (SELECT 1 FROM financial_conflicts WHERE candidate_evidence_id=e.evidence_id) "
+                "AND EXISTS (SELECT 1 FROM financial_events f WHERE f.aggregate_type='OBLIGATION' AND f.aggregate_id=:obligation "
+                "AND f.kind='PAYMENT_DUPLICATE_EVIDENCE' AND json_extract(f.payload_json,'$.candidate_evidence_id')=e.evidence_id)))",
+                {"item": item_id, "obligation": obligation_id, "work": work_id},
+            ):
+                if evidence_id not in bound:
+                    family = _EVIDENCE_COLLECTION[kind]
+                    moved.add((family, f"COLLECTION({family}, {item_id})"))
+            touched: set[str] = set()
+            for kind, foreign in connection.execute(
+                "SELECT DISTINCT kind,aggregate_type='OBLIGATION' AND aggregate_id<>? FROM financial_events WHERE event_sequence>?",
+                (obligation_id, sequence),
+            ):
+                families = _FOLLOWUP_TOUCHES[kind]
+                if not foreign:
+                    touched.update(families)
+        except (KeyError, TypeError):
+            return "REVIEW_REQUIRED", []
+        if any(family not in touched for family, _ in moved):
+            return "REVIEW_REQUIRED", []
+        changed = sorted(key for _, key in moved)
+        return ("REOPENED" if changed else "CURRENT"), changed
 
     def correction_followup_outputs(self, item_id: str, action_id: str) -> dict[str, Any]:
         """Read deterministic Mirror, report, and recipient-safe support views for one accepted correction."""
 
         _id(action_id, "action_id")
-        package = self.decision_package(item_id)
-        obligation = package.get("obligation")
-        if type(obligation) is not dict or type(obligation.get("obligation_id")) is not str:
-            _fail(FinancialIntegrityError, "correction_followup_obligation")
-        event = self._correction_followup_event(str(obligation["obligation_id"]), action_id)
-        followup = event["followup"]
-        status = self._correction_followup_status(event, package)
-        accepted_basis = None
-        if type(followup) is dict:
-            accepted_basis = {
-                key: followup[key]
-                for key in (
-                    "artifact", "control_pack", "authority", "input_evaluation",
-                    "result_evaluation", "dependency_families",
-                )
-                if key in followup
-            }
-        current_basis = {
-            "obligation_revision": obligation["revision"],
-            "evaluation_receipt": package.get("evaluation_receipt"),
-            "control_pack": package.get("control_pack"),
-            "current_determination": package.get("current_determination"),
-            "current_action": package.get("current_action"),
-            "case": package.get("case"),
-        }
-        explanation = {
-            "contract": "RR/FINANCIAL/CORRECTION-EXPLANATION/v1",
-            "transition": "OFFSET_REJECTED_CORRECTION_AUTHORIZED",
-            "followup_status": status,
-            "source_event_sequence": event["event_sequence"],
-            "accepted_basis": accepted_basis,
-            "current_basis": current_basis,
-            "decision_package": package,
-        }
-        report = {
-            "contract": "RR/FINANCIAL/CORRECTION-REPORT/v1",
-            "followup_status": status,
-            "source_event_sequence": event["event_sequence"],
-            "accepted_basis": accepted_basis,
-            "current_basis": current_basis,
-            "decision_package": package,
-        }
-        artifact = accepted_basis.get("artifact") if type(accepted_basis) is dict else None
         from app import right_rail_financial_engine as financial_engine
 
-        if (
-            type(artifact) is not dict
-            or set(artifact) != {"contract", "version", "sha256"}
-            or artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
-            or type(artifact.get("version")) is not int
-            or artifact.get("version") != 1
-            or not _known_correction_engine(artifact.get("sha256"))
-        ):
-            artifact = None
-        failure = {
+        with self._read_snapshot() as connection:
+            package = self.decision_package(item_id, _connection=connection)
+            found = [
+                (int(row["event_sequence"]), payload.get("correction_followup"))
+                for row in connection.execute(
+                    "SELECT event_sequence,payload_json FROM financial_events WHERE aggregate_type='OBLIGATION' "
+                    "AND aggregate_id=? AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence",
+                    (package["obligation"]["obligation_id"],),
+                )
+                if (payload := _stored_object(row["payload_json"], "correction_followup_event")).get("action_id") == action_id
+            ]
+            if len(found) != 1:
+                _fail(FinancialIntegrityError, "correction_followup_duplicate" if found else "correction_followup_missing")
+            sequence, followup = found[0]
+            accepted_basis = None
+            if type(followup) is dict:
+                accepted_basis = {
+                    key: followup[key]
+                    for key in (
+                        "artifact", "control_pack", "authority", "input_evaluation",
+                        "result_evaluation", "dependency_families",
+                    )
+                    if key in followup
+                }
+            artifact = accepted_basis.get("artifact") if type(accepted_basis) is dict else None
+            if (
+                type(artifact) is not dict
+                or set(artifact) != {"contract", "version", "sha256"}
+                or artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
+                or type(artifact.get("version")) is not int
+                or artifact.get("version") != 1
+                or not _known_correction_engine(artifact.get("sha256"))
+            ):
+                artifact = None
+            status, changed = self._correction_followup_status(connection, package, item_id, sequence, followup, artifact)
+        view = {
+            "followup_status": status,
+            "changed_dependencies": changed,
+            "source_event_sequence": sequence,
+            "accepted_basis": accepted_basis,
+            "current_basis": {
+                "obligation_revision": package["obligation"]["revision"],
+                **{key: package[key] for key in ("evaluation_receipt", "control_pack", "current_determination", "current_action", "case")},
+            },
+            "decision_package": package,
+        }
+        explanation = {"contract": "RR/FINANCIAL/CORRECTION-EXPLANATION/v1", "transition": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", **view}
+        report = {"contract": "RR/FINANCIAL/CORRECTION-REPORT/v1", **view}
+        failure_stage, error_class = {
             "CURRENT": ("NONE", "NONE"),
             "REOPENED": ("FOLLOWUP_RECONCILIATION", "STALE_DEPENDENCY"),
             "REVIEW_REQUIRED": ("FOLLOWUP_RECONCILIATION", "UNSUPPORTED_DEPENDENCY"),
-        }
-        failure_stage, error_class = failure[status]
+        }[status]
         support = {
             "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v1",
             "status": status,
@@ -6217,7 +6110,7 @@ class FinancialOwner:
         result = {
             "followup_status": status,
             "work_id": action_id,
-            "source_event_sequence": event["event_sequence"],
+            "source_event_sequence": sequence,
             "mirror_explanation": explanation,
             "state_report": report,
             "corporate_support": support,

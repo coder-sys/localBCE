@@ -493,6 +493,7 @@
       const artifact = corporate.artifact;
       fact("Follow-up event", durable.source_event_sequence + " · " + durable.followup_status);
       fact("State report", durable.state_report.contract + " · " + durable.state_report.followup_status);
+      fact("Changed dependencies", durable.state_report.changed_dependencies.join(", ") || "None");
       fact("Allowlisted support", corporate.contract + " · " + corporate.status
         + " · " + corporate.failure_stage + " / " + corporate.error_class
         + (artifact ? " · artifact v" + artifact.version + " " + artifact.sha256 : ""));

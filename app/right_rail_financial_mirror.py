@@ -177,7 +177,7 @@ _OWNER_OBLIGATION: Final = {*_OBLIGATION, "population_id"}
 _ARTIFACT: Final = _fields("contract", "version", "sha256")
 _BASIS_EVALUATION: Final = _fields("evaluation_id", "revision", "result_digest", "receipt_digest")
 _FOLLOWUP_VIEW: Final = _fields(
-    "contract", "transition", "followup_status", "source_event_sequence",
+    "contract", "transition", "followup_status", "source_event_sequence", "changed_dependencies",
     accepted_basis=_fields(
         "dependency_families", artifact=_ARTIFACT, control_pack=_PACK_REF, authority=_AUTHORITY,
         input_evaluation=_BASIS_EVALUATION, result_evaluation=_BASIS_EVALUATION,
@@ -1021,28 +1021,21 @@ class FinancialMirror:
             _fail(FinancialMirrorContinuityError, "correction_followup_status")
         explanation = result["mirror_explanation"]
         report = result["state_report"]
+        shared = {"followup_status", "changed_dependencies", "source_event_sequence", "accepted_basis", "current_basis", "decision_package"}
         if (
             type(explanation) is not dict
-            or set(explanation)
-            != {
-                "contract", "transition", "followup_status", "source_event_sequence",
-                "accepted_basis", "current_basis", "decision_package",
-            }
             or type(report) is not dict
-            or set(report)
-            != {
-                "contract", "followup_status", "source_event_sequence", "accepted_basis",
-                "current_basis", "decision_package",
-            }
-            or explanation.get("contract") != "RR/FINANCIAL/CORRECTION-EXPLANATION/v1"
-            or explanation.get("transition") != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
-            or report.get("contract") != "RR/FINANCIAL/CORRECTION-REPORT/v1"
-            or explanation.get("followup_status") != status
-            or report.get("followup_status") != status
-            or explanation.get("source_event_sequence") != result["source_event_sequence"]
-            or report.get("source_event_sequence") != result["source_event_sequence"]
-            or explanation.get("decision_package") != report.get("decision_package")
-            or type(explanation.get("decision_package")) is not dict
+            or set(explanation) != {"contract", "transition", *shared}
+            or set(report) != {"contract", *shared}
+            or explanation["contract"] != "RR/FINANCIAL/CORRECTION-EXPLANATION/v1"
+            or explanation["transition"] != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
+            or report["contract"] != "RR/FINANCIAL/CORRECTION-REPORT/v1"
+            or any(explanation[key] != report[key] for key in shared)
+            or (explanation["followup_status"], explanation["source_event_sequence"]) != (status, result["source_event_sequence"])
+            or type(explanation["decision_package"]) is not dict
+            or type(changed := explanation["changed_dependencies"]) is not list
+            or changed != sorted({str(key) for key in changed})  # sorted, unique dependency keys; REOPENED names at least one
+            or bool(changed) != (status == "REOPENED")
         ):
             _fail(FinancialMirrorContinuityError, "correction_followup_projection")
         support = result["corporate_support"]
