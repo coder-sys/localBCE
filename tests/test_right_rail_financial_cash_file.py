@@ -10,6 +10,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -178,16 +179,55 @@ class ReceiverCashFileTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 self._unchanged(lambda: self._apply(self._prepare(value)))
 
-    def test_thousand_rows_and_maximum_grammar_values(self):
-        value = copy.deepcopy(self.value)
-        value["rows"] = [self._row(i, 1, i) for i in range(1000)]
-        value.update(row_count=1000, total_cents=1000)
-        commands, context = self._prepare(value)
-        self.assertEqual(len(check.CashFileCheck(commands, context).commands), 1000)
-        value.update(row_count=1, total_cents=2**63 - 1)
-        value["rows"] = [self._row(1, 2**63 - 1, 9999)]
+    def _file_of(self, items, count):
+        revisions = {item: self.store.obligation_detail(item)["revision"] for item in items}
+        rows = []
+        for number in range(count):
+            item = items[number % len(items)]
+            rows.append({**self._row(number, 1, revisions[item]), "item_id": item})
+            revisions[item] += 1
+        return {**self.value, "rows": rows, "row_count": count, "total_cents": count}
+
+    def test_row_cap_and_maximum_grammar_values(self):
+        commands, context = self._prepare(self._file_of([expected.H_ITEM_ID], check.MAX_ROWS))
+        self.assertEqual(len(check.CashFileCheck(commands, context).commands), check.MAX_ROWS)
+        for count in (check.MAX_ROWS + 1, 1000):
+            raw = canonical(self._file_of([expected.H_ITEM_ID], count))
+            with self.subTest(rows=count):
+                with self.assertRaisesRegex(check.CashFileError, "^cash_file_row_cap$"):
+                    cash._propose(raw, self.baseline)
+                with self.assertRaisesRegex(check.CashFileError, "^cash_file_row_cap$"):
+                    check.CashFileCheck(commands, {**context, "source_bytes": raw, "expected_source_sha256": sha(raw)})
+        value = {**self.value, "row_count": 1, "total_cents": 2**63 - 1, "rows": [self._row(1, 2**63 - 1, 9999)]}
         value["rows"][0]["payment_id"] = "a" * 128
         self.assertEqual(self._prepare(value)[0][0][1]["amount_cents"], 2**63 - 1)
+
+    def test_maximum_rows_apply_within_lock_and_package_budget(self):
+        # Measured 2026-09-28 on a fresh store, MAX_ROWS = 100: 20 items 0.6 s lock, 1.0 MB package;
+        # one item 1.0 s, 3.6 MB. Refusals begin at 8 MiB (one item ~160 rows) or the 5 s busy timeout.
+        for index, items in enumerate((list(expected.ITEM_IDS), [expected.H_ITEM_ID])):
+            with self.subTest(items=len(items)):
+                if index:
+                    self.setUp()  # a fresh store for the second shape
+                prepared = self._prepare(self._file_of(items, check.MAX_ROWS))
+                self.assertEqual(cash.preview_cash_file(*prepared, trusted_authority=self.fixture.authority,
+                                                        clock=self.store.clock)["recorded_count"], check.MAX_ROWS)
+                seconds, original = [], self.store._write
+                @contextmanager
+                def timed(**kwargs):
+                    outer = getattr(self.store._batch, "connection", None) is None
+                    start = time.perf_counter()
+                    try:
+                        with original(**kwargs) as connection:
+                            yield connection
+                    finally:
+                        if outer:
+                            seconds.append(time.perf_counter() - start)
+                with patch.object(self.store, "_write", timed):
+                    receipt = self._apply(prepared)
+                self.assertEqual((receipt["recorded_count"], receipt["cash_delta_cents"]), (check.MAX_ROWS, check.MAX_ROWS))
+                self.assertLess(seconds[0], 5.0)
+                self.assertLess(len(self.store.export_continuity()), 6 * 1024 * 1024)
 
     def test_concurrent_identical_files_commit_cash_once(self):
         prepared = self._prepare()

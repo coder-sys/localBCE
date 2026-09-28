@@ -18,6 +18,9 @@ from app import right_rail_financial_owner_independent as ledger
 
 
 _MAX_CENTS = 2**63 - 1
+# Measured 2026-09-28 (docs/CORE_REDESIGN.md): apply holds the write lock through two full replays and the
+# package grows O(n^2) per item, so one item stops at ~157 rows and the 8 MiB package cap refuses beyond that.
+MAX_ROWS = 100
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _SHA = re.compile(r"[0-9A-F]{64}\Z")
 _SCOPE = {"state_id", "deployment_id", "program_id", "period_id", "currency"}
@@ -95,7 +98,8 @@ def _source(raw: bytes) -> dict[str, object]:
     for key in _SOURCE - {"captured_at_ms"}:
         _id(value["source"][key])
     _integer(value["source"]["captured_at_ms"], 0, _MAX_CENTS)
-    _integer(value["row_count"], 1, 1000)
+    _require(type(value["row_count"]) is not int or value["row_count"] <= MAX_ROWS, "cash_file_row_cap")
+    _integer(value["row_count"], 1, MAX_ROWS)
     _integer(value["total_cents"], 1, _MAX_CENTS)
     rows = value["rows"]
     _require(type(rows) is list and len(rows) == value["row_count"], "cash_file_count")

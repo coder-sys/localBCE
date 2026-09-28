@@ -7,7 +7,7 @@ import re
 import tempfile
 
 from app.right_rail_financial_owner import FinancialOwner, _checker_authority
-from app.right_rail_financial_cash_file_independent import CashFileCheck, CashFileError
+from app.right_rail_financial_cash_file_independent import MAX_ROWS, CashFileCheck, CashFileError
 
 
 MAX_FILE_BYTES = 1_048_576
@@ -63,7 +63,9 @@ def _propose(source_bytes, baseline_bytes):
     for key in ("source_id", "version", "receiver_system_id", "capture_id"):
         _identifier(source[key])
     _integer(source["captured_at_ms"], 0, 2**63 - 1)
-    _integer(value["row_count"], 1, 1000)
+    if type(value["row_count"]) is int and value["row_count"] > MAX_ROWS:
+        raise CashFileError("cash_file_row_cap")
+    _integer(value["row_count"], 1, MAX_ROWS)
     _integer(value["total_cents"], 1, 2**63 - 1)
     rows = value["rows"]
     if type(rows) is not list or len(rows) != value["row_count"]:

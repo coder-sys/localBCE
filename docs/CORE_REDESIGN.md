@@ -265,7 +265,7 @@ cash evidence as one transaction. This removes repeated manual entry while
 preserving exact retries and a visible all-or-nothing result. No money moves.
 
 - Predicate: accept only `RR/FINANCIAL/RECEIVER-CASH-FILE/v1`, canonical ASCII
-  JSON of at most 1 MiB, with 1-1,000 ordered rows. Root fields are exactly
+  JSON of at most 1 MiB, with 1-100 ordered rows (more: `cash_file_row_cap`; measured limits in `STATUS.md`). Root fields are exactly
   `contract`, `source_class`, `scope`, `source`, `row_count`, `total_cents`,
   `rows`; `source_class` is `SYNTHETIC_RECEIVER_CASH`. Scope has exactly the
   existing state/deployment/program/period/currency fields, currency USD.

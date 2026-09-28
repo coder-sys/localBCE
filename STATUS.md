@@ -6,8 +6,9 @@ commit `595e611`, followed by funding/source-clock fixes in `2c61ae8` and
 test-setup consolidation in `e026658`. Main has not received this combination.
 Git state, raw guard logs and artifact provenance govern; a branch's pass does
 not verify another branch or their combination. `CONSTITUTION.md` is supreme.
-Connector/browser source and fixture consolidation remain uncommitted working
-changes while the separate Lean build/kit increment is committed.
+Connector/browser source, the cash-file intake and fixture consolidation are
+committed (`707ba78`, an ancestor of this line); their run evidence below predates
+`d5853b1` unless a run id says otherwise.
 
 ## Product and standing claims
 
@@ -46,21 +47,36 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
  stale bytecode refusal; corrected count-only r87 passed 78,975/80,000 code
  lines). Those kit runs packaged source committed as `707ba78`
  (then uncommitted), not `86390ab`; the engine module differs by an equal
- derived map (PROVENANCE). Clean checkout `e3fb69f` passed all 24
+ derived map (PROVENANCE). That the kit matches `707ba78` is UNVERIFIED on the
+ current line: not re-hashed after `d5853b1` (Owner change) or the cash-file cap
+ below. Clean checkout `e3fb69f` passed all 24
  kit/size/protected-invariant checks in r89 (19.393 s, zero
  failures/errors/skips, child/guard exit 0, cleanup PASS); its Lean tree is
  unchanged from the fresh build and formal proof evidence. Connector/browser
  work remains paused.
-- **Receiver cash-file increment**: 20/20 new checks pass in guarded r63
- (isolated preview, independent pre/post replay, whole-file rollback, exact
- retries after reversal, concurrency, process crashes, CLI setup refusing
- mutation); independent money/storage review found no remaining source
- blocker. Grouped run: 75/77 passed, one total-size failure (since resolved:
- founder expanded the ceiling to 80,000, all six size gates pass in r79;
- 2026-09-28 split into product 44,000 and tests+Lean 40,000 lines),
- one fresh-evaluation-engine skip (resolved in r74), no errors, cleanup
- PASS. Acceptance/Mirror fixture equivalence: 117/117 in r65, zero
- skips/errors, cleanup PASS.
+- **Receiver cash-file increment**: on `cash-scale` (`2aa1b09` plus the cap),
+ guarded `cashscale-r3-a1-L1` (v6): cash-file and bloat-budget modules
+ run=27 passed=27 failed=0 errors=0 skipped=0 (21 cash-file tests, 2 new
+ capacity tests). The earlier "20/20 in r63" and "independent money/storage
+ review found no remaining source blocker" are withdrawn: they predate
+ `d5853b1`, which changed `record_payment_evidence` and the funding guard cash
+ files use. Not independently reviewed since `d5853b1`; rr-review 2026-09-28
+ findings M1 (open) and M2 (capacity, below).
+ **Capacity (M2), measured** (`cashscale-m1..m5`, fresh store, this laptop):
+ apply holds the write lock through two full replays and the package grows
+ O(n^2) per item (`_recompute_obligation` re-binds all of an item's evidence),
+ so the 8 MiB package cap, not the 1,000-row grammar, is the limit.
+ One item: 157 rows land (8.09 MB, 1.7 s lock), 165 refuse
+ `continuity_package_size`. 20 items: 560 land (8.25 MB, 3.5 s), 590 refuse.
+ 1,000 items, one row each: 800 land (8.28 MB, 5.9 s lock, past the 5 s busy
+ timeout, so staff writers see `store_busy` from about 700 rows), 1,000 refuse
+ (baseline alone 4.1 MB). Preview repeats the replay outside the lock (8-10 s at
+ 1,000 items). Cap set to 100 rows per file (`cash_file_row_cap`; 1.0 s lock,
+ 3.6 MB on one item), far under every shape. That is low; only an Owner/checker
+ performance fix (one replay, non-quadratic evidence binding) raises it. The
+ earlier grouped run 75/77 (size failure since resolved, skip resolved in r74)
+ and acceptance/Mirror equivalence 117/117 in r65 also predate `d5853b1`.
+ Size gates: 2026-09-28 split into product 44,000 and tests+Lean 40,000 lines.
 - Fixture consolidation removed 148 lines without removing test methods or
  assertions (r66/r67 regression and fresh build passed; failed attempt r64
  preserved as log/stage). The real Edge bridge and response model
