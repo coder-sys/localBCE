@@ -40,6 +40,10 @@ CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
 CORRECTION_TRANSITION_RESULT_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
     "83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6"
 )
+# Support's fictional reproduction (CORPORATE-SUPPORT/v2): the published request vector and the case its result creates.
+CORRECTION_TRANSITION_REPRODUCTION: Final[dict[str, str]] = {
+    "vector_file_digest": CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256.hex().upper(), "case_id": "case:obligation:item-h:period-01",
+}
 _SHA256_BYTES: Final[int] = 32
 _MAX_SQLITE_INTEGER: Final[int] = 2**63 - 1
 
