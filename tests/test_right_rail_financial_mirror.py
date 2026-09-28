@@ -144,6 +144,7 @@ class FinancialMirrorTests(unittest.TestCase):
     def _prepare_action(self) -> dict[str, object]:
         self._prepare_claim()
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
+        self.clock.value = 1_774_922_399_999  # recorded when decided: a later event never commits before this one
         return self.mirror.reject_offset_and_authorize_correction(
             item_id=H_ITEM_ID,
             claim_id="claim:offset:h",

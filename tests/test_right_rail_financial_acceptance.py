@@ -500,7 +500,6 @@ def _record_fixture_support(store: FinancialOwner, evidence: expected.EvidenceEx
         local_ref=evidence.local_ref,
         applicable_at_ms=evidence.applicable_at_ms,
         event_at_ms=evidence.event_at_ms,
-        received_at_ms=evidence.received_at_ms,
     )
 
 
@@ -932,6 +931,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _authorize(store: FinancialOwner, claim_id: str) -> dict[str, object]:
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        RightRailFinancialAcceptanceTests._advance_clock(store, expected.OFFSET_DECISION_MS - 1)  # recorded when decided
         return store.authorize_offset(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
@@ -945,6 +945,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _reject(store: FinancialOwner, claim_id: str, receipt: dict[str, object] | None = None) -> dict[str, object]:
         receipt = receipt or store.current_evaluation_receipt(expected.H_ITEM_ID)
+        RightRailFinancialAcceptanceTests._advance_clock(store, expected.CORRECTION_AUTH_MS - 1)  # recorded when decided
         return store.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
@@ -1593,7 +1594,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
         reopened_process_postcommit = self._make_owner(
             path=process_postcommit_store.path,
-            clock=_Clock(process_postcommit_clock + 1),
+            clock=_Clock(expected.CORRECTION_AUTH_MS),  # the child committed at its decision time
             correction_transition_release=correction_release,
         )
         self._assert_snapshot(reopened_process_postcommit, expected.H_REJECTED_CORRECTION)
@@ -2866,6 +2867,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(claim_result["status"], "CLAIMED")
         receipt = mirror.current_evaluation_receipt(expected.H_ITEM_ID)
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS - 1)  # recorded when decided
         rejection = mirror.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID,
             claim_id=expected.H_CLAIM_ID,
@@ -4023,7 +4025,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(restored_package, package)
         self.assertEqual(self._assert_decision_package_verified(restored.owner, restored_package)["integrity"], "VERIFIED")
 
-    def test_c05_current_action_and_determination_follow_revision_after_clock_rollback(self) -> None:
+    def test_c05_a_clock_behind_the_history_writes_nothing(self) -> None:
         clock = _Clock()
         store = self._build_base(clock=clock)
         self._record_cash(store)
@@ -4051,58 +4053,23 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(first_result["action_id"], first_action_id)
 
-        second_claim_id = "claim:clock-rollback:second"
-        second_action_id = "action:clock-rollback:second"
-        clock.value = low_clock_value
-        store.record_offset_claim(
-            item_id=expected.H_ITEM_ID,
-            claim_id=second_claim_id,
-            amount_cents=100_000,
-            evidence_id="evidence:clock-rollback:second",
-            owner_role="CASE_OWNER",
-            deadline_ms=expected.H_DUE_AT_MS,
-        )
-        second_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
-        second_result = store.authorize_offset(
-            item_id=expected.H_ITEM_ID,
-            claim_id=second_claim_id,
-            expected_revision=int(second_receipt["revision"]),
-            action_id=second_action_id,
-            evaluation_id=str(second_receipt["evaluation_id"]),
-            evaluation_result_digest=str(second_receipt["result_digest"]),
-        )
-        self.assertEqual(second_result["action_id"], second_action_id)
-        store.acknowledge_action(second_action_id, "ack:clock-rollback:second")
-
-        detail = store.obligation_detail(expected.H_ITEM_ID)
-        first_action = next(row for row in detail["actions"] if row["action_id"] == first_action_id)
-        second_action = next(row for row in detail["actions"] if row["action_id"] == second_action_id)
+        before = store.export_continuity()
+        clock.value = low_clock_value  # the checker refuses a history whose commit times run backward
+        with self.assertRaisesRegex(FinancialIntegrityError, "event_commit_order"):
+            store.record_offset_claim(
+                item_id=expected.H_ITEM_ID,
+                claim_id="claim:clock-rollback:second",
+                amount_cents=100_000,
+                evidence_id="evidence:clock-rollback:second",
+                owner_role="CASE_OWNER",
+                deadline_ms=expected.H_DUE_AT_MS,
+            )
+        self.assertEqual(store.export_continuity(), before)
+        self._assert_verified(store)
         first_determination = next(
-            row for row in detail["determinations"] if row["determination_id"] == first_result["determination_id"]
+            row for row in store.obligation_detail(expected.H_ITEM_ID)["determinations"]
+            if row["determination_id"] == first_result["determination_id"]
         )
-        second_determination = next(
-            row for row in detail["determinations"] if row["determination_id"] == second_result["determination_id"]
-        )
-        self.assertGreater(second_action["revision"], first_action["revision"])
-        self.assertLess(second_action["created_at_ms"], first_action["created_at_ms"])
-        self.assertLess(second_determination["decided_at_ms"], first_determination["decided_at_ms"])
-
-        package = store.decision_package(expected.H_ITEM_ID)
-        self.assertEqual(package["current_action"]["action_id"], second_action_id)
-        self.assertEqual(package["current_action"]["revision"], second_action["revision"])
-        self.assertEqual(package["current_action"]["status"], "ACKNOWLEDGED")
-        self.assertEqual(package["current_action"]["acknowledgment"]["cash_effect_cents"], 0)
-        self.assertEqual(package["current_determination"]["determination_id"], second_determination["determination_id"])
-        self.assertEqual(
-            package["current_determination"]["resulting_revision"],
-            second_determination["resulting_revision"],
-        )
-        self.assertEqual(package["obligation"]["delivery_status"], "ACKNOWLEDGED")
-        self.assertEqual(package["cash"]["recorded_received_cash_cents"], expected.H_CASH_CENTS)
-        self.assertEqual(detail["received_cash_cents"], expected.H_CASH_CENTS)
-        self.assertEqual(self._assert_decision_package_verified(store, package)["integrity"], "VERIFIED")
-
-        durable_snapshot_before_retries = store.export_continuity()
         duplicate = store.authorize_offset(
             item_id=expected.H_ITEM_ID,
             claim_id=first_claim_id,
@@ -4122,7 +4089,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 evaluation_id=str(first_receipt["evaluation_id"]),
                 evaluation_result_digest=str(first_receipt["result_digest"]),
             )
-        self.assertEqual(store.export_continuity(), durable_snapshot_before_retries)
+        self.assertEqual(store.export_continuity(), before)
 
     def test_c05_independent_package_input_is_bounded_before_database_open(self) -> None:
         store = self._build_base()
@@ -4176,7 +4143,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def test_v5_populated_evaluation_receipt_is_independent_and_boundary_stable(self) -> None:
         from tools import right_rail_financial_cli as cli
 
-        clock = _Clock()
+        clock = _Clock(expected.CASH_EVENT_MS - 1_000)
         store = self._build_base(clock=clock)
         clock.value = expected.CASH_EVENT_MS - 1
         self._record_cash(store)
@@ -4217,9 +4184,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 "source_id": "synthetic-offset-source",
                 "source_version": "fixture-v1",
                 "local_ref": f"offset:{claim_id}",
-                "applicable_at_ms": expected.CASH_EVENT_MS + 2,
-                "event_at_ms": expected.CASH_EVENT_MS + 3,
-                "received_at_ms": expected.CASH_EVENT_MS + 4,
+                "applicable_at_ms": expected.CASH_EVENT_MS + 1,
+                "event_at_ms": expected.CASH_EVENT_MS + 1,
+                "received_at_ms": expected.CASH_EVENT_MS + 1,
                 "amount_cents": expected.UNAPPROVED_OFFSET_CENTS,
                 "reversal_of": None,
                 "supersedes": None,
@@ -4385,6 +4352,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "evaluation_result_digest": receipt["result_digest"],
         }
         reject = store.reject_offset_and_authorize_correction
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS - 1)  # recorded when decided
 
         def lose_response_after_commit(**kwargs: object) -> None:
             reject(**kwargs)
@@ -4499,20 +4467,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.export_continuity(), after_first)
         self._assert_verified(store)
 
-    def test_future_received_evidence_is_rejected_without_clamping(self) -> None:
+    def test_clock_behind_received_evidence_is_rejected_without_clamping(self) -> None:
         clock = _Clock()
         store = self._build_base(clock=clock)
+        self._record_h_support(store)
         before = store.path.read_bytes()
-        future_received_at_ms = clock.value + 10_000
+        clock.value -= 10_000  # the owner clock steps back behind evidence it already received
         with self.assertRaisesRegex(FinancialIntegrityError, "evaluation_evidence_chronology"):
-            store.record_support_evidence(
-                item_id=expected.H_ITEM_ID,
-                evidence_id="evidence:future-received",
-                common_origin_id="future-received",
-                applicable_at_ms=clock.value,
-                event_at_ms=clock.value,
-                received_at_ms=future_received_at_ms,
-            )
+            store.evaluate_obligation(expected.H_ITEM_ID)
         self.assertEqual(store.path.read_bytes(), before)
         self._assert_verified(store)
 
@@ -4680,7 +4642,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             # Final review 75a5517 finding 5: every current evaluation is now compared with the rows first.
             ("obligation:exact-input:evidence", lambda c: store._insert_evidence(c, orphan)),
             ("case:derived", lambda c: c.execute("UPDATE cases SET due_at_ms=due_at_ms+1")),
-            ("replay:financial_conflicts", lambda c: c.execute("UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1")),
+            # One clock reading per command: visible_at_ms now equals its event's commit time, so this fails before replay.
+            ("conflict:visible", lambda c: c.execute("UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1")),
             # Not carried as rows: bound to their evaluation, their population's history, and the only epoch.
             ("projection:updated-at", lambda c: c.execute("UPDATE obligations SET updated_at_ms=updated_at_ms+1")),
             ("history:population-updated-at", lambda c: c.execute("UPDATE population_imports SET updated_at_ms=updated_at_ms+1")),

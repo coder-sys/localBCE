@@ -481,7 +481,6 @@ def _sample(root: Path, *, size: int, sample: int) -> dict[str, Any]:
             local_ref=f"measurement:record:{size}:{sample}:{index}",
             applicable_at_ms=3,
             event_at_ms=3,
-            received_at_ms=4,
         )
         statuses.append(str(result["status"]))
     update_ms = _elapsed_ms(update_start)

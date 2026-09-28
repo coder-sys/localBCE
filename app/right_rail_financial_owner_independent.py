@@ -2382,7 +2382,6 @@ def _verify_population_history(
         source_completed = False
         validated = False
         published = False
-        previous_committed_at: int | None = None
         for event in by_population[population_id]:
             event_sequence = _integer(
                 event["event_sequence"],
@@ -2402,7 +2401,6 @@ def _verify_population_history(
                 )
             ):
                 _fail("history:population-manifest-stale-event")
-            previous_committed_at = event["committed_at_ms"]  # in order: history:commit-order
             before = _integer(event["before_revision"], "history:population-before", maximum=MAX_ROWS)
             after = _integer(event["after_revision"], "history:population-after", maximum=MAX_ROWS)
             payload = _parse_json(event["payload_json"], "history:population-payload", max_bytes=MAX_PACKAGE_BYTES)
@@ -2559,7 +2557,7 @@ def _verify_population_history(
         elif status == "PUBLISHED":
             if not validated or not published:
                 _fail("history:population-status-order")
-        last_committed_at[population_id] = previous_committed_at
+        last_committed_at[population_id] = by_population[population_id][-1]["committed_at_ms"] if by_population[population_id] else None
     if any(populations[population_id]["updated_at_ms"] != at for population_id, at in last_committed_at.items()):
         _fail("history:population-updated-at")
 

@@ -166,7 +166,6 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             common_origin_id="support:H",
             applicable_at_ms=10,
             event_at_ms=10,
-            received_at_ms=11,
         )
         self.store.record_payment_evidence(
             item_id="item:H",
@@ -184,6 +183,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             deadline_ms=9_000,
         )
         receipt = self.store.current_evaluation_receipt("item:H")
+        self.clock.value = 1_999  # recorded when decided: a later event never commits before this one
         self.store.authorize_offset(
             item_id="item:H",
             claim_id="claim:H",
@@ -495,6 +495,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         with closing(sqlite3.connect(path, isolation_level=None)) as connection:
             connection.row_factory = sqlite3.Row
             rows = list(connection.execute("SELECT * FROM financial_events ORDER BY event_sequence"))
+            times = [int(row["committed_at_ms"]) for row in rows]  # each position keeps its time: the clock stays in order
             left_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == left_kind]
             right_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == right_kind]
             left_position = left_candidates[left_index]
@@ -503,13 +504,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             offset = 100_000
             _drop_history_triggers(connection)
             connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
-            base_committed_at, registered_at_by_manifest, previous = (
-                IndependentFinancialCheckerTests._history_rehash_context(connection, rows)
-            )
-            for sequence, row in enumerate(rows, start=1):
-                committed_at = base_committed_at + sequence
-                if row["aggregate_type"] == "POPULATION_MANIFEST":
-                    committed_at = registered_at_by_manifest[str(row["aggregate_id"])]
+            _base, _registered, previous = IndependentFinancialCheckerTests._history_rehash_context(connection, rows)
+            for sequence, (row, committed_at) in enumerate(zip(rows, times), start=1):
                 event_id, head = IndependentFinancialCheckerTests._rehashed_event(
                     row, sequence, committed_at, previous, bytes(row["payload_digest"]),
                 )

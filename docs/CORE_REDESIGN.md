@@ -344,8 +344,10 @@ shown on the pack's face.
   - rows of payments matching the map's program/source predicate, paid in the
     federal fiscal quarter (UTC boundaries), recorded before its end and not
     reversed by a record before its end. "Recorded" is the evidence's
-    owner-clock `received_at_ms` (bound by the checker, never before
-    `event_at_ms`), never a caller's date;
+    owner-clock `received_at_ms`, never a caller's date: the Owner reads its
+    clock once per command (a clock behind the history writes nothing), and
+    the checker requires it to equal the writing event's `committed_at_ms`,
+    commit times never to decrease, and it never to precede `event_at_ms`;
   - `prior_quarter_adjustments`: each payment, reversal or amount conflict
     (`CONFLICT`) of an earlier quarter's payment, listed once in the quarter
     that recorded it, never netted;
@@ -373,8 +375,10 @@ shown on the pack's face.
 - **Format:** stays `v1` though its fields changed after 17142e3; no pack
   built before this record is kept as evidence.
 - **Evidence:** `tests/test_right_rail_financial_line_pack.py`.
-- **Scope:** derived artifact only. No tables or Owner, Lean, wire or digest
-  changes. `signer` is null because no PQ signing path exists.
+- **Scope:** derived artifact, plus the clock binding above: support
+  evidence no longer takes a caller received time (a retry keeps the first
+  one). No table, Lean, wire or digest changes. `signer` is null because no
+  PQ signing path exists.
 - **Proposed Lean (not written):**
   - `line_pack_sum_eq_ledger`
   - `line_pack_rule_version_bound`
