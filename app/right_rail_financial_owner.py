@@ -1875,6 +1875,7 @@ class FinancialOwner:
         mode: str = "LIVE",
         owner_id: str = "financial-owner-v1",
         correction_transition_release: object | None = None,
+        existing_only: bool = False,
     ) -> None:
         self._initialize(
             path=path,
@@ -1885,6 +1886,7 @@ class FinancialOwner:
             owner_id=owner_id,
             correction_transition_release=correction_transition_release,
             identity_contract=None,
+            existing_only=existing_only,
         )
         self._verify_open_identity(verify_history=True)
 
@@ -1948,6 +1950,7 @@ class FinancialOwner:
         owner_id: str,
         correction_transition_release: object | None,
         identity_contract: Mapping[str, Any] | None,
+        existing_only: bool = False,
     ) -> None:
         if not isinstance(path, Path) or not path.parent.is_dir() or path.is_symlink():
             _fail(FinancialIntegrityError, "owner_path")
@@ -1958,6 +1961,7 @@ class FinancialOwner:
         if type(clock) is not type(None) and not hasattr(clock, "now_ms"):
             _fail(FinancialInputError, "clock")
         self.path = path
+        self._existing_only = existing_only
         self.config = config
         self.schema_version = _SCHEMA_VERSION
         self.schema = _SCHEMA
@@ -1974,6 +1978,8 @@ class FinancialOwner:
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
+        if existing_only and (not existed or path.stat().st_size == 0):
+            _fail(FinancialIntegrityError, "existing_database_required")
         if existed and path.stat().st_size == 0:  # a creator holds its new file empty until its schema commits: wait for it
             try:
                 with closing(sqlite3.connect(str(path), timeout=5.0, isolation_level=None)) as probe:
@@ -2037,7 +2043,8 @@ class FinancialOwner:
     def _connect(self, *, capture_triggers: bool = False) -> sqlite3.Connection:
         connection = None
         try:
-            connection = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
+            location = self.path.resolve().as_uri() + "?mode=rw" if self._existing_only else str(self.path)
+            connection = sqlite3.connect(location, uri=self._existing_only, timeout=5.0, isolation_level=None)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
@@ -2180,6 +2187,7 @@ class FinancialOwner:
             )
 
     def _verify_open_identity(self, *, verify_history: bool) -> None:
+        no_migration = self.mode == "SHADOW" or self._existing_only
         try:
             with closing(self._connect()) as connection:
                 try:
@@ -2194,7 +2202,7 @@ class FinancialOwner:
                     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
                     if tables in (_TABLES, _TABLES | {"right_rail_continuity_admission"}):
                         # A v8 store from before history segments: replayed, then its whole history opens the first segment.
-                        if self.mode == "SHADOW":  # read-only: only a writing owner migrates
+                        if no_migration:
                             _fail(FinancialIntegrityError, "shadow_requires_migration")
                         migrated = True
                         connection.execute("DROP TABLE IF EXISTS right_rail_continuity_admission")
@@ -2202,11 +2210,11 @@ class FinancialOwner:
                         self._track_all(connection)
                     elif tables != _TABLES | _SEGMENT_TABLES:
                         _fail(FinancialIntegrityError, "schema_tables")
-                    if self.mode != "SHADOW":
+                    if not no_migration:
                         _install_private_index_set(connection)
                     elif _private_index_set_version(connection) == 0:  # read-only: checked, never upgraded
                         _fail(FinancialIntegrityError, "shadow_requires_migration")
-                    _install_history_append_only(connection, read_only=self.mode == "SHADOW")
+                    _install_history_append_only(connection, read_only=no_migration)
                     if verify_history or migrated:
                         self._verify_history_in_transaction(connection)
                     connection.execute("COMMIT")
@@ -2310,7 +2318,7 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "funding_projection_drift")
 
     @contextmanager
-    def _write(self) -> Iterator[sqlite3.Connection]:
+    def _write(self, *, before_commit=None) -> Iterator[sqlite3.Connection]:
         """One atomic command; inside ``run_batch`` the batch owns the connection, BEGIN, COMMIT and ROLLBACK,
         while each command still seals as it would alone, so a batch's segments equal its commands' run singly."""
         batch = getattr(self._batch, "connection", None)
@@ -2332,6 +2340,8 @@ class FinancialOwner:
                     if _CHECK_ROW_CACHE and rows != _count_rows(connection):
                         raise AssertionError(f"row_count_cache: {rows} != {_count_rows(connection)}")
                     after = (tuple(connection.execute(_HISTORY_MARK).fetchone()), rows)
+                    if before_commit is not None:
+                        before_commit(connection)
                     connection.execute("COMMIT")
                     self._row_cache = after
             except BaseException as error:
@@ -2344,25 +2354,36 @@ class FinancialOwner:
                 if began:
                     self._batch.rows = None
 
-    def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]]) -> list[dict[str, Any]]:
+    def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]], *, cash_file_context=None):
         """Up to 1,000 commands in one transaction, each run exactly as its method alone (same checks,
         history, retries). All or nothing: the first failure rolls the whole batch back and is raised
         with a ``batch_index=<i>`` note (Art. III.2, III.5)."""
         if type(commands) is not list or not 0 < len(commands) <= 1_000 or any(type(entry) is not tuple or len(entry) != 2 or entry[0] not in _BATCH_COMMANDS or not isinstance(entry[1], Mapping) for entry in commands):
             _fail(FinancialInputError, "batch_commands")
-        with self._write() as connection:
+        check = None
+        results = []
+        if cash_file_context is not None:
+            from app.right_rail_financial_cash_file_independent import CashFileCheck
+            if getattr(self._batch, "connection", None) is not None:
+                _fail(FinancialInputError, "cash_file_nested_batch")
+            check = CashFileCheck(commands, cash_file_context)
+            commands = check.commands
+        def verify_cash(connection):
+            check.finish(connection, self._continuity_package_bytes(connection), results)
+        with self._write(before_commit=verify_cash) if check else self._write() as connection:
+            if check:
+                check.begin(connection, self._continuity_package_bytes(connection))
             self._batch.connection = connection
             try:
-                results = []
                 for index, (name, arguments) in enumerate(commands):
                     try:
                         results.append(getattr(self, name)(**arguments))
                     except BaseException as error:
                         error.add_note(f"batch_index={index}")
                         raise
-                return results
             finally:
                 self._batch.connection = None
+        return check.receipt if check else results
 
     @contextmanager
     def _read_snapshot(self, *, _connection: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
@@ -3895,6 +3916,18 @@ class FinancialOwner:
         _id(source_id, "source_id")
         _text(source_version, "source_version")
         normalized_local_ref = local_ref or f"payment:{payment_id}"
+        evidence_fields = {
+            "evidence_id": evidence_id,
+            "item_id": item_id,
+            "kind": "PAYMENT_CONFIRMATION",
+            "common_origin_id": common_origin_id,
+            "source_id": source_id,
+            "source_version": source_version,
+            "local_ref": normalized_local_ref,
+            "applicable_at_ms": event_at_ms,
+            "event_at_ms": event_at_ms,
+            "amount_cents": amount_cents,
+        }
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
             existing_id = connection.execute(
@@ -3908,19 +3941,7 @@ class FinancialOwner:
                 ).fetchone()
                 if existing_evidence is None:
                     _fail(FinancialConflictError, "payment_request_conflict")
-                retry_evidence = self._new_evidence(
-                    evidence_id=evidence_id,
-                    item_id=item_id,
-                    kind="PAYMENT_CONFIRMATION",
-                    common_origin_id=common_origin_id,
-                    source_id=source_id,
-                    source_version=source_version,
-                    local_ref=normalized_local_ref,
-                    applicable_at_ms=event_at_ms,
-                    event_at_ms=event_at_ms,
-                    received_at_ms=int(existing_evidence["received_at_ms"]),
-                    amount_cents=amount_cents,
-                )
+                retry_evidence = self._new_evidence(**evidence_fields, received_at_ms=int(existing_evidence["received_at_ms"]))
                 payment_events = connection.execute(
                     "SELECT aggregate_id,before_revision,after_revision,payload_json "
                     "FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? "
@@ -3983,19 +4004,7 @@ class FinancialOwner:
                 }
 
             self._check_revision(obligation, expected_revision)
-            evidence = self._new_evidence(
-                evidence_id=evidence_id,
-                item_id=item_id,
-                kind="PAYMENT_CONFIRMATION",
-                common_origin_id=common_origin_id,
-                source_id=source_id,
-                source_version=source_version,
-                local_ref=normalized_local_ref,
-                applicable_at_ms=event_at_ms,
-                event_at_ms=event_at_ms,
-                received_at_ms=self._now(),
-                amount_cents=amount_cents,
-            )
+            evidence = self._new_evidence(**evidence_fields, received_at_ms=self._now())
             evidence_status = self._insert_evidence(connection, evidence)
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
             if existing is not None:  # existing_id is None here: that retry path returned or failed above
@@ -6391,27 +6400,9 @@ class FinancialOwner:
 
         next_revision = before_revision + 1
         record = receipt.as_record()
-        connection.execute(
-            "INSERT INTO program_funding_receipts "
-            "(receipt_id,state_id,deployment_id,program_id,period_id,currency,source_record_ref,"
-            "amount_cents,confirmation_class,evidence_status,event_at_ms,recorded_at_ms,"
-            "supersedes_receipt_id,receipt_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                receipt.receipt_id,
-                receipt.state_id,
-                receipt.deployment_id,
-                receipt.program_id,
-                receipt.period_id,
-                receipt.currency,
-                receipt.source_record_ref,
-                receipt.amount_cents,
-                receipt.confirmation_class,
-                receipt.evidence_status,
-                receipt.event_at_ms,
-                recorded_at_ms,
-                receipt.supersedes_receipt_id,
-                receipt_digest,
-            ),
+        self._insert_row(
+            connection, "program_funding_receipts",
+            {**record, "recorded_at_ms": recorded_at_ms, "receipt_digest": receipt_digest},
         )
         connection.execute(
             "INSERT INTO program_funding_projection "

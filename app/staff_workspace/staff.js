@@ -38,7 +38,7 @@
   // A command whose response was lost or unverifiable may have committed: keep the exact body for retry.
   const UNCERTAIN_OUTCOMES = [
     "owner_command_unavailable", "Failed to fetch", "NetworkError", "command_unavailable",
-    "command_outcome_uncertain", "command_response_unverified", "store_busy", "store_busy_outcome_unknown",
+    "command_outcome_uncertain", "command_response_unverified", "store_busy", "store_busy_outcome_unknown", "transport_failure",
   ];
   const ROUTES = {
     "reject-offset": "/api/decision/reject-offset",
@@ -87,7 +87,11 @@
     byId("workflow-section").hidden = !screens.includes("decision");
     const status = byId("role-status");
     status.replaceChildren(Object.assign(document.createElement("span"), { textContent: "Role: " + model.roles[role] + " · " }));
-    status.appendChild(Object.assign(document.createElement("a"), { href: "/", textContent: "Switch role" }));
+    const switchRole = Object.assign(document.createElement("a"), { href: "/", textContent: "Switch role" });
+    switchRole.addEventListener("click", (event) => {
+      if (commandPending || unresolvedCorrectionBody || unresolvedCashBody) event.preventDefault();
+    });
+    status.appendChild(switchRole);
   }
 
   function assert(condition, code) {
@@ -274,7 +278,7 @@
         decisionRequestGeneration += 1;
         correctionFollowupRequestGeneration += 1;
         correctionFollowup = null;
-        showOwnerUnavailable();
+        showOwnerUnavailable(model.controls["refresh-button"].responses.fork_detected.message);
         return false;
       }
       if (!sameSnapshot(previous, incoming)) {
@@ -329,7 +333,7 @@
       ], isH ? "highlight" : "");
     });
     const ownerMode = value.integrity.mode === "LIVE" ? "SYNTHETIC LOCAL (Owner native mode LIVE)" : value.integrity.mode;
-    banner("connection-status", "disabled", "Owner snapshot VERIFIED · " + ownerMode + " · sequence " + value.summary.sequence
+    banner("connection-status", "disabled", model.controls["refresh-button"].responses.success.message + " Owner snapshot VERIFIED · " + ownerMode + " · sequence " + value.summary.sequence
       + " · full independent reconstruction used this same SQLite snapshot.");
     detectPackageStaleness();
     renderDecision();
@@ -344,21 +348,28 @@
     updateActions();
   }
 
-  function showOwnerUnavailable() {
+  function showOwnerUnavailable(message = "The Owner read failed. Reload this page to check again.") {
     byId("read-as-of").textContent = snapshot
       ? "Last successful read: " + new Date(snapshot.read_at).toLocaleString() + " (stale while service is unavailable)."
       : "No successful read yet.";
-    markViewUnusable("unavailable", (snapshot
-      ? "UNAVAILABLE — showing the last successful local view; it is stale and commands are disabled."
-      : "UNAVAILABLE — no Owner snapshot loaded; commands are disabled.") + " Reload this page to check again.",
-    "UNAVAILABLE — the displayed decision package is retained but stale; refresh the Owner read and reopen it before any command. Reload this page to check again.");
+    markViewUnusable("unavailable", message, message);
   }
 
   async function fetchJson(url) {
-    const response = await fetch(url, { cache: "no-store", credentials: "omit" });
+    let response;
+    try {
+      response = await fetch(url, { cache: "no-store", credentials: "omit" });
+    } catch (_error) {
+      throw new Error("transport_failure");
+    }
     const body = await response.json();
     if (!response.ok) throw new Error(body.error && body.error.code ? body.error.code : "read_unavailable");
     return body;
+  }
+
+  function readErrorMessage(name, error) {
+    const code = error.message === "transport_failure" ? "transport_failure" : "owner_read_unavailable";
+    return model.controls[name].responses[code].message;
   }
 
   async function refreshCorrectionFollowup(requestGeneration = null) {
@@ -385,7 +396,9 @@
       correctionFollowup = value;
     } catch (error) {
       if (superseded()) return;
-      correctionFollowup = { status: "UNAVAILABLE", reason: error.message };
+      const message = readErrorMessage("refresh-button", error);
+      correctionFollowup = { status: "UNAVAILABLE", reason: message };
+      showOwnerUnavailable(message);
     }
     renderDecision();
   }
@@ -397,8 +410,10 @@
       const value = await fetchJson("/api/workspace");
       if (!applyWorkspaceSnapshot(value, requestGeneration)) return;
       await refreshCorrectionFollowup(requestGeneration);
-    } catch (_error) {
-      if (requestGeneration === workspaceRequestGeneration) showOwnerUnavailable();
+    } catch (error) {
+      if (requestGeneration === workspaceRequestGeneration) {
+        showOwnerUnavailable(readErrorMessage("refresh-button", error));
+      }
     }
   }
 
@@ -538,7 +553,7 @@
     } else if (packageStale) {
       banner("package-staleness", "stale", "STALE REVIEW — the verified snapshot, scope, H revision, evaluation, Control Pack, authority, or input state changed. Reopen the package before a new command.");
     } else {
-      banner("package-staleness", "pending", "The displayed scope, Owner snapshot, H revision, Control Pack, authority, and evaluation input match the current Owner view.");
+      banner("package-staleness", "pending", model.controls["open-package"].responses.success.message + " The displayed scope, Owner snapshot, H revision, Control Pack, authority, and evaluation input match the current Owner view.");
     }
     setText("package-revision", "Sequence " + decisionView.sequence + " · revision " + h.revision);
     updateActions();
@@ -552,8 +567,9 @@
       if (!snapshot || !sameSnapshot(snapshot.read_envelope, value.read_envelope)) {
         packageAvailable = false;
         packageStale = true;
-        banner("package-staleness", "stale", "STALE READ — the package and overview do not describe the same Owner snapshot. Refresh and reopen the package.");
-        if (!decisionOpen) commandMessage("The package changed while it was loading. The overview is refreshing; open the package again.", "error");
+        const message = model.controls["open-package"].responses.stale_read.message;
+        banner("package-staleness", "stale", message);
+        commandMessage(message, "error");
         updateActions();
         await refreshOverview();
         return;
@@ -566,11 +582,7 @@
       moveFocus("decision-title", true);
     } catch (error) {
       if (requestGeneration !== decisionRequestGeneration) return;
-      packageAvailable = false;
-      banner("package-staleness", "unavailable", "UNAVAILABLE — decision package read failed (" + error.message + ").");
-      if (!decisionOpen) commandMessage("The decision package could not be loaded. Refresh the overview and try again.", "error");
-      if (decisionView) packageStale = true;
-      updateActions();
+      showOwnerUnavailable(readErrorMessage("open-package", error));
     }
   }
 
@@ -620,6 +632,13 @@
     const testMode = Boolean(snapshot && snapshot.continuity && snapshot.continuity.mode === "TEST");
     const canRetry = ownerAvailable && !commandPending;
     byId("refresh-button").disabled = commandPending;
+    byId("open-package").disabled = !canRetry;
+    const switchRole = byId("role-status").querySelector("a");
+    if (switchRole) {
+      const disabled = Boolean(commandPending || unresolvedCorrectionBody || unresolvedCashBody);
+      switchRole.setAttribute("aria-disabled", String(disabled));
+      switchRole.tabIndex = disabled ? -1 : 0;
+    }
     const correctionRetry = Boolean(unresolvedCorrectionBody && canRetry);
     const cashRetry = Boolean(unresolvedCashBody && canRetry);
     setButton("reject-offset", correctionRetry ? false : !reviewed || decided, correctionRetry && "Retry exact correction command");
@@ -637,10 +656,8 @@
   }
 
   function describeError(code, name) {
-    if (code === "store_busy") return "The Owner store was busy and recorded nothing. Retry the same command in a moment.";
-    if (UNCERTAIN_OUTCOMES.includes(code)) {
-      return "Command outcome is unavailable and may have committed. Refresh the overview, reopen the package, and inspect Owner state before retrying.";
-    }
+    if (["Failed to fetch", "NetworkError", "command_outcome_uncertain"].includes(code)) code = "transport_failure";
+    if (code === "command_unavailable") code = "owner_command_unavailable";
     const declared = name && model.controls[name] && model.controls[name].responses[code];
     if (declared && declared.message) return declared.message;
     return {
@@ -648,7 +665,7 @@
       obligation_revision_conflict: "Owner rejected the stale revision. Reopen the H package and review the current revision.",
       evaluation_revision_conflict: "Owner rejected the evaluation binding because it no longer matches the current package.",
       loopback_origin_required: "The service accepts this action only from its exact loopback browser origin.",
-    }[code] || "Command result is unresolved (" + words(code) + "). Refresh the overview and reopen the package before any retry.";
+    }[code] || "Command result is unresolved. Refresh the overview and reopen the package before any retry.";
   }
 
   async function postJson(url, body) {
@@ -681,6 +698,7 @@
 
   async function performAction(name) {
     if (commandPending) return;
+    const decisionWasOpen = decisionOpen;
     const envelope = snapshot && snapshot.read_envelope;
     const startedAt = envelope ? { ...ownerIdentity(envelope), ...snapshotFields(envelope), snapshot_id: envelope.snapshot_id } : null;
     const route = ROUTES[name];
@@ -693,10 +711,10 @@
     updateActions();
     let refreshAfter = false;
     let reopenAfter = false;
+    let responseReceived = false;
     try {
       const result = await postJson(route, body);
-      if (name === "reject-offset") unresolvedCorrectionBody = null;
-      if (name === "record-cash") unresolvedCashBody = null;
+      responseReceived = true;
       const declared = model.controls[name] && model.controls[name].responses.success.message;
       let description = declared || "Command recorded";
       if (name === "acknowledge") {
@@ -707,20 +725,25 @@
       if (name === "restore-test") description += " H decision package equality: " + String(result.continuity.decision_package_equal) + ".";
       const applied = applyCommandSnapshot(result.workspace, startedAt);
       commandMessage(description + (applied ? " The package below now shows the result." : " Reopen the package to review the new Owner sequence."), "success");
+      if (name === "reject-offset") unresolvedCorrectionBody = null;
+      if (name === "record-cash") unresolvedCashBody = null;
+      reopenAfter = decisionOpen;
       if (applied) {
         await refreshCorrectionFollowup(workspaceRequestGeneration);
-        reopenAfter = decisionOpen;
       } else refreshAfter = true;
     } catch (error) {
-      if (!UNCERTAIN_OUTCOMES.includes(error.message)) {
+      const code = responseReceived ? "command_response_unverified" : error.message;
+      if (!UNCERTAIN_OUTCOMES.includes(code)) {
         if (name === "reject-offset") unresolvedCorrectionBody = null;
         if (name === "record-cash") unresolvedCashBody = null;
       }
-      if (error.message === "owner_read_unavailable") {
-        showOwnerUnavailable();
+      const message = describeError(code, name);
+      const response = model.controls[name].responses[code === "command_unavailable" ? "owner_command_unavailable" : code];
+      commandMessage(message, "error");
+      if (response && response.screen === "unavailable") {
+        showOwnerUnavailable(message);
       } else {
-        commandMessage(describeError(error.message, name), "error");
-        if (error.message === "obligation_revision_conflict") {
+        if (code === "obligation_revision_conflict") {
           packageStale = true;
           banner("package-staleness", "stale", "STALE REVIEW — Owner rejected the package binding. Reload the overview and reopen H before continuing.");
         }
@@ -731,7 +754,7 @@
       detectPackageStaleness();
       renderDecision(); moveFocus("command-status", false);
       if (refreshAfter) await refreshOverview();
-      else if (reopenAfter) await openPackage();
+      if (ownerAvailable && (reopenAfter || (decisionWasOpen && !decisionOpen))) await openPackage();
     }
   }
 

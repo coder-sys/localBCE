@@ -30,7 +30,12 @@ from tests.rightrail_financial_expected_cases import (
     PROGRAM_ITEMS,
     UNAPPROVED_OFFSET_CENTS,
 )
-from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
+from tests.test_right_rail_financial_acceptance import (
+    _control_pack_from_fixture,
+    _correction_transition_test_release,
+    _items_from_fixture,
+    _population_manifest_from_fixture,
+)
 
 class _Clock:
     def __init__(self, value: int = 1_774_828_801_000) -> None:
@@ -100,60 +105,12 @@ class FinancialMirrorTests(unittest.TestCase):
         return status, json.loads(stdout) if stdout else {}, stderr
 
     def _populate_owner(self) -> None:
-        scope = CONTROL_PACK_V1.scope
-        pack = owner.ControlPack(
-            pack_id=CONTROL_PACK_V1.pack_id,
-            state_id=scope.state_id,
-            deployment_id=scope.deployment_id,
-            program_id=scope.program_id,
-            period_id=scope.period_id,
-            version=CONTROL_PACK_V1.version,
-            source_refs=CONTROL_PACK_V1.source_refs,
-            effective_start_ms=CONTROL_PACK_V1.effective_start_ms,
-            effective_end_ms=CONTROL_PACK_V1.effective_end_ms,
-            recorded_at_ms=CONTROL_PACK_V1.recorded_at_ms,
-            approved_at_ms=CONTROL_PACK_V1.approved_at_ms,
-            calculation_rule_id=CONTROL_PACK_V1.calculation_rule_id,
-            adjustment_rule_id=CONTROL_PACK_V1.adjustment_rule_id,
-            authorized_roles=CONTROL_PACK_V1.authorized_roles,
-            expected_tests=CONTROL_PACK_V1.expected_tests,
-        )
+        pack = _control_pack_from_fixture(CONTROL_PACK_V1)
         self.store.publish_control_pack(pack)
         manifest_fixture = POPULATION_MANIFEST_V1
-        manifest = owner.PopulationManifest(
-            manifest_id=manifest_fixture.manifest_id,
-            manifest_version=manifest_fixture.manifest_version,
-            state_id=manifest_fixture.scope.state_id,
-            deployment_id=manifest_fixture.scope.deployment_id,
-            program_id=manifest_fixture.scope.program_id,
-            period_id=manifest_fixture.scope.period_id,
-            currency=manifest_fixture.scope.currency,
-            pack_id=manifest_fixture.pack_id,
-            cutoff_ms=manifest_fixture.cutoff_ms,
-            inclusion_rules=manifest_fixture.inclusion_rules,
-            source_owner_id=manifest_fixture.source_owner_id,
-            authority_id=self.authority.authority_id,
-            authority_epoch=self.authority.epoch,
-            authority_digest=self.authority.digest,
-            approved_by=manifest_fixture.approved_by,
-            approval_ref=manifest_fixture.approval_ref,
-            source_id=manifest_fixture.source_id,
-            source_version=manifest_fixture.source_version,
-            source_digest=bytes.fromhex(manifest_fixture.source_digest_hex),
-            member_ids=manifest_fixture.member_ids,
-        )
+        manifest = _population_manifest_from_fixture(manifest_fixture, self.authority)
         self.store.register_population_manifest(manifest)
-        items = tuple(
-            owner.PopulationItem(
-                population_id=item.population_id,
-                item_id=item.item_id,
-                display_label=item.display_label,
-                owed_cents=item.owed_cents,
-                due_at_ms=item.due_at_ms,
-                currency=item.currency,
-            )
-            for item in PROGRAM_ITEMS
-        )
+        items = _items_from_fixture(PROGRAM_ITEMS, None)
         self.store.stage_population(
             population_id=items[0].population_id,
             manifest_id=manifest.manifest_id,

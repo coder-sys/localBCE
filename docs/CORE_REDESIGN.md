@@ -207,3 +207,104 @@ domains, theorem statements, and `tests/test_right_rail_financial_constitution_i
    never current source truth. Independent post-edit review found no remaining
    source-boundary blocker. Current combined-source regression evidence and
    outstanding build requirements are recorded only in `STATUS.md`.
+
+## Receiver cash-file boundary (XI.2 design, 2026-09-26)
+
+Felt effect: during reconciliation, an implementation lead can preview one
+fictional receiver file against the reviewed ledger, then explicitly record its
+cash evidence as one transaction. This removes repeated manual entry while
+preserving exact retries and a visible all-or-nothing result. No money moves.
+
+- Predicate: accept only `RR/FINANCIAL/RECEIVER-CASH-FILE/v1`, canonical ASCII
+  JSON of at most 1 MiB, with 1-1,000 ordered rows. Root fields are exactly
+  `contract`, `source_class`, `scope`, `source`, `row_count`, `total_cents`,
+  `rows`; `source_class` is `SYNTHETIC_RECEIVER_CASH`. Scope has exactly the
+  existing state/deployment/program/period/currency fields, currency USD.
+  Source has `source_id`, `version`, `receiver_system_id`, `capture_id`,
+  `captured_at_ms`. Each row has exactly eight fields: `item_id`, `payment_id`,
+  `common_origin_id`, `evidence_id`, `amount_cents`, `event_at_ms`,
+  `pays_action_id`, `expected_revision`. The action link is explicitly null or
+  an ID. Earlier planning called this nine fields but listed only these eight;
+  eight is the intended exact set, with no implicit extra field.
+- Invariant/failure: untrusted input never skips a row, turns acknowledgment or
+  reporting into cash, substitutes an ID with the same total, or commits a
+  partial file. IDs/version use the owner's 128-character grammar. Cents are
+  positive integers and their sum is at most 2^63-1; times are integers from
+  zero through 2^63-1, event time no later than capture time; revision is an
+  integer from zero through 9,999. Booleans are not integers. Reject duplicate
+  JSON keys, missing/extra fields, noncanonical bytes, duplicate payment/evidence
+  IDs or item/origin pairs, and count/total disagreement. MCO reports, X12
+  820/835 and MMIS extracts are unsupported formats and refuse completely.
+- Evidence: `record_payment_evidence` can return CONFLICT after recording
+  conflict evidence, or DUPLICATE with a different payment ID after recording
+  alias evidence. `run_batch` rolls back exceptions, not those statuses. Checking
+  only its returned report would accept partial or differently bound work.
+  `_write` can also seal history after the batch body, so the final independent
+  check must occur after sealing and before COMMIT.
+- Disposition: add this explicitly fictional input contract; retain all owner
+  commands, cash rules, existing wire/digest domains, expected answers and
+  limits. No caller-provided callback or success flag authorizes acceptance.
+- Replacement control: the caller separately supplies trusted scope, source
+  context, source SHA-256, original baseline SHA-256, owner ID/mode and authority.
+  Let F be exact file bytes and B the ORIGINAL reviewed Continuity bytes.
+  Every derived command binds `local_ref = UPPER(SHA256(F)) || UPPER(SHA256(B))`.
+  A retry never replaces B with a fresh snapshot. Producer and verifier parse
+  and reconstruct independently; the verifier does not import the producer.
+  Freeze commands before comparison. Under the same BEGIN IMMEDIATE, verify
+  the whole current store and its same-connection snapshot, then bind identity,
+  scope, epoch, history and the execution baseline. New work requires exact
+  baseline equality. An older baseline is allowed only as an authenticated
+  ancestor followed by all exact duplicates with the requested payment IDs.
+  After final sealing, independently verify the store, row/command order,
+  payment/evidence/action links, revisions and per-item cash deltas; other cash,
+  acknowledgments and reporting remain unchanged. An all-duplicate result must
+  leave durable state identical and make zero SQL changes. Any mismatch rolls
+  back the whole file. Publish the receipt only after COMMIT succeeds.
+  Preview is the default: independently verify and restore B into isolated TEST
+  storage, using that restore's snapshot as execution baseline while retaining
+  F and original B as retry identity. Preview never opens an incumbent writer.
+  Explicit apply uses the same checked boundary. Cleanup failures are visible.
+  CLI apply opens only an existing, current store with the reviewed mode/ID:
+  SQLite `mode=rw` prevents accidental creation; read-only setup checks refuse
+  missing segment/index/append-only metadata instead of migrating it before
+  the import transaction. A missing, empty or disappearing store is refused.
+- Scope: local synthetic receiver cash evidence only. Switch's existing owed
+  comparison schema is unchanged; this is separate cash reconciliation, with
+  no live transport, source authentication/truth, payment or activation claim.
+- Receipt: `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v1` has exactly `contract`,
+  `mode` (PREVIEW or APPLIED), `source_sha256`, `baseline_sha256`, `row_count`,
+  `recorded_count`, `duplicate_count`, `file_total_cents`, `recorded_cents`,
+  `duplicate_cents`, `cash_before_cents`, `cash_after_cents`, `cash_delta_cents`,
+  `proofSuiteId` (null), `production_usable` (false), `activation` (false).
+  Amounts come from independently checked pre/post cash; duplicates add zero
+  cash, including payments reversed after their original receipt. No intermediate
+  owner projection or raw file/error data is exported in this result.
+- Duration: v1 is a new contract with no implicit legacy migration. Subsequent
+  changes require a new explicit compatibility decision and fresh evidence.
+- Claims withdrawn: this design is not implementation or verification. Required
+  evidence covers field/context/identity mutations, altered command order,
+  exact bounds, original-baseline retry and reversal, stale/concurrent/mixed
+  batches, alias/conflict rollback, action limits, crashes/lost responses,
+  no ACK/report effects, source preservation, privacy and cleanup, independent
+  verification, Continuity and existing consumers. Status records actual runs.
+
+## Browser conformance correction (2026-09-26)
+
+Felt effect: staff receiving a busy or lost response can recover without a
+second cash/decision write, and read failures clearly disable unsafe commands.
+The declared model currently omits retained exact-retry bodies and busy/uncertain
+responses; some read failures also leave a different screen/message than it
+declares. Replace those incomplete predicates with the actual reviewed retry
+states and fixed response vocabulary. Preserve the original command body after
+uncertainty, distinguish confirmed refusal from unknown outcome, and require a
+fresh verified read before a new command. A read error reaches the declared
+unavailable state with a working refresh path; commands remain disabled there.
+Keep financial API payloads, authority and owner decisions unchanged.
+
+The scorecard's simulated DOM does not establish browser conformance. Replace
+that implementation with a real browser over the same HTTP server while
+retaining the existing scorecard answers, journeys and fault checks. Exercise
+each declared role/control/response, actual enabled state, message, destination
+and recovery; distinguish injected HTTP response rendering from actual owner
+refusal and crash tests. Isolate and close only the test browser. No old model
+pass is inherited as evidence for the corrected model or actual browser.

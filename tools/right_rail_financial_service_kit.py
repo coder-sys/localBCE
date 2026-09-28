@@ -97,6 +97,8 @@ STATE_FILES = (
     "app/minimal_clearance_resource_limits.py",
     "app/minimal_clearance_verifier_process.py",
     "app/right_rail_financial_engine.py",
+    "app/right_rail_financial_cash_file.py",
+    "app/right_rail_financial_cash_file_independent.py",
     "app/right_rail_financial_mirror.py",
     "app/right_rail_financial_owner.py",
     "app/right_rail_financial_owner_independent.py",

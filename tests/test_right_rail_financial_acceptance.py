@@ -410,6 +410,100 @@ raise SystemExit(99)
 """
 
 
+def _control_pack_from_fixture(value: expected.ControlPackExpectation) -> ControlPack:
+    return ControlPack(
+        pack_id=value.pack_id,
+        state_id=value.scope.state_id,
+        deployment_id=value.scope.deployment_id,
+        program_id=value.scope.program_id,
+        period_id=value.scope.period_id,
+        version=value.version,
+        source_refs=value.source_refs,
+        effective_start_ms=value.effective_start_ms,
+        effective_end_ms=value.effective_end_ms,
+        recorded_at_ms=value.recorded_at_ms,
+        approved_at_ms=value.approved_at_ms,
+        calculation_rule_id=value.calculation_rule_id,
+        adjustment_rule_id=value.adjustment_rule_id,
+        authorized_roles=value.authorized_roles,
+        expected_tests=value.expected_tests,
+    )
+
+
+def _items_from_fixture(
+    items: tuple[expected.PopulationItemExpectation, ...], population_id: str | None,
+) -> tuple[PopulationItem, ...]:
+    return tuple(
+        PopulationItem(
+            population_id=item.population_id if population_id is None else population_id,
+            item_id=item.item_id,
+            display_label=item.display_label,
+            owed_cents=item.owed_cents,
+            due_at_ms=item.due_at_ms,
+            currency=item.currency,
+        )
+        for item in items
+    )
+
+
+def _population_manifest_from_fixture(
+    fixture: expected.PopulationManifestExpectation,
+    authority: SyntheticTrustedAuthority,
+    *,
+    manifest_id: str | None = None,
+    source_owner_id: str | None = None,
+    member_ids: tuple[str, ...] | None = None,
+    manifest_version: int | None = None,
+    supersedes: PopulationManifest | None = None,
+    approved_by: str | None = None,
+    approval_ref: str | None = None,
+    inclusion_rules: tuple[str, ...] | None = None,
+    cutoff_ms: int | None = None,
+) -> PopulationManifest:
+    scope = fixture.scope
+    version = manifest_version
+    if version is None:
+        version = supersedes.manifest_version + 1 if supersedes is not None else fixture.manifest_version
+    return PopulationManifest(
+        manifest_id=manifest_id or fixture.manifest_id,
+        manifest_version=version,
+        state_id=scope.state_id,
+        deployment_id=scope.deployment_id,
+        program_id=scope.program_id,
+        period_id=scope.period_id,
+        currency=scope.currency,
+        pack_id=fixture.pack_id,
+        cutoff_ms=fixture.cutoff_ms if cutoff_ms is None else cutoff_ms,
+        inclusion_rules=fixture.inclusion_rules if inclusion_rules is None else inclusion_rules,
+        source_owner_id=source_owner_id or fixture.source_owner_id,
+        authority_id=authority.authority_id,
+        authority_epoch=authority.epoch,
+        authority_digest=authority.digest,
+        approved_by=approved_by or fixture.approved_by,
+        approval_ref=approval_ref or fixture.approval_ref,
+        source_id=fixture.source_id,
+        source_version=fixture.source_version,
+        source_digest=bytes.fromhex(fixture.source_digest_hex),
+        member_ids=fixture.member_ids if member_ids is None else member_ids,
+        supersedes_manifest_id=None if supersedes is None else supersedes.manifest_id,
+        supersedes_digest=None if supersedes is None else supersedes.digest,
+    )
+
+
+def _record_fixture_support(store: FinancialOwner, evidence: expected.EvidenceExpectation) -> None:
+    store.record_support_evidence(
+        item_id=evidence.item_id,
+        evidence_id=evidence.evidence_id,
+        common_origin_id=evidence.common_origin_id,
+        source_id=evidence.source_id,
+        source_version=evidence.source_version,
+        local_ref=evidence.local_ref,
+        applicable_at_ms=evidence.applicable_at_ms,
+        event_at_ms=evidence.event_at_ms,
+        received_at_ms=evidence.received_at_ms,
+    )
+
+
 class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="right-rail-financial-acceptance-")
@@ -693,37 +787,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     @staticmethod
     def _pack(value: expected.ControlPackExpectation) -> ControlPack:
-        return ControlPack(
-            pack_id=value.pack_id,
-            state_id=value.scope.state_id,
-            deployment_id=value.scope.deployment_id,
-            program_id=value.scope.program_id,
-            period_id=value.scope.period_id,
-            version=value.version,
-            source_refs=value.source_refs,
-            effective_start_ms=value.effective_start_ms,
-            effective_end_ms=value.effective_end_ms,
-            recorded_at_ms=value.recorded_at_ms,
-            approved_at_ms=value.approved_at_ms,
-            calculation_rule_id=value.calculation_rule_id,
-            adjustment_rule_id=value.adjustment_rule_id,
-            authorized_roles=value.authorized_roles,
-            expected_tests=value.expected_tests,
-        )
+        return _control_pack_from_fixture(value)
 
     @staticmethod
     def _items(population_id: str) -> tuple[PopulationItem, ...]:
-        return tuple(
-            PopulationItem(
-                population_id=population_id,
-                item_id=item.item_id,
-                display_label=item.display_label,
-                owed_cents=item.owed_cents,
-                due_at_ms=item.due_at_ms,
-                currency=item.currency,
-            )
-            for item in expected.PROGRAM_ITEMS
-        )
+        return _items_from_fixture(expected.PROGRAM_ITEMS, population_id)
 
     def _population_manifest(
         self,
@@ -739,33 +807,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         inclusion_rules: tuple[str, ...] | None = None,
         cutoff_ms: int | None = None,
     ) -> PopulationManifest:
-        scope = fixture.scope
-        version = manifest_version
-        if version is None:
-            version = supersedes.manifest_version + 1 if supersedes is not None else fixture.manifest_version
-        return PopulationManifest(
-            manifest_id=manifest_id or fixture.manifest_id,
-            manifest_version=version,
-            state_id=scope.state_id,
-            deployment_id=scope.deployment_id,
-            program_id=scope.program_id,
-            period_id=scope.period_id,
-            currency=scope.currency,
-            pack_id=fixture.pack_id,
-            cutoff_ms=fixture.cutoff_ms if cutoff_ms is None else cutoff_ms,
-            inclusion_rules=fixture.inclusion_rules if inclusion_rules is None else inclusion_rules,
-            source_owner_id=source_owner_id or fixture.source_owner_id,
-            authority_id=self.authority.authority_id,
-            authority_epoch=self.authority.epoch,
-            authority_digest=self.authority.digest,
-            approved_by=approved_by or fixture.approved_by,
-            approval_ref=approval_ref or fixture.approval_ref,
-            source_id=fixture.source_id,
-            source_version=fixture.source_version,
-            source_digest=bytes.fromhex(fixture.source_digest_hex),
-            member_ids=fixture.member_ids if member_ids is None else member_ids,
-            supersedes_manifest_id=None if supersedes is None else supersedes.manifest_id,
-            supersedes_digest=None if supersedes is None else supersedes.digest,
+        return _population_manifest_from_fixture(
+            fixture, self.authority, manifest_id=manifest_id, source_owner_id=source_owner_id,
+            member_ids=member_ids, manifest_version=manifest_version, supersedes=supersedes,
+            approved_by=approved_by, approval_ref=approval_ref,
+            inclusion_rules=inclusion_rules, cutoff_ms=cutoff_ms,
         )
 
     @staticmethod
@@ -851,17 +897,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     @staticmethod
     def _record_support(store: FinancialOwner, evidence: expected.EvidenceExpectation) -> None:
-        store.record_support_evidence(
-            item_id=evidence.item_id,
-            evidence_id=evidence.evidence_id,
-            common_origin_id=evidence.common_origin_id,
-            source_id=evidence.source_id,
-            source_version=evidence.source_version,
-            local_ref=evidence.local_ref,
-            applicable_at_ms=evidence.applicable_at_ms,
-            event_at_ms=evidence.event_at_ms,
-            received_at_ms=evidence.received_at_ms,
-        )
+        _record_fixture_support(store, evidence)
 
     @staticmethod
     def _record_h_support(store: FinancialOwner) -> None:
