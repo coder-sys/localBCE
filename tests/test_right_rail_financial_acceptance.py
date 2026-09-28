@@ -1641,15 +1641,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             expected.ACTION_CORRECTION_ID,
             "ack:process-postcommit-correction",
         )
-        reopened_outputs = reopened_process_postcommit.correction_followup_outputs(
+        # G2: an acknowledgment moves no dependency value, so the correction stays closed.
+        acknowledged_outputs = reopened_process_postcommit.correction_followup_outputs(
             expected.H_ITEM_ID,
             expected.ACTION_CORRECTION_ID,
         )
-        self.assertEqual(reopened_outputs["followup_status"], "REOPENED")
-        self.assertEqual(
-            reopened_outputs["corporate_support"]["error_class"],
-            "STALE_DEPENDENCY",
-        )
+        self.assertEqual(acknowledged_outputs["followup_status"], "CURRENT")
+        self.assertEqual(acknowledged_outputs["corporate_support"]["error_class"], "NONE")
         process_postcommit_package = reopened_process_postcommit.export_continuity()
         process_postcommit_counts = self._durable_counts(reopened_process_postcommit.path)
         process_postcommit_duplicate = self._reject(reopened_process_postcommit, process_postcommit_claim, process_postcommit_receipt)
@@ -5214,10 +5212,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._pay_a(store, 100_000)
         self._pay_a(store, 50_000, "p3", linked=False)
 
-        def resend(suffix: str, pays_action_id: str | None) -> dict[str, object]:
+        def resend(suffix: str, pays_action_id: str | None, document: str = "") -> dict[str, object]:
             return store.record_payment_evidence(
                 item_id=expected.H_ITEM_ID, payment_id=f"payment:h:resent-{suffix}", common_origin_id=f"origin:payment:h:{suffix}",
-                amount_cents=100_000 if suffix == "p2" else 50_000, evidence_id=f"evidence:payment-h:resent-{suffix}",
+                amount_cents=100_000 if suffix == "p2" else 50_000, evidence_id=f"evidence:payment-h:resent-{suffix}{document}",
                 event_at_ms=expected.CORRECTION_AUTH_MS + 500, pays_action_id=pays_action_id,
             )
 
@@ -5227,9 +5225,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 resend(suffix, link)
         self.assertEqual(self._durable_counts(store.path), counts)
         self.assertEqual(resend("p2", expected.ACTION_CORRECTION_ID)["status"], "DUPLICATE")
-        # A bank confirmation of a linked payment does not know the internal link: it corroborates, never conflicts.
-        self.assertEqual(resend("p2", None)["status"], "DUPLICATE")
-        self.assertEqual(resend("p3", None)["status"], "DUPLICATE")
+        # A bank confirmation of a linked payment is its own document and does not know the internal link:
+        # it corroborates, never conflicts.
+        self.assertEqual(resend("p2", None, ":bank")["status"], "DUPLICATE")
+        self.assertEqual(resend("p3", None, ":bank")["status"], "DUPLICATE")
         self._assert_verified(store)
 
     def test_a_relabelled_second_correction_is_refused(self) -> None:

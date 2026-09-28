@@ -105,6 +105,32 @@ the correction it pays; an acknowledgment still has zero cash effect.
 - **Scope/duration:** provenance text only; no pin, digest, vector or gate changes.
 - **Claims withdrawn:** r80/r84/r85/r88 are not evidence for `86390ab`.
 
+### Correction follow-up changed dependencies (2026-09-28, XI.2 record)
+
+- **Predicate:** the correction explanation and State report
+  (`CORRECTION-EXPLANATION/v1`, `CORRECTION-REPORT/v1`) gain
+  `changed_dependencies`: sorted, unique keys such as
+  `COLLECTION(OFFSET_EVIDENCE, <item>)`. Mirror allowlists and checks the field.
+- **Invariant / failure:** follow-up is REOPENED iff a later event touches a key
+  (`_FOLLOWUP_TOUCHES`) and re-reading it at head gives a new value. An unknown
+  event kind, stored family, or engine, or a moved key that no event explains,
+  is REVIEW_REQUIRED. Before this change, any change to the decision package
+  reopened the work, including a plain acknowledgment. A re-sent payment
+  confirmation that the owner records as DUPLICATE (same origin and amount)
+  changes no money value, so it does not reopen the work. A new payment, a
+  reversal or a conflict does.
+- **Evidence:** the G2 Mirror tests (Hospital H journey, unknown kind,
+  acknowledgment/rejection) and the acceptance pin, all run through the guard.
+- **Disposition:** a read-side output field only. No store, event, digest, or
+  Lean change.
+- **Replacement control:** the independent checker still verifies the stored
+  basis at open. Mirror refuses the field unless it is sorted and unique, and it
+  must be non-empty exactly when the status is REOPENED.
+- **Scope/duration:** financial correction follow-up. Evaluation receipts are a
+  follow-up.
+- **Claims withdrawn:** "an acknowledgment reopens a correction". A delivery
+  rejection still does.
+
 The core is roughly 2.5x larger than the invariants need. Root cause: state lives in
 ~20 editable tables with history as a side log, so every consumer (checker, successor,
 continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:
