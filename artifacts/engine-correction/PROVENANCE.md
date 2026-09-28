@@ -131,6 +131,14 @@ The kit binds the complete working-tree inventory at assembly, including frozen
 connector/browser candidates. These Lean and service checks do not establish
 exhaustive browser conformance or qualify those other unfinished tracks.
 
+Source binding (2026-09-28, rr-review H1; XI.2 record in `docs/CORE_REDESIGN.md`).
+r80 was assembled from an uncommitted tree, so r80/r84/r85/r88 are not evidence
+for `86390ab`. Compared file by file (CRLF-normalised), the r80 archive equals
+commit `707ba78`: all 46 `engine/source` Lean files and 26 of 27 `app`/`tools`/
+`tests` files. The exception is `app/right_rail_financial_engine.py`, which is the
+`86390ab` version; `707ba78` replaces its 21-line reject-requirement literal with
+an equal map derived from the tag tables. No pin, digest or vector changes.
+
 ## Reproduced twice
 
 Two clean builds, each in a fresh export under its own `<BUILD_ROOT>`, each

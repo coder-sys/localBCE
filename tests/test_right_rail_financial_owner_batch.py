@@ -314,6 +314,8 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             "deleted": "DELETE FROM program_funding_projection",
             "null-id-successor": "INSERT INTO program_funding_receipts SELECT NULL,state_id,deployment_id,program_id,period_id,currency,source_record_ref,amount_cents,confirmation_class,evidence_status,event_at_ms,recorded_at_ms,receipt_id,receipt_digest FROM program_funding_receipts WHERE receipt_id IN (SELECT receipt_id FROM program_funding_projection)",
             "extra": "INSERT INTO program_funding_projection SELECT source_record_ref||':extra','funding:unknown',amount_cents,event_at_ms,revision,receipt_digest FROM program_funding_projection",
+            # rr-review L2: receipt and projection edited together; only the event payload still holds the truth.
+            "receipt-and-projection": "DROP TRIGGER program_funding_receipt_update_immutable; UPDATE program_funding_receipts SET amount_cents=amount_cents+1; UPDATE program_funding_projection SET amount_cents=amount_cents+1",
         }
         for label, statement in mutations.items():
             with self.subTest(mutation=label):
@@ -325,7 +327,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
                     amount_cents=original["amount_cents"], event_at_ms=original["event_at_ms"],
                 )
                 with closing(sqlite3.connect(owner.path)) as connection, connection:
-                    connection.execute(statement)
+                    connection.executescript(statement)
                 history, rows, sequence = _history(owner.path), _rows(owner.path), owner.summary()["sequence"]
                 for command in (
                     lambda: owner.record_support_evidence(**_support("evidence:funding-refused", "origin:funding-refused")[1]),

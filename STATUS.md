@@ -46,6 +46,8 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   bytecode files written by the extra restart test in the old extraction; r88
   freshly extracted the unchanged archive and passed both serve/restart cycles
   with stricter harness cleanup. The r88 extraction is the clean handoff.
+  Those kit runs packaged the source committed as `707ba78` (then uncommitted),
+  not `86390ab`; the engine module differs by an equal derived map (PROVENANCE).
   Clean checkout `e3fb69f` passed all 24 kit/size/protected-invariant checks in
   r89 (19.393 s, zero failures/errors/skips); child/guard exits zero, cleanup PASS.
   Its Lean tree is unchanged from the fresh build and formal proof evidence.

@@ -2301,7 +2301,8 @@ class FinancialOwner:
             "OR p.source_record_ref IS NOT r.source_record_ref OR p.amount_cents IS NOT r.amount_cents "
             "OR p.event_at_ms IS NOT r.event_at_ms OR p.receipt_digest IS NOT r.receipt_digest "
             "OR p.revision IS NOT e.after_revision OR e.before_revision IS NOT p.revision-1 "
-            "OR e.committed_at_ms IS NOT r.recorded_at_ms "
+            "OR e.committed_at_ms IS NOT r.recorded_at_ms OR json_extract(e.payload_json,'$.amount_cents') IS NOT r.amount_cents "
+            "OR json_extract(e.payload_json,'$.receipt_digest') IS NOT hex(r.receipt_digest) "
             "OR e.kind IS NOT CASE WHEN r.supersedes_receipt_id IS NULL THEN 'FUNDING_RECEIPT_RECORDED' "
             "ELSE 'FUNDING_RECEIPT_SUPERSEDED' END LIMIT 1"
         ).fetchone()
@@ -4010,7 +4011,7 @@ class FinancialOwner:
             if existing is not None:  # existing_id is None here: that retry path returned or failed above
                 if int(existing["amount_cents"]) == amount_cents:
                     recorded_link = connection.execute("SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')=?", (obligation["obligation_id"], existing["payment_id"])).fetchone()[0]
-                    if pays_action_id != recorded_link:  # a re-sent source may not change, add or remove its link
+                    if pays_action_id not in (None, recorded_link):  # it may not change or add a link; an outside confirmation that omits it corroborates
                         _fail(FinancialConflictError, "payment_request_conflict")
                     now_ms = self._now()
                     if evidence_status == "INSERTED":

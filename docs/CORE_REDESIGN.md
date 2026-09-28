@@ -88,6 +88,23 @@ engine and history checker, then exercise retry and restore without rebuilding
 missing package contents by hand. Finance staff's cash command now identifies
 the correction it pays; an acknowledgment still has zero cash effect.
 
+### Kit evidence source binding (2026-09-28, XI.2 record)
+
+- **Predicate:** `artifacts/engine-correction/PROVENANCE.md` may cite a run only
+  for the source it actually packaged.
+- **Invariant / failure:** r80/r84/r85/r88 were recorded as evidence for
+  `86390ab`, but r80 packaged an uncommitted tree (cash-file modules, Owner
+  `existing_only`) (rr-review H1).
+- **Evidence:** a file-by-file comparison of the r80 archive with commit
+  `707ba78` found every Lean source and 26 of 27 source files identical. The one
+  difference is `right_rail_financial_engine.py`, whose derived reject map equals
+  the archive's literal.
+- **Disposition:** append a source-binding paragraph; edit no earlier text.
+- **Replacement control:** the comparison script is rerunnable against any
+  commit. A new kit is assembled from a clean checkout before any release claim.
+- **Scope/duration:** provenance text only; no pin, digest, vector or gate changes.
+- **Claims withdrawn:** r80/r84/r85/r88 are not evidence for `86390ab`.
+
 The core is roughly 2.5x larger than the invariants need. Root cause: state lives in
 ~20 editable tables with history as a side log, so every consumer (checker, successor,
 continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:

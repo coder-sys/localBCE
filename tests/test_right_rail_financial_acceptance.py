@@ -5222,11 +5222,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
 
         counts = self._durable_counts(store.path)
-        for suffix, link in (("p2", None), ("p2", _ACTION_B), ("p3", expected.ACTION_CORRECTION_ID), ("p3", _ACTION_B)):
+        for suffix, link in (("p2", _ACTION_B), ("p3", expected.ACTION_CORRECTION_ID), ("p3", _ACTION_B)):
             with self.subTest(suffix=suffix, link=link), self.assertRaisesRegex(FinancialConflictError, "^payment_request_conflict$"):
                 resend(suffix, link)
         self.assertEqual(self._durable_counts(store.path), counts)
         self.assertEqual(resend("p2", expected.ACTION_CORRECTION_ID)["status"], "DUPLICATE")
+        # A bank confirmation of a linked payment does not know the internal link: it corroborates, never conflicts.
+        self.assertEqual(resend("p2", None)["status"], "DUPLICATE")
         self.assertEqual(resend("p3", None)["status"], "DUPLICATE")
         self._assert_verified(store)
 
