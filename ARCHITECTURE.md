@@ -65,7 +65,7 @@ bounded check scans current funding sources, not the complete event
 history, and runs twice per batch rather than per nested command — it
 detects current-projection drift, while independent full replay still
 checks historical rows, digests and the whole store. Felt effect: finance
-staff cannot continue recording work or read a funding total once its
+staff cannot continue recording work or read a funding total once its current
 stored values have drifted from the recorded receipts. No new persistent
 format or trust root.
 

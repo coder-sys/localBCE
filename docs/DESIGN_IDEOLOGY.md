@@ -28,7 +28,7 @@ malformed proof, weaken atomic mutation, or relabel a nonqualifying result.
 ## Small trusted core and modular interfaces
 
 Prefer one canonical owner, a small trusted state machine, narrow versioned
-interfaces and independently reconstructed boundaries. Every module states
+interfaces and independently reconstructed boundaries. Every module must state
 what it owns, receives, may mutate, and which evidence proves the boundary.
 No second ledger, speculative orchestration layer, or duplicate receipt
 format to compensate for an unresolved contract.
