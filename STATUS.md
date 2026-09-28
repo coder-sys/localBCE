@@ -282,7 +282,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   Lean together, retain supported rule/version/role checks and digest/length
   bounds, rebuild, then exercise different amounts, recipients and timetable
   through correction, linked cash and Continuity. No partial policy change made.
-- Dependency-aware follow-up (G2), support v2 (G4), conformance packaging (G5),
+- Dependency-aware follow-up (G2), support v2 (G4),
   shared provider/gate rules and payee-identity integration remain designed work.
   Acknowledgment currently reopens correction follow-up; dependencies do not yet
   identify which fact changed. New protected contracts require their XI.2 record.
