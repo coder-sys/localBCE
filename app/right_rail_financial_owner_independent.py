@@ -1231,6 +1231,8 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
     assert isinstance(previous, bytes)
     for index, row in enumerate(rows, start=1):
         previous = _verify_event(row, index, previous)
+    if any(earlier["committed_at_ms"] > later["committed_at_ms"] for earlier, later in zip(rows, rows[1:])):
+        _fail("history:commit-order")  # the clock never runs backward along the history
     if previous != meta["history_head"]:
         _fail("history:meta-head")
     identity = meta["identity"]
@@ -1305,6 +1307,8 @@ def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.R
                 rows[key].update({column: _package_import_value(value, f"replay:{table}") for column, value in changes.items()})
             else:
                 _fail(f"replay:image:{table}")
+            if table == "evidence" and (row if "row" in image else changes).get("received_at_ms", event["committed_at_ms"]) != event["committed_at_ms"]:
+                _fail("replay:evidence-received-at")  # received is when the event that wrote it committed
     for table in CAPTURED_TABLES:
         if {str(row[0]): dict(row) for row in _bounded_rows(connection, table)} != state[table]:
             _fail(f"replay:{table}")
@@ -2398,10 +2402,7 @@ def _verify_population_history(
                 )
             ):
                 _fail("history:population-manifest-stale-event")
-            committed_at = _time(event["committed_at_ms"], "history:population-committed-at")
-            if previous_committed_at is not None and committed_at < previous_committed_at:
-                _fail("history:population-chronology")
-            previous_committed_at = committed_at
+            previous_committed_at = event["committed_at_ms"]  # in order: history:commit-order
             before = _integer(event["before_revision"], "history:population-before", maximum=MAX_ROWS)
             after = _integer(event["after_revision"], "history:population-after", maximum=MAX_ROWS)
             payload = _parse_json(event["payload_json"], "history:population-payload", max_bytes=MAX_PACKAGE_BYTES)
