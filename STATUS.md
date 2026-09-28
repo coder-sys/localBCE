@@ -191,7 +191,8 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
  passed r84. The archive binds the assembly working tree, including frozen
  connector and browser candidates; these checks do not qualify those other
  tracks. Lean builds need 4,029,372,048 free bytes to start; Python tests
- need 2,200,000,000. Both keep the 2,029,372,048-byte running floor (guard v6).
+ need 2,200,000,000. Both keep the 2,029,372,048-byte running floor (guard v7;
+ 1 GiB and both starts 955,630,224 lower while the owner's away file is valid).
 - Retired engines are historical verification only, through the append-only,
  digest-pinned registry. A missing, malformed or changed registry refuses
  verification. Only the current engine may decide new corrections.
