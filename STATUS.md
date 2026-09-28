@@ -286,6 +286,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   shared provider/gate rules and payee-identity integration remain designed work.
   Acknowledgment currently reopens correction follow-up; dependencies do not yet
   identify which fact changed. New protected contracts require their XI.2 record.
+- Conformance kit (G5): vectors, manifest and correction wire spec in `conformance/`.
 - A READY correction can become stale after later money events; cancel/reduce
   transitions and excess-request accounting remain to build. Reuse still trusts
   recorded input shortfall and ignores the paid list; no application calls it.
