@@ -17,7 +17,7 @@ updated and rechecked.
 liveness run ran out of Java heap on this laptop; they are not results.
 
 Not yet checked: the deeper model (3 nodes, 3 payments, MaxEpoch 4) and liveness
-on the 2-payment model. Both need more memory than the 2.19 GB guard floor
+on the 2-payment model. Both need more memory than the 2.03 GB guard floor
 leaves.
 
 ## Rerun
@@ -27,5 +27,5 @@ java -Xmx512m -cp tla2tools.jar tlc2.TLC -workers 1 -deadlock -config safety.cfg
 java -Xmx512m -cp tla2tools.jar tlc2.TLC -workers 1 -deadlock -config live.cfg gate_failover.tla
 ```
 
-Run through `native/guard/run_guarded_v4.ps1` with `-MinimumStartFreeBytes 2400000000`.
+Run through the shared runner (`rr_guarded.ps1 -Exe java ... -MinFree 2200000000`).
 tla2tools.jar v1.7.4 (SHA-256 `936A262061C914694DFD669A543BE24573C45D5AA0FF20A8B96B23D01E050E88`), Temurin JRE 21.0.12.1.

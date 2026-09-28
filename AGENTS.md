@@ -10,9 +10,11 @@ This is the single RightRail codebase (`rightrail-main`). Read, in order:
 Working rules (details in the constitution):
 
 - All product code lives here. Do not create per-team copies of modules.
-- Heavy runs (builds, tests, provers) go through the guard in `native/guard/`
-  (`run_guarded_v4.ps1`, SHA-256 `57F9EC8AEFE1D0E281B3BB0D76F2F057C8295F99AFDD04305DFC777703ED99FB`)
-  with its 2,190,433,321-byte physical-free floor. Never weaken or bypass it.
+- Heavy runs (builds, tests, provers) go only through the shared runner
+  `C:/Users/neers/rrb/tools/rr_guarded.ps1`, which calls guard v6 (outside this
+  tree; floor 2,029,372,048 bytes; `-MinFree` 2,200,000,000 Python, 4,029,372,048
+  Lean/cargo/native). Never weaken or bypass it. The pinned `native/guard/` v4
+  and `run.ps1` keep their own 2,190,433,321-byte floor and stay unchanged.
 - Lean decides; Python adapters commit. No duplicate policy, no silent fallback.
 - The pinned engine binary in `artifacts/engine-correction/` is built from
   the `lean/` commit its `PROVENANCE.md` names. Any later `lean/` change
