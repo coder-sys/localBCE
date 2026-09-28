@@ -25,7 +25,7 @@ CORE_FILE_LINES = {
     "app/right_rail_financial_mirror.py": 1_541,
     "app/right_rail_financial_engine.py": 1_469,
     "app/right_rail_financial_switch.py": 1_334,
-    "app/right_rail_financial_line_pack.py": 316,
+    "app/right_rail_financial_line_pack.py": 315,
 }
 FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Copy-paste: repeated 6-line windows (>=120 chars) across product Python.

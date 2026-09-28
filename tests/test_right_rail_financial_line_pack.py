@@ -66,20 +66,26 @@ def _reverse(owner: FinancialOwner, n: object, item: int, at_ms: int, recorded_a
     owner.reverse_payment(item_id=f"item:{item}", payment_id=f"payment:{n}", evidence_id=f"evidence:reversal:{n}", event_at_ms=at_ms)
 
 
+def _population(owner: FinancialOwner, authority: SyntheticTrustedAuthority, name: str, owed: dict[str, int]) -> None:
+    items = tuple(PopulationItem(population_id=f"population:line-pack-{name}", item_id=item, display_label=f"synthetic-{item}", owed_cents=cents, due_at_ms=Q4_END) for item, cents in owed.items())
+    owner.register_population_manifest(PopulationManifest(
+        manifest_id=f"manifest:line-pack-{name}", manifest_version=1, **SCOPE, pack_id="pack:line-pack-v1", cutoff_ms=1_000,
+        inclusion_rules=("included:synthetic",), source_owner_id=f"source-owner:line-pack-{name}", authority_id=authority.authority_id,
+        authority_epoch=authority.epoch, authority_digest=authority.digest, approved_by="synthetic-official",
+        approval_ref=f"ref:line-pack-{name}", source_id=f"source:line-pack-{name}", source_version="v1",
+        source_digest=hashlib.sha3_512(name.encode()).digest(), member_ids=tuple(owed),
+    ))
+    owner.stage_population(population_id=f"population:line-pack-{name}", manifest_id=f"manifest:line-pack-{name}", pack_id="pack:line-pack-v1", cutoff_ms=1_000, inclusion_rules=("included:synthetic",), expected_count=len(owed), items=items, chunk_size=3)
+    owner.validate_population(f"population:line-pack-{name}")
+    owner.publish_population(f"population:line-pack-{name}")
+
+
 def _build(directory: Path, authority: SyntheticTrustedAuthority, line_map: bytes) -> FinancialOwner:
     owner = FinancialOwner(path=directory / "line-pack.sqlite3", config=FinancialOwnerConfig(**SCOPE), trusted_authority=authority, clock=_Clock())
     owner.publish_control_pack(_control_pack(1, 1_000, V2_START, _ref(line_map)))
-    items = tuple(PopulationItem(population_id="population:line-pack-v1", item_id=f"item:{i}", display_label=f"synthetic-{i}", owed_cents=owed, due_at_ms=Q4_END) for i, owed in enumerate((50_000, 70_000, 90_000)))
-    owner.register_population_manifest(PopulationManifest(
-        manifest_id="manifest:line-pack-v1", manifest_version=1, **SCOPE, pack_id="pack:line-pack-v1", cutoff_ms=1_000,
-        inclusion_rules=("included:synthetic",), source_owner_id="source-owner:line-pack", authority_id=authority.authority_id,
-        authority_epoch=authority.epoch, authority_digest=authority.digest, approved_by="synthetic-official",
-        approval_ref="ref:line-pack-v1", source_id="source:line-pack-v1", source_version="v1",
-        source_digest=hashlib.sha3_512(b"line-pack-population-v1").digest(), member_ids=tuple(item.item_id for item in items),
-    ))
-    owner.stage_population(population_id="population:line-pack-v1", manifest_id="manifest:line-pack-v1", pack_id="pack:line-pack-v1", cutoff_ms=1_000, inclusion_rules=("included:synthetic",), expected_count=3, items=items, chunk_size=3)
-    owner.validate_population("population:line-pack-v1")
-    owner.publish_population("population:line-pack-v1")
+    owner.publish_control_pack(_control_pack(2, V2_START, V3_START, _ref(line_map.replace(b'"pack_version":1', b'"pack_version":2'))))
+    owner.publish_control_pack(_control_pack(3, V3_START, V3_END, _ref(line_map.replace(b'"pack_version":1', b'"pack_version":3')), "line-map:sha256:" + "0" * 64))
+    _population(owner, authority, "v1", {"item:0": 50_000, "item:1": 70_000, "item:2": 90_000})
     # Each fact is recorded on its own date, in time order; the late-recording tests backdate on purpose.
     _pay(owner, 4, 1, 7_000, Q4_START - 1)  # prior quarter, reversed in Q4 below
     _pay(owner, 5, 2, 4_000, Q4_START + DAY)  # 19A, reversed within Q4 below
@@ -92,8 +98,6 @@ def _build(directory: Path, authority: SyntheticTrustedAuthority, line_map: byte
     owner.record_payment_evidence(item_id="item:2", payment_id="payment:conflict", common_origin_id="origin:2", amount_cents=31_000, evidence_id="evidence:conflict:2", event_at_ms=Q4_START + DAY * 31, source_id=PERSONAL_CARE)
     _pay(owner, 1, 1, 20_000, Q4_END - 1)  # 19A, last millisecond of the quarter
     _pay(owner, 3, 0, 5_000, Q4_END)  # next quarter
-    owner.publish_control_pack(_control_pack(2, V2_START, V3_START, _ref(line_map.replace(b'"pack_version":1', b'"pack_version":2'))))
-    owner.publish_control_pack(_control_pack(3, V3_START, V3_END, _ref(line_map.replace(b'"pack_version":1', b'"pack_version":3')), "line-map:sha256:" + "0" * 64))
     return owner
 
 
@@ -323,12 +327,17 @@ class LateRecordingTests(unittest.TestCase):
             trust = {"trusted_authority": authority, "expected_scope": {**SCOPE, "currency": "USD"}}
 
             def pack(package: bytes, quarter: str, at_ms: int = AT, **changes: object) -> bytes:
-                return build_line_pack(database=Path(tmp) / "line-pack.sqlite3", package_bytes=package, line_map_bytes=line_map, line="19A",
-                                       quarter=quarter, reported_line_cents=1, generated_at_ms=at_ms, **trust, **changes)
+                return build_line_pack(database=Path(tmp) / "line-pack.sqlite3", package_bytes=package, line="19A",
+                                       quarter=quarter, reported_line_cents=1, generated_at_ms=at_ms, **trust, **{"line_map_bytes": line_map, **changes})
 
             closed = pack(owner.export_continuity(), "FFY2025Q4")
             _reverse(owner, 0, 0, Q4_END - DAY, recorded_at_ms=Q4_END)  # dated in Q4, recorded Q1's first millisecond
             _pay(owner, "late", 1, 9_000, Q4_END - 1, recorded_at_ms=Q4_END + DAY)  # dated Q4's last millisecond, recorded in Q1
+            owner.clock.value = Q4_END + DAY * 2  # then a differing amount for Q4's payment:1, a second roster and a new map, all in Q1
+            owner.record_payment_evidence(item_id="item:1", payment_id="payment:1-conflict", common_origin_id="origin:1", amount_cents=21_000, evidence_id="evidence:conflict:1", event_at_ms=Q4_END - 1, source_id=HCBS)
+            _population(owner, authority, "late", {"item:late": 1_000})
+            late_map = line_map.replace(b'"pack_version":1', b'"pack_version":4')
+            owner.publish_control_pack(_control_pack(4, V3_END, V3_END + DAY, _ref(late_map)))
             package = owner.export_continuity()
             rebuilt = pack(package, "FFY2025Q4", at_ms=AT + 1, prior_pack=closed)  # ancestry holds: the old head is in this history
             content = lambda raw: {k: v for k, v in json.loads(raw).items() if k not in {"source", "generated_at_ms", "supersedes"}}
@@ -337,9 +346,16 @@ class LateRecordingTests(unittest.TestCase):
             listed = {quarter: json.loads(pack(package, quarter)) for quarter in ("FFY2025Q3", "FFY2025Q4", "FFY2026Q1", "FFY2026Q2")}
             self.assertEqual({quarter: [(a["kind"], a["payment_id"]) for a in p["prior_quarter_adjustments"]] for quarter, p in listed.items()}, {
                 "FFY2025Q3": [], "FFY2025Q4": [("REVERSAL", "payment:4")],
-                "FFY2026Q1": [("REVERSAL", "payment:0"), ("PAYMENT", "payment:late")], "FFY2026Q2": [],
+                "FFY2026Q1": [("REVERSAL", "payment:0"), ("CONFLICT", "payment:1"), ("PAYMENT", "payment:late")], "FFY2026Q2": [],
             })  # each late fact exactly once
-            self.assertEqual(listed["FFY2026Q1"]["prior_quarter_adjustments"][1], {"kind": "PAYMENT", "payment_id": "payment:late", "amount_cents": 9_000, "paid_quarter": "FFY2025Q4"})
+            self.assertEqual(listed["FFY2026Q1"]["prior_quarter_adjustments"][1:], [
+                {"kind": "CONFLICT", "payment_id": "payment:1", "amount_cents": 20_000, "paid_quarter": "FFY2025Q4"},
+                {"kind": "PAYMENT", "payment_id": "payment:late", "amount_cents": 9_000, "paid_quarter": "FFY2025Q4"},
+            ])
+            self.assertIn("gap:member-manifest-not-complete-at-quarter-end", listed["FFY2026Q1"]["unavailable"])  # two by Q1's end
+            with self.assertRaisesRegex(LinePackError, "line-map-not-in-approved-control-pack"):  # pack v4 was published after Q4 closed
+                pack(package, "FFY2025Q4", line_map_bytes=late_map)
+            self.assertEqual(json.loads(pack(package, "FFY2026Q1", line_map_bytes=late_map))["versions"]["control_pack"]["version"], 4)
             self.assertEqual(([row["payment_id"] for row in listed["FFY2026Q1"]["rows"]], listed["FFY2026Q1"]["total_cents"]), (["payment:3"], 5_000))  # never netted
             # Past year 3000 (where Windows' fromtimestamp raises OSError) the quarter is still computed; past 9998 it is refused.
             far_start = quarter_window("FFY3100Q2")[0]

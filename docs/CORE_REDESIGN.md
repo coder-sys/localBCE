@@ -346,20 +346,26 @@ shown on the pack's face.
     reversed by a record before its end. "Recorded" is the evidence's
     owner-clock `received_at_ms` (bound by the checker, never before
     `event_at_ms`), never a caller's date;
-  - `prior_quarter_adjustments`: each payment or reversal of an earlier
-    quarter's payment, listed once in the quarter that recorded it, never
-    netted. Rows, totals and row evaluations (the last one before quarter end)
-    of a closed quarter never change; the member manifest, line-map binding
-    and amount-conflict gaps are read as of the package and still can;
+  - `prior_quarter_adjustments`: each payment, reversal or amount conflict
+    (`CONFLICT`) of an earlier quarter's payment, listed once in the quarter
+    that recorded it, never netted;
+  - every field reads only what was recorded before quarter end, so a closed
+    quarter's pack changes only in `source`, `generated_at_ms` and
+    `supersedes`: the last evaluation before the end, the
+    Control Pack and population whose publish events committed before it, and
+    the manifest bound to that population unless superseded before it (the
+    Owner refuses to supersede a published roster and never changes a pack's
+    status);
   - each row's evidence digest, evaluation receipt and rule version;
   - a service-period split, the member-manifest digest and a provenance root;
   - coverage as integer cents over the reported line.
 - **Invariant/failure:** the pack is documentation only and carries no
   determination.
-  - A reversed payment, a row not decided under the bound pack, an unbound
-    manifest, a map window short of the quarter, a visible amount conflict,
-    and a cents gap in either direction are each listed in `unavailable`; any
-    gap rules out FULL.
+  - A reversed payment, a row not decided under the bound pack, no single
+    unsuperseded published roster at quarter end, a map window short of the
+    quarter, an amount conflict recorded before quarter end, and a cents gap
+    in either direction are each listed in `unavailable`; any gap rules out
+    FULL.
   - Five never-held items are always listed.
   - A superseding pack must have the same line, quarter and store (genesis,
     owner, mode, scope), a later time, and a head that is this history's

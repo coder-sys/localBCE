@@ -146,9 +146,9 @@ def build_line_pack(database: object, package_bytes: bytes, **inputs: object) ->
     ``database`` is verified in full, read-only, against caller-supplied authority and scope, and
     ``package_bytes`` must be its current snapshot row for row; nothing else is trusted. The same
     inputs always give the same bytes (``generated_at_ms`` is an input, never read from a clock).
-    ``reported_line_cents`` is the state's reported line amount: the coverage denominator. Rows, totals and row
-    evaluations use only what the owner clock recorded before quarter end; a payment or reversal recorded later is
-    listed once, in the adjustments of the quarter that recorded it. Manifest, line-map and conflict gaps may still change.
+    ``reported_line_cents`` is the state's reported line amount: the coverage denominator. Every field reads only what
+    the owner clock recorded before quarter end; a payment, reversal or amount conflict recorded later is listed once,
+    in the adjustments of the quarter that recorded it, so a closed quarter's pack never changes.
     """
     try:
         return _build(database, package_bytes, **inputs)
@@ -182,13 +182,11 @@ def _build(
     entry = _line_entry(line_map_bytes, line, scope["state_id"])
     line_map_sha256 = hashlib.sha256(line_map_bytes).hexdigest().upper()
 
+    # Publish commit times give what held at quarter end (a pack's status and a published import never change after).
+    published = {(e["aggregate_type"], e["aggregate_id"]): e["committed_at_ms"] for e in rows["financial_events"] if e["kind"] in ("CONTROL_PACK_PUBLISHED", "POPULATION_PUBLISHED")}
     # The map is Control Pack data by reference: exactly one approved pack of the map's version lists it, once.
-    bound_packs = [
-        pack for pack in rows["control_packs"]
-        if pack["status"] == "APPROVED"
-        and pack["version"] == entry["pack_version"]
-        and LINE_MAP_SOURCE_REF + line_map_sha256 in json.loads(pack["source_refs_json"])["values"]
-    ]
+    bound_packs = [pack for pack in rows["control_packs"] if pack["status"] == "APPROVED" and published["CONTROL_PACK", pack["pack_id"]] < end_ms
+                   and pack["version"] == entry["pack_version"] and LINE_MAP_SOURCE_REF + line_map_sha256 in json.loads(pack["source_refs_json"])["values"]]
     if len(bound_packs) != 1:
         _fail("line-map-not-in-approved-control-pack")
     pack = bound_packs[0]
@@ -199,21 +197,24 @@ def _build(
     unavailable = set(NOT_HELD)
     if not (pack["effective_start_ms"] <= start_ms and end_ms <= pack["effective_end_ms"]):
         unavailable.add("gap:line-map-window-does-not-cover-quarter")
-    complete = [p for p in rows["population_imports"] if p["status"] == "PUBLISHED" and p["source_complete"] == 1]
-    heads = {row["manifest_id"] for row in rows["population_manifest_heads"]}
+    complete = [p for p in rows["population_imports"] if p["status"] == "PUBLISHED" and p["source_complete"] == 1 and published["POPULATION", p["population_id"]] < end_ms]
+    superseded = {row["supersedes_manifest_id"] for row in rows["population_manifests"] if row["registered_at_ms"] < end_ms}
     bindings = {row["population_id"]: row["manifest_id"] for row in rows["population_manifest_bindings"]}
     manifests = {row["manifest_id"]: row for row in rows["population_manifests"]}
     member_manifest_digest = None
-    if len(complete) == 1 and bindings.get(complete[0]["population_id"]) in heads:
+    if len(complete) == 1 and bindings[complete[0]["population_id"]] not in superseded:  # the head at quarter end
         member_manifest_digest = _hex(manifests[bindings[complete[0]["population_id"]]]["member_digest"])
     else:
-        unavailable.add("gap:member-manifest-not-current-and-complete")
+        unavailable.add("gap:member-manifest-not-complete-at-quarter-end")
 
     evidence = {row["evidence_id"]: row for row in rows["evidence"]}
     obligations = {row["obligation_id"]: row for row in rows["obligations"]}
-    decided ={row["obligation_id"]: row for row in sorted(rows["evaluations"], key=lambda row: row["revision"])
+    decided = {row["obligation_id"]: row for row in sorted(rows["evaluations"], key=lambda row: row["revision"])
                if row["evaluated_at_ms"] < end_ms}
     predicate = entry["payment_class"]
+    conflicts: dict[str, list[int]] = {}  # a differing amount for a payment's origin, by payment
+    for conflict in rows["financial_conflicts"]:
+        conflicts.setdefault(conflict["existing_payment_id"], []).append(conflict["visible_at_ms"])
     pack_rows, split, rule_versions, adjustments = [], {}, set(), []
     for payment in sorted(rows["payments"], key=lambda row: row["payment_id"]):
         proof = evidence[payment["evidence_id"]]
@@ -223,7 +224,7 @@ def _build(
         learned = proof["received_at_ms"]
         undone = None if payment["active"] == 1 else max(evidence[payment["reversed_by_evidence_id"]]["received_at_ms"], learned)
         if payment["event_at_ms"] < start_ms:  # an earlier quarter's payment: facts learned now are listed, never netted
-            for kind, at_ms in (("PAYMENT", learned), ("REVERSAL", undone)):
+            for kind, at_ms in (("PAYMENT", learned), ("REVERSAL", undone), *(("CONFLICT", seen) for seen in sorted(conflicts.get(payment["payment_id"], ())))):
                 if at_ms is not None and start_ms <= at_ms < end_ms:
                     adjustments.append({"kind": kind, "payment_id": payment["payment_id"], "amount_cents": payment["amount_cents"],
                                         "paid_quarter": _quarter_of(payment["event_at_ms"])})
@@ -233,6 +234,8 @@ def _build(
         if undone is not None and undone < end_ms:  # not cash at quarter end; named so a reviewer sees it
             unavailable.add(f"excluded:reversed-payment:{payment['payment_id']}")
             continue
+        if any(seen < end_ms for seen in conflicts.get(payment["payment_id"], ())):
+            unavailable.add(f"gap:amount-conflict-visible:{payment['payment_id']}")
         obligation = obligations[payment["obligation_id"]]
         evaluation = decided.get(payment["obligation_id"])
         if (
@@ -259,10 +262,6 @@ def _build(
         })
         cents, count = split.get(obligation["period_id"], (0, 0))
         split[obligation["period_id"]] = (cents + payment["amount_cents"], count + 1)
-    counted = {row["payment_id"] for row in pack_rows}
-    for conflict in rows["financial_conflicts"]:  # a differing amount for a counted payment's origin
-        if conflict["existing_payment_id"] in counted:
-            unavailable.add(f"gap:amount-conflict-visible:{conflict['existing_payment_id']}")
 
     total = _cents(sum(row["amount_cents"] for row in pack_rows), "total-cents")
     if total < denominator:
