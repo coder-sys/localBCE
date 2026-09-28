@@ -325,3 +325,48 @@ each declared role/control/response, actual enabled state, message, destination
 and recovery; distinguish injected HTTP response rendering from actual owner
 refusal and crash tests. Isolate and close only the test browser. No old model
 pass is inherited as evidence for the corrected model or actual browser.
+
+## Line pack: CMS deferral response (2026-09-28, XI.2 record)
+
+Felt effect: when CMS defers a CMS-64.9 line, a state finance lead gets that
+line and quarter reconciled to the cent in minutes, not weeks. Coverage is
+shown on the pack's face.
+
+- **Predicate:** `app/right_rail_financial_line_pack.py` emits canonical
+  `RR/LINE-PACK/CMS-64.9/v1` JSON from independently verified Continuity bytes
+  and a line map. The line map's SHA-256 is listed in an approved Control Pack
+  `source_refs` entry (`line-map:sha256:<hex>`), so the Control Pack schema is
+  unchanged.
+- **What each pack carries:**
+  - rows of active payments whose payment time falls in the federal fiscal
+    quarter (UTC) and that match the map's program/source predicate;
+  - each row's evidence digest, evaluation receipt and rule version;
+  - a service-period split, the member-manifest digest and a provenance root;
+  - coverage as integer cents over the reported line.
+- **Invariant/failure:** the pack is documentation only and carries no
+  determination.
+  - A reversed payment, a row not decided under the bound pack, an unbound
+    manifest, and a cents gap in either direction are each listed in
+    `unavailable`.
+  - Five never-held items are always listed.
+  - A superseding pack must have the same line, quarter and owner, a later
+    time, and no older sequence.
+- **Evidence:** `tests/test_right_rail_financial_line_pack.py`.
+- **Scope:** derived artifact only. No tables or Owner, Lean, wire or digest
+  changes. `signer` is null because no PQ signing path exists.
+- **Proposed Lean (not written):**
+  - `line_pack_sum_eq_ledger`
+  - `line_pack_rule_version_bound`
+  - `line_pack_complete_or_declares_gap`
+  - `line_pack_deterministic`
+  - `line_pack_chronology_strict`
+  - `line_pack_documentation_only`
+- **Kill criteria:**
+  1. The synthetic pack does not reconcile to a synthetic 64.9 line to the cent.
+  2. Coverage is under about 50% on lines a state actually had deferred.
+  3. Reviewers mostly ask for allowability evidence the Ledger never holds.
+- **Follow-up:**
+  - The W0 growth breakdown needs units, rates and multiple periods, which the
+    Ledger does not hold.
+  - There is no per-claim service date, so the split uses the obligation
+    period.
