@@ -3092,6 +3092,23 @@ def _verify_conflicts(
     return conflicts
 
 
+def _verify_duplicate_evidence(connection: sqlite3.Connection) -> None:
+    """A DUPLICATE label names a confirmation on its obligation's item with no payment or conflict of its own that
+    repeats the named payment of that obligation (same origin, amount); a forged one would hide a new payment."""
+    if connection.execute(
+        "SELECT 1 FROM financial_events f WHERE f.kind='PAYMENT_DUPLICATE_EVIDENCE' AND NOT EXISTS (SELECT 1 FROM evidence e "
+        "JOIN obligations o ON o.item_id=e.item_id JOIN payments p ON p.obligation_id=o.obligation_id "
+        "WHERE f.aggregate_type='OBLIGATION' AND o.obligation_id=f.aggregate_id AND e.kind='PAYMENT_CONFIRMATION' "
+        "AND e.evidence_id=json_extract(f.payload_json,'$.candidate_evidence_id') "
+        "AND p.payment_id=json_extract(f.payload_json,'$.existing_payment_id') "
+        "AND p.common_origin_id=json_extract(f.payload_json,'$.common_origin_id') "
+        "AND e.common_origin_id=p.common_origin_id AND e.amount_cents=p.amount_cents "
+        "AND NOT EXISTS (SELECT 1 FROM payments WHERE evidence_id=e.evidence_id) "
+        "AND NOT EXISTS (SELECT 1 FROM financial_conflicts WHERE candidate_evidence_id=e.evidence_id))"
+    ).fetchone() is not None:
+        _fail("duplicate-evidence:binding")
+
+
 def _evaluation_bindings_json(raw: object, code: str) -> list[dict[str, str]]:
     value = _parse_json(raw, code)
     if not isinstance(value, dict) or set(value) != {"bindings"} or not isinstance(value["bindings"], list):
@@ -4331,6 +4348,7 @@ def _verify_connection(
     )
     actions = _verify_actions(connection, meta, evaluations, claims, determinations, payments)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
+    _verify_duplicate_evidence(connection)
     funding, funding_receipt_ids = _verify_program_funding(connection, meta, events)
     manifest_records = manifest_state["manifests"]
     assert isinstance(manifest_records, dict)

@@ -145,11 +145,11 @@ _FOLLOWUP_TOUCHES: Final[dict[str, tuple[str, ...]]] = {
     "PAYMENT_RECEIVED": ("AUTHORITY", "PAYMENT_EVIDENCE"),
     "PAYMENT_REVERSED": ("AUTHORITY", "PAYMENT_EVIDENCE"),
     "PAYMENT_CONFLICT_VISIBLE": ("AUTHORITY", "PAYMENT_EVIDENCE"),
-    "PAYMENT_DUPLICATE_EVIDENCE": (),  # corroborates an already-bound payment; money is unchanged
+    "PAYMENT_DUPLICATE_EVIDENCE": (),  # repeats an existing payment (the checker binds it); money is unchanged
     "OFFSET_CLAIMED": ("AUTHORITY", "OFFSET_EVIDENCE"),
     "OFFSET_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
     "OFFSET_REJECTED_CORRECTION_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
-    "ACTION_ACKNOWLEDGED": ("AUTHORITY", "DELIVERY_REJECTED"),
+    "ACTION_ACKNOWLEDGED": ("AUTHORITY",),  # an acknowledgment never reopens; nothing records a rejection
     "REPORTING_EVIDENCE_RECORDED": ("AUTHORITY", "REPORT_EVIDENCE"),
     "REPORTING_CORRECTION_RECORDED": ("AUTHORITY", "REPORT_EVIDENCE"),
     **dict.fromkeys(
@@ -6009,11 +6009,17 @@ class FinancialOwner:
                 if value_moved
             }
             bound = {value["evidence_id"] for value in followup["supporting_evidence"]}
-            for evidence_id, kind in connection.execute(  # a re-sent (DUPLICATE) confirmation is not a new fact
-                "SELECT e.evidence_id,e.kind FROM evidence e WHERE e.item_id=? AND NOT EXISTS (SELECT 1 FROM financial_events f "
-                "WHERE f.aggregate_type='OBLIGATION' AND f.aggregate_id=? AND f.kind='PAYMENT_DUPLICATE_EVIDENCE' "
-                "AND json_extract(f.payload_json,'$.candidate_evidence_id')=e.evidence_id)",
-                (item_id, obligation_id),
+            for evidence_id, kind in connection.execute(  # not new facts: the payment this correction requested, and a
+                # re-sent confirmation that made no payment or conflict of its own (the checker binds the label)
+                "SELECT e.evidence_id,e.kind FROM evidence e WHERE e.item_id=:item AND NOT (e.kind='PAYMENT_CONFIRMATION' AND ("
+                "EXISTS (SELECT 1 FROM payments p JOIN financial_events f ON json_extract(f.payload_json,'$.payment_id')=p.payment_id "
+                "WHERE p.evidence_id=e.evidence_id AND f.aggregate_type='OBLIGATION' AND f.aggregate_id=:obligation "
+                "AND f.kind='PAYMENT_RECEIVED' AND json_extract(f.payload_json,'$.pays_action_id')=:work) "
+                "OR NOT EXISTS (SELECT 1 FROM payments WHERE evidence_id=e.evidence_id) "
+                "AND NOT EXISTS (SELECT 1 FROM financial_conflicts WHERE candidate_evidence_id=e.evidence_id) "
+                "AND EXISTS (SELECT 1 FROM financial_events f WHERE f.aggregate_type='OBLIGATION' AND f.aggregate_id=:obligation "
+                "AND f.kind='PAYMENT_DUPLICATE_EVIDENCE' AND json_extract(f.payload_json,'$.candidate_evidence_id')=e.evidence_id)))",
+                {"item": item_id, "obligation": obligation_id, "work": work_id},
             ):
                 if evidence_id not in bound:
                     family = _EVIDENCE_COLLECTION[kind]

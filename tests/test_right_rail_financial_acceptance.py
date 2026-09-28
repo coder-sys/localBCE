@@ -4971,6 +4971,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_a_correction_naming_an_unknown_engine_is_refused(self) -> None:
         store = self._correction_decided_by_engine("AB" * 32)
+        self.assertEqual(store.correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)["followup_status"], "REVIEW_REQUIRED")
         with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-followup-artifact-binding$"):
             self._assert_verified(store)
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-followup-artifact-binding$"):
@@ -5230,6 +5231,29 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(resend("p2", None, ":bank")["status"], "DUPLICATE")
         self.assertEqual(resend("p3", None, ":bank")["status"], "DUPLICATE")
         self._assert_verified(store)
+
+    def test_a_forged_duplicate_label_cannot_hide_a_new_payment(self) -> None:
+        # rr-review H1: a PAYMENT_DUPLICATE_EVIDENCE event appended over a real new payment's confirmation
+        # neither closes the correction's follow-up nor passes the checker.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 1, linked=False)
+        with store._write() as connection:
+            obligation_id, revision, origin = connection.execute(
+                "SELECT obligation_id,o.revision,p.common_origin_id FROM obligations o JOIN payments p USING(obligation_id) WHERE p.payment_id='payment:h:cash'"
+            ).fetchone()
+            store._append_event(
+                connection, aggregate_type="OBLIGATION", aggregate_id=obligation_id, kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=revision,
+                after_revision=revision, committed_at_ms=store._now(),
+                payload={"candidate_evidence_id": "evidence:payment-h:p2", "existing_payment_id": "payment:h:cash", "common_origin_id": origin},
+            )
+        outputs = store.correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)
+        self.assertEqual((outputs["followup_status"], outputs["state_report"]["changed_dependencies"]), ("REOPENED", [f"COLLECTION(PAYMENT_EVIDENCE, {expected.H_ITEM_ID})"]))
+        with self.assertRaisesRegex(IndependentFinancialError, "^duplicate-evidence:binding$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:duplicate-evidence:binding$"):
+            self._make_owner(path=store.path)
 
     def test_a_relabelled_second_correction_is_refused(self) -> None:
         # rr-review round 3 #1: 300,000 unpaid, claims A and B of 200,000; honest requests are 200,000
