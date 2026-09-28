@@ -22,10 +22,11 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 - Line pack (B+, documentation-only CMS-64.9 pack): builds only from a store
   that verify_database has fully verified (read-only), with the package as its
-  exact snapshot. Guarded bplus-fix-r1: 25 run, 24 passed, 1 failed (the
-  Markdown budget, already over at base: 215,227 B). Kill criterion 1 holds
-  (19A 32,345 of 32,345, FULL). Forged package rows and a raw store UPDATE are
-  refused. No Lean or Owner changes. The unbound-manifest gap is untested.
+  exact snapshot; quarters go by owner-clock received time, so a backdated
+  payment or reversal leaves a closed quarter's rows unchanged. Guarded
+  bplus-fix2-r1: 44 run, 43 passed, 1 failed (Markdown budget, over at base).
+  Kill criterion 1 holds (19A 32,345 of 32,345, FULL). No Lean or Owner
+  changes. The unbound-manifest gap is untested.
 - Lean build/proof/kit phase: r77 freshly reproduced the current pinned engine
   with a canonical 46-file source manifest; both fixed vectors matched. r68 built all six Lake
   targets (87 jobs); r69 passed 30 evaluator, 18 decision-package, 42 correction

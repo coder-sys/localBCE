@@ -11,7 +11,7 @@ production_usable=false, activation=false.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import re
@@ -77,7 +77,7 @@ def quarter_window(quarter: str) -> tuple[int, int]:
 
 
 def _quarter_of(at_ms: int) -> str:
-    moment = datetime.fromtimestamp(at_ms // 1000, timezone.utc)
+    moment = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=at_ms)
     return f"FFY{moment.year + (moment.month >= 10)}Q{(moment.month + 2) % 12 // 3 + 1}"
 
 
@@ -116,8 +116,8 @@ def _line_entry(line_map_bytes: bytes, line: str, state_id: str) -> dict:
     return lines[seen.index(line)]
 
 
-def _prior(prior_pack: bytes | None, line: str, quarter: str, source: dict, generated_at_ms: int) -> str | None:
-    """A superseding pack is strictly later: same line, quarter and store; newer time; no older state."""
+def _prior(prior_pack: bytes | None, line: str, quarter: str, source: dict, generated_at_ms: int, heads: dict) -> str | None:
+    """A superseding pack is strictly later: same line, quarter and store; newer time; a head in this history."""
     if prior_pack is None:
         return None
     prior = _decode_canonical_json(prior_pack, maximum=MAX_LINE_PACK_BYTES, label="prior-pack")
@@ -130,10 +130,7 @@ def _prior(prior_pack: bytes | None, line: str, quarter: str, source: dict, gene
             and {k: v for k, v in old.items() if k not in _SOURCE_STATE} == {k: v for k, v in source.items() if k not in _SOURCE_STATE}
         )
         later = type(prior["generated_at_ms"]) is int and prior["generated_at_ms"] < generated_at_ms
-        forward = type(old["sequence"]) is int and (
-            old["sequence"] < source["sequence"]
-            or (old["sequence"] == source["sequence"] and old["history_head"] == source["history_head"])
-        )
+        forward = type(old["history_head"]) is str and heads.get(old["sequence"]) == old["history_head"]
     except (AttributeError, KeyError, TypeError):
         _fail("prior-pack-fields")
     if not same:
@@ -149,7 +146,9 @@ def build_line_pack(database: object, package_bytes: bytes, **inputs: object) ->
     ``database`` is verified in full, read-only, against caller-supplied authority and scope, and
     ``package_bytes`` must be its current snapshot row for row; nothing else is trusted. The same
     inputs always give the same bytes (``generated_at_ms`` is an input, never read from a clock).
-    ``reported_line_cents`` is the state's reported line amount: the coverage denominator.
+    ``reported_line_cents`` is the state's reported line amount: the coverage denominator. Rows, totals and row
+    evaluations use only what the owner clock recorded before quarter end; a payment or reversal recorded later is
+    listed once, in the adjustments of the quarter that recorded it. Manifest, line-map and conflict gaps may still change.
     """
     try:
         return _build(database, package_bytes, **inputs)
@@ -176,7 +175,7 @@ def _build(
     trust = {"expected_scope": expected_scope, "expected_authority": trusted_authority}
     store = verify_database(database, current_snapshot_package=package_bytes, **trust)
     rows = verify_continuity_package(package_bytes, **trust, _include_rows=True)["_decoded_rows"]
-    last_ms = max([e["committed_at_ms"] for e in rows["financial_events"]] + [e["event_at_ms"] for e in rows["evidence"]], default=0)
+    last_ms = max([e["committed_at_ms"] for e in rows["financial_events"]] + [e["received_at_ms"] for e in rows["evidence"]], default=0)
     if generated_at_ms < last_ms:
         _fail("generated-before-package")
     scope = store["scope"]
@@ -212,28 +211,30 @@ def _build(
 
     evidence = {row["evidence_id"]: row for row in rows["evidence"]}
     obligations = {row["obligation_id"]: row for row in rows["obligations"]}
-    evaluations = {row["evaluation_id"]: row for row in rows["evaluations"]}
+    decided ={row["obligation_id"]: row for row in sorted(rows["evaluations"], key=lambda row: row["revision"])
+               if row["evaluated_at_ms"] < end_ms}
     predicate = entry["payment_class"]
-    pack_rows, split, rule_versions, reversed_after, prior_reversals = [], {}, set(), [], []
+    pack_rows, split, rule_versions, adjustments = [], {}, set(), []
     for payment in sorted(rows["payments"], key=lambda row: row["payment_id"]):
         proof = evidence[payment["evidence_id"]]
         if scope["program_id"] != predicate["program_id"] or proof["source_id"] not in predicate["payment_source_ids"]:
             continue
-        # Payment-date basis, and a closed quarter never changes: a payment counts in its quarter if it was
-        # active at quarter end; a later reversal is named in the quarter it falls in, never netted there.
-        reversed_at = None if payment["active"] == 1 else evidence[payment["reversed_by_evidence_id"]]["event_at_ms"]
-        named = {"payment_id": payment["payment_id"], "amount_cents": payment["amount_cents"]}
-        if payment["event_at_ms"] < start_ms and reversed_at is not None and start_ms <= reversed_at < end_ms:
-            prior_reversals.append({**named, "paid_quarter": _quarter_of(payment["event_at_ms"])})
-        if not start_ms <= payment["event_at_ms"] < end_ms:
+        # Quarters go by the owner-clock received_at_ms (checker-bound, never before event_at_ms), not a caller's date.
+        learned = proof["received_at_ms"]
+        undone = None if payment["active"] == 1 else max(evidence[payment["reversed_by_evidence_id"]]["received_at_ms"], learned)
+        if payment["event_at_ms"] < start_ms:  # an earlier quarter's payment: facts learned now are listed, never netted
+            for kind, at_ms in (("PAYMENT", learned), ("REVERSAL", undone)):
+                if at_ms is not None and start_ms <= at_ms < end_ms:
+                    adjustments.append({"kind": kind, "payment_id": payment["payment_id"], "amount_cents": payment["amount_cents"],
+                                        "paid_quarter": _quarter_of(payment["event_at_ms"])})
             continue
-        if reversed_at is not None and reversed_at < end_ms:  # not cash at quarter end; named so a reviewer sees it
+        if learned >= end_ms:  # paid later, or learned only after this quarter closed: a later quarter's adjustment
+            continue
+        if undone is not None and undone < end_ms:  # not cash at quarter end; named so a reviewer sees it
             unavailable.add(f"excluded:reversed-payment:{payment['payment_id']}")
             continue
-        if reversed_at is not None:
-            reversed_after.append(named)
         obligation = obligations[payment["obligation_id"]]
-        evaluation = evaluations.get(obligation["current_evaluation_id"])
+        evaluation = decided.get(payment["obligation_id"])
         if (
             evaluation is None
             or payment["evidence_id"] not in json.loads(evaluation["evidence_ids_json"])["evidence_ids"]
@@ -290,8 +291,7 @@ def _build(
         "total_cents": total,
         "row_count": len(pack_rows),
         "rows": pack_rows,
-        "reversed_after_quarter": reversed_after,
-        "prior_quarter_reversals": prior_reversals,
+        "prior_quarter_adjustments": adjustments,
         "service_period_split": [
             {"service_period_id": period, "cents": cents, "row_count": count}
             for period, (cents, count) in sorted(split.items())
@@ -310,7 +310,7 @@ def _build(
         },
         "source": source,
         "generated_at_ms": generated_at_ms,
-        "supersedes": _prior(prior_pack, line, quarter, source, generated_at_ms),
+        "supersedes": _prior(prior_pack, line, quarter, source, generated_at_ms, {e["event_sequence"]: _hex(e["head"]) for e in rows["financial_events"]}),
         "signer": None,  # no post-quantum signing path exists yet; never RSA/ECDSA
     }
     return _canonical_json(record, maximum=MAX_LINE_PACK_BYTES)

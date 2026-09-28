@@ -48,8 +48,26 @@ def _control_pack(version: int, start: int, end: int, *refs: str) -> ControlPack
     )
 
 
+class _Clock:
+    """The owner clock, set by the fixture: the time the Ledger records (learns) each fact."""
+    value = 1_000
+
+    def now_ms(self) -> int:
+        return self.value
+
+
+def _pay(owner: FinancialOwner, n: object, item: int, cents: int, at_ms: int, source: str = HCBS, recorded_at_ms: int | None = None) -> None:
+    owner.clock.value = at_ms if recorded_at_ms is None else recorded_at_ms
+    owner.record_payment_evidence(item_id=f"item:{item}", payment_id=f"payment:{n}", common_origin_id=f"origin:{n}", amount_cents=cents, evidence_id=f"evidence:payment:{n}", event_at_ms=at_ms, source_id=source)
+
+
+def _reverse(owner: FinancialOwner, n: object, item: int, at_ms: int, recorded_at_ms: int | None = None) -> None:
+    owner.clock.value = at_ms if recorded_at_ms is None else recorded_at_ms
+    owner.reverse_payment(item_id=f"item:{item}", payment_id=f"payment:{n}", evidence_id=f"evidence:reversal:{n}", event_at_ms=at_ms)
+
+
 def _build(directory: Path, authority: SyntheticTrustedAuthority, line_map: bytes) -> FinancialOwner:
-    owner = FinancialOwner(path=directory / "line-pack.sqlite3", config=FinancialOwnerConfig(**SCOPE), trusted_authority=authority)
+    owner = FinancialOwner(path=directory / "line-pack.sqlite3", config=FinancialOwnerConfig(**SCOPE), trusted_authority=authority, clock=_Clock())
     owner.publish_control_pack(_control_pack(1, 1_000, V2_START, _ref(line_map)))
     items = tuple(PopulationItem(population_id="population:line-pack-v1", item_id=f"item:{i}", display_label=f"synthetic-{i}", owed_cents=owed, due_at_ms=Q4_END) for i, owed in enumerate((50_000, 70_000, 90_000)))
     owner.register_population_manifest(PopulationManifest(
@@ -62,20 +80,18 @@ def _build(directory: Path, authority: SyntheticTrustedAuthority, line_map: byte
     owner.stage_population(population_id="population:line-pack-v1", manifest_id="manifest:line-pack-v1", pack_id="pack:line-pack-v1", cutoff_ms=1_000, inclusion_rules=("included:synthetic",), expected_count=3, items=items, chunk_size=3)
     owner.validate_population("population:line-pack-v1")
     owner.publish_population("population:line-pack-v1")
-    for n, (item, cents, at_ms, source) in enumerate((
-        (0, 12_345, Q4_START + DAY * 14, HCBS),   # 19A, mid-quarter
-        (1, 20_000, Q4_END - 1, HCBS),                    # 19A, last millisecond of the quarter
-        (2, 30_000, Q4_START + DAY * 31, PERSONAL_CARE),  # 23A
-        (0, 5_000, Q4_END, HCBS),                         # next quarter
-        (1, 7_000, Q4_START - 1, HCBS),                   # prior quarter, reversed in Q4 below
-        (2, 4_000, Q4_START + DAY, HCBS),          # 19A, reversed within Q4 below
-    )):
-        owner.record_payment_evidence(item_id=f"item:{item}", payment_id=f"payment:{n}", common_origin_id=f"origin:{n}", amount_cents=cents, evidence_id=f"evidence:payment:{n}", event_at_ms=at_ms, source_id=source)
-    owner.reverse_payment(item_id="item:2", payment_id="payment:5", evidence_id="evidence:reversal:5", event_at_ms=Q4_START + DAY * 2)
-    owner.reverse_payment(item_id="item:1", payment_id="payment:4", evidence_id="evidence:reversal:4", event_at_ms=Q4_START + DAY * 3)
+    # Each fact is recorded on its own date, in time order; the late-recording tests backdate on purpose.
+    _pay(owner, 4, 1, 7_000, Q4_START - 1)  # prior quarter, reversed in Q4 below
+    _pay(owner, 5, 2, 4_000, Q4_START + DAY)  # 19A, reversed within Q4 below
+    _reverse(owner, 5, 2, Q4_START + DAY * 2)
+    _reverse(owner, 4, 1, Q4_START + DAY * 3)
+    _pay(owner, 0, 0, 12_345, Q4_START + DAY * 14)  # 19A, mid-quarter
     # The same origin again: an equal amount is a duplicate confirmation, a different amount a visible conflict.
     owner.record_payment_evidence(item_id="item:0", payment_id="payment:duplicate", common_origin_id="origin:0", amount_cents=12_345, evidence_id="evidence:duplicate:0", event_at_ms=Q4_START + DAY * 14, source_id=HCBS)
+    _pay(owner, 2, 2, 30_000, Q4_START + DAY * 31, PERSONAL_CARE)  # 23A
     owner.record_payment_evidence(item_id="item:2", payment_id="payment:conflict", common_origin_id="origin:2", amount_cents=31_000, evidence_id="evidence:conflict:2", event_at_ms=Q4_START + DAY * 31, source_id=PERSONAL_CARE)
+    _pay(owner, 1, 1, 20_000, Q4_END - 1)  # 19A, last millisecond of the quarter
+    _pay(owner, 3, 0, 5_000, Q4_END)  # next quarter
     owner.publish_control_pack(_control_pack(2, V2_START, V3_START, _ref(line_map.replace(b'"pack_version":1', b'"pack_version":2'))))
     owner.publish_control_pack(_control_pack(3, V3_START, V3_END, _ref(line_map.replace(b'"pack_version":1', b'"pack_version":3')), "line-map:sha256:" + "0" * 64))
     return owner
@@ -111,11 +127,11 @@ class LinePackTests(unittest.TestCase):
             return connection.execute(query, parameters).fetchall()
 
     def _ledger_cents(self, source: str, start: int, end: int) -> int:
-        """Payments from ``source`` paid in [start, end) and still active at ``end``."""
+        """Payments from ``source`` paid in [start, end), recorded before ``end`` and not reversed by a record before it."""
         return self._sql(
             "SELECT COALESCE(SUM(p.amount_cents),0) FROM payments p JOIN evidence e ON e.evidence_id=p.evidence_id "
             "LEFT JOIN evidence r ON r.evidence_id=p.reversed_by_evidence_id "
-            "WHERE (p.active=1 OR r.event_at_ms>=?) AND p.event_at_ms>=? AND p.event_at_ms<? AND e.source_id=?",
+            "WHERE (p.active=1 OR r.received_at_ms>=?) AND p.event_at_ms>=? AND e.received_at_ms<? AND e.source_id=?",
             (end, start, end, source),
         )[0][0]
 
@@ -144,17 +160,18 @@ class LinePackTests(unittest.TestCase):
 
     def test_closed_quarter_keeps_a_later_reversal(self) -> None:
         q3 = self._pack(reported=7_000, quarter="FFY2025Q3")
-        self.assertEqual((q3["total_cents"], q3["reversed_after_quarter"]), (7_000, [{"payment_id": "payment:4", "amount_cents": 7_000}]))
+        self.assertEqual(([row["payment_id"] for row in q3["rows"]], q3["prior_quarter_adjustments"]), (["payment:4"], []))
         q4 = self._pack()
-        self.assertEqual(q4["prior_quarter_reversals"], [{"payment_id": "payment:4", "amount_cents": 7_000, "paid_quarter": "FFY2025Q3"}])
-        self.assertEqual((q4["total_cents"], q4["reversed_after_quarter"]), (32_345, []))  # never netted into Q4
+        self.assertEqual(q4["prior_quarter_adjustments"], [{"kind": "REVERSAL", "payment_id": "payment:4", "amount_cents": 7_000, "paid_quarter": "FFY2025Q3"}])
+        self.assertEqual(q4["total_cents"], 32_345)  # never netted into Q4
         self.assertIn("excluded:reversed-payment:payment:5", q4["unavailable"])  # reversed within its own quarter
 
     def test_rule_version_bound(self) -> None:
         pack = self._pack()
         ((pack_digest,),) = self._sql("SELECT pack_digest FROM control_packs WHERE pack_id='pack:line-pack-v1'")
-        decided = {row[0]: (row[1], row[2].hex().upper()) for row in self._sql(
-            "SELECT e.evaluation_id,e.rule_version,e.control_pack_digest FROM evaluations e JOIN obligations o ON o.current_evaluation_id=e.evaluation_id")}
+        decided = {row[0]: (row[1], row[2].hex().upper()) for row in self._sql(  # each obligation's last evaluation before Q4 ends
+            "SELECT e.evaluation_id,e.rule_version,e.control_pack_digest FROM evaluations e WHERE e.evaluated_at_ms<?1 AND NOT EXISTS "
+            "(SELECT 1 FROM evaluations l WHERE l.obligation_id=e.obligation_id AND l.evaluated_at_ms<?1 AND l.revision>e.revision)", (Q4_END,))}
         self.assertEqual(pack["versions"]["control_pack"], {"pack_id": "pack:line-pack-v1", "version": 1, "digest": pack_digest.hex().upper()})
         self.assertEqual(pack["versions"]["line_map_sha256"], hashlib.sha256(self.line_map).hexdigest().upper())
         for row in pack["rows"]:
@@ -203,9 +220,14 @@ class LinePackTests(unittest.TestCase):
             with self.subTest(at_ms=at_ms), self.assertRaisesRegex(LinePackError, "chronology-not-strict"):
                 self._raw(at_ms=at_ms, prior_pack=prior)
         source = json.loads(prior)["source"]
+        ((earlier_head,),) = self._sql("SELECT head FROM financial_events WHERE event_sequence=?", (source["sequence"] - 1,))
+        earlier = {**source, "sequence": source["sequence"] - 1, "history_head": earlier_head.hex().upper()}
+        self.assertIsNotNone(self._pack(at_ms=AT + 1, prior_pack=_encode({**json.loads(prior), "source": earlier}))["supersedes"])
         for edit, code in (
             ({"sequence": source["sequence"] + 1}, "chronology-not-strict"),
             ({"history_head": "0" * 128}, "chronology-not-strict"),  # same sequence, another head
+            ({"sequence": source["sequence"] - 1}, "chronology-not-strict"),  # an earlier sequence whose head is not in this history
+            ({"sequence": source["sequence"] - 1, "history_head": None}, "chronology-not-strict"),
             ({"program_id": "program:other"}, "prior-pack-identity"),
             ({"genesis_head": "0" * 128}, "prior-pack-identity"),
         ):
@@ -215,8 +237,9 @@ class LinePackTests(unittest.TestCase):
             self._raw(at_ms=AT + 1, prior_pack=self._raw("23A", reported=1))
         with self.assertRaisesRegex(LinePackError, "prior-pack:canonical"):
             self._raw(at_ms=AT + 1, prior_pack=prior + b" ")
-        with self.assertRaisesRegex(LinePackError, "generated-before-package"):
-            self._raw(at_ms=Q4_END)
+        with self.assertRaisesRegex(LinePackError, "generated-before-package"):  # the last fact was recorded at Q4_END
+            self._raw(at_ms=Q4_END - 1)
+        self._raw(at_ms=Q4_END)
 
     def test_never_asserts_allowability(self) -> None:
         raw = self._raw()
@@ -228,7 +251,7 @@ class LinePackTests(unittest.TestCase):
             self.assertNotIn(word, raw.lower())
         self.assertEqual(set(pack), {
             "contract", "documentation_only", "claims", "line", "quarter", "window_ms", "payment_date_basis", "total_cents",
-            "row_count", "rows", "reversed_after_quarter", "prior_quarter_reversals", "service_period_split",
+            "row_count", "rows", "prior_quarter_adjustments", "service_period_split",
             "member_manifest_digest", "provenance_root", "unavailable", "coverage", "versions", "source", "generated_at_ms",
             "supersedes", "signer",
         })
@@ -290,6 +313,41 @@ class LinePackTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), self._raw())
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             self.assertEqual(financial_cli.main(["--database", str(self.db), *args]), 2)  # the output file exists: never replaced
+
+
+class LateRecordingTests(unittest.TestCase):
+    def test_a_fact_recorded_after_quarter_end_changes_only_the_quarter_that_records_it(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="rr-line-pack-late-") as tmp:
+            authority, line_map = SyntheticTrustedAuthority(), LINE_MAP.read_bytes()
+            owner = _build(Path(tmp), authority, line_map)
+            trust = {"trusted_authority": authority, "expected_scope": {**SCOPE, "currency": "USD"}}
+
+            def pack(package: bytes, quarter: str, at_ms: int = AT, **changes: object) -> bytes:
+                return build_line_pack(database=Path(tmp) / "line-pack.sqlite3", package_bytes=package, line_map_bytes=line_map, line="19A",
+                                       quarter=quarter, reported_line_cents=1, generated_at_ms=at_ms, **trust, **changes)
+
+            closed = pack(owner.export_continuity(), "FFY2025Q4")
+            _reverse(owner, 0, 0, Q4_END - DAY, recorded_at_ms=Q4_END)  # dated in Q4, recorded Q1's first millisecond
+            _pay(owner, "late", 1, 9_000, Q4_END - 1, recorded_at_ms=Q4_END + DAY)  # dated Q4's last millisecond, recorded in Q1
+            package = owner.export_continuity()
+            rebuilt = pack(package, "FFY2025Q4", at_ms=AT + 1, prior_pack=closed)  # ancestry holds: the old head is in this history
+            content = lambda raw: {k: v for k, v in json.loads(raw).items() if k not in {"source", "generated_at_ms", "supersedes"}}
+            self.assertEqual(content(rebuilt), content(closed))
+            self.assertEqual(json.loads(rebuilt)["supersedes"], hashlib.sha256(closed).hexdigest().upper())
+            listed = {quarter: json.loads(pack(package, quarter)) for quarter in ("FFY2025Q3", "FFY2025Q4", "FFY2026Q1", "FFY2026Q2")}
+            self.assertEqual({quarter: [(a["kind"], a["payment_id"]) for a in p["prior_quarter_adjustments"]] for quarter, p in listed.items()}, {
+                "FFY2025Q3": [], "FFY2025Q4": [("REVERSAL", "payment:4")],
+                "FFY2026Q1": [("REVERSAL", "payment:0"), ("PAYMENT", "payment:late")], "FFY2026Q2": [],
+            })  # each late fact exactly once
+            self.assertEqual(listed["FFY2026Q1"]["prior_quarter_adjustments"][1], {"kind": "PAYMENT", "payment_id": "payment:late", "amount_cents": 9_000, "paid_quarter": "FFY2025Q4"})
+            self.assertEqual(([row["payment_id"] for row in listed["FFY2026Q1"]["rows"]], listed["FFY2026Q1"]["total_cents"]), (["payment:3"], 5_000))  # never netted
+            # Past year 3000 (where Windows' fromtimestamp raises OSError) the quarter is still computed; past 9998 it is refused.
+            far_start = quarter_window("FFY3100Q2")[0]
+            _pay(owner, "far", 1, 1_000, far_start - 1, recorded_at_ms=far_start)
+            far = json.loads(pack(owner.export_continuity(), "FFY3100Q2", at_ms=far_start))
+            self.assertEqual(far["prior_quarter_adjustments"], [{"kind": "PAYMENT", "payment_id": "payment:far", "amount_cents": 1_000, "paid_quarter": "FFY3100Q1"}])
+            with self.assertRaisesRegex(LinePackError, "line-pack:quarter"):
+                pack(package, "FFY9999Q1")
 
 
 if __name__ == "__main__":

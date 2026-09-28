@@ -342,8 +342,15 @@ shown on the pack's face.
   timeout): run it on a quiet store or a copy.
 - **What each pack carries:**
   - rows of payments matching the map's program/source predicate, paid in the
-    federal fiscal quarter (UTC boundaries) and active at its end; a later
-    reversal is listed, never netted, so a closed quarter never changes;
+    federal fiscal quarter (UTC boundaries), recorded before its end and not
+    reversed by a record before its end. "Recorded" is the evidence's
+    owner-clock `received_at_ms` (bound by the checker, never before
+    `event_at_ms`), never a caller's date;
+  - `prior_quarter_adjustments`: each payment or reversal of an earlier
+    quarter's payment, listed once in the quarter that recorded it, never
+    netted. Rows, totals and row evaluations (the last one before quarter end)
+    of a closed quarter never change; the member manifest, line-map binding
+    and amount-conflict gaps are read as of the package and still can;
   - each row's evidence digest, evaluation receipt and rule version;
   - a service-period split, the member-manifest digest and a provenance root;
   - coverage as integer cents over the reported line.
@@ -355,7 +362,10 @@ shown on the pack's face.
     gap rules out FULL.
   - Five never-held items are always listed.
   - A superseding pack must have the same line, quarter and store (genesis,
-    owner, mode, scope), a later time, and a later sequence or the same head.
+    owner, mode, scope), a later time, and a head that is this history's
+    head at its sequence.
+- **Format:** stays `v1` though its fields changed after 17142e3; no pack
+  built before this record is kept as evidence.
 - **Evidence:** `tests/test_right_rail_financial_line_pack.py`.
 - **Scope:** derived artifact only. No tables or Owner, Lean, wire or digest
   changes. `signer` is null because no PQ signing path exists.
