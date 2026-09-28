@@ -13,8 +13,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 
-# Founder expanded the total to 80,000 on 2026-09-26 for connected-workflow work.
-LIVE_CODE_LINES = 80_000
+# Founder 2026-09-28 split the old single 80,000 total so the budget stops charging
+# tests and proofs as bloat. Product code (what runs and must be read to be trusted)
+# ratchets down; lower it to the actual size after the in-flight merges (B+, G2, G3).
+PRODUCT_CODE_LINES = 44_000
+# Tests and Lean proofs: raising needs a commit line naming the behaviours or
+# theorems the new lines cover.
+EVIDENCE_CODE_LINES = 40_000
 MARKDOWN_FILES = 20
 MARKDOWN_BYTES = 180_000
 STATUS_BYTES = 40_000
@@ -48,8 +53,14 @@ def _lines(path):
 
 class BloatBudgetTest(unittest.TestCase):
     def test_live_code_stays_under_ceiling(self):
-        total = sum(_lines(p) for p in _live_files() if os.path.splitext(p)[1].lower() in CODE_EXTS)
-        self.assertLessEqual(total, LIVE_CODE_LINES)
+        totals = {"product": 0, "evidence": 0}
+        for p in _live_files():
+            ext = os.path.splitext(p)[1].lower()
+            if ext in CODE_EXTS:
+                top = os.path.relpath(p, ROOT).split(os.sep)[0]
+                totals["evidence" if ext == ".lean" or top in ("tests", "lean") else "product"] += _lines(p)
+        self.assertLessEqual(totals["product"], PRODUCT_CODE_LINES)
+        self.assertLessEqual(totals["evidence"], EVIDENCE_CODE_LINES)
 
     def test_core_files_stay_under_ceiling(self):
         for rel, ceiling in CORE_FILE_LINES.items():
