@@ -8,7 +8,7 @@ database paths read-only.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 import hashlib
 import json
 import math
@@ -2916,9 +2916,10 @@ def _verify_actions(
     claims: dict[str, sqlite3.Row],
     determinations: dict[str, sqlite3.Row],
     payments: dict[str, sqlite3.Row],
+    only: Collection[str] | None = None,  # per-obligation mode: these obligations' actions, the same rules
 ) -> dict[str, sqlite3.Row]:
-    rows = _bounded_rows(connection, "actions")
-    outbox_rows = _bounded_rows(connection, "action_outbox")
+    rows = [row for row in _bounded_rows(connection, "actions") if only is None or row["obligation_id"] in only]
+    outbox_rows = [row for row in _bounded_rows(connection, "action_outbox") if only is None or row["action_id"] in {action["action_id"] for action in rows}]
     outbox = {str(row["action_id"]): row for row in outbox_rows}
     acks = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.action_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='ACTION_ACKNOWLEDGED'")}
     registry = correction_engines()
@@ -2934,6 +2935,7 @@ def _verify_actions(
         decided[action_ref] = event_amount
     reversed_at = dict(connection.execute("SELECT json_extract(payload_json,'$.payment_id'),after_revision FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_REVERSED'").fetchall())
     links = connection.execute("SELECT aggregate_id,after_revision,json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL").fetchall()
+    links = [link for link in links if only is None or link[0] in only]
     linked: dict[object, list[tuple[int, object, int]]] = {}  # correction action -> (paid at, reversed at, cents)
     for _obligation, paid_revision, payment_id, action_ref in links:
         if payment_id not in payments:
@@ -3615,6 +3617,14 @@ def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids
             _, snapshot = _verify_evaluation_row(connection, meta, row, {obligation_id: obligation}, populations, packs, evidence, _evaluation_event_kinds(connection, obligation_id))
             _verify_exact_input(connection, obligation, snapshot)
             _verify_cases(connection, {obligation_id: obligation}, {obligation_id: row}, obligation_id)
+
+            def mine(table: str, key: str) -> dict[str, sqlite3.Row]:
+                return {str(value[key]): value for value in connection.execute(f"SELECT * FROM {table} WHERE obligation_id=?", (obligation_id,))}
+
+            _verify_actions(  # the amount and requestable rule: what Lean decided is not taken on trust
+                connection, meta, {obligation_id: list(connection.execute("SELECT * FROM evaluations WHERE obligation_id=?", (obligation_id,)))},
+                mine("claimed_adjustments", "claim_id"), mine("determinations", "determination_id"), mine("payments", "payment_id"), only={obligation_id},
+            )
             for key in ("revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
                 if obligation[key] != row[key]:
                     _fail(f"obligation:projection:{key}")

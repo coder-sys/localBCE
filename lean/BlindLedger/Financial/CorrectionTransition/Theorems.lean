@@ -304,4 +304,18 @@ theorem assessCorrectionReuse_never_permits_external_dispatch
     cases hMutation : request.acceptedResult.mutation <;>
       simp [assessCorrectionReuse, assessAcceptedCorrectionReuse, hStatus, hMutation]
 
+/-- A1: a CANCELLED correction request asks for nothing; only uncancelled
+    requests reduce the balance a new correction may request (with B2). -/
+theorem outstandingCorrectionCents_eq_uncancelled (paid : List CorrectionPaid)
+    (actions : List ActionRecord) :
+    outstandingCorrectionCents paid actions =
+      outstandingCorrectionCents paid
+        (actions.filter (fun action => action.status ≠ ActionStatus.CANCELLED)) := by
+  induction actions with
+  | nil => rfl
+  | cons action rest ih =>
+      by_cases hCancelled : action.status = ActionStatus.CANCELLED
+      · simp [List.filter, hCancelled, outstandingCorrectionCents, ih]
+      · simp [List.filter, hCancelled, outstandingCorrectionCents, ih]
+
 end BlindLedger.Financial.CorrectionTransition

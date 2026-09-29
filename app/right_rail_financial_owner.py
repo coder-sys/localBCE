@@ -4590,25 +4590,11 @@ class FinancialOwner:
             and dependencies["correction_paid"] == correction_paid,
             "correction_read_set_binding",
         )
-        # Lean requests only the unpaid balance no earlier correction request still asks for, less
-        # what linked payments paid on it: min(claim, max(input shortfall - unpaid, 0)) (B2, H1).
-        paid = {entry["action_id"]: entry["paid_cents"] for entry in correction_paid}
-        outstanding = sum(
-            max(int(requested) - paid.get(action_ref, 0), 0)
-            for action_ref, requested in connection.execute(
-                "SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions "
-                "WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST'",
-                (obligation_id,),
-            )
-        )
-        action_amount = int(action["amount_cents"])
         require_binding(
-            action["obligation_id"] == obligation_id
-            and action["currency"] == self.config.currency
-            and action_amount
-            == min(expected_claim["amount_cents"], max(int(input_receipt["shortfall_cents"]) - outstanding, 0)),
+            action["obligation_id"] == obligation_id and action["currency"] == self.config.currency,
             "correction_action_binding",
         )
+        action_amount = int(action["amount_cents"])
 
         determination_payload = _determination_digest_payload(
             action_id=action_id,
