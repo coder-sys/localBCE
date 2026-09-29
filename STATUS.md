@@ -94,9 +94,9 @@ in that archive that holds the raw record.
     `gate_rules` passes 242 of 242 vectors (probes P8a-P8d, P9) and all 3,616 demo lines
     (134 held, $46,987.00; 6 review; state ZZ); the unittest fails unless the runner's
     embedded source hash matches Spec, Run, Sha3, lakefile and toolchain, and skips loudly
-    only when it is missing. The mutant batch (Spec, 7 runner-commit and 2 demo mutants)
-    is being rerun (gr2-mut-r3); no kill count is claimed yet. Tests only, not the token path.
-    OPEN: this work puts live code at 85,717, over the 85,597 ceiling (test_bloat_budget
+    only when it is missing. All 194 mutants (185 Spec, 7 runner-commit, 2 demo) are killed
+    on a scratch copy, across gr2-mut-r3 (stopped, Spec 0-40), r4a and r4b. Tests only, not the token path.
+    OPEN: this work puts live code at 85,718, over the 85,597 ceiling (test_bloat_budget
     fails); a raise or the split evidence budget is the lead's call.
     REQUIRED trusted input: the gate's signed checkpoint of both sets (gate-v1); the
     runner holds it in memory. REQUIRED for the unbuilt release path: it removes lines

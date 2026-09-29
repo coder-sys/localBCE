@@ -3,11 +3,12 @@
 The lean tree is copied to a temporary directory; each mutant weakens one
 check in the copy's ``BlindLedger/Gate/Rules/Spec.lean`` (or, for the runner's
 commit, ``Run.lean``), rebuilds its ``gate_rules`` and must make
-``rules_v1.vectors`` FAIL; whether the demo file also fails is reported.  Each
-demo mutant mislabels lines of the demo file and must FAIL against the
-unmutated rules.  The tracked tree is never written; the hashes of its
-Spec.lean and Run.lean are checked before and after.  Run only under the v4 guard:
-``python tools/gate_rules_mutants.py <lean dir> <rules vectors> <demo vectors> <lake.exe>``.
+``rules_v1.vectors`` FAIL.  Each demo mutant mislabels lines of the demo file
+and must FAIL against the unmutated rules.  The tracked tree is never written;
+the hashes of its Spec.lean and Run.lean are checked before and after.  The
+optional ``start:stop`` slices the Spec-then-Run mutant list, for batches.
+Run only under the guard:
+``python tools/gate_rules_mutants.py <lean dir> <rules vectors> <demo vectors> <lake.exe> [start:stop]``.
 """
 
 import hashlib
@@ -289,10 +290,10 @@ def vectors(lean: Path, path: Path) -> str:
     return out[-1].split()[0] + (" first_lines=" + ",".join(first) if first else "")
 
 
-def main(lean_dir: str, rules: str, demo: str, lake: str) -> int:
+def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> int:
     tracked = [Path(lean_dir) / "BlindLedger" / "Gate" / "Rules" / f for f in ("Spec.lean", "Run.lean")]
     before = [hashlib.sha256(p.read_bytes()).hexdigest() for p in tracked]
-    killed = demo_killed = 0
+    killed = 0
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         lean = Path(tmp) / "lean"
         shutil.copytree(lean_dir, lean)
@@ -307,23 +308,23 @@ def main(lean_dir: str, rules: str, demo: str, lake: str) -> int:
             result = vectors(lean, path)
             killed += result.startswith("RULES_VECTORS=FAIL")
             print(f"MUTANT {name}: {result}", flush=True)
-        for file, mutants in (("Spec.lean", MUTANTS), ("Run.lean", RUN_MUTANTS)):
+        chosen = ([("Spec.lean", *m) for m in MUTANTS] + [("Run.lean", *m) for m in RUN_MUTANTS])[
+            slice(*(int(x) if x else None for x in part.split(":")))]
+        for file, name, old, new in chosen:
             src = lean / "BlindLedger" / "Gate" / "Rules" / file
             text = src.read_text(encoding="utf-8")
-            for name, old, new in mutants:
-                if text.count(old) != 1:
-                    print(f"MUTANT {name}: SCRIPT_ERROR occurrences={text.count(old)}")
-                    continue
-                src.write_text(text.replace(old, new), encoding="utf-8")
-                got = [vectors(lean, Path(p)) for p in (rules, demo)] if build(lean, lake) else ["BUILD_ERROR"] * 2
-                killed += got[0].startswith("RULES_VECTORS=FAIL")
-                demo_killed += got[1].startswith("RULES_VECTORS=FAIL")
-                print(f"MUTANT {name}: {got[0]} demo={got[1]}", flush=True)
+            if text.count(old) != 1:
+                print(f"MUTANT {name}: SCRIPT_ERROR occurrences={text.count(old)}")
+                continue
+            src.write_text(text.replace(old, new), encoding="utf-8")
+            result = vectors(lean, Path(rules)) if build(lean, lake) else "BUILD_ERROR"
             src.write_text(text, encoding="utf-8")
+            killed += result.startswith("RULES_VECTORS=FAIL")
+            print(f"MUTANT {name}: {result}", flush=True)
     after = [hashlib.sha256(p.read_bytes()).hexdigest() for p in tracked]
-    total = len(MUTANTS) + len(RUN_MUTANTS) + len(DEMO_MUTANTS)
+    total = len(chosen) + len(DEMO_MUTANTS)
     print(f"TRACKED_SOURCES sha256_before={before} sha256_after={after}")
-    print(f"MUTANTS total={total} killed={killed} demo_killed={demo_killed}/{len(MUTANTS) + len(RUN_MUTANTS)}")
+    print(f"MUTANTS part={part} total={total} killed={killed}")
     ok = base == ["RULES_VECTORS=PASS"] * 2 and killed == total and before == after
     return 0 if ok else 1
 
