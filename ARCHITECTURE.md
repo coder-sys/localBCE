@@ -81,11 +81,10 @@ replay still checks historical rows, digests and the whole store.
  committed follow-ups stay valid history, but only the current pin decides;
  a retired engine never decides after a newer one, and no correction, whatever
  engine decided it, requests more than was then requestable.
-- **Evaluation:** Lean decides. Each write sends `BLFIN02` to one pinned
- worker (`artifacts/engine-evaluator/`, `evaluate_live` in
- `app/right_rail_financial_engine.py`); its `BLFRES02` answer is bound to the
- three writes and re-checked before COMMIT. A worker that is down, unpinned,
- panicking or disagreeing refuses the write; no Python fallback.
+- **Evaluation:** Lean decides. `evaluate_live` (`app/right_rail_financial_engine.py`)
+ sends `BLFIN02` to the pinned worker (`artifacts/engine-evaluator/`); its `BLFRES02`
+ answer is bound to the three writes and re-checked before COMMIT. A bad worker
+ refuses the write; no Python fallback.
 - **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
  `BlindLedger`: financial types, codec, evaluation, correction transition,
  decision package, gate rules, theorems, semantic kernel; four executables).
@@ -185,9 +184,8 @@ What exists today toward it:
 - There is no batch decide API, independent witness, fenced standby or Bypass
  outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing exist only as
  the gate-v1 codec and Lean model.
-- The correction transition still starts one Windows process per call
- (`app/minimal_clearance_verifier_process.py`), disqualifying for gate
- throughput; only evaluation has a long-lived worker, and no pool benchmark exists.
+- The correction transition still starts one Windows process per call, disqualifying
+ for gate throughput; only evaluation has a long-lived worker; no pool benchmark exists.
 - There is no CI, on-call rotation or tested failover drill.
 
 The target document holds the authority ladder, gate points, batch signing,

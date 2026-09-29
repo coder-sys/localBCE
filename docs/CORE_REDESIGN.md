@@ -605,36 +605,14 @@ re-decided, not stranded in review, and no line is paid twice.
 
 ## Lean-live M1: Lean is the only evaluator (2026-09-29, XI.2 record)
 
-Baseline trunk `5ebffba`. Felt effect: Lean alone decides every evaluated money
-field, and a write is refused instead of guessed.
-
-- **Predicate:** `artifacts/engine-evaluator/blind_financial_worker.exe`, a new
-  pin (`PROVENANCE.md`), and its frame, a new wire format: u32 big-endian length
-  then one BLFIN02; the answer is tag 0 plus BLFRES02, or one byte 1, 2 or 3
-  (input, evaluation or result refused). In the constitution-invariants test
-  `_python_decision_paths_forbidden` loses the `evaluate_financial_snapshot`
-  patch with its symbol; the `_recompute_obligation` patch stays, relabelled
-  `separate_evaluation_during_transition`.
-- **Invariant / failure:** III.1, V.1, V.2: one decider; a write that cannot be
-  decided is refused, never guessed by a second evaluator.
-- **Evidence:** on the load cohorts 59,756 Lean answers agree with Python and
-  none differ; 9,996 were Lean refusals (9,342 `evidence_bound`, fixed in
-  42edeb0; 654 `evaluator_containment`, the growth below). A worker hid a Lean
-  panic behind stderr; it now aborts on panic and any stderr byte fails closed.
-- **Disposition:** replace. The Python evaluator, snapshot comparison and their
-  tests are deleted, not disabled.
-- **Replacement control:** the worker laws (`decodeFinancialInputBA_eq`,
-  `workerRespondBA_eq`, the M1 set) use only `propext`, `Classical.choice` and
-  `Quot.sound`; the checker re-checks each result before COMMIT; failure,
-  timeout, oversize frame and stderr all fail closed.
-- **Scope:** live evaluation only, not the other 13 command types. **Duration:**
-  until M3 replaces per-command policy.
-- **Claims withdrawn:** "evaluation is a read-only comparison"; the r74 snapshot
-  comparison evidence.
-- **Unexplained:** two large Lists alive at once leak about 34 MB of commit per
-  call in the compiled worker; mimalloc purge settings changed nothing. The
-  worker keeps one list, restarts after 1,000 requests or 400 MB, and the cursor
-  decoder is queued as M1.5.
+- **Predicate:** the `artifacts/engine-evaluator/` worker pin and frame (u32 big-endian length; BLFIN02 in; tag 0 plus BLFRES02, or byte 1-3, out); the invariants test `_python_decision_paths_forbidden` drops its `evaluate_financial_snapshot` patch.
+- **Invariant / failure:** III.1, V.1, V.2: one decider; an undecidable write is refused. Failure: a second evaluator that differs.
+- **Evidence:** 59,756 shadow answers agree, none differ; a worker hid a Lean panic behind stderr and now aborts on it.
+- **Disposition:** replace. Python evaluator, snapshot comparison and tests deleted.
+- **Replacement control:** worker laws on `propext`, `Classical.choice`, `Quot.sound`; checker re-check before COMMIT; every failure closed.
+- **Scope, duration:** live evaluation only; until M3.
+- **Withdrawn:** "evaluation is a read-only comparison"; the r74 snapshot evidence.
+- **Open:** two large Lists alive at once leak about 34 MB per call in the compiled worker, cause unknown; one list kept, restart at 1,000 requests or 400 MB, cursor decoder queued (M1.5).
 
 ## Slim-1b PR-2: guard naming and instrument classification (2026-09-29, XI.2 record)
 

@@ -383,8 +383,7 @@ model crawl does not replace Article XIII's real-browser crawl.
 The ordered path removes the most risk per week first (`fv-plan.md`'s
 roadmap, steps 1–4 first): proof hygiene on the existing theorem manifest
 and a reproducible rebuild of the pinned binary from current source; codec
-laws for the live command path; the existing `evaluate` proof made the live
-evaluator; the remaining thirteen command types ported in order of money
+laws for the live command path; the remaining thirteen command types ported in order of money
 impact. In parallel: the warm-worker throughput benchmark and the owner
 throughput harness (branch `load-test`), needed before any batch-sizing or
 worker-pool claim is more than a guess. `CAP-REL` as a plain Lean rule and the
