@@ -1,11 +1,8 @@
 # RightRail status
 
-Updated: 2026-09-28. Current candidate: `codex/connected-workflows` at `618e81f`,
-a clean tree apart from untracked guard scratch files. It is based on trunk
-`6cccb84` and integrates `correction-v2`, G2 (dependency check), G4 (support
-package v2), `deferral-pack` (B+ line pack) and `gate-rules-2`. Trunk has not
-received this combination. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination.
+Updated: 2026-09-29. Trunk `bbd6b71` = `connected-workflows` (`618e81f`: correction-v2, G2,
+G4, `deferral-pack`, `gate-rules-2`) + docs `fc0fa3d` + Lean-live M0. Git state, raw guard
+logs and artifact provenance govern; a branch's pass does not verify another branch.
 `CONSTITUTION.md` is supreme. Protected-change records (Art. XI.2) are in
 `docs/CORE_REDESIGN.md`; how the code fits together is `ARCHITECTURE.md`.
 
@@ -21,6 +18,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 ## Current verification (latest run per claim; raw logs are the record)
 
 - **Full suite on `618e81f`** (`cwf-full-r1`): `SUMMARY run=475 passed=462 failed=1 errors=0 skipped=12`. The one failure is the Markdown budget (164,542 > 160,000). Then, after a guarded `gate_rules` Lean build (`cwf-gate-lean-r2`, 8 jobs, exit 0) and Markdown-only edits, `cwf-final-r1` (both gate-rules vector tests and all bloat tests): `SUMMARY run=8 passed=8 failed=0 errors=0 skipped=0`. That run's tree lacks only this run-id line. Skips in the full run: the two gate-rules vector tests (`gate_rules.exe` not built), Windows symlink privilege, absent old accepted-engine artifact, no fresh evaluation-engine handoff, and 7 semantic-assurance tests that run only in the external gate.
+- **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount; the checker re-checks it before COMMIT. Its `lean/` edit also voids the engine pin until a guarded rebuild.
 - **G2 dependency check** (`g2dep-r3-a1-L2`, 184/184): a correction follow-up reopens only when a derived dependency key moves (XI.2 record).
 - **G4 support package v2** (XI.2 record): software version and Trust Graph profile are NONE (no bound source); Mirror refuses any other package shape.
 - **Line pack (B+)**, documentation-only CMS-64.9 pack, built read-only from a fully verified store, quarters by owner-clock received time; a clock stepping back stops writes until it passes the last commit (XI.2 record). `bplus-fix5d` on `deferral-pack` 3656bf5: 221 run, 219 passed, 1 skipped, 1 failed (Markdown budget). Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
