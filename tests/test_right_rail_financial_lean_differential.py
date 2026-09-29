@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from app import right_rail_financial_engine as engine
 from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
@@ -58,12 +59,13 @@ class LeanDifferentialTests(unittest.TestCase):
                     variants.append(request[:offset] + value.to_bytes(8, "big") + request[offset + 8:])
         with tempfile.TemporaryDirectory(prefix="rr-lean-differential-") as workspace:
             release = _correction_transition_test_release(workspace=Path(workspace))
-            outputs = set()
-            for body in variants:
-                try:  # Lean exits nonzero on input it refuses to decode; only exit-0 results are decoded below
-                    outputs.add(engine._run_pinned(release, engine.CORRECTION_TRANSITION_ARGUMENTS, body, failure_code="differential").stdout)
-                except engine.FinancialEngineContainmentError:
-                    pass
+            with mock.patch.object(engine, "_validate_contained_result", lambda result, _release: result):  # keep exit codes visible
+                runs = [engine._run_pinned(release, engine.CORRECTION_TRANSITION_ARGUMENTS, body, failure_code="differential") for body in variants]
+        self.assertEqual(len(runs), 9)  # the shipped request and each of four header numbers plus and minus one
+        for run in runs:  # a timeout, memory-cap kill or leaked process fails here; only Lean's own decode refusal is tolerated below
+            self.assertEqual((run.timed_out, run.cap_enforced, run.process_tree_complete, run.cleanup_complete), (False, True, True, True))
+        self.assertEqual([(run.exit_code, run.stderr) for run in runs if run.exit_code], [(72, b"FINANCIAL_ERROR=correction-transition-input-decode\n")])
+        outputs = {run.stdout for run in runs if run.exit_code == 0}
         self.assertIn((VECTORS / "result.expected.bin").read_bytes(), outputs)
         seen = set()
         for payload in outputs:
@@ -79,8 +81,7 @@ class LeanDifferentialTests(unittest.TestCase):
                 for index in range(len(payload)):
                     flipped = payload[:index] + bytes([payload[index] ^ 1]) + payload[index + 1:]
                     self.assertTrue(_refused(flipped) or engine.decode_correction_transition_result(flipped) != decoded, f"byte {index} is never read")
-        self.assertIn("ACCEPTED", {status for status, _ in seen})
-        self.assertGreater(len(seen), 1, "Lean produced no rejection to decode")
+        self.assertEqual(sorted(seen, key=str), [("ACCEPTED", None), ("REJECTED", "AUTHORITY_STALE"), ("REJECTED", "REVISION_CONFLICT")])
 
 
 if __name__ == "__main__":
