@@ -4035,8 +4035,8 @@ def verify_history_export(directory: str | Path, *, expected_authority: object, 
     return _mapped(lambda: _verify_history_export(Path(directory), expected_authority, expected_scope, restored))
 
 
-def _verify_history_export(directory: Path, expected_authority: object, expected_scope: object | None, restored: str | Path | None) -> dict[str, object]:
-    manifest = _read_json(directory / "manifest.json", "history:manifest", MAX_JSON_BYTES)
+def _verify_manifest(manifest: object, expected_authority: object, expected_scope: object | None) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]:
+    """The manifest's own checks (shape, digest, meta, identity), shared by a history export and a cash-file baseline: (meta, identity, scope, expected)."""
     if not isinstance(manifest, dict) or set(manifest) != {"format", "identity", "meta", "segment_count", "last_segment_digest", "manifest_digest"} or manifest["format"] != SEGMENT_FORMAT:
         _fail("history:manifest")
     body = {key: value for key, value in manifest.items() if key != "manifest_digest"}
@@ -4053,6 +4053,12 @@ def _verify_history_export(directory: Path, expected_authority: object, expected
         _fail("history:identity-genesis")
     if identity["anchor_sequence"] == 0 and identity["anchor_head"] != identity["genesis_head"]:
         _fail("history:identity-anchor")
+    return meta, identity, scope, expected
+
+
+def _verify_history_export(directory: Path, expected_authority: object, expected_scope: object | None, restored: str | Path | None) -> dict[str, object]:
+    manifest = _read_json(directory / "manifest.json", "history:manifest", MAX_JSON_BYTES)
+    meta, identity, scope, expected = _verify_manifest(manifest, expected_authority, expected_scope)
     count = _integer(manifest["segment_count"], "history:segment-count", maximum=MAX_ROWS)
     previous, head, sequence = ZERO_DIGEST, identity["genesis_head"], 0
     images: dict[tuple[str, tuple[object, ...]], dict[str, object]] = {}
@@ -4088,7 +4094,7 @@ def _verify_history_export(directory: Path, expected_authority: object, expected
     if manifest["last_segment_digest"] != previous.hex().upper() or (meta["sequence"], meta["history_head"]) != (sequence, head) or identity["anchor_sequence"] > sequence:
         _fail("history:manifest-binding")
     result: dict[str, object] = {  # shaped like a verified package, for restore
-        "scope": scope, "authority": {"authority_id": authority[0], "epoch": authority[1], "digest": expected["authority_digest"].hex().upper()},
+        "scope": scope, "authority": {"authority_id": expected["authority_id"], "epoch": expected["authority_epoch"], "digest": expected["authority_digest"].hex().upper()},
         "continuity_epoch": meta["continuity_epoch"], "sequence": sequence, "history_head": head.hex().upper(), "package_digest": manifest["manifest_digest"],
         "segment_count": count, "tables": {"financial_identity": [manifest["identity"]], "financial_meta": [manifest["meta"]]},
     }

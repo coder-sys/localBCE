@@ -1886,7 +1886,8 @@ _SEGMENT_SCHEMA: Final[str] = """
 
 def _replace_file(path: Path, data: bytes) -> None:
     temporary = path.with_name(f"{path.name}.tmp")
-    with temporary.open("wb") as handle:
+    temporary.unlink(missing_ok=True)  # a leftover, or a planted link, is removed itself, never written through
+    with temporary.open("xb") as handle:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
@@ -6880,16 +6881,28 @@ class FinancialOwner:
 
         The manifest is read in the sealing transaction; sealed segments are append-only,
         so their files may be written after it. A segment file already in ``directory``
-        is never rewritten, only compared byte for byte (IX.3).
+        is never rewritten, only compared byte for byte (IX.3); ``manifest.json`` is replaced only by a
+        later export of the same history: a cash file's baseline is these exact bytes (III.3).
         """
         with self._write() as connection:
             self._seal_segment(connection, force=True)
             rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
             count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
         body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
+        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
         directory.mkdir(exist_ok=True)
+        target = directory / "manifest.json"
         with self._read_snapshot() as connection:
-            for segment in connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall():
+            segments = connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall()
+            if target.exists():
+                try:  # an older manifest of this identity whose last segment is this store's segment at that index
+                    old = json.loads(target.read_bytes())
+                    replaceable = old["identity"] == body["identity"] and old["segment_count"] >= 0 and old["last_segment_digest"] == (_hex(bytes(segments[old["segment_count"] - 1]["segment_digest"])) if old["segment_count"] else _hex(_ZERO_DIGEST))
+                except (ValueError, KeyError, TypeError, IndexError):
+                    replaceable = False
+                if not replaceable and target.read_bytes() != manifest:
+                    _fail(FinancialContinuityError, "history_export_mismatch")
+            for segment in segments:
                 events = connection.execute("SELECT * FROM financial_events WHERE event_sequence BETWEEN ? AND ? ORDER BY event_sequence", (segment["first_sequence"], segment["last_sequence"]))
                 data = _canonical({"events": [self._segment_record("financial_events", tuple(row)) for row in events], "rows": json.loads(segment["rows_json"]), "seal": _segment_seal(*tuple(segment)[:6]), "segment_digest": _hex(bytes(segment["segment_digest"])), "signature": None})
                 path = directory / f"segment-{segment['segment_index']:08d}.json"
@@ -6899,8 +6912,8 @@ class FinancialOwner:
                     with path.open("rb") as handle:
                         if handle.read(len(data) + 1) != data:
                             _fail(FinancialContinuityError, "history_export_mismatch")
-        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
-        _replace_file(directory / "manifest.json", manifest)
+        if not target.exists() or target.read_bytes() != manifest:
+            _replace_file(target, manifest)
         return manifest
 
     def _replay_segment(self, connection: sqlite3.Connection, path: Path) -> None:

@@ -131,7 +131,7 @@ def _parser() -> argparse.ArgumentParser:
     cash.add_argument("--source-context", nargs=5, required=True,
                       metavar=("SOURCE", "VERSION", "RECEIVER", "CAPTURE", "CAPTURED_AT_MS"))
     cash.add_argument("--owner-id", required=True)
-    cash.add_argument("--mode", choices=("LIVE", "TEST", "SHADOW"), required=True)
+    cash.add_argument("--mode", choices=("LIVE", "TEST"), required=True)
     cash.add_argument("--apply", action="store_true", help="record checked evidence; default is isolated preview")
 
     report = subparsers.add_parser("record-reporting-correction", aliases=("reporting-correction",))

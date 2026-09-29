@@ -200,14 +200,14 @@ class CashFileCheck:
         self._context = _freeze(context)
         self._source = _freeze(source)
         manifest = json.loads(context["baseline_bytes"].decode("ascii"), object_pairs_hook=_unique)  # B: the owner's history-export manifest (docs/CORE_REDESIGN.md "History segments")
-        _keys(manifest, {"format", "identity", "meta", "segment_count", "last_segment_digest", "manifest_digest"})
-        body = {key: value for key, value in manifest.items() if key != "manifest_digest"}
-        _require(manifest["format"] == ledger.SEGMENT_FORMAT and context["baseline_bytes"] == ledger._canonical(manifest)
-                 and manifest["manifest_digest"] == ledger._digest(ledger.SEGMENT_DOMAIN, b"manifest", ledger._canonical(body)).hex().upper(), "cash_file_format")
-        meta, authority = ledger._verify_package_rows([manifest["meta"]], "financial_meta")[0], context["expected_authority"]
-        _require(all(meta[key] == value for key, value in context["expected_scope"].items()) and (meta["owner_id"], meta["mode"]) == (context["expected_owner_id"], context["expected_mode"])
-                 and (meta["trusted_authority_id"], meta["trusted_authority_epoch"], meta["trusted_authority_digest"]) == (authority["authority_id"], authority["epoch"], bytes.fromhex(authority["digest"])), "cash_file_binding")
-        self._anchor = (ledger._verify_package_rows([manifest["identity"]], "financial_identity"), meta["sequence"], meta["history_head"])
+        _require(context["baseline_bytes"] == ledger._canonical(manifest), "cash_file_format")
+        try:  # the export verifier's own manifest checks: shape, digest, meta, authority, scope, identity
+            meta = ledger._verify_manifest(manifest, context["expected_authority"], context["expected_scope"])[0]
+        except ledger.IndependentFinancialError as error:
+            raise CashFileError("cash_file_format" if str(error) in ("history:manifest", "history:manifest-digest") else "cash_file_binding") from None
+        _require((meta["owner_id"], meta["mode"]) == (context["expected_owner_id"], context["expected_mode"]) and type(meta["sequence"]) is int and type(meta["history_head"]) is bytes
+                 and type(manifest["segment_count"]) is int and manifest["segment_count"] >= 0 and type(manifest["last_segment_digest"]) is str, "cash_file_binding")
+        self._anchor = (ledger._verify_package_rows([manifest["identity"]], "financial_identity"), meta["sequence"], meta["history_head"], manifest["segment_count"], manifest["last_segment_digest"])
         self._epoch = meta["continuity_epoch"]
         self._preview = context["preview"]
         _require(type(commands) is list and len(commands) == source["row_count"], "cash_file_binding")
@@ -235,10 +235,11 @@ class CashFileCheck:
     def begin(self, connection: sqlite3.Connection) -> None:
         _require(self._connection is None and not self._finished and isinstance(connection, sqlite3.Connection) and connection.in_transaction, "cash_file_failed")
         rows = ledger._database_snapshot_rows(connection)
-        identity, sequence, head = self._anchor
+        identity, sequence, head, count, last = self._anchor
         meta = rows["financial_meta"][0]
         ancestor = rows["financial_identity"][0]["genesis_head"] if sequence == 0 else _index(rows, "financial_events", "event_sequence").get(sequence, {}).get("head")
-        _require(rows["financial_identity"] == identity and ancestor == head, "cash_file_binding")  # the store descends from the reviewed baseline: the same identity, and the same event head at its sequence
+        sealed = connection.execute("SELECT last_sequence,segment_digest FROM history_segments WHERE segment_index=?", (count - 1,)).fetchone()  # the manifest's last segment is the store's, sealed at the baseline's sequence
+        _require(rows["financial_identity"] == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else (sealed[0], bytes(sealed[1]).hex().upper()) == (sequence, last)), "cash_file_binding")  # the store descends from the reviewed baseline: the same identity, event head and last sealed segment
         self._stale = meta["sequence"] != sequence
         self._received, self._aliases = _payment_events(rows["financial_events"])
         self._plan = self._classify(rows)
@@ -340,4 +341,5 @@ class CashFileCheck:
             "production_usable": False, "activation": False,
         }
         if self._preview:  # never committed: the owner rolls the copy back (docs/CORE_REDESIGN.md "Cash-file capacity")
+            _require(not connection.execute("PRAGMA foreign_key_check").fetchall(), "cash_file_failed")  # the deferred keys COMMIT would check
             raise CashFilePreview(self.receipt)

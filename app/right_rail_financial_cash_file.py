@@ -5,8 +5,10 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import tempfile
+import time
 
 from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialOwner, FinancialOwnerConfig, FinancialRevisionError, _checker_authority
 from app.right_rail_financial_cash_file_independent import MAX_ROWS, REFUSALS, CashFileCheck, CashFileError, CashFilePreview
@@ -114,7 +116,12 @@ def prepare_cash_file(source_bytes, baseline_bytes, *, expected_source_sha256,
 def preview_cash_file(commands, context, *, path, trusted_authority, clock=None):
     """Run the checked file on a private copy of the live store and roll it back; publish only after the copy is removed."""
     try:
-        with tempfile.TemporaryDirectory(prefix="rightrail-cash-preview-") as directory:
+        folder = Path(path).resolve().with_name(Path(path).name + ".cash-preview")  # owner-controlled, beside the store, not the system temp folder
+        folder.mkdir(exist_ok=True)
+        for stale in folder.iterdir():  # a copy a crash left behind is swept by the next preview
+            if time.time() - stale.stat().st_mtime > 3600:
+                shutil.rmtree(stale, ignore_errors=True)
+        with tempfile.TemporaryDirectory(dir=folder) as directory:
             store = Path(directory) / "preview.sqlite"
             with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as live, closing(sqlite3.connect(store)) as target:
                 live.backup(target)  # a consistent snapshot; the live file is only read

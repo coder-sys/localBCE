@@ -8,6 +8,7 @@ import dataclasses
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -290,7 +291,8 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.assertLess(sum(path.stat().st_size for path in history.iterdir()), 24 * 1024 * 1024)
 
     def test_quarter_end_file_within_writer_timeout(self):
-        # A quarter's last file on 5,500 earlier payments (6,000 in all): the worst lock this design admits.
+        # A quarter's last file on 5,500 earlier payments (6,000 in all), applied through an already-open owner: the lock of a warm apply,
+        # not of a fresh CLI open (its verify adds seconds, docs/CORE_REDESIGN.md "Cash-file capacity") or of one 84-item history.
         # If it fails, MAX_ROWS drops again (docs/CORE_REDESIGN.md "Cash-file capacity").
         ids = self._wide_store()
         shapes = (ids, ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)])
@@ -309,12 +311,56 @@ class ReceiverCashFileTests(unittest.TestCase):
             body = {key: value for key, value in {**manifest, **changes}.items() if key != "manifest_digest"}
             return canonical({**body, "manifest_digest": independent._digest(independent.SEGMENT_DOMAIN, b"manifest", canonical(body)).hex().upper()})
         foreign = sealed(meta={**manifest["meta"], "owner_id": "other-owner"})
+        for change in ({"meta": {**manifest["meta"], "sequence": None}}, {"meta": {**manifest["meta"], "history_head": None}}, {"identity": {**manifest["identity"], "schema_version": 0}}):
+            with self.subTest(change=list(change)), self.assertRaisesRegex(check.CashFileError, "^cash_file_(binding|format)$"):
+                self._prepare(baseline=sealed(**change))  # the export verifier's own meta and identity checks, reused
+        for change in ({"segment_count": manifest["segment_count"] + 1}, {"last_segment_digest": "AB" * 32}):  # sealed lies: the live history_segments row is the anchor
+            with self.subTest(change=list(change)):
+                self._unchanged(lambda: self._apply(self._prepare(baseline=sealed(**change))), "^cash_file_binding$")
         forged = sealed(meta={**manifest["meta"], "history_head": {"hex": "AB" * 32}})  # this sequence, another head
         for code, baselines in {"cash_file_format": (self.baseline + b"\n", canonical({**manifest, "segment_count": 99}), self.package), "cash_file_binding": (foreign,)}.items():
             for raw in baselines:
                 with self.subTest(code=code, size=len(raw)), self.assertRaisesRegex(check.CashFileError, f"^{code}$"):
                     self._prepare(baseline=raw)
         self._unchanged(lambda: self._apply(self._prepare(baseline=forged)), "^cash_file_binding$")
+
+    def test_preview_refuses_a_copy_with_a_dangling_key_and_lives_beside_the_store(self):
+        folders, finishing, connect, finish = [], [], sqlite3.connect, check.CashFileCheck.finish
+        class Dangling(sqlite3.Connection):  # a copy whose deferred keys COMMIT would refuse: the pragma reports one while the file is being finished
+            def execute(self, sql, *arguments):
+                return super().execute("SELECT 'payments',1,'obligations',0" if finishing and sql == "PRAGMA foreign_key_check" else sql, *arguments)
+        def finishing_finish(instance, connection, results):
+            finishing.append(1)
+            try:
+                return finish(instance, connection, results)
+            finally:
+                finishing.clear()
+        commands, context = self._prepare()
+        with patch.object(sqlite3, "connect", lambda *a, **k: connect(*a, **k, factory=Dangling)), patch.object(check.CashFileCheck, "finish", finishing_finish),                 self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
+            cash.preview_cash_file(commands, context, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
+        folder = self.store.path.with_name(self.store.path.name + ".cash-preview")
+        stale, fresh = folder / "stale", folder / "fresh"
+        stale.mkdir(), fresh.mkdir()
+        old = time.time() - 7200
+        os.utime(stale, (old, old))
+        real = tempfile.TemporaryDirectory
+        with patch.object(cash.tempfile, "TemporaryDirectory", lambda **kwargs: folders.append(kwargs["dir"]) or real(**kwargs)):
+            self.assertEqual(cash.preview_cash_file(commands, context, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)["mode"], "PREVIEW")
+        self.assertEqual((folders, sorted(path.name for path in folder.iterdir())), ([folder], ["fresh"]))  # swept the crashed copy, kept a recent one, left none of its own
+
+    def test_history_export_replaces_only_an_earlier_manifest_of_this_history_and_not_through_a_leftover(self):
+        directory = Path(self.fixture.temp_dir.name) / "export"
+        directory.mkdir()
+        for foreign in (b"{}", canonical({**json.loads(self.baseline), "identity": {**json.loads(self.baseline)["identity"], "id": "other"}})):  # not an earlier export of this history
+            (directory / "manifest.json").write_bytes(foreign)
+            with self.assertRaisesRegex(owner.FinancialError, "history_export_mismatch"):
+                self.store.export_history(directory)
+            self.assertEqual((directory / "manifest.json").read_bytes(), foreign)
+        (directory / "manifest.json").unlink()
+        (directory / "manifest.json.tmp").write_bytes(b"leftover")
+        self.assertEqual(self.store.export_history(directory), self.baseline)
+        self.assertEqual((directory / "manifest.json").read_bytes(), self.baseline)
+        self.assertEqual(self.store.export_history(directory), self.baseline)  # the same manifest again is accepted
 
     def test_concurrent_identical_files_commit_cash_once(self):
         prepared = self._prepare()
@@ -563,7 +609,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                 self.assertEqual(cli.main(["--database", str(path), *args[2:], "--apply"]), 2)
         self.assertFalse(path.exists())
 
-    def test_cli_binds_custom_live_test_and_shadow_identities(self):
+    def test_cli_binds_custom_live_and_test_identities_and_never_shadow(self):
         custom = owner.FinancialOwner(path=self.fixture._path(), config=self.store.config,
                                       trusted_authority=self.fixture.authority, owner_id="custom-owner", clock=self.store.clock)
         with patch.object(self.fixture, "_make_owner", return_value=custom):
@@ -573,20 +619,23 @@ class ReceiverCashFileTests(unittest.TestCase):
             restore_mode=mode, clock=self.store.clock) for mode in ("TEST", "SHADOW")]
         for store in (custom, *restores):
             self.store = store
-            self.package, self.baseline = store.export_continuity(), self._manifest() if store.mode != "SHADOW" else self.baseline  # SHADOW is refused before B is read
+            self.package = store.export_continuity()
+            if store.mode == "SHADOW":  # never a cash-file target (Phase 1b): the CLI has no such mode and the checker refuses it
+                self.baseline = self._manifest()
+                with self.assertRaisesRegex(check.CashFileError, "^cash_file_binding$"):
+                    self._prepare()
+                _, _, args = self._cli_fixture()
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    cli.main(args)
+                self.assertEqual(store.export_continuity(), self.package)
+                continue
+            self.baseline = self._manifest()
             _, _, args = self._cli_fixture()
             stdout, stderr = io.StringIO(), io.StringIO()
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 code = cli.main(args + ["--apply"])
-            if store.mode == "SHADOW":  # never a cash-file target, applied or previewed (Phase 1b)
-                self.assertEqual((code, stderr.getvalue()), (2, "ERROR:receiver_cash_file_refused:cash_file_binding\n"))
-                self.assertEqual(store.export_continuity(), self.package)
-                stderr = io.StringIO()
-                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
-                    self.assertEqual((cli.main(args), stderr.getvalue()), (2, "ERROR:receiver_cash_file_refused:cash_file_binding\n"))
-            else:
-                self.assertEqual((code, stderr.getvalue()), (0, ""))
-                self.assertEqual(json.loads(stdout.getvalue())["cash_delta_cents"], 300)
+            self.assertEqual((code, stderr.getvalue()), (0, ""))
+            self.assertEqual(json.loads(stdout.getvalue())["cash_delta_cents"], 300)
 
     def test_checked_context_and_commands_are_immutable_copies(self):
         commands, context = self._prepare()

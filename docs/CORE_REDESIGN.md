@@ -13,72 +13,61 @@ Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited 
 
 ### Current-source Lean reproduction (2026-09-26, XI.2 record)
 
-- Guard-log line endings: r78 refused the fresh r77 kit with
-  `engine_guard_log_policy_mismatch`. Its 99 CRLF records contain the exact
-  required v4 policy, but the kit's LF-only line anchors match zero policies.
-  Predicate/invariant: parse the actual guard evidence and retain exact fields,
-  counts, floors, exits, cleanup and mutex release; do not infer a pass from a
-  receipt alone. Disposition: replace only the three record-ending patterns
-  with LF-or-CRLF anchors. Replacement control: positive checks for both forms,
-  malformed-ending and adverse-record mutations, independent review and a new
-  complete kit run. Raw log bytes and their digest binding remain unchanged.
-  Scope/duration: this v4 text-log parser until a separately reviewed format
-  change. Claims withdrawn: r78 verifies no kit; no prior run is relabelled.
-- Canonical manifest correction: r75 refused the r67 kit with
-  `engine_source_manifest_not_canonical_or_current`. The producer sorted native
-  Windows paths before replacing backslashes, placing `CodecLawsCheck.lean`
-  before `CodecLaws/Correction.lean`; the existing kit requires ordinal ordering
-  of the portable slash paths. Retain that exact canonical-byte predicate and
-  all source identity checks. Normalize before sorting in the producer, compare
-  its actual manifest against independently constructed Python canonical bytes,
-  then create a new guarded release. Scope/duration: prospective manifests only;
-  r67 evidence remains unchanged and does not acquire a kit-compatibility claim.
+- Guard-log line endings: r78 refused the r77 kit (`engine_guard_log_policy_mismatch`):
+  its 99 CRLF records hold the exact v4 policy, but the kit's LF-only anchors match none.
+  Predicate: parse the actual guard evidence and keep exact fields, counts, floors,
+  exits, cleanup and mutex release; no pass from a receipt alone. Disposition: the three
+  record-ending patterns take LF-or-CRLF anchors. Replacement control: positive checks
+  for both forms, malformed-ending and adverse-record mutations, independent review, a
+  new complete kit run; raw log bytes and digest binding unchanged. Scope: this v4 text-log
+  parser. Claims withdrawn: r78 verifies no kit; no prior run is relabelled.
+- Canonical manifest correction: r75 refused the r67 kit
+  (`engine_source_manifest_not_canonical_or_current`): the producer sorted native Windows
+  paths before replacing backslashes, so `CodecLawsCheck.lean` preceded
+  `CodecLaws/Correction.lean`; the kit requires ordinal order of slash paths. Keep that
+  canonical-byte predicate and every source identity check; normalize before sorting,
+  compare the manifest with independently built Python canonical bytes, then make a new
+  guarded release. Scope: prospective manifests; r67 evidence gains no kit-compatibility claim.
 - **Predicate:** an exact-source build claim binds the guarded producer receipt,
   all selected Lean/config bytes, toolchain, executable and both pinned vectors.
 - **Invariant / failure:** an older binary's historical build does not establish
   reproducibility from a later combined source tree.
-- **Evidence:** r67 built the 46-file current source manifest at `61a24519` and
-  reproduced the existing 6,279,168-byte executable byte-for-byte; transition
-  and reuse outputs match both independent expected files. Guard exits are zero,
-  cleanup PASS, mutex released. r68 separately compiled all six Lake targets.
+- **Evidence:** r67 built the 46-file source manifest at `61a24519` and reproduced the
+  6,279,168-byte executable byte-for-byte; transition and reuse outputs match both expected
+  files; guard exits zero, cleanup PASS, mutex released. r68 compiled all six Lake targets.
 - **Disposition:** extend provenance with this separately identified reproduction;
   retain the historical origin, executable pin and retired-pin registry unchanged.
-- **Replacement control:** the source-manifest and receipt hashes, original raw
-  guard/child logs and exact comparisons remain inspectable. The producer's empty
-  stream/process-result repairs passed a binary I/O regression and independent
-  review; resource, toolchain, source-identity and expected-answer checks remain.
-- **Scope:** local synthetic build evidence only; no theorem statement, wire
-  format, decision rule, executable bytes or allowed axiom is changed.
-- **Duration:** this evidence applies only to the recorded source and artifacts;
-  later changes require their own verification.
-- **Claims withdrawn:** no assurance for later source, whole-system qualification
-  or all-theorem axiom hygiene follows from reproducibility. Native diagnostic
-  axioms and 21 r68 linter warnings remain visible; the formal gate has its own
-  explicitly bounded declaration scope.
+- **Replacement control:** the source-manifest and receipt hashes, raw guard/child logs
+  and exact comparisons stay inspectable; the producer's empty stream/process-result
+  repairs passed a binary I/O regression and independent review; resource, toolchain,
+  source-identity and expected-answer checks remain.
+- **Scope:** local synthetic build evidence; no theorem, wire format, decision rule,
+  executable bytes or allowed axiom changes.
+- **Duration:** the recorded source and artifacts only.
+- **Claims withdrawn:** reproducibility gives no assurance for later source, whole-system
+  qualification or all-theorem axiom hygiene. Native diagnostic axioms and 21 r68 linter
+  warnings stay visible; the formal gate has its own bounded declaration scope.
 
 ### Current-engine service-kit connection (2026-09-26, XI.2 record)
 
-- **Predicate:** the release producer requires four exact pinned vector inputs,
-  then requires transition and reuse actual bytes to equal their pinned
-  expected bytes; the kit checks the guarded receipt and the same inventory.
-- **Invariant / failure:** a package must exercise the exact engine protocol and
-  carry the checker's pinned retired-engine registry. Missing or stale inputs
-  must refuse packaging, not be omitted from its assurance.
+- **Predicate:** the release producer requires four exact pinned vector inputs, then
+  transition and reuse actual bytes equal to their pinned expected bytes; the kit checks
+  the guarded receipt and the same inventory.
+- **Invariant / failure:** a package exercises the exact engine protocol and carries the
+  checker's pinned retired-engine registry; missing or stale inputs refuse packaging.
 - **Evidence:** the producer still pins BLFCMD01/BLFCRES1 and BLFCRU01/BLFCRV01;
   the current engine uses CMD02/RES3 and RU02/RV02, and lacks reuse fixtures.
   `STATE_FILES` also omitted the registry that the checker always requires.
 - **Disposition:** replace stale fixture pins with current canonical vectors;
   retain all comparisons, provenance, resource checks and exact inventory.
-- **Replacement control:** an independent reader derived the reuse baseline
-  from the old immutable fixture, replacing its embedded accepted result and
-  removing only fields removed by ReuseCodec v2. Expected assessment bytes were
-  specified before engine execution; provenance records hashes and construction.
-  Guarded actual/expected comparison, fresh release build and extracted-kit
-  scenario remain required before a packaged-runtime claim.
-- **Scope:** only this synthetic current-engine release and its kit inventory;
-  no theorem, protocol semantics, guard, authority or cash rule is weakened.
-- **Duration:** these fixtures remain pinned until another explicit release
-  record replaces them; prior fixtures remain in Git history.
+- **Replacement control:** an independent reader derived the reuse baseline from the old
+  immutable fixture, replacing its embedded accepted result and removing only fields
+  ReuseCodec v2 removed. Expected assessment bytes were fixed before engine execution;
+  provenance records hashes and construction. A guarded actual/expected comparison, fresh
+  release build and extracted-kit scenario remain required before a packaged-runtime claim.
+- **Scope:** this synthetic current-engine release and kit inventory; no theorem, protocol,
+  guard, authority or cash rule is weakened.
+- **Duration:** pinned until a release record replaces them; earlier fixtures stay in Git.
 - **Claims withdrawn:** old reuse-vector evidence does not verify v2. This
   unchanged-state baseline does not resolve paid-list/stale-shortfall reuse
   limitations and does not authorize using reuse to decide live commands.
@@ -90,18 +79,16 @@ the correction it pays; an acknowledgment still has zero cash effect.
 
 ### Kit evidence source binding (2026-09-28, XI.2 record)
 
-- **Predicate:** `artifacts/engine-correction/PROVENANCE.md` may cite a run only
-  for the source it actually packaged.
-- **Invariant / failure:** r80/r84/r85/r88 were recorded as evidence for
-  `86390ab`, but r80 packaged an uncommitted tree (cash-file modules, Owner
-  `existing_only`) (rr-review H1).
-- **Evidence:** a file-by-file comparison of the r80 archive with commit
-  `707ba78` found every Lean source and 26 of 27 source files identical. The one
-  difference is `right_rail_financial_engine.py`, whose derived reject map equals
-  the archive's literal.
+- **Predicate:** `artifacts/engine-correction/PROVENANCE.md` cites a run only for the
+  source it packaged.
+- **Invariant / failure:** r80/r84/r85/r88 were recorded for `86390ab`, but r80 packaged
+  an uncommitted tree (cash-file modules, Owner `existing_only`) (rr-review H1).
+- **Evidence:** comparing the r80 archive with commit `707ba78`, every Lean source and 26
+  of 27 source files are identical; the one difference is `right_rail_financial_engine.py`,
+  whose derived reject map equals the archive's literal.
 - **Disposition:** append a source-binding paragraph; edit no earlier text.
-- **Replacement control:** the comparison script is rerunnable against any
-  commit. A new kit is assembled from a clean checkout before any release claim.
+- **Replacement control:** the comparison script reruns against any commit; a new kit is
+  assembled from a clean checkout before any release claim.
 - **Scope/duration:** provenance text only; no pin, digest, vector or gate changes.
 - **Claims withdrawn:** r80/r84/r85/r88 are not evidence for `86390ab`.
 
@@ -319,13 +306,14 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   Every derived command binds `local_ref = UPPER(SHA256(F)) || UPPER(SHA256(B))`.
   A retry never replaces B with a fresh export. Producer and verifier parse
   and reconstruct independently; the verifier does not import the producer.
-  It accepts B only if canonical, its `manifest_digest` recomputes, and its meta
-  and identity rows match the trusted scope, owner, mode (LIVE or TEST) and
-  authority. Freeze commands before comparison. Under the same BEGIN IMMEDIATE, bind the
+  It accepts B only if canonical and it passes the export verifier's own manifest
+  checks (`_verify_manifest`, one code: digest recomputes; meta and identity match the
+  trusted scope, owner, mode (LIVE or TEST) and authority; no null sequence or head).
+  Freeze commands before comparison. Under the same BEGIN IMMEDIATE, bind the
   store to B: the same identity row and event head at B's sequence (the owner
-  verified the whole store at open; later history is append-only). B's
-  `segment_count` and `last_segment_digest` are covered by its digest only, not
-  bound to the store. New work requires the store still at B's sequence; on an
+  verified the whole store at open; later history is append-only), and B's
+  `segment_count` and `last_segment_digest` equal to the live `history_segments`
+  row sealed at B's sequence (none: 0 and the zero digest). New work requires the store still at B's sequence; on an
   older baseline only rows that write nothing (RETRY, ALIAS) are allowed.
   After final sealing the checker verifies row/command order, each new event
   onto the chain, payment/evidence/action links, revisions, every table's
@@ -387,9 +375,13 @@ All-provider refund flows need sharding or Phase 2 below and are not claimed.
   `export-history --output --owner-id --mode` prints the manifest SHA-256. No stored
   format, digest or `local_ref` construction changes. Replacement control: the manifest
   and store binding above, and the tests in `tests/test_right_rail_financial_cash_file.py`.
+  Review fixes: B's segment fields bind to the live row; a preview also refuses a copy
+  whose deferred keys COMMIT would refuse; `export-history` replaces `manifest.json`
+  only with a later export of the same history; the preview copy sits in `<store>.cash-preview`, swept after an hour;
+  `--mode` is LIVE or TEST. Held: a `local_ref` version prefix (it changes how the ref is
+  built) cannot fit the 128-character identifier grammar with both hashes.
   Scope: cash-file path and that command. Claims withdrawn: "B is the original reviewed Continuity bytes", "preview restores B into
-  isolated TEST storage" and "preview never opens an owner" (it opens one on a private
-  copy, never on the live path).
+  isolated TEST storage", "preview never opens an owner" (it opens one on a private copy).
 - Visible changes: `--baseline` takes the manifest (a Continuity package is refused as
   `cash_file_format`) and preview needs `--database`; the CLI prints
   `ERROR:receiver_cash_file_refused:{code}` with nine fixed classes (below);
