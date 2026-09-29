@@ -8,8 +8,10 @@ Synthetic, non-PHI.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import ctypes
 from ctypes import wintypes
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -128,8 +130,9 @@ class DifferentialTests(unittest.TestCase):
             lines = [f"mldsa87 {'accept' if ok else 'reject'} {p.hex()} {m.hex()} {s.hex()}" for p, m, s, ok in cases]
             path = Path(tmp) / "diff.vectors"
             path.write_text("\n".join([*lines, f"end {len(lines)}"]) + "\n", "ascii", newline="\n")
-            for p, m, s, ok in cases:
-                self.assertEqual(kat_verify(p, m, s), ok)
+            with ThreadPoolExecutor(min(4, os.cpu_count() or 1)) as pool:  # a worker process per case; at most 4 side by side
+                verdicts = list(pool.map(lambda c: kat_verify(*c[:3]), cases))
+            self.assertEqual(verdicts, [c[3] for c in cases])
             self.assertEqual(lean_vectors(path), f"GATE_VECTORS=PASS checked={len(cases)} expected={len(cases)} failed=0")
         print(f"differential: {len(cases)} cases, AWS-LC and Lean agree on every one")
 

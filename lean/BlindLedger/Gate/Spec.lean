@@ -2,7 +2,7 @@ namespace BlindLedger.Gate
 
 /-! Payment gate formats, first slice (founder decision D1, 2026-09-25):
     `RR/GATE/DECIDE-REQUEST/v1`, `DECIDE-RESPONSE/v1`, `TOKEN/v1`,
-    `CHECKPOINT/v1` (ML-DSA-87 per-batch variant) and the SHA3-512 digest
+    `CHECKPOINT/v1` (ML-DSA-87 per-batch variant), `KEY-CERT/v1` and the SHA3-512 digest
     domains `DECISION-ID/v1`, `INPUT/v1`, `MERKLE-NODE/v1` (batch token tree),
     `LINES-NODE/v1` (a payment's lines tree), `SHARD/v1` and `STATE/v1` (the
     rules' released and unresolved sets).  Every name, the rules' set pins
@@ -15,8 +15,8 @@ namespace BlindLedger.Gate
     checkpoint once, and pins each payment's member key when it first sends a
     command for it; `verifyToken` is then its whole per-payment release
     decision, one predicate over twelve checks.  Hashing, the epoch-certificate
-    chain (format #5, not yet built) and ML-DSA-87 verification enter only
-    through `Crypto`, so every statement here holds for any instantiation.
+    chain and ML-DSA-87 verification enter only through `Crypto` (instantiated
+    by `Verify.realCrypto`), so every statement here holds for any instantiation.
     Synthetic, nonpayment, activation=false. -/
 
 abbrev Bytes := List UInt8
@@ -35,6 +35,8 @@ def maxRequestBytes : Nat := 8 * 1024 * 1024
 def maxTokenBytes : Nat := 4 * 1024
 def maxCheckpointBytes : Nat := 8 * 1024
 def mlDsa87Signature : Nat := 4627
+def mlDsa87Key : Nat := 2592
+def maxKeyCertBytes : Nat := 8 * 1024
 /-- A member key: the member's salted hash (D5 salt vault), 32 bytes. -/
 def memberKeyBytes : Nat := 32
 /-- Seconds of clock difference a payer allows on either side of a token's lifetime. -/
@@ -543,14 +545,32 @@ def decodeResponse (H : Bytes → Bytes) (r : Request) : Bytes → Option Respon
 
 /-! ## The payer: certificates and checkpoints once, then one release decision per payment -/
 
+/-- KEY-CERT/v1 (#5): the root key's signature over a tenant's epoch public key, epoch and shard count. -/
 structure EpochCert where
-  certId : Bytes
   epoch : Nat
   tenantId : Bytes
   publicKey : Bytes
   /-- The tenant's shard count (u32, at least 1), the same in all its certificates. -/
   shardCount : Nat
+  /-- The whole certificate: body, then the length-prefixed root signature. -/
+  signed : Bytes
   deriving DecidableEq
+
+/-- Body `KEY-CERT ‖ alg 1 ‖ tenant ‖ epoch u64 ‖ shard_count u32 (at least 1) ‖ public key`, then the root
+    signature as `checkpoint` carries its own.  The root signs the body. -/
+def pKeyCert : P EpochCert := do
+  let ((epoch, tenantId, shardCount, publicKey), signed) ← consumed do
+    expect (domain "KEY-CERT")
+    let _ ← nat 1 1 1
+    let tenantId ← ident
+    let epoch ← nat 8
+    let shardCount ← nat 4 1
+    let publicKey ← take mlDsa87Key
+    let _ ← blob mlDsa87Signature mlDsa87Signature
+    pure (epoch, tenantId, shardCount, publicKey)
+  pure { epoch, tenantId, publicKey, shardCount, signed }
+
+def decodeKeyCert : Bytes → Option EpochCert := parse pKeyCert maxKeyCertBytes
 
 /-- Why the payer refuses to send a command.  `member_key_changed`: the
     payment's member key differs from the one pinned by its first send;
@@ -560,9 +580,8 @@ inductive Refusal | member_key_changed deriving DecidableEq, Repr
 
 structure Crypto where
   hash : Bytes → Bytes
-  /-- KEY-CERT (#5) chain validity, supplied until that format exists.
-      Unbuilt requirement: KEY-CERT signs every field, shard count included,
-      so a certificate id reused with any changed field has no valid chain. -/
+  /-- KEY-CERT (#5) validity: the certificate decodes and its root signature verifies.  The root
+      signs every field, shard count included, so a changed field has no valid certificate. -/
   certChainOk : EpochCert → Bool
   /-- ML-DSA-87 verification: public key, message, signature. -/
   sigOk : Bytes → Bytes → Bytes → Bool

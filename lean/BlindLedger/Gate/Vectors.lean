@@ -1,4 +1,4 @@
-import BlindLedger.Gate.Spec
+import BlindLedger.Gate.Verify
 import BlindLedger.Sha3
 
 namespace BlindLedger.Gate.Vectors
@@ -10,11 +10,12 @@ open BlindLedger.Gate
     `payment` (a `send`), `checkpoint` and `release` lines are the payer's own
     steps (and are checked); `grants` and `now` lines set context.  A payment
     line is kept under its name even when its send is refused; an `unsent`
-    one only records the payment and checks it has no pin.  A certificate's
-    chain flag holds for that exact certificate, as KEY-CERT signs every
-    field.  The `sig` lines are the
-    only ML-DSA-87 triples treated as valid; the Python test verifies each of
-    them with AWS-LC.  A checkpoint line expects `accept` (stored), `fork`
+    one only records the payment and checks it has no pin.  `root` lines set
+    the tenants' root public keys; a `cert` line is a whole KEY-CERT (one that
+    does not decode can only be `reject`); signatures are verified by the
+    real ML-DSA-87 verifier (`realCrypto`), and `mldsa87` and `hash` lines
+    check it and the SHA-3 family against known answers.  A checkpoint line
+    expects `accept` (stored), `fork`
     (recorded as a fork) or `reject`.  Accepted request, response and
     checkpoint lines, and tokens that decode, list the decoded fields they must
     yield; a response line
@@ -22,8 +23,6 @@ open BlindLedger.Gate
     checks `reissues` (`redecides`) on the latest revision and two tokens.  The last line, `end N`, is the number
     of checked lines; anything else is a FAIL.  Test-only: this executable is
     never a release path. -/
-
-def sha3 (x : Bytes) : Bytes := (BlindLedger.Semantic.sha3_512 x.toByteArray).toList
 
 def nibble (c : Char) : Option Nat :=
   if '0' ≤ c && c ≤ '9' then some (c.toNat - 48)
@@ -95,28 +94,17 @@ def renderToken (t : Token) : List String :=
    hexList t.siblings, toHex t.checkpointDigest]
 
 structure Ctx where
-  state : PayerState :=
-    { fence := fun _ => 0, now := 0, certs := [], checkpoints := [], grants := [], released := [],
-      forked := [], equivocations := [], pins := [] }
-  chains : List (EpochCert × Bool) := []
-  sigs : List (Bytes × Bytes × Bytes) := []
+  state : PayerState := emptyState
+  roots : List (Bytes × Bytes) := []
   payments : List (String × Payment) := []
   requests : List (String × Request) := []
   expected : Option Nat := none
 
-def Ctx.crypto (x : Ctx) : Crypto where
-  hash := sha3
-  certChainOk e := x.chains.contains (e, true)
-  sigOk pk msg sig := x.sigs.contains (pk, msg, sig)
+def Ctx.crypto (x : Ctx) : Crypto := realCrypto x.roots
 
 def verdict : String → Option Bool
   | "accept" => some true
   | "reject" => some false
-  | _ => none
-
-def chainFlag : String → Option Bool
-  | "chain-ok" => some true
-  | "chain-bad" => some false
   | _ => none
 
 /-- A payer step: keep its new state, and check it happened iff expected. -/
@@ -134,18 +122,28 @@ def decoded {α : Type} (expect : String) (render : α → List String) (result 
 /-- One line: the new context and, for a checked line, whether it matched. -/
 def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
   match fields with
-  | ["cert", expect, id, epoch, tenant, shards, pk, chain] =>
-    let e : EpochCert := { certId := (← hex id), epoch := (← epoch.toNat?), tenantId := ascii tenant,
-                           publicKey := (← hex pk), shardCount := (← shards.toNat?) }
-    let x := { x with chains := x.chains ++ [(e, (← chainFlag chain))] }
-    let (s, ok) := installCert x.crypto x.state e
-    pure ({ x with state := s }, some (ok == (← verdict expect)))
+  | ["root", tenant, pk] => pure ({ x with roots := x.roots ++ [(ascii tenant, ← hex pk)] }, none)
+  | ["cert", expect, signed] =>
+    match decodeKeyCert (← hex signed) with
+    | none => pure (x, some (expect == "reject"))
+    | some e =>
+      let (s, ok) := installCert x.crypto x.state e
+      pure ({ x with state := s }, some (ok == (← verdict expect)))
+  | ["mldsa87", expect, pk, msg, sig] =>
+    pure (x, some (MlDsa87.verify (← hex pk).toByteArray (← hex msg).toByteArray (← hex sig).toByteArray == (← verdict expect)))
+  | ["hash", name, msg, out] =>
+    let m ← if msg == "-" then pure [] else hex msg
+    let o ← hex out
+    let got := match name with
+      | "sha3-512" => [sha3 m, (Semantic.sha3_512 m.toByteArray).toList]
+      | "shake128" => [(Keccak.shake128 m.toByteArray o.length).toList]
+      | _ => [(Keccak.shake256 m.toByteArray o.length).toList]
+    pure (x, some (got.all (· == o)))
   | ["grants", id, rules, releases] =>
     let g : Grant := { grantId := (← hex id), ruleVersions := (← list hex rules),
                        engineReleases := (← list hex releases) }
     pure ({ x with state := { x.state with grants := [g] } }, none)
   | ["now", now] => pure ({ x with state := { x.state with now := (← now.toNat?) } }, none)
-  | ["sig", pk, msg, sig] => pure ({ x with sigs := x.sigs ++ [((← hex pk), (← hex msg), (← hex sig))] }, none)
   | ["payment", expect, name, tenant, program, flow, id, member, payee, amount, period, lines] =>
     let p : Payment := { tenantId := ascii tenant, programId := ascii program,
                          flow := (← flowNames.lookup flow), paymentId := ascii id,
