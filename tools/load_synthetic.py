@@ -105,11 +105,12 @@ def _percentile(ordered: list[float], pct: int) -> float:
     return ordered[min(len(ordered) - 1, math.ceil(len(ordered) * pct / 100) - 1)] if ordered else 0.0
 
 
-def run(n: int, seed: int, batch: int = 0, history: Path | None = None) -> dict:
+def run(n: int, seed: int, batch: int = 0, history: Path | None = None, cohort: int = 0) -> dict:
     """``batch`` 0 runs each command alone; K>0 sends K commands per ``run_batch`` (one commit each)."""
-    if not 0 < n <= _MAX_N or not 0 <= batch <= 1_000:
-        raise SystemExit(f"aborting: need 0 < n <= {_MAX_N} and 0 <= batch <= 1000, got n={n} batch={batch}")
-    rng, cohort = random.Random(seed), max(1, min(1000, math.ceil(n / 20)))
+    cohort = cohort or max(1, min(1000, math.ceil(n / 20)))
+    if not (0 < n <= _MAX_N and 0 <= batch <= 1_000 and 0 < cohort <= 1_000):
+        raise SystemExit(f"aborting: need 0 < n <= {_MAX_N}, 0 <= batch <= 1000 and 0 < cohort <= 1000, got n={n} batch={batch} cohort={cohort}")
+    rng = random.Random(seed)
     with tempfile.TemporaryDirectory(prefix="rr-load-synthetic-") as tmp:
         authority = SyntheticTrustedAuthority()
         owner = FinancialOwner(path=Path(tmp) / "load.sqlite3", config=FinancialOwnerConfig(**_SCOPE), trusted_authority=authority)
@@ -144,8 +145,9 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--batch", type=int, default=0, help="commands per run_batch commit (0: each alone)")
     parser.add_argument("--history", type=Path, default=None, help="export, restore by replay and check the history in this new directory")
+    parser.add_argument("--cohort", type=int, default=0, help="obligations sharing the commands (default: n/20, at most 1000)")
     args = parser.parse_args()
-    print(json.dumps(run(args.n, args.seed, args.batch, args.history), indent=2))
+    print(json.dumps(run(args.n, args.seed, args.batch, args.history, args.cohort), indent=2))
     return 0
 
 

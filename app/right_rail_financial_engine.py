@@ -11,12 +11,16 @@ from the environment.
 
 from __future__ import annotations
 
+import atexit
 from dataclasses import dataclass
 import hashlib
 import math
 from pathlib import Path
+import shutil
 import sqlite3
 import stat
+import tempfile
+import threading
 from collections.abc import Mapping
 from typing import Any, Final
 
@@ -1421,6 +1425,95 @@ def run_correction_transition_v1(
     )
 
 
+# --- Live evaluator: one long-lived Lean worker decides every owner evaluation ---
+
+EVALUATOR_PATH: Final[Path] = Path(__file__).resolve().parents[1] / "artifacts" / "engine-evaluator" / "blind_financial_worker.exe"
+EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 5_707_264
+EVALUATOR_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
+    "956CB88F2CCEC6ABD9DCFC13D4CE1B64E6E17B0338971C5702EB2CFE2A143816"
+)
+EVALUATOR_JOB_MEMORY_CAP_BYTES: Final[int] = 1_000_000_000
+EVALUATOR_TIMEOUT_SECONDS: Final[float] = 5.0
+_EVALUATOR_REJECTIONS: Final[dict[int, str]] = {
+    1: "evaluator_input_rejected",
+    2: "evaluator_evaluation_rejected",
+    3: "evaluator_result_rejected",
+}
+_evaluator_lock = threading.Lock()
+_evaluator: list[Any] = []  # [ContainedWorker, workspace] while one is running
+
+
+def _close_evaluator() -> None:
+    if _evaluator:
+        worker, workspace = _evaluator
+        _evaluator.clear()
+        worker.close()
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def _running_evaluator() -> process.ContainedWorker:
+    if _evaluator and not _evaluator[0].alive:
+        _close_evaluator()
+    if not _evaluator:
+        if _is_reparse_path(EVALUATOR_PATH):
+            raise process.VerifierProcessError("evaluator_path")
+        workspace = Path(tempfile.mkdtemp(prefix="rr-evaluator-"))
+        try:
+            worker = process.launch_contained_worker(
+                EVALUATOR_PATH,
+                workspace=workspace,
+                job_memory_cap_bytes=EVALUATOR_JOB_MEMORY_CAP_BYTES,
+                expected_executable_size_bytes=EVALUATOR_ARTIFACT_SIZE_BYTES,
+                expected_executable_sha256=EVALUATOR_ARTIFACT_SHA256,
+            )
+        except BaseException:
+            shutil.rmtree(workspace, ignore_errors=True)
+            raise
+        _evaluator.extend((worker, workspace))
+    return _evaluator[0]
+
+
+atexit.register(_close_evaluator)
+
+
+def _evaluate_wire(wire: bytes) -> bytes:
+    """Lean ``evaluate`` on one BLFIN02 input: the BLFRES02 answer.  Any rejection or transport
+    failure is an error; a failed worker is replaced on the next use, never retried here."""
+
+    with _evaluator_lock:
+        try:
+            response = _running_evaluator().exchange(
+                wire, response_cap_bytes=semantic.MAX_WIRE_BYTES + 1, timeout_seconds=EVALUATOR_TIMEOUT_SECONDS,
+            )
+        except process.VerifierProcessError:
+            raise FinancialEngineContainmentError("evaluator_containment") from None
+    if response[0] in _EVALUATOR_REJECTIONS and len(response) == 1:
+        raise FinancialEngineResultError(_EVALUATOR_REJECTIONS[response[0]])
+    if response[0] != 0:
+        raise FinancialEngineResultError("evaluator_response")
+    return response[1:]
+
+
+def evaluate_live(
+    connection: sqlite3.Connection,
+    *,
+    obligation_id: str,
+    authority_context: semantic.TrustedAuthorityContext,
+    evaluation_time_ms: int,
+    verification: Mapping[str, object],
+) -> semantic.DecodedLeanResult:
+    """The owner's live decision: BLFIN02 from its transaction, Lean decides, BLFRES02 bound back."""
+
+    wire, data = semantic.live_evaluation_input(
+        connection,
+        obligation_id=obligation_id,
+        authority_context=authority_context,
+        evaluation_time_ms=evaluation_time_ms,
+        verification=verification,
+    )
+    return semantic.decode_live_result(_evaluate_wire(wire), data)
+
+
 __all__ = (
     "ENGINE_ARGUMENTS",
     "CORRECTION_TRANSITION_OPERATION",
@@ -1445,6 +1538,7 @@ __all__ = (
     "MAX_CORRECTION_TRANSITION_BYTES",
     "MAX_ENGINE_INPUT_BYTES",
     "MAX_ENGINE_JOB_MEMORY_CAP_BYTES",
+    "evaluate_live",
     "evaluate_financial_snapshot",
     "encode_correction_transition_request",
     "load_correction_transition_release",

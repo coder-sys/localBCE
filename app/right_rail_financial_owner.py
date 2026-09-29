@@ -232,7 +232,13 @@ _PROGRAM_FUNDING_CONFIRMATION_CLASS: Final[str] = "STATE_PAYMENT_RECORD"
 _PROGRAM_FUNDING_EVIDENCE_STATUS: Final[str] = "SYNTHETIC_UNAPPROVED"
 _IDENTITY_DOMAIN = b"RR/FINANCIAL/IDENTITY/v1\x00"
 _EVALUATION_RECEIPT_CONTRACT: Final[str] = "RR/FINANCIAL/EVALUATION-RECEIPT/v1"
-_ZERO_DIGEST: Final[bytes] = b"\x00" * 64
+# The Lean result fields an evaluation row stores as decided (V.1); flags are stored as 0/1.
+_DECIDED_VALUES: Final[tuple[str, ...]] = (
+    "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents",
+    "shortfall_cents", "overage_cents", "verification_status", "case_status", "delivery_status",
+)
+_DECIDED_FLAGS: Final[tuple[str, ...]] = ("cash_satisfied", "amount_satisfied", "timely", "reporting_complete")
+_ZERO_DIGEST: Final[bytes] =b"\x00" * 64
 
 # Exported (Continuity v8) tables and their exact column order.
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
@@ -2751,6 +2757,58 @@ class FinancialOwner:
             committed_at_ms=now_ms,
         )
         return evaluation
+
+    def _recompute_obligation_lean(self, connection: sqlite3.Connection, obligation_id: str, *, now_ms: int) -> tuple[int, int, dict[str, Any]]:
+        """Lean ``evaluate`` decides; this only binds its declared result to the three writes (V.1)."""
+
+        from app import right_rail_financial_engine as financial_engine
+        from app import right_rail_financial_semantic_adapter as semantic
+
+        pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, obligation_id)
+        try:
+            decided = financial_engine.evaluate_live(
+                connection,
+                obligation_id=obligation_id,
+                authority_context=semantic.TrustedAuthorityContext.from_authority(self.trusted_authority),
+                evaluation_time_ms=now_ms,
+                verification={"scope": self._scope_value(), "owner_id": self.owner_id, "mode": self.mode},
+            )
+        except (FinancialError, financial_engine.FinancialEngineError) as error:
+            _fail(FinancialIntegrityError, f"lean_evaluation:{error}")
+        evaluation_id = f"evaluation:{obligation_id}:r{decided.after_revision}"
+        result = {
+            "evaluation_id": evaluation_id,
+            "obligation_id": obligation_id,
+            "revision": decided.after_revision,
+            "rule_version": decided.rule_version,
+            "evidence_ids": list(decided.evidence_ids),
+            "authority_id": decided.authority_id,
+            "evaluated_at_ms": decided.evaluated_at_ms,
+            **{field: getattr(decided, field) for field in _DECIDED_VALUES},
+            **{field: int(getattr(decided, field)) for field in _DECIDED_FLAGS},
+        }
+        connection.execute("UPDATE cases SET status=?,updated_at_ms=? WHERE obligation_id=?", (decided.case_status, now_ms, obligation_id))
+        stored_evaluation = self._insert_evaluation(
+            connection,
+            result=result,
+            pack=pack,
+            evidence_bindings=self._evidence_bindings(connection, decided.evidence_ids),
+            authority_epoch=decided.authority_epoch,
+            authority_digest=decided.authority_digest,
+        )
+        updated = connection.execute(
+            "UPDATE obligations SET revision=?,claimed_adjustment_cents=?,lawful_adjustment_cents=?,received_cash_cents=?,shortfall_cents=?,overage_cents=?,cash_satisfied=?,amount_satisfied=?,timely=?,verification_status=?,case_status=?,delivery_status=?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?",
+            (
+                decided.after_revision, decided.claimed_adjustment_cents, decided.lawful_adjustment_cents,
+                decided.received_cash_cents, decided.shortfall_cents, decided.overage_cents,
+                result["cash_satisfied"], result["amount_satisfied"], result["timely"],
+                decided.verification_status, decided.case_status, decided.delivery_status,
+                evaluation_id, now_ms, obligation_id, decided.before_revision,
+            ),
+        )
+        if updated.rowcount != 1:
+            _fail(FinancialRevisionError, "obligation_revision_conflict")
+        return decided.before_revision, decided.after_revision, stored_evaluation
 
     def _recompute_obligation(self, connection: sqlite3.Connection, obligation_id: str, *, now_ms: int) -> tuple[int, int, dict[str, Any]]:
         old = self._obligation_by_id(connection, obligation_id)
