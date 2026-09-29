@@ -3643,7 +3643,7 @@ def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids
             actions={str(v["action_id"]): dict(v) for v in mine("actions")}, cases={str(v["case_id"]): dict(v) for v in mine("cases")}, packs={key: dict(v) for key, v in packs.items()},
         )
         _verify_followthrough_decisions(  # only decisions carry a payload here; the other events give the revision each decision must follow
-            connection.execute("SELECT event_sequence,aggregate_id,kind,before_revision,after_revision,committed_at_ms,CASE kind WHEN 'FOLLOWTHROUGH_DECIDED' THEN payload_json END AS payload_json FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),
+            connection.execute("SELECT event_sequence,aggregate_type,aggregate_id,kind,before_revision,after_revision,committed_at_ms,CASE kind WHEN 'FOLLOWTHROUGH_DECIDED' THEN payload_json END AS payload_json FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),
             meta, touched, populations, packs, identity["actors"],
         )
 
@@ -3708,20 +3708,21 @@ def _verify_followthrough_decisions(
 ) -> None:
     """Whole-store and touched-obligation modes: each decision in event order through the one per-event rule, each id once."""
 
-    revision: dict[object, object] = {}  # an obligation's first OBLIGATION event follows the import's revision 0
+    revision: dict[tuple[object, object], object] = {}  # per (type, id): an aggregate id may repeat across types; an obligation's first event follows the import's revision 0
     seen: set[str] = set()
     for event in events:
         aggregate = event["aggregate_id"]
+        key = (event["aggregate_type"], aggregate)
         if event["kind"] == "FOLLOWTHROUGH_DECIDED":
             obligation = obligations.get(aggregate)
             population = None if obligation is None else populations.get(str(obligation["population_id"]))
             decision_id = _verify_followthrough_event(
-                event, prior_revision=revision.get(aggregate, 0), obligation=obligation, pack=None if population is None else packs.get(str(population["pack_id"])), actors=actors, meta=meta,
+                event, prior_revision=revision.get(key, 0), obligation=obligation, pack=None if population is None else packs.get(str(population["pack_id"])), actors=actors, meta=meta,
             )
             if decision_id in seen:
                 _fail("followthrough:duplicate")
             seen.add(decision_id)
-        revision[aggregate] = event["after_revision"]
+        revision[key] = event["after_revision"]
 
 
 def verify_followthrough_connection(connection: sqlite3.Connection, obligation_id: str, decision_id: str, **expected: Any) -> dict[str, object]:

@@ -2,7 +2,7 @@
 
 Approval (2026-09-24): founder approved the v8 rebuild and retiring v5/v6 stores, conditional on every step complying with CONSTITUTION.md; any step weakening a safety property or protected answer needs a separate founder decision.
 
-Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to move to the v8 store/package format (RR/FINANCIAL/CONTINUITY/v8), the founder answered "Yes, approve v8". The only protected change is CASE_11's export version string in `tests/rightrail_financial_expected_cases.py`. History-completeness approval (same date): one sealed opening-balance event, then full facts on every later event. Both v7 provisions (migration on open, opening-balance conversion) were superseded 2026-09-25 (decision C3): v7 conversion and `OPENING_BALANCE` were removed.
+Format approval (2026-09-24, CONSTITUTION V.4): the founder approved the v8 store/package format (RR/FINANCIAL/CONTINUITY/v8) in session chat ("Yes, approve v8"). The only protected change is CASE_11's export version string in `tests/rightrail_financial_expected_cases.py`. History-completeness approval (same date): one sealed opening-balance event, then full facts on every later event. Both v7 provisions (migration on open, opening-balance conversion) were superseded 2026-09-25 (decision C3): v7 conversion and `OPENING_BALANCE` were removed.
 
 ## Verdict
 
@@ -391,7 +391,7 @@ is inherited.
 
 ## Correction-v2 protected changes (2026-09-26; XI.2 record written 2026-09-28)
 
-This record replaces the one STATUS lost in `b9aa6a2` (last at `d79aceb`, lines 123-127, 130); facts are from `git show` of the commits named.
+This record replaces the one STATUS lost in `b9aa6a2` (last at `d79aceb`); facts are from `git show` of the commits named.
 
 Felt effect: a hospital short part of its claim is asked for exactly what is
 still unpaid, and no older engine record can ask for more.

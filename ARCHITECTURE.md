@@ -152,8 +152,7 @@ capture context (subject, credential, enrollment, locator, observation and fetch
 time); all six values must match the independent source check before admission.
 Only the admitted graph reaches the read-model and export verification gates;
 the served projection keeps freshness and source truth unknown. A failed capture
-or context mismatch opens no server. No writes, network fetch, cache or
-financial authority; retry recomputes the same verified projection.
+or context mismatch opens no server. Retry recomputes the same verified projection.
 Both CLIs accept `--source-envelope` and `--capture-context` (see `--help`) instead
 of `--artifact PATH`; the four identities are opaque
 128-character hex values from the capture configuration, never parsed from the

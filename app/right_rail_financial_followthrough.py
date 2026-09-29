@@ -162,6 +162,9 @@ def _by(rows: list, key: str, keep: object = lambda row: True) -> dict[str, list
     return grouped
 
 
+_NOT_ACTIVITY = ("FOLLOWTHROUGH_DECIDED", "ACTION_ACKNOWLEDGED", "EVALUATION_RECORDED")
+
+
 def _covered(requires: list[str], sources: list[str], holders: dict[str, set[str]]) -> bool:
     """Each required purpose gets its own evidence row, from a source that holds that purpose: one document never meets two."""
     taken: dict[int, str] = {}  # evidence row -> the purpose it meets
@@ -175,6 +178,18 @@ def _covered(requires: list[str], sources: list[str], holders: dict[str, set[str
                     return True
         return False
     return all(place(purpose, set()) for purpose in requires)
+
+
+def _documents(rows: list) -> list:
+    """One row per document: a repeat under the same origin or content digest is the same document, so it meets one purpose at most."""
+    seen: set = set()
+    kept = []
+    for row in rows:
+        marks = {("origin", row["common_origin_id"]), ("digest", bytes(row["content_digest"]))}
+        if not marks & seen:
+            kept.append(row)
+        seen |= marks
+    return kept
 
 
 def _fact(source: str, at_ms: int, evidence: dict | None, **more: object) -> dict:
@@ -210,6 +225,7 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
     evaluations = _by(sorted(rows["evaluations"], key=lambda row: row["revision"]), "obligation_id")
     payments = _by(rows["payments"], "obligation_id", lambda row: row["active"] == 1)
     received = {row["evidence_id"]: row["received_at_ms"] for row in rows["evidence"]}
+    recorded = {json.loads(row["payload_json"])["evidence_id"]: row["event_sequence"] for row in rows["financial_events"] if row["kind"] == "SUPPORT_EVIDENCE_RECORDED"}  # event order, not time
     gaps, items = set(), []
     for obligation in sorted(rows["obligations"], key=lambda row: row["item_id"]):
         manifest = finders[obligation["population_id"]]
@@ -234,12 +250,12 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
                       "agrees_with_suggestion": None if p["suggestion"] is None else all(p[key] == p["suggestion"][key] for key in ("act", "reason_code", "owner_id")),
                       "actor_id": p["actor_id"], "actor_role": p["actor_role"], "decided_at_ms": row["committed_at_ms"], "event_sequence": row["event_sequence"]}
                      for row in sorted(events.get(obligation["obligation_id"], []), key=lambda row: row["event_sequence"]) if row["kind"] == "FOLLOWTHROUGH_DECIDED" for p in [json.loads(row["payload_json"])]]
-        covered = set()  # closes in the rules whose every required purpose (433.318) has its own evidence row received by the decision
+        covered = set()  # closes in the rules whose every required purpose (433.318) has its own document recorded before the decision (event order)
         for d in decisions:
             listed = d["reason_code"] in reasons if d["act"] == "CLOSE" else parties.get(d["owner_id"], {"kind": "MODEL"})["kind"] != "MODEL"
             if not listed:
                 gaps.add(f"gap:decision-not-in-rules:{d['decision_id']}")
-            elif d["act"] == "CLOSE" and _covered(reasons[d["reason_code"]]["requires"], [row["source_id"] for row in support.get(obligation["item_id"], []) if row["received_at_ms"] <= d["decided_at_ms"]], holders):
+            elif d["act"] == "CLOSE" and _covered(reasons[d["reason_code"]]["requires"], [row["source_id"] for row in _documents([row for row in support.get(obligation["item_id"], []) if recorded[row["evidence_id"]] < d["event_sequence"]])], holders):
                 covered.add(d["decision_id"])
             elif d["act"] == "CLOSE":
                 gaps.add(f"gap:closure-evidence-missing:{d['decision_id']}")
@@ -247,8 +263,9 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
                 gaps.add(f"gap:suggestion-source-not-typed:{d['decision_id']}")
         close = decisions[-1] if decisions and decisions[-1]["act"] == "CLOSE" else None  # an ASSIGN after a close reopens the item
         assigned = next((d for d in reversed(decisions) if d["act"] == "ASSIGN"), None)
-        if close is not None and any(row["received_at_ms"] > close["decided_at_ms"] for row in evidence.get(obligation["item_id"], [])):
-            gaps.add(f"gap:activity-after-close:{obligation['item_id']}")
+        if close is not None and any(row["event_sequence"] > close["event_sequence"] and row["kind"] not in _NOT_ACTIVITY for row in events.get(obligation["obligation_id"], [])):
+            gaps.add(f"gap:activity-after-close:{obligation['item_id']}")  # evidence, payment or offset recorded after the close
+        collected_share = None
         clocks = []
         for clock in rules["clocks"]:
             facts = []
@@ -277,7 +294,15 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
             elif satisfied is not None:
                 status = "MET" if satisfied["at_ms"] < due else "MET_LATE"
             elif close is not None and close["decision_id"] in covered and clock["clock_id"] in reasons[close["reason_code"]]["stops"] and close["decided_at_ms"] < ends:
-                status, stopped_by = "STOPPED", close["decision_id"]  # 433.320(d)
+                status, stopped_by = "STOPPED", close["decision_id"]  # 433.320(d): only the uncollected part stops
+                report = None
+                gaps.add(f"gap:write-off-line-unknown:{obligation['item_id']}")  # the 64.9 write-off line is not in the rules (design risk 2)
+                collected = obligation["owed_cents"] - obligation["shortfall_cents"]
+                if clock["report"]["kind"] == "CMS64_QUARTER" and collected > 0 and share is not None:  # the federal share of money already collected stays due (433.320(a)(2)-(3))
+                    quarter, due, was_collected = _cms64_due(ends, max((row["event_at_ms"] for row in payments.get(obligation["obligation_id"], [])), default=None), clock["report"]["due_days"])
+                    collected_share = {"clock_id": clock["clock_id"], "collected_cents": collected, "basis_points": share["basis_points"], "cents": (collected * share["basis_points"] + 5000) // 10_000,
+                                       "quarter": quarter, "due_ms": due, "report": {"quarter": quarter, **clock["report"]["collected" if was_collected else "uncollected"]},
+                                       "status": "MISSED" if generated_at_ms >= due else "DUE"}
             else:
                 status = "MISSED" if generated_at_ms >= due else "RUNNING"
             clocks.append({"clock_id": clock["clock_id"], "citation": clock["citation"], "anchor": anchor, "ends_ms": ends, "due_ms": due, "report": report,
@@ -295,6 +320,7 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
             "open_cents": obligation["shortfall_cents"],
             "clocks": clocks,
             "federal_share": share,
+            "collected_share": collected_share,
             "decisions": decisions,
         })
     return _canonical_json({

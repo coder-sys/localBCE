@@ -532,6 +532,61 @@ class FollowthroughDecisionTests(unittest.TestCase):
         _decide(store, CLOSE_AT + 2, decision_id="decision:r2:close-2")
         self.assertEqual(self._r2(store)["clocks"][0]["status"], "STOPPED")
 
+    def test_partial_recovery_then_close_keeps_the_collected_share_due(self) -> None:
+        # 433.318(a)(1) excuses the state only to the extent it cannot recover: the collected part's federal share stays due.
+        store = _build_r_store(self.directory, RULES)
+        store.clock.value = EVIDENCE_AT
+        store.record_payment_evidence(item_id="item-r2", payment_id="payment:r2:partial", common_origin_id="origin:r2:partial", amount_cents=200_000,
+                                      evidence_id="evidence:payment:r2:partial", event_at_ms=EVIDENCE_AT, source_id="state-collections")
+        _legal(store, "petition", "creditor", "effort")
+        _decide(store)
+        item = self._r2(store)
+        federal = item["clocks"][0]
+        self.assertEqual((item["status"], item["open_cents"], federal["status"], federal["report"]), ("CLOSED", 300_000, "STOPPED", None))
+        self.assertIn("gap:write-off-line-unknown:item-r2", _pack(store)["unavailable"])
+        quarter, due, _ = _cms64_due(FEDERAL_ENDS, EVIDENCE_AT, 30)
+        self.assertEqual(item["collected_share"], {
+            "clock_id": "federal-share-credit", "collected_cents": 200_000, "basis_points": 5000, "cents": 100_000, "quarter": quarter, "due_ms": due,
+            "report": {"quarter": quarter, "form": "64.9C1", "line": None, "summary_line": "9C"}, "status": "MISSED"})
+        early = next(i for i in _pack(store, CLOSE_AT + DAY)["items"] if i["item_id"] == "item-r2")
+        self.assertEqual(early["collected_share"]["status"], "DUE")
+        (self.directory / "none").mkdir()
+        self.assertIsNone(self._r2(_decided_store(self.directory / "none"))["collected_share"])  # nothing collected: nothing due
+
+    def test_evidence_recorded_after_a_close_never_covers_it(self) -> None:
+        store = _build_r_store(self.directory, RULES)
+        _legal(store, "creditor", "effort")
+        _decide(store)
+        _legal(store, "petition", at_ms=CLOSE_AT)  # the same millisecond as the decision, recorded after it
+        unavailable = _pack(store)["unavailable"]
+        self.assertEqual(self._r2(store)["clocks"][0]["status"], "MISSED")
+        for gap in (f"gap:closure-evidence-missing:{CLOSE}", "gap:activity-after-close:item-r2"):
+            self.assertIn(gap, unavailable)
+
+    def test_one_document_recorded_three_times_meets_one_purpose(self) -> None:
+        store = _build_r_store(self.directory, RULES)
+        store.clock.value = EVIDENCE_AT
+        for copy in "abc":
+            store.record_support_evidence(item_id="item-r2", evidence_id=f"evidence:copy-{copy}:r2", common_origin_id="origin:legal-doc-1", source_id="state-legal-office",
+                                          source_version="v1", local_ref="legal:doc-1", applicable_at_ms=EVIDENCE_AT, event_at_ms=EVIDENCE_AT)
+        _decide(store)
+        self.assertIn(f"gap:closure-evidence-missing:{CLOSE}", _pack(store)["unavailable"])
+        self.assertEqual(self._r2(store)["clocks"][0]["status"], "MISSED")
+
+    def test_an_aggregate_id_shared_across_types_still_opens(self) -> None:
+        # A pack id equal to an obligation id: the whole-database walk keys by (type, id), as the pre-COMMIT query does.
+        store = _build_r_store(self.directory, RULES)
+        store.clock.value = EVIDENCE_AT
+        store.publish_control_pack(ControlPack(
+            pack_id=store.obligation_detail("item-r3")["obligation_id"], **SCOPE, version=2, source_refs=("synthetic:source:v2",),
+            effective_start_ms=4_000_000_000_000, effective_end_ms=4_100_000_000_000, recorded_at_ms=500, approved_at_ms=500,
+            calculation_rule_id="calculation:per-recipient:v1", adjustment_rule_id="adjustment:offset:v1",
+            authorized_roles=("FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER", "CASE_OWNER"),
+            expected_tests=("program-total=100000000", "H-owed=10000000", "other-total=90000000", "timeliness-separate")))
+        _decide(store, item_id="item-r3", decision_id="decision:r3:assign", act="ASSIGN", reason_code=None, owner_id="state-recovery-unit")
+        independent.verify_database(store.path, **store._checker_expectations())
+        FinancialOwner(path=store.path, config=FinancialOwnerConfig(**SCOPE), trusted_authority=store.trusted_authority, clock=_Clock()).verify_integrity()
+
     def test_cli_records_followthrough_decision(self) -> None:
         store = _build_r_store(self.directory, RULES)
         _legal(store, "petition", "creditor", "effort")
