@@ -28,6 +28,7 @@ from app.right_rail_financial_mirror import (
     FinancialMirrorError,
     MAX_PACKAGE_BYTES,
 )
+from app.right_rail_financial_followthrough import MAX_RULES_BYTES, PACK_CONTRACT, build_followthrough_pack
 from app.right_rail_financial_line_pack import LINE_PACK_CONTRACT, MAX_LINE_MAP_BYTES, MAX_LINE_PACK_BYTES, build_line_pack
 from app.right_rail_financial_switch import (
     COHORT_APPROVAL_CONTRACT,
@@ -174,6 +175,12 @@ def _parser() -> argparse.ArgumentParser:
     line_pack.add_argument("--generated-at-ms", type=int, required=True)
     line_pack.add_argument("--prior-pack", type=Path, help="the line pack this one supersedes")
     line_pack.add_argument("--output", type=Path, required=True, help="new line-pack file; existing paths are never replaced")
+
+    followthrough = subparsers.add_parser("followthrough-pack", help="write the documentation-only follow-through pack from --database, verified read-only")
+    followthrough.add_argument("--package", type=Path, required=True, help="that store's current Continuity package bytes")
+    followthrough.add_argument("--rules", type=Path, required=True, help="rules JSON listed by the approved Control Pack")
+    followthrough.add_argument("--generated-at-ms", type=int, required=True)
+    followthrough.add_argument("--output", type=Path, required=True, help="new follow-through file; existing paths are never replaced")
 
     subparsers.add_parser("dispatch-outbox")
     return parser
@@ -599,6 +606,13 @@ def _run(args: argparse.Namespace) -> Any:
         )
         _write_new(args.output, pack)
         return {"contract": LINE_PACK_CONTRACT, "line_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "line_pack_path": str(args.output)}
+    if args.command == "followthrough-pack":
+        pack = build_followthrough_pack(
+            args.database, _read_package(args.package), trusted_authority=_trusted_authority(args), expected_scope=_scope(args),
+            rules_bytes=_read_package(args.rules, MAX_RULES_BYTES), generated_at_ms=args.generated_at_ms,
+        )
+        _write_new(args.output, pack)
+        return {"contract": PACK_CONTRACT, "followthrough_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "followthrough_pack_path": str(args.output)}
     owner = _owner(args)
     mirror = FinancialMirror(owner)
     command = args.command

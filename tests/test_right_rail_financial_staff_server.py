@@ -34,6 +34,7 @@ from app.right_rail_financial_owner import (
     FinancialOwner,
     FinancialRevisionError,
 )
+from app.right_rail_financial_followthrough import build_followthrough_pack
 from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
 
 from app.right_rail_financial_staff_server import (
@@ -365,6 +366,38 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertFalse(restored["workspace"]["nonactivation"]["activation"])
         self.assertIsNone(restored["workspace"]["nonactivation"]["proof_suite_id"])
         self.assertEqual(restored["workspace"]["h"]["obligation"]["shortfall_cents"], 0)
+
+    def test_h_store_followthrough_chain(self) -> None:
+        workflow = self._workflow(with_correction_release=True)
+        owner = workflow.mirror.owner
+        rules = (Path(__file__).resolve().parents[1] / "app" / "fixtures" / "h_followthrough_rules_v1.json").read_bytes()
+        scope = {key: getattr(owner.config, key) for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")}
+
+        def items(at_ms: int) -> dict[str, dict]:
+            pack = build_followthrough_pack(owner.path, owner.export_continuity(), trusted_authority=owner.trusted_authority, expected_scope=scope, rules_bytes=rules, generated_at_ms=at_ms)
+            return {item["item_id"]: item for item in json.loads(pack)["items"]}
+
+        def query(sql: str) -> tuple:
+            with closing(sqlite3.connect(owner.path)) as check:
+                return check.execute(sql).fetchone()
+
+        workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
+        sequence, at_ms = query("SELECT event_sequence,committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED'")
+        h = items(at_ms + 1)[H_ITEM_ID]
+        self.assertEqual((h["found"]["party"], h["found"]["source_owner_id"], h["status"]), ("STATE", "source-owner:fixture-state-finance-v1", "OPEN"))
+        self.assertEqual(h["owner"], {"owner_id": "state:provider-finance", "basis": "RULES_DEFAULT", "decision_id": None})
+        (clock,) = h["clocks"]
+        self.assertEqual(clock["anchor"], {"source": "EVENT:OFFSET_REJECTED_CORRECTION_AUTHORIZED", "at_ms": at_ms, "recorded_at_ms": at_ms, "evidence_id": None, "evidence_record_digest": None, "event_sequence": sequence})
+        self.assertEqual((clock["clock_id"], clock["ends_ms"], clock["status"]), ("correction-payment", at_ms + 30 * 86_400_000, "RUNNING"))
+
+        workflow.acknowledge_correction_action(self._revision_body(workflow))
+        workflow.record_cash_correction(self._cash_body(workflow))
+        (evaluated,) = query(f"SELECT evaluated_at_ms FROM evaluations WHERE obligation_id='{h['obligation_id']}' AND amount_satisfied=1 ORDER BY revision LIMIT 1")
+        done = items(query("SELECT MAX(committed_at_ms) FROM financial_events")[0] + 1)
+        (clock,) = done[H_ITEM_ID]["clocks"]
+        self.assertEqual((done[H_ITEM_ID]["status"], done[H_ITEM_ID]["federal_share"], clock["status"], clock["satisfied"]["at_ms"]), ("SATISFIED", None, "MET", evaluated))
+        self.assertEqual({clock["status"] for item in done.values() if item["item_id"] != H_ITEM_ID for clock in item["clocks"]}, {"NOT_ANCHORED"})
+        self.assertEqual(len(done), 20)
 
     def test_a_failed_test_restore_returns_a_valid_support_package_over_http(self) -> None:
         workflow = self._workflow()

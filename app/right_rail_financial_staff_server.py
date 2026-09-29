@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -102,6 +103,7 @@ ITEM_LABELS = {
 }
 
 _ROOT = Path(__file__).resolve().parent
+FOLLOWTHROUGH_RULES_BYTES = (_ROOT / "fixtures" / "h_followthrough_rules_v1.json").read_bytes()  # listed by the fixture Control Pack
 # Role is selected by path, never by query string: do_GET rejects any query
 # or fragment outright, and a fixed set of real roles keeps every disallowed
 # control absent from the page rather than merely disabled (Art. XIII.4).
@@ -349,7 +351,7 @@ class StaffWorkflow:
             program_id=PROGRAM_ID,
             period_id=PERIOD_ID,
             version=1,
-            source_refs=("fixture-source:approved-schedule:v1",),
+            source_refs=("fixture-source:approved-schedule:v1", "followthrough-rules:sha256:" + hashlib.sha256(FOLLOWTHROUGH_RULES_BYTES).hexdigest().upper()),
             effective_start_ms=PERIOD_START_MS,
             effective_end_ms=PERIOD_END_MS,
             recorded_at_ms=PACK_RECORDED_AT_MS,
