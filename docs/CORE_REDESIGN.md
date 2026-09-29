@@ -576,3 +576,12 @@ verifier before it can leave the gate, post-quantum only.
 - **Scope.** Laptop runs; permanent until the producer and kit move to v7, which is planned, not done.
 - **Claims withdrawn.** "v4 is the guarded wrapper" and "the floor is 2,190,433,321" no longer hold for tests. Engine and release builds still run at v4's floor.
 - **Kill criteria.** Restore from `parked/native_guard/` if `-Light` is revived or a release step needs the trunk v4 path.
+
+## gate_verify re-pin after slim and quick-wins (2026-09-29, XI.2 record)
+
+- **Felt effect.** The signer runs a verifier built from the Lean tree it ships with.
+- **Predicate.** `test_gate_verify_pin_names_the_current_lean_tree`: the `lean/` manifest recorded in `artifacts/gate-verify/PROVENANCE.txt` equals the tree's, and the tree's build is the pinned exe.
+- **Change.** `gate_verify.exe` rebuilt and re-pinned (`gate_verify.sha256`, Source manifest, `VERIFY_PIN`). Two causes moved the manifest. Slim moved `semantic_assurance_gate.py` and its manifest under `lean/tools/`. Quick-wins changed `lakefile.toml` (comment, default targets), gave `AxiomCheck.lean` `#guard_msgs` pins and moved the retired Semantic kernel to `parked/`. No theorem statement or wire format changes.
+- **Invariant.** A change under `lean/` cannot ship with a stale verifier pin. Failure: the signer trusts a build no one reproduced.
+- **Disposition.** Retain the gate. **Replacement control.** None. **Scope.** Until the next `lean/` edit.
+- **Kill criteria.** Drop the manifest check if the pin moves to a hash of the exe's own import closure.

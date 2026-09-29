@@ -12,11 +12,17 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 55 files (sha256 and path, sorted): SHA-256
-  0482e14cf80ebebba1e4634e2f1d4e536ec845fd49ba7d054f608079f19743ff, 6,023 bytes;
-  copy at C:\Users\neers\rrb\gate\pqm1-gv3-manifest.txt.
+- Source manifest, 52 files (sha256 and path, sorted): SHA-256
+  2b99e9c5ce28d6eb03c222f5fe3729868390add4a695a9598dba5753649ba4be, 5,764 bytes;
+  copy at C:\Users\neers\rrb\gate\lqw-gv-manifest.txt.
   tests/test_right_rail_gate_formats.py recomputes it from lean/ and fails on any change
   under lean/ until this file is updated after a rebuild.
+
+Re-pin (2026-09-29, branch lean-quick-wins on trunk a0fb1ca): the manifest moved (55 files, 0482e14c..., to 52 files,
+2b99e9c5...) while the exe did not: the rebuild (guard log lqw-gv1-a6-L1, `lake build -d lean`, 53 jobs) gave the same
+SHA-256 fc45ce6d... as the pin above. Causes: slim moved the semantic gate and its manifest under lean/tools/; quick-wins
+changed lakefile.toml and AxiomCheck.lean and moved the retired Semantic kernel out of lean/. No file in gate_verify's
+import closure changed. XI.2 record: docs/CORE_REDESIGN.md, "gate_verify re-pin".
 
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in
