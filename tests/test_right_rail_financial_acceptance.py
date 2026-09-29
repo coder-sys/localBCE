@@ -5313,6 +5313,19 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "^action:event-amount$"):
             verify_database(changed, expected_config=store.config, expected_authority=self.authority)
 
+    def test_a_determination_only_the_whole_store_rule_rejects_refuses_before_commit(self) -> None:
+        # The determination and follow-up rules run on the touched rows before COMMIT (cash 1a F1): a digest that
+        # matches the owner's own payload but not the row's fields used to commit and leave a store that will not open.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        before = store.export_continuity()
+        real = owner._determination_digest_payload
+        with patch.object(owner, "_determination_digest_payload", lambda **fields: {**real(**fields), "unbound": 1}):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^correction_verification:determination:digest$"):
+                self._reject(store, claim_id)
+        self.assertEqual(store.export_continuity(), before)
+
     def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:
         # Final review of 75a5517, finding 5: publish opened the case after the first evaluation,
         # and only the per-obligation mode compared a current evaluation with the current rows.

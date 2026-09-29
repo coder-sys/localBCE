@@ -362,7 +362,7 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   Amounts are the checker's sums of the rows before the write and the per-item
   cash deltas it proved; totals are not re-verified over the whole store.
   RETRY and ALIAS rows add zero cash, including payments reversed after their
-  receipt; a new repeat of a reversed payment refuses (`conflict`). No intermediate
+  receipt; a new repeat of a reversed payment is DUPLICATE only if dated no later than the reversal, else `conflict`. No intermediate
   owner projection or raw file/error data is exported in this result.
 - Duration: v1 has no implicit legacy migration; changes need a new compatibility decision and fresh evidence.
 - Claims withdrawn: this design is not implementation or verification. The
@@ -386,15 +386,15 @@ refund flows need sharding or Phase 2 below and are not claimed.
   import under the lock (it runs at each open). Replacement control, before
   COMMIT: each new event onto the chain, every table's before/after difference,
   and the checker's own rules (never copies) on the touched rows: current
-  evaluation, action amount, requestable and `payment:link`, evidence digests. A
-  structural test lists each whole-store rule not run before COMMIT with its
-  reason; two `OPEN GAP` entries (determinations, correction follow-up records
-  on the correction path) stay unresolved. Claims withdrawn: that the store, or
+  evaluation, determinations, action amount, requestable and `payment:link`,
+  correction follow-up records, evidence digests. A structural test lists each
+  whole-store rule not run before COMMIT with its reason. Claims withdrawn: that the store, or
   a cash file's totals, is independently verified before COMMIT. Corruption
   that bypassed the owner is caught at the next open or by `verify-integrity`.
 - Visible changes: the CLI prints `ERROR:receiver_cash_file_refused:{code}`; older
-  per-cause refusal codes collapsed into nine fixed classes (below); a cash file's
-  new repeat of a reversed payment refuses `conflict` (the owner's direct command still labels it DUPLICATE); `duplicate_count` includes OVERLAP
+  per-cause refusal codes collapsed into nine fixed classes (below); a repeat of a
+  reversed payment's origin is DUPLICATE only when dated no later than the
+  reversal, else `conflict` (owner command and cash file share the rule); `duplicate_count` includes OVERLAP
   rows, which write alias evidence.
 - A row is NEW, RETRY, OVERLAP (a repeat of a stored payment under new ids:
   DUPLICATE, one alias event, no cash), ALIAS (a stored repeat: nothing written)

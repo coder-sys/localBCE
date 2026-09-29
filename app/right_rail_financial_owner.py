@@ -4051,6 +4051,8 @@ class FinancialOwner:
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
             same = existing is not None and int(existing["amount_cents"]) == amount_cents
             prior = connection.execute("SELECT received_at_ms FROM evidence WHERE evidence_id=?", (evidence_id,)).fetchone() if same else None
+            if same and prior is None and not existing["active"] and event_at_ms > connection.execute("SELECT event_at_ms FROM evidence WHERE evidence_id=?", (existing["reversed_by_evidence_id"],)).fetchone()[0]:  # a repeat dated after the reversal may be a re-presentment: a person decides
+                _fail(FinancialConflictError, "payment_origin_reversed")
             if prior is None:  # an exact repeat of a stored alias confirmation is rebuilt as stored and writes nothing (III.3)
                 self._check_revision(obligation, expected_revision)
             evidence = self._new_evidence(**evidence_fields, received_at_ms=self._now() if prior is None else int(prior[0]))

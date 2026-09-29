@@ -2812,8 +2812,9 @@ def _verify_determinations(
     evaluations: dict[str, list[sqlite3.Row]],
     *,
     actors: Mapping[str, frozenset[str]] | None,
+    only: Collection[str] | None = None,  # per-obligation mode: these obligations' determinations, the same rules
 ) -> dict[str, sqlite3.Row]:
-    rows = _bounded_rows(connection, "determinations")
+    rows = [row for row in _bounded_rows(connection, "determinations") if only is None or row["obligation_id"] in only]
     result: dict[str, sqlite3.Row] = {}
     evaluations_by_id = {
         str(evaluation["evaluation_id"]): evaluation
@@ -3629,13 +3630,21 @@ def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids
         # The whole-store rules the checker runs on rows a write can add or change, once for the touched obligations: nothing is copied.
         marks = json.dumps(sorted(touched))
         items = {str(value["item_id"]): value for value in touched.values()}
-        _verify_evidence(connection, items, touched, only=items)
+        evidence = _verify_evidence(connection, items, touched, only=items)
 
         def mine(table: str) -> Iterable[sqlite3.Row]:
             return connection.execute(f"SELECT * FROM {table} WHERE obligation_id IN (SELECT value FROM json_each(?))", (marks,))
 
-        _verify_actions(connection, meta, _group(mine("evaluations"), "obligation_id"), {str(v["claim_id"]): v for v in mine("claimed_adjustments")},
-                        {str(v["determination_id"]): v for v in mine("determinations")}, {str(v["payment_id"]): v for v in mine("payments")}, only=touched)
+        populations = {str(v["population_id"]): v for v in connection.execute("SELECT * FROM population_imports WHERE population_id IN (SELECT population_id FROM obligations WHERE obligation_id IN (SELECT value FROM json_each(?)))", (marks,))}
+        packs = {str(v["pack_id"]): v for v in connection.execute("SELECT * FROM control_packs")}
+        evaluations, claims = _group(mine("evaluations"), "obligation_id"), {str(v["claim_id"]): v for v in mine("claimed_adjustments")}
+        determinations = _verify_determinations(connection, meta, touched, populations, packs, claims, evidence, evaluations, actors=identity["actors"], only=touched)
+        _verify_actions(connection, meta, evaluations, claims, determinations, {str(v["payment_id"]): v for v in mine("payments")}, only=touched)
+        _verify_correction_followup_records(
+            connection.execute("SELECT * FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),
+            evaluations={str(v["evaluation_id"]): dict(v) for rows in evaluations.values() for v in rows}, determinations={key: dict(v) for key, v in determinations.items()},
+            actions={str(v["action_id"]): dict(v) for v in mine("actions")}, cases={str(v["case_id"]): dict(v) for v in mine("cases")}, packs={key: dict(v) for key, v in packs.items()},
+        )
 
     return _mapped(lambda: tuple(check()))
 
