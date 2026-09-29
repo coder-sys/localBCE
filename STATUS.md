@@ -17,7 +17,8 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 ## Current verification (latest run per claim; raw logs are the record)
 
 - **Full suite, trunk `4efcb4b` merged** (`merge4efcb4b-full1-a1-L3`): `SUMMARY run=495 passed=483 failed=0 errors=2 skipped=10`; the 2 errors are the ML-DSA vector tests (unbuilt exe). Gate Lean build, 19 jobs (`merge4efcb4b-lean2-a2`). Skips: symlink privilege, absent old engine artifact, no fresh handoff, 7 external-gate tests.
-- **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount; the checker re-checks it before COMMIT. Its `lean/` edit also voids the engine pin until a guarded rebuild.
+- **Slim sweep (`slim-1`)**: -206 product lines, no behaviour change; `slim1-full2` 497/511, 14 skipped.
+- **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount; the checker re-checks it before COMMIT.
 - **G2 dependency check** (`g2dep-r3-a1-L2`, 184/184): a correction follow-up reopens only when a derived dependency key moves (XI.2 record).
 - **G4 support package v2** (XI.2 record): software version and Trust Graph profile stay NONE.
 - **Line pack (B+)** (documentation-only CMS-64.9 pack; XI.2 record): its tests run in the suite. Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
@@ -27,7 +28,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 - **Engine, proof and kit**: source-manifest reproduction (r67, 46 files) and the six-target Lake build (r68) are in the XI.2 record; 30 evaluator, 18 decision-package, 42 correction KATs and 210 + 3,616 gate-rule cases (r69); 18 correction declarations passed trust-zero, axiom-closure and `leanchecker` checks (r70); 21 verifier tests (r73). Kit: 2,673-member archive assembled, verified, extracted and run (r80, r84, r85, r88; `PROVENANCE.md`); clean checkout `e3fb69f` 24/24 (r89). 21 compile warnings and 30 fixed-vector native-axiom declarations remain; not an all-theorem axiom-hygiene claim. **Retained failures (unresolved, logs kept):** r75 native-path sort order, r78 CRLF parsing, r81-r83 smoke-harness issues; r85's outer run failed only in its count-print command.
 - **Receiver cash file**: at most 500 rows a file, 6 per item. Quarter-end (twelfth file) writer lock alone, five runs (`cash1b-qeB1..5`): 3.32 to 3.75 s, median 3.43; fresh-owner apply 4.69 s (`cash1b-probe1`). It grows 0.36 s per earlier 500 payments (Phase 2); 1,000-row files stay out of reach. The review's fixes are unreviewed.
 - **Funding, clock, connectors, staff**: 24/24, 72/72, 30/30, 65/65 and 39/39 in earlier guarded runs (`cx-*`); browser runs cover the success path only, no exhaustive error-state crawl (`cx-browser-clock-r16-a1`: its confirmation wait timed out; the next read showed the restore complete). Switch (13) and Provider Trust Graph (12) run in the suite (`trunk-cv8-full-a1`, `ptg-full-a1`).
-- Raw output: `native/guard/guarded-command-*.stdout.log`/`.stderr.log`; guard exits in `C:/Users/neers/rrb/logs/`. The runner's failing-subtest pass count is unreliable; raw unittest records govern. `git diff --check` passes; six historical CRLF whitespace warnings remain in `artifacts/engine-correction/vectors/run-vectors.cmd`.
+- Raw output: `native/guard/guarded-command-*.stdout.log`/`.stderr.log`; guard exits in `C:/Users/neers/rrb/logs/`. The runner's failing-subtest pass count is unreliable; raw unittest records govern. `git diff --check` passes except six historical CRLF warnings in `artifacts/engine-correction/vectors/run-vectors.cmd`.
 
 ## Connected behavior not in ARCHITECTURE.md
 
@@ -43,7 +44,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 ## Rules and unresolved work
 
 - The NC capture path is synthetic file intake, no live transport. Financial file adapters (MCO reports, X12 820/835, MMIS extracts), shared provider/gate rules and payee-identity consumption remain unbuilt. Aggregate provider export has a read-model consistency consumer; keep it.
-- Owner/Continuity v8 only; older stores fail without mutation, including stores written on trunk `6cccb84` or earlier (recreate the synthetic workspace). At most 10,000 events or rows per table.
+- Owner/Continuity v8 only; older stores fail without mutation, including trunk `6cccb84` or earlier (recreate the workspace). At most 10,000 events or rows per table.
 - Complete the real-browser crawl of the declared interaction model; the Node model/scorecard is not one.
 - Second synthetic state (G3) needs owner, checker and Lean changed together (`controlPackRulesWellFormed` pins H's labels), then a guarded rebuild; no partial change made. Conformance kit (G5): `conformance/`.
 - A READY correction can go stale after later money events; cancel/reduce transitions and excess-request accounting remain to build. Reuse trusts the recorded input shortfall and ignores the paid list; no application calls it; a pin-transition event and stronger paid-list proofs are pending.

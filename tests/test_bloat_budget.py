@@ -16,7 +16,7 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Founder 2026-09-28 split the old single 80,000 total so the budget stops charging
 # tests and proofs as bloat. Product code (what runs and must be read to be trusted)
 # ratchets down; lower it to the actual size after the in-flight merges (B+, G2, G3).
-PRODUCT_CODE_LINES = 44_000
+PRODUCT_CODE_LINES = 43_508
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
 EVIDENCE_CODE_LINES = 40_312
@@ -27,12 +27,12 @@ MARKDOWN_BYTES = 160_000
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 7_189,
+    "app/right_rail_financial_owner.py": 7_167,
     "app/right_rail_financial_owner_independent.py": 5_120,
-    "app/right_rail_financial_semantic_adapter.py": 2_156,
-    "app/right_rail_financial_mirror.py": 1_533,
-    "app/right_rail_financial_engine.py": 1_454,
-    "app/right_rail_financial_switch.py": 1_334,
+    "app/right_rail_financial_semantic_adapter.py": 2_126,
+    "app/right_rail_financial_mirror.py": 1_521,
+    "app/right_rail_financial_engine.py": 1_421,
+    "app/right_rail_financial_switch.py": 1_314,
     "app/right_rail_financial_line_pack.py": 253,
     "app/right_rail_financial_followthrough.py": 270,
 }
@@ -41,7 +41,7 @@ FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Independent checkers may restate a small shared schema by design; the rest
 # is duplication to delete.
 PRODUCT_DIRS = ("app", "tools", os.path.join("provider_app", "provider_app"))
-DUPLICATED_WINDOWS = 728
+DUPLICATED_WINDOWS = 706
 
 
 def _live_files():
