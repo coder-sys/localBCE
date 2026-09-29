@@ -35,7 +35,7 @@ from tests.rightrail_financial_expected_cases import (
     PROGRAM_ITEMS,
     UNAPPROVED_OFFSET_CENTS,
 )
-from tools.privacy_artifact_scan import scan_artifacts
+from tests.tools.privacy_artifact_scan import scan_artifacts
 from tests.test_right_rail_financial_acceptance import (
     _control_pack_from_fixture,
     _correction_transition_test_release,

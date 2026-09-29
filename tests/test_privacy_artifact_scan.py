@@ -10,9 +10,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools import privacy_primitives
-from tools.privacy_artifact_scan import main as privacy_scan_main
-from tools.privacy_artifact_scan import scan_artifacts
+from tests.tools import privacy_primitives
+from tests.tools.privacy_artifact_scan import main as privacy_scan_main
+from tests.tools.privacy_artifact_scan import scan_artifacts
 
 
 def _synthetic_envelope(**overrides: object) -> dict[str, object]:
@@ -44,7 +44,7 @@ def _synthetic_envelope(**overrides: object) -> dict[str, object]:
 
 class PrivacyArtifactScanTests(unittest.TestCase):
     def test_artifact_scanner_uses_the_shared_privacy_primitives(self) -> None:
-        from tools import privacy_artifact_scan
+        from tests.tools import privacy_artifact_scan
 
         self.assertIs(
             privacy_artifact_scan._text_categories,

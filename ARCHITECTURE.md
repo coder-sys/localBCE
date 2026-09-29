@@ -88,7 +88,7 @@ replay still checks historical rows, digests and the whole store.
 - **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
  `BlindLedger`: financial types, codec, evaluation, correction transition,
  decision package, gate rules, theorems, semantic kernel; four executables).
- `tools/semantic_assurance_gate.py` checks the correction transition's pinned
+ `lean/tools/semantic_assurance_gate.py` checks the correction transition's pinned
  theorem statements, proofs and axioms.
 
 ## Mirror, Continuity and Switch

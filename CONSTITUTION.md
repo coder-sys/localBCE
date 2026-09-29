@@ -138,7 +138,8 @@ operational authority.
    since `git log` is the log. Raw logs live in log files, not in markdown.
    No hash tables in status documents except the pinned-artifact list.
 2. Heavy runs (builds, tests, provers) on the laptop go through the guarded
-   wrapper (`native/guard/run_guarded_v4.ps1`) with its memory floor; it is
+   wrapper (`C:/Users/neers/rrb/tools/rr_guarded.ps1`, which runs the guard-host
+   `work/rightrail-guard-host/native/guard/run_guarded_v7.ps1`) with its memory floor; it is
    never bypassed or weakened there. CI and cloud runners use their own
    resource limits.
 3. Never destroy uncommitted work, raw evidence, keys, or the only copy of
@@ -343,3 +344,6 @@ never an amendment.
   entry; and the guard memory floor applies to laptop runs, not CI/cloud.
   Decided by the lead under the founder's 2026-09-25 grant; founder decided
   the PQ-only line.
+- 2026-09-29 — Article X.2 amended (lead, slim-2 plan D2): it names the live
+  guard, v7 through `rr_guarded.ps1`; the trunk v4 copy is parked (XI.2 record in
+  `docs/CORE_REDESIGN.md`).

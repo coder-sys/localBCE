@@ -142,7 +142,7 @@ it pays; an acknowledgment still has zero cash effect.
   approved one by JSON equality (so `false` is not `0`) before any projection,
   so an extra key at any level is refused, not dropped; pack fields have fixed
   shapes (id pattern, positive int version, 128-digit upper hex). Tests run
-  `tools/privacy_artifact_scan.py` on the follow-up and restore packages and
+  `tests/tools/privacy_artifact_scan.py` on the follow-up and restore packages and
   require nothing beyond its unapproved-schema notice; that is what is checked,
   not a proof that no package can leak.
 - **Raw evidence:** v1 (`82a2087`) held no rule, adapter or software version, no affected work, nothing rerunnable and no restore-failure package.
@@ -602,3 +602,10 @@ re-decided, not stranded in review, and no line is paid twice.
 - **Scope.** All stores; permanent.
 - **Claims withdrawn.** "Any v8 checker verifies any v8 package" no longer holds: a package that contains a decision needs a checker at or after M2. No Lean theorem covers the decision act; the Lean-controlled claim still covers only the correction transition.
 - **Kill criteria.** Stop if an existing test expectation or digest changes, a table column or digest domain is needed, or the correction follow-up leaves CURRENT.
+
+## Slim-1b PR-2: trunk guard copy and proof/privacy instruments (2026-09-29, XI.2 record)
+
+- **Change.** The trunk copy of the guard (`run.ps1`, `run_guarded_v4.ps1`, `pins.json`, `suites.json`, its README, 3,033 lines with the direct-mask fixture) moves to `parked/`. Constitution X.2 names the live guard: `rr_guarded.ps1` running `work/rightrail-guard-host/native/guard/run_guarded_v7.ps1`. `semantic_assurance_gate.py` and its manifest move to `lean/tools/`; the privacy scanner pair moves to `tests/tools/`. Both count as evidence, not product (Art. IX.1).
+- **Unchanged.** The guard's floors, containment and cleanup are not touched: v7 is the same file, hash-checked by the runner. The release producer still reads the external preserved v4 copy. No wire format, digest domain or theorem statement changes.
+- **Why.** No product path or test reaches trunk `run.ps1` or v4; only the parked `-Light` lane did. Naming the guard that runs is more auditable than naming one that does not.
+- **Kill criteria.** Restore from `parked/native_guard/` if `-Light` is revived or a release step needs the trunk v4 path.
