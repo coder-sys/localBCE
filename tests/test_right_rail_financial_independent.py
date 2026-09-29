@@ -1067,11 +1067,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         source_package = self.store.export_continuity()
         restored_path = Path(self.temp_dir.name) / "role-test-restore.sqlite"
-        restored = owner.FinancialOwner.restore_test_continuity(
+        restored = owner.FinancialOwner.restore_continuity(
             package_bytes=source_package,
             recovered_path=restored_path,
             trusted_authority=self.authority,
             clock=self.clock,
+            restore_mode="TEST",
         )
         restored.close()
         altered_source = json.loads(source_package.decode("ascii"))

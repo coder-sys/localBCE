@@ -1752,11 +1752,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(test_destination.read_bytes(), test_bytes_after_completion)
 
         roundtrip_destination = self._path("test-roundtrip.sqlite")
-        roundtrip = FinancialOwner.restore_test_continuity(
+        roundtrip = FinancialOwner.restore_continuity(
             package_bytes=roundtrip_package,
             recovered_path=roundtrip_destination,
             trusted_authority=self.authority,
             clock=_Clock(),
+            restore_mode="TEST",
         )
         self._assert_verified(roundtrip, restore_source_package=roundtrip_package)
         roundtrip_current_package = roundtrip.export_continuity()
@@ -2055,11 +2056,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened.verify_integrity()
 
         restored_path = self._path("private-index-restored.sqlite")
-        restored = FinancialOwner.restore_test_continuity(
+        restored = FinancialOwner.restore_continuity(
             package_bytes=source_package,
             recovered_path=restored_path,
             trusted_authority=self.authority,
             clock=_Clock(initial=1_700_000_000_000),
+            restore_mode="TEST",
         )
         self._assert_private_index_schema(restored_path)
         restored.verify_integrity()
@@ -4968,6 +4970,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         outputs = self._make_owner(path=store.path).correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)
         self.assertEqual(outputs["followup_status"], "CURRENT")
         self.assertEqual(outputs["corporate_support"]["artifact"]["sha256"], _RETIRED_CORRECTION_ARTIFACT_SHA256)
+        self.assertEqual(outputs["corporate_support"]["reproduction"], "NONE")  # only the pinned engine has a published vector
 
     def test_a_correction_naming_an_unknown_engine_is_refused(self) -> None:
         store = self._correction_decided_by_engine("AB" * 32)

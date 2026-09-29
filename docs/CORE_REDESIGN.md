@@ -137,6 +137,57 @@ the correction it pays; an acknowledgment still has zero cash effect.
   action identity, kind, status, reference or attempt. An acknowledgment no
   longer reopens.
 
+### Safe support package v2 (2026-09-28, XI.2 record)
+
+- **Predicate:** `CORPORATE-SUPPORT/v1` becomes `/v2`, built from approved fields
+  only, never a redacted dump. Fields: software version, rule version, adapter
+  versions, `work_ref_count`, reproduction. Consumers: the correction follow-up
+  (Owner builds, Mirror re-checks) and a failed Continuity restore (Mirror
+  builds in `_restore_continuity` and attaches it to the raised error as
+  `corporate_support`; only the staff endpoint's 409 response returns it, the
+  403, 503 and 400 responses do not).
+- **Sources:** rule version = the pack the correction was decided under,
+  `accepted_basis.control_pack` `{pack_id, version, digest}`, NONE if there is no
+  accepted basis; adapter `population` = the population manifest contract for a
+  follow-up and NONE for a restore failure (nothing was read);
+  `work_ref_count` = 0 when CURRENT, else 1 (this correction), with no work id and
+  no store counter; reproduction = `{vector_file_digest, case_id}` of the
+  published correction vector, only when the artifact is the pinned engine (a
+  test checks the digest and that the case is in the pinned result file).
+  **NONE**: software version (no commit or kit digest is bound to a running
+  owner) and the Trust Graph source profile (the owner has no source of it). A
+  restore failure's `error_class` is its code only when it is a `FinancialError`
+  or `FinancialMirrorError` whose text is in the closed tuple
+  `CONTINUITY_ERROR_CODES` (defined once in the Owner, imported by the Mirror);
+  anything else is `UNCLASSIFIED`; never message text.
+- **Invariant / failure:** Mirror compares the Owner's raw package with the
+  approved one by JSON equality (so `false` is not `0`) before any projection,
+  so an extra key at any level is refused, not dropped; the pack fields must
+  also have fixed shapes (id pattern, positive int version, 128-digit upper hex). Tests run
+  `tools/privacy_artifact_scan.py` on the follow-up and restore packages and
+  require that it reports nothing beyond its unapproved-schema notice; that is
+  what is checked, not a proof that no package can leak.
+- **Raw evidence the old version is unsuitable:** v1 (commit `82a2087`) had no
+  rule, adapter or software version and no affected work, and its reproduction
+  `{scenario: SYNTHETIC_CORRECTION, real_data: false}` held nothing a
+  corporate-support engineer could rerun; the restore failure had no package.
+- **Disposition:** v1 replaced, not versioned alongside: it is derived, synthetic
+  and has no outside consumer. Deleted: the Owner's `_corporate_support` and
+  `continuity_restore_support` builders, its `restore_test_continuity` wrapper
+  (callers use `restore_continuity(restore_mode="TEST")`) and Mirror's restore
+  re-check, which the Owner's package validation already made, and the Mirror's
+  own restore-mode check (the Owner refuses a bad mode first, before it creates
+  anything).
+- **Replacement control:** Mirror, staff-server and acceptance tests, run through
+  the guard.
+- **Scope / follow-ups:** correction follow-up and restore failure only. A
+  failure raised by the staff workflow after a successful restore (package size,
+  decision-package mismatch) carries no package yet. `work_ref_count` is 0/1
+  until the G2 reopened set is cheap to read at build time. Real software and
+  Trust Graph versions need a bound source first.
+- **Claims withdrawn:** `reproduction {SYNTHETIC_CORRECTION, real_data: false}`;
+  the earlier `affected_work {count, ids}` with the event sequence.
+
 The core is ~2.5x larger than the invariants need. Root cause: state lives in
 ~20 editable tables with history as a side log, so every consumer (checker, successor,
 continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:
