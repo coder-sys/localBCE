@@ -32,6 +32,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   passes the last commit time, never reordering history; the checker binds
   each evidence received time to its event's commit time and requires commit
   times in order, for the database and the package. Guarded bplus-fix5d on `deferral-pack` 3656bf5: 221 run, 219 passed, 1 skipped, 1 failed (Markdown budget, fixed on this line). Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
+- **Gate decision rules R1-R5 (Lean, `BlindLedger.Gate.Rules`)**: sound, complete, fail-closed, monotone, arrival-order deterministic; `allow_clear`, `allowed_decideAll`, `later_allow_clear(_many)` and `allow_clear_store` proved over append-only sets checked against the gate's checkpoint (stale reads give `STALE_*`/`*_UNVERIFIED` review, never a HOLD on unusable data). 242/242 vectors and 3,616 demo lines; the unittest fails if the runner is older than its sources. All 194 mutants killed (gate-rules-2 84c2016, gr2-mut-r3/r4a/r4b). Tests only, not the token path: signed checkpoints (gate-v1) and the release path remain unbuilt. Open Low: a CAP copy of a loose row gets no reason code; the unchained path is O(n*m).
 - **Lean build/proof/kit**: r77 freshly reproduced the pinned engine from a
  canonical 46-file source manifest, both fixed vectors matched. r68 built all
  six Lake targets (87 jobs); r69 passed 30 evaluator, 18 decision-package, 42

@@ -113,8 +113,13 @@ def demo():
     def expect(why):
         return "ALLOW -" if not why else f"HUMAN_REVIEW {why}" if why == "FFS_NEAR_DUPLICATE" else f"HOLD {why}"
 
-    ids = iter(range(1, sum(map(len, batches)) + 1))
-    body = [x for b in batches for x in [f"line {next(ids)} {c} {expect(why)}" for c, why in b] + ["commit"]]
+    # A repeat of an earlier batch's line names it (with=); a same-batch repeat names nothing.
+    ids, body, earlier = iter(range(1, sum(map(len, batches)) + 1)), [], {}
+    for b in batches:
+        named = [(next(ids), c, why) for c, why in b]
+        body += [f"line {i} {c} {expect(why)}" + (f" with={earlier[c]}" if c in earlier else "")
+                 for i, c, why in named] + ["commit"]
+        earlier.update((c, i) for i, c, _ in named)
     return pin(head) + body + ["report", f"end {sum(map(len, batches))}"], seeded
 
 
