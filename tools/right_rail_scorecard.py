@@ -90,7 +90,7 @@ async function view() {
     }
     const unavailable = document.getElementById("connection-status").classList.contains("unavailable");
     const screens = { picker: !hidden["role-picker"], overview: !hidden["workspace-root"] && !unavailable,
-      decision: !hidden["decision-panel"] && !unavailable, decide: document.getElementById("decide-sheet").open, unavailable };
+      decision: !hidden["decision-panel"] && !unavailable, decide: !!document.getElementById("decide-sheet")?.open, unavailable };
     return { texts, tables, hidden, disabled, buttons, screens, path: location.pathname,
       hash: location.hash, focus_in_main: Boolean(document.activeElement.closest("main")) };
   });

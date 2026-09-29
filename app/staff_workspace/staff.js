@@ -609,7 +609,7 @@
       evaluation_id: pkg.evaluation_receipt.evaluation_id,
       evaluation_result_digest: pkg.evaluation_receipt.result_digest,
     };
-    return name === "reject-offset" ? { ...decision, read_binding: staffCommandBinding(decisionView.read_envelope, pkg) } : decision;
+    return name !== "authorize-offset" ? { ...decision, read_binding: staffCommandBinding(decisionView.read_envelope, pkg) } : decision;
   }
 
   function applyCommandSnapshot(value, startedAt) {
