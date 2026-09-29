@@ -94,7 +94,7 @@ class FinancialServiceKitManifestTests(unittest.TestCase):
                     yield from (f"{node.module}.{alias.name}" for alias in node.names)
 
         def missing(files: set[str]) -> list[str]:
-            need = {name.replace(".", "/") + ".py" for path in files if path.endswith(".py") for name in imported(path) if name.startswith(("app.", "tools."))}
+            need = {name.replace(".", "/") + ".py" for path in files if path.endswith(".py") for name in imported(path) if name.startswith(("app.", "tools.", "tests."))}
             return sorted(path for path in need - files if (root / path).is_file())
 
         self.assertEqual(missing(set(STATE_FILES)), [])

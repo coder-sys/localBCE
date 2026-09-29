@@ -280,11 +280,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             "cash_command": dict(CASH_CORRECTION_COMMAND),
         }
 
-    def test_population_gate_denials_and_unknown_source_are_visible(self) -> None:
+    def test_population_and_unknown_source_are_visible(self) -> None:
         workflow = self._workflow()
-        reviewed = self._review_body(workflow)
-        wrong_role = workflow.attempt_wrong_role(reviewed)
-        stale_revision = workflow.attempt_stale_revision(reviewed)
         snapshot = workflow.workspace()
         package = workflow.decision_view()["decision_package"]
 
@@ -313,16 +310,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(h["lawful_adjustment_cents"], 0)
         self.assertIsNone(package["current_determination"])
         self.assertEqual(package["reporting"]["complete"], False)
-
-        self.assertEqual(
-            [(row["name"], row["status"], row["code"], row["state_unchanged"]) for row in snapshot["gate_checks"]],
-            [
-                ("Wrong role", "REJECTED", "authority_actor_not_authorized", True),
-                ("Stale revision", "REJECTED", "obligation_revision_conflict", True),
-            ],
-        )
-        self.assertEqual(wrong_role["gate"]["code"], "authority_actor_not_authorized")
-        self.assertEqual(stale_revision["gate"]["code"], "obligation_revision_conflict")
 
     def test_ack_cash_reporting_and_test_restore_remain_separate(self) -> None:
         workflow = self._workflow(with_correction_release=True)
@@ -435,22 +422,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual((support["contract"], support["status"], support["failure_stage"], support["error_class"]),
                          ("RR/FINANCIAL/CORPORATE-SUPPORT/v2", "FAILED", "RESTORE", "continuity_history_head"))
         self.assertEqual((support["rule_version"], support["adapter_versions"]["population"], support["work_ref_count"]), ("NONE", "NONE", 0))
-
-    def test_gate_state_unchanged_is_measured_before_and_after_the_attempt(self) -> None:
-        workflow = self._workflow()
-        reviewed = self._review_body(workflow)
-        position = workflow._owner_position()
-        self.assertTrue(workflow.attempt_wrong_role(reviewed)["gate"]["state_unchanged"])
-        self.assertEqual(workflow._owner_position(), position)
-        with patch.object(
-            workflow,
-            "_owner_position",
-            side_effect=[(position[0], position[1]), (position[0] + 1, b"\x00" * 64)],
-        ) as position_spy:
-            moved = workflow.attempt_stale_revision(reviewed)
-        self.assertEqual(position_spy.call_count, 2)
-        self.assertEqual(moved["gate"]["code"], "obligation_revision_conflict")
-        self.assertFalse(moved["gate"]["state_unchanged"])
 
     def test_ack_cash_effect_is_measured_before_and_after_the_command(self) -> None:
         workflow = self._workflow(with_correction_release=True)
@@ -738,7 +709,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             workflow.record_cash_correction: self._cash_body(workflow),
             workflow.record_reporting_evidence: self._revision_body(workflow),
         }
-        position = workflow._owner_position()
+        position = workflow.mirror.owner.export_continuity()
         for handler, body in bodies.items():
             missing = {key: value for key, value in body.items() if key != "revision"}
             with self.assertRaisesRegex(ValueError, r"\Arequest_shape\Z", msg=handler.__name__):
@@ -746,7 +717,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             for field in ("actor_id", "actor_role"):
                 with self.assertRaisesRegex(ValueError, r"\Arequest_shape\Z", msg=handler.__name__):
                     handler({**body, field: "synthetic-official"})
-        self.assertEqual(workflow._owner_position(), position)
+        self.assertEqual(workflow.mirror.owner.export_continuity(), position)
 
         # Every staff command handler passes its actor and the reviewed revision
         # to the Mirror explicitly; none relies on a library default.
@@ -757,7 +728,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         tree = ast.parse(inspect.getsource(staff_server.StaffWorkflow))
         actor_commands = {"reject_offset_and_authorize_correction", "acknowledge_action", "record_reporting_evidence"}
         handlers = {
-            "_gate_attempt",
             "reject_offset_and_authorize_correction",
             "acknowledge_correction_action",
             "record_cash_correction",

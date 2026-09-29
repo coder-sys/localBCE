@@ -74,8 +74,6 @@ Only open ones remain (answer-first, dead-connection and dead-control items are 
 - **Illogical path.** The approver's reject-offset is enabled in every
  session (observed for analyst, director, auditor); the page has no roles
  by design.
-- **Illogical path.** "exercise wrong-role" and "exercise stale-revision"
- buttons can only ever produce a rejection, and every role sees them.
 - **Illogical path.** Record-report is enabled on Monday, before any
  decision or cash (observed).
 - **Illogical path.** Restore-test is enabled for any role once H is paid,
