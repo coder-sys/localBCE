@@ -46,6 +46,24 @@ def decodeWorkerOutcome : Bytes → Option WorkerOutcome
 /-- The worker's whole policy: one BLFIN02 frame in, one outcome frame out. -/
 def workerRespond (wire : Bytes) : Bytes := encodeWorkerOutcome (evaluateWire wire)
 
+/-- The frame arrives as a `ByteArray`; `Fast.decodeFinancialInputBA` is proved equal to the list
+    decoder on `wire.toList`, so this is `workerRespond` without a second large list. -/
+def workerRespondBA (wire : ByteArray) : Bytes :=
+  encodeWorkerOutcome
+    (match Fast.decodeFinancialInputBA wire with
+      | none => .decodeRejected
+      | some input =>
+          match evaluate input with
+          | none => .evaluationRejected
+          | some result =>
+              match encodeFinancialResult result with
+              | none => .encodingRejected
+              | some output => .evaluated output)
+
+theorem workerRespondBA_eq (wire : ByteArray) : workerRespondBA wire = workerRespond wire.toList := by
+  unfold workerRespondBA workerRespond evaluateWire
+  rw [Fast.decodeFinancialInputBA_eq]
+
 def maxWorkerFrameBytes : Nat := maxTotalEncodedBytes + 1
 
 end BlindLedger.Financial

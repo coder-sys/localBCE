@@ -296,7 +296,8 @@ def decodeAction (bytes : Bytes) : Option (ActionRecord × Bytes) := do
        payloadDigest := payloadDigest
        createdAt := createdAt }, rest)
 
-def decodeFinancialInput (bytes : Bytes) : Option FinancialInput := do
+/-- The reference decoder with the canonical-bytes test abstracted as `same`. -/
+def decodeInputWith (same : Bytes → Bool) (bytes : Bytes) : Option FinancialInput := do
   if bytes.length > maxTotalEncodedBytes then none else
     let rest ← readMagic bytes
     let (context, rest) ← decodeContext rest
@@ -329,10 +330,23 @@ def decodeFinancialInput (bytes : Bytes) : Option FinancialInput := do
           actions := actions }
       if financialInputWellFormed input then
         match encodeFinancialInput input with
-        | some canonical => if canonical = bytes then some input else none
+        | some canonical => if same canonical then some input else none
         | none => none
       else none
     else none
+
+def decodeFinancialInput (bytes : Bytes) : Option FinancialInput :=
+  decodeInputWith (fun canonical => decide (canonical = bytes)) bytes
+
+/-- `l` is `ba` from index `i`, checked cell by cell.  The worker keeps the input as a `ByteArray`
+    and compares the canonical re-encoding here, so no second copy of the input list is alive;
+    two large lists alive together made the worker's memory grow by about 34 MB per 615 KB request. -/
+def listEqAt : List UInt8 → ByteArray → Nat → Bool
+  | [], ba, i => decide (ba.size ≤ i)
+  | b :: rest, ba, i => decide (i < ba.size) && b == ba.get! i && listEqAt rest ba (i + 1)
+
+def decodeFinancialInputBA (ba : ByteArray) : Option FinancialInput :=
+  decodeInputWith (fun canonical => listEqAt canonical ba 0) ba.toList
 
 theorem readString_eq : readString = BlindLedger.Financial.readString := by
   funext bytes
@@ -413,7 +427,69 @@ theorem decodeAction_eq : decodeAction = BlindLedger.Financial.decodeAction := b
 
 theorem decodeFinancialInputFast_eq (bytes : Bytes) :
     decodeFinancialInput bytes = BlindLedger.Financial.decodeFinancialInput bytes := by
-  simp only [decodeFinancialInput, BlindLedger.Financial.decodeFinancialInput, decodeContext_eq, decodeAuthority_eq, decodeControlPack_eq, decodeObligation_eq, decodePayment_eq, decodeClaim_eq, decodeDetermination_eq, decodeEvidence_eq, decodeConflict_eq, decodeCase_eq, decodeAction_eq]
+  simp only [decodeFinancialInput, decodeInputWith, decide_eq_true_eq, BlindLedger.Financial.decodeFinancialInput, decodeContext_eq, decodeAuthority_eq, decodeControlPack_eq, decodeObligation_eq, decodePayment_eq, decodeClaim_eq, decodeDetermination_eq, decodeEvidence_eq, decodeConflict_eq, decodeCase_eq, decodeAction_eq]
   rfl
+
+private theorem size_eq (ba : ByteArray) : ba.size = ba.data.toList.length := by
+  rw [Array.length_toList]
+  rfl
+
+private theorem drop_nil (ba : ByteArray) (i : Nat) (h : ba.size ≤ i) : ba.data.toList.drop i = [] :=
+  List.drop_eq_nil_of_le (by rw [← size_eq]; exact h)
+
+private theorem drop_cons (ba : ByteArray) (i : Nat) (hi : i < ba.size) :
+    ba.data.toList.drop i = ba.get! i :: ba.data.toList.drop (i + 1) := by
+  have h : i < ba.data.toList.length := by rw [← size_eq]; exact hi
+  rw [List.drop_eq_getElem_cons h]
+  congr 1
+  obtain ⟨bs⟩ := ba
+  exact (getElem!_pos bs i (by simpa [ByteArray.size] using hi)).symm
+
+theorem toList_eq (ba : ByteArray) : ba.toList = ba.data.toList := by
+  have loop : ∀ (n i : Nat) (r : List UInt8), ba.size - i = n →
+      ByteArray.toList.loop ba i r = r.reverse ++ ba.data.toList.drop i := by
+    intro n
+    induction n using Nat.strongRecOn with
+    | _ n ih =>
+      intro i r hn
+      unfold ByteArray.toList.loop
+      by_cases hi : i < ba.size
+      · rw [if_pos hi, ih (ba.size - (i + 1)) (by omega) (i + 1) (ba.get! i :: r) rfl, drop_cons ba i hi]
+        simp
+      · rw [if_neg hi, drop_nil ba i (by omega)]
+        simp
+  have h := loop _ 0 [] rfl
+  unfold ByteArray.toList
+  rw [h]
+  simp
+
+theorem listEqAt_eq (l : List UInt8) (ba : ByteArray) (i : Nat) :
+    listEqAt l ba i = decide (l = ba.data.toList.drop i) := by
+  induction l generalizing i with
+  | nil =>
+    simp only [listEqAt]
+    by_cases hi : i < ba.size
+    · rw [drop_cons ba i hi]
+      have : ¬ ba.size ≤ i := by omega
+      simp [this]
+    · rw [drop_nil ba i (by omega)]
+      have : ba.size ≤ i := by omega
+      simp [this]
+  | cons b rest ih =>
+    simp only [listEqAt]
+    by_cases hi : i < ba.size
+    · rw [drop_cons ba i hi, ih]
+      by_cases h1 : b = ba.get! i <;> by_cases h2 : rest = ba.data.toList.drop (i + 1) <;>
+        simp [hi, h1, h2]
+    · rw [drop_nil ba i (by omega)]
+      simp [hi]
+
+theorem decodeFinancialInputBA_eq (ba : ByteArray) :
+    decodeFinancialInputBA ba = decodeFinancialInput ba.toList := by
+  unfold decodeFinancialInputBA decodeFinancialInput
+  congr 1
+  funext canonical
+  rw [listEqAt_eq, toList_eq]
+  simp
 
 end BlindLedger.Financial.Fast

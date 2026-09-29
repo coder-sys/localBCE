@@ -30,7 +30,7 @@ partial def serve (stdin stdout : IO.FS.Stream) : IO UInt32 := do
   if length > maxWorkerFrameBytes then
     return workerExitFrame
   let some frame ← readExact stdin length ByteArray.empty | return workerExitFrame
-  let response := workerRespond frame.toList
+  let response := workerRespondBA frame
   stdout.write (natBE 4 response.length ++ response).toByteArray
   stdout.flush
   serve stdin stdout
