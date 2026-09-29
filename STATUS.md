@@ -20,7 +20,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification (latest run per claim; raw logs are the record)
 
-- **Full suite:** `cwf-full-r1` on `618e81f`: run=475 passed=462 failed=1 (Markdown budget) skipped=12 (two gate-rules vector tests, symlink privilege, old accepted-engine artifact, no fresh engine handoff, 7 semantic-assurance tests that run only in the external gate). On gate-v1 after merging trunk: `gate-r7b-target-a1-L3` (bloat, gate formats, gate-rules vectors) run=16 passed=16.
+- **Full suite:** `cwf-full-r1` on `618e81f`: run=475 passed=462 failed=1 (Markdown budget) skipped=12 (two gate-rules vector tests, symlink privilege, old accepted-engine artifact, no fresh engine handoff, 7 semantic-assurance tests that run only in the external gate). Gate-v1 with trunk merged: `gate-r7b-full2-a1-L1` run=483 passed=473 failed=0 errors=0 skipped=10 (that tree lacks only this run-id line).
 - **G2 dependency check** (`g2dep-r3-a1-L2`, 184/184): a correction follow-up reopens only when a derived dependency key moves (XI.2 record).
 - **G4 support package v2** (XI.2 record): software version and Trust Graph profile are NONE (no bound source); Mirror refuses any other package shape.
 - **Line pack (B+)**, documentation-only CMS-64.9 pack, built read-only from a fully verified store, quarters by owner-clock received time; a clock stepping back stops writes until it passes the last commit (XI.2 record). `bplus-fix5d` on `deferral-pack` 3656bf5: 221 run, 219 passed, 1 skipped, 1 failed (Markdown budget). Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
