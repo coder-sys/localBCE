@@ -60,58 +60,57 @@ record.
 
 ## Top friction found (worst five)
 
-1. **Director, weekly review.** Cash recorded, program shortfall and open items
-   were nowhere on screen; the other 20 rows had to be added by hand. It cost 3
-   clicks and still left 3 of 5 totals unanswered. *Fixed:* the three totals
-   are now cards on the overview.
-2. **Analyst and director, Monday.** 20 of 20 rows read "Case OPEN", and 19 stay
-   open at the end, but only H has a real problem. The fixture never records the
-   other hospitals' $900,000, although plan §4 says they received it. *Open:*
-   this is a fixture decision for the owner.
-3. **Analyst, correction.** Every button went dead after each command until the
-   package was reopened by hand. That meant 2 forced reopens and no reason
-   shown. *Fixed:* the package reloads after the operator's own successful
-   command.
-4. **Approver, auditor and analyst.** Needed facts could only be found in raw
-   JSON: the owner, claim status, deadline, deciding role and evidence. It cost
-   2 to 3 screens. *Fixed:* the decision panel now leads with plain facts, and
-   the overview answers first.
-5. **Replacement operator.** Restore to Continuity TEST is enabled only after
-   H's shortfall is 0, so a replacement cannot take over unfinished work, which
-   plan §14 expects. *Open:* needs an owner decision.
+1. **Director, weekly review.** Cash recorded, program shortfall and open
+ items were nowhere on screen; 20 other rows had to be added by hand: 3
+ clicks, 3 of 5 totals unanswered. *Fixed:* three totals now cards on the
+ overview.
+2. **Analyst and director, Monday.** 20 of 20 rows read "Case OPEN", 19 stay
+ open at the end, but only H has a real problem — the fixture never records
+ the other hospitals' $900,000, though plan §4 says they received it.
+ *Open:* fixture decision for the owner.
+3. **Analyst, correction.** Every button went dead after each command until
+ reopened by hand: 2 forced reopens, no reason shown. *Fixed:* package
+ reloads after the operator's own successful command.
+4. **Approver, auditor and analyst.** Needed facts (owner, claim status,
+ deadline, deciding role, evidence) existed only in raw JSON: 2-3 screens.
+ *Fixed:* decision panel leads with plain facts; overview answers first.
+5. **Replacement operator.** Restore to Continuity TEST is enabled only
+ after H's shortfall is 0, so a replacement cannot take over unfinished
+ work, which plan §14 expects. *Open:* needs an owner decision.
 
 ## Article XIII violations found
 
 Status after this change. The Mirror redesign owns the full interaction model.
 
-- **XIII.1, answer first.** Status, owner, gap and next step needed 2 clicks and
-  raw JSON. *Fixed:* "Needs attention now" on the overview.
-- **Dead connection.** A failed or stale package read wrote its message inside
-  the hidden panel, so the click showed nothing. *Fixed:* the message now
-  appears in the command status.
-- **Dead control.** Refresh did nothing, silently, while a command was pending.
-  *Fixed:* Refresh is disabled while a command runs.
-- **Illogical path.** The approver's reject-offset is enabled in every session
-  (observed for analyst, director and auditor). The page has no roles by
-  design. *Open.*
-- **Illogical path.** The "exercise wrong-role" and "exercise stale-revision"
-  buttons can only ever produce a rejection, and every role sees them. *Open.*
-- **Illogical path.** Record-report is enabled on Monday, before any decision
-  or cash (observed). *Open.*
+- **XIII.1, answer first.** Status, owner, gap and next step needed 2 clicks
+ and raw JSON. *Fixed:* "Needs attention now" on the overview.
+- **Dead connection.** A failed or stale package read wrote its message
+ inside the hidden panel, so the click showed nothing. *Fixed:* the
+ message now appears in the command status.
+- **Dead control.** Refresh did nothing, silently, while a command was
+ pending. *Fixed:* Refresh disabled while a command runs.
+- **Illogical path.** The approver's reject-offset is enabled in every
+ session (observed for analyst, director, auditor); the page has no roles
+ by design. *Open.*
+- **Illogical path.** "exercise wrong-role" and "exercise stale-revision"
+ buttons can only ever produce a rejection, and every role sees them.
+ *Open.*
+- **Illogical path.** Record-report is enabled on Monday, before any
+ decision or cash (observed). *Open.*
 - **Illogical path.** Restore-test is enabled for any role once H is paid,
-  including the auditor (observed). It stays disabled while a case is open; see
-  friction 5. *Open.*
-- **Orphan screen.** "Owner gate results" is fed only by the exercise buttons,
-  which are disabled after the decision, so it reads "No gate attempts
-  recorded" for good. *Open.*
-- **Trap-like.** The 19 other rows show "Case OPEN", but only H can be opened or
-  acted on. *Open.*
-- **Trap.** After a detected Owner fork the page stays UNAVAILABLE and gives no
-  reload instruction. Found by code reading, not exercised. *Open.*
-- **Friction.** Disabled buttons give no reason. *Open*, though the automatic
-  reload removed the common case.
-- **XIII.2, no jargon or internal IDs.** Decision facts now lead in plain words.
-  Digests, receipts and snapshot ids moved into a collapsed "Technical
-  bindings" section. *Still open:* the header read line (snapshot id, statement
-  counts), raw codes in roster rows and chronology, and raw error codes in the
-  fallback error message.
+ including the auditor (observed); stays disabled while a case is open,
+ see friction 5. *Open.*
+- **Orphan screen.** "Owner gate results" is fed only by the exercise
+ buttons, disabled after the decision, so it reads "No gate attempts
+ recorded" for good. *Open.*
+- **Trap-like.** The 19 other rows show "Case OPEN", but only H can be
+ opened or acted on. *Open.*
+- **Trap.** After a detected Owner fork the page stays UNAVAILABLE with no
+ reload instruction (found by code reading, not exercised). *Open.*
+- **Friction.** Disabled buttons give no reason. *Open*, though the
+ automatic reload removed the common case.
+- **XIII.2, no jargon or internal IDs.** Decision facts now lead in plain
+ words; digests, receipts and snapshot ids moved into a collapsed
+ "Technical bindings" section. *Still open:* header read line (snapshot
+ id, statement counts), raw codes in roster rows/chronology, raw error
+ codes in the fallback error message.

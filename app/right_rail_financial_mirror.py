@@ -14,13 +14,17 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import threading
 from collections.abc import Mapping
 from typing import Any, Final
 
+from app import right_rail_financial_engine as engine
 from app.right_rail_financial_owner import (
+    CONTINUITY_ERROR_CODES,
     FinancialContinuityError,
     FinancialDispatchError,
+    FinancialError,
     FinancialOwner,
     ProgramFundingReceipt,
     SyntheticTrustedAuthority,
@@ -177,7 +181,7 @@ _OWNER_OBLIGATION: Final = {*_OBLIGATION, "population_id"}
 _ARTIFACT: Final = _fields("contract", "version", "sha256")
 _BASIS_EVALUATION: Final = _fields("evaluation_id", "revision", "result_digest", "receipt_digest")
 _FOLLOWUP_VIEW: Final = _fields(
-    "contract", "transition", "followup_status", "source_event_sequence",
+    "contract", "transition", "followup_status", "source_event_sequence", "changed_dependencies",
     accepted_basis=_fields(
         "dependency_families", artifact=_ARTIFACT, control_pack=_PACK_REF, authority=_AUTHORITY,
         input_evaluation=_BASIS_EVALUATION, result_evaluation=_BASIS_EVALUATION,
@@ -191,8 +195,9 @@ _FOLLOWUP_VIEW: Final = _fields(
 _FOLLOWUP: Final = _fields(
     "followup_status", "work_id", "source_event_sequence", mirror_explanation=_FOLLOWUP_VIEW, state_report=_FOLLOWUP_VIEW,
     corporate_support=_fields(
-        "contract", "status", "component", "failure_stage", "error_class", artifact=_ARTIFACT,
-        reproduction=_fields("scenario", "real_data"),
+        "contract", "status", "component", "software_version", "failure_stage", "error_class", "work_ref_count", artifact=_ARTIFACT,
+        rule_version=_PACK_REF, adapter_versions=_fields("population", "trust_graph_source_profile"),
+        reproduction=_fields("vector_file_digest", "case_id"),
     ),
 )
 _EVENT: Final = _fields(
@@ -293,6 +298,14 @@ def _safe_value(value: Any) -> Any:
     if value is None or type(value) in {str, int, float, bool}:
         return value
     _fail(FinancialMirrorContinuityError, "unsafe_owner_value")
+
+
+def _support(**fields: Any) -> dict[str, Any]:
+    """The one CORPORATE-SUPPORT/v2 shape (Article IV.2); the defaults are a package that read nothing and names no work."""
+    return {
+        "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v2", "software_version": "NONE", "rule_version": "NONE", "artifact": None,
+        "adapter_versions": {"population": "NONE", "trust_graph_source_profile": "NONE"}, "work_ref_count": 0, "reproduction": "NONE", **fields,
+    }
 
 
 def _project(value: Any, table: Any) -> Any:
@@ -1021,61 +1034,51 @@ class FinancialMirror:
             _fail(FinancialMirrorContinuityError, "correction_followup_status")
         explanation = result["mirror_explanation"]
         report = result["state_report"]
+        shared = {"followup_status", "changed_dependencies", "source_event_sequence", "accepted_basis", "current_basis", "decision_package"}
         if (
             type(explanation) is not dict
-            or set(explanation)
-            != {
-                "contract", "transition", "followup_status", "source_event_sequence",
-                "accepted_basis", "current_basis", "decision_package",
-            }
             or type(report) is not dict
-            or set(report)
-            != {
-                "contract", "followup_status", "source_event_sequence", "accepted_basis",
-                "current_basis", "decision_package",
-            }
-            or explanation.get("contract") != "RR/FINANCIAL/CORRECTION-EXPLANATION/v1"
-            or explanation.get("transition") != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
-            or report.get("contract") != "RR/FINANCIAL/CORRECTION-REPORT/v1"
-            or explanation.get("followup_status") != status
-            or report.get("followup_status") != status
-            or explanation.get("source_event_sequence") != result["source_event_sequence"]
-            or report.get("source_event_sequence") != result["source_event_sequence"]
-            or explanation.get("decision_package") != report.get("decision_package")
-            or type(explanation.get("decision_package")) is not dict
+            or set(explanation) != {"contract", "transition", *shared}
+            or set(report) != {"contract", *shared}
+            or explanation["contract"] != "RR/FINANCIAL/CORRECTION-EXPLANATION/v1"
+            or explanation["transition"] != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
+            or report["contract"] != "RR/FINANCIAL/CORRECTION-REPORT/v1"
+            or any(explanation[key] != report[key] for key in shared)
+            or (explanation["followup_status"], explanation["source_event_sequence"]) != (status, result["source_event_sequence"])
+            or type(explanation["decision_package"]) is not dict
+            or type(changed := explanation["changed_dependencies"]) is not list
+            or changed != sorted({str(key) for key in changed})  # sorted, unique dependency keys; REOPENED names at least one
+            or bool(changed) != (status == "REOPENED")
         ):
             _fail(FinancialMirrorContinuityError, "correction_followup_projection")
         support = result["corporate_support"]
-        if type(support) is not dict or set(support) != {
-            "contract", "status", "component", "artifact", "failure_stage", "error_class", "reproduction",
-        }:
-            _fail(FinancialMirrorContinuityError, "corporate_support_allowlist")
-        expected_failure = {
-            "CURRENT": ("NONE", "NONE"),
-            "REOPENED": ("FOLLOWUP_RECONCILIATION", "STALE_DEPENDENCY"),
-            "REVIEW_REQUIRED": ("FOLLOWUP_RECONCILIATION", "UNSUPPORTED_DEPENDENCY"),
-        }[status]
-        artifact = support["artifact"]
-        if artifact is not None and (
-            type(artifact) is not dict
-            or set(artifact) != {"contract", "version", "sha256"}
-            or type(artifact["contract"]) is not str
-            or type(artifact["version"]) is not int
-            or artifact["version"] < 1
-            or type(artifact["sha256"]) is not str
-            or len(artifact["sha256"]) != 64
-            or any(character not in "0123456789ABCDEF" for character in artifact["sha256"])
-        ):
+        artifact = support.get("artifact") if type(support) is dict else None
+        # the one engine contract, version 1 and a SHA-256 in upper hex
+        if artifact is not None and not re.fullmatch(rf'\{{"contract":"{engine.CORRECTION_TRANSITION_OPERATION}","sha256":"[0-9A-F]{{64}}","version":1\}}', json.dumps(artifact, sort_keys=True, separators=(",", ":"))):
             _fail(FinancialMirrorContinuityError, "corporate_support_artifact")
-        if (
-            support["contract"] != "RR/FINANCIAL/CORPORATE-SUPPORT/v1"
-            or support["status"] != status
-            or support["component"] != "FINANCIAL_CORRECTION"
-            or (support["failure_stage"], support["error_class"]) != expected_failure
-            or support["reproduction"] != {"scenario": "SYNTHETIC_CORRECTION", "real_data": False}
-        ):
+        stage, error_class = {"CURRENT": ("NONE", "NONE"), "REOPENED": ("FOLLOWUP_RECONCILIATION", "STALE_DEPENDENCY"),
+                              "REVIEW_REQUIRED": ("FOLLOWUP_RECONCILIATION", "UNSUPPORTED_DEPENDENCY")}[status]
+        pack = basis.get("control_pack") if type(basis := explanation["accepted_basis"]) is dict else None  # the pack the correction was decided under
+        if type(pack) is dict and (type(pack.get("version")) is not int or not re.fullmatch(  # free text is refused, only fixed shapes pass
+                r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\|[1-9][0-9]*\|[0-9A-F]{128}", "|".join(str(pack.get(key)) for key in _PACK_REF))):
+            _fail(FinancialMirrorContinuityError, "corporate_support_allowlist")
+        approved = _support(
+            status=status, component="FINANCIAL_CORRECTION", artifact=artifact, failure_stage=stage, error_class=error_class,
+            rule_version={key: pack.get(key) for key in _PACK_REF} if type(pack) is dict else "NONE",
+            adapter_versions={"population": "RR/FINANCIAL/POPULATION-MANIFEST/v1", "trust_graph_source_profile": "NONE"},
+            work_ref_count=int(status != "CURRENT"), reproduction=engine.CORRECTION_TRANSITION_REPRODUCTION
+            if artifact and artifact["sha256"] == engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper() else "NONE",
+        )
+        # the Owner's raw package, so an extra key is refused instead of projected away; JSON, so 1 is not True
+        if json.dumps(raw["corporate_support"], sort_keys=True, default=str) != json.dumps(approved, sort_keys=True):
             _fail(FinancialMirrorContinuityError, "corporate_support_allowlist")
         return result
+
+    @staticmethod
+    def continuity_restore_support(error: BaseException) -> dict[str, Any]:
+        """Support package for a failed restore: a Financial(Mirror)Error's closed code, else UNCLASSIFIED; never other text."""
+        known = isinstance(error, (FinancialError, FinancialMirrorError)) and str(error) in CONTINUITY_ERROR_CODES
+        return _support(status="FAILED", component="CONTINUITY", failure_stage="RESTORE", error_class=str(error) if known else "UNCLASSIFIED")
 
     def correction_followup_outputs(self, item_id: str, action_id: str) -> dict[str, Any]:
         result = self._validated_correction_followup_output(
@@ -1319,34 +1322,8 @@ class FinancialMirror:
     def retry_action(self, action_id: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         return self._command_result(self.owner.retry_action(action_id, payload=payload))
 
-    def record_payment_evidence(
-        self,
-        *,
-        item_id: str,
-        payment_id: str,
-        common_origin_id: str,
-        amount_cents: int,
-        evidence_id: str,
-        event_at_ms: int,
-        source_id: str = "synthetic-payment-source",
-        source_version: str = "fixture-v1",
-        local_ref: str | None = None,
-        expected_revision: int | None = None,
-    ) -> dict[str, Any]:
-        return self._command_result(
-            self.owner.record_payment_evidence(
-                item_id=item_id,
-                payment_id=payment_id,
-                common_origin_id=common_origin_id,
-                amount_cents=amount_cents,
-                evidence_id=evidence_id,
-                event_at_ms=event_at_ms,
-                source_id=source_id,
-                source_version=source_version,
-                local_ref=local_ref,
-                expected_revision=expected_revision,
-            )
-        )
+    def record_payment_evidence(self, **fields: Any) -> dict[str, Any]:
+        return self._command_result(self.owner.record_payment_evidence(**fields))
 
     def record_reporting_correction(
         self,
@@ -1490,76 +1467,58 @@ class FinancialMirror:
         package = self.owner.export_continuity()
         if type(package) is not bytes:
             _fail(FinancialMirrorContinuityError, "continuity_export_type")
-        # Validate the exact bytes produced by the owner before exposing them.
         self.validate_owner_continuity_package(package)
         return package
 
-    def _validate_restore_binding(self, package_bytes: bytes) -> None:
-        # Scope and authority were already bound by validate_owner_continuity_package.
-        package = FinancialOwner.validate_continuity_package(package_bytes)
-        if package.get("schema") != self.owner.continuity_schema or package.get("version") != self.owner.schema_version:
-            _fail(FinancialMirrorContinuityError, "continuity_package_schema")
-        if package.get("dispatch_enabled") is not False or package.get("egress_enabled") is not False:
-            _fail(FinancialMirrorContinuityError, "continuity_nonactivating_boundary")
-
     def _restore_continuity(self, package_bytes: bytes, recovered_path: Path, *, restore_mode: str) -> "FinancialMirror":
-        """Validate and restore into a new independently verified non-live owner."""
+        """Restore into a new verified non-live owner; a failure carries its CORPORATE-SUPPORT/v2 package for the staff endpoint."""
+        try:
+            if not isinstance(recovered_path, Path):
+                _fail(FinancialMirrorContinuityError, "continuity_destination")
+            self.validate_owner_continuity_package(package_bytes)
+            source_name = _normalized_path(self.owner.path)
+            destination_name = _normalized_path(recovered_path)
+            if source_name == destination_name:
+                _fail(FinancialMirrorContinuityError, "continuity_source_overwrite")
+            if recovered_path.is_symlink() or recovered_path.exists() or not recovered_path.parent.is_dir():
+                _fail(FinancialMirrorContinuityError, "continuity_destination")
 
-        if restore_mode not in {"SHADOW", "TEST"}:
-            _fail(FinancialMirrorContinuityError, "continuity_restore_mode")
-        if not isinstance(recovered_path, Path):
-            _fail(FinancialMirrorContinuityError, "continuity_destination")
-        self.validate_owner_continuity_package(package_bytes)
-        self._validate_restore_binding(package_bytes)
-        source_name = _normalized_path(self.owner.path)
-        destination_name = _normalized_path(recovered_path)
-        if source_name == destination_name:
-            _fail(FinancialMirrorContinuityError, "continuity_source_overwrite")
-        if recovered_path.is_symlink() or recovered_path.exists() or not recovered_path.parent.is_dir():
-            _fail(FinancialMirrorContinuityError, "continuity_destination")
-
-        with _RESTORE_LOCK:
-            if destination_name in _ACTIVE_DESTINATIONS:
-                _fail(FinancialMirrorContinuityError, "continuity_second_writer")
-            _ACTIVE_DESTINATIONS.add(destination_name)
-            try:
-                restored_owner = type(self.owner).restore_continuity(
-                    package_bytes=package_bytes,
-                    recovered_path=recovered_path,
-                    trusted_authority=self.owner.trusted_authority,
-                    restore_mode=restore_mode,
-                    correction_transition_release=self.owner.correction_transition_release,
-                )
-                summary = restored_owner.summary()
-                integrity = restored_owner.verify_integrity()
-                expected_owner_id = "continuity-shadow-owner-v1" if restore_mode == "SHADOW" else "continuity-test-owner-v1"
-                if restored_owner.mode != restore_mode or summary.get("dispatch_enabled") is not False or summary.get("egress_enabled") is not False or integrity.get("mode") != restore_mode:
-                    _fail(FinancialMirrorContinuityError, f"continuity_{restore_mode.lower()}_boundary")
-                if restored_owner.owner_id != expected_owner_id:
-                    _fail(FinancialMirrorContinuityError, "continuity_owner_identity")
-                return type(self)(restored_owner)
-            except BaseException:
-                _cleanup_new_destination(recovered_path)
-                raise
-            finally:
-                _ACTIVE_DESTINATIONS.discard(destination_name)
+            with _RESTORE_LOCK:
+                if destination_name in _ACTIVE_DESTINATIONS:
+                    _fail(FinancialMirrorContinuityError, "continuity_second_writer")
+                _ACTIVE_DESTINATIONS.add(destination_name)
+                try:
+                    restored_owner = type(self.owner).restore_continuity(
+                        package_bytes=package_bytes,
+                        recovered_path=recovered_path,
+                        trusted_authority=self.owner.trusted_authority,
+                        restore_mode=restore_mode,
+                        correction_transition_release=self.owner.correction_transition_release,
+                    )
+                    summary = restored_owner.summary()
+                    integrity = restored_owner.verify_integrity()
+                    expected_owner_id = "continuity-shadow-owner-v1" if restore_mode == "SHADOW" else "continuity-test-owner-v1"
+                    if restored_owner.mode != restore_mode or summary.get("dispatch_enabled") is not False or summary.get("egress_enabled") is not False or integrity.get("mode") != restore_mode:
+                        _fail(FinancialMirrorContinuityError, f"continuity_{restore_mode.lower()}_boundary")
+                    if restored_owner.owner_id != expected_owner_id:
+                        _fail(FinancialMirrorContinuityError, "continuity_owner_identity")
+                    return type(self)(restored_owner)
+                except BaseException:
+                    _cleanup_new_destination(recovered_path)
+                    raise
+                finally:
+                    _ACTIVE_DESTINATIONS.discard(destination_name)
+        except Exception as error:
+            error.corporate_support = self.continuity_restore_support(error)
+            raise
 
     def restore_continuity(self, package_bytes: bytes, recovered_path: Path) -> "FinancialMirror":
         """Validate and restore into a new, independently verified SHADOW owner."""
-
         return self._restore_continuity(package_bytes, recovered_path, restore_mode="SHADOW")
 
     def restore_test_continuity(self, package_bytes: bytes, recovered_path: Path) -> "FinancialMirror":
         """Restore into an explicitly TEST-only owner for synthetic continuation."""
-
         return self._restore_continuity(package_bytes, recovered_path, restore_mode="TEST")
-
-    restore_shadow = restore_continuity
-    restore_test = restore_test_continuity
-
-
-RightRailFinancialMirror = FinancialMirror
-Mirror = FinancialMirror
 
 
 __all__ = (
@@ -1571,6 +1530,4 @@ __all__ = (
     "FinancialMirrorInputError",
     "MAX_PACKAGE_BYTES",
     "MIRROR_SCHEMA",
-    "Mirror",
-    "RightRailFinancialMirror",
 )

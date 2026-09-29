@@ -2,12 +2,12 @@
 
 Runs the Hospital H journey end to end through what staff actually use: the real
 loopback staff server (Owner, Mirror, pinned Lean correction release) over HTTP,
-and the real served staff.js under Node against the served index.html. Each role
+and the real served page in an isolated Edge browser driven by Playwright. Each role
 opens a fresh page, reads the overview, opens the H package only if the answer is
 not there, expands raw JSON only as a last resort, and clicks the same buttons.
 
-Counts are deterministic (server-side requests, clicks, screens, synthetic clock);
-staff.js timers are recorded, not run. Evidence classes (Art. XI.11): "after" is
+Counts include actual server requests, clicks, screens and normal polling; the
+Owner clock is synthetic. Evidence classes (Art. XI.11): "after" is
 measured here; "demo_baseline" was measured by this harness before the friction
 fixes; "manual_before" is an assumption with its source, or unknown.
 
@@ -43,139 +43,145 @@ from app import right_rail_financial_staff_server as staff  # noqa: E402
 
 SCHEMA = "RR/FINANCIAL/FELT-VALUE-SCORECARD/v1"
 SCORECARD_PATH = _ROOT / "docs" / "scorecard" / "hospital_h.json"
-ENGINE_PATH = _ROOT / "artifacts" / "engine-correction-e911" / "blind_financial_correction.exe"
+ENGINE_PATH = _ROOT / "artifacts" / "engine-correction" / "blind_financial_correction.exe"
 _MODEL = json.loads((_ROOT / "app" / "staff_workspace" / "interaction-model.json").read_text(encoding="utf-8"))
 HOUR_MS = 3_600_000
 # Screens in the order a person reaches them; the overview is up on page load.
 SCREEN_ORDER = ("overview", "decision_package", "raw:package-json", "raw:followup-json")
 
-# Headless browser for the real staff.js: a stub DOM built from the served
-# index.html ids and buttons, the browser's same-origin fetch (Origin on POST
-# only), and a pending-work counter so every op returns once staff.js is idle.
+# The caller supplies the installed Edge executable and Playwright package.
+# Browser contexts, DOM, same-origin fetch and polling are real; no fallback.
 DRIVER_JS = r"""
 "use strict";
-const http = require("http"), readline = require("readline"), vm = require("vm");
-let port = 0, script = "", page = null, pending = 0, navPath = "/";
-class El {
-  constructor(tag, id = "") { Object.assign(this, { tagName: tag, id, children: [], parent: null, _text: "", className: "", hidden: false, disabled: false, dataset: {}, listeners: {}, colSpan: 1 }); }
-  get textContent() { return this.children.length ? this.children.map((c) => c.textContent).join("\n") : this._text; }
-  set textContent(v) { this.children = []; this._text = String(v); }
-  get firstChild() { return this.children[0] || null; }
-  appendChild(c) { c.parent = this; this.children.push(c); return c; }
-  append(...cs) { cs.forEach((c) => this.appendChild(c)); }
-  replaceChildren(...cs) { this.children = []; this._text = ""; this.append(...cs); }
-  addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
-  closest(sel) {
-    if (sel !== "button[data-action]") throw new Error("unsupported_selector:" + sel);
-    for (let n = this; n; n = n.parent) if (n.tagName === "button" && n.dataset.action) return n;
-    return null;
-  }
-  scrollIntoView() {}
-  focus() { this.focused = true; }
-  setAttribute(k, v) { this.attrs = { ...this.attrs, [k]: String(v) }; }
+const readline = require("readline");
+const path = require("path");
+const modulePath = process.env.RR_SCORECARD_PLAYWRIGHT;
+const executablePath = process.env.RR_SCORECARD_BROWSER;
+if (!modulePath || !executablePath) throw new Error("real_browser_runtime_unconfigured");
+if (!path.isAbsolute(modulePath) || !path.isAbsolute(executablePath) || path.basename(executablePath).toLowerCase() !== "msedge.exe") {
+  throw new Error("real_browser_runtime_not_explicit_edge");
 }
-const track = (p) => { pending += 1; return p.finally(() => { pending -= 1; }); };
-function browserFetch(url, o = {}) {
-  const method = o.method || "GET", body = o.body === undefined ? null : Buffer.from(String(o.body), "utf8");
-  const headers = { Host: "127.0.0.1:" + port };
-  if (method === "POST") headers.Origin = "http://127.0.0.1:" + port;
-  if (o.headers && o.headers["Content-Type"]) headers["Content-Type"] = o.headers["Content-Type"];
-  if (body) headers["Content-Length"] = String(body.length);
-  return track(new Promise((resolve, reject) => {
-    const req = http.request({ host: "127.0.0.1", port, path: url, method, headers }, (res) => {
-      const chunks = [];
-      res.on("data", (c) => chunks.push(c));
-      res.on("end", () => {
-        const text = Buffer.concat(chunks).toString("utf8");
-        resolve({ ok: res.statusCode < 300, status: res.statusCode, json: async () => JSON.parse(text), text: async () => text });
-      });
-      res.on("error", reject);
-    });
-    req.on("error", () => reject(new TypeError("Failed to fetch")));
-    if (body) req.write(body);
-    req.end();
-  }));
-}
-function newPage(elements, actions) {
-  const byId = new Map(), buttons = new Map(), grid = new El("div"), intervals = [];
-  for (const [id, spec] of Object.entries(elements)) {
-    const el = new El(spec.tag, id);
-    el._text = spec.text; el.hidden = spec.hidden; byId.set(id, el);
-  }
-  for (const [name, label] of Object.entries(actions)) {
-    const b = new El("button"); b.dataset.action = name; b._text = label; b.disabled = true;
-    grid.appendChild(b); buttons.set(name, b);
-  }
-  const document = {
-    getElementById: (id) => { if (!byId.has(id)) throw new Error("unknown_element:" + id); return byId.get(id); },
-    createElement: (tag) => new El(tag),
-    querySelector: (sel) => {
-      if (sel === ".action-grid") return grid;
-      const m = /^\[data-action="([a-z-]+)"\]$/.exec(sel);
-      if (m) return buttons.get(m[1]) || null;
-      throw new Error("unsupported_selector:" + sel);
-    },
-    querySelectorAll: (sel) => {
-      if (sel === "[data-action]") return [...grid.children];
-      throw new Error("unsupported_selector:" + sel);
-    },
-  };
-  const context = { document, fetch: browserFetch, TextEncoder, console,
-    location: { pathname: navPath },
-    crypto: { subtle: { digest: (a, b) => track(globalThis.crypto.subtle.digest(a, b)) } },
-    setInterval: (_f, ms) => intervals.push(ms), matchMedia: (q) => ({ matches: false, media: q, addEventListener() {}, addListener() {} }) };
-  context.window = context;
-  vm.createContext(context);
-  return { byId, buttons, grid, intervals, context };
-}
+if (require(path.join(modulePath, "package.json")).version !== "1.62.1") throw new Error("playwright_version_mismatch");
+const { chromium } = require(modulePath);
+let browser = null, context = null, page = null, changedAt = 0;
+let pending = new Set(), diagnostics = [], pageErrors = [];
+let posts = [];
 async function settle() {
-  for (let quiet = 0; quiet < 5;) { await new Promise((r) => setImmediate(r)); quiet = pending ? 0 : quiet + 1; }
-}
-function view() {
-  const texts = {}, tables = {}, hidden = {}, disabled = {}, buttons = {};
-  for (const [id, el] of page.byId) {
-    texts[id] = el.textContent;
-    if (el.children.length) tables[id] = el.children.map((r) => (r.children.length ? r.children.map((c) => c.textContent) : [r.textContent]));
-    if (el.hidden) hidden[id] = true;
-    if (el.disabled) disabled[id] = true;
+  const deadline = Date.now() + 30000;
+  while (pending.size || Date.now() - changedAt < 150) {
+    if (Date.now() >= deadline) throw new Error("browser_network_idle_timeout");
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  for (const [name, b] of page.buttons) buttons[name] = { disabled: b.disabled, hidden: Boolean(b.hidden) };
-  return { texts, tables, hidden, disabled, buttons, intervals: page.intervals.slice() };
+  if (pageErrors.length) throw new Error("browser_page_error:" + pageErrors.join("\n"));
+}
+async function view() {
+  const dom = await page.evaluate(() => {
+    const texts = {}, tables = {}, hidden = {}, disabled = {}, buttons = {};
+    const invisible = (el) => !el.getClientRects().length || getComputedStyle(el).visibility === "hidden";
+    for (const el of document.querySelectorAll("[id]")) {
+      texts[el.id] = el.textContent;
+      if (el.children.length) tables[el.id] = [...el.children].map((row) => row.children.length ? [...row.children].map((cell) => cell.textContent) : [row.textContent]);
+      if (invisible(el)) hidden[el.id] = true;
+      if (el.disabled) disabled[el.id] = true;
+    }
+    for (const button of document.querySelectorAll("[data-action]")) {
+      buttons[button.dataset.action] = { disabled: button.disabled, hidden: invisible(button) };
+    }
+    const unavailable = document.getElementById("connection-status").classList.contains("unavailable");
+    const screens = { picker: !hidden["role-picker"], overview: !hidden["workspace-root"] && !unavailable,
+      decision: !hidden["decision-panel"] && !unavailable, unavailable };
+    return { texts, tables, hidden, disabled, buttons, screens, path: location.pathname,
+      hash: location.hash, focus_in_main: Boolean(document.activeElement.closest("main")) };
+  });
+  return { ...dom, posts };
 }
 async function handle(m) {
   if (m.op === "navigate") {
-    port = m.port; page = null; navPath = m.path || "/";
-    const html = await (await browserFetch(navPath)).text();
-    await browserFetch("/staff.css");
-    script = await (await browserFetch("/staff.js")).text();
-    return { html };
+    if (context) await context.close();
+    if (!browser) browser = await chromium.launch({ executablePath, headless: true });
+    context = await browser.newContext({ locale: "en-US" });
+    page = await context.newPage();
+    pending = new Set();
+    diagnostics = [];
+    pageErrors = [];
+    posts = [];
+    page.on("request", (request) => {
+      pending.add(request);
+      changedAt = Date.now();
+      if (request.method() === "POST") posts.push({ url: request.url(), body: request.postData() });
+    });
+    const finished = (request) => { pending.delete(request); changedAt = Date.now(); };
+    page.on("requestfinished", finished);
+    page.on("requestfailed", finished);
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    page.on("console", (message) => {
+      if (["warning", "error"].includes(message.type())) diagnostics.push({ type: message.type(), text: message.text() });
+    });
+    const response = await page.goto("http://127.0.0.1:" + m.port + (m.path || "/"));
+    await settle();
+    return { html: await response.text(), view: await view() };
   }
   if (m.op === "post") {
-    const res = await browserFetch(m.path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(m.body) });
-    return { status: res.status, body: await res.json() };
+    return page.evaluate(async ({ path, body }) => {
+      const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() };
+    }, m);
   }
-  if (m.op === "boot") {
-    page = newPage(m.elements, m.actions);
-    vm.runInContext(script, page.context, { filename: "staff.js" });
+  if (m.op === "close") {
+    if (browser) await browser.close();
+    browser = null;
+    return { closed: true };
+  }
+  if (m.op === "inventory") {
+    const controls = await page.evaluate((selectors) => [...document.querySelectorAll("a,button,summary")].map((el) => ({
+      matches: Object.entries(selectors).filter(([, selector]) => el.matches(selector)).map(([name]) => name),
+      text: el.textContent.trim(), hidden: !el.getClientRects().length || getComputedStyle(el).visibility === "hidden",
+      disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"),
+      expanded: el.tagName === "SUMMARY" ? el.parentElement.open : null,
+    })), m.selectors);
+    return { controls, view: await view() };
+  }
+  if (m.op === "local") {
+    const control = page.locator(m.selector);
+    if (m.keyboard) {
+      await control.focus();
+      await control.press("Enter");
+      await page.keyboard.press("Tab");
+    } else {
+      await control.click();
+    }
   } else if (m.op === "click") {
-    const el = page.byId.get(m.id);
-    if (!el || !el.listeners.click) throw new Error("not_clickable:" + m.id);
-    el.listeners.click.forEach((f) => f({ target: el }));
-  } else if (m.op === "action") {
-    const b = page.buttons.get(m.name);
-    if (!b) throw new Error("unknown_action:" + m.name);
-    if (b.disabled) return { clicked: false };
-    (page.grid.listeners.click || []).forEach((f) => f({ target: b }));
+    await page.locator("#" + m.id).click();
+  } else if (m.op === "expand") {
+    await page.locator("#" + m.id).locator("..").locator("summary").click();
+  } else if (["action", "begin-action"].includes(m.op)) {
+    const button = page.locator('[data-action="' + m.name + '"]');
+    if (!await button.isVisible() || await button.isDisabled()) return { clicked: false };
+    await button.click();
   } else if (m.op !== "view") throw new Error("unknown_op:" + m.op);
-  await settle();
-  return { clicked: true, view: view() };
+  if (m.op !== "begin-action" && m.wait !== false) await settle();
+  return { clicked: true, view: await view() };
 }
 let queue = Promise.resolve();
-readline.createInterface({ input: process.stdin }).on("line", (line) => {
+const input = readline.createInterface({ input: process.stdin });
+input.on("line", (line) => {
   queue = queue.then(async () => {
     let reply;
-    try { reply = { ok: true, ...(await handle(JSON.parse(line))) }; } catch (e) { reply = { ok: false, error: String(e && e.message ? e.message : e) }; }
+    try {
+      reply = { ok: true, ...(await handle(JSON.parse(line))) };
+    } catch (e) {
+      reply = { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+    reply.diagnostics = diagnostics.splice(0);
     process.stdout.write(JSON.stringify(reply) + "\n");
+  });
+});
+input.on("close", () => {
+  queue.then(async () => {
+    if (browser) await browser.close();
+  }).catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
   });
 });
 """
@@ -274,9 +280,9 @@ def _metered_handler(workflow: staff.StaffWorkflow, meter: _Meter) -> type:
         def _json_request(self) -> dict[str, Any]:
             self._record["body"] = value = super()._json_request()
             return value
-        def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8") -> None:
+        def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8", *, retry_after: bool = False) -> None:
             self._record["status"] = status
-            super()._respond(status, value, content_type)
+            super()._respond(status, value, content_type, retry_after=retry_after)
     return Metered
 
 def _node_path() -> str:
@@ -303,6 +309,8 @@ class _Browser:
         if not line:
             raise RuntimeError("browser_driver_exited:" + (self._process.stderr.read() if self._process.stderr else "")[-2000:])
         reply = json.loads(line)
+        for diagnostic in reply.pop("diagnostics", []):
+            print("BROWSER_DIAGNOSTIC=" + json.dumps(diagnostic, sort_keys=True), flush=True)
         if not reply.pop("ok"):
             raise RuntimeError("browser_driver:" + str(reply.get("error")))
         if "view" in reply:
@@ -310,8 +318,6 @@ class _Browser:
         return reply
     def open(self, path: str = "/") -> None:
         self.page = _PageMap(self.call({"op": "navigate", "port": self.port, "path": path})["html"])
-        elements = {key: {"tag": spec["tag"], "text": spec["text"], "hidden": spec["hidden"]} for key, spec in self.page.elements.items()}
-        self.call({"op": "boot", "elements": elements, "actions": self.page.actions})
     def click(self, element_id: str) -> None:
         self.call({"op": "click", "id": element_id})
     def action(self, name: str) -> bool:
@@ -319,16 +325,22 @@ class _Browser:
     def view(self) -> dict[str, Any]:
         return self.call({"op": "view"})["view"]
     def close(self) -> None:
-        if self._process.stdin:
-            self._process.stdin.close()
         try:
-            self._process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            self._process.kill()
-            self._process.wait()
-        for stream in (self._process.stdout, self._process.stderr):
-            if stream:
-                stream.close()
+            if self._process.poll() is None:
+                self.call({"op": "close"})
+        finally:
+            if self._process.stdin:
+                self._process.stdin.close()
+            try:
+                self._process.wait(timeout=30)
+            except subprocess.TimeoutExpired as error:
+                self._process.kill()
+                self._process.wait()
+                raise RuntimeError("browser_cleanup_timed_out") from error
+            finally:
+                for stream in (self._process.stdout, self._process.stderr):
+                    if stream:
+                        stream.close()
 
 # ---- What a person can read on each screen ----------------------------------
 
@@ -651,6 +663,7 @@ class _Task:
                 if screen == "decision_package":
                     self.click("open-package", "open H decision package")
                 else:
+                    self.browser.call({"op": "expand", "id": screen[4:]})
                     self.step(f"expand: {screen[4:]}")
                 opened.append(screen)
             if screen not in self.screens:
@@ -820,8 +833,8 @@ def build_scorecard(measured: dict[str, Any]) -> dict[str, Any]:
         "scenario": "Hospital H: $1,000,000 across 20 synthetic hospitals; H is owed $100,000, $97,000 arrives, Plan A claims an unsupported $3,000 offset; the approver rejects it, a $3,000 correction arrives, reporting follows, and a replacement operator restores the case in Continuity TEST.",
         "claims": {"synthetic": True, "phi": False, "payment": False, "proofSuiteId": None, "production_usable": False, "activation": False},
         "method": {
-            "path": "real loopback staff server over HTTP; real served staff.js under Node against the served index.html; Owner + Mirror + pinned Lean correction release",
-            "counting": "deterministic: server-side requests, clicks and screens per role task; synthetic clock; timers recorded, not run",
+            "path": "real loopback staff server over HTTP; real Edge DOM through Playwright; Owner + Mirror + pinned Lean correction release",
+            "counting": "actual server-side requests, clicks and screens per role task; synthetic Owner clock; normal browser polling",
             "screens": list(SCREEN_ORDER),
             "comparison": "tests/test_right_rail_scorecard.py fails if any 'after' value is worse than this file in its direction",
         },

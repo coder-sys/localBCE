@@ -86,6 +86,7 @@ SERVICE_SCENARIO = (
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = "MANIFEST.json"
+RETIRED_PIN_REGISTRY = "artifacts/engine-correction/RETIRED_PINS"
 
 # The scenario's static import closure, the staff app it serves, the kit itself and
 # the two governing documents. A listed file that is missing fails assembly.
@@ -96,6 +97,8 @@ STATE_FILES = (
     "app/minimal_clearance_resource_limits.py",
     "app/minimal_clearance_verifier_process.py",
     "app/right_rail_financial_engine.py",
+    "app/right_rail_financial_cash_file.py",
+    "app/right_rail_financial_cash_file_independent.py",
     "app/right_rail_financial_mirror.py",
     "app/right_rail_financial_owner.py",
     "app/right_rail_financial_owner_independent.py",
@@ -106,6 +109,7 @@ STATE_FILES = (
     "app/staff_workspace/interaction-model.json",
     "app/staff_workspace/staff.css",
     "app/staff_workspace/staff.js",
+    RETIRED_PIN_REGISTRY,
     "tests/__init__.py",
     "tests/rightrail_financial_expected_cases.py",
     "tests/test_right_rail_financial_acceptance.py",
@@ -496,7 +500,7 @@ def _check_guard_log(raw: bytes, start_floor: int, minimum_free: int) -> None:
         raise KitError("engine_guard_log_failure_marker")
 
     def records(tag: str) -> list[str]:
-        return re.findall(rf"(?m)^{tag} ([^\r\n]+)$", text)
+        return re.findall(rf"(?m)^{tag} ([^\r\n]+)\r?$", text)
 
     reserve = {
         "reserve_floor_bytes": str(PHYSICAL_FREE_FLOOR_BYTES),
@@ -553,7 +557,7 @@ def _check_guard_log(raw: bytes, start_floor: int, minimum_free: int) -> None:
     targets = set(statuses) - {"child-exit-7", "child-exit-0"}
     if not targets or any(statuses[label] != 0 for label in targets):
         raise KitError("engine_guard_log_target_child_status")
-    if re.findall(r"(?m)^CLEANUP=([^\r\n]*)$", text) != [
+    if re.findall(r"(?m)^CLEANUP=([^\r\n]*)\r?$", text) != [
         f"PASS label={label} owned_process_tree=empty" for label in statuses
     ]:
         raise KitError("engine_guard_log_cleanup_inventory")
@@ -583,7 +587,7 @@ def _check_guard_log(raw: bytes, start_floor: int, minimum_free: int) -> None:
         raise KitError("engine_guard_log_summary_inventory")
     if min(summaries.values()) != minimum_free:
         raise KitError("engine_guard_log_minimum_free_mismatch")
-    if re.findall(r"(?m)^MUTEX=([^\r\n]+)$", text) != [f"RELEASED name={GUARD_MUTEX_NAME}"]:
+    if re.findall(r"(?m)^MUTEX=([^\r\n]+)\r?$", text) != [f"RELEASED name={GUARD_MUTEX_NAME}"]:
         raise KitError("engine_guard_log_mutex_release")
 
 
@@ -618,11 +622,19 @@ def _manifest_files(manifest: dict[str, Any]) -> Members:
     return members
 
 
+def _check_retired_pins(read: Callable[[str], bytes]) -> None:
+    # Parse the bundled checker's pin without executing bundled code during verification.
+    pins = re.findall(rb'(?m)^RETIRED_PINS_SHA256 = "([0-9a-f]{64})"\r?$', read("app/right_rail_financial_owner_independent.py"))
+    if len(pins) != 1 or hashlib.sha256(read(RETIRED_PIN_REGISTRY)).hexdigest().encode("ascii") != pins[0]:
+        raise KitError("kit_retired_pins_mismatch")
+
+
 def _check_contents(members: Members, read: Callable[[str], bytes]) -> dict[str, Any]:
     """Exact inventory, engine pins, closed Lean dependencies and the guarded build receipt."""
     paths = set(members)
     if {path for path in paths if not path.startswith(("engine/", "runtime/"))} != set(STATE_FILES):
         raise KitError("kit_state_source_inventory")
+    _check_retired_pins(read)
     if {path for path in paths if path.startswith("engine/") and not path.startswith(ENGINE_SOURCE_PREFIX)} != {
         *RELEASE_FILES.values(), PRODUCER,
     }:

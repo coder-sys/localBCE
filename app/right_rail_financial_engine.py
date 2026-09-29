@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import json
 import math
 from pathlib import Path
 import sqlite3
@@ -31,16 +30,20 @@ ENGINE_ARGUMENTS: Final[tuple[str, ...]] = ("--evaluate",)
 CORRECTION_TRANSITION_OPERATION: Final[str] = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARGUMENTS: Final[tuple[str, ...]] = ("--apply-correction-transition",)
 MAX_CORRECTION_TRANSITION_BYTES: Final[int] = semantic.MAX_WIRE_BYTES
-CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES: Final[int] = 6_245_376
+CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES: Final[int] = 6_279_168
 CORRECTION_TRANSITION_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+    "1A7A18333726484A0737DA7B005EC699F73E99EA0CFACFB409B000F964BED3AF"
 )
 CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
-    "13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537"
+    "B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067"
 )
 CORRECTION_TRANSITION_RESULT_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
-    "312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E"
+    "83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6"
 )
+# Support's fictional reproduction (CORPORATE-SUPPORT/v2): the published request vector and the case its result creates.
+CORRECTION_TRANSITION_REPRODUCTION: Final[dict[str, str]] = {
+    "vector_file_digest": CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256.hex().upper(), "case_id": "case:obligation:item-h:period-01",
+}
 _SHA256_BYTES: Final[int] = 32
 _MAX_SQLITE_INTEGER: Final[int] = 2**63 - 1
 
@@ -562,8 +565,10 @@ def encode_correction_transition_request(
     query_observations: Mapping[str, Mapping[str, Any]],
     current_event_sequence: int,
     previous_history_head: bytes,
+    correction_paid: list[dict[str, Any]],
 ) -> bytes:
-    """Encode the BLFCMD01 request from one locked Owner snapshot."""
+    """Encode the BLFCMD02 request from one locked Owner snapshot; correction_paid is what linked
+    payments paid on each of the obligation's correction requests, by action id."""
 
     if type(snapshot) is not semantic.LockedSemanticSnapshot:
         raise FinancialEngineInputError("engine_correction_snapshot_type")
@@ -585,8 +590,8 @@ def encode_correction_transition_request(
         )
 
         writer = semantic._WireWriter()
-        writer.raw(b"BLFCMD01", "engine_correction_magic")
-        writer.raw((1).to_bytes(2, "big"), "engine_correction_version")
+        writer.raw(b"BLFCMD02", "engine_correction_magic")
+        writer.raw((2).to_bytes(2, "big"), "engine_correction_version")
         writer.string(CORRECTION_TRANSITION_OPERATION, "engine_correction_contract")
         for field in ("item_id", "claim_id", "action_id", "actor_id"):
             _ident(writer, command.get(field), f"engine_correction_{field}")
@@ -611,6 +616,7 @@ def encode_correction_transition_request(
             _write_correction_query_observation(writer, observation, label)
         _u64(writer, current_event_sequence, "engine_correction_event_sequence")
         _digest(writer, previous_history_head, "engine_correction_history_head")
+        writer.list(correction_paid, "engine_correction_paid", lambda entry, label: (_ident(writer, entry["action_id"], label), _u64(writer, entry["paid_cents"], label)))
         writer.raw(len(current_input).to_bytes(4, "big"), "engine_correction_input_length")
         writer.raw(current_input, "engine_correction_input")
         writer.raw(len(receipt_bytes).to_bytes(4, "big"), "engine_correction_receipt_length")
@@ -803,6 +809,7 @@ def _read_correction_dependency_facts(reader: Any) -> dict[str, Any]:
     input_evaluation_revision = _read_transition_nat(reader, "dependency_evaluation_revision")
     input_evaluation_evaluated_at_ms = _read_transition_nat(reader, "dependency_evaluation_time")
     input_evaluation_snapshot_digest = reader.digest("dependency_snapshot_digest")
+    input_shortfall_cents = _read_transition_nat(reader, "dependency_input_shortfall")
     decision_at_ms = _read_transition_nat(reader, "dependency_decision_time")
     owner_now_ms = _read_transition_nat(reader, "dependency_owner_now")
     claim_before = _read_correction_claim(reader, "dependency_claim")
@@ -815,6 +822,10 @@ def _read_correction_dependency_facts(reader: Any) -> dict[str, Any]:
     observations = _read_correction_query_observations(reader)
     current_event_sequence = _read_transition_nat(reader, "dependency_event_sequence")
     previous_history_head = reader.digest("dependency_history_head")
+    correction_paid = reader.list(
+        "dependency_correction_paid",
+        lambda label: {"action_id": reader.identifier(f"{label}_id"), "paid_cents": _read_transition_nat(reader, f"{label}_cents")},
+    )
     if current_event_sequence > 10_000:
         raise FinancialEngineResultError("dependency_event_sequence")
     return {
@@ -831,6 +842,7 @@ def _read_correction_dependency_facts(reader: Any) -> dict[str, Any]:
         "input_evaluation_revision": input_evaluation_revision,
         "input_evaluation_evaluated_at_ms": input_evaluation_evaluated_at_ms,
         "input_evaluation_snapshot_digest": input_evaluation_snapshot_digest,
+        "input_shortfall_cents": input_shortfall_cents,
         "decision_at_ms": decision_at_ms,
         "owner_now_ms": owner_now_ms,
         "claim_before": claim_before,
@@ -838,6 +850,7 @@ def _read_correction_dependency_facts(reader: Any) -> dict[str, Any]:
         "query_observations": observations,
         "current_event_sequence": current_event_sequence,
         "previous_history_head": previous_history_head,
+        "correction_paid": correction_paid,
     }
 
 
@@ -1024,10 +1037,7 @@ def _read_correction_mutation(reader: Any) -> dict[str, Any] | None:
     resulting_result_wire = reader.take(result_size, "correction_resulting_result")
     resulting_result = _decode_correction_financial_result(resulting_result_wire)
     determination = _read_correction_determination(reader)
-    determination_digest = reader.digest("correction_determination_digest")
     action = _read_correction_action(reader)
-    action_payload_digest = reader.digest("correction_action_payload_digest")
-    action_idempotency_key = reader.digest("correction_action_idempotency_key")
     case_record = _read_correction_case(reader)
     contractual_accountability = reader.identifier("correction_case_accountability")
     completion_amount = reader.boolean("correction_case_amount_complete")
@@ -1048,16 +1058,12 @@ def _read_correction_mutation(reader: Any) -> dict[str, Any] | None:
     if outbox_status is None:
         raise FinancialEngineResultError("engine_correction_outbox_status")
     outbox_attempt = _read_transition_nat(reader, "correction_outbox_attempt")
-    outbox_payload_digest = reader.digest("correction_outbox_payload_digest")
-    outbox_idempotency_key = reader.digest("correction_outbox_idempotency_key")
     acknowledgment_reference = _read_optional_transition_text(reader, "correction_outbox_acknowledgment")
     outbox_updated_at_ms = _read_transition_nat(reader, "correction_outbox_updated_at")
     outbox = {
         "action_id": outbox_action_id,
         "status": outbox_status,
         "attempt": outbox_attempt,
-        "payload_digest": outbox_payload_digest,
-        "idempotency_key": outbox_idempotency_key,
         "acknowledgment_reference": acknowledgment_reference,
         "updated_at_ms": outbox_updated_at_ms,
     }
@@ -1069,7 +1075,6 @@ def _read_correction_mutation(reader: Any) -> dict[str, Any] | None:
     event_before_revision = _read_transition_nat(reader, "correction_event_before_revision")
     event_after_revision = _read_transition_nat(reader, "correction_event_after_revision")
     event_committed_at_ms = _read_transition_nat(reader, "correction_event_committed_at")
-    event_base_payload_json = reader.string("correction_event_base_payload")
     event = {
         "sequence": event_sequence,
         "previous_head": event_previous_head,
@@ -1079,7 +1084,6 @@ def _read_correction_mutation(reader: Any) -> dict[str, Any] | None:
         "before_revision": event_before_revision,
         "after_revision": event_after_revision,
         "committed_at_ms": event_committed_at_ms,
-        "base_payload_json": event_base_payload_json,
     }
     return {
         "transition": "OFFSET_REJECTED_CORRECTION_AUTHORIZED",
@@ -1090,10 +1094,7 @@ def _read_correction_mutation(reader: Any) -> dict[str, Any] | None:
         "resulting_result_wire": resulting_result_wire,
         "resulting_result": resulting_result,
         "determination": determination,
-        "determination_digest": determination_digest,
         "action": action,
-        "action_payload_digest": action_payload_digest,
-        "action_idempotency_key": action_idempotency_key,
         "case_delta": case_delta,
         "outbox": outbox,
         "event": event,
@@ -1120,6 +1121,8 @@ _CORRECTION_REJECT_REASON_TAGS: Final[dict[int, str]] = {
     17: "CAPACITY",
     18: "QUERY_OBSERVATION_INVALID",
     19: "INPUT_SNAPSHOT_MISSING",
+    20: "NO_SHORTFALL",
+    21: "NO_REQUESTABLE_BALANCE",
 }
 _CORRECTION_REQUIREMENT_TAGS: Final[dict[int, str]] = {
     1: "VALID_COMMAND",
@@ -1141,27 +1144,12 @@ _CORRECTION_REQUIREMENT_TAGS: Final[dict[int, str]] = {
     17: "HISTORY_CAPACITY_AVAILABLE",
     18: "COMPLETE_QUERY_OBSERVATIONS",
     19: "INPUT_SNAPSHOT_DIGEST_AVAILABLE",
+    20: "POSITIVE_SHORTFALL",
+    21: "UNREQUESTED_SHORTFALL",
 }
+# Lean's requiredTransitionCondition pairs each reject reason with the requirement of the same tag.
 _CORRECTION_REJECT_REQUIREMENTS: Final[dict[str, str]] = {
-    "INVALID_REQUEST": "VALID_COMMAND",
-    "INVALID_INPUT": "WELL_FORMED_FINANCIAL_SNAPSHOT",
-    "SHADOW_READ_ONLY": "ACTIONABLE_OWNER_MODE",
-    "SCOPE_MISMATCH": "REQUEST_SCOPE_MATCH",
-    "AUTHORITY_STALE": "CURRENT_AUTHORITY_MATCH",
-    "ACTOR_UNAUTHORIZED": "AUTHORIZED_ACTOR_ROLE",
-    "CONTROL_PACK_REJECTED": "APPROVED_CONTROL_PACK",
-    "REVISION_CONFLICT": "CURRENT_REVISION_MATCH",
-    "EVALUATION_CONFLICT": "CURRENT_EVALUATION_BINDING",
-    "EVALUATION_CONSUMED": "UNIQUE_EVALUATION_USE",
-    "EVIDENCE_COVERAGE": "CLAIM_EVIDENCE_COVERAGE",
-    "CLAIM_MISSING": "CLAIM_EXISTS_IN_SCOPE",
-    "CLAIM_NOT_CLAIMED": "CLAIM_IS_CLAIMED",
-    "ACTION_CONFLICT": "ACTION_IDENTITY_MATCH",
-    "DETERMINATION_CONFLICT": "DETERMINATION_ID_AVAILABLE",
-    "CHRONOLOGY": "RECEIPT_PRECEDES_DECISION",
-    "CAPACITY": "HISTORY_CAPACITY_AVAILABLE",
-    "QUERY_OBSERVATION_INVALID": "COMPLETE_QUERY_OBSERVATIONS",
-    "INPUT_SNAPSHOT_MISSING": "INPUT_SNAPSHOT_DIGEST_AVAILABLE",
+    reason: _CORRECTION_REQUIREMENT_TAGS[tag] for tag, reason in _CORRECTION_REJECT_REASON_TAGS.items()
 }
 
 
@@ -1237,18 +1225,6 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
         outbox = mutation["outbox"]
         followups = mutation["followups"]
         transition_id = f"determination:{action_id}"
-        event_payload = {
-            "action_id": action_id,
-            "amount_cents": det["amount_cents"],
-            "determination_id": determination_id,
-            "evaluation_id": followups["resulting_evaluation_id"],
-        }
-        try:
-            expected_event_payload = json.dumps(
-                event_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
-            )
-        except (TypeError, ValueError):
-            raise FinancialEngineResultError("engine_correction_event_payload") from None
         observations = deps["query_observations"]
         if (
             determination_id != transition_id
@@ -1260,14 +1236,11 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             or action["determination_id"] != determination_id
             or action["kind"] != "CORRECTION_PAYMENT_REQUEST"
             or action["status"] != "READY"
-            or action["amount_cents"] != det["amount_cents"]
-            or action["payload_digest"] != mutation["action_payload_digest"]
+            or deps["input_shortfall_cents"] <= 0
             or outbox["action_id"] != action_id
             or outbox["status"] != "READY"
             or outbox["attempt"] != 0
             or outbox["acknowledgment_reference"] is not None
-            or outbox["payload_digest"] != mutation["action_payload_digest"]
-            or outbox["idempotency_key"] != mutation["action_idempotency_key"]
             or case_delta["contractual_accountability"] != "PROGRAM_ACCOUNTABILITY"
             or not case_delta["completion_conditions_amount_satisfied"]
             or not case_delta["completion_conditions_reporting_complete"]
@@ -1287,7 +1260,6 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             or event["before_revision"] != det["expected_revision"]
             or event["after_revision"] != det["resulting_revision"]
             or event["committed_at_ms"] != outbox["updated_at_ms"]
-            or event["base_payload_json"] != expected_event_payload
             or followups["action_id"] != action_id
             or followups["outbox_action_id"] != action_id
             or followups["case_id"] != case_delta["record"]["case_id"]
@@ -1377,13 +1349,13 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
 
 
 def decode_correction_transition_result(payload: bytes) -> dict[str, Any]:
-    """Strictly decode one BLFCRES1 value and reject any trailing bytes."""
+    """Strictly decode one BLFCRES3 value and reject any trailing bytes."""
 
     try:
         reader = semantic._WireReader(payload, max_bytes=MAX_CORRECTION_TRANSITION_BYTES)
-        if reader.take(8, "correction_result_magic") != b"BLFCRES1":
+        if reader.take(8, "correction_result_magic") != b"BLFCRES3":
             raise FinancialEngineResultError("engine_correction_result_magic")
-        if int.from_bytes(reader.take(2, "correction_result_version"), "big") != 1:
+        if int.from_bytes(reader.take(2, "correction_result_version"), "big") != 3:
             raise FinancialEngineResultError("engine_correction_result_version")
         status_tags = {1: "ACCEPTED", 2: "DUPLICATE", 3: "REJECTED"}
         status = status_tags.get(reader.byte("correction_result_status"))
@@ -1433,7 +1405,7 @@ def run_correction_transition_v1(
         raise FinancialEngineConfigError("engine_correction_transition_release_type")
     if (
         type(request) is not bytes
-        or not request.startswith(b"BLFCMD01")
+        or not request.startswith(b"BLFCMD02")
         or not 0 < len(request) <= configured.input_max_bytes
     ):
         raise FinancialEngineInputError("engine_correction_request_contract")

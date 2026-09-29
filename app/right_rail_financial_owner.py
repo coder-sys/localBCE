@@ -9,7 +9,7 @@ live directive, stores raw evidence, or claims production authority.
 from __future__ import annotations
 
 from contextlib import closing, contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import ctypes
 import hashlib
 import json
@@ -136,11 +136,39 @@ _CORRECTION_FOLLOWUP_DEPENDENCIES: Final[tuple[str, ...]] = (
     "CURRENT_DETERMINATION",
     "ACTION_DELIVERY",
 )
-_CORRECTION_FOLLOWUP_READ_OBSERVATIONS: Final[tuple[str, ...]] = (
-    "action_id",
-    "determination_id",
-    "evaluation_consumed",
-)
+# Which derived dependency families of a committed correction each event kind can move.
+# A kind missing here makes follow-up status REVIEW_REQUIRED, never CURRENT.
+_FOLLOWUP_TOUCHES: Final[dict[str, tuple[str, ...]]] = {
+    "CONTROL_PACK_PUBLISHED": ("RULE",),
+    "EVALUATION_RECORDED": ("AUTHORITY",),
+    "SUPPORT_EVIDENCE_RECORDED": ("AUTHORITY", "SUPPORT_EVIDENCE"),
+    "PAYMENT_RECEIVED": ("AUTHORITY", "PAYMENT_EVIDENCE"),
+    "PAYMENT_REVERSED": ("AUTHORITY", "PAYMENT_EVIDENCE"),
+    "PAYMENT_CONFLICT_VISIBLE": ("AUTHORITY", "PAYMENT_EVIDENCE"),
+    "PAYMENT_DUPLICATE_EVIDENCE": (),  # repeats an existing payment (the checker binds it); money is unchanged
+    "OFFSET_CLAIMED": ("AUTHORITY", "OFFSET_EVIDENCE"),
+    "OFFSET_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
+    "OFFSET_REJECTED_CORRECTION_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
+    "ACTION_ACKNOWLEDGED": ("AUTHORITY",),  # an acknowledgment never reopens; nothing records a rejection
+    "REPORTING_EVIDENCE_RECORDED": ("AUTHORITY", "REPORT_EVIDENCE"),
+    "REPORTING_CORRECTION_RECORDED": ("AUTHORITY", "REPORT_EVIDENCE"),
+    **dict.fromkeys(
+        (
+            "POPULATION_MANIFEST_REGISTERED", "POPULATION_MANIFEST_SUPERSEDED", "POPULATION_STAGED",
+            "POPULATION_IMPORT_OPENED", "POPULATION_SOURCE_COMPLETED", "POPULATION_VALIDATED",
+            "POPULATION_PUBLISHED", "FUNDING_RECEIPT_RECORDED", "FUNDING_RECEIPT_SUPERSEDED",
+        ),
+        (),
+    ),
+}
+_EVIDENCE_COLLECTION: Final[dict[str, str]] = {
+    "SUPPORT": "SUPPORT_EVIDENCE",
+    "PAYMENT_CONFIRMATION": "PAYMENT_EVIDENCE",
+    "PAYMENT_REVERSAL": "PAYMENT_EVIDENCE",
+    "OFFSET_CLAIM": "OFFSET_EVIDENCE",
+    "REPORT": "REPORT_EVIDENCE",
+    "REPORT_CORRECTION": "REPORT_EVIDENCE",
+}
 _MODES: Final[frozenset[str]] = frozenset({"LIVE", "SHADOW", "TEST"})
 _TEST_OWNER_ID: Final[str] = "continuity-test-owner-v1"
 _SHADOW_OWNER_ID: Final[str] = "continuity-shadow-owner-v1"
@@ -371,6 +399,47 @@ _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
     "ACTION_ACKNOWLEDGMENT": "SELECT acknowledgment_ref FROM action_outbox WHERE action_id=?",
     "REPORT": "SELECT item_id,record_digest FROM evidence WHERE evidence_id=?",
 }
+
+
+# Every code a Continuity restore can raise (FinancialError here, FinancialMirrorError in the Mirror); a support package
+# names one of these or UNCLASSIFIED, never other text. A test keeps this closed set equal to the codes in the source.
+CONTINUITY_ERROR_CODES: Final[tuple[str, ...]] = tuple("continuity_" + code for code in (
+    "authority_digest authority_epoch authority_id authority_mismatch columns destination destination_claim dispatch_boundary "
+    "expected_scope_required export_type hex history_head identity:shape identity:id identity:schema identity:provenance "
+    "identity:mode identity:owner identity:restore-live identity:restore-owner identity:anchor-sequence identity:anchor_head "
+    "identity:genesis_head identity:source_package_digest identity:identity_digest identity:digest identity_anchor "
+    "identity_binding identity_cardinality identity_genesis identity_history_anchor identity_id identity_rows meta_binding "
+    "meta_columns meta_rows owner_identity package_authority package_binding package_canonical package_digest package_epoch "
+    "package_json package_row package_rows package_schema package_scope package_sequence package_shape package_size "
+    "package_tables package_type restore_cleanup restore_integrity restore_mode restore_owner row_cap schema_columns "
+    "scope_currency scope_deployment_id scope_mismatch scope_period_id scope_program_id scope_state_id second_writer "
+    "shadow_boundary source source_overwrite test_boundary trusted_authority_required value"
+).split())
+
+
+def _known_correction_engine(sha256: object) -> bool:
+    """Whether committed correction history may name this engine (the checker's registry); a missing,
+    altered or malformed registry is an integrity refusal."""
+    from app.right_rail_financial_owner_independent import IndependentFinancialError, correction_engines
+
+    try:
+        return str(sha256) in correction_engines()
+    except IndependentFinancialError as error:
+        _fail(FinancialIntegrityError, str(error))
+
+
+def _correction_paid(connection: sqlite3.Connection, obligation_id: str) -> list[dict[str, Any]]:
+    """What active linked payments paid on each correction request of the obligation, by action id."""
+    return [
+        {"action_id": action_id, "paid_cents": paid}
+        for action_id, paid in connection.execute(
+            "SELECT json_extract(e.payload_json,'$.pays_action_id'),SUM(p.amount_cents) FROM financial_events e "
+            "JOIN payments p ON p.payment_id=json_extract(e.payload_json,'$.payment_id') "
+            "WHERE e.aggregate_type='OBLIGATION' AND e.aggregate_id=? AND e.kind='PAYMENT_RECEIVED' "
+            "AND json_extract(e.payload_json,'$.pays_action_id') IS NOT NULL AND p.active=1 GROUP BY 1 ORDER BY 1",
+            (obligation_id,),
+        )
+    ]
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -1850,6 +1919,7 @@ class FinancialOwner:
         mode: str = "LIVE",
         owner_id: str = "financial-owner-v1",
         correction_transition_release: object | None = None,
+        existing_only: bool = False,
     ) -> None:
         self._initialize(
             path=path,
@@ -1860,6 +1930,7 @@ class FinancialOwner:
             owner_id=owner_id,
             correction_transition_release=correction_transition_release,
             identity_contract=None,
+            existing_only=existing_only,
         )
         self._verify_open_identity(verify_history=True)
 
@@ -1923,6 +1994,7 @@ class FinancialOwner:
         owner_id: str,
         correction_transition_release: object | None,
         identity_contract: Mapping[str, Any] | None,
+        existing_only: bool = False,
     ) -> None:
         if not isinstance(path, Path) or not path.parent.is_dir() or path.is_symlink():
             _fail(FinancialIntegrityError, "owner_path")
@@ -1933,6 +2005,7 @@ class FinancialOwner:
         if type(clock) is not type(None) and not hasattr(clock, "now_ms"):
             _fail(FinancialInputError, "clock")
         self.path = path
+        self._existing_only = existing_only
         self.config = config
         self.schema_version = _SCHEMA_VERSION
         self.schema = _SCHEMA
@@ -1949,6 +2022,8 @@ class FinancialOwner:
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
+        if existing_only and (not existed or path.stat().st_size == 0):
+            _fail(FinancialIntegrityError, "existing_database_required")
         if existed and path.stat().st_size == 0:  # a creator holds its new file empty until its schema commits: wait for it
             try:
                 with closing(sqlite3.connect(str(path), timeout=5.0, isolation_level=None)) as probe:
@@ -2012,7 +2087,8 @@ class FinancialOwner:
     def _connect(self, *, capture_triggers: bool = False) -> sqlite3.Connection:
         connection = None
         try:
-            connection = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
+            location = self.path.resolve().as_uri() + "?mode=rw" if self._existing_only else str(self.path)
+            connection = sqlite3.connect(location, uri=self._existing_only, timeout=5.0, isolation_level=None)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
@@ -2155,6 +2231,7 @@ class FinancialOwner:
             )
 
     def _verify_open_identity(self, *, verify_history: bool) -> None:
+        no_migration = self.mode == "SHADOW" or self._existing_only
         try:
             with closing(self._connect()) as connection:
                 try:
@@ -2169,7 +2246,7 @@ class FinancialOwner:
                     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
                     if tables in (_TABLES, _TABLES | {"right_rail_continuity_admission"}):
                         # A v8 store from before history segments: replayed, then its whole history opens the first segment.
-                        if self.mode == "SHADOW":  # read-only: only a writing owner migrates
+                        if no_migration:
                             _fail(FinancialIntegrityError, "shadow_requires_migration")
                         migrated = True
                         connection.execute("DROP TABLE IF EXISTS right_rail_continuity_admission")
@@ -2177,11 +2254,11 @@ class FinancialOwner:
                         self._track_all(connection)
                     elif tables != _TABLES | _SEGMENT_TABLES:
                         _fail(FinancialIntegrityError, "schema_tables")
-                    if self.mode != "SHADOW":
+                    if not no_migration:
                         _install_private_index_set(connection)
                     elif _private_index_set_version(connection) == 0:  # read-only: checked, never upgraded
                         _fail(FinancialIntegrityError, "shadow_requires_migration")
-                    _install_history_append_only(connection, read_only=self.mode == "SHADOW")
+                    _install_history_append_only(connection, read_only=no_migration)
                     if verify_history or migrated:
                         self._verify_history_in_transaction(connection)
                     connection.execute("COMMIT")
@@ -2196,36 +2273,18 @@ class FinancialOwner:
     def _verify_meta_identity(self, connection: sqlite3.Connection, meta: sqlite3.Row) -> None:
         """Bind persisted meta and identity rows to this Owner's config, mode, owner id and authority."""
 
-        expected = (
-            self.schema_version,
-            self.schema,
-            self.config.state_id,
-            self.config.deployment_id,
-            self.config.program_id,
-            self.config.period_id,
-            self.config.currency,
-        )
-        actual = tuple(
-            meta[key]
-            for key in (
-                "schema_version", "schema", "state_id", "deployment_id",
-                "program_id", "period_id", "currency",
-            )
-        )
-        if actual != expected:
+        scope = self._scope_value()
+        actual = (meta["schema_version"], meta["schema"], *(meta[key] for key in scope))
+        if actual != (self.schema_version, self.schema, *scope.values()):
             _fail(FinancialIntegrityError, "schema_identity")
         if int(meta["dispatch_enabled"]) != 0 or int(meta["egress_enabled"]) != 0 or str(meta["mode"]) != self.mode:
             _fail(FinancialIntegrityError, "nonactivating_boundary")
         if str(meta["owner_id"]) != self.owner_id:
             _fail(FinancialIntegrityError, "owner_identity")
-        if (
-            str(meta["trusted_authority_id"]),
-            int(meta["trusted_authority_epoch"]),
-            bytes(meta["trusted_authority_digest"]),
-        ) != (
-            self.trusted_authority.authority_id,
-            self.trusted_authority.epoch,
-            self.trusted_authority.digest,
+        authority = self.trusted_authority
+        if (str(meta["trusted_authority_id"]), int(meta["trusted_authority_epoch"]),
+                bytes(meta["trusted_authority_digest"])) != (
+            authority.authority_id, authority.epoch, authority.digest
         ):
             _fail(FinancialAuthorityError, "trusted_authority_stale")
         identity_rows = connection.execute("SELECT * FROM financial_identity WHERE id=1").fetchall()
@@ -2274,18 +2333,51 @@ class FinancialOwner:
             if first_event is None or bytes(first_event["previous_head"]) != identity["genesis_head"]:
                 _fail(FinancialIntegrityError, "identity_history_genesis")
 
+    @staticmethod
+    def _verify_funding_projection(connection: sqlite3.Connection) -> None:
+        """Check current funding leaves against receipt and event facts, without replaying history."""
+        drift = connection.execute(
+            "SELECT 1 FROM program_funding_projection AS p "
+            "LEFT JOIN program_funding_receipts AS r ON r.receipt_id=p.receipt_id "
+            "LEFT JOIN program_funding_receipts AS child ON child.supersedes_receipt_id=p.receipt_id "
+            "LEFT JOIN financial_events AS e ON e.aggregate_type='PROGRAM_FUNDING_RECEIPT' AND e.aggregate_id=p.receipt_id "
+            "WHERE r.receipt_id IS NULL OR child.rowid IS NOT NULL OR e.aggregate_id IS NULL "
+            "OR p.source_record_ref IS NOT r.source_record_ref OR p.amount_cents IS NOT r.amount_cents "
+            "OR p.event_at_ms IS NOT r.event_at_ms OR p.receipt_digest IS NOT r.receipt_digest "
+            "OR p.revision IS NOT e.after_revision OR e.before_revision IS NOT p.revision-1 "
+            "OR e.committed_at_ms IS NOT r.recorded_at_ms OR json_extract(e.payload_json,'$.amount_cents') IS NOT r.amount_cents "
+            "OR json_extract(e.payload_json,'$.receipt_digest') IS NOT hex(r.receipt_digest) "
+            "OR e.kind IS NOT CASE WHEN r.supersedes_receipt_id IS NULL THEN 'FUNDING_RECEIPT_RECORDED' "
+            "ELSE 'FUNDING_RECEIPT_SUPERSEDED' END LIMIT 1"
+        ).fetchone()
+        roots = connection.execute(
+            "SELECT 1 FROM program_funding_receipts AS r WHERE r.supersedes_receipt_id IS NULL "
+            "GROUP BY r.source_record_ref HAVING COUNT(*) != 1 OR NOT EXISTS "
+            "(SELECT 1 FROM program_funding_projection AS p WHERE p.source_record_ref=r.source_record_ref) LIMIT 1"
+        ).fetchone()
+        counts = connection.execute(
+            "SELECT (SELECT COUNT(*) FROM program_funding_receipts WHERE supersedes_receipt_id IS NULL), "
+            "(SELECT COUNT(*) FROM program_funding_projection)"
+        ).fetchone()
+        if drift is not None or roots is not None or counts[0] != counts[1]:
+            _fail(FinancialIntegrityError, "funding_projection_drift")
+
     @contextmanager
-    def _write(self) -> Iterator[sqlite3.Connection]:
+    def _write(self, *, before_commit=None) -> Iterator[sqlite3.Connection]:
         """One atomic command; inside ``run_batch`` the batch owns the connection, BEGIN, COMMIT and ROLLBACK,
         while each command still seals as it would alone, so a batch's segments equal its commands' run singly."""
         batch = getattr(self._batch, "connection", None)
         began = batch is None
         with closing(self._connect(capture_triggers=True)) if began else nullcontext(batch) as connection:
+            outer_now, self._batch.now = getattr(self._batch, "now", None), -1  # this command's clock is unread (_now)
             try:
                 if began:
                     connection.execute("BEGIN IMMEDIATE")
+                    self._verify_funding_projection(connection)
                     self._batch.rows = self._committed_row_counts(connection)
                 yield connection
+                if began:
+                    self._verify_funding_projection(connection)
                 rows = self._row_counts(connection, self._batch.rows)
                 self._seal_segment(connection, rows=rows)
                 if connection.execute("SELECT 1 FROM temp.rr_captured_rows").fetchone() is not None:
@@ -2294,6 +2386,8 @@ class FinancialOwner:
                     if _CHECK_ROW_CACHE and rows != _count_rows(connection):
                         raise AssertionError(f"row_count_cache: {rows} != {_count_rows(connection)}")
                     after = (tuple(connection.execute(_HISTORY_MARK).fetchone()), rows)
+                    if before_commit is not None:
+                        before_commit(connection)
                     connection.execute("COMMIT")
                     self._row_cache = after
             except BaseException as error:
@@ -2303,28 +2397,40 @@ class FinancialOwner:
                 _raise_if_busy(error)
                 raise
             finally:
+                self._batch.now = outer_now
                 if began:
                     self._batch.rows = None
 
-    def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]]) -> list[dict[str, Any]]:
+    def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]], *, cash_file_context=None):
         """Up to 1,000 commands in one transaction, each run exactly as its method alone (same checks,
         history, retries). All or nothing: the first failure rolls the whole batch back and is raised
         with a ``batch_index=<i>`` note (Art. III.2, III.5)."""
         if type(commands) is not list or not 0 < len(commands) <= 1_000 or any(type(entry) is not tuple or len(entry) != 2 or entry[0] not in _BATCH_COMMANDS or not isinstance(entry[1], Mapping) for entry in commands):
             _fail(FinancialInputError, "batch_commands")
-        with self._write() as connection:
+        check = None
+        results = []
+        if cash_file_context is not None:
+            from app.right_rail_financial_cash_file_independent import CashFileCheck
+            if getattr(self._batch, "connection", None) is not None:
+                _fail(FinancialInputError, "cash_file_nested_batch")
+            check = CashFileCheck(commands, cash_file_context)
+            commands = check.commands
+        def verify_cash(connection):
+            check.finish(connection, self._continuity_package_bytes(connection), results)
+        with self._write(before_commit=verify_cash) if check else self._write() as connection:
+            if check:
+                check.begin(connection, self._continuity_package_bytes(connection))
             self._batch.connection = connection
             try:
-                results = []
                 for index, (name, arguments) in enumerate(commands):
                     try:
                         results.append(getattr(self, name)(**arguments))
                     except BaseException as error:
                         error.add_note(f"batch_index={index}")
                         raise
-                return results
             finally:
                 self._batch.connection = None
+        return check.receipt if check else results
 
     @contextmanager
     def _read_snapshot(self, *, _connection: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
@@ -2343,8 +2449,15 @@ class FinancialOwner:
                 raise
 
     def _now(self) -> int:
-        value = self.clock.now_ms()
-        return _time(value, "clock")
+        """The owner clock, read once per command: inside a ``_write`` every call returns its first reading,
+        so an evidence row's received_at_ms is its event's committed_at_ms (checker replay:evidence-received-at)."""
+        now = getattr(self._batch, "now", None)
+        if now is not None and now >= 0:
+            return now
+        value = _time(self.clock.now_ms(), "clock")
+        if now is not None:
+            self._batch.now = value
+        return value
 
     def _scope_period(self, period_id: str) -> None:
         _id(period_id, "period_id")
@@ -2406,6 +2519,8 @@ class FinancialOwner:
         if int(meta["sequence"]) >= _MAX_ROWS or after_revision > _MAX_ROWS:
             _fail(FinancialIntegrityError, "history_capacity")
         sequence = int(meta["sequence"]) + 1
+        if (last := connection.execute("SELECT committed_at_ms FROM financial_events WHERE event_sequence=?", (sequence - 1,)).fetchone()) and committed_at_ms < last[0]:
+            _fail(FinancialIntegrityError, "event_commit_order")  # checker history:commit-order: a clock behind its history writes nothing
         previous_head = bytes(meta["history_head"])
         header = b"".join(
             value.to_bytes(8, "big")
@@ -2582,9 +2697,9 @@ class FinancialOwner:
         return pack, calculation, adjustment
 
     def _insert_evidence(self, connection: sqlite3.Connection, evidence: EvidenceRecord) -> str:
-        existing = connection.execute("SELECT record_digest FROM evidence WHERE evidence_id=?", (evidence.evidence_id,)).fetchone()
-        if existing is not None:
-            if bytes(existing[0]) == evidence.record_digest:
+        existing = connection.execute("SELECT record_digest,received_at_ms FROM evidence WHERE evidence_id=?", (evidence.evidence_id,)).fetchone()
+        if existing is not None:  # a retry restates the fact; its received time stays the first recording's
+            if evidence.event_at_ms <= existing[1] and bytes(existing[0]) == replace(evidence, received_at_ms=existing[1]).record_digest:
                 return "DUPLICATE"
             _fail(FinancialConflictError, "evidence_identity_conflict")
         connection.execute(
@@ -2624,7 +2739,6 @@ class FinancialOwner:
         kind: str,
         payload: Mapping[str, Any],
         now_ms: int,
-        committed_at_ms: int | None = None,
     ) -> dict[str, Any]:
         """Recompute one obligation and append its event, bound to the new evaluation."""
 
@@ -2637,7 +2751,7 @@ class FinancialOwner:
             before_revision=before,
             after_revision=after,
             payload={**payload, "evaluation_id": evaluation["evaluation_id"]},
-            committed_at_ms=now_ms if committed_at_ms is None else committed_at_ms,
+            committed_at_ms=now_ms,
         )
         return evaluation
 
@@ -3813,13 +3927,12 @@ class FinancialOwner:
         local_ref: str | None = None,
         applicable_at_ms: int = 1,
         event_at_ms: int = 1,
-        received_at_ms: int | None = None,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
+        """Received time is the owner clock, never the caller's; event_at_ms is when the document is dated."""
         self._assert_actionable()
-        received = self._now() if received_at_ms is None else received_at_ms
-        evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="SUPPORT", common_origin_id=common_origin_id, source_id=source_id, source_version=source_version, local_ref=local_ref or f"support:{evidence_id}", applicable_at_ms=applicable_at_ms, event_at_ms=event_at_ms, received_at_ms=received)
         with self._write() as connection:
+            evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="SUPPORT", common_origin_id=common_origin_id, source_id=source_id, source_version=source_version, local_ref=local_ref or f"support:{evidence_id}", applicable_at_ms=applicable_at_ms, event_at_ms=event_at_ms, received_at_ms=self._now())
             obligation = self._get_obligation_row(connection, item_id)
             self._check_revision(obligation, expected_revision)
             status = self._insert_evidence(connection, evidence)
@@ -3841,10 +3954,14 @@ class FinancialOwner:
         source_version: str = "fixture-v1",
         local_ref: str | None = None,
         expected_revision: int | None = None,
+        pays_action_id: str | None = None,
     ) -> dict[str, Any]:
-        """Record one payment once by common origin; conflicts never mutate cash."""
+        """Record one payment once by common origin; conflicts never mutate cash. A payment answering
+        a correction request names it (pays_action_id) and never pays more than the request leaves unpaid."""
         self._assert_actionable()
         _id(payment_id, "payment_id")
+        if pays_action_id is not None:
+            _id(pays_action_id, "pays_action_id")
         _cents(amount_cents, "payment_amount", nonnegative=True)
         if amount_cents == 0:
             _fail(FinancialInputError, "payment_amount_zero")
@@ -3853,6 +3970,18 @@ class FinancialOwner:
         _id(source_id, "source_id")
         _text(source_version, "source_version")
         normalized_local_ref = local_ref or f"payment:{payment_id}"
+        evidence_fields = {
+            "evidence_id": evidence_id,
+            "item_id": item_id,
+            "kind": "PAYMENT_CONFIRMATION",
+            "common_origin_id": common_origin_id,
+            "source_id": source_id,
+            "source_version": source_version,
+            "local_ref": normalized_local_ref,
+            "applicable_at_ms": event_at_ms,
+            "event_at_ms": event_at_ms,
+            "amount_cents": amount_cents,
+        }
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
             existing_id = connection.execute(
@@ -3866,19 +3995,7 @@ class FinancialOwner:
                 ).fetchone()
                 if existing_evidence is None:
                     _fail(FinancialConflictError, "payment_request_conflict")
-                retry_evidence = self._new_evidence(
-                    evidence_id=evidence_id,
-                    item_id=item_id,
-                    kind="PAYMENT_CONFIRMATION",
-                    common_origin_id=common_origin_id,
-                    source_id=source_id,
-                    source_version=source_version,
-                    local_ref=normalized_local_ref,
-                    applicable_at_ms=event_at_ms,
-                    event_at_ms=event_at_ms,
-                    received_at_ms=int(existing_evidence["received_at_ms"]),
-                    amount_cents=amount_cents,
-                )
+                retry_evidence = self._new_evidence(**evidence_fields, received_at_ms=int(existing_evidence["received_at_ms"]))
                 payment_events = connection.execute(
                     "SELECT aggregate_id,before_revision,after_revision,payload_json "
                     "FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? "
@@ -3899,6 +4016,7 @@ class FinancialOwner:
                     "evidence_id": evidence_id,
                     "amount_cents": amount_cents,
                     "common_origin_id": common_origin_id,
+                    **({} if pays_action_id is None else {"pays_action_id": pays_action_id}),
                 }
                 actual_event_fields = {
                     key: event_payload.get(key)
@@ -3940,34 +4058,36 @@ class FinancialOwner:
                 }
 
             self._check_revision(obligation, expected_revision)
-            evidence = self._new_evidence(
-                evidence_id=evidence_id,
-                item_id=item_id,
-                kind="PAYMENT_CONFIRMATION",
-                common_origin_id=common_origin_id,
-                source_id=source_id,
-                source_version=source_version,
-                local_ref=normalized_local_ref,
-                applicable_at_ms=event_at_ms,
-                event_at_ms=event_at_ms,
-                received_at_ms=self._now(),
-                amount_cents=amount_cents,
-            )
+            evidence = self._new_evidence(**evidence_fields, received_at_ms=self._now())
             evidence_status = self._insert_evidence(connection, evidence)
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
             if existing is not None:  # existing_id is None here: that retry path returned or failed above
-                if int(existing["amount_cents"]) == amount_cents and str(existing["common_origin_id"]) == common_origin_id:
-                    now_ms = self._now()
+                if int(existing["amount_cents"]) == amount_cents:
+                    recorded_link = connection.execute("SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')=?", (obligation["obligation_id"], existing["payment_id"])).fetchone()[0]
+                    if pays_action_id not in (None, recorded_link):  # it may not change or add a link; an outside confirmation that omits it corroborates
+                        _fail(FinancialConflictError, "payment_request_conflict")
                     if evidence_status == "INSERTED":
-                        self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=now_ms)
+                        self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=self._now())
                     return {"status": "DUPLICATE", "payment_id": str(existing["payment_id"]), **self._current_projection(connection, str(obligation["obligation_id"]))}
                 conflict_id = f"conflict:{item_id}:{common_origin_id}:{evidence_id}"
                 if connection.execute("SELECT 1 FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone() is None:
                     connection.execute("INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)", (conflict_id, obligation["obligation_id"], common_origin_id, str(existing["payment_id"]), evidence_id, int(existing["amount_cents"]), amount_cents, "CONFLICTING_COMMON_ORIGIN_AMOUNT", self._now()))
-                    self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now(), committed_at_ms=self._now())
+                    self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now())
                 return {"status": "CONFLICT", "conflict_id": conflict_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
+            link = {}
+            if pays_action_id is not None:
+                (request,) = connection.execute(
+                    "SELECT json_extract(payload_json,'$.amount_cents') FROM actions WHERE action_id=? AND obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST'",
+                    (pays_action_id, obligation["obligation_id"]),
+                ).fetchone() or (None,)
+                if request is None:
+                    _fail(FinancialConflictError, "payment_request_unknown")
+                paid = next((entry["paid_cents"] for entry in _correction_paid(connection, str(obligation["obligation_id"])) if entry["action_id"] == pays_action_id), 0)
+                if paid + amount_cents > request:
+                    _fail(FinancialConflictError, "payment_exceeds_unpaid_request")
+                link = {"pays_action_id": pays_action_id}
             connection.execute("INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)", (payment_id, obligation["obligation_id"], item_id, evidence_id, common_origin_id, amount_cents, event_at_ms, 1, None))
-            self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id}, now_ms=self._now())
+            self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id, **link}, now_ms=self._now())
             return {"status": "RECORDED", "payment_id": payment_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
 
     def reverse_payment(
@@ -4017,8 +4137,9 @@ class FinancialOwner:
             _fail(FinancialInputError, "offset_amount_zero")
         _role(owner_role, "offset_owner_role")
         _time(deadline_ms, "offset_deadline")
-        evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="OFFSET_CLAIM", common_origin_id=claim_id, source_id="synthetic-offset-source", source_version="fixture-v1", local_ref=f"offset:{claim_id}", applicable_at_ms=self._now(), event_at_ms=self._now(), received_at_ms=self._now(), amount_cents=amount_cents)
         with self._write() as connection:
+            now_ms = self._now()
+            evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="OFFSET_CLAIM", common_origin_id=claim_id, source_id="synthetic-offset-source", source_version="fixture-v1", local_ref=f"offset:{claim_id}", applicable_at_ms=now_ms, event_at_ms=now_ms, received_at_ms=now_ms, amount_cents=amount_cents)
             obligation = self._get_obligation_row(connection, item_id)
             pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, str(obligation["obligation_id"]))
             if owner_role not in pack.authorized_roles:
@@ -4030,7 +4151,6 @@ class FinancialOwner:
             evidence_status = self._insert_evidence(connection, evidence)
             if evidence_status == "DUPLICATE":
                 _fail(FinancialConflictError, "offset_evidence_reused")
-            now_ms = self._now()
             connection.execute("INSERT INTO claimed_adjustments VALUES (?,?,?,?,?,?,?,?,?)", (claim_id, obligation["obligation_id"], evidence_id, amount_cents, owner_role, deadline_ms, "CLAIMED", now_ms, now_ms))
             self._ensure_case(connection, obligation_id=str(obligation["obligation_id"]), reason="UNSUPPORTED_OFFSET", owner=owner_role, due_at_ms=deadline_ms, status="OPEN", now_ms=now_ms)
             self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="OFFSET_CLAIMED", payload={"claim_id": claim_id, "evidence_id": evidence_id, "amount_cents": amount_cents}, now_ms=now_ms)
@@ -4381,6 +4501,7 @@ class FinancialOwner:
         query_observations: Mapping[str, Mapping[str, Any]],
         current_event_sequence: int,
         previous_history_head: bytes,
+        correction_paid: list[dict[str, Any]],
         transition_result: Mapping[str, Any],
         financial_engine: Any,
         semantic: Any,
@@ -4441,6 +4562,7 @@ class FinancialOwner:
             and dependencies["input_evaluation_evaluated_at_ms"] == input_receipt["evaluated_at_ms"]
             and dependencies["input_evaluation_snapshot_digest"]
             == bytes.fromhex(str(input_receipt["input_snapshot_digest"]))
+            and dependencies["input_shortfall_cents"] == int(input_receipt["shortfall_cents"])
             and dependencies["decision_at_ms"] == command["decision_at_ms"]
             and dependencies["owner_now_ms"] == command["owner_now_ms"]
             and dependencies["current_event_sequence"] == current_event_sequence
@@ -4470,11 +4592,27 @@ class FinancialOwner:
         )
         require_binding(
             dependencies["supporting_evidence"] == evidence_bindings_wire
-            and dependencies["query_observations"] == query_observations,
+            and dependencies["query_observations"] == query_observations
+            and dependencies["correction_paid"] == correction_paid,
             "correction_read_set_binding",
         )
+        # Lean requests only the unpaid balance no earlier correction request still asks for, less
+        # what linked payments paid on it: min(claim, max(input shortfall - unpaid, 0)) (B2, H1).
+        paid = {entry["action_id"]: entry["paid_cents"] for entry in correction_paid}
+        outstanding = sum(
+            max(int(requested) - paid.get(action_ref, 0), 0)
+            for action_ref, requested in connection.execute(
+                "SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions "
+                "WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST'",
+                (obligation_id,),
+            )
+        )
+        action_amount = int(action["amount_cents"])
         require_binding(
-            action["obligation_id"] == obligation_id and action["currency"] == self.config.currency,
+            action["obligation_id"] == obligation_id
+            and action["currency"] == self.config.currency
+            and action_amount
+            == min(expected_claim["amount_cents"], max(int(input_receipt["shortfall_cents"]) - outstanding, 0)),
             "correction_action_binding",
         )
 
@@ -4501,7 +4639,7 @@ class FinancialOwner:
         expected_determination_digest = _digest(_ACTION_DOMAIN, _canonical(determination_payload))
         action_payload = {
             "action_id": action_id,
-            "amount_cents": expected_claim["amount_cents"],
+            "amount_cents": action_amount,
             "claim_id": str(command["claim_id"]),
             "currency": self.config.currency,
             "determination_id": determination_id,
@@ -4513,13 +4651,8 @@ class FinancialOwner:
             "revision": resulting_revision,
         }
         action_payload_digest = _digest(_ACTION_DOMAIN, _canonical(action_payload))
+        require_binding(action["payload_digest"] == action_payload_digest, "correction_digest_binding")
         action_idempotency_key = _digest(_IDEMPOTENCY_DOMAIN, action_id.encode("ascii"))
-        require_binding(
-            mutation["determination_digest"] == expected_determination_digest
-            and action["payload_digest"] == action_payload_digest
-            and mutation["action_idempotency_key"] == action_idempotency_key,
-            "correction_digest_binding",
-        )
         prior_case = connection.execute(
             "SELECT * FROM cases WHERE case_id=? AND obligation_id=?",
             (case_record["case_id"], obligation_id),
@@ -4784,8 +4917,9 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "offset_claim_missing")
         if decision_at_ms is None and decision_time_required:
             _fail(FinancialInputError, "decision_time_required")
-        decision_time = self._now() if decision_at_ms is None else decision_at_ms
-        _time(decision_time, "decision_time")
+        decision_time = self._now() if decision_at_ms is None else _time(decision_at_ms, "decision_time")
+        if decision_time > self._now():  # a future decision would hold the clock ahead of every later write
+            _fail(FinancialInputError, "decision_time_future")
         _evaluation_row, evaluation_receipt, input_result_digest = self._validate_evaluation_reference(
             connection,
             obligation,
@@ -5050,6 +5184,7 @@ class FinancialOwner:
                     "decision_at_ms": decision_time,
                     "owner_now_ms": owner_now_ms,
                 }
+                correction_paid = _correction_paid(connection, str(obligation["obligation_id"]))
                 request = financial_engine.encode_correction_transition_request(
                     snapshot=snapshot,
                     command=command,
@@ -5057,6 +5192,7 @@ class FinancialOwner:
                     query_observations=query_observations,
                     current_event_sequence=current_event_sequence,
                     previous_history_head=previous_history_head,
+                    correction_paid=correction_paid,
                 )
                 execution = financial_engine.run_correction_transition_v1(
                     configured_release,
@@ -5090,6 +5226,8 @@ class FinancialOwner:
                     "CHRONOLOGY": (FinancialIntegrityError, "evaluation_chronology"),
                     "QUERY_OBSERVATION_INVALID": (FinancialIntegrityError, "correction_read_set_invalid"),
                     "INPUT_SNAPSHOT_MISSING": (FinancialIntegrityError, "correction_input_snapshot_missing"),
+                    "NO_SHORTFALL": (FinancialConflictError, "correction_no_shortfall"),
+                    "NO_REQUESTABLE_BALANCE": (FinancialConflictError, "correction_no_requestable_balance"),
                     "CAPACITY": (FinancialIntegrityError, "history_capacity"),
                 }
                 error_type, error_code = rejected_errors.get(
@@ -5110,6 +5248,7 @@ class FinancialOwner:
                 query_observations=query_observations,
                 current_event_sequence=current_event_sequence,
                 previous_history_head=previous_history_head,
+                correction_paid=correction_paid,
                 transition_result=transition_result,
                 financial_engine=financial_engine,
                 semantic=semantic,
@@ -5207,7 +5346,6 @@ class FinancialOwner:
                 _fail(FinancialIntegrityError, "report_supersedes_required")
             _id(supersedes, "supersedes")
         requested_event_time = None if event_at_ms is None else _time(event_at_ms, "reporting_event")
-        received_at_ms = self._now()
         evidence_fields: dict[str, Any] = {
             "evidence_id": evidence_ref,
             "item_id": item_id,
@@ -5239,12 +5377,12 @@ class FinancialOwner:
                     _fail(FinancialConflictError, "evidence_identity_conflict")
                 return {"status": "DUPLICATE", "report_id": report_id, **self._projection_for_row(obligation)}
             self._check_revision(obligation, expected_revision)
-            event_time = received_at_ms if requested_event_time is None else requested_event_time
+            event_time = self._now() if requested_event_time is None else requested_event_time
             evidence = self._new_evidence(
                 **evidence_fields,
                 applicable_at_ms=event_time,
                 event_at_ms=event_time,
-                received_at_ms=received_at_ms,
+                received_at_ms=self._now(),
             )
             if correction:
                 prior = connection.execute("SELECT * FROM evidence WHERE evidence_id=?", (supersedes,)).fetchone()
@@ -5850,288 +5988,154 @@ class FinancialOwner:
                 _fail(FinancialIntegrityError, "decision_package_size")
             return package
 
-    def _correction_followup_event(self, obligation_id: str, action_id: str) -> dict[str, Any]:
-        found: dict[str, Any] | None = None
-        with self._read_snapshot() as connection:
-            rows = connection.execute(
-                "SELECT event_sequence,payload_json,previous_head FROM financial_events "
-                "WHERE aggregate_type='OBLIGATION' AND aggregate_id=? "
-                "AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence DESC",
-                (obligation_id,),
-            )
-            for row in rows:
-                payload = _stored_object(row["payload_json"], "correction_followup_event")
-                if payload.get("action_id") != action_id:
-                    continue
-                if found is not None:
-                    _fail(FinancialIntegrityError, "correction_followup_duplicate")
-                followup = payload.get("correction_followup")
-                found = {
-                    "event_sequence": int(row["event_sequence"]),
-                    "previous_head": _hex(bytes(row["previous_head"])),
-                    "payload": payload,
-                    "followup": followup if type(followup) is dict else None,
-                }
-        if found is None:
-            _fail(FinancialIntegrityError, "correction_followup_missing")
-        return found
-
     def _correction_followup_status(
         self,
-        event_record: Mapping[str, Any],
+        connection: sqlite3.Connection,
         package: Mapping[str, Any],
-    ) -> str:
-        followup = event_record.get("followup")
-        if type(followup) is not dict:
-            return "REVIEW_REQUIRED"
-        expected_fields = {
-            "contract", "work_id", "determination_id", "source", "artifact", "control_pack",
-            "authority", "input_evaluation", "result_evaluation", "determination_digest",
-            "case_status", "action_status", "outbox_status", "supporting_evidence",
-            "dependency_families", "read_observations", "outputs",
-        }
-        if set(followup) != expected_fields or followup.get("contract") != _CORRECTION_FOLLOWUP_CONTRACT:
-            return "REVIEW_REQUIRED"
-        source = followup.get("source")
-        artifact = followup.get("artifact")
-        input_evaluation = followup.get("input_evaluation")
-        result_evaluation = followup.get("result_evaluation")
-        expected_pack = followup.get("control_pack")
-        expected_authority = followup.get("authority")
-        observations = followup.get("read_observations")
-        payload = event_record.get("payload")
-        event_sequence = event_record.get("event_sequence")
-        previous_head = event_record.get("previous_head")
-        if any(
-            type(value) is not dict
-            for value in (source, artifact, input_evaluation, result_evaluation, expected_pack, expected_authority, observations, payload)
-        ):
-            return "REVIEW_REQUIRED"
-        if (
-            set(source) != {"action_id", "outbox_action_id", "case_id", "resulting_evaluation_id", "event_sequence"}
-            or set(artifact) != {"contract", "version", "sha256"}
-            or set(input_evaluation) != {"evaluation_id", "revision", "result_digest", "receipt_digest"}
-            or set(result_evaluation) != {"evaluation_id", "revision", "result_digest", "receipt_digest"}
-            or set(expected_pack) != {"pack_id", "version", "digest"}
-            or set(expected_authority) != {"authority_id", "epoch", "digest"}
-            or set(observations) != set(_CORRECTION_FOLLOWUP_READ_OBSERVATIONS)
-            or followup.get("dependency_families") != list(_CORRECTION_FOLLOWUP_DEPENDENCIES)
-            or followup.get("outputs") != ["MIRROR_EXPLANATION", "STATE_REPORT", "CORPORATE_SUPPORT"]
-            or type(event_sequence) is not int
-            or not _is_upper_hex128(previous_head)
-        ):
-            return "REVIEW_REQUIRED"
-        from app import right_rail_financial_engine as financial_engine
+        item_id: str,
+        sequence: int,
+        followup: Any,
+        artifact: Any,
+    ) -> tuple[str, list[str]]:
+        """Derive which dependency keys of one committed correction moved, from its stored basis and later history.
 
-        is_digest = _is_upper_hex128
+        REOPENED iff a later event touches a key and re-reading that key at head gives a different value.
+        An unknown event kind, stored family or engine, or a moved key no later event explains, is REVIEW_REQUIRED.
+        """
 
-        supporting_evidence = followup.get("supporting_evidence")
-        if (
-            type(followup.get("work_id")) is not str
-            or type(source.get("action_id")) is not str
-            or type(source.get("case_id")) is not str
-            or type(source.get("resulting_evaluation_id")) is not str
-            or type(input_evaluation.get("evaluation_id")) is not str
-            or type(input_evaluation.get("revision")) is not int
-            or input_evaluation["revision"] < 0
-            or not is_digest(input_evaluation.get("result_digest"))
-            or not is_digest(input_evaluation.get("receipt_digest"))
-            or type(result_evaluation.get("revision")) is not int
-            or result_evaluation["revision"] < 0
-            or not is_digest(result_evaluation.get("result_digest"))
-            or not is_digest(result_evaluation.get("receipt_digest"))
-            or type(expected_pack.get("pack_id")) is not str
-            or type(expected_pack.get("version")) is not int
-            or expected_pack["version"] < 1
-            or not is_digest(expected_pack.get("digest"))
-            or type(expected_authority.get("authority_id")) is not str
-            or type(expected_authority.get("epoch")) is not int
-            or expected_authority["epoch"] < 1
-            or not is_digest(expected_authority.get("digest"))
-            or not is_digest(followup.get("determination_digest"))
-            or type(followup.get("case_status")) is not str
-            or type(supporting_evidence) is not list
-            or any(
-                type(value) is not dict
-                or set(value) != {"evidence_id", "record_digest"}
-                or type(value["evidence_id"]) is not str
-                or not is_digest(value["record_digest"])
-                for value in supporting_evidence
-            )
-        ):
-            return "REVIEW_REQUIRED"
-        if (
-            artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
-            or type(artifact.get("version")) is not int
-            or artifact.get("version") != 1
-            or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
-            or source.get("action_id") != payload.get("action_id")
-            or source.get("outbox_action_id") != payload.get("action_id")
-            or source.get("resulting_evaluation_id") != payload.get("evaluation_id")
-            or source.get("event_sequence") != event_sequence
-            or result_evaluation.get("evaluation_id") != payload.get("evaluation_id")
-            or followup.get("work_id") != source.get("action_id")
-            or followup.get("determination_id") != payload.get("determination_id")
-            or followup.get("action_status") != "READY"
-            or followup.get("outbox_status") != "READY"
-        ):
-            return "REVIEW_REQUIRED"
-        for key, predicate, subject in (
-            ("action_id", "ACTION_ID", source.get("action_id")),
-            ("determination_id", "DETERMINATION_ID", followup.get("determination_id")),
-            ("evaluation_consumed", "EVALUATION_CONSUMED", input_evaluation.get("evaluation_id")),
-        ):
-            observation = observations[key]
+        try:
             if (
-                type(observation) is not dict
-                or set(observation) != {
-                    "predicate", "subject", "complete", "match_count", "result_identity",
-                    "version_sequence", "version_head",
-                }
-                or observation.get("predicate") != predicate
-                or observation.get("subject") != subject
-                or observation.get("complete") is not True
-                or observation.get("match_count") != 0
-                or observation.get("result_identity") is not None
-                or observation.get("version_sequence") != event_sequence - 1
-                or observation.get("version_head") != previous_head
+                artifact is None
+                or followup["contract"] != _CORRECTION_FOLLOWUP_CONTRACT
+                or followup["dependency_families"] != list(_CORRECTION_FOLLOWUP_DEPENDENCIES)
             ):
-                return "REVIEW_REQUIRED"
-        current_evaluation = package.get("evaluation_receipt")
-        current_pack = package.get("control_pack")
-        current_determination = package.get("current_determination")
-        current_action = package.get("current_action")
-        current_case = package.get("case")
-        obligation = package.get("obligation")
-        if any(
-            type(value) is not dict
-            for value in (
-                source,
-                result_evaluation,
-                expected_pack,
-                expected_authority,
-                current_evaluation,
-                current_pack,
-                current_determination,
-                current_action,
-                current_case,
-                obligation,
-            )
-        ):
-            return "REVIEW_REQUIRED"
-        acknowledgment = current_action.get("acknowledgment")
-        current_authority = current_evaluation.get("authority")
-        if type(acknowledgment) is not dict or type(current_authority) is not dict:
-            return "REVIEW_REQUIRED"
-        current_evidence = current_evaluation.get("evidence_bindings")
-        expected_evidence = supporting_evidence
-        same = (
-            followup.get("work_id") == source.get("action_id")
-            and current_action.get("action_id") == source.get("action_id")
-            and current_action.get("determination_id") == followup.get("determination_id")
-            and current_action.get("kind") == "CORRECTION_PAYMENT_REQUEST"
-            and current_action.get("status") == followup.get("action_status")
-            and acknowledgment.get("status") == followup.get("outbox_status")
-            and acknowledgment.get("reference") is None
-            and acknowledgment.get("attempt") == 0
-            and current_case.get("case_id") == source.get("case_id")
-            and current_case.get("status") == followup.get("case_status")
-            and obligation.get("revision") == result_evaluation.get("revision")
-            and current_evaluation.get("evaluation_id") == result_evaluation.get("evaluation_id")
-            and current_evaluation.get("revision") == result_evaluation.get("revision")
-            and current_evaluation.get("result_digest") == result_evaluation.get("result_digest")
-            and current_evaluation.get("receipt_digest") == result_evaluation.get("receipt_digest")
-            and current_pack.get("pack_id") == expected_pack.get("pack_id")
-            and current_pack.get("version") == expected_pack.get("version")
-            and current_pack.get("digest") == expected_pack.get("digest")
-            and current_authority.get("authority_id") == expected_authority.get("authority_id")
-            and current_authority.get("epoch") == expected_authority.get("epoch")
-            and current_authority.get("digest") == expected_authority.get("digest")
-            and current_determination.get("determination_id") == followup.get("determination_id")
-            and current_determination.get("determination_digest") == followup.get("determination_digest")
-            and current_determination.get("input_evaluation_id") == input_evaluation.get("evaluation_id")
-            and current_determination.get("input_evaluation_result_digest") == input_evaluation.get("result_digest")
-            and current_evidence == expected_evidence
-        )
-        return "CURRENT" if same else "REOPENED"
+                return "REVIEW_REQUIRED", []
+            obligation_id, work_id = package["obligation"]["obligation_id"], followup["work_id"]
+            pack, authority, determination = followup["control_pack"], followup["authority"], package["current_determination"]
+            delivery = connection.execute(
+                "SELECT a.status,o.status FROM actions a JOIN action_outbox o USING(action_id) WHERE a.action_id=?", (work_id,)
+            ).fetchone()
+            moved = {
+                key
+                for key, value_moved in (
+                    (("RULE", f"RULE({pack['pack_id']})"), {k: package["control_pack"][k] for k in pack} != pack),
+                    (("AUTHORITY", f"AUTHORITY({authority['authority_id']})"), package["evaluation_receipt"]["authority"] != authority),
+                    (
+                        ("DETERMINATION", f"COLLECTION(DETERMINATION, {obligation_id})"),
+                        (determination["determination_id"], determination["determination_digest"])
+                        != (followup["determination_id"], followup["determination_digest"]),
+                    ),
+                    (
+                        ("DELIVERY_REJECTED", f"COLLECTION(DELIVERY_REJECTED, {work_id})"),
+                        delivery is None or not {*delivery} <= {"READY", "ACKNOWLEDGED"},
+                    ),
+                )
+                if value_moved
+            }
+            bound = {value["evidence_id"] for value in followup["supporting_evidence"]}
+            for evidence_id, kind in connection.execute(  # not new facts: the payment this correction requested, and a
+                # re-sent confirmation that made no payment or conflict of its own (the checker binds the label)
+                "SELECT e.evidence_id,e.kind FROM evidence e WHERE e.item_id=:item AND NOT (e.kind='PAYMENT_CONFIRMATION' AND ("
+                "EXISTS (SELECT 1 FROM payments p JOIN financial_events f ON json_extract(f.payload_json,'$.payment_id')=p.payment_id "
+                "WHERE p.evidence_id=e.evidence_id AND f.aggregate_type='OBLIGATION' AND f.aggregate_id=:obligation "
+                "AND f.kind='PAYMENT_RECEIVED' AND json_extract(f.payload_json,'$.pays_action_id')=:work) "
+                "OR NOT EXISTS (SELECT 1 FROM payments WHERE evidence_id=e.evidence_id) "
+                "AND NOT EXISTS (SELECT 1 FROM financial_conflicts WHERE candidate_evidence_id=e.evidence_id) "
+                "AND EXISTS (SELECT 1 FROM financial_events f WHERE f.aggregate_type='OBLIGATION' AND f.aggregate_id=:obligation "
+                "AND f.kind='PAYMENT_DUPLICATE_EVIDENCE' AND json_extract(f.payload_json,'$.candidate_evidence_id')=e.evidence_id)))",
+                {"item": item_id, "obligation": obligation_id, "work": work_id},
+            ):
+                if evidence_id not in bound:
+                    family = _EVIDENCE_COLLECTION[kind]
+                    moved.add((family, f"COLLECTION({family}, {item_id})"))
+            touched: set[str] = set()
+            for kind, foreign in connection.execute(
+                "SELECT DISTINCT kind,aggregate_type='OBLIGATION' AND aggregate_id<>? FROM financial_events WHERE event_sequence>?",
+                (obligation_id, sequence),
+            ):
+                families = _FOLLOWUP_TOUCHES[kind]
+                if not foreign:
+                    touched.update(families)
+        except (KeyError, TypeError):
+            return "REVIEW_REQUIRED", []
+        if any(family not in touched for family, _ in moved):
+            return "REVIEW_REQUIRED", []
+        changed = sorted(key for _, key in moved)
+        return ("REOPENED" if changed else "CURRENT"), changed
 
     def correction_followup_outputs(self, item_id: str, action_id: str) -> dict[str, Any]:
         """Read deterministic Mirror, report, and recipient-safe support views for one accepted correction."""
 
         _id(action_id, "action_id")
-        package = self.decision_package(item_id)
-        obligation = package.get("obligation")
-        if type(obligation) is not dict or type(obligation.get("obligation_id")) is not str:
-            _fail(FinancialIntegrityError, "correction_followup_obligation")
-        event = self._correction_followup_event(str(obligation["obligation_id"]), action_id)
-        followup = event["followup"]
-        status = self._correction_followup_status(event, package)
-        accepted_basis = None
-        if type(followup) is dict:
-            accepted_basis = {
-                key: followup[key]
-                for key in (
-                    "artifact", "control_pack", "authority", "input_evaluation",
-                    "result_evaluation", "dependency_families",
-                )
-                if key in followup
-            }
-        current_basis = {
-            "obligation_revision": obligation["revision"],
-            "evaluation_receipt": package.get("evaluation_receipt"),
-            "control_pack": package.get("control_pack"),
-            "current_determination": package.get("current_determination"),
-            "current_action": package.get("current_action"),
-            "case": package.get("case"),
-        }
-        explanation = {
-            "contract": "RR/FINANCIAL/CORRECTION-EXPLANATION/v1",
-            "transition": "OFFSET_REJECTED_CORRECTION_AUTHORIZED",
-            "followup_status": status,
-            "source_event_sequence": event["event_sequence"],
-            "accepted_basis": accepted_basis,
-            "current_basis": current_basis,
-            "decision_package": package,
-        }
-        report = {
-            "contract": "RR/FINANCIAL/CORRECTION-REPORT/v1",
-            "followup_status": status,
-            "source_event_sequence": event["event_sequence"],
-            "accepted_basis": accepted_basis,
-            "current_basis": current_basis,
-            "decision_package": package,
-        }
-        artifact = accepted_basis.get("artifact") if type(accepted_basis) is dict else None
         from app import right_rail_financial_engine as financial_engine
 
-        if (
-            type(artifact) is not dict
-            or set(artifact) != {"contract", "version", "sha256"}
-            or artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
-            or type(artifact.get("version")) is not int
-            or artifact.get("version") != 1
-            or artifact.get("sha256") != financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
-        ):
-            artifact = None
-        failure = {
+        with self._read_snapshot() as connection:
+            package = self.decision_package(item_id, _connection=connection)
+            found = [
+                (int(row["event_sequence"]), payload.get("correction_followup"))
+                for row in connection.execute(
+                    "SELECT event_sequence,payload_json FROM financial_events WHERE aggregate_type='OBLIGATION' "
+                    "AND aggregate_id=? AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence",
+                    (package["obligation"]["obligation_id"],),
+                )
+                if (payload := _stored_object(row["payload_json"], "correction_followup_event")).get("action_id") == action_id
+            ]
+            if len(found) != 1:
+                _fail(FinancialIntegrityError, "correction_followup_duplicate" if found else "correction_followup_missing")
+            sequence, followup = found[0]
+            accepted_basis = None
+            if type(followup) is dict:
+                accepted_basis = {
+                    key: followup[key]
+                    for key in (
+                        "artifact", "control_pack", "authority", "input_evaluation",
+                        "result_evaluation", "dependency_families",
+                    )
+                    if key in followup
+                }
+            artifact = accepted_basis.get("artifact") if type(accepted_basis) is dict else None
+            if (
+                type(artifact) is not dict
+                or set(artifact) != {"contract", "version", "sha256"}
+                or artifact.get("contract") != financial_engine.CORRECTION_TRANSITION_OPERATION
+                or type(artifact.get("version")) is not int
+                or artifact.get("version") != 1
+                or not _known_correction_engine(artifact.get("sha256"))
+            ):
+                artifact = None
+            status, changed = self._correction_followup_status(connection, package, item_id, sequence, followup, artifact)
+        view = {
+            "followup_status": status,
+            "changed_dependencies": changed,
+            "source_event_sequence": sequence,
+            "accepted_basis": accepted_basis,
+            "current_basis": {
+                "obligation_revision": package["obligation"]["revision"],
+                **{key: package[key] for key in ("evaluation_receipt", "control_pack", "current_determination", "current_action", "case")},
+            },
+            "decision_package": package,
+        }
+        explanation = {"contract": "RR/FINANCIAL/CORRECTION-EXPLANATION/v1", "transition": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", **view}
+        report = {"contract": "RR/FINANCIAL/CORRECTION-REPORT/v1", **view}
+        failure_stage, error_class = {
             "CURRENT": ("NONE", "NONE"),
             "REOPENED": ("FOLLOWUP_RECONCILIATION", "STALE_DEPENDENCY"),
             "REVIEW_REQUIRED": ("FOLLOWUP_RECONCILIATION", "UNSUPPORTED_DEPENDENCY"),
-        }
-        failure_stage, error_class = failure[status]
+        }[status]
+        pack = accepted_basis.get("control_pack") if type(accepted_basis) is dict else None
         support = {
-            "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v1",
-            "status": status,
-            "component": "FINANCIAL_CORRECTION",
-            "artifact": artifact,
-            "failure_stage": failure_stage,
-            "error_class": error_class,
-            "reproduction": {"scenario": "SYNTHETIC_CORRECTION", "real_data": False},
+            "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v2", "status": status, "component": "FINANCIAL_CORRECTION",
+            "software_version": "NONE",  # no commit or kit digest is bound to a running owner
+            "rule_version": {key: pack.get(key) for key in ("pack_id", "version", "digest")} if type(pack) is dict else "NONE",
+            "adapter_versions": {"population": _POPULATION_MANIFEST_CONTRACT, "trust_graph_source_profile": "NONE"},
+            "artifact": artifact, "failure_stage": failure_stage, "error_class": error_class, "work_ref_count": int(status != "CURRENT"),
+            "reproduction": dict(financial_engine.CORRECTION_TRANSITION_REPRODUCTION)
+            if artifact and artifact["sha256"] == _hex(financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256) else "NONE",
         }
         result = {
             "followup_status": status,
             "work_id": action_id,
-            "source_event_sequence": event["event_sequence"],
+            "source_event_sequence": sequence,
             "mirror_explanation": explanation,
             "state_report": report,
             "corporate_support": support,
@@ -6228,6 +6232,7 @@ class FinancialOwner:
         """Return the separate, versioned program-funding evidence projection."""
 
         with self._read_snapshot() as connection:
+            self._verify_funding_projection(connection)
             projections = list(
                 connection.execute(
                     "SELECT p.*,r.confirmation_class,r.evidence_status,r.recorded_at_ms,r.supersedes_receipt_id "
@@ -6314,27 +6319,9 @@ class FinancialOwner:
 
         next_revision = before_revision + 1
         record = receipt.as_record()
-        connection.execute(
-            "INSERT INTO program_funding_receipts "
-            "(receipt_id,state_id,deployment_id,program_id,period_id,currency,source_record_ref,"
-            "amount_cents,confirmation_class,evidence_status,event_at_ms,recorded_at_ms,"
-            "supersedes_receipt_id,receipt_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                receipt.receipt_id,
-                receipt.state_id,
-                receipt.deployment_id,
-                receipt.program_id,
-                receipt.period_id,
-                receipt.currency,
-                receipt.source_record_ref,
-                receipt.amount_cents,
-                receipt.confirmation_class,
-                receipt.evidence_status,
-                receipt.event_at_ms,
-                recorded_at_ms,
-                receipt.supersedes_receipt_id,
-                receipt_digest,
-            ),
+        self._insert_row(
+            connection, "program_funding_receipts",
+            {**record, "recorded_at_ms": recorded_at_ms, "receipt_digest": receipt_digest},
         )
         connection.execute(
             "INSERT INTO program_funding_projection "
@@ -6380,21 +6367,7 @@ class FinancialOwner:
         self._assert_actionable()
         if type(receipt) is not ProgramFundingReceipt:
             _fail(FinancialInputError, "program_funding_receipt_type")
-        expected_scope = (
-            self.config.state_id,
-            self.config.deployment_id,
-            self.config.program_id,
-            self.config.period_id,
-            self.config.currency,
-        )
-        receipt_scope = (
-            receipt.state_id,
-            receipt.deployment_id,
-            receipt.program_id,
-            receipt.period_id,
-            receipt.currency,
-        )
-        if receipt_scope != expected_scope:
+        if any(getattr(receipt, key) != value for key, value in self._scope_value().items()):
             _fail(FinancialInputError, "program_funding_scope")
         with self._write() as connection:
             result_status, result_receipt = self._record_program_funding_receipt_in_transaction(
@@ -7192,27 +7165,6 @@ class FinancialOwner:
         if owner is None:
             _fail(FinancialContinuityError, "continuity_restore_owner")
         return owner
-
-    @classmethod
-    def restore_test_continuity(
-        cls,
-        *,
-        package_bytes: bytes,
-        recovered_path: Path,
-        trusted_authority: SyntheticTrustedAuthority | None,
-        clock: FinancialClock | None = None,
-        correction_transition_release: object | None = None,
-    ) -> "FinancialOwner":
-        """Restore into a separate non-live TEST owner for synthetic continuation."""
-
-        return cls.restore_continuity(
-            package_bytes=package_bytes,
-            recovered_path=recovered_path,
-            trusted_authority=trusted_authority,
-            clock=clock,
-            restore_mode="TEST",
-            correction_transition_release=correction_transition_release,
-        )
 
     def _checker_expectations(self) -> dict[str, Any]:
         """This Owner's trusted identity, as the independent checker expects it."""

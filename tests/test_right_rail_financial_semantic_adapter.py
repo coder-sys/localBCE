@@ -24,14 +24,18 @@ from app import right_rail_financial_owner as owner
 from app import right_rail_financial_engine as financial_engine
 from app import right_rail_financial_semantic_adapter as adapter
 from app.right_rail_financial_owner import (
-    ControlPack,
     FinancialOwner,
     FinancialOwnerConfig,
-    PopulationItem,
     SyntheticTrustedAuthority,
 )
 from tests import rightrail_financial_expected_cases as expected
-from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
+from tests.test_right_rail_financial_acceptance import (
+    _control_pack_from_fixture,
+    _correction_transition_test_release,
+    _items_from_fixture,
+    _population_manifest_from_fixture,
+    _record_fixture_support,
+)
 
 
 EXPECTED_PROGRAM_TOTAL_CENTS = 100_000_000
@@ -95,45 +99,11 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
     def _correction_release(self) -> financial_engine.FinancialCorrectionTransitionRelease:
         # The Owner fails closed without a release (Art. V.2); success-path
-        # correction histories run the pinned E911 release, each in its own
+        # correction histories run the pinned correction release, each in its own
         # empty workspace, exactly like the acceptance fixtures.
         self.path_counter += 1
         return _correction_transition_test_release(
             workspace=Path(self.temp_dir.name) / f"correction-engine-workspace-{self.path_counter}",
-        )
-
-    @staticmethod
-    def _pack(value: expected.ControlPackExpectation) -> ControlPack:
-        return ControlPack(
-            pack_id=value.pack_id,
-            state_id=value.scope.state_id,
-            deployment_id=value.scope.deployment_id,
-            program_id=value.scope.program_id,
-            period_id=value.scope.period_id,
-            version=value.version,
-            source_refs=value.source_refs,
-            effective_start_ms=value.effective_start_ms,
-            effective_end_ms=value.effective_end_ms,
-            recorded_at_ms=value.recorded_at_ms,
-            approved_at_ms=value.approved_at_ms,
-            calculation_rule_id=value.calculation_rule_id,
-            adjustment_rule_id=value.adjustment_rule_id,
-            authorized_roles=value.authorized_roles,
-            expected_tests=value.expected_tests,
-        )
-
-    @staticmethod
-    def _items(population_id: str) -> tuple[PopulationItem, ...]:
-        return tuple(
-            PopulationItem(
-                population_id=population_id,
-                item_id=item.item_id,
-                display_label=item.display_label,
-                owed_cents=item.owed_cents,
-                due_at_ms=item.due_at_ms,
-                currency=item.currency,
-            )
-            for item in expected.PROGRAM_ITEMS
         )
 
     def _build_base(self, *, path: Path | None = None, correction: bool = False) -> FinancialOwner:
@@ -142,32 +112,11 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             correction_transition_release=self._correction_release() if correction else None,
         )
         pack_expectation = expected.CONTROL_PACK_V1
-        pack = self._pack(pack_expectation)
+        pack = _control_pack_from_fixture(pack_expectation)
         store.publish_control_pack(pack)
         manifest_fixture = expected.POPULATION_MANIFEST_V1
         authority = store.trusted_authority
-        manifest = owner.PopulationManifest(
-            manifest_id=manifest_fixture.manifest_id,
-            manifest_version=manifest_fixture.manifest_version,
-            state_id=manifest_fixture.scope.state_id,
-            deployment_id=manifest_fixture.scope.deployment_id,
-            program_id=manifest_fixture.scope.program_id,
-            period_id=manifest_fixture.scope.period_id,
-            currency=manifest_fixture.scope.currency,
-            pack_id=manifest_fixture.pack_id,
-            cutoff_ms=manifest_fixture.cutoff_ms,
-            inclusion_rules=manifest_fixture.inclusion_rules,
-            source_owner_id=manifest_fixture.source_owner_id,
-            authority_id=authority.authority_id,
-            authority_epoch=authority.epoch,
-            authority_digest=authority.digest,
-            approved_by=manifest_fixture.approved_by,
-            approval_ref=manifest_fixture.approval_ref,
-            source_id=manifest_fixture.source_id,
-            source_version=manifest_fixture.source_version,
-            source_digest=bytes.fromhex(manifest_fixture.source_digest_hex),
-            member_ids=manifest_fixture.member_ids,
-        )
+        manifest = _population_manifest_from_fixture(manifest_fixture, authority)
         store.register_population_manifest(manifest)
         store.stage_population(
             population_id=expected.POPULATION_ONE_ID,
@@ -176,23 +125,13 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             cutoff_ms=pack_expectation.effective_start_ms,
             inclusion_rules=("included:synthetic",),
             expected_count=EXPECTED_HOSPITAL_COUNT,
-            items=self._items(expected.POPULATION_ONE_ID),
+            items=_items_from_fixture(expected.PROGRAM_ITEMS, expected.POPULATION_ONE_ID),
             chunk_size=5,
         )
         store.validate_population(expected.POPULATION_ONE_ID)
         store.publish_population(expected.POPULATION_ONE_ID)
         for evidence in expected.OTHER_SUPPORT_EVIDENCE:
-            store.record_support_evidence(
-                item_id=evidence.item_id,
-                evidence_id=evidence.evidence_id,
-                common_origin_id=evidence.common_origin_id,
-                source_id=evidence.source_id,
-                source_version=evidence.source_version,
-                local_ref=evidence.local_ref,
-                applicable_at_ms=evidence.applicable_at_ms,
-                event_at_ms=evidence.event_at_ms,
-                received_at_ms=evidence.received_at_ms,
-            )
+            _record_fixture_support(store, evidence)
         return store
 
     @staticmethod
@@ -232,22 +171,12 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
     @staticmethod
     def _record_h_support(store: FinancialOwner) -> None:
-        evidence = expected.OFFSET_SUPPORT_EVIDENCE
-        store.record_support_evidence(
-            item_id=evidence.item_id,
-            evidence_id=evidence.evidence_id,
-            common_origin_id=evidence.common_origin_id,
-            source_id=evidence.source_id,
-            source_version=evidence.source_version,
-            local_ref=evidence.local_ref,
-            applicable_at_ms=evidence.applicable_at_ms,
-            event_at_ms=evidence.event_at_ms,
-            received_at_ms=evidence.received_at_ms,
-        )
+        _record_fixture_support(store, expected.OFFSET_SUPPORT_EVIDENCE)
 
     @staticmethod
     def _authorize(store: FinancialOwner, claim_id: str) -> None:
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        RightRailFinancialSemanticAdapterTests._advance_clock(store, expected.OFFSET_DECISION_MS)  # recorded when decided
         store.authorize_offset(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
@@ -261,6 +190,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
     @staticmethod
     def _reject(store: FinancialOwner, claim_id: str) -> None:
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        RightRailFinancialSemanticAdapterTests._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
         store.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
@@ -620,6 +550,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         first_claim = self._record_claim(store)
         self._record_h_support(store)
         first_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
         store.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID,
             claim_id=first_claim,
@@ -741,26 +672,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
     def test_duplicate_conflict_reversal_replacement_and_reporting_are_real_facts(self) -> None:
         store = self._build_base(correction=True)
-        self._prepare_acknowledged(store)
-        payment = expected.P2_PAYMENT_EVIDENCE
-        self._advance_clock(store, payment.event_at_ms)
-        store.record_payment_evidence(
-            item_id=payment.item_id,
-            payment_id="payment:h:p2",
-            common_origin_id=payment.common_origin_id,
-            amount_cents=EXPECTED_OFFSET_CENTS,
-            evidence_id=payment.evidence_id,
-            event_at_ms=payment.event_at_ms,
-            source_id=payment.source_id,
-            source_version=payment.source_version,
-            local_ref=payment.local_ref,
-        )
-        original = expected.REPORT_ORIGINAL_EVIDENCE
-        self._advance_clock(store, original.event_at_ms)
-        store.record_reporting_evidence(item_id=original.item_id, report_id="report:h:v1", evidence_id=original.evidence_id, event_at_ms=original.event_at_ms)
-        correction = expected.REPORT_CORRECTION_EVIDENCE
-        self._advance_clock(store, correction.event_at_ms)
-        store.record_reporting_correction(item_id=correction.item_id, report_id="report:h:v2", evidence_id=correction.evidence_id, event_at_ms=correction.event_at_ms, supersedes=original.evidence_id)
+        self._prepare_final(store)
         self._record_duplicate_conflict_reversal_replacement(store)
 
         before_hash = self._hash(store.path)
@@ -865,6 +777,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             "evaluation_id": receipt["evaluation_id"],
             "evaluation_result_digest": receipt["result_digest"],
         }
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
 
         with self.assertRaisesRegex(
             owner.FinancialIntegrityError,

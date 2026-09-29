@@ -27,5 +27,5 @@ decisions. A later policy-approved change should split them rather than treat on
 
 ## Sign-off record
 
-Reviewer: ____________________   Date: ____________________   Decision: approve / changes / G8 split / crosswalk review
+Reviewer: ____________________ Date: ____________________ Decision: approve / changes / G8 split / crosswalk review
 Notes: __________________________________________________________________________________

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, closing, redirect_stderr, redirect_stdout
+import dataclasses
+import hashlib
 import io
 import json
 from pathlib import Path
+import re
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -22,6 +26,7 @@ from app.right_rail_financial_mirror import (
 from tests.rightrail_financial_expected_cases import (
     CONTINUITY,
     CONTROL_PACK_V1,
+    CONTROL_PACK_V2,
     H_CASH_CENTS,
     H_ITEM_ID,
     H_OWED_CENTS,
@@ -30,7 +35,13 @@ from tests.rightrail_financial_expected_cases import (
     PROGRAM_ITEMS,
     UNAPPROVED_OFFSET_CENTS,
 )
-from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
+from tools.privacy_artifact_scan import scan_artifacts
+from tests.test_right_rail_financial_acceptance import (
+    _control_pack_from_fixture,
+    _correction_transition_test_release,
+    _items_from_fixture,
+    _population_manifest_from_fixture,
+)
 
 class _Clock:
     def __init__(self, value: int = 1_774_828_801_000) -> None:
@@ -75,61 +86,37 @@ class FinancialMirrorTests(unittest.TestCase):
             path.write_text(json.dumps(cli.authority_file_record(self.authority)), encoding="ascii")
         return path
 
+    def _cli_prefix(self, *, include_authority: bool = True) -> list[str]:
+        prefix = ["--database", str(self.db)]
+        if include_authority:
+            prefix += ["--authority-file", str(self._authority_file())]
+        return prefix + [
+            "--state-id", self.config.state_id,
+            "--deployment-id", self.config.deployment_id,
+            "--program-id", self.config.program_id,
+            "--period-id", self.config.period_id,
+        ]
+
+    @staticmethod
+    def _invoke_cli(args: list[str]) -> tuple[int, str, str]:
+        from tools import right_rail_financial_cli as cli
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            status = cli.main(args)
+        return status, stdout.getvalue(), stderr.getvalue()
+
+    def _invoke_cli_json(self, args: list[str]) -> tuple[int, dict[str, object], str]:
+        status, stdout, stderr = self._invoke_cli(args)
+        return status, json.loads(stdout) if stdout else {}, stderr
+
     def _populate_owner(self) -> None:
-        scope = CONTROL_PACK_V1.scope
-        pack = owner.ControlPack(
-            pack_id=CONTROL_PACK_V1.pack_id,
-            state_id=scope.state_id,
-            deployment_id=scope.deployment_id,
-            program_id=scope.program_id,
-            period_id=scope.period_id,
-            version=CONTROL_PACK_V1.version,
-            source_refs=CONTROL_PACK_V1.source_refs,
-            effective_start_ms=CONTROL_PACK_V1.effective_start_ms,
-            effective_end_ms=CONTROL_PACK_V1.effective_end_ms,
-            recorded_at_ms=CONTROL_PACK_V1.recorded_at_ms,
-            approved_at_ms=CONTROL_PACK_V1.approved_at_ms,
-            calculation_rule_id=CONTROL_PACK_V1.calculation_rule_id,
-            adjustment_rule_id=CONTROL_PACK_V1.adjustment_rule_id,
-            authorized_roles=CONTROL_PACK_V1.authorized_roles,
-            expected_tests=CONTROL_PACK_V1.expected_tests,
-        )
+        pack = _control_pack_from_fixture(CONTROL_PACK_V1)
         self.store.publish_control_pack(pack)
         manifest_fixture = POPULATION_MANIFEST_V1
-        manifest = owner.PopulationManifest(
-            manifest_id=manifest_fixture.manifest_id,
-            manifest_version=manifest_fixture.manifest_version,
-            state_id=manifest_fixture.scope.state_id,
-            deployment_id=manifest_fixture.scope.deployment_id,
-            program_id=manifest_fixture.scope.program_id,
-            period_id=manifest_fixture.scope.period_id,
-            currency=manifest_fixture.scope.currency,
-            pack_id=manifest_fixture.pack_id,
-            cutoff_ms=manifest_fixture.cutoff_ms,
-            inclusion_rules=manifest_fixture.inclusion_rules,
-            source_owner_id=manifest_fixture.source_owner_id,
-            authority_id=self.authority.authority_id,
-            authority_epoch=self.authority.epoch,
-            authority_digest=self.authority.digest,
-            approved_by=manifest_fixture.approved_by,
-            approval_ref=manifest_fixture.approval_ref,
-            source_id=manifest_fixture.source_id,
-            source_version=manifest_fixture.source_version,
-            source_digest=bytes.fromhex(manifest_fixture.source_digest_hex),
-            member_ids=manifest_fixture.member_ids,
-        )
+        manifest = _population_manifest_from_fixture(manifest_fixture, self.authority)
         self.store.register_population_manifest(manifest)
-        items = tuple(
-            owner.PopulationItem(
-                population_id=item.population_id,
-                item_id=item.item_id,
-                display_label=item.display_label,
-                owed_cents=item.owed_cents,
-                due_at_ms=item.due_at_ms,
-                currency=item.currency,
-            )
-            for item in PROGRAM_ITEMS
-        )
+        items = _items_from_fixture(PROGRAM_ITEMS, None)
         self.store.stage_population(
             population_id=items[0].population_id,
             manifest_id=manifest.manifest_id,
@@ -163,6 +150,7 @@ class FinancialMirrorTests(unittest.TestCase):
     def _prepare_action(self) -> dict[str, object]:
         self._prepare_claim()
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
+        self.clock.value = 1_774_922_399_999  # recorded when decided: a later event never commits before this one
         return self.mirror.reject_offset_and_authorize_correction(
             item_id=H_ITEM_ID,
             claim_id="claim:offset:h",
@@ -172,6 +160,20 @@ class FinancialMirrorTests(unittest.TestCase):
             evaluation_id=receipt["evaluation_id"],
             evaluation_result_digest=receipt["result_digest"],
         )
+
+    def _followup(self) -> tuple[str, list[str]]:
+        outputs = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        return outputs["followup_status"], outputs["state_report"]["changed_dependencies"]
+
+    def _assert_privacy_clean(self, package: dict) -> None:  # the scanner reports the file itself, and nothing inside it
+        directory = Path(tempfile.mkdtemp(dir=self.root))
+        (directory / "support.json").write_text(json.dumps(package, sort_keys=True), encoding="utf-8")
+        self.assertEqual(scan_artifacts(directory), ["item[000001]:unapproved_json_artifact_schema"])
+
+    def _cancel_correction(self) -> None:  # no command cancels a correction; only a raw store edit can
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            for table in ("actions", "action_outbox"):
+                connection.execute(f"UPDATE {table} SET status='CANCELLED' WHERE action_id='action:correction:h'")
 
     def test_correction_followup_outputs_resume_and_reopen_through_mirror(self) -> None:
         self._prepare_action()
@@ -187,24 +189,21 @@ class FinancialMirrorTests(unittest.TestCase):
         )
         self.assertEqual(explanation["decision_package"]["current_action"]["status"], "READY")
         support = current["corporate_support"]
-        self.assertEqual(
-            set(support),
-            {
-                "contract",
-                "status",
-                "component",
-                "artifact",
-                "failure_stage",
-                "error_class",
-                "reproduction",
+        self.assertEqual(support, {
+            "contract": "RR/FINANCIAL/CORPORATE-SUPPORT/v2", "status": "CURRENT", "component": "FINANCIAL_CORRECTION",
+            "software_version": "NONE",
+            "rule_version": {key: explanation["accepted_basis"]["control_pack"][key] for key in ("pack_id", "version", "digest")},
+            "adapter_versions": {"population": "RR/FINANCIAL/POPULATION-MANIFEST/v1", "trust_graph_source_profile": "NONE"},
+            "artifact": {
+                "contract": financial_engine.CORRECTION_TRANSITION_OPERATION, "version": 1,
+                "sha256": financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper(),
             },
-        )
-        self.assertEqual(support["status"], "CURRENT")
-        self.assertEqual(
-            support["artifact"]["sha256"],
-            financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper(),
-        )
-        support_json = json.dumps(support, sort_keys=True)
+            "failure_stage": "NONE", "error_class": "NONE", "work_ref_count": 0,
+            "reproduction": financial_engine.CORRECTION_TRANSITION_REPRODUCTION,
+        })
+        self._assert_privacy_clean(support)
+        # the fictional reproduction is the published vector's case (fixture ids), never this record
+        support_json = json.dumps({**support, "reproduction": None}, sort_keys=True)
         for private_value in (
             H_ITEM_ID,
             "action:correction:h",
@@ -213,15 +212,220 @@ class FinancialMirrorTests(unittest.TestCase):
         ):
             self.assertNotIn(private_value, support_json)
 
+        self.assertEqual(report["changed_dependencies"], [])
+        # A plain acknowledgment moves the head but no dependency value: the work stays closed.
         self.mirror.acknowledge_action("action:correction:h", "ack:correction:h:followup")
-        reopened = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
-        self.assertEqual(reopened["followup_status"], "REOPENED")
-        self.assertEqual(reopened["corporate_support"]["error_class"], "STALE_DEPENDENCY")
+        self.assertEqual(self._followup(), ("CURRENT", []))
+        # No command or event records a delivery rejection yet: a status no event explains needs review.
+        self._cancel_correction()
+        self.assertEqual(self._followup(), ("REVIEW_REQUIRED", []))
         drained = self.mirror.drain_correction_followups(limit=1)
         self.assertEqual(drained["count"], 1)
-        self.assertEqual(drained["items"][0]["followup_status"], "REOPENED")
+        review = drained["items"][0]["corporate_support"]
+        self.assertEqual((review["error_class"], review["work_ref_count"]), ("UNSUPPORTED_DEPENDENCY", 1))
+        self.assertNotIn(str(drained["items"][0]["source_event_sequence"]), json.dumps(review))  # no store counter leaves the owner
+        self._assert_privacy_clean(review)
         self.assertFalse(drained["has_more"])
         self.assertEqual(drained["skipped"], {"count": 0, "reasons": {}})
+
+    def test_hospital_h_correction_reopens_only_when_its_offset_evidence_changes(self) -> None:
+        self._prepare_action()
+        other_item_id = next(item.item_id for item in PROGRAM_ITEMS if item.item_id != H_ITEM_ID)
+
+        self.store.record_support_evidence(item_id=other_item_id, evidence_id="evidence:support:other", common_origin_id="origin:support:other")
+        self.assertEqual(self._followup(), ("CURRENT", []))
+        # This owner is scoped to period 01: the period-02 pack cannot reach H at all ...
+        with self.assertRaisesRegex(owner.FinancialIntegrityError, "period_scope"):
+            self.store.publish_control_pack(_control_pack_from_fixture(CONTROL_PACK_V2))
+        # ... and a later period-01 pack touches RULE, but H stays bound to the pack it was decided under.
+        later_pack = dataclasses.replace(
+            _control_pack_from_fixture(CONTROL_PACK_V2), pack_id="control-pack:fixture-2026-01:v2", period_id=CONTROL_PACK_V1.scope.period_id,
+        )
+        self.assertEqual(self.store.publish_control_pack(later_pack)["status"], "PUBLISHED")
+        self.assertEqual(self._followup(), ("CURRENT", []))
+        support = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        accepted = support["mirror_explanation"]["accepted_basis"]["control_pack"]
+        self.assertNotEqual(accepted["pack_id"], later_pack.pack_id)  # H is decided under the older pack, so the rule version is that pack, not the current one
+        self.assertEqual(support["corporate_support"]["rule_version"], {key: accepted[key] for key in ("pack_id", "version", "digest")})
+        self.store.record_offset_claim(
+            item_id=H_ITEM_ID, claim_id="claim:offset:h2", amount_cents=1, evidence_id="evidence:offset:claim:h2", deadline_ms=1_774_915_200_000,
+        )
+        self.assertEqual(self._followup(), ("REOPENED", [f"COLLECTION(OFFSET_EVIDENCE, {H_ITEM_ID})"]))
+        support = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")["corporate_support"]
+        self.assertEqual((support["error_class"], support["work_ref_count"]), ("STALE_DEPENDENCY", 1))
+        self._assert_privacy_clean(support)
+
+    def test_mirror_refuses_a_support_package_that_is_not_the_approved_v2_shape(self) -> None:
+        self._prepare_action()
+        good = json.loads(json.dumps(self.store.correction_followup_outputs(H_ITEM_ID, "action:correction:h")))
+        for name, edit in {
+            "software version": lambda s: s.update(software_version="abc123"),
+            "missing rule version": lambda s: s.pop("rule_version"),
+            "old contract": lambda s: s.update(contract="RR/FINANCIAL/CORPORATE-SUPPORT/v1"),
+            "another case": lambda s: s["reproduction"].update(case_id="case:other"),
+            "no reproduction for the pinned engine": lambda s: s.update(reproduction="NONE"),
+            "false is not a count of zero": lambda s: s.update(work_ref_count=False),
+            "an old affected_work with ids": lambda s: s.update(affected_work={"count": 0, "ids": [1]}),
+            "an extra top-level key": lambda s: s.update(note="member-private"),
+            "an extra reproduction key": lambda s: s["reproduction"].update(extra="x"),
+            "an extra artifact key": lambda s: s["artifact"].update(extra="x"),
+            "an extra rule version key": lambda s: s["rule_version"].update(extra="x"),
+            "an extra adapter key": lambda s: s["adapter_versions"].update(extra="x"),
+        }.items():
+            with self.subTest(name):
+                bad = json.loads(json.dumps(good))
+                edit(bad["corporate_support"])
+                with mock.patch.object(self.store, "correction_followup_outputs", return_value=bad):
+                    with self.assertRaisesRegex(FinancialMirrorContinuityError, "corporate_support_allowlist"):
+                        self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+
+    def test_the_pack_named_in_a_support_package_has_fixed_shapes_or_none(self) -> None:
+        self._prepare_action()
+        good = json.loads(json.dumps(self.store.correction_followup_outputs(H_ITEM_ID, "action:correction:h")))
+
+        def output(edit: object, *, no_basis: bool = False, rule_version: object = None) -> dict:
+            bad = json.loads(json.dumps(good))
+            for part in ("mirror_explanation", "state_report"):  # the two views must agree, so both carry the edit
+                if no_basis:
+                    bad[part]["accepted_basis"] = None
+                else:
+                    edit(bad[part]["accepted_basis"]["control_pack"])
+            if rule_version is not None:
+                bad["corporate_support"]["rule_version"] = rule_version
+            else:
+                edit(bad["corporate_support"]["rule_version"])
+            return bad
+
+        for name, edit in {
+            "a free-text pack id": lambda p: p.update(pack_id="member Jane Doe"),
+            "a bool version": lambda p: p.update(version=True),
+            "a zero version": lambda p: p.update(version=0),
+            "a short digest": lambda p: p.update(digest="AB"),
+            "a lower-case digest": lambda p: p.update(digest=p["digest"].lower()),
+        }.items():
+            with self.subTest(name), mock.patch.object(self.store, "correction_followup_outputs", return_value=output(edit)):
+                with self.assertRaisesRegex(FinancialMirrorContinuityError, "corporate_support_allowlist"):
+                    self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        with self.subTest("no accepted basis names no rule version"):
+            with mock.patch.object(self.store, "correction_followup_outputs", return_value=output(None, no_basis=True, rule_version="NONE")):
+                self.assertEqual(self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")["corporate_support"]["rule_version"], "NONE")
+            with mock.patch.object(self.store, "correction_followup_outputs", return_value=output(None, no_basis=True, rule_version=good["corporate_support"]["rule_version"])):
+                with self.assertRaisesRegex(FinancialMirrorContinuityError, "corporate_support_allowlist"):
+                    self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+
+    def test_a_failed_restore_gives_a_support_package_holding_only_its_fixed_failure_code(self) -> None:
+        with self.assertRaises(FinancialMirrorContinuityError) as mirror_failure:
+            self.mirror.restore_continuity(self.mirror.export_continuity(), self.db)
+        with self.assertRaises(owner.FinancialContinuityError) as owner_failure:
+            self.mirror.restore_continuity(b"{}", self.root / "not-a-package.sqlite")
+        for error, code in (
+            (mirror_failure.exception, "continuity_source_overwrite"), (owner_failure.exception, "continuity_package_shape"),
+            (ValueError("continuity_x member-name-private"), "UNCLASSIFIED"), (RuntimeError("continuity_Bad"), "UNCLASSIFIED"),
+            (RuntimeError("continuity_history_head"), "UNCLASSIFIED"),  # a known code from a class that is not ours
+            (owner.FinancialContinuityError("continuity_new_unlisted_code"), "UNCLASSIFIED"),  # ours, but not in the closed tuple
+            (owner.FinancialContinuityError("continuity_identity:member-name"), "UNCLASSIFIED"),
+        ):
+            support = FinancialMirror.continuity_restore_support(error)
+            self.assertEqual((support["rule_version"], support["adapter_versions"]["population"]), ("NONE", "NONE"))  # nothing was read
+            self.assertEqual(support["work_ref_count"], 0)
+            self.assertEqual((support["status"], support["component"], support["failure_stage"], support["error_class"]), ("FAILED", "CONTINUITY", "RESTORE", code))
+            self.assertNotIn("private", json.dumps(support))
+            self._assert_privacy_clean(support)
+
+    def test_a_failed_restore_carries_its_support_package_on_the_raised_error(self) -> None:
+        with self.assertRaises(FinancialMirrorContinuityError) as failure:
+            self.mirror.restore_continuity(self.mirror.export_continuity(), self.db)
+        self.assertEqual(failure.exception.corporate_support, FinancialMirror.continuity_restore_support(failure.exception))
+        self.assertEqual(failure.exception.corporate_support["error_class"], "continuity_source_overwrite")
+
+    def test_the_restore_code_list_holds_every_code_the_restore_path_can_raise(self) -> None:
+        root = Path(financial_engine.__file__).parent
+        found = set()
+        for name in ("right_rail_financial_owner.py", "right_rail_financial_mirror.py"):
+            text = (root / name).read_text(encoding="utf-8")
+            found |= set(re.findall(r'_fail\([^,]+,\s*f?"(continuity_[a-z0-9_:-]+)"', text))
+            found |= {"continuity_identity:" + sub for sub in re.findall(r'f"\{code_prefix\}:([a-z_-]+)"', text)}
+        named = {"continuity_history_head", "continuity_package_digest", "continuity_shadow_boundary", "continuity_test_boundary"}
+        self.assertTrue(found)
+        self.assertEqual({code for code in found | named if "{" not in code} - set(owner.CONTINUITY_ERROR_CODES), set())
+        self.assertEqual(len(set(owner.CONTINUITY_ERROR_CODES)), len(owner.CONTINUITY_ERROR_CODES))
+
+    def test_the_reproduction_names_a_case_in_the_pinned_vector_result(self) -> None:
+        vectors = Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
+        reproduction = financial_engine.CORRECTION_TRANSITION_REPRODUCTION
+        self.assertEqual(hashlib.sha256((vectors / "request.bin").read_bytes()).hexdigest().upper(), reproduction["vector_file_digest"])
+        self.assertIn(reproduction["case_id"].encode(), (vectors / "result.expected.bin").read_bytes())
+
+    def test_a_resent_payment_confirmation_keeps_the_correction_closed(self) -> None:
+        self._prepare_action()
+
+        payment = {"item_id": H_ITEM_ID, "event_at_ms": 1_774_828_800_000}
+        resent = self.mirror.record_payment_evidence(
+            **payment, payment_id="payment:p1:resent", common_origin_id="origin:payment:p1",
+            amount_cents=H_CASH_CENTS, evidence_id="evidence:payment:p1:resent",
+        )
+        self.assertEqual(resent["status"], "DUPLICATE")
+        self.assertEqual(self._followup(), ("CURRENT", []))
+        self.mirror.record_payment_evidence(
+            **payment, payment_id="payment:p2", common_origin_id="origin:payment:p2", amount_cents=1, evidence_id="evidence:payment:p2",
+        )
+        self.assertEqual(self._followup(), ("REOPENED", [f"COLLECTION(PAYMENT_EVIDENCE, {H_ITEM_ID})"]))
+
+    def test_correction_followup_fails_closed_on_an_unknown_event_kind(self) -> None:
+        self._prepare_action()
+        other_item_id = next(item.item_id for item in PROGRAM_ITEMS if item.item_id != H_ITEM_ID)
+        with mock.patch.dict(owner._FOLLOWUP_TOUCHES):
+            del owner._FOLLOWUP_TOUCHES["EVALUATION_RECORDED"]
+            self.store.evaluate_obligation(other_item_id)
+            outputs = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        self.assertEqual((outputs["followup_status"], outputs["state_report"]["changed_dependencies"]), ("REVIEW_REQUIRED", []))
+        self.assertEqual(outputs["corporate_support"]["error_class"], "UNSUPPORTED_DEPENDENCY")
+        self.assertEqual(self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")["followup_status"], "CURRENT")
+
+    def test_each_later_fact_about_h_reopens_its_correction_and_nothing_else_does(self) -> None:
+        payment = {"item_id": H_ITEM_ID, "event_at_ms": 1_774_828_800_000}
+        cases = {
+            "the payment the correction requested": (lambda: self.store.record_payment_evidence(
+                **payment, payment_id="payment:own", common_origin_id="origin:payment:own", amount_cents=1,
+                evidence_id="evidence:payment:own", pays_action_id="action:correction:h"), "CURRENT", None),
+            "a same-inputs re-evaluation": (lambda: self.store.evaluate_obligation(H_ITEM_ID), "CURRENT", None),
+            "a reversal of the bound payment": (lambda: self.store.reverse_payment(
+                item_id=H_ITEM_ID, payment_id="payment:p1", evidence_id="evidence:reversal:p1"), "REOPENED", "PAYMENT_EVIDENCE"),
+            "a conflicting amount for the bound origin": (lambda: self.store.record_payment_evidence(
+                **payment, payment_id="payment:p1:conflict", common_origin_id="origin:payment:p1", amount_cents=H_CASH_CENTS - 1,
+                evidence_id="evidence:payment:p1:conflict"), "REOPENED", "PAYMENT_EVIDENCE"),
+            "new support evidence on H": (lambda: self.store.record_support_evidence(
+                item_id=H_ITEM_ID, evidence_id="evidence:support:h", common_origin_id="origin:support:h"), "REOPENED", "SUPPORT_EVIDENCE"),
+            "a cancellation no event explains": (self._cancel_correction, "REVIEW_REQUIRED", None),
+        }
+        for name, (act, status, family) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                self._prepare_action()
+                act()
+                self.assertEqual(self._followup(), (status, [f"COLLECTION({family}, {H_ITEM_ID})"] if family else []))
+
+    def test_mirror_refuses_an_inconsistent_changed_dependencies_list(self) -> None:
+        self._prepare_action()
+        current = self.store.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        self.mirror._validated_correction_followup_output(current)
+        key = f"COLLECTION(PAYMENT_EVIDENCE, {H_ITEM_ID})"
+        for status, changed, report_changed in (
+            ("REOPENED", [key, "A"], None),  # unsorted
+            ("REOPENED", [key, key], None),  # repeated
+            ("REOPENED", key, None),  # not a list
+            ("REOPENED", [1], None),  # not strings
+            ("REOPENED", [], None),  # REOPENED names what moved
+            ("CURRENT", [key], None),  # CURRENT names nothing
+            ("REOPENED", [key], []),  # the explanation and the report disagree
+        ):
+            with self.subTest(status=status, changed=changed, report_changed=report_changed):
+                raw = json.loads(json.dumps(current))
+                raw["followup_status"] = raw["mirror_explanation"]["followup_status"] = raw["state_report"]["followup_status"] = status
+                raw["mirror_explanation"]["changed_dependencies"] = changed
+                raw["state_report"]["changed_dependencies"] = changed if report_changed is None else report_changed
+                with self.assertRaisesRegex(FinancialMirrorContinuityError, "^correction_followup_projection$"):
+                    self.mirror._validated_correction_followup_output(raw)
 
     def test_queries_are_bounded_and_return_references_without_raw_payloads(self) -> None:
         first = self.mirror.list_obligations(status="ALL", limit=5, offset=0)
@@ -353,6 +557,7 @@ class FinancialMirrorTests(unittest.TestCase):
                 evaluation_id=receipt["evaluation_id"],
                 evaluation_result_digest=receipt["result_digest"],
             )
+        self.clock.value = 1_774_864_800_000  # recorded when decided
         result = self.mirror.authorize_offset(
             item_id=H_ITEM_ID,
             claim_id="claim:offset:h",
@@ -378,6 +583,7 @@ class FinancialMirrorTests(unittest.TestCase):
             "evaluation_id": receipt["evaluation_id"],
             "evaluation_result_digest": receipt["result_digest"],
         }
+        self.clock.value = 1_774_922_400_000  # recorded when decided
         first = self.mirror.authorize_offset(**request)
         self.assertEqual(first["status"], "AUTHORIZED")
         after_first = self.mirror.summary()
@@ -387,7 +593,7 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
 
         with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
-            self.mirror.authorize_offset(**{**request, "decision_at_ms": request["decision_at_ms"] + 1})
+            self.mirror.authorize_offset(**{**request, "decision_at_ms": request["decision_at_ms"] - 1})
         with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
             self.mirror.authorize_offset(**{**request, "evaluation_result_digest": "0" * 128})
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
@@ -404,6 +610,7 @@ class FinancialMirrorTests(unittest.TestCase):
             "evaluation_id": receipt["evaluation_id"],
             "evaluation_result_digest": receipt["result_digest"],
         }
+        self.clock.value = 1_774_922_400_000  # recorded when decided
         first = self.mirror.reject_offset_and_authorize_correction(**request)
         self.assertEqual(first["status"], "CORRECTION_AUTHORIZED")
         after_first = self.mirror.summary()
@@ -413,7 +620,7 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
 
         with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
-            self.mirror.reject_offset_and_authorize_correction(**{**request, "decision_at_ms": request["decision_at_ms"] + 1})
+            self.mirror.reject_offset_and_authorize_correction(**{**request, "decision_at_ms": request["decision_at_ms"] - 1})
         with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
             self.mirror.reject_offset_and_authorize_correction(**{**request, "claim_id": "claim:changed:h"})
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
@@ -499,21 +706,13 @@ class FinancialMirrorTests(unittest.TestCase):
         self.mirror.verify_integrity()
 
     def test_cli_reporting_correction_default_retry_and_identity_conflicts(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
         self.mirror.record_reporting_evidence(
             item_id=H_ITEM_ID,
             report_id="report:cli:prior:h",
             evidence_id="evidence:report:cli:prior:h",
             event_at_ms=1_700_000_000_000,
         )
-        common = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
+        common = self._cli_prefix() + [
             "record-reporting-correction",
             "--item-id", H_ITEM_ID,
             "--report-id", "report:cli:correction:h",
@@ -524,15 +723,7 @@ class FinancialMirrorTests(unittest.TestCase):
             "--expected-revision", "1",
         ]
 
-        def invoke(args: list[str]) -> tuple[int, dict[str, object], str]:
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = cli.main(args)
-            output = json.loads(stdout.getvalue()) if stdout.getvalue() else {}
-            return status, output, stderr.getvalue()
-
-        status, first, stderr = invoke(common)
+        status, first, stderr = self._invoke_cli_json(common)
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(first["status"], "RECORDED")
@@ -540,7 +731,7 @@ class FinancialMirrorTests(unittest.TestCase):
         before_summary = self.mirror.summary()
         before_row = next(row for row in before["evidence_references"] if row["evidence_id"] == "evidence:report:cli:correction:h")
 
-        status, duplicate, stderr = invoke(common)
+        status, duplicate, stderr = self._invoke_cli_json(common)
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(duplicate["status"], "DUPLICATE")
@@ -548,10 +739,10 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(next(row for row in after["evidence_references"] if row["evidence_id"] == "evidence:report:cli:correction:h")["record_digest"], before_row["record_digest"])
         self.assertEqual(self.mirror.summary()["sequence"], before_summary["sequence"])
 
-        status, _changed_time, stderr = invoke(common + ["--event-at-ms", str(int(before_row["event_at_ms"]) + 1)])
+        status, _changed_time, stderr = self._invoke_cli_json(common + ["--event-at-ms", str(int(before_row["event_at_ms"]) + 1)])
         self.assertEqual(status, 2)
         self.assertEqual(stderr, "ERROR:evidence_identity_conflict\n")
-        status, _changed_payload, stderr = invoke(
+        status, _changed_payload, stderr = self._invoke_cli_json(
             [value if value != "report:cli:correction:h" else "report:cli:changed:h" for value in common]
         )
         self.assertEqual(status, 2)
@@ -560,8 +751,6 @@ class FinancialMirrorTests(unittest.TestCase):
         self.mirror.verify_integrity()
 
     def test_v5_evaluation_receipt_is_mirror_and_cli_reference(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
         self._prepare_claim()
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
         self.assertEqual(receipt["schema"], "RR/FINANCIAL/MIRROR/v1")
@@ -569,24 +758,9 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(receipt["evaluation_result_digest"], receipt["result_digest"])
         self.assertNotIn("raw_evidence", receipt)
         self.assertNotIn("payload", receipt)
-        common = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
-        ]
+        common = self._cli_prefix()
 
-        def invoke(args: list[str]) -> tuple[int, dict[str, object], str]:
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = cli.main(args)
-            output = json.loads(stdout.getvalue()) if stdout.getvalue() else {}
-            return status, output, stderr.getvalue()
-
-        status, cli_receipt, stderr = invoke(common + ["current-evaluation-receipt", "--item-id", H_ITEM_ID])
+        status, cli_receipt, stderr = self._invoke_cli_json(common + ["current-evaluation-receipt", "--item-id", H_ITEM_ID])
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(cli_receipt["evaluation_id"], receipt["evaluation_id"])
@@ -594,7 +768,7 @@ class FinancialMirrorTests(unittest.TestCase):
 
         cli_engine_workspace = self.root / "cli-correction-engine-workspace"
         cli_engine_workspace.mkdir()
-        status, command, stderr = invoke(
+        status, command, stderr = self._invoke_cli_json(
             common
             + [
                 "--correction-transition-executable", str(self.store.correction_transition_release.executable),
@@ -617,17 +791,9 @@ class FinancialMirrorTests(unittest.TestCase):
         self.mirror.verify_integrity()
 
     def test_cli_authorize_offset_success_retry_and_binding_conflict(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
         self._prepare_claim()
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
-        common = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
+        common = self._cli_prefix() + [
             "authorize-offset",
             "--item-id", H_ITEM_ID,
             "--claim-id", "claim:offset:h",
@@ -640,20 +806,13 @@ class FinancialMirrorTests(unittest.TestCase):
             "--evaluation-result-digest", str(receipt["result_digest"]),
         ]
 
-        def invoke(args: list[str]) -> tuple[int, dict[str, object], str]:
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = cli.main(args)
-            return status, json.loads(stdout.getvalue()) if stdout.getvalue() else {}, stderr.getvalue()
-
-        status, first, stderr = invoke(common)
+        status, first, stderr = self._invoke_cli_json(common)
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(first["status"], "AUTHORIZED")
         after_first = self.mirror.summary()
 
-        status, duplicate, stderr = invoke(common)
+        status, duplicate, stderr = self._invoke_cli_json(common)
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(duplicate["status"], "DUPLICATE")
@@ -661,23 +820,26 @@ class FinancialMirrorTests(unittest.TestCase):
 
         changed = list(common)
         changed[changed.index("--decision-at-ms") + 1] = "1774864800001"
-        status, _changed, stderr = invoke(changed)
+        status, _changed, stderr = self._invoke_cli_json(changed)
         self.assertEqual(status, 2)
         self.assertEqual(stderr, "ERROR:determination_request_conflict\n")
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
         self.mirror.verify_integrity()
 
+    def test_cli_payment_link_reaches_the_owner(self) -> None:
+        sequence = self.mirror.summary()["sequence"]
+        status, _output, stderr = self._invoke_cli(self._cli_prefix() + [
+            "record-payment", "--item-id", H_ITEM_ID, "--payment-id", "payment:cli:h", "--common-origin-id", "origin:cli:h",
+            "--amount-cents", "1", "--evidence-id", "evidence:cli:h", "--event-at-ms", "1",
+            "--expected-revision", str(self.mirror.obligation_detail(H_ITEM_ID)["revision"]), "--pays-action-id", "action:cli:none",
+        ])
+        self.assertEqual((status, stderr), (2, "ERROR:payment_request_unknown\n"))
+        self.assertEqual(self.mirror.summary()["sequence"], sequence)
+
     def test_cli_mutations_require_explicit_actor_and_expected_revision(self) -> None:
         from tools import right_rail_financial_cli as cli
 
-        common = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
-        ]
+        common = self._cli_prefix()
         actor = ["--actor-id", "synthetic-official", "--actor-role", "FINANCE_DECISION", "--expected-revision", "1"]
         offset = ["--item-id", H_ITEM_ID, "--claim-id", "claim:offset:h", "--evaluation-id", "evaluation:h", "--evaluation-result-digest", "0" * 64]
         commands = {
@@ -714,9 +876,8 @@ class FinancialMirrorTests(unittest.TestCase):
 
         # The supplied actor and revision reach the Mirror exactly, for acknowledge too.
         with mock.patch.object(FinancialMirror, "acknowledge_action", return_value={"status": "STUB"}) as acknowledge:
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                self.assertEqual(cli.main(common + ["acknowledge-action", "--action-id", "action:h", "--acknowledgment-ref", "ack:h",
-                                                    "--actor-id", "synthetic-receiver", "--actor-role", "RECEIVER", "--expected-revision", "7"]), 0)
+            self.assertEqual(self._invoke_cli(common + ["acknowledge-action", "--action-id", "action:h", "--acknowledgment-ref", "ack:h",
+                                                       "--actor-id", "synthetic-receiver", "--actor-role", "RECEIVER", "--expected-revision", "7"])[0], 0)
         acknowledge.assert_called_once_with(
             "action:h", "ack:h", actor_id="synthetic-receiver", actor_role="RECEIVER", expected_revision=7
         )
@@ -725,10 +886,9 @@ class FinancialMirrorTests(unittest.TestCase):
         stale = list(commands["record-payment-evidence"])
         stale[stale.index("--expected-revision") + 1] = str(revision - 1)
         sequence = self.mirror.summary()["sequence"]
-        stderr = io.StringIO()
-        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
-            self.assertEqual(cli.main(common + ["record-payment-evidence"] + stale), 2)
-        self.assertEqual(stderr.getvalue(), "ERROR:obligation_revision_conflict\n")
+        status, _output, stderr = self._invoke_cli(common + ["record-payment-evidence"] + stale)
+        self.assertEqual(status, 2)
+        self.assertEqual(stderr, "ERROR:obligation_revision_conflict\n")
         self.assertEqual(self.mirror.summary()["sequence"], sequence)
 
     def test_population_status_reports_manifest_completeness_without_roster(self) -> None:
@@ -882,43 +1042,16 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(verified["package_digest"], json.loads(package.decode("ascii"))["package_digest"])
 
     def test_cli_requires_explicit_trusted_authority_file(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        argv = [
-            "--database", str(self.db),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
-            "summary",
-        ]
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            status = cli.main(argv)
+        status, stdout, stderr = self._invoke_cli(self._cli_prefix(include_authority=False) + ["summary"])
         self.assertEqual(status, 2)
-        self.assertEqual(stdout.getvalue(), "")
-        self.assertEqual(stderr.getvalue(), "ERROR:trusted_authority_missing\n")
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "ERROR:trusted_authority_missing\n")
 
     def test_cli_summary_is_local_and_redacted(self) -> None:
-        from tools import right_rail_financial_cli as cli
-
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        argv = [
-            "--database", str(self.db),
-            "--authority-file", str(self._authority_file()),
-            "--state-id", self.config.state_id,
-            "--deployment-id", self.config.deployment_id,
-            "--program-id", self.config.program_id,
-            "--period-id", self.config.period_id,
-            "summary",
-        ]
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            status = cli.main(argv)
+        status, stdout, stderr = self._invoke_cli(self._cli_prefix() + ["summary"])
         self.assertEqual(status, 0)
-        self.assertEqual(stderr.getvalue(), "")
-        summary = json.loads(stdout.getvalue())
+        self.assertEqual(stderr, "")
+        summary = json.loads(stdout)
         self.assertEqual(summary["schema"], "RR/FINANCIAL/MIRROR/v1")
         self.assertFalse(summary["dispatch_enabled"])
         self.assertFalse(summary["egress_enabled"])
@@ -932,7 +1065,8 @@ class FinancialMirrorTests(unittest.TestCase):
 
         def tag(value: object) -> object:
             if type(value) is dict:
-                return {**{key: tag(item) for key, item in value.items()}, marker: marker}
+                # the support package is refused, not projected, when it carries an extra key: its own test covers that
+                return {**{key: item if key == "corporate_support" else tag(item) for key, item in value.items()}, marker: marker}
             return [tag(item) for item in value] if type(value) is list else value
 
         def tagging(name: str) -> object:

@@ -12,11 +12,13 @@ import sys
 from typing import NoReturn
 
 from app.mirror import nc_medicaid_fhir_profile as nc_profile
+from app.mirror.nc_medicaid_fhir_independent import NcMedicaidFhirVerifier
 from app.mirror import provider_evidence_export_v1 as evidence_export
 from app.mirror import provider_evidence_export_v1_independent as evidence_export_independent
 from app.mirror import provider_trust_graph as graph_producer
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror.error_boundary import raise_redacted
+from app.mirror.source_admission import SourceAdmissionService
 
 
 class ProviderTrustGraphReadModelV1Error(ValueError):
@@ -623,34 +625,53 @@ def compare_read_models_v1(
     )
 
 
-def _add_cli_selection_arguments(parser: argparse.ArgumentParser, *, prefix: str = "") -> None:
-    parser.add_argument(f"--{prefix}artifact", required=True)
-    parser.add_argument(f"--{prefix}request", required=True)
-    parser.add_argument(f"--{prefix}operation-ref", required=True)
+def _add_cli_selection_arguments(parser: argparse.ArgumentParser, *, prefix: str = "", required: bool = True) -> None:
+    inputs = parser.add_mutually_exclusive_group(required=required)
+    inputs.add_argument(f"--{prefix}artifact", help="local graph artifact path")
+    inputs.add_argument(f"--{prefix}source-envelope", help="local synthetic NC FHIR capture path")
+    parser.add_argument(f"--{prefix}capture-context", nargs=6, metavar=("SUBJECT", "CREDENTIAL", "ENROLLMENT", "LOCATOR", "OBSERVED", "FETCHED"), help="independently supplied expected capture context; required with source-envelope")
+    parser.add_argument(f"--{prefix}request", required=required)
+    parser.add_argument(f"--{prefix}operation-ref", required=required)
 
 
-def load_selection(artifact_path: str, request_path: str, operation_ref: str) -> ProviderTrustGraphReadSelectionV1:
-    """Read one bounded local artifact/request pair into the NC Medicaid graph selection."""
+def load_selection(artifact_path: str, request_path: str, operation_ref: str, *, capture_context: nc_profile.DynamicCaptureContext | None = None) -> ProviderTrustGraphReadSelectionV1:
+    """Load a bounded artifact, or admit an envelope against caller-owned context."""
     try:
-        artifact = graph_producer._read_bounded(artifact_path, graph_independent.MAX_ARTIFACT_BYTES)
         request = graph_producer._read_bounded(request_path, evidence_export.MAX_REQUEST_BYTES)
+        profile = nc_profile.NC_MEDICAID_GRAPH_PROFILE
+        if capture_context is None:
+            artifact = graph_producer._read_bounded(artifact_path, graph_independent.MAX_ARTIFACT_BYTES)
+        else:
+            profile = nc_profile.NC_MEDICAID_PROFILE.graph_profile_for_context(capture_context)
+            envelope = graph_producer._read_bounded(artifact_path, nc_profile.NC_MEDICAID_PROFILE.transport_caps["max_envelope_bytes"])
+            verifier = NcMedicaidFhirVerifier(expected_context=capture_context)
+            artifact = SourceAdmissionService(profile, verifier).admit(envelope).graph_artifact
     except Exception:
         _fail("read:v1:local-input")
     return ProviderTrustGraphReadSelectionV1(
         graph_artifact=artifact,
-        profile_registry=nc_profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY,
-        expected_profile_id=nc_profile.NC_MEDICAID_GRAPH_PROFILE.profile_id,
-        expected_profile_version=nc_profile.NC_MEDICAID_GRAPH_PROFILE.version,
+        profile_registry={profile.profile_id: profile},
+        expected_profile_id=profile.profile_id,
+        expected_profile_version=profile.version,
         export_request_raw=request,
         expected_operation_ref=operation_ref,
     )
 
 
 def _cli_selection(args: argparse.Namespace, *, prefix: str = "") -> ProviderTrustGraphReadSelectionV1:
+    source = getattr(args, f"{prefix}source_envelope")
+    values = getattr(args, f"{prefix}capture_context")
+    if (source is not None) != (values is not None):
+        _fail("read:v1:local-input")
+    try:
+        context = nc_profile.DynamicCaptureContext(*values[:4], *map(int, values[4:])) if values is not None else None
+    except Exception:
+        _fail("read:v1:local-input")
     return load_selection(
-        getattr(args, f"{prefix}artifact"),
+        source if source is not None else getattr(args, f"{prefix}artifact"),
         getattr(args, f"{prefix}request"),
         getattr(args, f"{prefix}operation_ref"),
+        capture_context=context,
     )
 
 

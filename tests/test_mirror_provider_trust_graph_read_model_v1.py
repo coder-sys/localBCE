@@ -272,45 +272,22 @@ class ProviderTrustGraphReadModelV1Tests(unittest.TestCase):
             artifact_path.write_bytes(admission.graph_artifact)
             request_path.write_bytes(request)
             right_request_path.write_bytes(_request("b" * 64))
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = read_model.main(
-                    [
-                        "page",
-                        "--artifact", str(artifact_path),
-                        "--request", str(request_path),
-                        "--operation-ref", "a" * 64,
-                        "--now", "7000",
-                        "--collection", "sources",
-                        "--page-size", "1",
-                    ]
-                )
-            self.assertEqual(0, status)
-            self.assertEqual("", stderr.getvalue())
-            cli_value = json.loads(stdout.getvalue())
-            self.assertEqual("PAGE", cli_value["view"])
-            self.assertEqual(1, len(cli_value["page"]["items"]))
-
-            compare_stdout = io.StringIO()
-            compare_stderr = io.StringIO()
-            with redirect_stdout(compare_stdout), redirect_stderr(compare_stderr):
-                compare_status = read_model.main(
-                    [
-                        "compare",
-                        "--left-artifact", str(artifact_path),
-                        "--left-request", str(request_path),
-                        "--left-operation-ref", "a" * 64,
-                        "--right-artifact", str(artifact_path),
-                        "--right-request", str(right_request_path),
-                        "--right-operation-ref", "b" * 64,
-                        "--now", "7000",
-                    ]
-                )
-            self.assertEqual(0, compare_status)
-            self.assertEqual("", compare_stderr.getvalue())
-            compare_value = json.loads(compare_stdout.getvalue())
-            self.assertEqual("COMPARE", compare_value["view"])
+            cases = (
+                ("PAGE", ["page", "--artifact", str(artifact_path), "--request", str(request_path),
+                          "--operation-ref", "a" * 64, "--collection", "sources", "--page-size", "1"]),
+                ("COMPARE", ["compare", "--left-artifact", str(artifact_path), "--left-request", str(request_path),
+                             "--left-operation-ref", "a" * 64, "--right-artifact", str(artifact_path),
+                             "--right-request", str(right_request_path), "--right-operation-ref", "b" * 64]),
+            )
+            for expected_view, args in cases:
+                with self.subTest(view=expected_view), redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()) as stderr:
+                    status = read_model.main(args + ["--now", "7000"])
+                self.assertEqual(0, status)
+                self.assertEqual("", stderr.getvalue())
+                value = json.loads(stdout.getvalue())
+                self.assertEqual(expected_view, value["view"])
+                if expected_view == "PAGE":
+                    self.assertEqual(1, len(value["page"]["items"]))
 
 
 if __name__ == "__main__":

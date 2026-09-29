@@ -832,8 +832,7 @@ def _write_actions(writer: _WireWriter, actions: object, *, currency: object) ->
 def encode_blfin02_input(snapshot: LockedSemanticSnapshot) -> bytes:
     """Encode one authenticated owner snapshot using the Engine BLFIN02 wire contract."""
 
-    snapshot = _require_validated_snapshot(snapshot)
-    data = snapshot.data
+    data = _require_validated_snapshot(snapshot).data
     try:
         scope = _wire_mapping(data["scope"], "scope", {"state_id", "deployment_id", "program_id", "period_id", "currency"})
         owner_body = _wire_mapping(data["owner"], "owner")

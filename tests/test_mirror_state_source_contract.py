@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from contextlib import ExitStack
 import json
 import traceback
 import unittest
+from unittest.mock import patch
 
 from app.mirror import provider_trust_graph as graph
 from app.mirror import provider_trust_graph_independent as graph_independent
-from app.mirror import nc_medicaid_fhir as nc_transport
 from app.mirror import nc_medicaid_fhir_independent as nc_fhir
 from app.mirror import nc_medicaid_fhir_profile as nc_profile
 from app.mirror.source_admission import (
@@ -218,55 +219,25 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
 
     def test_arbitrary_verifier_graph_and_parser_failures_have_no_public_context(self) -> None:
         canary = "PRIVATE-SOURCE-BOUNDARY-CANARY"
-
-        class ExplodingVerifier(SyntheticTestSourceVerifier):
-            def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
-                raise RuntimeError(canary)
-
-        with self.assertRaisesRegex(SourceAdmissionError, "verifier:reject") as caught:
-            _service(ExplodingVerifier()).admit(_adapter())
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertIsNone(caught.exception.__context__)
-        self.assertNotIn(canary, str(caught.exception))
-        self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
-
-        original_build = graph.build_report
-        graph.build_report = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(canary))  # type: ignore[assignment]
-        try:
-            with self.assertRaisesRegex(SourceAdmissionError, "graph:producer-reject") as caught:
-                _service().admit(_adapter())
-        finally:
-            graph.build_report = original_build  # type: ignore[assignment]
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertIsNone(caught.exception.__context__)
-        self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
-
-        original_independent = graph_independent.verify_bytes
-        graph_independent.verify_bytes = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(canary))  # type: ignore[assignment]
-        try:
-            with self.assertRaisesRegex(SourceAdmissionError, "graph:independent-reject") as caught:
-                _service().admit(_adapter())
-        finally:
-            graph_independent.verify_bytes = original_independent  # type: ignore[assignment]
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertIsNone(caught.exception.__context__)
-        self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
-
-        original_parse = graph.parse_canonical
-        original_build = graph.build_report
         graph_input = SyntheticTestSourceVerifier().verify(_adapter()).graph_input
-        valid_artifact, valid_telemetry = original_build(graph_input)
-        graph.build_report = lambda *_args, **_kwargs: (valid_artifact, valid_telemetry)  # type: ignore[assignment]
-        graph.parse_canonical = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(canary))  # type: ignore[assignment]
-        try:
-            with self.assertRaisesRegex(SourceAdmissionError, "graph:artifact-shape") as caught:
-                _service().admit(_adapter())
-        finally:
-            graph.build_report = original_build  # type: ignore[assignment]
-            graph.parse_canonical = original_parse  # type: ignore[assignment]
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertIsNone(caught.exception.__context__)
-        self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
+        valid_report = graph.build_report(graph_input)
+        stages = (
+            (SyntheticTestSourceVerifier, "verify", "verifier:reject"),
+            (graph, "build_report", "graph:producer-reject"),
+            (graph_independent, "verify_bytes", "graph:independent-reject"),
+            (graph, "parse_canonical", "graph:artifact-shape"),
+        )
+        for target, method, code in stages:
+            with self.subTest(stage=code), ExitStack() as patches:
+                if method == "parse_canonical":
+                    patches.enter_context(patch.object(graph, "build_report", return_value=valid_report))
+                patches.enter_context(patch.object(target, method, side_effect=RuntimeError(canary)))
+                with self.assertRaisesRegex(SourceAdmissionError, code) as caught:
+                    _service().admit(_adapter())
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                self.assertNotIn(canary, str(caught.exception))
+                self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
 
     def test_verifier_configuration_failure_has_no_public_context(self) -> None:
         canary = "PRIVATE-SOURCE-VERIFIER-CANARY"
@@ -320,20 +291,14 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
         self.assertIsNone(caught.exception.__context__)
 
     def test_v2_result_profile_is_required_and_owned_field_exact(self) -> None:
-        from tests.test_nc_medicaid_fhir_source import _bundle
+        from tests.test_nc_medicaid_fhir_source import _envelope
 
         context = nc_profile.DynamicCaptureContext(
             "1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070,
         )
-        request_url = nc_profile.NC_MEDICAID_PROFILE.page_url(0, context)
-        bundle = _bundle()
-        bundle["link"][0]["url"] = request_url  # type: ignore[index]
-        transport = nc_transport.SyntheticFhirTransport({
-            (request_url, 0): nc_transport.fixture_response(bundle, request_url),
-        })
-        raw = nc_transport.build_fixture_envelope(transport, context=context)
+        raw = _envelope(context=context)
         configured = nc_profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context)
-        verified = nc_fhir.NcMedicaidFhirVerifier().verify(raw)
+        verified = nc_fhir.NcMedicaidFhirVerifier(expected_context=context).verify(raw)
 
         class RebindingVerifier:
             identity = configured.verifier_id
@@ -346,33 +311,30 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
                 return self.result
 
         cases = {
-            "omitted": replace(verified, graph_profile=None),
-            "credential": replace(
-                verified,
-                graph_profile=replace(configured, credential_id="f" * 128),
-            ),
-            "enrollment": replace(
-                verified,
-                graph_profile=replace(configured, enrollment_id="e" * 128),
-            ),
+            "omitted": None,
+            "credential": replace(configured, credential_id="f" * 128),
+            "enrollment": replace(configured, enrollment_id="e" * 128),
             "source-role": replace(
-                verified,
-                graph_profile=replace(
-                    configured,
-                    source_role_details=(
-                        replace(configured.source_role_details[0], authority_id="REBOUND"),
-                        configured.source_role_details[1],
-                    ),
+                configured,
+                source_role_details=(
+                    replace(configured.source_role_details[0], authority_id="REBOUND"),
+                    configured.source_role_details[1],
                 ),
             ),
         }
-        for name, result in cases.items():
+        for name, graph_profile in cases.items():
             with self.subTest(name=name):
                 with self.assertRaisesRegex(SourceAdmissionError, "^result:profile-mismatch$") as caught:
-                    SourceAdmissionService(configured, RebindingVerifier(result)).admit(raw)
+                    SourceAdmissionService(configured, RebindingVerifier(replace(verified, graph_profile=graph_profile))).admit(raw)
                 self.assertIsNone(caught.exception.__cause__)
                 self.assertIsNone(caught.exception.__context__)
                 self.assertTrue(caught.exception.__suppress_context__)
+        SourceAdmissionService(configured, RebindingVerifier(verified)).admit(raw)
+        for observation_time in (context.observation_time - 1, context.observation_time + 1, 999_999):
+            with self.subTest(observation_time=observation_time):
+                result = replace(verified, observation_time=observation_time)
+                with self.assertRaisesRegex(SourceAdmissionError, "^result:observation-mismatch$"):
+                    SourceAdmissionService(configured, RebindingVerifier(result)).admit(raw)
 
     def test_graph_output_profile_and_coverage_rebinding_fail_closed(self) -> None:
         class StaleGraphVerifier(SyntheticTestSourceVerifier):

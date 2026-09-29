@@ -3,7 +3,6 @@ import BlindLedger.Financial.CorrectionTransition.Reuse
 namespace BlindLedger.Financial.CorrectionTransition
 
 open BlindLedger.Financial
-open BlindLedger.Semantic
 open BlindLedger.Financial.DecisionPackage (EvaluationReceipt)
 
 theorem canonicalActionPayload_dispatch_is_synthetic_record_only
@@ -34,15 +33,149 @@ theorem applyCorrectionTransition_mutation_links
       cases preflight with
       | duplicate =>
           simp [hPreflight, duplicate] at hMutation
-      | ready currentResult claim inputRevisionMatches =>
+      | ready currentResult claim inputRevisionMatches hEvaluates hRequestable =>
           dsimp only
-          cases hBuild : buildAccepted request currentResult claim with
+          cases hBuild : buildAccepted request currentResult claim hEvaluates hRequestable with
           | error reason =>
               simp [hPreflight, hBuild, reject] at hMutation
           | ok certified =>
               simp [hPreflight, hBuild] at hMutation
               cases hMutation
               exact ⟨rfl, rfl, rfl, rfl, rfl, inputRevisionMatches, certified.property⟩
+
+/-- B2: a correction requests exactly the smaller of the rejected claim and the
+    requestable balance: the shortfall Lean evaluated before the decision less
+    what outstanding correction requests still ask for once the payments linked
+    to them are taken off. -/
+theorem applyCorrectionTransition_action_amount_eq_b2
+    (request : CorrectionTransitionRequest) (mutation : CorrectionMutation)
+    (hMutation : (applyCorrectionTransition request).mutation = some mutation) :
+    ∃ result, evaluate request.currentInput = some result ∧
+      outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions <
+        result.shortfallCents ∧
+      mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents
+        (result.shortfallCents -
+          outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions) ∧
+      mutation.action.amountCents ≤ result.shortfallCents := by
+  have hLinks := (applyCorrectionTransition_mutation_links request mutation hMutation).2.2.2.2.2.2
+  obtain ⟨result, hEval, hShortfall, hBelow⟩ := hLinks.inputShortfall
+  refine ⟨result, hEval, hBelow, ?_, ?_⟩
+  · rw [hLinks.amountRule, hLinks.claimAmount, hShortfall]
+  · rw [hLinks.amountRule, hShortfall]
+    exact Nat.le_trans (Nat.min_le_right _ _) (Nat.sub_le _ _)
+
+private theorem outstandingCorrectionCents_cons_ready (paid : List CorrectionPaid)
+    (action : ActionRecord) (rest : List ActionRecord)
+    (hKind : action.kind = "CORRECTION_PAYMENT_REQUEST") (hReady : action.status = .READY) :
+    outstandingCorrectionCents paid (action :: rest) =
+      (action.amountCents - correctionPaidCents paid action.actionId) +
+        outstandingCorrectionCents paid rest := by
+  have hCounted : action.kind = "CORRECTION_PAYMENT_REQUEST" ∧ action.status ≠ .CANCELLED :=
+    ⟨hKind, by rw [hReady]; decide⟩
+  simp only [outstandingCorrectionCents, if_pos hCounted]
+
+/-- H1: after an accepted correction, what the correction requests on the
+    obligation (the input's plus the new one) still ask for, less the payments
+    linked to them, never exceeds the shortfall Lean evaluated before the
+    decision. -/
+theorem applyCorrectionTransition_outstanding_within_shortfall
+    (request : CorrectionTransitionRequest) (mutation : CorrectionMutation)
+    (hMutation : (applyCorrectionTransition request).mutation = some mutation) :
+    ∃ result, evaluate request.currentInput = some result ∧
+      outstandingCorrectionCents request.command.correctionPaid
+          (mutation.action :: request.currentInput.actions) ≤ result.shortfallCents := by
+  have hLinks := (applyCorrectionTransition_mutation_links request mutation hMutation).2.2.2.2.2.2
+  obtain ⟨result, hEval, hShortfall, hBelow⟩ := hLinks.inputShortfall
+  have hAmount : mutation.action.amountCents ≤ result.shortfallCents -
+      outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions := by
+    rw [hLinks.amountRule, hShortfall]
+    exact Nat.min_le_right _ _
+  refine ⟨result, hEval, ?_⟩
+  rw [outstandingCorrectionCents_cons_ready _ _ _ hLinks.correctionKind hLinks.readyAction]
+  omega
+
+/-- When nothing is short, no correction payment request is created. -/
+theorem applyCorrectionTransition_zero_shortfall_has_no_mutation
+    (request : CorrectionTransitionRequest) (result : FinancialResult)
+    (hEval : evaluate request.currentInput = some result)
+    (hZero : result.shortfallCents = 0) :
+    (applyCorrectionTransition request).mutation = none := by
+  cases hMutation : (applyCorrectionTransition request).mutation with
+  | none => rfl
+  | some mutation =>
+      obtain ⟨other, hOther, hBelow, _, _⟩ :=
+        applyCorrectionTransition_action_amount_eq_b2 request mutation hMutation
+      rw [hEval] at hOther
+      have hSame : result = other := Option.some.inj hOther
+      subst hSame
+      omega
+
+private theorem evalAdd_some_eq {left right total : Nat}
+    (hAdd : evalAdd left right = some total) : total = left + right := by
+  unfold evalAdd at hAdd
+  split at hAdd
+  · exact (Option.some.inj hAdd).symm
+  · contradiction
+
+private theorem evaluateTotals_total {input : FinancialInput} {totals : EvaluatedTotals}
+    (hTotals : evaluateTotals input = some totals) : totals.total = totals.cash + totals.lawful := by
+  unfold evaluateTotals at hTotals
+  split at hTotals <;> try contradiction
+  split at hTotals <;> try contradiction
+  split at hTotals <;> try contradiction
+  split at hTotals <;> try contradiction
+  rename_i hAdd
+  cases hTotals
+  exact evalAdd_some_eq hAdd
+
+/-- A positive shortfall is exactly what cash and lawful adjustments leave unpaid. -/
+theorem evaluate_positive_shortfall_balance (input : FinancialInput) (result : FinancialResult)
+    (hEval : evaluate input = some result) (hPositive : 0 < result.shortfallCents) :
+    result.receivedCashCents + result.lawfulAdjustmentCents + result.shortfallCents =
+      result.owedCents := by
+  unfold evaluate at hEval
+  split at hEval
+  · unfold evaluateWellFormed at hEval
+    cases hTotals : evaluateTotals input with
+    | none =>
+        rw [hTotals] at hEval
+        contradiction
+    | some totals =>
+        rw [hTotals] at hEval
+        have hResult : evaluateResult input totals.cash totals.claimed totals.lawful totals.total =
+            result := Option.some.inj hEval
+        subst hResult
+        have hTotal := evaluateTotals_total hTotals
+        change 0 < (if input.obligation.owedCents > totals.total then
+          input.obligation.owedCents - totals.total else 0) at hPositive
+        change totals.cash + totals.lawful + (if input.obligation.owedCents > totals.total then
+          input.obligation.owedCents - totals.total else 0) = input.obligation.owedCents
+        by_cases hShort : input.obligation.owedCents > totals.total
+        · rw [if_pos hShort]
+          omega
+        · rw [if_neg hShort] at hPositive
+          omega
+  · contradiction
+
+/-- Amounts are conserved: the rejected offset is recorded at the claim's amount,
+    the request is no more than that offset, and cash plus lawful adjustments plus
+    the request never exceed what is owed. -/
+theorem applyCorrectionTransition_amounts_conserved
+    (request : CorrectionTransitionRequest) (mutation : CorrectionMutation)
+    (hMutation : (applyCorrectionTransition request).mutation = some mutation) :
+    ∃ result, evaluate request.currentInput = some result ∧
+      mutation.determination.amountCents = mutation.dependencies.claimBefore.amountCents ∧
+      mutation.action.amountCents ≤ mutation.determination.amountCents ∧
+      result.receivedCashCents + result.lawfulAdjustmentCents + mutation.action.amountCents ≤
+        result.owedCents := by
+  have hLinks := (applyCorrectionTransition_mutation_links request mutation hMutation).2.2.2.2.2.2
+  obtain ⟨result, hEval, hBelow, _, hBound⟩ :=
+    applyCorrectionTransition_action_amount_eq_b2 request mutation hMutation
+  have hBalance := evaluate_positive_shortfall_balance request.currentInput result hEval
+    (Nat.lt_of_le_of_lt (Nat.zero_le _) hBelow)
+  refine ⟨result, hEval, hLinks.claimAmount, ?_, by omega⟩
+  rw [hLinks.amountRule]
+  exact Nat.min_le_left _ _
 
 theorem applyCorrectionTransition_nonaccepted_has_no_mutation
     (request : CorrectionTransitionRequest)
@@ -127,11 +260,9 @@ theorem assessCorrectionReuse_allowed_implies_valid_axes
 
 theorem assessCorrectionReuse_calculation_independent_of_approval_and_execution_observations
     (request : CorrectionReuseRequest) (determination : Option OffsetDetermination)
-    (determinationDigest : Option Bytes) (outbox : Option CorrectionOutboxDelta)
-    (ownerNowMs : Nat) :
+    (outbox : Option CorrectionOutboxDelta) (ownerNowMs : Nat) :
     (assessCorrectionReuse { request with
       currentDetermination := determination
-      currentDeterminationDigest := determinationDigest
       currentOutbox := outbox
       currentOwnerNowMs := ownerNowMs }).calculationValidity =
       (assessCorrectionReuse request).calculationValidity := by

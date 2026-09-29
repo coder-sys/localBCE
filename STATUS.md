@@ -1,234 +1,283 @@
 # RightRail status
 
-Updated: 2026-09-26. This is the one current status file for the single codebase
-`rightrail-main`. Code is still being copied in from the older checkouts.
+Updated: 2026-09-28. Current candidate: `codex/connected-workflows`, based on
+main `6cccb84`, integrating `correction-v2` (`70f87c7`) in local development
+commit `595e611`, followed by funding/source-clock fixes in `2c61ae8` and
+test-setup consolidation in `e026658`. Main has not received this combination.
+Git state, raw guard logs and artifact provenance govern; a branch's pass does
+not verify another branch or their combination. `CONSTITUTION.md` is supreme.
+Connector/browser source and fixture consolidation remain uncommitted working
+changes while the separate Lean build/kit increment is committed.
 
-Standing rules: see CONSTITUTION.md (supreme; every change must comply).
+## Product and standing claims
 
-Older detailed status files are archived word for word in
-`work/_retired-research-20260924/trunk-docs-history-20260924/` (outside the trunk; also in Git history before 2026-09-24's removal commit). Raw run logs live in
-`work/pq-wide-seed-native-20260913/build-filter-native/`.
+One state-controlled record connects approved rules, evidence, unresolved work,
+official decisions and follow-through. Control Pack, Blind Ledger, Mirror,
+Continuity and Switch share the financial owner; Provider App is separate.
+The payment gate is one authority level within that product. Existing payment
+systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
+`production_usable=false`, `activation=false`.
 
-## What RightRail is
+## Current verification (latest state; earlier superseded runs collapsed)
 
-RightRail gives a state Medicaid agency one operating record for a consequential
-responsibility that crosses plans, providers and contractors, starting with one
-recurring financial responsibility such as a state-directed hospital payment program.
-It keeps the approved rule, evidence, open disagreements, the official's decision and
-the next action connected until the work is done, while existing processors and
-payment systems keep moving the money. It is five parts on one small foundation
-(Control Pack, Blind Ledger, Mirror, Continuity State, Switch): Lean decides each
-consequential step and the Python owner commits it.
+- **G2 dependency check** (`dep-check`): correction follow-up reopens only when a derived dependency key moves, named in `changed_dependencies` (XI.2 record in `docs/CORE_REDESIGN.md`). Acknowledgments, the correction's own requested payment and DUPLICATE confirmations do not reopen; new evidence does; an unexplained cancellation needs review. The checker refuses a forged DUPLICATE label (`duplicate-evidence:binding`). Guarded `g2dep-r3-a1-L2` (v6): run=184 passed=184, zero floor kills. On the merged line `int-g2-r2-a1-L1`: 176/177, the only failure the Markdown budget fixed by this merge.
+- **G4 support package v2** (XI.2 record in `docs/CORE_REDESIGN.md`): `CORPORATE-SUPPORT/v2` carries rule version (the pack the correction was decided under), adapter versions, `work_ref_count` (0 or 1, no ids) and a vector reproduction (pinned engine only); software version and Trust Graph profile are NONE (no bound source). A failed Continuity restore is the second consumer: its package rides the raised error and the staff `restore-test` 409, with `error_class` from the closed `CONTINUITY_ERROR_CODES` or UNCLASSIFIED. Mirror refuses any other shape, extra keys included; tests run the privacy scan on the follow-up and restore packages and require only its unapproved-schema notice. Guarded run: see the commit message.
+- **Line pack (B+)**, documentation-only CMS-64.9 pack: builds only from a store
+  that verify_database has fully verified (read-only), with the package as its
+  exact snapshot; quarters go by owner-clock received time, so a backdated
+  payment or reversal leaves a closed quarter's rows unchanged, and reads
+  only what was recorded before quarter end. The Owner reads its clock once
+  per command and refuses a future decision time (Lean needs the same guard);
+  a host clock stepping back stops every write (`event_commit_order`) until it
+  passes the last commit time, never reordering history; the checker binds
+  each evidence received time to its event's commit time and requires commit
+  times in order, for the database and the package. Guarded bplus-fix5d on `deferral-pack` 3656bf5: 221 run, 219 passed, 1 skipped, 1 failed (Markdown budget, fixed on this line). Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
+- **Gate decision rules R1-R5 (Lean, `BlindLedger.Gate.Rules`)**: sound, complete, fail-closed, monotone, arrival-order deterministic; `allow_clear`, `allowed_decideAll`, `later_allow_clear(_many)` and `allow_clear_store` proved over append-only sets checked against the gate's checkpoint (stale reads give `STALE_*`/`*_UNVERIFIED` review, never a HOLD on unusable data). 242/242 vectors and 3,616 demo lines; the unittest fails if the runner is older than its sources. All 194 mutants killed (gate-rules-2 84c2016, gr2-mut-r3/r4a/r4b). Tests only, not the token path: signed checkpoints (gate-v1) and the release path remain unbuilt. Open Low: a CAP copy of a loose row gets no reason code; the unchained path is O(n*m).
+- **Gate formats #1-#4, #12 (gate-v1, merged here)**: CHECKPOINT/v1, TOKEN/v1 and the payer's twelve-check `verifyToken` (Lean `BlindLedger.Gate`): member-key pin per payment, shard routing, epoch-local seq, fork blocks the whole (tenant, epoch), fence raised by any chain-valid newer cert. Round 6: 172/172 golden vectors, 31 theorems on `propext`/`Quot.sound` only (`AXIOMS.txt`), 86/86 spec mutants killed, AWS-LC ML-DSA-87 worker reproduced twice (`af8743c7...116b`). Offline payer verification is not claimed: ML-DSA-87 and the KEY-CERT chain are supplied inputs in Lean. Logs `native/guard/guarded-command-gate-rr6-*`.
+- **Lean build/proof/kit**: r77 freshly reproduced the pinned engine from a
+ canonical 46-file source manifest, both fixed vectors matched. r68 built all
+ six Lake targets (87 jobs); r69 passed 30 evaluator, 18 decision-package, 42
+ correction KATs and 210 + 3,616 gate-rule cases; r70 passed the formal
+ gate's 18 selected correction declarations (fresh trust-zero checks,
+ approved axiom closures, independent leanchecker, 42 KATs). Each guard/child
+ exited zero with cleanup PASS. 21 compile
+ warnings and 30 fixed-vector native-axiom declarations remain visible; not
+ an all-theorem axiom-hygiene claim. All 21 verifier tests now pass (r73,
+ after fixing two Windows cp1252 output errors from r72 via
+ `PYTHONIOENCODING=utf-8:strict`; output encoding only, no gate/source
+ change). r79 passed 24/24 kit, size and protected-invariant tests. r80
+ assembled/verified/extracted the 2,673-member offline kit and its bundled
+ correction/retry/SHADOW scenario. r84 passed kit serve and restart,
+ retaining owner/epoch/sequence/history with an empty engine workspace.
+ Retained failures (unresolved): r75 native-path sort order, r78 CRLF
+ parsing, r81-r83 smoke-harness issues. r85 passed the packaged durable
+ correction/cash restart test (1/1) and all six final size gates; its outer
+ run failed only in the subsequent count-print command (unmatched
+ parenthesis) — the failed outer result remains recorded. Current clean
+ handoff: r88 freshly extracted the unchanged archive and passed both
+ serve/restart cycles with stricter harness cleanup (superseding r86's
+ stale bytecode refusal; corrected count-only r87 passed 78,975/80,000 code
+ lines). Those kit runs packaged source committed as `707ba78`
+ (then uncommitted), not `86390ab`; the engine module differs by an equal
+ derived map (PROVENANCE). Clean checkout `e3fb69f` passed all 24
+ kit/size/protected-invariant checks in r89 (19.393 s, zero
+ failures/errors/skips, child/guard exit 0, cleanup PASS); its Lean tree is
+ unchanged from the fresh build and formal proof evidence. Connector/browser
+ work remains paused.
+- **Receiver cash-file increment**: 20/20 new checks pass in guarded r63
+ (isolated preview, independent pre/post replay, whole-file rollback, exact
+ retries after reversal, concurrency, process crashes, CLI setup refusing
+ mutation); independent money/storage review found no remaining source
+ blocker. Grouped run: 75/77 passed, one total-size failure (since resolved:
+ founder expanded the ceiling to 80,000, all six size gates pass in r79;
+ 2026-09-28 split into product 44,000 and tests+Lean 40,000 lines),
+ one fresh-evaluation-engine skip (resolved in r74), no errors, cleanup
+ PASS. Acceptance/Mirror fixture equivalence: 117/117 in r65, zero
+ skips/errors, cleanup PASS.
+- Fixture consolidation removed 148 lines without removing test methods or
+ assertions (r66/r67 regression and fresh build passed; failed attempt r64
+ preserved as log/stage). The real Edge bridge and response model
+ corrections are written; exhaustive browser execution is pending.
+ Process/Engine/Mirror test setup consolidation
+ removed 131 further lines, retaining all 75 test methods, 440
+ `self.assert` calls and the Mirror mock-call assertion; static review found
+ no blocker.
+- **Grouped regression aggregate** (ten groups, not one uninterrupted
+ full-suite run): 420 unique tests, 409 passed, 11 skipped, zero
+ failures/errors, no duplicate/missing/unknown IDs. Component runs: r40
+ 81 (79 passed/2 skipped); r42/r43 95/95 acceptance; r44 89 (88/1 skipped);
+ r54 50 (42/8 skipped); r55/r56 17/17 owner batch; r57 48/48 storage,
+ independent checker, protected invariants, Switch CLI; r58 24/24 staff;
+ r59 16/16 interaction model/scorecard. Each guard/grouped command exited 0,
+ cleanup PASS; all six size gates passed in r40; r41's 420-ID inventory
+ matches the completed logs.
+- The 11 skips: Windows symlink privilege (1, unverified), absent old
+ accepted-engine artifact (1, unverified), unbuilt gate runner (1, covered
+ by r69 vectors), no fresh evaluation-engine handoff (1, resolved r74), 7
+ real semantic-assurance mutation checks needing a configured external
+ candidate (resolved r72/r73; r69 separately ran all gate-rule vectors). The
+ interaction-model crawl is not the constitution's exhaustive real-browser
+ crawl.
+- r33, r34, r37, r39, r45, r48: guard memory-floor or preflight-minimum
+ stops, no full-suite verdict; contribute no tests to the aggregate above
+ (e.g. r34: 226 passes before floor stop); superseded by the completed
+ groups r40-r59. r35 completed a full run: 408/420 passed, 1 error, since
+ fixed by explicit fixture-class dispatch; r36 reproduced the failure. r38
+ (`cx-preconsolidation-r38-a1`) passed 8/8. `cx-funding-r31-a1` passed
+ 24/24. `cx-clock-contract-r32-a1` passed 72/72 (independent source review,
+ no blocker). All 155 remaining tests after r45/r48 completed in r54-r59.
+- Independent funding review found a nullable receipt-ID successor missed by
+ the local join predicate (reproduced r36, fixed by testing `child.rowid`,
+ confirmed passing r37).
+- Prior focused runs, all passing with no unresolved findings: connector
+ increment `cx-connectors-final-r28-a1` (65/65); real source-file browser
+ run `cx-source-browser-r25-a1` (SINGLE/COMPARE, navigation, findings,
+ empty discrepancies, right selection, no console warnings, min free memory
+ 2,961,432,576 B — first launch r24 failed on working-directory import,
+ fixed by explicit repository setup); staff/package/budget
+ `cx-staff-r9-a1` (39/39, includes the correction lost-response/SHADOW
+ scenario and reuse baseline); clock fix `cx-clock-green-r15-a1` (30/30,
+ 62.396 s, fixes the chronology failure first caught by
+ `cx-clock-red-r14-a1`); real-browser success-path runs `cx-browser-r13-a1`
+ and `cx-browser-clock-r16-a1` (all five roles, seven backend controls,
+ independent owner verification, restored decision-package equality true;
+ second browser's confirmation wait timed out, next UI read showed the
+ completed restore, final independent checks passed) — success path only,
+ not an exhaustive error-state crawl. Earlier regression evidence (r18-r22,
+ r27) reproduced now-fixed bugs (failing cases, missing source CLI, empty
+ comparison silently serving SINGLE, import errors, a size-budget
+ overshoot); all superseded by the passing runs above.
+- Raw output: this worktree's `native/guard/guarded-command-*.stdout.log`
+ and `.stderr.log`; guard/cleanup/exits in `C:/Users/neers/rrb/logs/`. The
+ external runner's failing-subtest pass count is unreliable; raw unittest
+ records govern. `git diff --check` passes; the merge retained six
+ historical CRLF whitespace warnings in
+ `artifacts/engine-correction/vectors/run-vectors.cmd` (bytes unchanged).
 
-## Standing claims
+## Connected behavior
 
-Pre-state build phase (the plan; CONSTITUTION VI.4): synthetic data,
-`proofSuiteId=null`, `production_usable=false`, `activation=false`.
+- Synthetic NC marker age uses a pinned logical-seconds-to-UTC mapping and
+ independent calendar calculations. Contract v3/profile v5 reject old
+ bindings, future instants and contradictory failures; date-only/absent
+ markers remain UNKNOWN. FRESH describes age at capture only; graph
+ freshness stays UNKNOWN.
+- Every outer owner write verifies current funding leaf projections before
+ work and before commit under the same lock; summaries check the same read
+ snapshot. The bounded check covers current sources, not arbitrary
+ historical tampering; full independent replay remains necessary for
+ history and store integrity.
+- NC FHIR retries retain only the final attempt's response/error and record
+ invalid Retry-After with a matching empty delay slot. Failure envelopes
+ verify as failures and cannot enter graph admission. V2/V3 admission checks
+ the configured observation window even when a source-contract digest is
+ present.
+- The read-model CLI and loopback graph view can take a bounded source
+ envelope with separately supplied expected capture context. The
+ independent verifier compares all six fields before source admission;
+ graph and aggregate-export verification still run before serving. Empty
+ comparison inputs fail before a server opens. Source files and raw
+ identities never enter the HTTP projection.
+- The pinned Lean transition decides financial corrections atomically with
+ the owner, no Python fallback: min(claim, shortfall not already requested
+ by unpaid earlier corrections). Only payments naming `pays_action_id`
+ reduce a request's unpaid amount; removing/changing that link on a resend
+ conflicts.
+- Staff cash commands name the correction they pay. HTTP and
+ process-restart tests create the correction first, preserve the original
+ retry body/revision, and check one committed payment. Acknowledgment still
+ has zero cash effect.
+- The demo clock advances to its explicit correction decision time before
+ the command, so subsequent acknowledgment timestamps follow action
+ creation, including after a lost response. Existing recorded history is
+ not rewritten.
+- The release producer pins CMD02/RES3 and independently derived RU02/RV02
+ baseline vectors. The kit's exact inventory includes `RETIRED_PINS` and
+ verifies its bytes against the independent checker's pin. All old
+ provenance, inventory, guard and actual/expected comparisons remain
+ required.
+- HTTP framing is checked before dispatch: one length, one content type, no
+ transfer encoding, exact body bytes, an 8,192-byte cap and five-second
+ total deadline. Refusals use a bounded 100 ms/8,193-byte drain after
+ sending; HEAD has no body. Clean delivery is best effort for peers
+ exceeding those bounds.
+- v8 Continuity exports chained bounded history and restores by replay to an
+ isolated SHADOW/TEST owner. Mirror reads the same owner. Switch compares
+ caller-supplied evaluators over verified SHADOW data; it is not live
+ cutover.
+- Switch and Provider Trust Graph already ran on trunk, contrary to old
+ "0 run" entries: 13 Switch and 12 Trust Graph tests passed in the recorded
+ trunk runs (`trunk-cv8-full-a1`, `ptg-full-a1`); the candidate full suite
+ also passes these. Trust Graph remains read-only, without a gate consumer.
 
-## What actually runs today and was verified
+## Artifact and source boundary
 
-Only items with a recorded passing guarded test run. "Evidence" is the archived file
-in that archive that holds the raw record.
+- Pinned correction engine: `1A7A1833...D3AF`, 6,279,168 bytes; request
+ `B658DCEE...D067`, result `83BB53D1...E0D6`; reuse request
+ `9C203F6B...5B99`, expected result `973B0CA0...78E4F`. Exact pins and
+ construction are in `artifacts/engine-correction/PROVENANCE.md`.
+- The pin was reproduced byte-identically from the current combined Lean
+ tree in r67/r77; provenance retains its earlier historical origin
+ separately, no new binary pin or retired-engine entry was needed. r68/r69/
+ r70 record the whole build, executable checks and independently checked
+ correction proofs.
+- Offline kit assemble/verify/extract/scenario passed r80; serve/restart
+ passed r84. The archive binds the assembly working tree, including frozen
+ connector and browser candidates; these checks do not qualify those other
+ tracks. Lean builds need 4,029,372,048 free bytes to start; Python tests
+ need 2,200,000,000. Both keep the 2,029,372,048-byte running floor (guard v7;
+ 1 GiB and both starts 955,630,224 lower while the owner's away file is valid).
+- Retired engines are historical verification only, through the append-only,
+ digest-pinned registry. A missing, malformed or changed registry refuses
+ verification. Only the current engine may decide new corrections.
 
-1. **Lean-controlled financial correction** (the plan's Hospital H $3,000 shortfall).
-   2026-09-24: 9 of 9 selected tests passed (run r7; r1-r6 failed and were fixed).
-   The owner rejects the disallowed offset and authorizes the correction only through
-   the Lean transition inside one database transaction; crashes before and after commit
-   and exact retries were checked. Caveat: the Lean program was built on 2026-09-23
-   from an OLDER version of the Lean source; the current source has never been compiled.
-   Evidence: `rightrail-financial-workflow-20260913-STATE.md`.
-2. **Engine correction program self-checks (older source).** 2026-09-23: correction
-   gates 32 of 32, existing 30 gates, 38-theorem checker. Evidence:
-   `lean-engine-20260913-STATE.md`.
-3. **Continuity admission (v7 at this run; now v8, see the change log) and correction follow-up through Mirror.**
-   2026-09-24: 11 of 11 passed (run r6; r3-r5 failed and were fixed).
-   Evidence: `rightrail-financial-workflow-20260913-STATE.md`.
-4. **Private snapshot indexes** (fast per-obligation reads, safe migration).
-   2026-09-24: 6 of 6 passed; no tested query still scans a whole table.
-   Evidence: `rightrail-financial-workflow-20260913-STATE.md`.
-   Downgrade index set v2 to v1 (no owner open): `DROP INDEX rr_financial_v2_events_aggregate_kind; PRAGMA user_version=1;` — a writing (LIVE/TEST) owner re-upgrades on open; SHADOW never does.
-   Row-count cache: a table within 5% of the 10,000-row cap, and every seal, is counted exactly; only an undercount above 500 rows could pass the cap, which needs tampering with the store or the owner process.
-5. **Queue claim path (Python).** 2026-09-24: 29 of 29 focused tests passed. The last
-   broader Queue run (122 tests) still has 1 failure and 5 errors. Earlier Lean/Rust
-   admission integration (2026-09-19): 4 of 4. Evidence: `lean-queue-20260913-STATE.md`.
-6. **Security Lean proof target** (opportunity-accounting reducer). 2026-09-24: build
-   succeeded on run r7 (r1-r6 failed): 18 theorems with no `sorry`, 39 examples,
-   30 style warnings. Local compile only, not an independent kernel check.
-   Evidence: `lean-security-20260913-STATE.md`.
-7. **v5 financial owner, checker, Mirror, CLI, Continuity.** Withdrawn 2026-09-24 (XI.2):
-   v5/v6 stores are retired, so this acceptance (focused runs of 63 and 5 tests, about
-   2026-09-20) no longer describes current code.
-   Evidence: `rightrail-financial-workflow-20260913-STATE.md`.
-8. **Provider App pre-submission checker core.** 2026-09-23: 13 of 13 Python tests and
-   one Lean compile. Its later Lean comparison extension never built successfully.
-   Evidence: `rightrail-provider-app-20260923-STATE.md`.
-9. **Gate failover design model (TLA+).** 2026-09-25: TLC found no error in the
-   safety model (2 nodes, 2 payments, 3 epochs; 3,516,192 distinct states): no
-   conflicting tokens, no fenced token accepted, no release without a token or
-   bypass, at most one release, no lost decision, stale primaries cannot sign.
-   Bypass reconciliation (liveness) holds on a 1-payment model. A design model,
-   not the code. Evidence: `docs/formal/gate_failover/README.md`.
-10. **Payment gate formats #1-#4, #12** (branch `gate-v1`). Felt effect (target): one
-   gate decision per payment (any flow) within the member's shard, which the payer
-   checks before releasing it. Each payment routes to one shard from its tenant and
-   32-byte member key (`shardOf`; the shard count, 1 to 2^32-1, is in the epoch cert,
-   fixed per tenant). Sending a command pins the member key per (tenant, program,
-   payment), write-once (Lean `send`, the only step that pins); the pin is durably
-   persisted before the command leaves, every command path uses the one pin store,
-   and a changed key is refused as `member_key_changed` and sends nothing. The payer
-   accepts only a token for a sent payment, under the pinned key, from that key's
-   shard: every token it accepts for one payment has one member key and one shard
-   (`verifyToken_one_route`), that key was pinned by the payment's first send
-   (`verifyToken_first_send`), and every command sent for it, a HOLD included, went
-   to that shard (`verifyToken_after_send`), where the writer's
-   PAYMENT_ALREADY_DECIDED answer is authoritative. Each epoch's checkpoint seq
-   starts at 0 with an all-zero previous digest. A checkpoint fork within one epoch
-   (overlapping sequences, or a neighbour not linked by its previous digest) blocks
-   its whole (tenant, epoch) on every shard: nothing more releases, no later
-   checkpoint of that epoch is stored, both signed headers are kept; other tenants
-   are unaffected, and failover to a new epoch recovers. A newer cert with a valid
-   chain raises its tenant's fence even when refused. Offline payer verification is not claimed: in the Lean model the ML-DSA-87
-   check and KEY-CERT chain are supplied inputs. 2026-09-26 (round 6): Lean
-   `verifyToken` (twelve checks, one predicate) judges 172 of 172 golden vectors; 31
-   theorems compile using only `propext`/`Quot.sound`, pinned by `lake build
-   gate_axioms` (printed by `tools/gate_print_axioms.lean` into
-   `lean/BlindLedger/Gate/AXIOMS.txt`, log `gate-rr6-axioms-a4`; a Python test checks
-   the two agree); 86 of 86 spec mutants killed (`tools/gate_mutants.py`); 7 of 7
-   Python tests pass. Logs: `native/guard/guarded-command-gate-rr6-*`. The signer
-   build is reproducible on this machine: two directories gave SHA-256
-   `af8743c7...116b` (recipe and limits: `rust/gate_mldsa87/README.md`; logs
-   `gate-rr4-sign*`). Lead decision: the signer keeps its AWS-LC verify mode, the only
-   real check of the golden signatures.
-   Known limits: a legitimate member-key change needs an official determination, not
-   built in v1. Resharding is out of scope (changing a tenant's shard count needs a
-   migration spec). An older ALLOW token stays valid until it expires even after a
-   later HOLD revision; a re-issue carries only the latest revision at a later
-   (epoch, seq) (Lean `reissues`),
-   and a HOLD raising the fence is a possible later fix, not built. Deferred: LOW-6
-   (the F6 re-issue rule stays gate-side) and M2 (the grant has no flow scope).
-   Process: the bloat-ceiling raises and the round-4 to 6 scope calls on this branch
-   are lead decisions (2026-09-26) under the founder's grant of 2026-09-25 ("u have
-   all auth", relayed by the lead; scope: internal engineering decisions).
-11. **Gate decision rules R1-R5 (Lean).** 2026-09-26: `BlindLedger.Gate.Rules` builds;
-    sound, complete, hold_complete, fail_closed, monotone and arrival-order deterministic
-    are proved, axioms pinned. Each line has an identity and claims its exact key, near
-    key and identity whatever its outcome or enrollment (only a CAP_820 line known not
-    enrolled with its plan claims no member-month). Certain reasons, a duplicate of an
-    unresolved line and a reused identity (`ALREADY_DECIDED`) HOLD; unusable data, bad
-    or future dates, near duplicates and FFS near collisions with unresolved lines
-    review; neither ALLOWs. The key guarantees are `allow_clear` (an ALLOW line shares
-    no key with a released or unresolved line but that member-month) and
-    `allowed_decideAll` (ALLOW lines of a batch share none); `ids_disjoint` keeps an
-    identity in at most one set. Both sets are append-only in v1: each must extend the
-    gate's checkpoint of it, else `STALE_*`. `gate_rules` passes 210 of 210 vectors and
-    all 3,616 demo lines (134 held, $46,987.00; 6 review; state ZZ), also as a unittest;
-    all 155 mutants are killed on a scratch copy. Tests only, not the token path.
-    REQUIRED trusted input: the gate's signed checkpoint of both sets (gate-v1); the
-    runner holds it in memory. REQUIRED for the unbuilt release path: it removes lines
-    from the unresolved set by identity, on release and on reject, under a new signed
-    checkpoint; before releasing it checks exact keys, near keys and member-months,
-    not-enrolled lines included, against the released set; a retry after an outage
-    must reuse the original identities. It must refuse to release an `ALREADY_DECIDED`
-    decision and bind each release to the exact reviewed row's identity. Before
-    releasing a stale-feed review it must re-run R1, R3 and R5 on fresh snapshots: that
-    review can hide known-bad facts. Corrections of held CAP member-months wait on it.
-    OPEN, fixed next on gate-rules-2 and REQUIRED before any token-path use: the
-    checkpoint must also take the gate's own new identities when the read set was
-    unusable; until then a rollback after an unresolved-set outage lets a later batch
-    ALLOW.
+## Rules and unresolved work
 
-## What is written but has never run
+- The NC capture path is synthetic file intake, no live transport. Financial
+ file adapters (MCO reports, X12 820/835, MMIS extracts), shared
+ provider/gate rules and payee-identity consumption remain unbuilt.
+ Aggregate provider export already has a read-model consistency consumer;
+ the A2 design's no-consumer premise is stale and not a reason to remove
+ that check.
+- Owner/Continuity v8 only; older stores fail without mutation. At most
+ 10,000 events or rows per table. One writer; history/projections/outbox
+ commit together; exact retries do not write; changed meaning conflicts.
+- Complete the real-browser crawl of the declared interaction model — the
+ Node model/scorecard is not a browser crawl.
+- Second synthetic state (plan G3) is not a Python-only edit: Lean's
+ `controlPackRulesWellFormed` also pins H's test labels. Change
+ owner/checker/Lean together, retain supported rule/version/role checks and
+ digest/length bounds, rebuild, then exercise different amounts, recipients
+ and timetable through correction, linked cash and Continuity. No partial
+ policy change made.
+- Support v2 (G4), shared provider/gate rules and payee-identity integration
+ remain designed work (G2 landed above). New protected contracts require
+ their XI.2 record.
+- Conformance kit (G5): vectors, manifest and correction wire spec in
+ `conformance/`.
+- A READY correction can become stale after later money events; cancel/
+ reduce transitions and excess-request accounting remain to build. Reuse
+ still trusts recorded input shortfall and ignores the paid list; no
+ application calls it. A new pin-transition event and stronger
+ paid-list/amount proofs remain pending.
+- The prior funding drift reproduction accepted 70 later writes; r31 now
+ refuses all 70 after tampering, without a full history replay per write.
+ The full-store replay still owns detection of historical corruption
+ outside current projection links; the new local guard does not replace it.
+- Whole-history checking was ~27 s at 10,000 rows, above the 5 s
+ target. Lock contention may return `store_busy`; retries must keep the
+ reviewed body. TEST restore through segmented history and a Lean seal
+ codec remain unbuilt.
+- Staff roles are UI-only; authentication, refusal logging and connection
+ caps remain absent. A replacement operator can restore/read but not take
+ over work.
+- Isolated TEST restore creates an owner using the system clock;
+ continuation there is not tied to the deterministic demo clock. Process
+ resume is distinct: it advances the demo clock to the latest verified
+ committed event.
+- The financial command log omits `pays_action_id`; the event chain carries
+ it.
+- No integrated payer gate. Separate gate-format work still assumes
+ admitted grants and authenticated checkpoint ancestry. Rule tests do not
+ establish a durable token/release path. The gate-rules-2
+ checkpoint-identity repair is not part of this candidate; preserve that
+ branch's existing dirty work.
+- Gate failover TLC is a bounded model (3,516,192 states), not running
+ failover; the deeper model, operational drill, CI and warm-worker
+ throughput remain open.
+- Historical unresolved runs remain evidence, not current verification:
+ Queue broad run 122 tests with 1 failure/5 errors; State clearance 45
+ pass/1 failure before later unrun fixes; Security proof build succeeded
+ with 30 style warnings. Qualification's 17 tests/8 empty evidence slots
+ and Security's 64-test cleanup need fresh evidence. The State clearance
+ route is under `parked/`.
+- Private ZK is active in its separate prototype repository, evidence-only
+ and never a core/gate prerequisite; old `parked/` sources remain
+ reference.
 
-- **Offline service kit** (assemble, verify, run, serve; lost-response retry; SHADOW
-  restore). 0 runs; archive never assembled; needs an Engine build receipt.
-- **Switch** shadow replay module and CLI: 10 tests written, 0 run.
-- **Staff server additions** (read bundle, envelope, browser checks): 3 test files skipped.
-- **Engine current Lean source** (fixed-point proof, release producer script): never
-  compiled. Which exact source built the existing program could not be recovered.
-- **Queue source-bound lifecycle mode**: still closed; the program is on its old pin.
-- **State BLSDRQ01 clearance route**: run r2 (2026-09-24) was 45 passed, 1 failing (a
-  retry-conflict test got the wrong error type). Later fixes are unrun; the production
-  pin is still pending. Evidence: `lean-state-20260913-STATE.md`.
-- **Provider Trust Graph** read model and local browser view: 12 tests written, 0 run.
-- **Qualification bundle**: 17 tests written, 0 run; 8 evidence slots empty.
-- **Security calculator cleanup**: its 64-test module not rerun.
-
-## Known blockers
-
-1. **Engine must rebuild the current source.** The build needs about 4.2 GB free RAM
-   at start (4,190,433,321 bytes). The machine has 16 GB (15.3 GB usable) and usually
-   only about 1-1.6 GB free with current apps open (1.0 GB when this was written). The
-   last two Engine guard starts also failed with "Access denied" before measuring
-   memory. Until this build happens, the service kit cannot be assembled and Queue's
-   source-bound mode stays closed.
-2. **One heavy run at a time.** All builds and tests share one guarded lane.
-
-## Parked
-
-Nothing product-facing. Private zero-knowledge (`PRIVATE_ZK`) was un-parked on 2026-09-25 as an
-evidence-only prototype track (Constitution IX.4); old code under `parked/` is reference.
-The native work in `pq-wide-seed-native-20260913` is frozen as history. Retired research
-history lives in bundles under `work/_retired-research-20260924`.
-
-## Next 6 concrete steps
-
-1. **Run the service kit end-to-end**: assemble, verify, run the scenario, serve the
-   staff app on loopback. Needs the build receipt from step 2.
-2. **Fresh Engine build of the current source** under the guard: free about 4.2 GB
-   first (close apps or reboot), keep the build receipt, rerun the 9 correction tests
-   on the new program.
-3. **Make `rightrail-main` the only place code changes**; old checkouts become read-only.
-4. **Hospital-payment full cycle demo** per the plan: 20 hospitals, $1M, Hospital H
-   short $3,000, with incomplete files, disputed offsets, late records, partial
-   corrections, repeat messages, crash recovery and restore, all visible in Mirror.
-5. **Second, nonfinancial workflow via the Provider Trust Graph**: run its 12 written
-   tests, then expose it read-only through an authenticated staff route.
-6. **Owner writes don't re-verify the funding projection**: a tampered projection still accepted 70 writes on top.
-   Writer store_busy 0 during checker re-checks was measured on small stores; where a full check exceeds about 5 s, owner writes during a re-check can get store_busy (safe: changed:false, the held-body retry works).
-
-## Change log
-
-- 2026-09-26 — Gate rules R1-R5 (Art. V.1-V.2, VI, IX.3, X.1-X.2, XI.6, XI.8, XI.9, XII): Lean `decideBatch` holds deceased-member, second-plan member-month, excluded/deceased-provider, duplicate-FFS and not-enrolled lines; missing or stale snapshots go to human review. Felt effect: a state sees why each dollar was held, before it leaves. Next: wire into the gate token (one line = one leaf).
-
-- 2026-09-25 — Gate failover TLA+ model and configs added under `docs/formal/gate_failover/` (Art. IV, XI); safety and small-model liveness checks passed under the guard. Deeper model still to run (memory).
-- 2026-09-24 — Private-ZK / Profile 11-12 track moved to `parked/private_zk/` (96 files); default `pytest` run excludes it (`pytest parked` runs it). Dead `tools/direct_mask_*` duplicates removed (newer copies live in `native/tools/`). New constitution tests: `tests/test_right_rail_financial_constitution_invariants.py` (written, not yet run).
-- 2026-09-24 — Audit fixes (Art. III.1, III.5, V.2, VI.1, XI.10, XI.13): checker now enforces actor roles against a digest-bound roster (the check never fired before); database verification requires trusted authority (no default-digest shortcut, no `authority_*` aliases); owner constructor backdoor removed; 11 `assert` safety checks replaced by typed errors; staff server measures cash/state before and after instead of hard-coding them, resume checks real integrity fields, import-order and owner-id bugs fixed. 4 new tests. Not yet run (RAM below floor).
-- 2026-09-24 — Gate/packager cleanup (Art. IX.1-2, X.1, XI.2, XI.6): removed 23 files (about 8,600 lines) the live path never imported: the ops-authority, documentation-governance, project-acceptance and qualification v2/v3 gates, duplicate packagers (the service kit is the one packager) and a dead conftest. Kept: privacy scanner, semantic assurance gate, offline hash-locked installer, native_v3 parser tests. No claims gained. (Condensed; full text in git history.)
-- 2026-09-24 — Mirror cleanup (Art. IX.1-2, IX.4, X.3, XI.2, XI.6): `app/mirror` cut from 32 to 11 modules (about 25,100 lines incl. tests). Kept the import closure of `tools/provider_trust_graph_view.py` plus the NC FHIR source producer/verifier. Deleted, with no live caller: Mirror v2 core/ingress/recovery, approval, governance, qualification, operational-owner, writer-authority and restore-publication modules and 7 test files (the live financial Mirror has its own tests). NC directory v1 pair parked in `parked/mirror_legacy/`. Only `py_compile` and an import check run. (Condensed; full text in git history.)
-- 2026-09-24 — Docs cleanup (Art. IX.1, X.1, VI.4): living Markdown cut from 26 files/249 KB to 14 files/105 KB (58 KB of that is the target). Root `CURRENT_TASK.md`/`STATE.md` (2026-09-20 financial copies) archived verbatim in `docs/history/`; `provider_app/STATE.md`, `provider_app/AGENTS.md` deleted (already archived byte-identical). Roadmap, Lean kernel, Mirror, dependency-locking, rejected-architecture, provider backlog and five `ops/` docs deleted, their still-true content merged into `README.md`, `ARCHITECTURE.md` (rewritten as current truth) and the target; `NATIVE_V3_ARCHITECTURE.md`/`DATABASE_ZK_ARCHITECTURE.md` moved to `parked/private_zk/docs/`; six `native/tools/*/README.md` merged into `native/tools/README.md`. `docs/RIGHTRAIL_FULL_STACK_TARGET.md`, cited by the constitution but missing here, imported from the financial checkout with its status sentences removed. Nothing run.
-- 2026-09-24 — Code still pointing at missing docs (not edited): `tools/right_rail_financial_service_kit.py` `STATE_FILES` lists `docs/FINANCIAL_SERVICE_KIT.md` and `docs/FINANCIAL_STAFF_WORKSPACE_ARCHITECTURE.md`, which were never in the trunk, so kit assembly cannot find them; `ops/launch_blockers.json` and `ops/verifier_artifact_pin.example.json` now have no consumer; `lean/engine/BlindLedger` and `lean/state/BlindLedger` carry divergent copies of the same modules (IX.1).
-- 2026-09-24 — Closed the three open audit items (Art. III.2, V.2, V.4, XI.10). (A) `stage_population` now appends a `POPULATION_IMPORT_OPENED` event in the same transaction that creates the staged import row and manifest binding (payload: population id, SHA3 staging digest of the row's immutable columns under new domain `RR/FINANCIAL/POPULATION-STAGING/v1`, manifest fields); the checker and `tools/continuity_successor_v7.py` require it exactly once and first for every v7 population, reject it on v5/v6. Test expectations changed only where the new event appears (3 event-kind lists, one sequence 4->5). (B) No default authority anywhere: checker's continuity-package fallback and manifest-approver roster fallback removed (and the unused `ExpectedFinancialIdentity` default); `FinancialMirror.validate_continuity_package` now takes caller `trusted_authority` + `expected_scope` (new `validate_owner_continuity_package` for the Owner's own); Switch entry points and the CLI take trusted authority/scope, CLI via a required `--authority-file` (fails closed with `trusted_authority_missing`). The Switch previously always failed (`identity:scope-required`). (C) Two staff tests now open their second writer with the database's real TEST mode/owner id. 6 new tests. Nothing run (RAM below floor); only `py_compile`.
-- 2026-09-24 — Parked native tools (Art. IX.4, X.2, X.3): 9 `native/tools/direct_mask_*` dirs plus the tools README (63 files, about 19,590 lines) moved by pure rename to `parked/private_zk/native/tools/`. `native/tools/direct_mask_fixture/` (10 files) stays: the protected guard refuses every mode, including live `Command`, without it (line 56). Its `Configure`/`Build`/`CTest` lanes serve only the parked fixture and now point at moved `tools\direct_mask_vole`/`direct_mask_pipeline`, so they fail closed; guard not edited.
-- 2026-09-24 — Deleted with no reader (X.3, recoverable from git): `ops/launch_blockers.json`, `ops/verifier_artifact_pin.example.json`, `docs/security-freeze/BL-PQ512-v1/hardening.json` (rejected STARK-era layout, not the parked track). Kept `docs/SBOM.python.spdx.json`: current (6 dev packages) and reconciled against the locks by `tests/test_locked_python_dependencies.py`. `ARCHITECTURE.md` still cites `native/tools/README.md` (now under `parked/private_zk/native/tools/`).
-- 2026-09-24 — Engine adapter collapse (Art. V.2, IX.2, XI.5-XI.7): the correction runs owner -> snapshot (verified once by the independent checker) -> BLFCMD01 -> one pinned contained launch -> strict BLFCRES1 decode, with no layer re-checking the one before it. Engine 1,849->1,592, adapter 2,459->2,207; the State clearance route parked (14,288 Python lines). Wire formats, pins, domains and asserted codes unchanged (old/new compared byte-for-byte on the E911 vector and 5,500 mutations). (Condensed.)
-
-- 2026-09-24 — One Lean workspace (Art. IX.1, V.3, V.4, XI.2): `lean/engine` + `lean/state` merged into `lean/` (Lake package `RightRail`); 16 identical modules kept once, 4,940 lines removed net; divergent State variants kept under `lean/StateKernel/`; no theorem statement changed. Rust suites re-pointed; their stale pins still fail closed. (Condensed; full text in git history.)
-- 2026-09-24 — Service kit cut (Art. IX.2, XI.5-XI.7, XI.14, IV): `tools/right_rail_financial_service_kit.py` 2,047→1,101 lines. `verify` is the one checker; `assemble` runs it on the finished archive and deletes it on any failure. Manifest v2 = schema, files (path, SHA-256, size), claims; every byte stays digest-bound. `STATE_FILES` = the scenario's import closure + staff assets + kit + `README.md`/`CONSTITUTION.md`. `staff.js` 1,038→895; CSP/textContent-only rendering unchanged. Only `py_compile`/`node --check`; nothing run. (Condensed; full text in git history.)
-- 2026-09-24 — Dependency gate replaced (XI.2): removed `tools/locked_python_dependencies.py`, its test and `requirements/locks|inputs` (nothing called it; it hard-required CPython 3.14.4). `requirements-dev.txt` pins the same 6 wheels by `==` and `--hash=sha256`, installed offline per README; tests check the pins, empty production, the README command and SBOM reconciliation. Withdrawn: SHA3-512, metadata, interpreter/pip pin and attestation checks. Stale: SBOM comments cite the deleted lock JSON. (Condensed; full text in git history.)
-- 2026-09-24 — `pytest.ini` norecursedirs now `.*`, `__pycache__`, venv, node_modules, target, work, parked, provider_app (its own project and `tests` package; run it from `provider_app/`).
-- 2026-09-24 — Parked what no Lake target builds (Art. IX.4, XI.8): about 8,300 Lean/Rust lines to `parked/`; live `lean/` is the financial correction, semantic kernel and Sha3. The semantic assurance gate's old clearance-kernel predicate is retired; its replacement pins the 13 live correction theorems verbatim, allows `propext`, and runs the `--correction-transition-kat` native check (32 gates). (Condensed.)
-- 2026-09-24 — Financial owner/checker/Switch dedupe (Art. IX.2, XI.6, XI.7, XI.14, V.2): about 705 lines removed (owner 7,545->7,137, checker 4,942->4,724, Switch 1,408->1,333, successor -4). Owner: one meta/identity check (was two), one population-manifest binding/pack/head/member helper set, one control-pack row decoder, one recompute-and-record path for obligation commands, one report/correction handler, one offset-decision prelude, one staff snapshot id/timeline reader; 11 unused method aliases, `read_model`/`_WriteClock` removed. Correction apply no longer re-checks what the Engine decoder already enforces or re-reads rows it just wrote, and no longer re-validates the engine-built execution record; it still binds the Lean result to the command, trusted authority, pack, claim, read set, history position, scope, and still runs the Engine's post-state delta check. Checker: table schemas as compact specs (proven equal to the old tuples); Switch: one record mixin for snapshot facts/replay input. Checker still does not import the owner (XI.6). Wire formats, digest domains, event bytes, asserted error codes, transaction boundaries unchanged. Nothing run; `py_compile` only.
-- 2026-09-24 — First guarded baseline of the consolidated trunk (v4 guard, run `baseline-20260924b`, HEAD a081c69, min free 2.81 GB, cleanup PASS): 175 tests, 150 passed, 8 failed, 17 errors. Passing: all 12 acceptance cases, the 9 correction tests, the 5 constitution-invariant tests, the independent checker except one test, Mirror, Switch. Failing: staff server (13; mostly staff command binding, demo gate role, HTTP flows), correction called without a configured Lean release in 5 adapter/journey tests, one engine None-config crash (must be a typed error), 2 tamper tests now stopped earlier at owner open (`continuity_admission_mismatch`), one changed restore error code, Mirror v5 receipt, CLI Switch report, and 2 environment-dependent engine tests (missing pinned `blind_financial.exe` 398E; real-engine conformance needs BLIND_FINANCIAL_EXE). Raw log: `native/guard/guarded-command-baseline-20260924b.stdout.log` (git-ignored).
-- 2026-09-24 — Lean correction transition compiles (Art. V, X): fixed proofs and plumbing only in `CorrectionTransition/Transition.lean` (new proof-only lemmas `caseStatusRule`/idempotence, `findCase_some`, `mem_updateAllCaseStatus`, `mem_insertCaseSorted`, `upsertCorrectionCase_sameId`, `correctionCase_found_links`; `optionWithProof`/`PLift` certificates replace equation-losing pattern `let`s in `buildAccepted`; runtime behavior, theorem statements, wire formats, KAT, digest domains unchanged; no `sorry`/`axiom`/`native_decide`). Guarded builds: `blind_financial_correction` PASS (32 jobs, `lean-fix-20260924b-3`, peak WS 1.02 GB, private 1.89 GB, min free 4.15 GB) and `blind_financial` PASS (50 jobs, `lean-fix-financial-20260924c-1`, peak 1.35 GB WS/2.69 GB private, min free 4.04 GB); warnings only. KAT `blind_financial --correction-transition-kat` (`lean-fix-kat-20260924b`): 32/32 PASS. Built exes (local, unpinned): `blind_financial_correction.exe` 6,241,792 B SHA-256 E4942E4D… 2D6E; `blind_financial.exe` 7,400,448 B SHA-256 7F30E8A1…AFFD. `CorrectionTransition/Theorems.lean` not in either exe's import chain, not compiled here. Felt effect: none (infrastructure for the Lean-checked correction path the analyst's corrections run through).
-- 2026-09-24 — Trunk test repair (Art. III.3, III.5, IV.2, V.2, XI.10; commits d452974, 75868a2, 08bb92c and this one): guarded run `fix-full-b` (v4 guard, same 11 modules as `baseline-20260924b`, min free 3.98 GB, cleanup PASS): 175 tests, 173 passed, 0 failed, 0 errors, 2 skipped (before: 150 passed, 8 failed, 17 errors). Product fixes: correction launcher fails closed on a missing/wrong release (was an AttributeError); one release loader for server and CLI, with CLI flags; staff command binding v2 (64-hex SHA-256 snapshot id; binds `receipt_digest` instead of the Mirror-hidden `input_snapshot_digest`); exact cash and correction retries are DUPLICATE, not conflicts; workspace resume no longer requires a summary key that never existed. Tests updated only where they expected removed/tightened behavior. The 2 skips are UNEXECUTED, not passes: the pinned 398E `blind_financial.exe` is absent from `artifacts/`, no fresh Engine handoff (`BLIND_FINANCIAL_EXE`/`_SHA256`) configured; a present but wrong artifact still fails. Felt effect: the analyst's correction/cash retries no longer show false conflicts, a restarted staff workspace reopens instead of refusing.
-- 2026-09-24 — Correction theorems compile (Art. V.4, X, XI.2): `CorrectionTransition/Theorems.lean` fixed in its proofs only (scoped `open ... DecisionPackage (EvaluationReceipt)` so the unchanged statement text names the field's real type instead of an auto-bound variable; `dsimp only`/`<;> rfl` fixes where `simp` couldn't see through private helpers); none of the 12 statements was false or changed, no `sorry`/`axiom`/`native_decide`. Guarded builds: module `BlindLedger.Financial.CorrectionTransition.Theorems` PASS (`lean-theorems-20260924e-8`, 12 jobs, peak 0.52 GB WS/0.97 GB private, min free 3.83 GB) and `blind_financial_axioms` PASS (`lean-axioms-20260924f-1`, 44 jobs incl. CodecLaws, peak 0.64/1.17 GB, min free 3.61 GB); warnings only. `#print axioms`: 2 of 12 use only `propext`; the other 10 and the `Transition.lean` fixed-point use `propext`, `Classical.choice`, `Quot.sound` (existing `simp` proofs), so the semantic assurance gate (allows only `propext`) would still fail its axiom check, as it would on its stale head pin and on importing a module its `blind_financial` build never produces. Not built by any Lake target: `lean/BlindLedger/AxiomCheck.lean`, `lean/BlindLedger/Checkpoint.lean` (no gate/doc reference). Felt effect: none (infrastructure for the Lean-checked correction path the analyst's corrections run through).
-- 2026-09-24 — Semantic assurance gate passes on a clean checkout (Art. V.4, XI.2; f44c974, 5363b5f): Lean's three standard axioms allowed, sorry/custom/native forbidden; the gate builds `blind_financial` and `blind_financial_axioms`, records the verified head/tree, parses wrapped `#print axioms`. Guarded run `semantic-gate-20260924l-1`: PASS (13/13 declarations, leanchecker PASS, native KAT 32 vectors, `blind_financial.exe` SHA-256 7F30E8A1…AFFD). Injected custom axiom and `sorry` are rejected by name. Claims unchanged. (Condensed.)
-- 2026-09-24 — Anti-bloat (Art. IX, X.1): removed `docs/history/` (30 old per-checkout status/instruction files, 1.48 MB) from the trunk after a hash-verified copy to `work/_retired-research-20260924/trunk-docs-history-20260924/`; added `tests/test_bloat_budget.py` (ratchet-down ceilings: live code 88k lines, core-file ceilings, <=20 Markdown files / 180 KB, STATUS <=40 KB, no per-team status files, no duplicate code files). Guarded run `bloat-budget-1`: 5/5 passed. Felt effect: none (infrastructure for: keeping the product small enough to change fast).
-- 2026-09-24/25 — core-v8 change log, condensed at the c17453a merge (full entries in git history). Step 1: v5/v6 stores retired (founder approval); owner 7,137->6,954, checker 4,724->4,630. Step 2: `financial_events` append-only triggers. Step 4: one typed decoder per stored JSON record; `STAFF-SNAPSHOT-ID/v1`. Staff correction binding fixed (then main's `STAFF-COMMAND-BINDING/v2`). Owner open replays history (`open_verification:<code>`, file left byte-identical). CLI requires actor and reviewed revision. v8 format (founder-approved): `OWNER/v8`, `CONTINUITY/v8`, derived `commands` log (`COMMAND/v1`), deferred FKs; v7 stores convert all-or-nothing on open. Step 3: one retry rule from the `commands` log. Checker FK trim (-49). Step 6: events carry the captured rows, replayed exactly; v7 conversion seals one `OPENING-BALANCE/v1` event. Step 7: per-obligation check before COMMIT. Step 5: Python re-derivation of the Lean correction deleted (engine -145). Felt: an edit made outside the owner, a stale command or a wrong retry is refused with its reason.
-- 2026-09-25 — Final review of 75a5517, fixes 1-5 (77bde96, 23ec2bb, c51c642, 3c2ceae, 32014bb): the checker derives the correction's case status, case rows and claim times from history (v7 sweep 106 sealable edits -> 2, both bounded); publish opens the case before the first evaluation and every current evaluation must match the current rows; Lean's post-state wire and result context must equal what was written; an opening balance cannot change a row history carried. Owner +18, checker +47, adapter +6. Tests 195->199, all pass. Felt: a needed correction cannot be hidden, and Lean cannot describe another state.
-- 2026-09-25 — B1 (6d1ef43): a new claim no longer hides an outstanding correction; the case keeps CORRECTION_REQUIRED, its owner and due date until the correction completes, and the claim is still recorded. Owner and checker share the rule. Checker +1, test +33; tests 200->201. Felt: staff keep seeing the correction still owed.
-- 2026-09-25 — C1: an opening balance only before any event that carries rows. The v7 conversion test opens a genuine v7 store (fixture written by d70ad50). Checker -2, tests -40; tests 201. Felt: conversion is proven on a store v7 really wrote.
-- 2026-09-25 — C2: the adapter binds Lean's declared correction post-state with the same checks as any result (context, authority, pack, revision, rule version, evidence, completion). Owner -24, adapter +28; tests 201. Felt: Lean cannot describe another state.
-- 2026-09-25 — Continuity v8 history segments (founder-approved; branch `continuity-v8`): writes no longer re-check the whole history, which is sealed into chained segments, exported and restored by replay (docs/CORE_REDESIGN.md). Ceiling: 10,000 events or rows per table (Lean `maxRows`), refused before commit; the harness stopped at 9,500 commands, evaluations first (`a3load-1`; was ~900). Guarded `a3all-1` after the core-v8 merge: 372 tests OK (10 env skips). FLAG: open and staff snapshot run the whole checker: 27.3 s / 27.9 s at 10k (`b10k-3`), ~100 s each at 20k (pre-cap code, `b20kc`); over the 5 s target, not fixed. Not done: Lean seal codec; staff TEST restore via the history export. Felt: about 9,500 commands instead of about 900.
-- 2026-09-25 — C3 (branch `c3-v7cut`; lead decision C3 under the founder's 2026-09-25 grant ('u have all auth'); reported to the founder the same day with no objection): v7 conversion deleted (only synthetic data existed): `tools/continuity_successor_v7.py`, owner `_migrate_v7_store`, `OPENING_BALANCE`, checker v7 package format and the v7 fixture. 14 tests deleted (11 v7-receiver + 3 conversion); rr-review fixes restored a forged-event test and the acknowledgment cross-check test on native v8 stores. A non-v8 store fails `unsupported_store_version`; a v8 store converted from v7 (it contains `OPENING_BALANCE`) now fails `history:event-kind` (all data was synthetic). LIVE_CODE_LINES 86,238->83,341; owner 7,237->7,165, checker 5,009->4,999; duplicated windows 865->740. Felt: none (infrastructure for: a smaller core that changes faster).
-- 2026-09-24 — Code anti-bloat pass (Art. III, V, IX, XI): 277 product lines removed across engine (1,665->1,627), semantic adapter (2,207->2,123), verifier process (1,844->1,810), mirror graph checker (868->803), FHIR adapter (337->329), trust-graph view (320->287), semantic gate (1,211->1,203) and provider app (-5): re-checks of values the same module just produced, no-op try/except-raise wrappers, unwired `verify_input_binding_v2` chain, raise-only `LiveFhirTransport`, unreachable branches, unread fields. Nothing parked: the verifier process is on the live Engine path; the service kit does not duplicate the CLI. Wire formats, digest domains, tested error codes unchanged. Budget: live code 85k, copy-paste windows 865 (actual 84,765/862). Guarded runs `simp-final-all-t10` (324 run, only the 7 known real-Lean gate env failures, 3 known skips; same as baseline) and `simp-final-prov-t1` (same 2 env errors as baseline). Felt effect: none (infrastructure for code small enough to change fast).
-- 2026-09-24 — Felt-value scorecard (Art. XII, XIII.1/2/4/5, XI.11): `tools/right_rail_scorecard.py` drives the Hospital H journey through the real staff server, Mirror and `staff.js` for five roles (state analyst, finance approver, director, auditor, replacement operator), measuring clicks, screens, requests, on-screen facts, hand-added rows, case age, open items, correction accuracy and repeat-evidence absorption; `docs/scorecard/hospital_h.json` holds before (commit 1c7ed3b) and after values, `tests/test_right_rail_scorecard.py` fails if any measured unit gets worse; `docs/SCORECARD.md` lists who feels each unit, top friction and Art. XIII violations. Staff-screen fixes only: answer-first "Needs attention now" line and program totals (director: 3 unanswered facts/20 hand-added rows -> 0), plain case facts with digests folded away (facts only in raw JSON -> 0 for every role), package reopens itself after a command (forced reopens 2 -> 0, follow-through clicks 6 -> 4), Refresh disabled while a command is pending, read errors shown when the panel is closed. Trade-off: one extra read request per command. Open: 19 hospitals show OPEN with no payment data (fixture); replacement operator can't take over unfinished work. Guarded runs score-base-9-a1, score-after-1-a1, score-test-2-a4, score-full-1-a11 (10 financial modules + scorecard + bloat: 172 run, 0 failed, 2 skipped UNEXECUTED engine tests) and score-cont-1-a7 (continuity successor v7: 11 passed): financial suite = 175 = 173 passed + 2 skipped as in baseline.
-- 2026-09-25 — Mirror made Article XIII-provable; scorecard items 2/5 closed (Art. XIII, XII), branch `mirror-xiii`: `interaction-model.json` declares every screen, role's controls/condition/route and response class from the real code; `test_right_rail_mirror_interaction_model.py` walks it exhaustively (no dead control, orphan screen, trap) and browser-crawls the served page per role, DOM matching exactly. Roles real via `/role/<role>`; `staff.js` hides (not disables) disallowed controls; removed wrong-role/stale-revision buttons and the orphan panel; unavailable states say to reload; raw ids/digests folded away. Item 2 (fixture): the 19 non-H items get seed-time payment evidence, reading paid not "Case OPEN". Item 5: TEST restore no longer blocked by H's own shortfall. Guarded (v4): 34/34 new/touched passed; full suite as baseline. Net +97 lines/5 files; scorecard JSON -25, no unit worse; live-code 84,996/85,000.
-- 2026-09-25 — Real Article XIII.4 checker, branch `mirror-xiii`: walker builds reject-offset's Lean release; per-state `enabled_when` eval caught 2 model bugs; REJECTED vocabulary 4->21 codes, enforced by a source scan; one table-driven walker for role visibility at every state; scorecard false-positive fixed. No money-logic, Lean, wire-format or protected-test edits.
-- 2026-09-25 — Dead-control fix, branch `mirror-xiii`: restore/restore-test now carry `correction_transition_release`, so restore-test no longer disables reject-offset (test fails on old code); walker runs restore-test at all 5 journey positions; `describeError` renders each control's declared message. Guarded `mirrorxiii-verify-01`: 121 tests, 0 failed.
-- 2026-09-25 — Staff HTTP hardening (Art. III.3, VI; branch `security-hardening`): only model-declared POST routes, exact targets, bad JSON/length 400, errors JSON 503/501, kit ships the model. Open: UI-only roles, no refusal log, no connection cap. Runs `sec-harden-1..3`. Felt effect: none (infrastructure for: audit readiness).
-- 2026-09-25 — WCAG 2.1 AA pass (Art. XIII.3), branch a11y: fixed 5 dark-mode contrast bugs, added focus moves, aria-live/aria-expanded, and a contrast+keyboard test; cut staff.js redundant same-trust-domain SHA-256 re-verification (-233 lines), binding kept.
-- 2026-09-25 — Mirror outputs allowlist-only (Art. IV.2); CLI `obligation-detail` no longer leaks evaluation snapshot/scope JSON or idempotency keys.
-- 2026-09-25 — core-v8 integrated trunk 85dc88b (Art. IV.2, XIII): trunk structure, core-v8 behaviour. `staff.js` is trunk's (snapshot-id contract enforced server side); Mirror tables unchanged, plus v2-only decision package, required population binding, `CONTINUITY/v8`. No Mirror field added or dropped.
-- 2026-09-26 — PTG view flake fix (branch `fix-ptg-flake`): the 405 path reads a declared body (<=64 KiB) before replying, so Windows no longer sends RST and aborts the client (WinError 10053). Slow-client probe 95/100 -> 100/100. Open: staff server 403/404/400 POST refusals do not read the body either.
-- 2026-09-26 — Gate formats round 6 (branch `gate-v1`, 786b5c9, merged trunk 6cccb84 as 175a5d6): LIVE_CODE_LINES 86,585->88,257 (+1,672 = round 6 +224, trunk gate rules +1,448), exact count of 175a5d6; duplicated windows 738, unchanged. Guarded full suite `gate-rr6-full-a1`: 395 run, 384 passed, 0 failed, 0 errors, 11 skipped. Lead decision under the founder's 2026-09-25 grant.
+Next: connector/browser completion remains paused at the founder's request;
+the exhaustive browser crawl and final combined-source verification are
+still outstanding. The receiver cash-file implementation is synthetic-only;
+the distinct MCO/X12/MMIS formats listed above remain unsupported and refuse
+completely. The founder requested local commits; this candidate is not a
+qualified release. No production activation follows from any of these local
+checks.

@@ -13,8 +13,10 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import socket
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -52,6 +54,8 @@ H_OBLIGATION_ID = "obligation:item-h:period-01"
 MAX_RESTORE_DESTINATIONS = 1000
 MAX_STAFF_COMMAND_BYTES = 8192
 HTTP_REQUEST_TIMEOUT_SECONDS = 60.0
+HTTP_BODY_TIMEOUT_SECONDS = 5.0
+HTTP_REFUSAL_DRAIN_SECONDS = 0.1
 
 PROGRAM_TOTAL_CENTS = 100_000_000
 H_OWED_CENTS = 10_000_000
@@ -75,6 +79,7 @@ REPORT_EVENT_MS = 1_775_001_600_000
 
 CASH_CORRECTION_COMMAND = {
     "item_id": H_ITEM_ID,
+    "pays_action_id": H_ACTION_ID,
     "payment_id": "payment:h:p2",
     "common_origin_id": "origin:payment:h:p2",
     "amount_cents": CORRECTION_CENTS,
@@ -429,7 +434,6 @@ class StaffWorkflow:
                 local_ref=f"ref:support:{index:02d}",
                 applicable_at_ms=SUPPORT_EVENT_MS,
                 event_at_ms=SUPPORT_EVENT_MS,
-                received_at_ms=SUPPORT_EVENT_MS,
             )
             owner.record_payment_evidence(
                 item_id=item_id,
@@ -612,6 +616,7 @@ class StaffWorkflow:
     def reject_offset_and_authorize_correction(self, body: object) -> dict[str, Any]:
         with self._lock:
             revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
+            self._clock.advance_to(DECISION_AT_MS)
             result = self._mirror.reject_offset_and_authorize_correction(
                 item_id=H_ITEM_ID,
                 claim_id=H_CLAIM_ID,
@@ -860,6 +865,7 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
         def setup(self) -> None:
             super().setup()
             self.connection.settimeout(HTTP_REQUEST_TIMEOUT_SECONDS)
+            self._body_read = False
 
         def log_message(self, _format: str, *args: Any) -> None:
             # Avoid request paths or user activity in console logs.
@@ -889,13 +895,31 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
 
         def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8", *, retry_after: bool = False) -> None:
             content = value if type(value) is bytes else _json_bytes(value)
+            self.close_connection = True
             self._response_length = len(content)
             self.send_response(status)
             self._headers(content_type)
             if retry_after:
                 self.send_header("Retry-After", "1")
             self.end_headers()
-            self.wfile.write(content)
+            if self.command != "HEAD":
+                self.wfile.write(content)
+            self.wfile.flush()
+            if status >= 400 and not self._body_read:
+                # Closing with unread bytes can reset away the refusal on Windows.
+                # Send first, then discard a bounded amount without trusting framing.
+                deadline = time.monotonic() + HTTP_REFUSAL_DRAIN_SECONDS
+                remaining = MAX_STAFF_COMMAND_BYTES + 1
+                try:
+                    self.connection.shutdown(socket.SHUT_WR)
+                    while remaining and (wait := deadline - time.monotonic()) > 0:
+                        self.connection.settimeout(wait)
+                        chunk = self.rfile.read1(remaining)
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                except OSError:
+                    pass  # peer gone or drain bound reached; never dispatch these bytes
 
         def _allowed(self, *, mutation: bool) -> bool:
             return _request_allowed(
@@ -907,12 +931,29 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
             )
 
         def _json_request(self) -> dict[str, Any]:
-            length = self.headers.get("Content-Length", "")
-            if self.headers.get_content_type() != "application/json" or not re.fullmatch(r"[0-9]{1,5}", length):
+            lengths = self.headers.get_all("Content-Length", [])
+            if len(lengths) != 1 or self.headers.get_all("Transfer-Encoding"):
+                raise ValueError("request_framing")
+            length = lengths[0]
+            if len(self.headers.get_all("Content-Type", [])) != 1 or self.headers.get_content_type() != "application/json" or not re.fullmatch(r"[0-9]{1,5}", length):
                 raise ValueError("request_header")
             if int(length) > MAX_STAFF_COMMAND_BYTES:
                 raise ValueError("request_size")
-            value = json.loads(self.rfile.read(int(length)).decode("utf-8"), object_pairs_hook=_unique_json_object)
+            deadline, data = time.monotonic() + HTTP_BODY_TIMEOUT_SECONDS, bytearray()
+            try:
+                while len(data) < int(length):
+                    wait = deadline - time.monotonic()
+                    if wait <= 0:
+                        raise ValueError("request_timeout")
+                    self.connection.settimeout(wait)
+                    chunk = self.rfile.read1(int(length) - len(data))
+                    if not chunk:
+                        raise ValueError("request_short_body")
+                    data.extend(chunk)
+            finally:
+                self.connection.settimeout(HTTP_REQUEST_TIMEOUT_SECONDS)
+            self._body_read = True
+            value = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_json_object)
             if type(value) is not dict:
                 raise ValueError("request_shape")
             return value
@@ -948,7 +989,7 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 return
             try:
                 body = self._json_request()
-            except (ValueError, RecursionError):  # ValueError covers JSON and UTF-8 decode errors
+            except (ValueError, RecursionError, OSError):  # malformed, truncated or timed-out body
                 self._respond(400, {"error": {"code": "invalid_request"}})
                 return
             try:
@@ -961,8 +1002,8 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 self._respond(409, {"error": {"code": str(exc)}, "changed": False})
             except FinancialAuthorityError as exc:
                 self._respond(403, {"error": {"code": str(exc)}, "changed": False})
-            except (FinancialError, FinancialMirrorError) as exc:
-                self._respond(409, {"error": {"code": str(exc)}})
+            except (FinancialError, FinancialMirrorError) as exc:  # a failed restore also carries its safe support package
+                self._respond(409, {"error": {"code": str(exc), **({"corporate_support": s} if (s := getattr(exc, "corporate_support", None)) else {})}})
             except ValueError:
                 self._respond(400, {"error": {"code": "invalid_request"}})
             except Exception:

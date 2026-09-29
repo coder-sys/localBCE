@@ -23,12 +23,6 @@ class IndependentFinancialError(RuntimeError):
     """Raised for every malformed, stale, rebound, or inconsistent owner DB."""
 
 
-# Friendly aliases keep the boundary usable without coupling callers to one
-# historical exception spelling.
-FinancialIndependentError = IndependentFinancialError
-FinancialVerificationError = IndependentFinancialError
-
-
 def _fail(code: str, caught: BaseException | None = None) -> NoReturn:
     # Only the checker's own caught read error can be a lock: another connection's lock is retryable, never a finding.
     if isinstance(caught, sqlite3.OperationalError) and getattr(caught, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
@@ -73,7 +67,43 @@ PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; the Owner upgrade
 }
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARTIFACT_SHA256 = "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "1A7A18333726484A0737DA7B005EC699F73E99EA0CFACFB409B000F964BED3AF"
+RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
+RETIRED_PINS_SHA256 = "d0c3aa9e493e6adf6af590fdd1c32b99eb85bf1c6d52b73f3fca1dab46f1dc3b"
+
+
+# What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
+# what earlier correction requests on the obligation still ask for, less what was paid against them) -> amount.
+_CORRECTION_AMOUNT_RULES = {
+    "correction-rule-v1": lambda claim, shortfall, unpaid: claim,  # E911: the whole claim
+    "b2-v1": lambda claim, shortfall, unpaid: min(claim, shortfall),  # 88D8: the unpaid balance
+    "h1-v1": lambda claim, shortfall, unpaid: min(claim, max(shortfall - unpaid, 0)),  # current: not yet requested
+}
+
+
+def correction_engines() -> dict[str, tuple[int, str]]:
+    """Every engine committed correction history may name -> (generation, amount rule). Retired engines are
+    valid for history, never for new work; generation is registry order and the current pin is newest
+    (append-only, digest-pinned; line = sha, date, retiring commit, rule, reason). A malformed registry refuses."""
+    try:
+        registry = RETIRED_PINS_PATH.read_bytes()
+    except OSError:
+        registry = b""
+    if hashlib.sha256(registry).hexdigest() != RETIRED_PINS_SHA256:
+        _fail("history:correction-retired-pins")
+    engines: dict[str, tuple[int, str]] = {}
+    try:
+        for line in registry.decode("ascii").splitlines():
+            sha, _date, _commit, rule, _reason = line.split("\t")
+            if re.fullmatch("[0-9A-F]{64}", sha) is None or rule not in _CORRECTION_AMOUNT_RULES or sha in engines or sha == CORRECTION_TRANSITION_ARTIFACT_SHA256:
+                raise ValueError(sha)
+            engines[sha] = (len(engines), rule)
+    except ValueError:
+        _fail("history:correction-retired-pins")
+    engines[CORRECTION_TRANSITION_ARTIFACT_SHA256] = (len(engines), "h1-v1")
+    return engines
+
+
 CORRECTION_FOLLOWUP_DEPENDENCIES = [
     "OBLIGATION_REVISION",
     "CURRENT_EVALUATION_RECEIPT",
@@ -423,7 +453,7 @@ _CASE_STATUSES = {"OPEN", "AUTHORIZED", "CORRECTION_REQUIRED", "ACTIONED", "RESO
 _DELIVERY_STATUSES = {"NONE", "READY", "ACKNOWLEDGED", "CANCELLED"}
 _EVALUATION_VERIFICATION = {"MISSING_EVIDENCE", "SUPPORTED", "CONFLICT_VISIBLE"}
 _ACTION_KINDS = {"OFFSET_AUTHORIZATION", "CORRECTION_PAYMENT_REQUEST"}
-_ACTION_STATUSES = {"READY", "ACKNOWLEDGED", "CANCELLED"}
+_ACTION_STATUSES = {"READY", "ACKNOWLEDGED"}  # v2 never cancels an action
 _CLAIM_STATUSES = {"CLAIMED", "AUTHORIZED", "REJECTED"}
 
 
@@ -1275,6 +1305,8 @@ def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.R
                 rows[key].update({column: _package_import_value(value, f"replay:{table}") for column, value in changes.items()})
             else:
                 _fail(f"replay:image:{table}")
+            if table == "evidence" and (row if "row" in image else changes).get("received_at_ms", event["committed_at_ms"]) != event["committed_at_ms"]:
+                _fail("replay:evidence-received-at")  # received is when the event that wrote it committed
     for table in CAPTURED_TABLES:
         if {str(row[0]): dict(row) for row in _bounded_rows(connection, table)} != state[table]:
             _fail(f"replay:{table}")
@@ -1353,7 +1385,7 @@ def _verify_correction_followup_records(
         if (
             artifact["contract"] != CORRECTION_TRANSITION_OPERATION
             or _integer(artifact["version"], "history:correction-followup-artifact-version", minimum=1, maximum=MAX_ROWS) != 1
-            or artifact["sha256"] != CORRECTION_TRANSITION_ARTIFACT_SHA256
+            or str(artifact["sha256"]) not in correction_engines()
         ):
             _fail("history:correction-followup-artifact-binding")
 
@@ -2302,6 +2334,9 @@ def _verify_population_history(
 ) -> None:
     """Reconstruct each population's lifecycle from ordered history events."""
 
+    times = [_time(event["committed_at_ms"], "history:committed-at") for event in events]
+    if any(earlier > later for earlier, later in zip(times, times[1:])):
+        _fail("history:commit-order")  # the clock never runs backward along the history; package and database paths both
     by_population: dict[str, list[sqlite3.Row]] = {population_id: [] for population_id in populations}
     for event in events:
         if event["aggregate_type"] != "POPULATION":
@@ -2348,7 +2383,6 @@ def _verify_population_history(
         source_completed = False
         validated = False
         published = False
-        previous_committed_at: int | None = None
         for event in by_population[population_id]:
             event_sequence = _integer(
                 event["event_sequence"],
@@ -2368,10 +2402,6 @@ def _verify_population_history(
                 )
             ):
                 _fail("history:population-manifest-stale-event")
-            committed_at = _time(event["committed_at_ms"], "history:population-committed-at")
-            if previous_committed_at is not None and committed_at < previous_committed_at:
-                _fail("history:population-chronology")
-            previous_committed_at = committed_at
             before = _integer(event["before_revision"], "history:population-before", maximum=MAX_ROWS)
             after = _integer(event["after_revision"], "history:population-after", maximum=MAX_ROWS)
             payload = _parse_json(event["payload_json"], "history:population-payload", max_bytes=MAX_PACKAGE_BYTES)
@@ -2528,7 +2558,7 @@ def _verify_population_history(
         elif status == "PUBLISHED":
             if not validated or not published:
                 _fail("history:population-status-order")
-        last_committed_at[population_id] = previous_committed_at
+        last_committed_at[population_id] = by_population[population_id][-1]["committed_at_ms"] if by_population[population_id] else None
     if any(populations[population_id]["updated_at_ms"] != at for population_id, at in last_committed_at.items()):
         _fail("history:population-updated-at")
 
@@ -2882,18 +2912,42 @@ def _verify_determinations(
 def _verify_actions(
     connection: sqlite3.Connection,
     meta: dict[str, object],
-    obligations: dict[str, sqlite3.Row],
+    evaluations: dict[str, list[sqlite3.Row]],
     claims: dict[str, sqlite3.Row],
     determinations: dict[str, sqlite3.Row],
+    payments: dict[str, sqlite3.Row],
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "actions")
     outbox_rows = _bounded_rows(connection, "action_outbox")
     outbox = {str(row["action_id"]): row for row in outbox_rows}
     acks = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.action_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='ACTION_ACKNOWLEDGED'")}
+    registry = correction_engines()
+    current = registry[CORRECTION_TRANSITION_ARTIFACT_SHA256]
+    engines: dict[str, tuple[int, str]] = {}  # correction action -> the engine that decided it, by its decision event
+    decided: dict[str, object] = {}  # correction action -> the amount its decision event records
+    newest = 0
+    for action_ref, sha, event_amount in connection.execute("SELECT json_extract(payload_json,'$.action_id'),json_extract(payload_json,'$.correction_followup.artifact.sha256'),json_extract(payload_json,'$.amount_cents') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence"):
+        engines[action_ref] = engine = registry.get(sha, current)
+        if engine[0] < newest:
+            _fail("action:engine-order")  # a retired engine never decides after a newer one
+        newest = engine[0]
+        decided[action_ref] = event_amount
+    reversed_at = dict(connection.execute("SELECT json_extract(payload_json,'$.payment_id'),after_revision FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_REVERSED'").fetchall())
+    links = connection.execute("SELECT aggregate_id,after_revision,json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL").fetchall()
+    linked: dict[object, list[tuple[int, object, int]]] = {}  # correction action -> (paid at, reversed at, cents)
+    for _obligation, paid_revision, payment_id, action_ref in links:
+        if payment_id not in payments:
+            _fail("payment:link")
+        linked.setdefault(action_ref, []).append((paid_revision, reversed_at.get(payment_id), payments[payment_id]["amount_cents"]))
+
+    def paid_at(action_ref: object, revision: int) -> int:  # what linked payments had paid on the request when revision was decided
+        return sum(cents for paid, reversed_revision, cents in linked.get(action_ref, ()) if paid < revision and (reversed_revision is None or reversed_revision >= revision))
+
     if len(outbox) != len(outbox_rows):
         _fail("outbox:duplicate")
     actions: dict[str, sqlite3.Row] = {}
-    for row in rows:
+    requests: dict[str, dict[str, int]] = {}  # per obligation, in revision order: correction request -> amount
+    for row in sorted(rows, key=lambda row: (str(row["obligation_id"]), _integer(row["revision"], "action:revision"))):
         action_id = _id(row["action_id"], "action:id")
         if action_id in actions:
             _fail("action:duplicate")
@@ -2918,14 +2972,22 @@ def _verify_actions(
         if not isinstance(payload, dict):
             _fail("action:payload-object")
         claim_id = determination["claim_id"]
-        claim = claims[str(claim_id)]
+        amount = requestable = claims[str(claim_id)]["amount_cents"]
+        if kind == "CORRECTION_PAYMENT_REQUEST":  # the input evaluation's unpaid balance, by the deciding engine's rule
+            if decided.get(action_id) != amount:
+                _fail("action:event-amount")  # the decision event records the rejected claim
+            shortfall = _cents(next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["evaluation_id"] == determination["input_evaluation_id"]), None), "action:input-shortfall", positive=True)
+            earlier = requests.setdefault(obligation_id, {})
+            unpaid = sum(max(cents - paid_at(ref, revision), 0) for ref, cents in earlier.items())
+            requestable = max(shortfall - unpaid, 0)
+            amount = earlier[action_id] = _CORRECTION_AMOUNT_RULES[engines.get(action_id, current)[1]](amount, shortfall, unpaid)
         expected_payload = {
             "action_id": action_id,
             "obligation_id": obligation_id,
             "determination_id": determination_id,
             "kind": kind,
             "claim_id": claim_id,
-            "amount_cents": claim["amount_cents"],
+            "amount_cents": amount,
             "currency": meta["scope"]["currency"],
             "revision": revision,
             "input_evaluation_id": determination["input_evaluation_id"],
@@ -2934,6 +2996,8 @@ def _verify_actions(
         }
         if payload != expected_payload:
             _fail("action:payload-binding")
+        if amount > requestable:
+            _fail("action:requestable")  # whatever engine decided it, never more than earlier requests leave unpaid
         payload_bytes = _canonical(payload, "action:payload")
         payload_digest = _blob64(row["payload_digest"], "action:payload-digest")
         if payload_digest != _digest(ACTION_DOMAIN, payload_bytes):
@@ -2958,6 +3022,10 @@ def _verify_actions(
                 _fail("outbox:acknowledged")
     if set(outbox) != set(actions):
         _fail("outbox:orphan")
+    for obligation_id, paid_revision, payment_id, action_ref in links:  # a payment pays an earlier request, never past it
+        request = requests.get(obligation_id, {}).get(action_ref)
+        if request is None or actions[action_ref]["revision"] >= paid_revision or paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request:
+            _fail("payment:link")
     return actions
 
 
@@ -3022,6 +3090,23 @@ def _verify_conflicts(
         elif candidate_key not in keys:
             _fail("conflict:missing")
     return conflicts
+
+
+def _verify_duplicate_evidence(connection: sqlite3.Connection) -> None:
+    """A DUPLICATE label names a confirmation on its obligation's item with no payment or conflict of its own that
+    repeats the named payment of that obligation (same origin, amount); a forged one would hide a new payment."""
+    if connection.execute(
+        "SELECT 1 FROM financial_events f WHERE f.kind='PAYMENT_DUPLICATE_EVIDENCE' AND NOT EXISTS (SELECT 1 FROM evidence e "
+        "JOIN obligations o ON o.item_id=e.item_id JOIN payments p ON p.obligation_id=o.obligation_id "
+        "WHERE f.aggregate_type='OBLIGATION' AND o.obligation_id=f.aggregate_id AND e.kind='PAYMENT_CONFIRMATION' "
+        "AND e.evidence_id=json_extract(f.payload_json,'$.candidate_evidence_id') "
+        "AND p.payment_id=json_extract(f.payload_json,'$.existing_payment_id') "
+        "AND p.common_origin_id=json_extract(f.payload_json,'$.common_origin_id') "
+        "AND e.common_origin_id=p.common_origin_id AND e.amount_cents=p.amount_cents "
+        "AND NOT EXISTS (SELECT 1 FROM payments WHERE evidence_id=e.evidence_id) "
+        "AND NOT EXISTS (SELECT 1 FROM financial_conflicts WHERE candidate_evidence_id=e.evidence_id))"
+    ).fetchone() is not None:
+        _fail("duplicate-evidence:binding")
 
 
 def _evaluation_bindings_json(raw: object, code: str) -> list[dict[str, str]]:
@@ -4261,8 +4346,9 @@ def _verify_connection(
         evaluations,
         actors=identity["actors"],
     )
-    actions = _verify_actions(connection, meta, obligations, claims, determinations)
+    actions = _verify_actions(connection, meta, evaluations, claims, determinations, payments)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
+    _verify_duplicate_evidence(connection)
     funding, funding_receipt_ids = _verify_program_funding(connection, meta, events)
     manifest_records = manifest_state["manifests"]
     assert isinstance(manifest_records, dict)
@@ -5005,7 +5091,3 @@ def verify_decision_package(
             _fail("decision-package:malformed", error)
     finally:
         connection.close()
-
-
-verify = verify_database
-verify_continuity = verify_continuity_package

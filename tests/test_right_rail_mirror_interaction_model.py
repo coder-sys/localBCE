@@ -7,6 +7,7 @@ scorecard's own headless browser, confirming the DOM matches exactly.
 
 import json
 import re
+import socket
 import tempfile
 import threading
 import unittest
@@ -96,26 +97,25 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             raise unittest.SkipTest("correction_engine_artifact_absent")
         scorecard._node_path()
         cls.temp = tempfile.TemporaryDirectory(prefix="rr-mirror-xiii-crawl-")
+        cls.addClassCleanup(cls.temp.cleanup)
         engine_dir = Path(cls.temp.name) / "engine-work"
         engine_dir.mkdir()
         cls.release = scorecard.financial_engine.load_correction_transition_release(scorecard.ENGINE_PATH.resolve(), engine_dir)
         cls.driver_path = Path(cls.temp.name) / "browser.js"
         cls.driver_path.write_text(scorecard.DRIVER_JS, encoding="utf-8")
         cls.browser = scorecard._Browser(0, cls.driver_path)
+        cls.addClassCleanup(cls.browser.close)
         cls.workflow, cls.server, cls.thread = cls._start_workflow(Path(cls.temp.name) / "owner")
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._stop_workflow(cls.workflow, cls.server, cls.thread)
-        cls.browser.close()
-        cls.temp.cleanup()
+        cls.addClassCleanup(cls._stop_workflow, cls.workflow, cls.server, cls.thread)
 
     @classmethod
     def _start_workflow(cls, owner_dir: Path):
         """A fresh workflow + server on the same real engine release."""
         owner_dir.mkdir()
         workflow = scorecard.staff.StaffWorkflow(owner_dir, correction_transition_release=cls.release)
-        server = scorecard.staff._LoopbackServer(("127.0.0.1", 0), scorecard.staff._handler_for(workflow))
+        server = scorecard.staff._LoopbackServer(("127.0.0.1", 0), _response_handler(workflow))
+        server.fault = None
+        server.fault_requests = []
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         thread.start()
         return workflow, server, thread
@@ -153,19 +153,23 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
 
     def _check_state(self, pkg: dict[str, Any], test_mode: bool, server: Any = None) -> None:
         ns = _state(pkg, test_mode)
-        for role in _DECISION_ROLES:
+        for role in _MODEL["roles"]:
             browser = self._open(role, server)
-            browser.click("open-package")
-            view = browser.view()
-            for name, control in _MODEL["controls"].items():
-                if control["screen"] != "decision":
-                    continue
-                button = view["buttons"].get(name)
-                if role not in control["roles"]:
-                    self.assertTrue(button is None or button["hidden"], f"{role}/{name}"); continue
-                self.assertIsNotNone(button, f"{role}/{name}")
-                self.assertFalse(button["hidden"], f"{role}/{name}")
-                self.assertEqual(not button["disabled"], eval(control["enabled_when"], {"__builtins__": {}}, ns), f"{role}/{name}: state={ns}")
+            browser.click("refresh-button")
+            if role in _DECISION_ROLES:
+                browser.click("open-package")
+            self._check_buttons(browser.view(), role, ns)
+
+    def _check_buttons(self, view, role, ns) -> None:
+        for name, control in _MODEL["controls"].items():
+            if control["screen"] != "decision":
+                continue
+            button = view["buttons"].get(name)
+            if role not in control["roles"]:
+                self.assertTrue(button is None or button["hidden"], f"{role}/{name}"); continue
+            self.assertIsNotNone(button, f"{role}/{name}")
+            self.assertFalse(button["hidden"], f"{role}/{name}")
+            self.assertEqual(not button["disabled"], eval(control["enabled_when"], {"__builtins__": {}}, ns), f"{role}/{name}: state={ns}")
 
     def _run_step(self, workflow, server, role: str, name: str, response: str = "success", before_click=None) -> None:
         control = _MODEL["controls"][name]
@@ -296,6 +300,130 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             with self.subTest(check="keyboard_reachable", control=control_id):
                 self.assertFalse(view["hidden"].get(control_id) or view["disabled"].get(control_id), control_id)
 
+    def test_every_declared_role_control_response_over_real_http(self) -> None:
+        """Negative replies test rendering at the HTTP boundary, not Owner refusal causes."""
+        expected = {(role, name, code) for name, control in _MODEL["controls"].items()
+                    for role in control["roles"] for code in control["responses"]}
+        observed = set()
+        for name, control in _MODEL["controls"].items():
+            workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"responses-{name}")
+            try:
+                self._prepare_command(workflow, server, name)
+                for role in control["roles"]:
+                    codes = [code for code in control["responses"] if code != "success"] + ["success"]
+                    for code in codes:
+                        with self.subTest(role=role, control=name, response=code):
+                            browser = self._open(role, server)
+                            if control["screen"] == "decision":
+                                browser.click("open-package")
+                            before = workflow.mirror.owner.export_continuity()
+                            package = workflow.decision_view()["decision_package"]
+                            server.fault_requests.clear()
+                            server.fault = None if code == "success" else {"route": control["route"], "code": code}
+                            try:
+                                if control["route"].startswith("POST"):
+                                    self.assertTrue(browser.action(name))
+                                else:
+                                    browser.click(name)
+                                view = browser.view()
+                            finally:
+                                server.fault = None
+                            self._check_response(view, name, code)
+                            if code != "success":
+                                self.assertTrue(server.fault_requests, "injection did not reach the real HTTP handler")
+                                self.assertEqual(workflow.mirror.owner.export_continuity(), before)
+                            elif control["route"].startswith("POST"):
+                                self._check_success(workflow, name, package)
+                            browser.click("refresh-button")
+                            self.assertTrue(browser.last_view["screens"]["overview"])
+                            if role in _DECISION_ROLES:
+                                browser.click("open-package")
+                                self.assertTrue(browser.last_view["screens"]["decision"])
+                            observed.add((role, name, code))
+                            print("BROWSER_RESPONSE_CASE=" + json.dumps([role, name, code]), flush=True)
+            finally:
+                self._stop_workflow(workflow, server, thread)
+        self.assertEqual(observed, expected)
+
+    def _prepare_command(self, workflow, server, name) -> None:
+        for role, step in _JOURNEY:
+            if name not in {action for _, action in _JOURNEY} or step == name:
+                return
+            self._run_step(workflow, server, role, step)
+
+    def _check_response(self, view, name, code) -> None:
+        outcome = _MODEL["controls"][name]["responses"][code]
+        self.assertTrue(view["screens"][outcome["screen"]], (name, code, view["screens"]))
+        region = ("connection-status" if name == "refresh-button" or outcome["screen"] == "unavailable"
+                  else "package-staleness" if name == "open-package" and code == "success" else "command-status")
+        if code == "success":
+            self.assertTrue(view["texts"][region].startswith(outcome["message"]), view["texts"][region])
+        else:
+            self.assertEqual(view["texts"][region], outcome["message"])
+        if outcome["screen"] == "unavailable":
+            self.assertTrue(all(button["disabled"] for button in view["buttons"].values()))
+            self.assertFalse(view["disabled"].get("refresh-button", False))
+
+    def _check_success(self, workflow, name, before) -> None:
+        after = workflow.decision_view()["decision_package"]
+        if name in ("reject-offset", "acknowledge"):
+            self.assertEqual(after["current_action"]["status"], "READY" if name == "reject-offset" else "ACKNOWLEDGED")
+        if name == "record-cash":
+            self.assertEqual(after["obligation"]["received_cash_cents"] - before["obligation"]["received_cash_cents"], 300000)
+            self.assertEqual(after["obligation"]["shortfall_cents"], 0)
+        else:
+            self.assertEqual(after["obligation"]["received_cash_cents"], before["obligation"]["received_cash_cents"])
+        if name == "record-report":
+            self.assertTrue(after["obligation"]["reporting_complete"])
+        if name == "restore-test":
+            self.assertEqual(after, before)
+            self.assertEqual(workflow.continuity["mode"], "TEST")
+        workflow.mirror.owner.verify_integrity()
+
+    def test_pending_and_lost_responses_retain_exact_correction_and_cash_bodies(self) -> None:
+        for name, role in (("reject-offset", "approver"), ("record-cash", "analyst")):
+            for code in ("transport_failure", "owner_command_unavailable", "command_response_unverified", "store_busy_outcome_unknown"):
+                with self.subTest(control=name, response=code):
+                    workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"lost-{name}-{code}")
+                    release = threading.Event()
+                    entered = threading.Event()
+                    try:
+                        self._prepare_command(workflow, server, name)
+                        browser = self._open(role, server)
+                        browser.click("open-package")
+                        before = workflow.decision_view()["decision_package"]
+                        server.fault = {"route": _MODEL["controls"][name]["route"], "code": code,
+                                        "commit": True, "entered": entered, "release": release}
+                        self.assertTrue(browser.call({"op": "begin-action", "name": name})["clicked"])
+                        self.assertTrue(entered.wait(5), "command did not reach the HTTP boundary")
+                        pending = browser.call({"op": "view", "wait": False})["view"]
+                        ns = _state(before, False)
+                        retry_flag = "unresolved_correction_body" if name == "reject-offset" else "unresolved_cash_body"
+                        ns.update(reviewed=False, command_pending=True, **{retry_flag: True})
+                        self._check_buttons(pending, role, ns)
+                        self.assertTrue(pending["disabled"]["refresh-button"])
+                        release.set()
+                        self._check_response(browser.view(), name, code)
+                        server.fault = None
+                        self._check_success(workflow, name, before)
+                        committed = workflow.mirror.owner.export_continuity()
+                        original = server.fault_requests[0]["body"]
+                        browser.click("refresh-button")
+                        ns = _state(workflow.decision_view()["decision_package"], False)
+                        ns.update(reviewed=False, **{retry_flag: True})
+                        self._check_buttons(browser.view(), role, ns)
+                        server.fault = {"route": _MODEL["controls"][name]["route"], "code": "success", "commit": True}
+                        self.assertTrue(browser.action(name))
+                        server.fault = None
+                        self.assertEqual(server.fault_requests[-1]["body"], original)
+                        self.assertEqual(workflow.mirror.owner.export_continuity(), committed)
+                        self._check_response(browser.view(), name, "success")
+                        print("BROWSER_EXACT_RETRY=" + json.dumps([name, code]), flush=True)
+                    finally:
+                        release.set()
+                        server.fault = None
+                        self._stop_workflow(workflow, server, thread)
+
 _JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
             ("analyst", "record-cash"), ("analyst", "record-report"))
 _DECISION_ROLES = ("analyst", "approver", "auditor", "operator")
@@ -304,10 +432,52 @@ def _state(pkg: dict[str, Any], test_mode: bool) -> dict[str, Any]:
     action = pkg.get("current_action") or {}
     return {
         "reviewed": True, "command_pending": False, "test_mode": test_mode,
+        "owner_available": True, "unresolved_correction_body": False, "unresolved_cash_body": False,
         "decided": pkg.get("current_determination") is not None,
         "action": SimpleNamespace(status=action.get("status")), "shortfall": pkg["obligation"]["shortfall_cents"],
         "reporting_complete": bool(pkg["obligation"]["reporting_complete"]),
     }
+
+def _response_handler(workflow):
+    """Inject HTTP replies only; genuine success/commit still uses the real command path."""
+    class Responses(scorecard.staff._handler_for(workflow)):
+        def _inject(self) -> bool:
+            fault = self.server.fault
+            if not fault or fault["route"] != f"{self.command} {self.path}":
+                return False
+            if not self._allowed(mutation=self.command == "POST"):
+                return False
+            body = self._json_request() if self.command == "POST" else None
+            self.server.fault_requests.append({"route": fault["route"], "body": body})
+            if "entered" in fault:
+                fault["entered"].set()
+                if not fault["release"].wait(30):
+                    raise RuntimeError("browser_fault_release_timeout")
+            result = workflow.command(scorecard.staff._COMMAND_ROUTES[self.path], body) if fault.get("commit") else None
+            code = fault["code"]
+            if code == "transport_failure":
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+            elif code in ("fork_detected", "stale_read"):
+                result = getattr(workflow, scorecard.staff._READ_ROUTES[self.path])()
+                result["read_envelope"]["snapshot_id"] = "0" * 64
+                self._respond(200, result)
+            elif code == "command_response_unverified":
+                self._respond(200, {"workspace": {}})
+            elif code == "success":
+                self._respond(200, result)
+            else:
+                self._respond(503, {"error": {"code": code}, "changed": None if code == "store_busy_outcome_unknown" else False})
+            return True
+
+        def do_GET(self) -> None:
+            if not self._inject():
+                super().do_GET()
+
+        def do_POST(self) -> None:
+            if not self._inject():
+                super().do_POST()
+    return Responses
 
 if __name__ == "__main__":
     unittest.main()

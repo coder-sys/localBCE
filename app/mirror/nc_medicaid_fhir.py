@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 import hashlib
 import json
 from typing import Mapping, Protocol
@@ -211,16 +212,17 @@ def _success_page(profile: NcMedicaidFhirSourceProfile, sequence: int, request_u
 def _fetch_page(profile: NcMedicaidFhirSourceProfile, transport: FhirTransport, sequence: int, request_url: str, context: DynamicCaptureContext) -> dict[str, object]:
     attempts: list[int] = []
     retry_after_values: list[int | None] = []
-    response: FhirTransportResponse | None = None
-    transport_error: str | None = None
     failure_code: str | None = None
     for attempt in range(profile.transport_caps["max_retries"] + 1):
+        response: FhirTransportResponse | None = None
+        transport_error: str | None = None
         try:
             response = transport.fetch(request_url, timeout_seconds=profile.transport_caps["timeout_seconds"], attempt=attempt)
             attempts.append(response.status)
             try:
                 retry_after_values.append(_retry_after(response))
             except NcMedicaidFhirError:
+                retry_after_values.append(None)
                 return _failure_page(profile, sequence, request_url, response, attempts, retry_after_values, "retry-after", context=context)
             failure_code = _response_failure(response, request_url)
             if failure_code not in ("rate-limit", "server-error") or attempt >= profile.transport_caps["max_retries"]:
@@ -253,6 +255,32 @@ def _bundle_marker(bundle: object, key: str) -> object:
         return bundle.get("total")
     meta = bundle.get("meta")
     return meta.get("lastUpdated") if isinstance(meta, dict) else None
+
+
+def _marker_age_seconds(marker: object, profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext) -> int | None:
+    if marker is None:
+        return None
+    try:
+        if type(marker) is not str:
+            raise ValueError
+        if len(marker) == 10 and date.fromisoformat(marker).isoformat() == marker:
+            return None
+        updated = datetime.fromisoformat(marker[:-1])
+        if len(marker) != 20 or updated.isoformat(timespec="seconds") + "Z" != marker:
+            raise ValueError
+        clock = profile.capture_clock
+        fetched = datetime.fromisoformat(str(clock["reference_utc"])[:-1]) + timedelta(seconds=(context.fetched_at - int(clock["reference_tick"])) * int(clock["seconds_per_tick"]))
+    except (ValueError, OverflowError):
+        raise_redacted(NcMedicaidFhirError, "markers:last-updated")
+    age = fetched - updated
+    if age < timedelta(0):
+        raise NcMedicaidFhirError("markers:future")
+    return age.days * 86_400 + age.seconds
+
+
+def _discard_page_body(page: dict[str, object], failure_code: str) -> None:
+    page.update(bundle=None, body_hex="", resource_digests=[], next_url=None, failure_code=failure_code, byte_length=0, body_digest=_raw_digest("page-bytes", b""))
+    page["page_id"] = _digest("page-id", {key: value for key, value in page.items() if key != "page_id"})
 
 
 def _envelope_body(profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext, pages: list[dict[str, object]], *, source_status: str, failure_code: str | None, server_markers: dict[str, object]) -> dict[str, object]:
@@ -289,10 +317,10 @@ def build_fixture_envelope(transport: FhirTransport, *, profile: NcMedicaidFhirS
         if next_url is None:
             break
         if sequence + 1 >= profile.transport_caps["max_pages"]:
-            page["bundle"] = None; page["body_hex"] = ""; page["resource_digests"] = []; page["next_url"] = None; page["failure_code"] = "partial-page"; page["page_id"] = _digest("page-id", {key: value for key, value in page.items() if key != "page_id"}); failure_code = "partial-page"; source_status = "PARTIAL"; break
+            _discard_page_body(page, "partial-page"); failure_code = "partial-page"; source_status = "PARTIAL"; break
         expected_next = profile.page_url(sequence + 1, context)
         if next_url != expected_next:
-            page["bundle"] = None; page["body_hex"] = ""; page["resource_digests"] = []; page["next_url"] = None; page["failure_code"] = "query-drift"; page["page_id"] = _digest("page-id", {key: value for key, value in page.items() if key != "page_id"}); failure_code = "query-drift"; source_status = "PARTIAL"; break
+            _discard_page_body(page, "query-drift"); failure_code = "query-drift"; source_status = "PARTIAL"; break
         request_url = next_url
     else:
         source_status = "PARTIAL"; failure_code = "partial-page"
@@ -300,13 +328,14 @@ def build_fixture_envelope(transport: FhirTransport, *, profile: NcMedicaidFhirS
         source_status = "PARTIAL"; failure_code = "partial-page"
     totals = [_bundle_marker(page.get("bundle"), "total") for page in pages if page.get("failure_code") is None]
     markers = [_bundle_marker(page.get("bundle"), "last_updated") for page in pages if page.get("failure_code") is None]
+    marker_ages = [_marker_age_seconds(marker, profile, context) for marker in markers]
     total_values = {value for value in totals if value is not None}; marker_values = {value for value in markers if value is not None}
     if len(total_values) > 1 or (total_values and sum(value is not None for value in totals) != len(totals)):
         failure_code = "total-drift"; source_status = "PARTIAL"
     if len(marker_values) > 1 or (marker_values and sum(value is not None for value in markers) != len(markers)):
         failure_code = "marker-drift"; source_status = "PARTIAL"
     server_markers = {"total": next(iter(total_values)) if len(total_values) == 1 and all(value is not None for value in totals) else None, "last_updated": next(iter(marker_values)) if len(marker_values) == 1 and all(value is not None for value in markers) else None}
-    if isinstance(server_markers["last_updated"], str) and server_markers["last_updated"].startswith(("1900", "197")) and failure_code is None:
+    if failure_code is None and marker_ages and marker_ages[0] is not None and marker_ages[0] > profile.max_server_marker_age_days * 86_400:
         failure_code = "stale"
         source_status = "STALE"
     body = _envelope_body(profile, context, pages, source_status=source_status, failure_code=failure_code, server_markers=server_markers)

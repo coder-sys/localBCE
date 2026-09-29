@@ -7,7 +7,6 @@ namespace BlindLedger.Financial.CorrectionTransition
 
 open BlindLedger.Financial
 open BlindLedger.Financial.DecisionPackage
-open BlindLedger.Semantic
 
 private def correctionDecision : DeterminationDecision :=
   .OFFSET_REJECTED_CORRECTION_AUTHORIZED
@@ -15,14 +14,13 @@ private def correctionDecision : DeterminationDecision :=
 private def actionKind : String := "CORRECTION_PAYMENT_REQUEST"
 
 private def actionDomain : Bytes := "RR/FINANCIAL/ACTION/v1".toUTF8.toList ++ [UInt8.ofNat 0]
-private def idempotencyDomain : Bytes :=
-  "RR/FINANCIAL/IDEMPOTENCY/v1".toUTF8.toList ++ [UInt8.ofNat 0]
 
 private def appendBytes (parts : List Bytes) : Bytes :=
   parts.foldl (fun output part => output ++ part) []
 
 private def ownerFramedDigest (domain : Bytes) (parts : List Bytes) : Bytes :=
-  (sha3_512 ((domain ++ appendBytes (parts.map (fun part => natBE 8 part.length ++ part))).toByteArray)).toList
+  (BlindLedger.Semantic.sha3_512
+    ((domain ++ appendBytes (parts.map (fun part => natBE 8 part.length ++ part))).toByteArray)).toList
 
 private def hexDigit (value : Nat) : Char :=
   Char.ofNat (if value < 10 then 48 + value else 55 + value)
@@ -31,39 +29,10 @@ private def digestHex (value : Bytes) : String :=
   String.ofList (value.foldr (fun byte output =>
     hexDigit (byte.toNat / 16) :: hexDigit (byte.toNat % 16) :: output) [])
 
-/-! Every string in these canonical JSON payloads has already passed the
+/-! Every string in this canonical JSON payload has already passed the
     Owner's ASCII identifier/role/kind grammar. That grammar excludes JSON
     quotation marks, backslashes, control bytes, and non-ASCII text. -/
 private def jsonId (value : String) : String := "\"" ++ value ++ "\""
-
-private def canonicalEvidence (bindings : List EvidenceBinding) : String :=
-  "[" ++ String.intercalate "," (bindings.map (fun binding =>
-    "{\"evidence_id\":" ++ jsonId binding.evidenceId ++
-    ",\"record_digest\":" ++ jsonId (digestHex binding.recordDigest) ++ "}")) ++ "]"
-
-private def canonicalDeterminationPayload (request : CorrectionTransitionRequest)
-    (claim : Claim) (determinationId : String) (resultingRevision : Nat)
-    (bindings : List EvidenceBinding) : String :=
-  let command := request.command
-  let input := request.currentInput
-  "{\"action_id\":" ++ jsonId command.actionId ++
-    ",\"actor_id\":" ++ jsonId command.actorId ++
-    ",\"actor_role\":" ++ jsonId command.actorRole ++
-    ",\"amount_cents\":" ++ toString claim.amountCents ++
-    ",\"authority_digest\":" ++ jsonId (digestHex input.authority.digest) ++
-    ",\"authority_epoch\":" ++ toString input.authority.epoch ++
-    ",\"authority_id\":" ++ jsonId input.authority.authorityId ++
-    ",\"claim_id\":" ++ jsonId command.claimId ++
-    ",\"decided_at_ms\":" ++ toString command.decisionAtMs ++
-    ",\"decision\":\"OFFSET_REJECTED_CORRECTION_AUTHORIZED\"" ++
-    ",\"determination_id\":" ++ jsonId determinationId ++
-    ",\"expected_revision\":" ++ toString command.expectedRevision ++
-    ",\"input_evaluation_id\":" ++ jsonId command.evaluationId ++
-    ",\"input_evaluation_result_digest\":" ++ jsonId (digestHex command.evaluationResultDigest) ++
-    ",\"kind\":\"CORRECTION_PAYMENT_REQUEST\"" ++
-    ",\"obligation_id\":" ++ jsonId input.context.obligationId ++
-    ",\"resulting_revision\":" ++ toString resultingRevision ++
-    ",\"supporting_evidence\":" ++ canonicalEvidence request.currentReceipt.evidenceBindings ++ "}"
 
 inductive CorrectionActionDispatchMode where
   | SYNTHETIC_RECORD_ONLY
@@ -96,15 +65,10 @@ def canonicalActionPayload (request : CorrectionTransitionRequest)
         ",\"obligation_id\":" ++ jsonId input.context.obligationId ++
         ",\"revision\":" ++ toString resultingRevision ++ "}" }
 
+/-- The Owner's storage digest of the action payload. The Owner recomputes it
+    from the row it writes and refuses any difference (`correction_digest_binding`). -/
 def correctionActionPayloadDigest (payload : CorrectionActionPayload) : Bytes :=
   ownerFramedDigest actionDomain [payload.canonicalJson.toUTF8.toList]
-
-def correctionEventBasePayload (actionId : String) (amountCents : Nat)
-    (determinationId evaluationId : String) : String :=
-  "{\"action_id\":" ++ jsonId actionId ++
-    ",\"amount_cents\":" ++ toString amountCents ++
-    ",\"determination_id\":" ++ jsonId determinationId ++
-    ",\"evaluation_id\":" ++ jsonId evaluationId ++ "}"
 
 structure CorrectionMutationLinkFacts (request : CorrectionTransitionRequest)
     (mutation : CorrectionMutation) : Prop where
@@ -131,9 +95,6 @@ structure CorrectionMutationLinkFacts (request : CorrectionTransitionRequest)
   resultingEvaluationIdentity : mutation.followUps.resultingEvaluationId =
     "evaluation:" ++ request.currentInput.context.obligationId ++ ":r" ++
       toString (request.command.expectedRevision + 1)
-  eventIdentity : mutation.event.basePayloadJson = correctionEventBasePayload
-    mutation.action.actionId mutation.action.amountCents mutation.determination.determinationId
-      mutation.followUps.resultingEvaluationId
   eventSequence : mutation.event.sequence = request.command.currentEventSequence + 1
   followUpEventSequence : mutation.followUps.eventSequence = mutation.event.sequence
   eventPreviousHead : mutation.event.previousHead = request.command.previousHistoryHead
@@ -178,20 +139,27 @@ structure CorrectionMutationLinkFacts (request : CorrectionTransitionRequest)
     request.currentReceipt.evidenceBindings
   dependencyQueries : mutation.dependencies.queryObservations =
     request.command.queryObservations
+  dependencyCorrectionPaid : mutation.dependencies.correctionPaid = request.command.correctionPaid
   readyAction : mutation.action.status = .READY
   readyOutbox : mutation.outbox.status = .READY
   outboxAttempt : mutation.outbox.attempt = 0
   noAcknowledgment : mutation.outbox.acknowledgmentReference = none
-  actionRecordPayloadDigest : mutation.action.payloadDigest = mutation.actionPayloadDigest
-  outboxPayloadDigest : mutation.outbox.payloadDigest = mutation.actionPayloadDigest
-  outboxIdempotencyKey : mutation.outbox.idempotencyKey = mutation.actionIdempotencyKey
   outboxActionTime : mutation.outbox.updatedAtMs = mutation.action.createdAt
   actionPayloadDispatchMode : (canonicalActionPayload request
     mutation.determination.determinationId (request.command.expectedRevision + 1)
       mutation.action.amountCents).dispatchMode = .SYNTHETIC_RECORD_ONLY
-  actionPayloadDigest : mutation.actionPayloadDigest = correctionActionPayloadDigest
+  actionPayloadDigest : mutation.action.payloadDigest = correctionActionPayloadDigest
     (canonicalActionPayload request mutation.determination.determinationId
       (request.command.expectedRevision + 1) mutation.action.amountCents)
+  correctionKind : mutation.action.kind = "CORRECTION_PAYMENT_REQUEST"
+  claimAmount : mutation.determination.amountCents = mutation.dependencies.claimBefore.amountCents
+  amountRule : mutation.action.amountCents =
+    min mutation.determination.amountCents (mutation.dependencies.inputShortfallCents -
+      outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions)
+  inputShortfall : ∃ result, evaluate request.currentInput = some result ∧
+    result.shortfallCents = mutation.dependencies.inputShortfallCents ∧
+    outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions <
+      result.shortfallCents
 
 def sameOwnerResult (result : FinancialResult) (receipt : EvaluationReceipt)
     (expectedEvaluationId : String) : Bool :=
@@ -579,7 +547,10 @@ private theorem correctionCase_found_links {cases : List CaseRecord}
   exact ⟨hId, hObligationId.trans (congrArg CaseRecord.obligationId hOriginal)⟩
 
 def buildAccepted (request : CorrectionTransitionRequest)
-    (currentResult : FinancialResult) (claim : Claim) :
+    (currentResult : FinancialResult) (claim : Claim)
+    (hEvaluates : evaluate request.currentInput = some currentResult)
+    (hRequestable : outstandingCorrectionCents request.command.correctionPaid
+      request.currentInput.actions < currentResult.shortfallCents) :
     Except TransitionRejectReason { mutation : CorrectionMutation // CorrectionMutationLinkFacts request mutation } := do
   let command := request.command
   let input := request.currentInput
@@ -604,22 +575,22 @@ def buildAccepted (request : CorrectionTransitionRequest)
     expectedRevision := command.expectedRevision
     resultingRevision := afterRevision
     decidedAt := command.decisionAtMs }
-  let determinationPayload := canonicalDeterminationPayload request claim determinationId
-    afterRevision request.currentReceipt.evidenceBindings
-  let determinationDigest := ownerFramedDigest actionDomain [determinationPayload.toUTF8.toList]
-  let actionPayload := canonicalActionPayload request determinationId afterRevision claim.amountCents
-  let actionPayloadDigest := correctionActionPayloadDigest actionPayload
-  let actionIdempotencyKey := ownerFramedDigest idempotencyDomain [command.actionId.toUTF8.toList]
+  -- The correction requests only what the rejected offset left unpaid and
+  -- earlier correction requests, less what was paid against them, do not
+  -- already ask for.
+  let amountCents := min claim.amountCents
+    (currentResult.shortfallCents - outstandingCorrectionCents command.correctionPaid input.actions)
   let action := {
     actionId := command.actionId
     obligationId := input.context.obligationId
     determinationId := some determinationId
     kind := actionKind
-    amountCents := claim.amountCents
+    amountCents := amountCents
     currency := input.context.currency
     revision := afterRevision
     status := .READY
-    payloadDigest := actionPayloadDigest
+    payloadDigest := correctionActionPayloadDigest
+      (canonicalActionPayload request determinationId afterRevision amountCents)
     createdAt := mutationTime }
   let changedClaim := { claim with status := .REJECTED }
   let newClaims := input.claims.map (fun existing =>
@@ -679,8 +650,6 @@ def buildAccepted (request : CorrectionTransitionRequest)
       inserted := inserted }
     let nextEventSequence := command.currentEventSequence + 1
     let newEvaluationId := "evaluation:" ++ input.context.obligationId ++ ":r" ++ toString afterRevision
-    let eventPayload := correctionEventBasePayload command.actionId claim.amountCents
-      determinationId newEvaluationId
     let event : CorrectionEventIntent := {
       sequence := nextEventSequence
       previousHead := command.previousHistoryHead
@@ -689,8 +658,7 @@ def buildAccepted (request : CorrectionTransitionRequest)
       kind := "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
       beforeRevision := command.expectedRevision
       afterRevision := afterRevision
-      committedAtMs := mutationTime
-      basePayloadJson := eventPayload }
+      committedAtMs := mutationTime }
     let mutation : CorrectionMutation := {
       transition := .OFFSET_REJECTED_CORRECTION_AUTHORIZED
       orderedEffects := [ .DETERMINATION_RECORDED, .CLAIM_REJECTED, .CASE_UPSERTED,
@@ -709,13 +677,15 @@ def buildAccepted (request : CorrectionTransitionRequest)
         inputEvaluationRevision := command.expectedRevision
         inputEvaluationEvaluatedAtMs := request.currentReceipt.result.evaluatedAtMs
         inputEvaluationSnapshotDigest := inputSnapshotDigest
+        inputShortfallCents := currentResult.shortfallCents
         decisionAtMs := command.decisionAtMs
         ownerNowMs := command.ownerNowMs
         claimBefore := claim
         supportingEvidence := request.currentReceipt.evidenceBindings
         queryObservations := command.queryObservations
         currentEventSequence := command.currentEventSequence
-        previousHistoryHead := command.previousHistoryHead }
+        previousHistoryHead := command.previousHistoryHead
+        correctionPaid := command.correctionPaid }
       followUps := {
         actionId := command.actionId
         outboxActionId := command.actionId
@@ -725,17 +695,12 @@ def buildAccepted (request : CorrectionTransitionRequest)
       resultingInput := resultingInput
       resultingResult := resultingResult
       determination := determination
-      determinationDigest := determinationDigest
       action := action
-      actionPayloadDigest := actionPayloadDigest
-      actionIdempotencyKey := actionIdempotencyKey
       caseDelta := caseDelta
       outbox := {
         actionId := command.actionId
         status := .READY
         attempt := 0
-        payloadDigest := actionPayloadDigest
-        idempotencyKey := actionIdempotencyKey
         acknowledgmentReference := none
         updatedAtMs := mutationTime }
       event := event }
@@ -756,7 +721,6 @@ def buildAccepted (request : CorrectionTransitionRequest)
       eventAggregateIdentity := rfl
       eventKind := rfl
       resultingEvaluationIdentity := rfl
-      eventIdentity := rfl
       eventSequence := rfl
       followUpEventSequence := rfl
       eventPreviousHead := rfl
@@ -783,16 +747,18 @@ def buildAccepted (request : CorrectionTransitionRequest)
       dependencyControlPackDigest := rfl
       dependencyEvidence := rfl
       dependencyQueries := rfl
+      dependencyCorrectionPaid := rfl
       readyAction := rfl
       readyOutbox := rfl
       outboxAttempt := rfl
       noAcknowledgment := rfl
-      actionRecordPayloadDigest := rfl
-      outboxPayloadDigest := rfl
-      outboxIdempotencyKey := rfl
       outboxActionTime := rfl
       actionPayloadDispatchMode := rfl
-      actionPayloadDigest := rfl }
+      actionPayloadDigest := rfl
+      correctionKind := rfl
+      claimAmount := rfl
+      amountRule := rfl
+      inputShortfall := ⟨currentResult, hEvaluates, rfl, hRequestable⟩ }
     pure ⟨mutation, linkFacts⟩
   else
     throw .REVISION_CONFLICT
@@ -801,6 +767,9 @@ inductive CorrectionTransitionPreflight (request : CorrectionTransitionRequest) 
   | duplicate
   | ready (currentResult : FinancialResult) (claim : Claim)
       (inputRevisionMatches : request.currentInput.beforeRevision + 1 = request.command.expectedRevision)
+      (evaluates : evaluate request.currentInput = some currentResult)
+      (requestable : outstandingCorrectionCents request.command.correctionPaid
+        request.currentInput.actions < currentResult.shortfallCents)
 
 def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
     Except TransitionRejectReason (CorrectionTransitionPreflight request) := do
@@ -852,7 +821,8 @@ def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
   if claim.status ≠ .CLAIMED then throw .CLAIM_NOT_CLAIMED
   if command.expectedRevision = 0 then throw .REVISION_CONFLICT
   if hInputRevision : input.beforeRevision + 1 = command.expectedRevision then
-    let some currentResult := evaluate input | throw .INVALID_INPUT
+    let some currentCertificate := evaluateWithProof input | throw .INVALID_INPUT
+    let currentResult := currentCertificate.val
     if request.currentReceipt.inputSnapshotDigest.isNone then
       throw .INPUT_SNAPSHOT_MISSING
     if !currentReceiptBound request currentResult then
@@ -868,7 +838,15 @@ def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
     if command.actionId ∈ input.actions.map ActionRecord.actionId ||
         ("determination:" ++ command.actionId) ∈ input.determinations.map OffsetDetermination.determinationId then
       throw .ACTION_CONFLICT
-    pure (.ready currentResult claim hInputRevision)
+    -- Nothing is short: rejecting the offset leaves no balance to request.
+    if currentResult.shortfallCents = 0 then throw .NO_SHORTFALL
+    -- Earlier correction requests, less what was paid against them, already
+    -- ask for the whole unpaid balance.
+    if hRequestable : outstandingCorrectionCents command.correctionPaid input.actions <
+        currentResult.shortfallCents then
+      pure (.ready currentResult claim hInputRevision currentCertificate.property hRequestable)
+    else
+      throw .NO_REQUESTABLE_BALANCE
   else
     throw .REVISION_CONFLICT
 
@@ -876,8 +854,8 @@ def applyCorrectionTransition (request : CorrectionTransitionRequest) : Correcti
   match preflightCorrectionTransition request with
   | .error reason => reject request.command reason
   | .ok .duplicate => duplicate request.command
-  | .ok (.ready currentResult claim _) =>
-      match buildAccepted request currentResult claim with
+  | .ok (.ready currentResult claim _ hEvaluates hRequestable) =>
+      match buildAccepted request currentResult claim hEvaluates hRequestable with
       | .error reason => reject request.command reason
       | .ok certified =>
           let mutation := certified.val

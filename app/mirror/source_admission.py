@@ -486,9 +486,8 @@ class SourceAdmissionService:
             raise SourceAdmissionError("result:observation-mismatch")
         if _v2_profile(profile):
             assert profile.observation_start is not None and profile.observation_end is not None
-            # A V2 dynamic capture owns its own observation context. The
-            # configured profile only supplies the source contract interval.
-            if result.source_contract_digest is None and not profile.observation_start <= result.observation_time < profile.observation_end:
+            # The verifier's capture profile must match the configured window.
+            if not profile.observation_start <= result.observation_time < profile.observation_end:
                 raise SourceAdmissionError("result:observation-mismatch")
         elif result.observation_time != profile.observation_time:
             raise SourceAdmissionError("result:observation-mismatch")

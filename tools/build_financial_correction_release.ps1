@@ -28,10 +28,10 @@ $script:GuardPhysicalFloorBytes = [UInt64]2190433321
 $script:LeanCompilerStartFloorBytes = [UInt64]4190433321
 $script:Utf8Strict = [System.Text.UTF8Encoding]::new($false, $true)
 $script:PinnedVectorSpecs = @(
-    [pscustomobject]@{ SourceName = 'request.bin'; OutputName = 'request.bin'; Sha256 = '13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537' },
-    [pscustomobject]@{ SourceName = 'result.expected.bin'; OutputName = 'result.expected.bin'; Sha256 = '312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E' },
-    [pscustomobject]@{ SourceName = 'reuse-request.bin'; OutputName = 'reuse-request.bin'; Sha256 = 'DD7DDC27FEEDFDFD26540AB6B1F7D37E6BE49768583FB1EA3AB02F85C8390DC6' },
-    [pscustomobject]@{ SourceName = 'reuse-result.expected.bin'; OutputName = 'reuse-result.expected.bin'; Sha256 = '8C50EC33F30B520CC7452C3618577228B6B51B59B68A1935549461FAD2615379' }
+    [pscustomobject]@{ SourceName = 'request.bin'; OutputName = 'request.bin'; Sha256 = 'B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067' },
+    [pscustomobject]@{ SourceName = 'result.expected.bin'; OutputName = 'result.expected.bin'; Sha256 = '83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6' },
+    [pscustomobject]@{ SourceName = 'reuse-request.bin'; OutputName = 'reuse-request.bin'; Sha256 = '9C203F6BF50DA69D9D77CAFC4ADBF7BD3628724DFABF87E69E141A319F185B99' },
+    [pscustomobject]@{ SourceName = 'reuse-result.expected.bin'; OutputName = 'reuse-result.expected.bin'; Sha256 = '973B0CA003384170C5031B0E32295E02D8F34D80BFE095B30DE6142DBD378E4F' }
 )
 $script:RequiredSourcePaths = [string[]]@(
     'BlindLedger\Financial\CorrectionTransition\Transition.lean',
@@ -43,7 +43,7 @@ $script:RequiredSourcePaths = [string[]]@(
 )
 
 function Get-Sha256FromBytes {
-    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return [Convert]::ToHexString($sha.ComputeHash($Bytes)).ToUpperInvariant() }
     finally { $sha.Dispose() }
@@ -75,7 +75,7 @@ function Read-RegularFileBytes {
 }
 
 function Write-FileCreateNew {
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
     $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
     try {
         $stream.Write($Bytes, 0, $Bytes.Length)
@@ -211,10 +211,12 @@ function Get-SelectedSourcePaths {
 
 function New-SourceManifestSnapshot {
     param([Parameter(Mandatory = $true)][string]$Root)
+    $portablePaths = [string[]]@((Get-SelectedSourcePaths -Root $Root) | ForEach-Object { $_.Replace('\', '/') })
+    [Array]::Sort($portablePaths, [System.StringComparer]::Ordinal)
     $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($relative in (Get-SelectedSourcePaths -Root $Root)) {
+    foreach ($relative in $portablePaths) {
         $identity = Get-RegularFileIdentity -Path (Join-Path $Root $relative)
-        $rows.Add([ordered]@{ path = 'engine/source/' + $relative.Replace('\', '/'); sha256 = $identity.Sha256; size_bytes = [Int64]$identity.SizeBytes })
+        $rows.Add([ordered]@{ path = 'engine/source/' + $relative; sha256 = $identity.Sha256; size_bytes = [Int64]$identity.SizeBytes })
     }
     $manifest = [ordered]@{ files = $rows.ToArray(); schema = $script:SourceManifestSchema }
     $bytes = $script:Utf8Strict.GetBytes((ConvertTo-CanonicalJsonText -Value $manifest))
@@ -271,8 +273,8 @@ function Invoke-RawProcess {
             $process.StandardInput.Close()
         }
         $process.WaitForExit()
-        $stdoutTask.GetAwaiter().GetResult()
-        $stderrTask.GetAwaiter().GetResult()
+        $null = $stdoutTask.GetAwaiter().GetResult()
+        $null = $stderrTask.GetAwaiter().GetResult()
         return [pscustomobject]@{ ExitCode = [Int32]$process.ExitCode; StdoutBytes = $stdout.ToArray(); StderrBytes = $stderr.ToArray() }
     } finally {
         $stderr.Dispose()
@@ -293,7 +295,7 @@ function Remove-FinalCrLf {
 }
 
 function Test-ByteArraysEqual {
-    param([Parameter(Mandatory = $true)][byte[]]$Left, [Parameter(Mandatory = $true)][byte[]]$Right)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Left, [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Right)
     if ($Left.Length -ne $Right.Length) { return $false }
     for ($index = 0; $index -lt $Left.Length; $index++) { if ($Left[$index] -ne $Right[$index]) { return $false } }
     return $true
@@ -508,7 +510,7 @@ function Get-V4GuardEvidence {
 }
 
 function Write-RawChildBytes {
-    param([Parameter(Mandatory = $true)][ValidateSet('stdout', 'stderr')][string]$Stream, [Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([Parameter(Mandatory = $true)][ValidateSet('stdout', 'stderr')][string]$Stream, [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
     if ($Stream -eq 'stdout') { $target = [Console]::OpenStandardOutput() }
     else { $target = [Console]::OpenStandardError() }
     if ($Bytes.Length -gt 0) { $target.Write($Bytes, 0, $Bytes.Length); $target.Flush() }
@@ -617,8 +619,8 @@ function Invoke-GuardedChild {
     $builtIdentity = Get-RegularFileIdentity -Path $builtExecutable
     if ($builtIdentity.SizeBytes -le 0) { throw 'freshly built executable is empty' }
     $vectorRoot = Join-Path $outputFull 'vectors'
-    $transition = Invoke-VectorOperation -Name TRANSITION -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'request.bin' -ExpectedName 'result.expected.bin' -ActualName 'result.actual.bin' -OperationArgument '--apply-correction-transition' -RequestSha256 '13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537' -ExpectedSha256 '312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E'
-    $reuse = Invoke-VectorOperation -Name REUSE -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'reuse-request.bin' -ExpectedName 'reuse-result.expected.bin' -ActualName 'reuse-result.actual.bin' -OperationArgument '--assess-correction-reuse' -RequestSha256 'DD7DDC27FEEDFDFD26540AB6B1F7D37E6BE49768583FB1EA3AB02F85C8390DC6' -ExpectedSha256 '8C50EC33F30B520CC7452C3618577228B6B51B59B68A1935549461FAD2615379'
+    $transition = Invoke-VectorOperation -Name TRANSITION -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'request.bin' -ExpectedName 'result.expected.bin' -ActualName 'result.actual.bin' -OperationArgument '--apply-correction-transition' -RequestSha256 'B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067' -ExpectedSha256 '83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6'
+    $reuse = Invoke-VectorOperation -Name REUSE -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'reuse-request.bin' -ExpectedName 'reuse-result.expected.bin' -ActualName 'reuse-result.actual.bin' -OperationArgument '--assess-correction-reuse' -RequestSha256 '9C203F6BF50DA69D9D77CAFC4ADBF7BD3628724DFABF87E69E141A319F185B99' -ExpectedSha256 '973B0CA003384170C5031B0E32295E02D8F34D80BFE095B30DE6142DBD378E4F'
     if ($transition.ExitCode -ne 0 -or -not $transition.OutputMatches -or $reuse.ExitCode -ne 0 -or -not $reuse.OutputMatches) {
         Write-ChildMarker -Text 'ENGINE_PRODUCER_CHILD_RESULT=FAIL'
         return 1

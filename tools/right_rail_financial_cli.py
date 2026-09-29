@@ -21,12 +21,14 @@ import sys
 from typing import Any
 
 from app import right_rail_financial_engine as financial_engine
+from app import right_rail_financial_cash_file as cash_file
 from app.right_rail_financial_mirror import (
     FinancialMirror,
     FinancialMirrorDispatchError,
     FinancialMirrorError,
     MAX_PACKAGE_BYTES,
 )
+from app.right_rail_financial_line_pack import LINE_PACK_CONTRACT, MAX_LINE_MAP_BYTES, MAX_LINE_PACK_BYTES, build_line_pack
 from app.right_rail_financial_switch import (
     COHORT_APPROVAL_CONTRACT,
     CURRENT_OWNER_SCHEMA_VERSION,
@@ -118,7 +120,19 @@ def _parser() -> argparse.ArgumentParser:
     payment.add_argument("--source-id", default="synthetic-payment-source")
     payment.add_argument("--source-version", default="fixture-v1")
     payment.add_argument("--local-ref")
+    payment.add_argument("--pays-action-id")
     payment.add_argument("--expected-revision", type=int, required=True)
+
+    cash = subparsers.add_parser("receiver-cash-file")
+    cash.add_argument("--file", type=Path, required=True)
+    cash.add_argument("--baseline", type=Path, required=True)
+    cash.add_argument("--source-sha256", required=True)
+    cash.add_argument("--baseline-sha256", required=True)
+    cash.add_argument("--source-context", nargs=5, required=True,
+                      metavar=("SOURCE", "VERSION", "RECEIVER", "CAPTURE", "CAPTURED_AT_MS"))
+    cash.add_argument("--owner-id", required=True)
+    cash.add_argument("--mode", choices=("LIVE", "TEST", "SHADOW"), required=True)
+    cash.add_argument("--apply", action="store_true", help="record checked evidence; default is isolated preview")
 
     report = subparsers.add_parser("record-reporting-correction", aliases=("reporting-correction",))
     report.add_argument("--item-id", required=True)
@@ -150,6 +164,16 @@ def _parser() -> argparse.ArgumentParser:
     switch_compare.add_argument("--reference-spec", type=Path)
     switch_compare.add_argument("--candidate-spec", type=Path)
     switch_compare.add_argument("--report-output", type=Path, help="optional new canonical JSON report file")
+
+    line_pack = subparsers.add_parser("line-pack", help="write one documentation-only CMS-64.9 line pack from --database, verified read-only")
+    line_pack.add_argument("--package", type=Path, required=True, help="that store's current Continuity package bytes")
+    line_pack.add_argument("--line-map", type=Path, required=True, help="line map JSON listed by the approved Control Pack")
+    line_pack.add_argument("--line", required=True)
+    line_pack.add_argument("--quarter", required=True, help="federal fiscal quarter, e.g. FFY2025Q4")
+    line_pack.add_argument("--reported-line-cents", type=int, required=True, help="the reported line amount: the coverage denominator")
+    line_pack.add_argument("--generated-at-ms", type=int, required=True)
+    line_pack.add_argument("--prior-pack", type=Path, help="the line pack this one supersedes")
+    line_pack.add_argument("--output", type=Path, required=True, help="new line-pack file; existing paths are never replaced")
 
     subparsers.add_parser("dispatch-outbox")
     return parser
@@ -260,15 +284,17 @@ def _owner(args: argparse.Namespace) -> FinancialOwner:
         config=config,
         trusted_authority=_trusted_authority(args),
         correction_transition_release=_correction_release(args),
+        **({"mode": args.mode, "owner_id": args.owner_id, "existing_only": True}
+           if args.command == "receiver-cash-file" else {}),
     )
 
 
-def _read_package(path: Path) -> bytes:
+def _read_package(path: Path, max_bytes: int = MAX_PACKAGE_BYTES) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise FinancialMirrorError("continuity_package_missing")
     with path.open("rb") as stream:
-        package = stream.read(MAX_PACKAGE_BYTES + 1)
-    if len(package) > MAX_PACKAGE_BYTES:
+        package = stream.read(max_bytes + 1)
+    if len(package) > max_bytes:
         raise FinancialMirrorError("continuity_package_size")
     return package
 
@@ -541,10 +567,38 @@ def _switch_compare_error(error: BaseException) -> dict[str, object]:
 
 
 def _run(args: argparse.Namespace) -> Any:
+    if args.command == "receiver-cash-file":
+        authority = _trusted_authority(args)
+        source = dict(zip(("source_id", "version", "receiver_system_id", "capture_id", "captured_at_ms"), args.source_context))
+        source["captured_at_ms"] = int(source["captured_at_ms"])
+        commands, context = cash_file.prepare_cash_file(
+            _read_package(args.file, cash_file.MAX_FILE_BYTES), _read_package(args.baseline),
+            expected_source_sha256=args.source_sha256, expected_baseline_sha256=args.baseline_sha256,
+            expected_scope=_scope(args), expected_source=source, expected_owner_id=args.owner_id,
+            expected_mode=args.mode, trusted_authority=authority,
+        )
+        if args.apply:
+            return _owner(args).run_batch(commands, cash_file_context=context)
+        return cash_file.preview_cash_file(commands, context, trusted_authority=authority)
     if args.command == "switch-prepare":
         return _switch_prepare(args)
     if args.command == "switch-compare":
         return _switch_compare(args)
+    if args.command == "line-pack":
+        pack = build_line_pack(
+            args.database,
+            _read_package(args.package),
+            trusted_authority=_trusted_authority(args),
+            expected_scope=_scope(args),
+            line_map_bytes=_read_package(args.line_map, MAX_LINE_MAP_BYTES),
+            line=args.line,
+            quarter=args.quarter,
+            reported_line_cents=args.reported_line_cents,
+            generated_at_ms=args.generated_at_ms,
+            prior_pack=None if args.prior_pack is None else _read_package(args.prior_pack, MAX_LINE_PACK_BYTES),
+        )
+        _write_new(args.output, pack)
+        return {"contract": LINE_PACK_CONTRACT, "line_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "line_pack_path": str(args.output)}
     owner = _owner(args)
     mirror = FinancialMirror(owner)
     command = args.command
@@ -604,6 +658,7 @@ def _run(args: argparse.Namespace) -> Any:
             source_id=args.source_id,
             source_version=args.source_version,
             local_ref=args.local_ref,
+            pays_action_id=args.pays_action_id,
             expected_revision=args.expected_revision,
         )
     if command in {"record-reporting-correction", "reporting-correction"}:
@@ -650,6 +705,9 @@ def main(argv: list[str] | None = None) -> int:
         OSError,
         ValueError,
     ) as error:
+        if args.command == "receiver-cash-file":
+            print("ERROR:receiver_cash_file_refused", file=sys.stderr)
+            return 2
         if args.command == "switch-compare":
             report = _switch_compare_error(error)
             print(_json(report))

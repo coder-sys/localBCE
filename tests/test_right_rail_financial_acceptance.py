@@ -43,6 +43,7 @@ from app.right_rail_financial_owner import (
     SyntheticTrustedAuthority,
 )
 from app.right_rail_financial_mirror import FinancialMirror
+from app import right_rail_financial_owner_independent as independent
 from app.right_rail_financial_owner_independent import (
     IndependentFinancialError,
     continuity_package_digest,
@@ -56,21 +57,24 @@ from tests import rightrail_financial_expected_cases as expected
 
 
 _CORRECTION_ENGINE_PATH = (
-    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction-e911" / "blind_financial_correction.exe"
+    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "blind_financial_correction.exe"
 )
 _CORRECTION_VECTOR_DIR = (
-    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction-e911" / "vectors"
+    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
 )
-_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_245_376
+_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_279_168
 _EXPECTED_CORRECTION_ARTIFACT_SHA256 = bytes.fromhex(
-    "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+    "1A7A18333726484A0737DA7B005EC699F73E99EA0CFACFB409B000F964BED3AF"
 )
 _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
-    "13F832E80B93CC55D17ADD29470A2CD789CFCED1CBCF5A055FCBA3ECB927B537"
+    "B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067"
 )
 _EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
-    "312AB06C76D6F6F2F40CF93F9EE37DA328161B733FE7D5567E0694B85D3AE18E"
+    "83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6"
 )
+_RETIRED_CORRECTION_ARTIFACT_SHA256 = "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
+_B2_CORRECTION_ARTIFACT_SHA256 = "88D853961AB127EE33C65A57F6E35D03244FB5CCE2067F4A0FDF592ECC730992"
+_ACTION_B = "action:obligation-item-h:correction-b"
 _EXPECTED_PRIVATE_INDEX_SET_VERSION = 2
 _EXPECTED_PRIVATE_INDEXES = (
     (
@@ -406,6 +410,99 @@ raise SystemExit(99)
 """
 
 
+def _control_pack_from_fixture(value: expected.ControlPackExpectation) -> ControlPack:
+    return ControlPack(
+        pack_id=value.pack_id,
+        state_id=value.scope.state_id,
+        deployment_id=value.scope.deployment_id,
+        program_id=value.scope.program_id,
+        period_id=value.scope.period_id,
+        version=value.version,
+        source_refs=value.source_refs,
+        effective_start_ms=value.effective_start_ms,
+        effective_end_ms=value.effective_end_ms,
+        recorded_at_ms=value.recorded_at_ms,
+        approved_at_ms=value.approved_at_ms,
+        calculation_rule_id=value.calculation_rule_id,
+        adjustment_rule_id=value.adjustment_rule_id,
+        authorized_roles=value.authorized_roles,
+        expected_tests=value.expected_tests,
+    )
+
+
+def _items_from_fixture(
+    items: tuple[expected.PopulationItemExpectation, ...], population_id: str | None,
+) -> tuple[PopulationItem, ...]:
+    return tuple(
+        PopulationItem(
+            population_id=item.population_id if population_id is None else population_id,
+            item_id=item.item_id,
+            display_label=item.display_label,
+            owed_cents=item.owed_cents,
+            due_at_ms=item.due_at_ms,
+            currency=item.currency,
+        )
+        for item in items
+    )
+
+
+def _population_manifest_from_fixture(
+    fixture: expected.PopulationManifestExpectation,
+    authority: SyntheticTrustedAuthority,
+    *,
+    manifest_id: str | None = None,
+    source_owner_id: str | None = None,
+    member_ids: tuple[str, ...] | None = None,
+    manifest_version: int | None = None,
+    supersedes: PopulationManifest | None = None,
+    approved_by: str | None = None,
+    approval_ref: str | None = None,
+    inclusion_rules: tuple[str, ...] | None = None,
+    cutoff_ms: int | None = None,
+) -> PopulationManifest:
+    scope = fixture.scope
+    version = manifest_version
+    if version is None:
+        version = supersedes.manifest_version + 1 if supersedes is not None else fixture.manifest_version
+    return PopulationManifest(
+        manifest_id=manifest_id or fixture.manifest_id,
+        manifest_version=version,
+        state_id=scope.state_id,
+        deployment_id=scope.deployment_id,
+        program_id=scope.program_id,
+        period_id=scope.period_id,
+        currency=scope.currency,
+        pack_id=fixture.pack_id,
+        cutoff_ms=fixture.cutoff_ms if cutoff_ms is None else cutoff_ms,
+        inclusion_rules=fixture.inclusion_rules if inclusion_rules is None else inclusion_rules,
+        source_owner_id=source_owner_id or fixture.source_owner_id,
+        authority_id=authority.authority_id,
+        authority_epoch=authority.epoch,
+        authority_digest=authority.digest,
+        approved_by=approved_by or fixture.approved_by,
+        approval_ref=approval_ref or fixture.approval_ref,
+        source_id=fixture.source_id,
+        source_version=fixture.source_version,
+        source_digest=bytes.fromhex(fixture.source_digest_hex),
+        member_ids=fixture.member_ids if member_ids is None else member_ids,
+        supersedes_manifest_id=None if supersedes is None else supersedes.manifest_id,
+        supersedes_digest=None if supersedes is None else supersedes.digest,
+    )
+
+
+def _record_fixture_support(store: FinancialOwner, evidence: expected.EvidenceExpectation) -> None:
+    store.record_support_evidence(
+        item_id=evidence.item_id,
+        evidence_id=evidence.evidence_id,
+        common_origin_id=evidence.common_origin_id,
+        source_id=evidence.source_id,
+        source_version=evidence.source_version,
+        local_ref=evidence.local_ref,
+        applicable_at_ms=evidence.applicable_at_ms,
+        event_at_ms=evidence.event_at_ms,
+    )
+
+
 class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="right-rail-financial-acceptance-")
@@ -653,31 +750,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         fault: str,
         clock_value: int,
     ) -> subprocess.CompletedProcess[str]:
-        environment = os.environ.copy()
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                _PROCESS_BOUNDARY_CHILD,
-                str(store.path),
-                claim_id,
-                fault,
-                str(clock_value),
-            ],
-            cwd=str(Path(__file__).resolve().parents[1]),
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        return RightRailFinancialAcceptanceTests._run_boundary_child(
+            self, _PROCESS_BOUNDARY_CHILD, [str(store.path), claim_id, fault, str(clock_value)], "process_boundary"
         )
-        try:
-            stdout, stderr = process.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate(timeout=5)
-            self.fail(f"process_boundary_timeout stdout={stdout!r} stderr={stderr!r}")
-        return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     def _run_funding_process_boundary(
         self,
@@ -686,17 +761,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         fault: str,
         clock_value: int,
     ) -> subprocess.CompletedProcess[str]:
+        return RightRailFinancialAcceptanceTests._run_boundary_child(
+            self, _PROCESS_FUNDING_BOUNDARY_CHILD, [str(store.path), fault, str(clock_value)], "funding_process_boundary"
+        )
+
+    def _run_boundary_child(self, script: str, arguments: list[str], label: str) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         process = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                _PROCESS_FUNDING_BOUNDARY_CHILD,
-                str(store.path),
-                fault,
-                str(clock_value),
-            ],
+            [sys.executable, "-c", script, *arguments],
             cwd=str(Path(__file__).resolve().parents[1]),
             env=environment,
             stdout=subprocess.PIPE,
@@ -708,42 +781,16 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate(timeout=5)
-            self.fail(f"funding_process_boundary_timeout stdout={stdout!r} stderr={stderr!r}")
+            self.fail(f"{label}_timeout stdout={stdout!r} stderr={stderr!r}")
         return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     @staticmethod
     def _pack(value: expected.ControlPackExpectation) -> ControlPack:
-        return ControlPack(
-            pack_id=value.pack_id,
-            state_id=value.scope.state_id,
-            deployment_id=value.scope.deployment_id,
-            program_id=value.scope.program_id,
-            period_id=value.scope.period_id,
-            version=value.version,
-            source_refs=value.source_refs,
-            effective_start_ms=value.effective_start_ms,
-            effective_end_ms=value.effective_end_ms,
-            recorded_at_ms=value.recorded_at_ms,
-            approved_at_ms=value.approved_at_ms,
-            calculation_rule_id=value.calculation_rule_id,
-            adjustment_rule_id=value.adjustment_rule_id,
-            authorized_roles=value.authorized_roles,
-            expected_tests=value.expected_tests,
-        )
+        return _control_pack_from_fixture(value)
 
     @staticmethod
     def _items(population_id: str) -> tuple[PopulationItem, ...]:
-        return tuple(
-            PopulationItem(
-                population_id=population_id,
-                item_id=item.item_id,
-                display_label=item.display_label,
-                owed_cents=item.owed_cents,
-                due_at_ms=item.due_at_ms,
-                currency=item.currency,
-            )
-            for item in expected.PROGRAM_ITEMS
-        )
+        return _items_from_fixture(expected.PROGRAM_ITEMS, population_id)
 
     def _population_manifest(
         self,
@@ -759,33 +806,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         inclusion_rules: tuple[str, ...] | None = None,
         cutoff_ms: int | None = None,
     ) -> PopulationManifest:
-        scope = fixture.scope
-        version = manifest_version
-        if version is None:
-            version = supersedes.manifest_version + 1 if supersedes is not None else fixture.manifest_version
-        return PopulationManifest(
-            manifest_id=manifest_id or fixture.manifest_id,
-            manifest_version=version,
-            state_id=scope.state_id,
-            deployment_id=scope.deployment_id,
-            program_id=scope.program_id,
-            period_id=scope.period_id,
-            currency=scope.currency,
-            pack_id=fixture.pack_id,
-            cutoff_ms=fixture.cutoff_ms if cutoff_ms is None else cutoff_ms,
-            inclusion_rules=fixture.inclusion_rules if inclusion_rules is None else inclusion_rules,
-            source_owner_id=source_owner_id or fixture.source_owner_id,
-            authority_id=self.authority.authority_id,
-            authority_epoch=self.authority.epoch,
-            authority_digest=self.authority.digest,
-            approved_by=approved_by or fixture.approved_by,
-            approval_ref=approval_ref or fixture.approval_ref,
-            source_id=fixture.source_id,
-            source_version=fixture.source_version,
-            source_digest=bytes.fromhex(fixture.source_digest_hex),
-            member_ids=fixture.member_ids if member_ids is None else member_ids,
-            supersedes_manifest_id=None if supersedes is None else supersedes.manifest_id,
-            supersedes_digest=None if supersedes is None else supersedes.digest,
+        return _population_manifest_from_fixture(
+            fixture, self.authority, manifest_id=manifest_id, source_owner_id=source_owner_id,
+            member_ids=member_ids, manifest_version=manifest_version, supersedes=supersedes,
+            approved_by=approved_by, approval_ref=approval_ref,
+            inclusion_rules=inclusion_rules, cutoff_ms=cutoff_ms,
         )
 
     @staticmethod
@@ -871,17 +896,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     @staticmethod
     def _record_support(store: FinancialOwner, evidence: expected.EvidenceExpectation) -> None:
-        store.record_support_evidence(
-            item_id=evidence.item_id,
-            evidence_id=evidence.evidence_id,
-            common_origin_id=evidence.common_origin_id,
-            source_id=evidence.source_id,
-            source_version=evidence.source_version,
-            local_ref=evidence.local_ref,
-            applicable_at_ms=evidence.applicable_at_ms,
-            event_at_ms=evidence.event_at_ms,
-            received_at_ms=evidence.received_at_ms,
-        )
+        _record_fixture_support(store, evidence)
 
     @staticmethod
     def _record_h_support(store: FinancialOwner) -> None:
@@ -891,17 +906,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _record_cash(store: FinancialOwner) -> None:
         evidence = expected.H_CASH_EVIDENCE
-        store.record_payment_evidence(
-            item_id=evidence.item_id,
-            payment_id="payment:h:cash",
-            common_origin_id=evidence.common_origin_id,
-            amount_cents=evidence.amount_cents or 0,
-            evidence_id=evidence.evidence_id,
-            event_at_ms=evidence.event_at_ms,
-            source_id=evidence.source_id,
-            source_version=evidence.source_version,
-            local_ref=evidence.local_ref,
-        )
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, evidence, payment_id="payment:h:cash")
 
     @staticmethod
     def _advance_clock(store: FinancialOwner, at_ms: int) -> None:
@@ -926,6 +931,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _authorize(store: FinancialOwner, claim_id: str) -> dict[str, object]:
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        RightRailFinancialAcceptanceTests._advance_clock(store, expected.OFFSET_DECISION_MS - 1)  # recorded when decided
         return store.authorize_offset(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
@@ -939,6 +945,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _reject(store: FinancialOwner, claim_id: str, receipt: dict[str, object] | None = None) -> dict[str, object]:
         receipt = receipt or store.current_evaluation_receipt(expected.H_ITEM_ID)
+        RightRailFinancialAcceptanceTests._advance_clock(store, expected.CORRECTION_AUTH_MS - 1)  # recorded when decided
         return store.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
@@ -957,17 +964,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def _record_p2(store: FinancialOwner) -> None:
         evidence = expected.P2_PAYMENT_EVIDENCE
         RightRailFinancialAcceptanceTests._advance_clock(store, evidence.event_at_ms)
-        store.record_payment_evidence(
-            item_id=evidence.item_id,
-            payment_id="payment:h:p2",
-            common_origin_id=evidence.common_origin_id,
-            amount_cents=evidence.amount_cents or 0,
-            evidence_id=evidence.evidence_id,
-            event_at_ms=evidence.event_at_ms,
-            source_id=evidence.source_id,
-            source_version=evidence.source_version,
-            local_ref=evidence.local_ref,
-        )
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, evidence, payment_id="payment:h:p2")
 
     @staticmethod
     def _record_report(store: FinancialOwner) -> None:
@@ -1010,30 +1007,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_p2(store)
         self._record_report(store)
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
-        duplicate_result = store.record_payment_evidence(
-            item_id=duplicate.item_id,
-            payment_id="payment:h:p2-confirmation",
-            common_origin_id=duplicate.common_origin_id,
-            amount_cents=duplicate.amount_cents or 0,
-            evidence_id=duplicate.evidence_id,
-            event_at_ms=duplicate.event_at_ms,
-            source_id=duplicate.source_id,
-            source_version=duplicate.source_version,
-            local_ref=duplicate.local_ref,
-        )
+        duplicate_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, duplicate, payment_id="payment:h:p2-confirmation")
         self.assertEqual(duplicate_result["status"], "DUPLICATE")
         conflict = expected.P2_CONFLICT_EVIDENCE
-        conflict_result = store.record_payment_evidence(
-            item_id=conflict.item_id,
-            payment_id="payment:h:p2-conflict",
-            common_origin_id=conflict.common_origin_id,
-            amount_cents=conflict.amount_cents or 0,
-            evidence_id=conflict.evidence_id,
-            event_at_ms=conflict.event_at_ms,
-            source_id=conflict.source_id,
-            source_version=conflict.source_version,
-            local_ref=conflict.local_ref,
-        )
+        conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
         reversal = expected.P2_REVERSAL_EVIDENCE
         self._advance_clock(store, reversal.event_at_ms)
@@ -1046,17 +1023,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
-        store.record_payment_evidence(
-            item_id=replacement.item_id,
-            payment_id="payment:h:p3",
-            common_origin_id=replacement.common_origin_id,
-            amount_cents=replacement.amount_cents or 0,
-            evidence_id=replacement.evidence_id,
-            event_at_ms=replacement.event_at_ms,
-            source_id=replacement.source_id,
-            source_version=replacement.source_version,
-            local_ref=replacement.local_ref,
-        )
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
 
     def _prepare_final(self, store: FinancialOwner) -> str:
         claim_id = self._prepare_acknowledged(store)
@@ -1101,20 +1068,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(item_ids_with_evidence), expected_evidence_items)
 
     @staticmethod
-    def _record_expected_recipient_payment(
+    def _record_fixture_payment(
         store: FinancialOwner | FinancialMirror,
-        payment: expected.RecipientPaymentExpectation,
+        evidence: expected.EvidenceExpectation | expected.RecipientPaymentExpectation,
+        *,
+        payment_id: str,
     ) -> dict[str, object]:
         return store.record_payment_evidence(
-            item_id=payment.item_id,
-            payment_id=payment.payment_id,
-            common_origin_id=payment.common_origin_id,
-            amount_cents=payment.amount_cents,
-            evidence_id=payment.evidence_id,
-            event_at_ms=payment.event_at_ms,
-            source_id=payment.source_id,
-            source_version=payment.source_version,
-            local_ref=payment.local_ref,
+            item_id=evidence.item_id,
+            payment_id=payment_id,
+            common_origin_id=evidence.common_origin_id,
+            amount_cents=evidence.amount_cents or 0,
+            evidence_id=evidence.evidence_id,
+            event_at_ms=evidence.event_at_ms,
+            source_id=evidence.source_id,
+            source_version=evidence.source_version,
+            local_ref=evidence.local_ref,
         )
 
     def _first_service_decision_package(self, mirror: FinancialMirror) -> dict[str, object]:
@@ -1286,6 +1255,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         claim_id = self._record_claim(store)
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
         before = receipt["revision"]
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
         with self.assertRaisesRegex(FinancialAuthorityError, expected.UNAUTHORIZED_REJECTION.expected_error):
             store.reject_offset_and_authorize_correction(
                 item_id=expected.H_ITEM_ID,
@@ -1358,31 +1328,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store = self._build_base_for_correction()
         self._prepare_reported(store)
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
-        result = store.record_payment_evidence(
-            item_id=duplicate.item_id,
-            payment_id="payment:h:p2-confirmation",
-            common_origin_id=duplicate.common_origin_id,
-            amount_cents=duplicate.amount_cents or 0,
-            evidence_id=duplicate.evidence_id,
-            event_at_ms=duplicate.event_at_ms,
-            source_id=duplicate.source_id,
-            source_version=duplicate.source_version,
-            local_ref=duplicate.local_ref,
-        )
+        result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, duplicate, payment_id="payment:h:p2-confirmation")
         self.assertEqual(result["status"], "DUPLICATE")
         self._assert_snapshot(store, expected.H_P2_DUPLICATE_UNCHANGED)
         conflict = expected.P2_CONFLICT_EVIDENCE
-        result = store.record_payment_evidence(
-            item_id=conflict.item_id,
-            payment_id="payment:h:p2-conflict",
-            common_origin_id=conflict.common_origin_id,
-            amount_cents=conflict.amount_cents or 0,
-            evidence_id=conflict.evidence_id,
-            event_at_ms=conflict.event_at_ms,
-            source_id=conflict.source_id,
-            source_version=conflict.source_version,
-            local_ref=conflict.local_ref,
-        )
+        result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(result["status"], "CONFLICT")
         self._assert_snapshot(store, expected.H_P2_CONFLICT_VISIBLE)
         reversal = expected.P2_REVERSAL_EVIDENCE
@@ -1397,17 +1347,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_snapshot(store, expected.H_P2_REVERSED)
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
-        store.record_payment_evidence(
-            item_id=replacement.item_id,
-            payment_id="payment:h:p3",
-            common_origin_id=replacement.common_origin_id,
-            amount_cents=replacement.amount_cents or 0,
-            evidence_id=replacement.evidence_id,
-            event_at_ms=replacement.event_at_ms,
-            source_id=replacement.source_id,
-            source_version=replacement.source_version,
-            local_ref=replacement.local_ref,
-        )
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
         self._assert_snapshot(store, expected.H_P3_REPLACED)
         self._assert_verified(store)
 
@@ -1421,6 +1361,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         barrier = threading.Barrier(2)
         outcomes: list[str] = []
         errors: list[tuple[type[BaseException], str]] = []
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
 
         def attempt(action_id: str) -> None:
             try:
@@ -1595,7 +1536,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         process_precommit_package = process_precommit_store.export_continuity()
         process_precommit_summary = process_precommit_store.summary()
         process_precommit_counts = self._durable_counts(process_precommit_store.path)
-        process_precommit_clock = process_precommit_store.clock.value + 1_000_000
+        process_precommit_clock = max(process_precommit_store.clock.value + 1_000_000, expected.CORRECTION_AUTH_MS)  # not before the decision
         process_precommit = self._run_process_boundary(
             store=process_precommit_store,
             claim_id=process_precommit_claim,
@@ -1638,7 +1579,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_cash(process_postcommit_store)
         process_postcommit_claim = self._record_claim(process_postcommit_store)
         process_postcommit_receipt = process_postcommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
-        process_postcommit_clock = process_postcommit_store.clock.value + 1_000_000
+        process_postcommit_clock = max(process_postcommit_store.clock.value + 1_000_000, expected.CORRECTION_AUTH_MS)
         process_postcommit = self._run_process_boundary(
             store=process_postcommit_store,
             claim_id=process_postcommit_claim,
@@ -1703,15 +1644,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             expected.ACTION_CORRECTION_ID,
             "ack:process-postcommit-correction",
         )
-        reopened_outputs = reopened_process_postcommit.correction_followup_outputs(
+        # G2: an acknowledgment moves no dependency value, so the correction stays closed.
+        acknowledged_outputs = reopened_process_postcommit.correction_followup_outputs(
             expected.H_ITEM_ID,
             expected.ACTION_CORRECTION_ID,
         )
-        self.assertEqual(reopened_outputs["followup_status"], "REOPENED")
-        self.assertEqual(
-            reopened_outputs["corporate_support"]["error_class"],
-            "STALE_DEPENDENCY",
-        )
+        self.assertEqual(acknowledged_outputs["followup_status"], "CURRENT")
+        self.assertEqual(acknowledged_outputs["corporate_support"]["error_class"], "NONE")
         process_postcommit_package = reopened_process_postcommit.export_continuity()
         process_postcommit_counts = self._durable_counts(reopened_process_postcommit.path)
         process_postcommit_duplicate = self._reject(reopened_process_postcommit, process_postcommit_claim, process_postcommit_receipt)
@@ -1816,11 +1755,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(test_destination.read_bytes(), test_bytes_after_completion)
 
         roundtrip_destination = self._path("test-roundtrip.sqlite")
-        roundtrip = FinancialOwner.restore_test_continuity(
+        roundtrip = FinancialOwner.restore_continuity(
             package_bytes=roundtrip_package,
             recovered_path=roundtrip_destination,
             trusted_authority=self.authority,
             clock=_Clock(),
+            restore_mode="TEST",
         )
         self._assert_verified(roundtrip, restore_source_package=roundtrip_package)
         roundtrip_current_package = roundtrip.export_continuity()
@@ -1852,36 +1792,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             candidate["package_digest"] = owner._hex(owner._digest(owner._CONTINUITY_DOMAIN, owner._canonical(body)))
             return owner._canonical(candidate)
 
-        live_restore = _tamper_restore_identity("LIVE", "financial-owner-v1")
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:restore-live"):
-            FinancialOwner.validate_continuity_package(live_restore)
-        with self.assertRaisesRegex(IndependentFinancialError, "continuity:identity:restore-live"):
-            verify_continuity_package(
-                live_restore,
-                expected_scope={
-                    "state_id": test_config.state_id,
-                    "deployment_id": test_config.deployment_id,
-                    "program_id": test_config.program_id,
-                    "period_id": test_config.period_id,
-                    "currency": test_config.currency,
-                },
-                expected_authority=self.authority,
-            )
-        wrong_restore_owner = _tamper_restore_identity("SHADOW", owner._TEST_OWNER_ID)
-        with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:restore-owner"):
-            FinancialOwner.validate_continuity_package(wrong_restore_owner)
-        with self.assertRaisesRegex(IndependentFinancialError, "continuity:identity:restore-owner"):
-            verify_continuity_package(
-                wrong_restore_owner,
-                expected_scope={
-                    "state_id": test_config.state_id,
-                    "deployment_id": test_config.deployment_id,
-                    "program_id": test_config.program_id,
-                    "period_id": test_config.period_id,
-                    "currency": test_config.currency,
-                },
-                expected_authority=self.authority,
-            )
+        restore_scope = {key: getattr(test_config, key) for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")}
+        for mode, owner_id, reason in (("LIVE", "financial-owner-v1", "restore-live"), ("SHADOW", owner._TEST_OWNER_ID, "restore-owner")):
+            with self.subTest(identity=reason):
+                candidate = _tamper_restore_identity(mode, owner_id)
+                with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:" + reason):
+                    FinancialOwner.validate_continuity_package(candidate)
+                with self.assertRaisesRegex(IndependentFinancialError, "continuity:identity:" + reason):
+                    verify_continuity_package(candidate, expected_scope=restore_scope, expected_authority=self.authority)
 
         mode_only = self._path("test-promotion-mode-only.sqlite")
         mode_only.write_bytes(test_bytes_after_completion)
@@ -1978,31 +1896,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.export_continuity(), first_package)
         self.assertEqual(self._durable_counts(store.path), first_counts)
 
-        changed_amount = replace(receipt, amount_cents=receipt.amount_cents + 1)
-        with self.assertRaisesRegex(FinancialConflictError, "program_funding_receipt_identity_conflict"):
-            mirror.record_program_funding_receipt(changed_amount)
-        self.assertEqual(store.export_continuity(), first_package)
-        self.assertEqual(self._durable_counts(store.path), first_counts)
-
-        changed_supersession = replace(receipt, supersedes_receipt_id="funding-receipt:unrelated")
-        with self.assertRaisesRegex(FinancialConflictError, "program_funding_receipt_identity_conflict"):
-            mirror.record_program_funding_receipt(changed_supersession)
-        self.assertEqual(store.export_continuity(), first_package)
-
-        missing_supersession = self._funding_receipt(
-            receipt_id="funding-receipt:state:period-01:missing-supersession",
+        refused = (
+            ("identity_conflict", replace(receipt, amount_cents=receipt.amount_cents + 1)),
+            ("identity_conflict", replace(receipt, supersedes_receipt_id="funding-receipt:unrelated")),
+            ("supersession_required", self._funding_receipt(receipt_id="funding-receipt:state:period-01:missing-supersession")),
+            ("supersession_missing", self._funding_receipt(receipt_id="funding-receipt:state:period-01:missing-parent", supersedes_receipt_id="funding-receipt:state:period-01:does-not-exist")),
         )
-        with self.assertRaisesRegex(FinancialConflictError, "program_funding_supersession_required"):
-            mirror.record_program_funding_receipt(missing_supersession)
-        self.assertEqual(store.export_continuity(), first_package)
-
-        missing_parent = self._funding_receipt(
-            receipt_id="funding-receipt:state:period-01:missing-parent",
-            supersedes_receipt_id="funding-receipt:state:period-01:does-not-exist",
-        )
-        with self.assertRaisesRegex(FinancialConflictError, "program_funding_supersession_missing"):
-            mirror.record_program_funding_receipt(missing_parent)
-        self.assertEqual(store.export_continuity(), first_package)
+        for reason, candidate in refused:
+            code = "program_funding_receipt_identity_conflict" if reason == "identity_conflict" else "program_funding_" + reason
+            with self.subTest(receipt=candidate), self.assertRaisesRegex(FinancialConflictError, code):
+                mirror.record_program_funding_receipt(candidate)
+            self.assertEqual(store.export_continuity(), first_package)
+            self.assertEqual(self._durable_counts(store.path), first_counts)
 
         replacement = self._funding_receipt(
             receipt_id="funding-receipt:state:period-01:v2",
@@ -2154,11 +2059,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened.verify_integrity()
 
         restored_path = self._path("private-index-restored.sqlite")
-        restored = FinancialOwner.restore_test_continuity(
+        restored = FinancialOwner.restore_continuity(
             package_bytes=source_package,
             recovered_path=restored_path,
             trusted_authority=self.authority,
             clock=_Clock(initial=1_700_000_000_000),
+            restore_mode="TEST",
         )
         self._assert_private_index_schema(restored_path)
         restored.verify_integrity()
@@ -2931,7 +2837,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_population(store, expected.CASE_01.expected_population_evidence_count)
         self._assert_snapshot(store, expected.H_MISSING)
         for payment in expected.OTHER_RECIPIENT_PAYMENTS[:18]:
-            result = self._record_expected_recipient_payment(mirror, payment)
+            result = self._record_fixture_payment(mirror, payment, payment_id=payment.payment_id)
             self.assertEqual(result["status"], "RECORDED")
 
         partial = mirror.summary()
@@ -2943,23 +2849,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(partial_rows[expected.H_ITEM_ID]["received_cash_cents"], 0)
         self.assertEqual(mirror.obligation_detail(expected.H_ITEM_ID)["verification_status"], "MISSING_EVIDENCE")
 
-        final_other = self._record_expected_recipient_payment(mirror, expected.OTHER_RECIPIENT_PAYMENTS[18])
+        final_payment = expected.OTHER_RECIPIENT_PAYMENTS[18]
+        final_other = self._record_fixture_payment(mirror, final_payment, payment_id=final_payment.payment_id)
         self.assertEqual(final_other["status"], "RECORDED")
         self.assertEqual(mirror.summary()["received_cash_cents"], expected.OTHER_TOTAL_CENTS)
         self.assertEqual(mirror.obligation_detail(expected.H_ITEM_ID)["verification_status"], "MISSING_EVIDENCE")
 
         h_cash = expected.H_CASH_EVIDENCE
-        h_cash_result = mirror.record_payment_evidence(
-            item_id=h_cash.item_id,
-            payment_id=expected.H_INITIAL_PAYMENT_ID,
-            common_origin_id=h_cash.common_origin_id,
-            amount_cents=h_cash.amount_cents or 0,
-            evidence_id=h_cash.evidence_id,
-            event_at_ms=h_cash.event_at_ms,
-            source_id=h_cash.source_id,
-            source_version=h_cash.source_version,
-            local_ref=h_cash.local_ref,
-        )
+        h_cash_result = RightRailFinancialAcceptanceTests._record_fixture_payment(mirror, h_cash, payment_id=expected.H_INITIAL_PAYMENT_ID)
         self.assertEqual(h_cash_result["status"], "RECORDED")
         claim = expected.OFFSET_CLAIM_EVIDENCE
         claim_result = store.record_offset_claim(
@@ -2972,6 +2869,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(claim_result["status"], "CLAIMED")
         receipt = mirror.current_evaluation_receipt(expected.H_ITEM_ID)
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS - 1)  # recorded when decided
         rejection = mirror.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID,
             claim_id=expected.H_CLAIM_ID,
@@ -3082,48 +2980,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
         late_payment = expected.P2_PAYMENT_EVIDENCE
         self._advance_clock(test_store, late_payment.event_at_ms)
-        late_result = test_mirror.record_payment_evidence(
-            item_id=late_payment.item_id,
-            payment_id="payment:h:p2",
-            common_origin_id=late_payment.common_origin_id,
-            amount_cents=late_payment.amount_cents or 0,
-            evidence_id=late_payment.evidence_id,
-            event_at_ms=late_payment.event_at_ms,
-            source_id=late_payment.source_id,
-            source_version=late_payment.source_version,
-            local_ref=late_payment.local_ref,
-        )
+        late_result = RightRailFinancialAcceptanceTests._record_fixture_payment(test_mirror, late_payment, payment_id="payment:h:p2")
         self.assertEqual(late_result["status"], "RECORDED")
         self._assert_snapshot(test_store, expected.H_P2_RECEIVED_LATE)
 
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
         cash_before_duplicate = test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"]
-        duplicate_result = test_mirror.record_payment_evidence(
-            item_id=duplicate.item_id,
-            payment_id="payment:h:p2-confirmation",
-            common_origin_id=duplicate.common_origin_id,
-            amount_cents=duplicate.amount_cents or 0,
-            evidence_id=duplicate.evidence_id,
-            event_at_ms=duplicate.event_at_ms,
-            source_id=duplicate.source_id,
-            source_version=duplicate.source_version,
-            local_ref=duplicate.local_ref,
-        )
+        duplicate_result = RightRailFinancialAcceptanceTests._record_fixture_payment(test_mirror, duplicate, payment_id="payment:h:p2-confirmation")
         self.assertEqual(duplicate_result["status"], "DUPLICATE")
         self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"], cash_before_duplicate)
 
         conflict = expected.P2_CONFLICT_EVIDENCE
-        conflict_result = test_mirror.record_payment_evidence(
-            item_id=conflict.item_id,
-            payment_id="payment:h:p2-conflict",
-            common_origin_id=conflict.common_origin_id,
-            amount_cents=conflict.amount_cents or 0,
-            evidence_id=conflict.evidence_id,
-            event_at_ms=conflict.event_at_ms,
-            source_id=conflict.source_id,
-            source_version=conflict.source_version,
-            local_ref=conflict.local_ref,
-        )
+        conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(test_mirror, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
         self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"], cash_before_duplicate)
         self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["timely"], 0)
@@ -3268,57 +3136,30 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
 
     def test_continuity_restore_destination_race_preserves_foreign_database_and_sidecars(self) -> None:
-        store = self._build_base()
-        package = store.export_continuity()
-        destination = self._path("raced-continuity.sqlite")
-        sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"))
-        foreign_database = b"foreign-destination-bytes"
-        foreign_wal = b"foreign-wal-bytes"
-        foreign_shm = b"foreign-shm-bytes"
-        original_link = owner.os.link
-
-        def create_foreign_destination(source: str | os.PathLike[str], target: str | os.PathLike[str], *args: object, **kwargs: object) -> None:
-            destination.write_bytes(foreign_database)
-            sidecars[0].write_bytes(foreign_wal)
-            sidecars[1].write_bytes(foreign_shm)
-            original_link(source, target, *args, **kwargs)
-
-        owner.os.link = create_foreign_destination
-        try:
-            with self.assertRaisesRegex(FinancialContinuityError, "continuity_destination"):
-                FinancialOwner.restore_continuity(
-                    package_bytes=package,
-                    recovered_path=destination,
-                    trusted_authority=self.authority,
-                    clock=_Clock(),
-                )
-        finally:
-            owner.os.link = original_link
-        self.assertEqual(destination.read_bytes(), foreign_database)
-        self.assertEqual(sidecars[0].read_bytes(), foreign_wal)
-        self.assertEqual(sidecars[1].read_bytes(), foreign_shm)
-        self.assertEqual(list(destination.parent.glob(f".{destination.name}.restore-*")), [])
-        self._assert_verified(store)
+        self._assert_restore_race_preserves_foreign_files(after_link=False)
 
     def test_continuity_restore_post_link_replacement_preserves_foreign_database_and_sidecars(self) -> None:
+        self._assert_restore_race_preserves_foreign_files(after_link=True)
+
+    def _assert_restore_race_preserves_foreign_files(self, *, after_link: bool) -> None:
         store = self._build_base()
         package = store.export_continuity()
-        destination = self._path("post-link-raced-continuity.sqlite")
+        destination = self._path(f"raced-continuity-{after_link}.sqlite")
         sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"))
-        foreign_database = b"foreign-post-link-destination-bytes"
-        foreign_wal = b"foreign-post-link-wal-bytes"
-        foreign_shm = b"foreign-post-link-shm-bytes"
+        foreign_database, foreign_wal, foreign_shm = b"foreign-database", b"foreign-wal", b"foreign-shm"
         original_link = owner.os.link
 
-        def replace_after_link(source: str | os.PathLike[str], target: str | os.PathLike[str], *args: object, **kwargs: object) -> None:
-            original_link(source, target, *args, **kwargs)
-            Path(target).unlink()
+        def race_at_link(source: str | os.PathLike[str], target: str | os.PathLike[str], *args: object, **kwargs: object) -> None:
+            if after_link:
+                original_link(source, target, *args, **kwargs)
+                Path(target).unlink()
             destination.write_bytes(foreign_database)
             sidecars[0].write_bytes(foreign_wal)
             sidecars[1].write_bytes(foreign_shm)
+            if not after_link:
+                original_link(source, target, *args, **kwargs)
 
-        owner.os.link = replace_after_link
-        try:
+        with patch.object(owner.os, "link", race_at_link):
             with self.assertRaisesRegex(FinancialContinuityError, "continuity_destination"):
                 FinancialOwner.restore_continuity(
                     package_bytes=package,
@@ -3326,8 +3167,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     trusted_authority=self.authority,
                     clock=_Clock(),
                 )
-        finally:
-            owner.os.link = original_link
         self.assertEqual(destination.read_bytes(), foreign_database)
         self.assertEqual(sidecars[0].read_bytes(), foreign_wal)
         self.assertEqual(sidecars[1].read_bytes(), foreign_shm)
@@ -3921,24 +3760,20 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def test_reporting_evidence_default_retry_is_identity_stable_after_reopen(self) -> None:
         store = self._build_base()
         original_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
-        first = store.record_reporting_evidence(
+        request = dict(
             item_id=expected.H_ITEM_ID,
             report_id="report:retry-default-original",
             evidence_id="evidence:report:retry-default-original",
             expected_revision=original_revision,
         )
+        first = store.record_reporting_evidence(**request)
         self.assertEqual(first["status"], "RECORDED")
         before_detail = store.obligation_detail(expected.H_ITEM_ID)
         before_sequence = store.summary()["sequence"]
         before_row = next(row for row in before_detail["evidence"] if row["evidence_id"] == "evidence:report:retry-default-original")
         store.close()
         reopened = self._make_owner(path=store.path)
-        retry = reopened.record_reporting_evidence(
-            item_id=expected.H_ITEM_ID,
-            report_id="report:retry-default-original",
-            evidence_id="evidence:report:retry-default-original",
-            expected_revision=original_revision,
-        )
+        retry = reopened.record_reporting_evidence(**request)
         self.assertEqual(retry["status"], "DUPLICATE")
         after_detail = reopened.obligation_detail(expected.H_ITEM_ID)
         after_row = next(row for row in after_detail["evidence"] if row["evidence_id"] == "evidence:report:retry-default-original")
@@ -3947,10 +3782,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(reopened.summary()["sequence"], before_sequence)
         with self.assertRaisesRegex(FinancialConflictError, "evidence_identity_conflict"):
             reopened.record_reporting_evidence(
-                item_id=expected.H_ITEM_ID,
-                report_id="report:retry-default-original",
-                evidence_id="evidence:report:retry-default-original",
-                expected_revision=original_revision,
+                **request,
                 event_at_ms=int(before_row["event_at_ms"]) + 1,
             )
         self._assert_verified(reopened)
@@ -4054,17 +3886,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_p2(store)
         self._record_report(store)
         conflict = expected.P2_CONFLICT_EVIDENCE
-        conflict_result = store.record_payment_evidence(
-            item_id=conflict.item_id,
-            payment_id="payment:h:p2-conflict",
-            common_origin_id=conflict.common_origin_id,
-            amount_cents=conflict.amount_cents or 0,
-            evidence_id=conflict.evidence_id,
-            event_at_ms=conflict.event_at_ms,
-            source_id=conflict.source_id,
-            source_version=conflict.source_version,
-            local_ref=conflict.local_ref,
-        )
+        conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
         final_package = store.decision_package(expected.H_ITEM_ID)
         self.assertEqual(final_package["case"]["status"], "RESOLVED")
@@ -4205,7 +4027,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(restored_package, package)
         self.assertEqual(self._assert_decision_package_verified(restored.owner, restored_package)["integrity"], "VERIFIED")
 
-    def test_c05_current_action_and_determination_follow_revision_after_clock_rollback(self) -> None:
+    def test_c05_a_clock_behind_the_history_writes_nothing(self) -> None:
         clock = _Clock()
         store = self._build_base(clock=clock)
         self._record_cash(store)
@@ -4233,58 +4055,24 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(first_result["action_id"], first_action_id)
 
-        second_claim_id = "claim:clock-rollback:second"
-        second_action_id = "action:clock-rollback:second"
-        clock.value = low_clock_value
-        store.record_offset_claim(
-            item_id=expected.H_ITEM_ID,
-            claim_id=second_claim_id,
-            amount_cents=100_000,
-            evidence_id="evidence:clock-rollback:second",
-            owner_role="CASE_OWNER",
-            deadline_ms=expected.H_DUE_AT_MS,
-        )
-        second_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
-        second_result = store.authorize_offset(
-            item_id=expected.H_ITEM_ID,
-            claim_id=second_claim_id,
-            expected_revision=int(second_receipt["revision"]),
-            action_id=second_action_id,
-            evaluation_id=str(second_receipt["evaluation_id"]),
-            evaluation_result_digest=str(second_receipt["result_digest"]),
-        )
-        self.assertEqual(second_result["action_id"], second_action_id)
-        store.acknowledge_action(second_action_id, "ack:clock-rollback:second")
-
-        detail = store.obligation_detail(expected.H_ITEM_ID)
-        first_action = next(row for row in detail["actions"] if row["action_id"] == first_action_id)
-        second_action = next(row for row in detail["actions"] if row["action_id"] == second_action_id)
+        before = store.export_continuity()
+        clock.value = low_clock_value  # the checker refuses a history whose commit times run backward
+        with self.assertRaisesRegex(FinancialIntegrityError, "event_commit_order"):
+            store.record_offset_claim(
+                item_id=expected.H_ITEM_ID,
+                claim_id="claim:clock-rollback:second",
+                amount_cents=100_000,
+                evidence_id="evidence:clock-rollback:second",
+                owner_role="CASE_OWNER",
+                deadline_ms=expected.H_DUE_AT_MS,
+            )
+        self.assertEqual(store.export_continuity(), before)
+        self._assert_verified(store)
+        clock.value = low_clock_value + 10_000  # the host clock recovers
         first_determination = next(
-            row for row in detail["determinations"] if row["determination_id"] == first_result["determination_id"]
+            row for row in store.obligation_detail(expected.H_ITEM_ID)["determinations"]
+            if row["determination_id"] == first_result["determination_id"]
         )
-        second_determination = next(
-            row for row in detail["determinations"] if row["determination_id"] == second_result["determination_id"]
-        )
-        self.assertGreater(second_action["revision"], first_action["revision"])
-        self.assertLess(second_action["created_at_ms"], first_action["created_at_ms"])
-        self.assertLess(second_determination["decided_at_ms"], first_determination["decided_at_ms"])
-
-        package = store.decision_package(expected.H_ITEM_ID)
-        self.assertEqual(package["current_action"]["action_id"], second_action_id)
-        self.assertEqual(package["current_action"]["revision"], second_action["revision"])
-        self.assertEqual(package["current_action"]["status"], "ACKNOWLEDGED")
-        self.assertEqual(package["current_action"]["acknowledgment"]["cash_effect_cents"], 0)
-        self.assertEqual(package["current_determination"]["determination_id"], second_determination["determination_id"])
-        self.assertEqual(
-            package["current_determination"]["resulting_revision"],
-            second_determination["resulting_revision"],
-        )
-        self.assertEqual(package["obligation"]["delivery_status"], "ACKNOWLEDGED")
-        self.assertEqual(package["cash"]["recorded_received_cash_cents"], expected.H_CASH_CENTS)
-        self.assertEqual(detail["received_cash_cents"], expected.H_CASH_CENTS)
-        self.assertEqual(self._assert_decision_package_verified(store, package)["integrity"], "VERIFIED")
-
-        durable_snapshot_before_retries = store.export_continuity()
         duplicate = store.authorize_offset(
             item_id=expected.H_ITEM_ID,
             claim_id=first_claim_id,
@@ -4300,11 +4088,36 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 claim_id=first_claim_id,
                 expected_revision=int(first_receipt["revision"]),
                 action_id=first_action_id,
-                decision_at_ms=int(first_determination["decided_at_ms"]) + 1,
+                decision_at_ms=int(first_determination["decided_at_ms"]) - 1,
                 evaluation_id=str(first_receipt["evaluation_id"]),
                 evaluation_result_digest=str(first_receipt["result_digest"]),
             )
-        self.assertEqual(store.export_continuity(), durable_snapshot_before_retries)
+        self.assertEqual(store.export_continuity(), before)
+
+    def test_future_decision_time_is_refused_and_a_later_honest_write_succeeds(self) -> None:
+        clock = _Clock()
+        store = self._build_base_for_correction(clock=clock)
+        self._record_cash(store)
+        store.record_offset_claim(
+            item_id=expected.H_ITEM_ID, claim_id="claim:future-decision", amount_cents=200_000,
+            evidence_id="evidence:future-decision", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS,
+        )
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        request = {
+            "item_id": expected.H_ITEM_ID, "claim_id": "claim:future-decision", "expected_revision": int(receipt["revision"]),
+            "action_id": "action:future-decision", "evaluation_id": str(receipt["evaluation_id"]),
+            "evaluation_result_digest": str(receipt["result_digest"]),
+        }
+        before = store.export_continuity()
+        for future in (lambda: clock.value + 2, lambda: 2**63 - 1):  # each write reads the clock once, at value + 1
+            with self.assertRaisesRegex(FinancialInputError, "decision_time_future"):
+                store.authorize_offset(**request, decision_at_ms=future())
+            with self.assertRaisesRegex(FinancialInputError, "decision_time_future"):
+                store.reject_offset_and_authorize_correction(**request, decision_at_ms=future())
+        self.assertEqual(store.export_continuity(), before)
+        self.assertEqual(store.authorize_offset(**request, decision_at_ms=clock.value)["action_id"], "action:future-decision")
+        store.evaluate_obligation(expected.H_ITEM_ID)  # the clock was never held ahead of the honest writes
+        self._assert_verified(store)
 
     def test_c05_independent_package_input_is_bounded_before_database_open(self) -> None:
         store = self._build_base()
@@ -4358,7 +4171,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def test_v5_populated_evaluation_receipt_is_independent_and_boundary_stable(self) -> None:
         from tools import right_rail_financial_cli as cli
 
-        clock = _Clock()
+        clock = _Clock(expected.CASH_EVENT_MS - 1_000)
         store = self._build_base(clock=clock)
         clock.value = expected.CASH_EVENT_MS - 1
         self._record_cash(store)
@@ -4399,9 +4212,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 "source_id": "synthetic-offset-source",
                 "source_version": "fixture-v1",
                 "local_ref": f"offset:{claim_id}",
-                "applicable_at_ms": expected.CASH_EVENT_MS + 2,
-                "event_at_ms": expected.CASH_EVENT_MS + 3,
-                "received_at_ms": expected.CASH_EVENT_MS + 4,
+                "applicable_at_ms": expected.CASH_EVENT_MS + 1,
+                "event_at_ms": expected.CASH_EVENT_MS + 1,
+                "received_at_ms": expected.CASH_EVENT_MS + 1,
                 "amount_cents": expected.UNAPPROVED_OFFSET_CENTS,
                 "reversal_of": None,
                 "supersedes": None,
@@ -4538,6 +4351,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_cash(store)
         claim_id = self._record_claim(store)
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
         with self.assertRaisesRegex(FinancialInputError, "evaluation_reference_required"):
             store.reject_offset_and_authorize_correction(
                 item_id=expected.H_ITEM_ID,
@@ -4567,6 +4381,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "evaluation_result_digest": receipt["result_digest"],
         }
         reject = store.reject_offset_and_authorize_correction
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS - 1)  # recorded when decided
 
         def lose_response_after_commit(**kwargs: object) -> None:
             reject(**kwargs)
@@ -4632,46 +4447,19 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 evaluation_result_digest=evaluation_result_digest,
             )
 
-        before_malformed = store.export_continuity()
-        with self.assertRaisesRegex(FinancialInputError, "evaluation_result_digest"):
-            request(
-                action_id="action:malformed-evaluation-reference",
-                evaluation_id=str(receipt["evaluation_id"]),
-                evaluation_result_digest="not-a-digest",
-                expected_revision=int(receipt["revision"]),
-            )
-        self.assertEqual(store.export_continuity(), before_malformed)
-
-        before_bad_digest = store.export_continuity()
-        with self.assertRaisesRegex(FinancialRevisionError, "evaluation_reference_conflict"):
-            request(
-                action_id="action:bad-evaluation-digest",
-                evaluation_id=str(receipt["evaluation_id"]),
-                evaluation_result_digest="0" * 128,
-                expected_revision=int(receipt["revision"]),
-            )
-        self.assertEqual(store.export_continuity(), before_bad_digest)
-
-        before_missing_reference = store.export_continuity()
-        with self.assertRaisesRegex(FinancialInputError, "evaluation_reference_required"):
-            request(
-                action_id="action:decision-before-evaluation-reference",
-                evaluation_id=None,
-                evaluation_result_digest=None,
-                expected_revision=int(receipt["revision"]),
-            )
-        self.assertEqual(store.export_continuity(), before_missing_reference)
-
-        before_chronology = store.export_continuity()
-        with self.assertRaisesRegex(FinancialIntegrityError, "evaluation_chronology"):
-            request(
-                action_id="action:decision-before-evaluation-chronology",
-                evaluation_id=str(receipt["evaluation_id"]),
-                evaluation_result_digest=str(receipt["result_digest"]),
-                expected_revision=int(receipt["revision"]),
-                decision_at_ms=int(receipt["evaluated_at_ms"]) - 1,
-            )
-        self.assertEqual(store.export_continuity(), before_chronology)
+        reference = dict(evaluation_id=str(receipt["evaluation_id"]), evaluation_result_digest=str(receipt["result_digest"]), expected_revision=int(receipt["revision"]))
+        refusals = (
+            ("malformed-evaluation-reference", FinancialInputError, "evaluation_result_digest", {"evaluation_result_digest": "not-a-digest"}),
+            ("bad-evaluation-digest", FinancialRevisionError, "evaluation_reference_conflict", {"evaluation_result_digest": "0" * 128}),
+            ("decision-before-evaluation-reference", FinancialInputError, "evaluation_reference_required", {"evaluation_id": None, "evaluation_result_digest": None}),
+            ("decision-before-evaluation-chronology", FinancialIntegrityError, "evaluation_chronology", {"decision_at_ms": int(receipt["evaluated_at_ms"]) - 1}),
+        )
+        for label, error, code, changes in refusals:
+            with self.subTest(refusal=label):
+                before = store.export_continuity()
+                with self.assertRaisesRegex(error, code):
+                    request(action_id="action:" + label, **{**reference, **changes})
+                self.assertEqual(store.export_continuity(), before)
 
         store.record_support_evidence(
             item_id=expected.H_ITEM_ID,
@@ -4708,20 +4496,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.export_continuity(), after_first)
         self._assert_verified(store)
 
-    def test_future_received_evidence_is_rejected_without_clamping(self) -> None:
+    def test_clock_behind_received_evidence_is_rejected_without_clamping(self) -> None:
         clock = _Clock()
         store = self._build_base(clock=clock)
+        self._record_h_support(store)
         before = store.path.read_bytes()
-        future_received_at_ms = clock.value + 10_000
+        clock.value -= 10_000  # the owner clock steps back behind evidence it already received
         with self.assertRaisesRegex(FinancialIntegrityError, "evaluation_evidence_chronology"):
-            store.record_support_evidence(
-                item_id=expected.H_ITEM_ID,
-                evidence_id="evidence:future-received",
-                common_origin_id="future-received",
-                applicable_at_ms=clock.value,
-                event_at_ms=clock.value,
-                received_at_ms=future_received_at_ms,
-            )
+            store.evaluate_obligation(expected.H_ITEM_ID)
         self.assertEqual(store.path.read_bytes(), before)
         self._assert_verified(store)
 
@@ -4889,7 +4671,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             # Final review 75a5517 finding 5: every current evaluation is now compared with the rows first.
             ("obligation:exact-input:evidence", lambda c: store._insert_evidence(c, orphan)),
             ("case:derived", lambda c: c.execute("UPDATE cases SET due_at_ms=due_at_ms+1")),
-            ("replay:financial_conflicts", lambda c: c.execute("UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1")),
+            # One clock reading per command: visible_at_ms now equals its event's commit time, so this fails before replay.
+            ("conflict:visible", lambda c: c.execute("UPDATE financial_conflicts SET visible_at_ms=visible_at_ms+1")),
             # Not carried as rows: bound to their evaluation, their population's history, and the only epoch.
             ("projection:updated-at", lambda c: c.execute("UPDATE obligations SET updated_at_ms=updated_at_ms+1")),
             ("history:population-updated-at", lambda c: c.execute("UPDATE population_imports SET updated_at_ms=updated_at_ms+1")),
@@ -4942,10 +4725,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 before = store.path.read_bytes()
                 declared: dict = {}
 
-                def encode(snapshot: object) -> bytes:
+                def encode(snapshot: object, **options: object) -> bytes:
                     # Lean also declares the post-state the wrong rows encode, so the checker's own
                     # derivation is what stands between them and COMMIT.
-                    wire = real_encode(snapshot)
+                    wire = real_encode(snapshot, **options)
                     if "mutation" in declared:
                         declared["mutation"]["resulting_input_wire"] = wire
                     return wire
@@ -5108,26 +4891,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:event-kind$"):
             self._make_owner(path=store.path)
 
-    def test_a_rehashed_row_image_cannot_change_the_accepted_acknowledgment(self) -> None:
-        # The acknowledgment event names the reference it accepted; the stored row must match it even
-        # when the row and its history image are edited together and the chain is re-hashed.
-        store = self._build_base_for_correction()
-        self._prepare_acknowledged(store)
-        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+    @staticmethod
+    def _rehash_history(path: Path, edit) -> int:
+        """Apply ``edit`` to every event payload and re-hash the chain, as a writer with file access could,
+        moving a correction follow-up's observed history head along with the chain."""
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
             triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='financial_events'").fetchall()
             for name, _sql in triggers:
                 connection.execute(f'DROP TRIGGER "{name}"')
-            ref = connection.execute("SELECT acknowledgment_ref FROM action_outbox WHERE status='ACKNOWLEDGED'").fetchone()[0]
-            forged = ref[:-1] + ("8" if ref.endswith("9") else "9")
-            connection.execute("UPDATE action_outbox SET acknowledgment_ref=? WHERE acknowledgment_ref=?", (forged, ref))
             events = connection.execute("SELECT event_sequence,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,previous_head,committed_at_ms FROM financial_events ORDER BY event_sequence").fetchall()
             previous, edited = bytes(events[0][7]), 0
             for sequence, aggregate_type, aggregate_id, kind, before, after, payload_json, _previous, committed_at in events:
                 payload = json.loads(payload_json)
-                for image in payload.get("rows", ()):
-                    values = image.get("row") or image.get("set")
-                    if image["table"] == "action_outbox" and values.get("acknowledgment_ref") == ref:
-                        values["acknowledgment_ref"], edited = forged, edited + 1
+                edited += bool(edit(payload))
+                for observation in payload.get("correction_followup", {}).get("read_observations", {}).values():
+                    if observation.get("version_head") == bytes(_previous).hex().upper():
+                        observation["version_head"] = previous.hex().upper()
                 payload_bytes = owner._canonical(payload)
                 payload_digest = owner._digest(owner._EVENT_DOMAIN, payload_bytes)
                 header = b"".join(value.to_bytes(8, "big") for value in (before, after, committed_at))
@@ -5138,11 +4917,392 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
             for _name, sql in triggers:
                 connection.execute(sql)
-        self.assertGreaterEqual(edited, 1)
+        return edited
+
+    def test_a_rehashed_row_image_cannot_change_the_accepted_acknowledgment(self) -> None:
+        # The acknowledgment event names the reference it accepted; the stored row must match it even
+        # when the row and its history image are edited together and the chain is re-hashed.
+        store = self._build_base_for_correction()
+        self._prepare_acknowledged(store)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            ref = connection.execute("SELECT acknowledgment_ref FROM action_outbox WHERE status='ACKNOWLEDGED'").fetchone()[0]
+            forged = ref[:-1] + ("8" if ref.endswith("9") else "9")
+            connection.execute("UPDATE action_outbox SET acknowledgment_ref=? WHERE acknowledgment_ref=?", (forged, ref))
+
+        def forge(payload: dict) -> bool:
+            images = [image.get("row") or image.get("set") for image in payload.get("rows", ()) if image["table"] == "action_outbox"]
+            for values in images:
+                if values.get("acknowledgment_ref") == ref:
+                    values["acknowledgment_ref"] = forged
+            return any(values.get("acknowledgment_ref") == forged for values in images)
+
+        self.assertGreaterEqual(self._rehash_history(store.path, forge), 1)
         with self.assertRaisesRegex(IndependentFinancialError, "^replay:acknowledgment$"):
             self._assert_verified(store)
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:acknowledgment$"):
             self._make_owner(path=store.path)
+
+    def _correction_decided_by_engine(self, sha256: str) -> FinancialOwner:
+        # A correction as an earlier pinned engine committed it: the follow-up names that engine.
+        store = self._build_base_for_correction()
+        self._prepare_rejected(store)
+
+        def name_engine(payload: dict) -> bool:
+            artifact = payload.get("correction_followup", {}).get("artifact")
+            if artifact is not None:
+                artifact["sha256"] = sha256
+            return artifact is not None
+
+        self.assertEqual(self._rehash_history(store.path, name_engine), 1)
+        return store
+
+    def test_a_correction_decided_by_a_retired_engine_pin_still_opens(self) -> None:
+        store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
+        self._assert_verified(store)
+        outputs = self._make_owner(path=store.path).correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)
+        self.assertEqual(outputs["followup_status"], "CURRENT")
+        self.assertEqual(outputs["corporate_support"]["artifact"]["sha256"], _RETIRED_CORRECTION_ARTIFACT_SHA256)
+        self.assertEqual(outputs["corporate_support"]["reproduction"], "NONE")  # only the pinned engine has a published vector
+
+    def test_a_correction_naming_an_unknown_engine_is_refused(self) -> None:
+        store = self._correction_decided_by_engine("AB" * 32)
+        self.assertEqual(store.correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)["followup_status"], "REVIEW_REQUIRED")
+        with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-followup-artifact-binding$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-followup-artifact-binding$"):
+            self._make_owner(path=store.path)
+
+    def test_a_retired_pin_registry_with_an_extra_line_is_refused(self) -> None:
+        store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
+        registry = self._path("RETIRED_PINS")
+        registry.write_bytes(independent.RETIRED_PINS_PATH.read_bytes() + b"AB" * 32 + b"\t2026-09-26\tforged\tcorrection-rule-v1\tforged\n")
+        with patch.object(independent, "RETIRED_PINS_PATH", registry):
+            with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-retired-pins$"):
+                self._assert_verified(store)
+            with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-retired-pins$"):
+                self._make_owner(path=store.path)
+
+    def test_a_malformed_retired_pin_registry_is_refused_even_when_pinned(self) -> None:
+        store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
+        current = financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper().encode("ascii")
+        original = independent.RETIRED_PINS_PATH.read_bytes()
+        for name, content in (
+            ("four-fields", original + b"AB" * 32 + b"\t2026-09-26\tforged\tb2-v1\n"),
+            ("unknown-rule", original + b"AB" * 32 + b"\t2026-09-26\tforged\tforged-rule\tforged\n"),
+            ("lower-case-sha", original + b"ab" * 32 + b"\t2026-09-26\tforged\tb2-v1\tforged\n"),
+            ("duplicate", original + original.splitlines(keepends=True)[0]),
+            ("lists-current", original + current + b"\t2026-09-26\tforged\tb2-v1\tforged\n"),
+            ("not-ascii", original + "\u00e9".encode("utf-8")),
+        ):
+            with self.subTest(name):
+                registry = self._path(f"RETIRED_PINS-{name}")
+                registry.write_bytes(content)
+                with patch.object(independent, "RETIRED_PINS_PATH", registry), patch.object(independent, "RETIRED_PINS_SHA256", hashlib.sha256(content).hexdigest()):
+                    with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-retired-pins$"):
+                        self._assert_verified(store)
+                    with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-retired-pins$"):
+                        self._make_owner(path=store.path)
+
+    def test_a_retired_engine_pin_never_decides_a_new_correction(self) -> None:
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        retired = replace(
+            _correction_transition_test_release(workspace=Path(self.temp_dir.name) / "correction-engine-workspace"),
+            executable_sha256=bytes.fromhex(_RETIRED_CORRECTION_ARTIFACT_SHA256),
+        )
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^correction_transition_failed$"):
+            self._reject(self._make_owner(path=store.path, correction_transition_release=retired), claim_id)
+        self.assertEqual(self._durable_counts(store.path), counts)
+
+    def _as_decided(self, path: Path, sha256: str, requested_cents: int, action_id: str = expected.ACTION_CORRECTION_ID) -> None:
+        """Rewrite correction ``action_id`` as engine ``sha256`` decided it, requesting ``requested_cents``: rows, row images, chain."""
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+            (payload_json,) = connection.execute("SELECT payload_json FROM actions WHERE action_id=?", (action_id,)).fetchone()
+            payload_text = owner._canonical({**json.loads(payload_json), "amount_cents": requested_cents}).decode("ascii")
+            digest = owner._digest(owner._ACTION_DOMAIN, payload_text.encode("ascii"))
+            triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('actions','action_outbox')").fetchall()
+            for name, _sql in triggers:
+                connection.execute(f'DROP TRIGGER "{name}"')
+            connection.execute("UPDATE actions SET payload_json=?,payload_digest=? WHERE action_id=?", (payload_text, digest, action_id))
+            connection.execute("UPDATE action_outbox SET payload_digest=? WHERE action_id=?", (digest, action_id))
+            for _name, sql in triggers:
+                connection.execute(sql)
+
+        def as_decided(payload: dict) -> bool:
+            for image in payload.get("rows", ()):
+                values = image.get("row", {})
+                if image["table"] == "action_outbox" and values.get("action_id") == action_id:
+                    values["payload_digest"] = {"hex": digest.hex().upper()}
+            artifact = payload.get("correction_followup", {}).get("artifact") if payload.get("action_id") == action_id else None
+            if artifact is not None:
+                artifact["sha256"] = sha256
+            return artifact is not None
+
+        self.assertEqual(self._rehash_history(path, as_decided), 1)
+
+    def test_history_is_judged_by_the_amount_rule_of_the_engine_that_decided_it(self) -> None:
+        # rr-review M1: E911 requested the whole claim (correction-rule-v1), 88D8 the unpaid balance (b2-v1).
+        # A 300,000 claim rejected on 100,000 unpaid is valid history only as the engine it names decided it,
+        # and never requesting more than was requestable: E911's whole claim is refused (round 3 #1).
+        store = self._build_base_for_correction()
+        cash = expected.H_CASH_EVIDENCE
+        store.record_payment_evidence(
+            item_id=cash.item_id, payment_id="payment:h:cash", common_origin_id=cash.common_origin_id,
+            amount_cents=expected.H_OWED_CENTS - 100_000, evidence_id=cash.evidence_id, event_at_ms=cash.event_at_ms,
+            source_id=cash.source_id, source_version=cash.source_version, local_ref=cash.local_ref,
+        )
+        self._reject(store, self._record_claim(store))
+        current = financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
+        for name, sha256, requested_cents, refusal in (
+            ("e911-whole-claim", _RETIRED_CORRECTION_ARTIFACT_SHA256, 300_000, "action:requestable"),
+            ("e911-unpaid-balance", _RETIRED_CORRECTION_ARTIFACT_SHA256, 100_000, "action:payload-binding"),
+            ("88d8-unpaid-balance", _B2_CORRECTION_ARTIFACT_SHA256, 100_000, None),
+            ("current-whole-claim", current, 300_000, "action:payload-binding"),
+        ):
+            with self.subTest(name):
+                path = self._path(f"{name}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                self._as_decided(path, sha256, requested_cents)
+                if refusal is None:
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+                    self._make_owner(path=path)
+                else:
+                    with self.assertRaisesRegex(IndependentFinancialError, f"^{refusal}$"):
+                        verify_database(path, expected_config=store.config, expected_authority=self.authority)
+
+    def _two_claim_corrections(self, first_cents: int, second_cents: int, unpaid_cents: int = expected.UNAPPROVED_OFFSET_CENTS) -> tuple[FinancialOwner, object]:
+        """``unpaid_cents`` unpaid with claims A and B; A is rejected with a correction; returns B's rejection to call."""
+        store = self._build_base_for_correction()
+        cash = expected.H_CASH_EVIDENCE
+        store.record_payment_evidence(
+            item_id=cash.item_id, payment_id="payment:h:cash", common_origin_id=cash.common_origin_id,
+            amount_cents=expected.H_OWED_CENTS - unpaid_cents, evidence_id=cash.evidence_id, event_at_ms=cash.event_at_ms,
+            source_id=cash.source_id, source_version=cash.source_version, local_ref=cash.local_ref,
+        )
+        for suffix, cents in (("a", first_cents), ("b", second_cents)):
+            store.record_offset_claim(
+                item_id=expected.H_ITEM_ID, claim_id=f"claim:obligation-item-h:offset-{suffix}", amount_cents=cents,
+                evidence_id=f"evidence:offset-h:claim-{suffix}", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS,
+            )
+        self._reject(store, "claim:obligation-item-h:offset-a")
+        self.assertEqual(store.current_evaluation_receipt(expected.H_ITEM_ID)["shortfall_cents"], unpaid_cents)  # rejecting A leaves it unpaid
+
+        def reject_b() -> dict[str, object]:
+            receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+            self._advance_clock(store, expected.CORRECTION_AUTH_MS + 1_000)  # B is decided after A committed
+            return store.reject_offset_and_authorize_correction(
+                item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-b", expected_revision=receipt["revision"],
+                action_id=_ACTION_B, decision_at_ms=expected.CORRECTION_AUTH_MS + 1_000,
+                evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"],
+            )
+
+        return store, reject_b
+
+    @staticmethod
+    def _pay_a(store: FinancialOwner, cents: int, suffix: str = "p2", *, linked: bool = True) -> dict[str, object]:
+        """A cash payment of ``cents`` after A's decision, answering A's correction request when ``linked``."""
+        RightRailFinancialAcceptanceTests._advance_clock(store, expected.CORRECTION_AUTH_MS + 500)
+        return store.record_payment_evidence(
+            item_id=expected.H_ITEM_ID, payment_id=f"payment:h:{suffix}", common_origin_id=f"origin:payment:h:{suffix}",
+            amount_cents=cents, evidence_id=f"evidence:payment-h:{suffix}", event_at_ms=expected.CORRECTION_AUTH_MS + 500,
+            source_id="fixture-payment-file", source_version="payment-v2", local_ref=f"ref:payment:h:{suffix}",
+            pays_action_id=expected.ACTION_CORRECTION_ID if linked else None,
+        )
+
+    @staticmethod
+    def _requested_and_claimed(store: FinancialOwner) -> tuple[list[int], list[int]]:
+        """Correction request amounts (action rows) and decision event amounts, in decision order."""
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            requested = [json.loads(row[0])["amount_cents"] for row in connection.execute("SELECT payload_json FROM actions WHERE kind='CORRECTION_PAYMENT_REQUEST' ORDER BY revision")]
+            claimed = [row[0] for row in connection.execute("SELECT json_extract(payload_json,'$.amount_cents') FROM financial_events WHERE kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence")]
+        return requested, claimed
+
+    def test_a_second_correction_on_a_fully_requested_balance_is_refused(self) -> None:
+        # rr-review H1: two 300,000 claims on 300,000 unpaid requested 600,000; the second now requests nothing.
+        store, reject_b = self._two_claim_corrections(300_000, 300_000)
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialConflictError, "^correction_no_requestable_balance$"):
+            reject_b()
+        self.assertEqual(self._durable_counts(store.path), counts)
+        self.assertEqual(self._requested_and_claimed(store), ([300_000], [300_000]))
+        self._assert_verified(store)
+        self._make_owner(path=store.path)
+
+    def test_a_second_correction_requests_only_what_is_left(self) -> None:
+        # rr-review H1: claims of 200,000 and 200,000 on 300,000 unpaid request 200,000, then the 100,000 left.
+        # The decision events keep each claim's amount (L4); only the action rows carry the request.
+        store, reject_b = self._two_claim_corrections(200_000, 200_000)
+        reject_b()
+        self.assertEqual(self._requested_and_claimed(store), ([200_000, 100_000], [200_000, 200_000]))
+        self._assert_verified(store)
+        self._make_owner(path=store.path)
+
+    def test_a_paid_correction_request_no_longer_blocks_the_next(self) -> None:
+        # rr-review round 3 #2: 600,000 unpaid, claims A and B of 300,000. A requests 300,000 and is paid;
+        # 300,000 is still unpaid and no unpaid request covers it, so B requests it. A payment that
+        # names no request is plain cash: A still looks unpaid and B has nothing left to request. A
+        # reversed payment pays nothing: 600,000 is unpaid again, A asks for 300,000, so B's 400,000
+        # claim requests the other 300,000.
+        for linked, reversed_, b_cents, requested in ((True, False, 300_000, [300_000, 300_000]), (False, False, 300_000, [300_000]), (True, True, 400_000, [300_000, 300_000])):
+            with self.subTest(linked=linked, reversed=reversed_):
+                store, reject_b = self._two_claim_corrections(300_000, b_cents, unpaid_cents=600_000)
+                self._pay_a(store, 300_000, linked=linked)
+                if reversed_:
+                    store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+                if linked:
+                    reject_b()
+                else:
+                    with self.assertRaisesRegex(FinancialConflictError, "^correction_no_requestable_balance$"):
+                        reject_b()
+                self.assertEqual(self._requested_and_claimed(store)[0], requested)
+                self._assert_verified(store)
+                self._make_owner(path=store.path)
+
+    def test_a_partly_paid_correction_request_counts_only_its_unpaid_part(self) -> None:
+        # 600,000 unpaid; A requests 300,000 and 100,000 of it is paid; B's 400,000 claim requests the
+        # 500,000 still unpaid less A's unpaid 200,000.
+        store, reject_b = self._two_claim_corrections(300_000, 400_000, unpaid_cents=600_000)
+        self._pay_a(store, 100_000)
+        reject_b()
+        self.assertEqual(self._requested_and_claimed(store), ([300_000, 300_000], [300_000, 400_000]))
+        self._assert_verified(store)
+        self._make_owner(path=store.path)
+
+    def test_a_payment_never_pays_more_than_its_request_leaves_unpaid(self) -> None:
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self.assertEqual(self._pay_a(store, 200_000)["status"], "RECORDED")
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_request$"):
+            self._pay_a(store, 100_001, "p3")
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_request_unknown$"):
+            store.record_payment_evidence(
+                item_id=expected.H_ITEM_ID, payment_id="payment:h:p4", common_origin_id="origin:payment:h:p4", amount_cents=1,
+                evidence_id="evidence:payment-h:p4", event_at_ms=expected.CORRECTION_AUTH_MS + 500, pays_action_id=_ACTION_B,
+            )
+        self.assertEqual(self._durable_counts(store.path), counts)
+        self.assertEqual(self._pay_a(store, 100_000, "p3")["status"], "RECORDED")  # exactly what is left
+        self._assert_verified(store)
+        # The checker refuses a link the Owner would not have written.
+
+        def link_cash(payload: dict) -> bool:  # the cash paid before the request existed
+            if payload.get("payment_id") == "payment:h:cash" and "common_origin_id" in payload:
+                payload["pays_action_id"] = expected.ACTION_CORRECTION_ID
+                return True
+            return False
+
+        early = self._path("early-link.sqlite")
+        early.write_bytes(store.path.read_bytes())
+        self.assertEqual(self._rehash_history(early, link_cash), 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
+            verify_database(early, expected_config=store.config, expected_authority=self.authority)
+
+    def test_a_resent_payment_source_cannot_change_its_link(self) -> None:
+        # rr-review round 3 LOW #3: a source already recorded is a duplicate only if the link it carries matches.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 100_000)
+        self._pay_a(store, 50_000, "p3", linked=False)
+
+        def resend(suffix: str, pays_action_id: str | None, document: str = "") -> dict[str, object]:
+            return store.record_payment_evidence(
+                item_id=expected.H_ITEM_ID, payment_id=f"payment:h:resent-{suffix}", common_origin_id=f"origin:payment:h:{suffix}",
+                amount_cents=100_000 if suffix == "p2" else 50_000, evidence_id=f"evidence:payment-h:resent-{suffix}{document}",
+                event_at_ms=expected.CORRECTION_AUTH_MS + 500, pays_action_id=pays_action_id,
+            )
+
+        counts = self._durable_counts(store.path)
+        for suffix, link in (("p2", _ACTION_B), ("p3", expected.ACTION_CORRECTION_ID), ("p3", _ACTION_B)):
+            with self.subTest(suffix=suffix, link=link), self.assertRaisesRegex(FinancialConflictError, "^payment_request_conflict$"):
+                resend(suffix, link)
+        self.assertEqual(self._durable_counts(store.path), counts)
+        self.assertEqual(resend("p2", expected.ACTION_CORRECTION_ID)["status"], "DUPLICATE")
+        # A bank confirmation of a linked payment is its own document and does not know the internal link:
+        # it corroborates, never conflicts.
+        self.assertEqual(resend("p2", None, ":bank")["status"], "DUPLICATE")
+        self.assertEqual(resend("p3", None, ":bank")["status"], "DUPLICATE")
+        self._assert_verified(store)
+
+    def test_a_forged_duplicate_label_cannot_hide_a_new_payment(self) -> None:
+        # rr-review H1: a PAYMENT_DUPLICATE_EVIDENCE event appended over a real new payment's confirmation
+        # neither closes the correction's follow-up nor passes the checker.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 1, linked=False)
+        with store._write() as connection:
+            obligation_id, revision, origin = connection.execute(
+                "SELECT obligation_id,o.revision,p.common_origin_id FROM obligations o JOIN payments p USING(obligation_id) WHERE p.payment_id='payment:h:cash'"
+            ).fetchone()
+            store._append_event(
+                connection, aggregate_type="OBLIGATION", aggregate_id=obligation_id, kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=revision,
+                after_revision=revision, committed_at_ms=store._now(),
+                payload={"candidate_evidence_id": "evidence:payment-h:p2", "existing_payment_id": "payment:h:cash", "common_origin_id": origin},
+            )
+        outputs = store.correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)
+        self.assertEqual((outputs["followup_status"], outputs["state_report"]["changed_dependencies"]), ("REOPENED", [f"COLLECTION(PAYMENT_EVIDENCE, {expected.H_ITEM_ID})"]))
+        with self.assertRaisesRegex(IndependentFinancialError, "^duplicate-evidence:binding$"):
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:duplicate-evidence:binding$"):
+            self._make_owner(path=store.path)
+
+    def test_a_relabelled_second_correction_is_refused(self) -> None:
+        # rr-review round 3 #1: 300,000 unpaid, claims A and B of 200,000; honest requests are 200,000
+        # then 100,000. Relabelling B as decided by a retired engine that requests 200,000 (400,000 on
+        # 300,000) is refused whichever retired engine it names, and so is a retired engine deciding
+        # after a newer one even when the amount fits (only the engine-order check sees that).
+        store, reject_b = self._two_claim_corrections(200_000, 200_000)
+        reject_b()
+        for name, sha256, cents, refusal in (
+            ("b2-v1", _B2_CORRECTION_ARTIFACT_SHA256, 200_000, "action:engine-order"),
+            ("e911", _RETIRED_CORRECTION_ARTIFACT_SHA256, 200_000, "action:engine-order"),
+        ):
+            with self.subTest(name):
+                path = self._path(f"relabel-{name}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                self._as_decided(path, sha256, cents, _ACTION_B)
+                with self.assertRaisesRegex(IndependentFinancialError, f"^{refusal}$"):
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        order_only, reject_b = self._two_claim_corrections(200_000, 100_000)
+        reject_b()
+        self.assertEqual(self._requested_and_claimed(order_only)[0], [200_000, 100_000])
+        path = self._path("relabel-order-only.sqlite")
+        path.write_bytes(order_only.path.read_bytes())
+        self._as_decided(path, _B2_CORRECTION_ARTIFACT_SHA256, 100_000, _ACTION_B)
+        with self.assertRaisesRegex(IndependentFinancialError, "^action:engine-order$"):
+            verify_database(path, expected_config=order_only.config, expected_authority=self.authority)
+        # Retired before current is the order history really has: A as E911 decided it, then B.
+        path = self._path("retired-then-current.sqlite")
+        path.write_bytes(store.path.read_bytes())
+        self._as_decided(path, _RETIRED_CORRECTION_ARTIFACT_SHA256, 200_000)
+        verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        self._make_owner(path=path)
+
+    def test_a_cancelled_correction_or_changed_decision_amount_is_refused(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_rejected(store)
+        cancelled = self._path("cancelled.sqlite")
+        cancelled.write_bytes(store.path.read_bytes())
+        with closing(sqlite3.connect(str(cancelled), isolation_level=None)) as connection:  # actions rows carry no history image
+            self.assertEqual(connection.execute("UPDATE actions SET status='CANCELLED' WHERE action_id=?", (expected.ACTION_CORRECTION_ID,)).rowcount, 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^action:status$"):
+            verify_database(cancelled, expected_config=store.config, expected_authority=self.authority)
+
+        def change_amount(payload: dict) -> bool:
+            if payload.get("action_id") == expected.ACTION_CORRECTION_ID and "correction_followup" in payload:
+                payload["amount_cents"] += 1
+                return True
+            return False
+
+        changed = self._path("decision-amount.sqlite")
+        changed.write_bytes(store.path.read_bytes())
+        self.assertEqual(self._rehash_history(changed, change_amount), 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^action:event-amount$"):
+            verify_database(changed, expected_config=store.config, expected_authority=self.authority)
 
     def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:
         # Final review of 75a5517, finding 5: publish opened the case after the first evaluation,
