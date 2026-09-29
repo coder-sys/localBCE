@@ -2705,9 +2705,6 @@ class FinancialOwner:
         )
         return "INSERTED"
 
-    def _evidence_for(self, connection: sqlite3.Connection, item_id: str) -> tuple[str, ...]:
-        return tuple(str(row[0]) for row in connection.execute("SELECT evidence_id FROM evidence WHERE item_id=? ORDER BY evidence_id", (item_id,)))
-
     def _case_status(self, connection: sqlite3.Connection, obligation_id: str) -> str:
         row = connection.execute("SELECT status FROM cases WHERE obligation_id=? ORDER BY case_id DESC LIMIT 1", (obligation_id,)).fetchone()
         return "OPEN" if row is None else str(row[0])
@@ -2768,16 +2765,11 @@ class FinancialOwner:
         owed = int(old["owed_cents"])
         shortfall = max(owed - total, 0)
         overage = max(total - owed, 0)
-        evidence_ids = self._evidence_for(connection, str(old["item_id"]))
-        future_evidence = connection.execute(
-            "SELECT 1 FROM evidence WHERE item_id=? AND received_at_ms>? LIMIT 1",
-            (old["item_id"], now_ms),
-        ).fetchone()
-        if future_evidence is not None:
+        evidence = connection.execute("SELECT evidence_id,record_digest,event_at_ms,received_at_ms FROM evidence WHERE item_id=? ORDER BY evidence_id", (old["item_id"],)).fetchall()  # read once: the evaluation's inputs
+        if any(int(row["received_at_ms"]) > now_ms for row in evidence):
             _fail(FinancialIntegrityError, "evaluation_evidence_chronology")
         conflict_count = int(connection.execute("SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?", (obligation_id,)).fetchone()[0])
-        evidence_count = int(connection.execute("SELECT COUNT(*) FROM evidence WHERE item_id=?", (old["item_id"],)).fetchone()[0])
-        verification = "CONFLICT_VISIBLE" if conflict_count else ("SUPPORTED" if evidence_count else "MISSING_EVIDENCE")
+        verification = "CONFLICT_VISIBLE" if conflict_count else ("SUPPORTED" if evidence else "MISSING_EVIDENCE")
         completion = self._completion_time(connection, obligation_id, owed, lawful)
         timely = int(completion is not None and completion <= int(old["due_at_ms"]))
         amount_satisfied = int(total >= owed)
@@ -2801,7 +2793,7 @@ class FinancialOwner:
             "obligation_id": obligation_id,
             "revision": after_revision,
             "rule_version": int(old["rule_version"]),
-            "evidence_ids": list(evidence_ids),
+            "evidence_ids": [str(row["evidence_id"]) for row in evidence],
             "authority_id": self.trusted_authority.authority_id,
             "evaluated_at_ms": now_ms,
             "owed_cents": owed,
@@ -2823,9 +2815,10 @@ class FinancialOwner:
             connection,
             result=result,
             pack=pack,
-            evidence_bindings=self._evidence_bindings(connection, evidence_ids),
+            evidence_bindings=[{"evidence_id": str(row["evidence_id"]), "record_digest": _hex(bytes(row["record_digest"]))} for row in evidence],
             authority_epoch=self.trusted_authority.epoch,
             authority_digest=self.trusted_authority.digest,
+            evidence=evidence,
         )
         updated = connection.execute(
             "UPDATE obligations SET revision=?,claimed_adjustment_cents=?,lawful_adjustment_cents=?,received_cash_cents=?,shortfall_cents=?,overage_cents=?,cash_satisfied=?,amount_satisfied=?,timely=?,verification_status=?,case_status=?,delivery_status=?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?",
@@ -3576,24 +3569,13 @@ class FinancialOwner:
             "currency": self.config.currency,
         }
 
-    def _evidence_bindings(self, connection: sqlite3.Connection, evidence_ids: Iterable[str]) -> list[dict[str, str]]:
-        ordered = list(evidence_ids)
-        if ordered != sorted(ordered) or len(set(ordered)) != len(ordered):
-            _fail(FinancialIntegrityError, "evaluation_evidence_order")
-        bindings: list[dict[str, str]] = []
-        for evidence_id in ordered:
-            row = connection.execute("SELECT record_digest FROM evidence WHERE evidence_id=?", (evidence_id,)).fetchone()
-            if row is None:
-                _fail(FinancialIntegrityError, "evaluation_evidence_missing")
-            bindings.append({"evidence_id": evidence_id, "record_digest": _hex(bytes(row[0]))})
-        return bindings
-
     def _evaluation_input_snapshot(
         self,
         connection: sqlite3.Connection,
         *,
         obligation_id: str,
         pre_revision: int,
+        evidence: list[sqlite3.Row] | None = None,
     ) -> dict[str, Any]:
         obligation = connection.execute(
             "SELECT obligation_id,item_id,revision,rule_version,owed_cents,due_at_ms,reporting_complete FROM obligations WHERE obligation_id=?",
@@ -3622,10 +3604,10 @@ class FinancialOwner:
                     "event_at_ms": int(row["event_at_ms"]),
                     "received_at_ms": int(row["received_at_ms"]),
                 }
-                for row in connection.execute(
+                for row in (evidence if evidence is not None else connection.execute(
                     "SELECT evidence_id,record_digest,event_at_ms,received_at_ms FROM evidence WHERE item_id=? ORDER BY evidence_id",
                     (item_id,),
-                )
+                ))
             ],
             "payments": [
                 {
@@ -3698,6 +3680,7 @@ class FinancialOwner:
         evidence_bindings: list[dict[str, str]],
         authority_epoch: int,
         authority_digest: bytes,
+        evidence: list[sqlite3.Row] | None = None,  # the item's evidence rows when the caller already read them
     ) -> dict[str, Any]:
         result_body = _evaluation_result_body(result)
         result_digest = _digest(_EVALUATION_RESULT_DOMAIN, _canonical(result_body))
@@ -3708,6 +3691,7 @@ class FinancialOwner:
             connection,
             obligation_id=str(result["obligation_id"]),
             pre_revision=pre_revision,
+            evidence=evidence,
         )
         input_snapshot_bytes = _canonical(input_snapshot)
         input_snapshot_digest = _digest(_EVALUATION_INPUT_DOMAIN, input_snapshot_bytes)

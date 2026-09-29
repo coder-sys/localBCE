@@ -3979,10 +3979,8 @@ def _database_snapshot_rows(connection: sqlite3.Connection) -> dict[str, list[di
     snapshot: dict[str, list[dict[str, object]]] = {}
     for table in PACKAGE_TABLES:
         rows = _bounded_rows(connection, table)
-        snapshot[table] = [
-            {column: row[column] for column in TABLE_COLUMNS[table]}
-            for row in rows
-        ]
+        order = [rows[0].keys().index(column) for column in TABLE_COLUMNS[table]] if rows else []  # positions once: a name lookup per value is the slow part
+        snapshot[table] = [dict(zip(TABLE_COLUMNS[table], map(row.__getitem__, order))) for row in rows]
     return snapshot
 
 
