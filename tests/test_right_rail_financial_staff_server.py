@@ -280,7 +280,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             "cash_command": dict(CASH_CORRECTION_COMMAND),
         }
 
-    def test_population_gate_denials_and_unknown_source_are_visible(self) -> None:
+    def test_population_and_unknown_source_are_visible(self) -> None:
         workflow = self._workflow()
         snapshot = workflow.workspace()
         package = workflow.decision_view()["decision_package"]

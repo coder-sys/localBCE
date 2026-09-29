@@ -11,7 +11,7 @@ import stat
 from typing import Any
 import unicodedata
 
-from tests.tools.privacy_primitives import (
+from tests.instruments.privacy_primitives import (
     _DuplicateJsonKey,
     _reject_duplicate_keys,
     _security_normalize,

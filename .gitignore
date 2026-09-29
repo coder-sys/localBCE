@@ -28,5 +28,3 @@ l2/deployments/
 # Lean build output and guarded-run outputs (trunk layout)
 .lake/
 **/.lake/
-native/guard/acceleration-correction/
-native/guard/guarded-*.log

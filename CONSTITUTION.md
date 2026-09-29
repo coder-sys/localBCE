@@ -141,7 +141,10 @@ operational authority.
    wrapper (`C:/Users/neers/rrb/tools/rr_guarded.ps1`, which runs the guard-host
    `work/rightrail-guard-host/native/guard/run_guarded_v7.ps1`) with its memory floor; it is
    never bypassed or weakened there. CI and cloud runners use their own
-   resource limits.
+   resource limits. Exception: engine and release builds run under the preserved
+   v4 guard (SHA-256 `57F9EC8A…99FB`, external copy
+   `work/pq-wide-seed-native-20260913/build-filter-native/run_guarded_v4.ps1`)
+   until a planned producer and kit move to v7.
 3. Never destroy uncommitted work, raw evidence, keys, or the only copy of
    anything. Deletions are recoverable first (Recycle Bin, Git bundle, archive).
 4. Every session leaves a working increment and a clear next step.
@@ -344,6 +347,10 @@ never an amendment.
   entry; and the guard memory floor applies to laptop runs, not CI/cloud.
   Decided by the lead under the founder's 2026-09-25 grant; founder decided
   the PQ-only line.
-- 2026-09-29 — Article X.2 amended (lead, slim-2 plan D2): it names the live
-  guard, v7 through `rr_guarded.ps1`; the trunk v4 copy is parked (XI.2 record in
-  `docs/CORE_REDESIGN.md`).
+- 2026-09-29 — Article X.2 amended, founder-approved (grants cited), recorded by
+  lead: it names the live guard (v7 through `rr_guarded.ps1`) and keeps v4 for
+  engine and release builds. Grants: 2026-09-28 "2 is fine instead of 2.2";
+  2026-09-28 "when im not actively using the laptop ... only 1 gb cap remains";
+  2026-09-29 "As long as it doesn't compromise safety and accuracy do whatever u
+  want"; standing 2026-09-25 "u have all auth". XI.2 record in
+  `docs/CORE_REDESIGN.md`.

@@ -13,11 +13,9 @@ from pathlib import Path
 import sqlite3
 
 from app.right_rail_financial_owner_independent import (
-    DECISION_PACKAGE_CONTRACT,
     IndependentFinancialError,
     MAX_CENTS,
-    MAX_DECISION_PACKAGE_BYTES,
-    MAX_DECISION_PACKAGE_DEPTH,
+    MAX_PACKAGE_BYTES,
     MAX_PACKAGE_NODES,
     MAX_ROWS,
     _blob64,
@@ -34,6 +32,11 @@ from app.right_rail_financial_owner_independent import (
     _sum_cents,
     verify_database_connection,
 )
+
+
+DECISION_PACKAGE_CONTRACT = "RR/FINANCIAL/DECISION-PACKAGE/v2"
+MAX_DECISION_PACKAGE_BYTES = MAX_PACKAGE_BYTES - 512
+MAX_DECISION_PACKAGE_DEPTH = 32
 
 
 def _snapshot_decision_package_input(value: object) -> dict[str, object]:
