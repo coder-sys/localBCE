@@ -8,66 +8,16 @@ Format approval (2026-09-24, CONSTITUTION V.4): the founder approved the v8 stor
 
 ### Current-source Lean reproduction (2026-09-26, XI.2 record)
 
-- Guard-log line endings: r78 refused the r77 kit (`engine_guard_log_policy_mismatch`):
-  its 99 CRLF records hold the exact v4 policy but the kit's LF-only anchors match
-  none. Predicate unchanged (parse the actual guard evidence; exact fields, counts,
-  floors, exits, cleanup and mutex release; no pass from a receipt alone). Only the
-  three record-ending patterns accept LF or CRLF; control: positive checks for both
-  forms, malformed-ending and adverse-record mutations, independent review, a new
-  complete kit run. Raw log bytes and digest binding are unchanged. Withdrawn: r78
-  verifies no kit.
-- Canonical manifest: r75 refused the r67 kit
-  (`engine_source_manifest_not_canonical_or_current`): the producer sorted native
-  Windows paths before replacing backslashes; the kit requires ordinal order of
-  portable slash paths. Keep that predicate and all identity checks; normalize
-  before sorting, compare with independently built Python canonical bytes, make
-  a new guarded release. Scope: prospective manifests; r67 gains no kit claim.
-- **Predicate:** an exact-source build claim binds the guarded producer receipt,
-  all selected Lean/config bytes, toolchain, executable and both pinned vectors.
-  **Failure:** an older binary's build does not establish reproducibility from a
-  later combined source tree.
-- **Evidence:** r67 built the 46-file source manifest at `61a24519` and
-  reproduced the existing 6,279,168-byte executable byte-for-byte; transition and
-  reuse outputs match both independent expected files. Guard exit zero, cleanup
-  PASS, mutex released. r68 separately compiled all six Lake targets.
-- **Disposition:** extend provenance with this reproduction; keep the historical
-  origin, executable pin and retired-pin registry. **Control:** hashes, raw logs
-  and exact comparisons stay inspectable; the producer's empty stream/process
-  repairs passed a binary I/O regression and independent review.
-- **Scope:** local synthetic build evidence for the recorded source and artifacts; no theorem statement, wire format, decision rule, executable bytes
-  or allowed axiom changed. **Claims withdrawn:** no assurance for later source,
-  whole-system qualification or all-theorem axiom hygiene; native diagnostic
-  axioms and 21 r68 linter warnings remain visible.
+Superseded by the correction-v2 re-pin (below). r67 reproduced the then-pinned 6,279,168-byte
+engine byte-for-byte from 46 source files at `61a24519`; the manifest-order and CRLF guard-log
+predicates were fixed prospectively; no claim for later source. Full record: `2ec89a0:docs/CORE_REDESIGN.md`.
 
 ### Current-engine service-kit connection (2026-09-26, XI.2 record)
 
-- **Predicate:** the release producer requires four exact pinned vector inputs,
-  then requires transition and reuse actual bytes to equal their pinned
-  expected bytes; the kit checks the guarded receipt and the same inventory.
-- **Invariant / failure:** a package exercises the exact engine protocol and
-  carries the checker's pinned retired-engine registry; missing or stale inputs
-  refuse packaging.
-- **Evidence:** the producer still pinned BLFCMD01/BLFCRES1 and BLFCRU01/BLFCRV01
-  (the engine uses CMD02/RES3 and RU02/RV02 and lacks reuse fixtures), and
-  `STATE_FILES` omitted the registry the checker always requires.
-- **Disposition:** replace stale fixture pins with current canonical vectors;
-  retain all comparisons, provenance, resource checks and exact inventory.
-- **Replacement control:** an independent reader derived the reuse baseline from
-  the old immutable fixture (removing only fields ReuseCodec v2 removed);
-  expected assessment bytes were specified before engine execution. A guarded
-  actual/expected comparison, fresh release build and extracted-kit scenario
-  remain required before a packaged-runtime claim.
-- **Scope:** this synthetic current-engine release and kit inventory; no
-  theorem, protocol semantics, guard, authority or cash rule is weakened;
-  fixtures stay pinned until another release record replaces them. **Claims
-  withdrawn:** old reuse-vector evidence does not verify v2; this unchanged-state
-  baseline does not resolve paid-list/stale-shortfall reuse limitations or
-  authorize using reuse to decide live commands.
-
-Felt effect: replacement operators can install and verify the same correction
-engine and history checker, then exercise retry and restore without rebuilding
-package contents by hand. Finance staff's cash command now names the correction
-it pays; an acknowledgment still has zero cash effect.
+Superseded by the correction-v2 re-pin. The release producer and kit require the current
+pinned transition and reuse vectors and the retired-engine registry, and compare actual with
+expected bytes; stale CMD01/RES1 pins were replaced. Old reuse evidence does not verify v2.
+Full record: `2ec89a0:docs/CORE_REDESIGN.md`.
 
 ### Kit evidence source binding (2026-09-28, XI.2 record)
 
@@ -476,9 +426,7 @@ unchecked rows, and a store that rolls back cannot earn ALLOW.
     `isSome_of_mem`; new axiom pins ([propext, Quot.sound]).
 - **Invariant / failure:** X.1-X.2, XI.8, XI.10: no HOLD rests on data not
   checked against the gate's checkpoint, and no rollback or dropped row earns ALLOW.
-- **Evidence:** 78eabc7's message lists the changed vector answers (205-208 and
-  149 gain `*_UNVERIFIED`; 175 and 177 gain the checkpoint's counterpart reason).
-  4bffc1e's "No committed theorem statement's text changes" holds only for it.
+- **Evidence:** the changed vector answers are listed in 78eabc7's message.
 - **Disposition:** replace. Nothing is disabled.
 - **Replacement control:** all proofs compile with pinned axioms; the vectors, demo lines
   and mutants pass (counts: `STATUS.md`); the unittest fails if the runner is older than its sources.
@@ -554,40 +502,52 @@ shown on the pack's face.
   periods, which the Ledger does not hold; there is no per-claim service date,
   so the split uses the obligation period.
 
-## Gate formats round 7 (2026-09-28, XI.2 record)
+## Gate formats rounds 7 and 8 (2026-09-28 and 09-29, XI.2 record)
 
-Formats are not frozen (D1) and are specified once, in target §4-§5 (with
-the `RR/GATE` registry); round 7 changed them and reissued the golden vectors.
+These rounds reissued the golden vectors, pins, keys and signatures. Felt effect: a biweekly or
+monthly payer's stale ALLOW is re-decided, not stranded in review, and no line is paid twice.
 
-- **DECIDE-REQUEST:** lines are parsed (at most 569 bytes each) and bound to the
-  request's flow, member key, payee and amount; an FFS_CLAIM request without
-  lines is refused.
-- **TOKEN leaf:** new `decided_at` before `epoch`, `decided_at <= issued_at`,
-  kept across reissues. An FFS_CLAIM leaf needs a nonzero `lines_root`.
-- **CHECKPOINT:** the zero field is now `state_digest` = H(`STATE/v1` NUL ‖
-  released pin ‖ unresolved pin), never zero; a first checkpoint has no previous
-  digest, a later one must.
-- **Payer, codec, NUL:** fork, one-certificate-per-(tenant, epoch), `encode_line`,
-  shard-checked stateless `sign_batch(..., state_digest, shard_count)` (unbuilt
-  preconditions: target §4-§5, STATUS) and the NUL after every domain, including the
-  rules pins and `TEST-ONLY-SEED`/`TEST-ONLY-MEMBER` keys, are specified in target §4-§5.
-  Every `rules_v1` and `demo_zz` pin, synthetic key and signature was reissued.
+- **Round 7:** request lines (at most 569 bytes) bound to flow, member key,
+  payee and amount; leaf `decided_at`; nonzero `lines_root` for FFS_CLAIM;
+  checkpoint `state_digest` (never zero), previous digest only after the first,
+  a non-adjacent link is a fork; one certificate per (tenant, epoch);
+  `sign_batch` refuses a leaf routed to another shard, stateless (unbuilt: STATUS).
+- **Round 8:** age per flow (`maxDecisionAge`), replacing round 7's single
+  14-day age; a second certificate for an installed (tenant, epoch) is recorded
+  (`equivocations`) and blocks it; FFS_CYCLE and CAP_820 need lines, SDP and
+  PLAN_PAY leaves are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
+  Rules: `redo`/`own` re-decision; only ALLOW payments' lines are released
+  (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`. Theorems:
+  `verifyToken_unforked` adds equivocation; `released_iff`,
+  `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation`
+  proved. Withdrawn: round 7's FFS_CLAIM-only lines and counts.
 
-## Gate formats round 8 (2026-09-29, XI.2 record)
+## Gate PQ signing M1 (2026-09-29, XI.2 record; founder-approved R1-R4, laptop root, ACVP download)
 
-The lead's round-7 review decisions, specified in target §4-§6; vectors and
-pins reissued. Felt effect: a biweekly or monthly payer's stale ALLOW is
-re-decided, not stranded in review, and no line is paid twice.
+Felt effect: every checkpoint signature is checked by an independent Lean
+verifier before it can leave the gate, post-quantum only.
 
-- **Payer:** age per flow (`maxDecisionAge`); a second certificate for an
-  installed (tenant, epoch) is recorded (`equivocations`) and blocks it.
-- **Formats:** FFS_CYCLE and CAP_820 need lines too; SDP and PLAN_PAY leaves
-  are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
-- **Rules:** `redo`/`own` re-decision; only ALLOW payments' lines are released
-  (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`.
-- **Theorems:** `verifyToken_unforked` adds equivocation; `released_iff`,
-  `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation` proved.
-- **Withdrawn:** round 7's single 14-day age, FFS_CLAIM-only lines, counts.
+- **R1, KEY-CERT/v1 (the one wire change; new digest domain):** `KEY-CERT NUL ‖
+  alg u8 1 ‖ tenant ‖ epoch u64 ‖ shard_count u32 ‖ public key (2592)`, then
+  `u16 4627 ‖ root signature`; no id; 8 KiB. `certChainOk` holds iff it decodes and
+  the root key verifies the body. Unlike target §11, the
+  root is ML-DSA-87 in laptop DPAPI custody, not HSM LMS/XMSS.
+- **R2:** pure ML-DSA-87, empty context; hedged (rnd = 0 in vectors only).
+- **R3:** `EpochCert` drops `certId`, gains `signed`; `AXIOMS.txt` unchanged. Statement change: below.
+- **R4:** `artifacts/gate-verify/` (Lean `gate_verify`, the signer's self-check) and a new worker pin.
+- **Speed:** each pinned exe is copied once per process, held open and hash-checked per run.
+- **Claim:** vector-verified, not proved.
+
+**Certificate equivocation (XI.2 record).**
+- **Predicate:** `installCert_equivocation` and the `installCert` filter:
+  a second chain-valid certificate for an installed (tenant, epoch) was equivocation if it differed at all
+  (`x ≠ e`); now only if its public key or shard count differs.
+- **Invariant / failure:** one key and shard count per (tenant, epoch); a hedged re-signature has new
+  bytes, so re-issuing blocked its own epoch.
+- **Evidence and replacement control:** vectors `other8` re-signed (not flagged), `twin` (other key), `eq5`
+  (same key, 8 shards; both flagged, block); 256/256, build `pqm1-lean4-a1`; four `gate__mutants` mutants.
+- **Disposition:** weaken. **Scope:** the spec-level payer model until M2 persists `PayerState`.
+- **Claims withdrawn:** that any second, different certificate is equivocation (round 8).
 
 ## Follow-through decision event (M2, 2026-09-29, XI.2 record)
 

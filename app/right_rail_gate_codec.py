@@ -2,7 +2,7 @@
 
 Formats: ``RR/GATE/DECIDE-REQUEST/v1``, ``RR/GATE/DECIDE-RESPONSE/v1``,
 ``RR/GATE/TOKEN/v1``, ``RR/GATE/CHECKPOINT/v1`` (ML-DSA-87 per-batch variant
-only) and the SHA3-512 digest domains ``RR/GATE/DECISION-ID/v1``,
+only), ``RR/GATE/KEY-CERT/v1`` (the tenant root signs one epoch key) and the SHA3-512 digest domains ``RR/GATE/DECISION-ID/v1``,
 ``RR/GATE/INPUT/v1``, ``RR/GATE/MERKLE-NODE/v1`` (the batch token tree),
 ``RR/GATE/LINES-NODE/v1`` (a payment's lines tree), ``RR/GATE/SHARD/v1``
 (a member's shard) and ``RR/GATE/STATE/v1`` (a checkpoint's released and
@@ -33,6 +33,7 @@ DECIDE_REQUEST: Final = b"RR/GATE/DECIDE-REQUEST/v1\x00"
 DECIDE_RESPONSE: Final = b"RR/GATE/DECIDE-RESPONSE/v1\x00"
 TOKEN: Final = b"RR/GATE/TOKEN/v1\x00"
 CHECKPOINT: Final = b"RR/GATE/CHECKPOINT/v1\x00"
+KEY_CERT: Final = b"RR/GATE/KEY-CERT/v1\x00"
 DECISION_ID: Final = b"RR/GATE/DECISION-ID/v1\x00"
 INPUT: Final = b"RR/GATE/INPUT/v1\x00"
 MERKLE_NODE: Final = b"RR/GATE/MERKLE-NODE/v1\x00"
@@ -308,10 +309,30 @@ def checkpoint_digest(cp: Checkpoint) -> bytes:
     return sha3_512(encode_checkpoint_header(cp))
 
 
+def attach_signature(body: bytes, signature: bytes) -> bytes:
+    """body || u16 length || ML-DSA-87 signature: the signed form of a checkpoint header and of a KEY-CERT body."""
+    w = _Writer(body)
+    w.blob(signature, "signature", size=ML_DSA_87_SIGNATURE, low=ML_DSA_87_SIGNATURE)
+    return bytes(w.out)
+
+
 def encode_checkpoint(cp: Checkpoint, signature: bytes) -> bytes:
     """The signed checkpoint a payer fetches once per batch: header || signature."""
-    w = _Writer(encode_checkpoint_header(cp))
-    w.blob(signature, "signature", size=ML_DSA_87_SIGNATURE, low=ML_DSA_87_SIGNATURE)
+    return attach_signature(encode_checkpoint_header(cp), signature)
+
+
+# ------------------------------------------------------------- #5 KEY-CERT/v1
+
+
+def encode_key_cert(tenant_id: str, epoch: int, shard_count: int, public_key: bytes) -> bytes:
+    """The exact bytes the tenant's root key signs (``attach_signature`` makes the certificate): the epoch's
+    ML-DSA-87 public key for the whole tenant, every program and shard, with the shard count."""
+    w = _Writer(KEY_CERT)
+    w.int(SIG_ML_DSA_87_BATCH, 1, "alg")
+    w.ident(tenant_id, "tenant_id")
+    w.int(epoch, 8, "epoch")
+    w.int(shard_count, 4, "shard_count", low=1)
+    w.digest(public_key, "public_key", ML_DSA_87_PUBLIC_KEY)
     return bytes(w.out)
 
 
@@ -401,6 +422,17 @@ def encode_token(token: Token) -> bytes:
     return bytes(w.out)
 
 
+class CheckedSigner:
+    """A ``sign`` callback whose signatures leave only after the independent verifier accepted them
+    (``right_rail_gate_signer.checked``); ``sign_batch`` takes no other."""
+
+    def __init__(self, sign: Callable[[bytes], bytes]) -> None:
+        self._sign = sign
+
+    def __call__(self, header: bytes) -> bytes:
+        return self._sign(header)
+
+
 def sign_batch(
     leaves: Sequence[TokenLeaf],
     *,
@@ -410,7 +442,7 @@ def sign_batch(
     state_digest: bytes,
     shard_count: int,
     created_at: int,
-    sign: Callable[[bytes], bytes],
+    sign: CheckedSigner,
 ) -> tuple[Checkpoint, bytes, list[Token]]:
     """One checkpoint and one ML-DSA-87 signature for a whole batch (the batching
     invariant); each payment's token is its leaf plus a Merkle path to token_root.
@@ -420,7 +452,9 @@ def sign_batch(
     carries the engine release and decision time that decided it, so a
     re-issued leaf keeps its own.  Stateless: the serial, persist-before-publish
     and fork self-check producer rules are unbuilt (Lean checkpoint section).
-    ``sign`` is the only signing call (see right_rail_gate_signer)."""
+    ``sign`` is the only signing call and must be a ``CheckedSigner`` (see right_rail_gate_signer)."""
+    if not isinstance(sign, CheckedSigner):
+        _fail("signer")
     if not 1 <= len(leaves) <= MAX_BATCH:
         _fail("batch")
     first = leaves[0]

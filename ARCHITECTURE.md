@@ -185,7 +185,7 @@ What exists today toward it:
  admissible values; nothing yet proves every value Lean emits is admissible.
 - There is no batch decide API, independent witness, fenced standby or Bypass
  outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing exist only as
- the gate-v1 codec and Lean model.
+ the gate-v1 codec, Lean model and `gate_verify` (no product caller).
 - The subprocess-per-decision path (`app/minimal_clearance_verifier_process.py`,
  one Windows process per call) is disqualifying for gate throughput and needs a
  long-lived worker pool; no warm-worker benchmark has been run.
