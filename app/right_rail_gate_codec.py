@@ -2,7 +2,7 @@
 
 Formats: ``RR/GATE/DECIDE-REQUEST/v1``, ``RR/GATE/DECIDE-RESPONSE/v1``,
 ``RR/GATE/TOKEN/v1``, ``RR/GATE/CHECKPOINT/v1`` (ML-DSA-87 per-batch variant
-only) and the SHA3-512 digest domains ``RR/GATE/DECISION-ID/v1``,
+only), ``RR/GATE/KEY-CERT/v1`` (the tenant root signs one epoch key) and the SHA3-512 digest domains ``RR/GATE/DECISION-ID/v1``,
 ``RR/GATE/INPUT/v1``, ``RR/GATE/MERKLE-NODE/v1`` (the batch token tree),
 ``RR/GATE/LINES-NODE/v1`` (a payment's lines tree), ``RR/GATE/SHARD/v1``
 (a member's shard) and ``RR/GATE/STATE/v1`` (a checkpoint's released and
@@ -308,10 +308,30 @@ def checkpoint_digest(cp: Checkpoint) -> bytes:
     return sha3_512(encode_checkpoint_header(cp))
 
 
+def attach_signature(body: bytes, signature: bytes) -> bytes:
+    """body || u16 length || ML-DSA-87 signature: the signed form of a checkpoint header and of a KEY-CERT body."""
+    w = _Writer(body)
+    w.blob(signature, "signature", size=ML_DSA_87_SIGNATURE, low=ML_DSA_87_SIGNATURE)
+    return bytes(w.out)
+
+
 def encode_checkpoint(cp: Checkpoint, signature: bytes) -> bytes:
     """The signed checkpoint a payer fetches once per batch: header || signature."""
-    w = _Writer(encode_checkpoint_header(cp))
-    w.blob(signature, "signature", size=ML_DSA_87_SIGNATURE, low=ML_DSA_87_SIGNATURE)
+    return attach_signature(encode_checkpoint_header(cp), signature)
+
+
+# ------------------------------------------------------------- #5 KEY-CERT/v1
+
+
+def encode_key_cert(tenant_id: str, epoch: int, shard_count: int, public_key: bytes) -> bytes:
+    """The exact bytes the tenant's root key signs (``attach_signature`` makes the certificate): the epoch's
+    ML-DSA-87 public key for the whole tenant, every program and shard, with the shard count."""
+    w = _Writer(KEY_CERT)
+    w.int(SIG_ML_DSA_87_BATCH, 1, "alg")
+    w.ident(tenant_id, "tenant_id")
+    w.int(epoch, 8, "epoch")
+    w.int(shard_count, 4, "shard_count", low=1)
+    w.digest(public_key, "public_key", ML_DSA_87_PUBLIC_KEY)
     return bytes(w.out)
 
 
