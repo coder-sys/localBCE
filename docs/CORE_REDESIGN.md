@@ -4,7 +4,7 @@ Approval (2026-09-24): founder approved the v8 rebuild and retiring v5/v6 stores
 
 Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to move to the v8 store/package format (RR/FINANCIAL/CONTINUITY/v8), with v7 stores migrating all-or-nothing on owner open and v7 packages still verifiable, the founder answered "Yes, approve v8". The only protected change is CASE_11's export version string in `tests/rightrail_financial_expected_cases.py`.
 
-History-completeness approval (2026-09-24, CONSTITUTION V.4): for v7 histories lacking full facts the founder chose one sealed opening-balance event under a new digest domain, and full facts on every later event. Superseded 2026-09-25 (decision C3): v7 conversion and `OPENING_BALANCE` were removed.
+History-completeness approval (2026-09-24, V.4): one sealed opening-balance event for v7 histories. Superseded 2026-09-25 (decision C3): v7 conversion and `OPENING_BALANCE` were removed.
 
 Source: first-principles review of the financial core (owner, checker, successor,
 Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited inline.
@@ -210,20 +210,7 @@ Target lines: owner ~3,000; checker ~1,800 (replay + compare, code-independent);
 
 ## Migration (each step leaves a working system; one guarded run per step)
 
-0. Baseline: guarded suites; golden events, heads, decision packages, v7 package bytes.
-1. Retire v5/v6 stores (XI.2 record; founder approval).
-2. Close gaps: `commands` table, required revision and actor, append-only triggers, FKs.
-3. Per-handler retry logic becomes the command log (goldens byte-identical).
-4. Stop re-validating own writes; one typed decoder per record; version the staff snapshot id.
-5. Remove Python re-derivation of Lean (replacement: read-set binding + pre-COMMIT
-   per-obligation checker).
-6. Complete-fact events + `apply` reducer: OWNER/CONTINUITY v8. The v7 conversion,
-   `OPENING_BALANCE` event and v7 receiver were removed 2026-09-25 (decision C3); a
-   non-v8 store fails `unsupported_store_version`.
-7. Checker becomes replay + compare with an incremental mode; all 25 tamper tests still detect.
-8. Continuity v8, restore by replay, successor that can continue.
-9. Switch and Mirror reuse the replay.
-10. After a guarded Lean rebuild: BLFIN02 becomes the live evaluator; more transitions move to Lean.
+Baseline (guarded suites, golden events, heads, decision packages) first. Then: retire v5/v6 stores (XI.2 record); close gaps (`commands` table, required revision and actor, append-only triggers, FKs); per-handler retry becomes the command log (goldens byte-identical); stop re-validating own writes, one typed decoder per record, versioned staff snapshot id; replace Python re-derivation of Lean with read-set binding and the pre-COMMIT per-obligation checker; complete-fact events and an `apply` reducer (OWNER/CONTINUITY v8; the v7 conversion, `OPENING_BALANCE` event and v7 receiver were removed 2026-09-25, decision C3, and a non-v8 store fails `unsupported_store_version`); checker as replay + compare with an incremental mode (all 25 tamper tests still detect); Continuity v8 with restore by replay and a successor that can continue; Switch and Mirror reuse the replay; after a guarded Lean rebuild, BLFIN02 becomes the live evaluator.
 
 ## History segments (approved by the founder 2026-09-25)
 
@@ -326,16 +313,20 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   commands, cash rules, existing wire/digest domains, expected answers and
   limits. No caller-provided callback or success flag authorizes acceptance.
 - Replacement control: the caller separately supplies trusted scope, source
-  context, source SHA-256, original baseline SHA-256, owner ID/mode and authority.
-  Let F be exact file bytes and B the ORIGINAL reviewed Continuity bytes.
+  context, source SHA-256, baseline SHA-256, owner ID/mode and authority.
+  Let F be exact file bytes and B the exact `manifest.json` bytes `export-history`
+  wrote (the owner's history manifest, about 1.9 KB whatever the history).
   Every derived command binds `local_ref = UPPER(SHA256(F)) || UPPER(SHA256(B))`.
-  A retry never replaces B with a fresh snapshot. Producer and verifier parse
+  A retry never replaces B with a fresh export. Producer and verifier parse
   and reconstruct independently; the verifier does not import the producer.
-  Freeze commands before comparison. Under the same BEGIN IMMEDIATE, bind the
+  It accepts B only if canonical, its `manifest_digest` recomputes, and its meta
+  and identity rows match the trusted scope, owner, mode (LIVE or TEST) and
+  authority. Freeze commands before comparison. Under the same BEGIN IMMEDIATE, bind the
   store to B: the same identity row and event head at B's sequence (the owner
-  verified the whole store at open; later history is append-only). New work
-  requires the store still at B's sequence; on an older baseline only rows that
-  write nothing (RETRY, ALIAS) are allowed.
+  verified the whole store at open; later history is append-only). B's
+  `segment_count` and `last_segment_digest` are covered by its digest only, not
+  bound to the store. New work requires the store still at B's sequence; on an
+  older baseline only rows that write nothing (RETRY, ALIAS) are allowed.
   After final sealing the checker verifies row/command order, each new event
   onto the chain, payment/evidence/action links, revisions, every table's
   before/after difference and per-item cash deltas, then runs its own rules on
@@ -343,10 +334,9 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   and reporting remain unchanged. It does not re-verify the whole store. A file with no NEW or OVERLAP
   row must leave durable state identical and make zero SQL changes. Any mismatch rolls
   back the whole file. Publish the receipt only after COMMIT succeeds.
-  Preview is the default: verify B and restore it into isolated TEST storage,
-  bind the restore to B's sequence and head, and run the file there, retaining F
-  and original B as retry identity. Preview never opens an incumbent writer.
-  Explicit apply uses the same checked boundary. Cleanup failures are visible.
+  Preview is the default: it runs the checked file on a private copy of the live
+  store (SQLite backup; the live file is only read), rolls the copy back and
+  deletes it. It opens no writer on the live file. Explicit apply uses the same checked boundary. Cleanup failures are visible.
   CLI apply opens only an existing, current store with the reviewed mode/ID:
   SQLite `mode=rw` prevents accidental creation; read-only setup checks refuse
   missing segment/index/append-only metadata instead of migrating it before
@@ -354,7 +344,7 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
 - Scope: local synthetic receiver cash evidence only. Switch's existing owed
   comparison schema is unchanged; this is separate cash reconciliation, with
   no live transport, source authentication/truth, payment or activation claim.
-- Receipt: `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v1` has exactly `contract`,
+- Receipt: `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2` (v1 receipts stay valid as issued) has exactly `contract`,
   `mode` (PREVIEW or APPLIED), `source_sha256`, `baseline_sha256`, `row_count`,
   `recorded_count`, `duplicate_count`, `file_total_cents`, `recorded_cents`,
   `duplicate_cents`, `cash_before_cents`, `cash_after_cents`, `cash_delta_cents`,
@@ -362,21 +352,19 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   Amounts are the checker's sums of the rows before the write and the per-item
   cash deltas it proved; totals are not re-verified over the whole store.
   RETRY and ALIAS rows add zero cash, including payments reversed after their
-  receipt; a new repeat of a reversed payment is DUPLICATE only if dated no later than the reversal, else `conflict`. No intermediate
-  owner projection or raw file/error data is exported in this result.
+  receipt; a new repeat of a reversed payment's origin is DUPLICATE only if dated no later than
+  the reversal, else `conflict` (owner command and cash file share the rule). No intermediate
+  owner projection or raw file/error data is exported.
 - Duration: v1 has no implicit legacy migration; changes need a new compatibility decision and fresh evidence.
-- Claims withdrawn: this design is not implementation or verification. The
-  runs that cover it (mutated fields, context and identity, command order,
-  bounds, retry and reversal, stale, concurrent and mixed batches, overlap,
-  conflict and reuse, action limits, crashes, no ACK/report effects, privacy,
-  cleanup, Continuity) are recorded in `STATUS.md`.
+- Claims withdrawn: this design is not implementation or verification; the runs that cover it are in `STATUS.md`.
 
 ### Cash-file capacity (2026-09-28)
 
 Target: the largest state's hospital-level program, about 600 hospitals with up
 to 3 lines a month (2,000 rows a month, under Lean's `maxRows`). Not met per rr-review: the
-8 MiB package cap on the baseline binds first (`STATUS.md`). All-provider
-refund flows need sharding or Phase 2 below and are not claimed.
+8 MiB package baseline capped a store near 950 payments; with the manifest baseline
+(1b) a month is four full files and a quarter twelve (measured locks: `STATUS.md`).
+All-provider refund flows need sharding or Phase 2 below and are not claimed.
 
 - One file is one `run_batch`: at most 500 rows, at most 6 per item (each
   payment re-binds every earlier payment of its item), bounded by the 5 s writer
@@ -391,11 +379,21 @@ refund flows need sharding or Phase 2 below and are not claimed.
   whole-store rule not run before COMMIT with its reason. Claims withdrawn: that the store, or
   a cash file's totals, is independently verified before COMMIT. Corruption
   that bypassed the owner is caught at the next open or by `verify-integrity`.
-- Visible changes: the CLI prints `ERROR:receiver_cash_file_refused:{code}`; older
-  per-cause refusal codes collapsed into nine fixed classes (below); a repeat of a
-  reversed payment's origin is DUPLICATE only when dated no later than the
-  reversal, else `conflict` (owner command and cash file share the rule); `duplicate_count` includes OVERLAP
-  rows, which write alias evidence.
+- Art. XI.2 record, Phase 1b (2026-09-29). Felt effect: a reviewer hashes a
+  1.9 KB manifest, not a 2.4 to 15.7 MB package, and later files of a month and
+  quarter can be prepared at all. Disposition: B's meaning changes to the `export-history`
+  manifest; the receipt is v2 with the same 16 keys; a SHADOW store is no longer a
+  cash-file target (`cash_file_binding`, apply or preview); the new CLI command
+  `export-history --output --owner-id --mode` prints the manifest SHA-256. No stored
+  format, digest or `local_ref` construction changes. Replacement control: the manifest
+  and store binding above, and the tests in `tests/test_right_rail_financial_cash_file.py`.
+  Scope: cash-file path and that command. Claims withdrawn: "B is the original reviewed Continuity bytes", "preview restores B into
+  isolated TEST storage" and "preview never opens an owner" (it opens one on a private
+  copy, never on the live path).
+- Visible changes: `--baseline` takes the manifest (a Continuity package is refused as
+  `cash_file_format`) and preview needs `--database`; the CLI prints
+  `ERROR:receiver_cash_file_refused:{code}` with nine fixed classes (below);
+  `duplicate_count` includes OVERLAP rows, which write alias evidence.
 - A row is NEW, RETRY, OVERLAP (a repeat of a stored payment under new ids:
   DUPLICATE, one alias event, no cash), ALIAS (a stored repeat: nothing written)
   or refused. Overlap needs new ids: a row that reuses stored ids must be the
