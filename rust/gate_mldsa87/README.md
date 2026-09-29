@@ -1,7 +1,7 @@
 # rr_gate_mldsa87: build recipe
 
 ML-DSA-87 signer (FIPS 204 algorithm, non-validated AWS-LC): `keygen|public-key|sign <file>`
-on a DPAPI-sealed seed, and `kat-*` modes for the ACVP vectors. `app/right_rail_gate_signer.py`
+on a DPAPI-sealed seed (`sign` verifies its own signature before output), and `kat-*` modes for the ACVP vectors. `app/right_rail_gate_signer.py`
 runs `target/release/rr_gate_mldsa87.exe` only if it hashes to `rr_gate_mldsa87.sha256`.
 
 Build: `powershell -NoProfile -File build.ps1` (under the guard, `-MinFree 4029372048`).
@@ -15,10 +15,9 @@ It prints the SHA-256 to pin. The inputs that fix the bytes:
 - `build.ps1` adds `--remap-path-prefix=<CARGO_HOME>=/cargo` for Rust source paths.
 
 Two builds (2026-09-29; this directory and a copy under `C:\Users\neers\rrb\gate\`) were
-byte-identical, SHA-256 `34047d3391ba6f6e898b2e5e59010db4c7715a435886a9b9e71d12b8ef15d887`
-(`pqm1-cargoA-a1`, `pqm1-cargoB-a2`). The retired pin is in `artifacts/gate-verify/PROVENANCE.txt`.
+byte-identical, SHA-256 `bfe29b0c42c10b378e472b7873099fdaceab2ef980d73808547029f3cc98fc83`
+(`pqm1-cargoa4-a1`, `pqm1-cargob4-a1`). Retired pins: `artifacts/gate-verify/PROVENANCE.txt`.
 
-Known limit: aws-lc-sys compiles C with `__FILE__` paths under CARGO_HOME (long and
-8.3 forms) that rustc's remap cannot reach. A matching rebuild needs CARGO_HOME at
+Known limit: rustc's remap cannot reach aws-lc-sys's C `__FILE__` paths under CARGO_HOME. A matching rebuild needs CARGO_HOME at
 `C:\Users\neers\.cargo` on a volume with the same 8.3 short names, MSVC 14.44.35207 and
-Windows SDK/UCRT 10.0.26100.0 (cc builder, no CMake). Other machines are untested.
+Windows SDK/UCRT 10.0.26100.0 (cc builder, no CMake).

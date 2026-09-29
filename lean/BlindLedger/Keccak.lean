@@ -1,7 +1,7 @@
 /-! Keccak-f[1600] with SHA3-512, SHAKE128 and SHAKE256, for the gate's ML-DSA-87 verifier.
     TEMPORARY DUPLICATE of the private Keccak-f in `BlindLedger.Sha3`, which stays untouched because it is in
     the engine pin's source manifest.  Delete this file, and use a public `Sha3.keccakF`, at the next engine
-    re-pin.  `gate_vectors` checks both SHA3-512 implementations against Python `hashlib`. -/
+    re-pin.  The ACVP known answers in `gate_vectors` exercise every function here. -/
 namespace BlindLedger.Keccak
 
 private def rotl (v : UInt64) (n : Nat) : UInt64 :=

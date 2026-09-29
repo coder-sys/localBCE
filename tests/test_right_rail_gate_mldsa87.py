@@ -22,7 +22,6 @@ from app import right_rail_gate_signer as signer
 TESTS = Path(__file__).resolve().parent
 VECTORS = TESTS / "gate_vectors"
 GATE_VECTORS = TESTS.parent / "lean" / ".lake" / "build" / "bin" / "gate_vectors.exe"
-NEEDS_LEAN = unittest.skipUnless(GATE_VECTORS.is_file(), f"LEAN VECTORS NOT RUN: {GATE_VECTORS} is missing; build gate_vectors")
 PK, SK, SIG, SEED = 2592, 4896, 4627, 32
 BETA, OMEGA = 120, 75
 
@@ -89,7 +88,6 @@ class AcvpTests(unittest.TestCase):
             self.assertEqual(kat_verify(pk, message, signature), verdict == b"\x01")
         print(f"ACVP ML-DSA-87 sigVer (AWS-LC): {len(cases)} cases; excluded {excluded}")
 
-    @NEEDS_LEAN
     def test_acvp_mldsa87_sigver_lean(self) -> None:
         included = header_counts("mldsa87_acvp.vectors", "sigVer")[0]
         self.assertEqual(lean_vectors(VECTORS / "mldsa87_acvp.vectors"), f"GATE_VECTORS=PASS checked={included} expected={included} failed=0")
@@ -103,8 +101,26 @@ def _put(data: bytes, at: int, value: bytes) -> bytes:
     return data[:at] + value + data[at + len(value) :]
 
 
+def hint_edges(sig: bytes, at: int) -> list[bytes]:
+    """Signatures whose hint block (omega indices, then 8 cumulative counts) breaks exactly one HintBitUnpack rule,
+    built from this signature's own counts: indices out of order or equal inside one polynomial, a count above
+    omega, a nonzero byte after the last index."""
+    y = bytearray(sig[at:])
+    ends = list(y[OMEGA:])
+    edges = []
+    start = 0
+    for end in ends:
+        if end - start >= 2:  # a polynomial with two or more hints
+            edges += [_put(sig, at + start, bytes([y[start + 1], y[start]])), _put(sig, at + start + 1, bytes([y[start]]))]
+            break
+        start = end
+    edges.append(_put(sig, at + OMEGA + 7, bytes([OMEGA + 1])))
+    if ends[7] < OMEGA:
+        edges.append(_put(sig, at + OMEGA - 1, bytes([1])))
+    return edges
+
+
 class DifferentialTests(unittest.TestCase):
-    @NEEDS_LEAN
     def test_lean_and_awslc_agree_on_mutations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handle = str(Path(tmp) / "diff.key")
@@ -119,18 +135,12 @@ class DifferentialTests(unittest.TestCase):
                 cases += [(pk, message, _flip(sig, bit), False) for bit in [*range(n, SIG * 8, 97), *boundaries]]
                 cases += [(_flip(pk, bit), message, sig, False) for bit in [*range(n, PK * 8, 97), 31 * 8, 32 * 8, (PK - 1) * 8]]
                 cases += [(pk, _flip(message, 16 + n), sig, False)]
-                y = sig[hints:]
-                edges = [
-                    _put(sig, hints, bytes([9, 9]) + y[2:]),  # equal indices: not strictly increasing
-                    _put(sig, hints + OMEGA, bytes([OMEGA + 1] * 8)),  # more than omega hints
-                    _put(sig, hints + OMEGA - 1, bytes([1])),  # nonzero padding after the last hint
-                    _put(sig, 64, bytes([BETA & 255, 0])),  # z[0][0] rewritten: a z at the norm bound region
-                ]
+                edges = hint_edges(sig, hints) + [_put(sig, 64, bytes([BETA, 0, sig[66] & 0xF0]))]  # z[0][0] = gamma1 - beta
                 cases += [(pk, message, edge, False) for edge in edges]
             lines = [f"mldsa87 {'accept' if ok else 'reject'} {p.hex()} {m.hex()} {s.hex()}" for p, m, s, ok in cases]
             path = Path(tmp) / "diff.vectors"
             path.write_text("\n".join([*lines, f"end {len(lines)}"]) + "\n", "ascii", newline="\n")
-            with ThreadPoolExecutor(min(2, os.cpu_count() or 1)) as pool:  # a worker process per case; at most 2 side by side
+            with ThreadPoolExecutor(min(4, os.cpu_count() or 1)) as pool:  # a worker process per case; at most 4 side by side
                 verdicts = list(pool.map(lambda c: kat_verify(*c[:3]), cases))
             self.assertEqual(verdicts, [c[3] for c in cases])
             self.assertEqual(lean_vectors(path), f"GATE_VECTORS=PASS checked={len(cases)} expected={len(cases)} failed=0")

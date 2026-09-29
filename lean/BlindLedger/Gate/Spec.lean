@@ -605,7 +605,7 @@ abbrev PayKey := Bytes × Bytes × Bytes
 /-- Payer-side state.  `fence` is per tenant; `certs` hold only chain-verified
     certificates; `grants` only active grants; `forked` holds each detected
     fork as (stored side, new side), both signed checkpoints as evidence;
-    `equivocations` each second chain-valid certificate for an installed
+    `equivocations` each second chain-valid certificate with another public key or shard count for an installed
     one's tenant and epoch, with it; `pins` is the sent set: each payment the payer sent a command for, with
     the member key its first send pinned. -/
 structure PayerState where
@@ -634,14 +634,16 @@ def fits (s : PayerState) (e : EpochCert) : Bool :=
     A valid chain raises the tenant's fence to its epoch (the model's
     `PayerLearnFence`) even when the certificate does not fit, so a refused
     newer certificate fails closed until a fitting one arrives.  One that
-    differs from an installed certificate of its tenant and epoch is
-    equivocation: the pair is recorded, which blocks that tenant and epoch. -/
+    differs in public key or shard count from an installed certificate of its
+    tenant and epoch is equivocation: the pair is recorded, which blocks that
+    tenant and epoch.  A re-signature of the same body (hedged signing gives a
+    new one on every retry) is not equivocation. -/
 def installCert (c : Crypto) (s : PayerState) (e : EpochCert) : PayerState × Bool :=
   if c.certChainOk e then
     ({ s with certs := if fits s e then e :: s.certs else s.certs,
               fence := raiseFence s.fence e.tenantId e.epoch,
               equivocations := (s.certs.filter fun x => x.tenantId == e.tenantId && x.epoch == e.epoch &&
-                x != e).map (·, e) ++ s.equivocations }, fits s e)
+                (x.publicKey != e.publicKey || x.shardCount != e.shardCount)).map (·, e) ++ s.equivocations }, fits s e)
   else (s, false)
 
 /-- The tenant's shard count, from its installed certificates (all equal). -/

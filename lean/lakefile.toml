@@ -53,7 +53,8 @@ name = "gate_rules"
 root = "BlindLedger.Gate.Rules.Run"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
-# The pinned payer-side verifier (artifacts/gate-verify): one checkpoint against one root key, exit 0 only on ACCEPT.
+# The pinned signer self-check (artifacts/gate-verify): one checkpoint against one root key, exit 0 only on ACCEPT.
+# The payer's verifier is not built; this is its Lean model run once per signature before it leaves the gate.
 [[lean_exe]]
 name = "gate_verify"
 root = "BlindLedger.Gate.VerifyCli"

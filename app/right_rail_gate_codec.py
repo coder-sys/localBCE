@@ -422,6 +422,17 @@ def encode_token(token: Token) -> bytes:
     return bytes(w.out)
 
 
+class CheckedSigner:
+    """A ``sign`` callback whose signatures leave only after the independent verifier accepted them
+    (``right_rail_gate_signer.checked``); ``sign_batch`` takes no other."""
+
+    def __init__(self, sign: Callable[[bytes], bytes]) -> None:
+        self._sign = sign
+
+    def __call__(self, header: bytes) -> bytes:
+        return self._sign(header)
+
+
 def sign_batch(
     leaves: Sequence[TokenLeaf],
     *,
@@ -431,7 +442,7 @@ def sign_batch(
     state_digest: bytes,
     shard_count: int,
     created_at: int,
-    sign: Callable[[bytes], bytes],
+    sign: CheckedSigner,
 ) -> tuple[Checkpoint, bytes, list[Token]]:
     """One checkpoint and one ML-DSA-87 signature for a whole batch (the batching
     invariant); each payment's token is its leaf plus a Merkle path to token_root.
@@ -441,7 +452,9 @@ def sign_batch(
     carries the engine release and decision time that decided it, so a
     re-issued leaf keeps its own.  Stateless: the serial, persist-before-publish
     and fork self-check producer rules are unbuilt (Lean checkpoint section).
-    ``sign`` is the only signing call (see right_rail_gate_signer)."""
+    ``sign`` is the only signing call and must be a ``CheckedSigner`` (see right_rail_gate_signer)."""
+    if not isinstance(sign, CheckedSigner):
+        _fail("signer")
     if not 1 <= len(leaves) <= MAX_BATCH:
         _fail("batch")
     first = leaves[0]

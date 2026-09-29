@@ -1,5 +1,4 @@
 import BlindLedger.Gate.Verify
-import BlindLedger.Sha3
 
 namespace BlindLedger.Gate.Vectors
 
@@ -13,8 +12,8 @@ open BlindLedger.Gate
     one only records the payment and checks it has no pin.  `root` lines set
     the tenants' root public keys; a `cert` line is a whole KEY-CERT (one that
     does not decode can only be `reject`); signatures are verified by the
-    real ML-DSA-87 verifier (`realCrypto`), and `mldsa87` and `hash` lines
-    check it and the SHA-3 family against known answers.  A checkpoint line
+    real ML-DSA-87 verifier (`realCrypto`), and `mldsa87` lines
+    check it against known answers.  A checkpoint line
     expects `accept` (stored), `fork`
     (recorded as a fork) or `reject`.  Accepted request, response and
     checkpoint lines, and tokens that decode, list the decoded fields they must
@@ -131,14 +130,6 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
       pure ({ x with state := s }, some (ok == (← verdict expect)))
   | ["mldsa87", expect, pk, msg, sig] =>
     pure (x, some (MlDsa87.verify (← hex pk).toByteArray (← hex msg).toByteArray (← hex sig).toByteArray == (← verdict expect)))
-  | ["hash", name, msg, out] =>
-    let m ← if msg == "-" then pure [] else hex msg
-    let o ← hex out
-    let got := match name with
-      | "sha3-512" => [sha3 m, (Semantic.sha3_512 m.toByteArray).toList]
-      | "shake128" => [(Keccak.shake128 m.toByteArray o.length).toList]
-      | _ => [(Keccak.shake256 m.toByteArray o.length).toList]
-    pure (x, some (got.all (· == o)))
   | ["grants", id, rules, releases] =>
     let g : Grant := { grantId := (← hex id), ruleVersions := (← list hex rules),
                        engineReleases := (← list hex releases) }

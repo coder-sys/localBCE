@@ -2,13 +2,14 @@
 //! seed sealed by DPAPI (user scope); the seed never leaves this process. Binary stdin and stdout.
 //!   keygen <file>     : (nothing)  -> public key (2592); creates <file>, never overwrites
 //!   public-key <file> : (nothing)  -> public key
-//!   sign <file>       : message    -> signature (4627): pure ML-DSA, empty context, hedged
+//!   sign <file>       : message    -> signature (4627): pure ML-DSA, empty context, hedged; the worker
+//!                       verifies it against the key's own public key first (fault defence), else no output
 //! Known-answer modes run AWS-LC's FIPS 204 internal functions (M' is passed whole, rnd is 32 bytes):
 //!   kat-keygen : seed(32)              -> pk (2592) || sk (4896)
 //!   kat-sign   : sk || rnd || M'       -> signature
 //!   kat-verify : pk || sig(4627) || M' -> one byte, 1 valid or 0 invalid
 //! Success exits 0; any malformed or refused input exits 2. Messages are bounded at 64 KiB.
-use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_87_SIGNING};
+use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, UnparsedPublicKey, ML_DSA_87, ML_DSA_87_SIGNING};
 use std::ffi::c_void;
 use std::io::{Read, Write};
 use std::ptr::{null, null_mut};
@@ -102,7 +103,7 @@ fn main() {
             aws_lc_rs::rand::fill(&mut seed).unwrap_or_else(|_| fail());
             let sealed = dpapi(true, &seed).unwrap_or_else(|| fail());
             let created = std::fs::OpenOptions::new().write(true).create_new(true).open(&path);
-            created.and_then(|mut f| f.write_all(&sealed)).unwrap_or_else(|_| fail());
+            created.and_then(|mut f| f.write_all(&sealed).and_then(|_| f.sync_all())).unwrap_or_else(|_| fail());
             pair(&mut seed).public_key().as_ref().to_vec()
         }
         "public-key" | "sign" => {
@@ -112,7 +113,10 @@ fn main() {
                 key.public_key().as_ref().to_vec()
             } else {
                 let mut signature = vec![0u8; SIGNATURE];
-                if input.len() > MAX_MESSAGE || key.sign(&input, &mut signature) != Ok(SIGNATURE) {
+                if input.len() > MAX_MESSAGE
+                    || key.sign(&input, &mut signature) != Ok(SIGNATURE)
+                    || UnparsedPublicKey::new(&ML_DSA_87, key.public_key().as_ref()).verify(&input, &signature).is_err()
+                {
                     fail();
                 }
                 signature
