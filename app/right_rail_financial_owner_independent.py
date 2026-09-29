@@ -3708,7 +3708,7 @@ def _verify_followthrough_decisions(
 ) -> None:
     """Whole-store and touched-obligation modes: each decision in event order through the one per-event rule, each id once."""
 
-    revision: dict[object, object] = {}
+    revision: dict[object, object] = {}  # an obligation's first OBLIGATION event follows the import's revision 0
     seen: set[str] = set()
     for event in events:
         aggregate = event["aggregate_id"]
@@ -3716,7 +3716,7 @@ def _verify_followthrough_decisions(
             obligation = obligations.get(aggregate)
             population = None if obligation is None else populations.get(str(obligation["population_id"]))
             decision_id = _verify_followthrough_event(
-                event, prior_revision=revision.get(aggregate), obligation=obligation, pack=None if population is None else packs.get(str(population["pack_id"])), actors=actors, meta=meta,
+                event, prior_revision=revision.get(aggregate, 0), obligation=obligation, pack=None if population is None else packs.get(str(population["pack_id"])), actors=actors, meta=meta,
             )
             if decision_id in seen:
                 _fail("followthrough:duplicate")
@@ -3742,7 +3742,7 @@ def verify_followthrough_connection(connection: sqlite3.Connection, obligation_i
         if event["aggregate_id"] != obligation_id:
             _fail("followthrough:payload")
         prior = connection.execute("SELECT after_revision FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND event_sequence<? ORDER BY event_sequence DESC LIMIT 1", (obligation_id, event["event_sequence"])).fetchone()
-        _verify_followthrough_event(event, prior_revision=None if prior is None else prior[0], obligation=obligation, pack=pack, actors=identity["actors"], meta=meta)
+        _verify_followthrough_event(event, prior_revision=0 if prior is None else prior[0], obligation=obligation, pack=pack, actors=identity["actors"], meta=meta)
         request = _canonical({"command": "FOLLOWTHROUGH_DECISION", "key": decision_id, "payload_digest": bytes(event["payload_digest"]).hex().upper()}, "followthrough:command")
         command = connection.execute("SELECT kind,request_json,request_digest,event_sequence FROM commands WHERE command_id=?", (f"FOLLOWTHROUGH_DECISION:{decision_id}",)).fetchone()
         if command is None or tuple(command) != ("FOLLOWTHROUGH_DECISION", request.decode("ascii"), _digest(COMMAND_DOMAIN, request), event["event_sequence"]):

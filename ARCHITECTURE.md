@@ -21,10 +21,8 @@ FinancialOwner (app/right_rail_financial_owner.py) -- the only writer, one SQLit
    +--> Switch (app/right_rail_financial_switch.py): read-only replay and comparison
 ```
 
-Evidence, evaluation, official determination, authorized action, dispatch,
-receiver acknowledgment, cash and reporting are separate records; an
-acknowledgment never marks cash. Dispatch and egress are disabled; nothing here
-moves money.
+Dispatch and egress are disabled; nothing here moves money, and an
+acknowledgment never marks cash (the record kinds are separate: Constitution II).
 
 ## Financial owner
 
@@ -133,9 +131,6 @@ transfer encoding, and at most 8,192 bytes within a five-second total body
 deadline. Refusals flush, then drain at most 8,193 unread bytes for 100 ms
 before closing; HEAD sends no body, so a slow sender cannot hold a refusal open.
 
-The staff server's Hospital H labels are fixture data; a second state also
-needs Lean changed (`STATUS.md`).
-
 ## Direct-state-owned clearance route (parked)
 
 Parked in `parked/state_clearance/` (`parked/README.md`): the State `BLSDRQ01`
@@ -159,9 +154,8 @@ Only the admitted graph reaches the read-model and export verification gates;
 the served projection keeps freshness and source truth unknown. A failed capture
 or context mismatch opens no server. No writes, network fetch, cache or
 financial authority; retry recomputes the same verified projection.
-Both CLIs accept `--source-envelope PATH --capture-context SUBJECT CREDENTIAL
-ENROLLMENT LOCATOR OBSERVED FETCHED` instead of `--artifact PATH` (comparison:
-the `compare-` or `left-`/`right-` prefix); the four identities are opaque
+Both CLIs accept `--source-envelope` and `--capture-context` (see `--help`) instead
+of `--artifact PATH`; the four identities are opaque
 128-character hex values from the capture configuration, never parsed from the
 untrusted envelope. This is file intake for the fixed synthetic profile; no
 live fetch or financial-file adapter is implied.

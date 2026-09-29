@@ -11,11 +11,9 @@ feature label.
 
 ## Principles stated in Constitution Article XI
 
-Invariant first, gates serving invariants (with the exact-predicate record for
-changing one), one owner per truth with a small trusted core, narrow versioned
-interfaces, deterministic explicit inputs, and adversarial simplicity are
-Article XI.1-XI.2, XI.5, XI.7, XI.9 and XI.14; they are not restated here. What
-this document adds: the financial owner is the only writer, Mirror is a
+Article XI.1-XI.2, XI.5, XI.7, XI.9 and XI.14 (invariants, one owner per truth,
+narrow interfaces, deterministic inputs, adversarial simplicity) are not
+restated here. What this document adds: the financial owner is the only writer, Mirror is a
 caller/read model, Continuity is a bounded SHADOW/TEST handoff, and State owns
 rules, authority, policy transitions and official consequences. Every module
 states what it owns, receives and may mutate, and what evidence proves the
@@ -45,10 +43,8 @@ Recovery must prove behavior both when a process exits before COMMIT and when
 the committed result is lost before the caller receives it; restart and
 independent verification are part of the contract, not operational decoration.
 
-Continuity restore is bounded and isolated (`ARCHITECTURE.md`): SHADOW
-read-only, TEST non-live, dispatch/egress disabled, source bytes and owner
-identity protected, and cleanup removes only an owned attempt or published
-identity, with cleanup failures visible.
+Continuity restore is bounded and isolated as `ARCHITECTURE.md` states; cleanup
+removes only an owned attempt or published identity, and failures are visible.
 
 ## Lean direction
 

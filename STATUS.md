@@ -17,12 +17,12 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 ## Current verification (latest run per claim; raw logs are the record)
 
 - **Full suite, trunk `4efcb4b` merged** (`merge4efcb4b-full1-a1-L3`): `SUMMARY run=495 passed=483 failed=0 errors=2 skipped=10`; the 2 errors are the ML-DSA vector tests (unbuilt exe). Gate Lean build, 19 jobs (`merge4efcb4b-lean2-a2`). Skips: symlink privilege, absent old engine artifact, no fresh handoff, 7 external-gate tests.
-- **Slim sweep (`slim-1`)**: -206 product lines, no behaviour change; `slim1-full2` 497/511, 14 skipped.
 - **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount; the checker re-checks it before COMMIT.
 - **G2 dependency check** (`g2dep-r3-a1-L2`, 184/184): a correction follow-up reopens only when a derived dependency key moves (XI.2 record).
 - **G4 support package v2** (XI.2 record): software version and Trust Graph profile stay NONE.
 - **Line pack (B+)** (documentation-only CMS-64.9 pack; XI.2 record): its tests run in the suite. Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
 - **Follow-through pack (M1)** (derived, documentation-only): full suite on merge with `8883de9`, `recm1-merge-full-a1-L3` `SUMMARY run=511 passed=497 failed=0 errors=0 skipped=14`; skips include ML-DSA vector tests (no exe).
+- **Follow-through decision (M2)** (XI.2 record): an official's ASSIGN or CLOSE is one protected event, checked before COMMIT; a close needs a distinct evidence row per required purpose.
 - **Gate decision rules R1-R5 (Lean, `BlindLedger.Gate.Rules`)**: sound, complete, fail-closed, monotone, arrival-order deterministic (stale reads give `STALE_*`/`*_UNVERIFIED` review; XI.2 records). 274/274 vectors, 3,616 demo lines; all 204 mutants killed (`gate-r8-rmut*`). Tests only, not the token path. Open Low: a CAP copy of a loose row gets no reason code; the unchained path is O(n*m).
 - **Gate formats #1-#4, #12 (gate-v1)**: CHECKPOINT/v1, TOKEN/v1 and the payer's twelve-check `verifyToken` (Lean `BlindLedger.Gate`); round 8 (XI.2 record): 232/232 golden vectors, 36 theorems on `propext`/`Quot.sound` only (`AXIOMS.txt`), 133/133 spec mutants killed. The six LM1 statements are proved (no `sorry`): `Step.released_grows`, `Steps.coherent`, `Steps.at_most_once`, `installCert_equivocation`, rules `released_iff`, `one_payment_per_line`. **UNBUILT REQUIREMENTS** (target §4-§5): a checkpoint producer serialized per (tenant, shard), persisting before publishing, with a fork self-check; the payer pin written before send; KEY-CERT signing the shard count; the runtime verifier that priors hash to the anchored checkpoint `state_digest`. Offline payer verification is not claimed: ML-DSA-87 and the KEY-CERT chain are supplied inputs in Lean (`gate-r8-*` logs).
 - **Engine, proof and kit**: source-manifest reproduction (r67, 46 files) and the six-target Lake build (r68) are in the XI.2 record; 30 evaluator, 18 decision-package, 42 correction KATs and 210 + 3,616 gate-rule cases (r69); 18 correction declarations passed trust-zero, axiom-closure and `leanchecker` checks (r70); 21 verifier tests (r73). Kit: 2,673-member archive assembled, verified, extracted and run (r80, r84, r85, r88; `PROVENANCE.md`); clean checkout `e3fb69f` 24/24 (r89). 21 compile warnings and 30 fixed-vector native-axiom declarations remain; not an all-theorem axiom-hygiene claim. **Retained failures (unresolved, logs kept):** r75 native-path sort order, r78 CRLF parsing, r81-r83 smoke-harness issues; r85's outer run failed only in its count-print command.
@@ -32,9 +32,8 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Connected behavior not in ARCHITECTURE.md
 
-- Synthetic NC marker age, date-only markers and FRESH: the XI.2 capture-clock record in `docs/CORE_REDESIGN.md`.
 - NC FHIR retries keep only the final attempt; invalid Retry-After is recorded with a matching empty delay slot; failure envelopes cannot enter graph admission; V2/V3 admission checks the observation window even with a source-contract digest.
-- Only payments naming `pays_action_id` reduce a correction's unpaid amount; removing that link on a resend conflicts.
+- A resend that drops a payment's `pays_action_id` link conflicts.
 
 ## Artifact boundary
 

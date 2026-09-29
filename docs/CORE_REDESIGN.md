@@ -9,13 +9,13 @@ Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to
 ### Current-source Lean reproduction (2026-09-26, XI.2 record)
 
 - Guard-log line endings: r78 refused the r77 kit (`engine_guard_log_policy_mismatch`):
-  its 99 CRLF records hold the exact v4 policy but the kit's LF-only anchors
-  match none. Predicate unchanged: parse the actual guard evidence and keep
-  exact fields, counts, floors, exits, cleanup and mutex release; no pass from a
-  receipt alone. Disposition: only the three record-ending patterns accept LF or
-  CRLF; control: positive checks for both forms, malformed-ending and
-  adverse-record mutations, independent review, a new complete kit run. Raw log
-  bytes and digest binding are unchanged. Withdrawn: r78 verifies no kit.
+  its 99 CRLF records hold the exact v4 policy but the kit's LF-only anchors match
+  none. Predicate unchanged (parse the actual guard evidence; exact fields, counts,
+  floors, exits, cleanup and mutex release; no pass from a receipt alone). Only the
+  three record-ending patterns accept LF or CRLF; control: positive checks for both
+  forms, malformed-ending and adverse-record mutations, independent review, a new
+  complete kit run. Raw log bytes and digest binding are unchanged. Withdrawn: r78
+  verifies no kit.
 - Canonical manifest: r75 refused the r67 kit
   (`engine_source_manifest_not_canonical_or_current`): the producer sorted native
   Windows paths before replacing backslashes; the kit requires ordinal order of
@@ -145,10 +145,7 @@ it pays; an acknowledgment still has zero cash effect.
   `tools/privacy_artifact_scan.py` on the follow-up and restore packages and
   require nothing beyond its unapproved-schema notice; that is what is checked,
   not a proof that no package can leak.
-- **Raw evidence:** v1 (`82a2087`) had no rule, adapter or software version and
-  no affected work; its reproduction `{scenario: SYNTHETIC_CORRECTION,
-  real_data: false}` held nothing a support engineer could rerun; a restore
-  failure had no package.
+- **Raw evidence:** v1 (`82a2087`) held no rule, adapter or software version, no affected work, nothing rerunnable and no restore-failure package.
 - **Disposition:** v1 replaced, not versioned alongside (derived, synthetic, no
   outside consumer). Deleted: the Owner's `_corporate_support` and
   `continuity_restore_support` builders and `restore_test_continuity` wrapper
@@ -164,13 +161,6 @@ it pays; an acknowledgment still has zero cash effect.
 - **Claims withdrawn:** `reproduction {SYNTHETIC_CORRECTION, real_data: false}`;
   the earlier `affected_work {count, ids}` with the event sequence.
 
-The core is ~2.5x larger than the invariants need. Root cause: state lives in
-~20 editable tables with history as a side log, so every consumer (checker, successor,
-continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:
-one command log + one append-only, hash-chained history of complete facts + projections
-rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lines
-(8,000-11,000); owner ~3,000.
-
 ## Gaps found (under-enforcement, not just size)
 
 - Python alone computes every evaluation; Lean's BLFIN02 evaluator runs only in tests (V.1/V.2).
@@ -178,18 +168,12 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 - Two canonical encodings (SHA3/ASCII and SHA-256/UTF-8 staff snapshot).
 - The successor verifies and views but cannot continue the work (VII.2).
 
-## Target sizes (Python lines; current ceilings in `tests/test_bloat_budget.py`)
-
-Target lines: owner ~3,000; checker ~1,800 (replay + compare, code-independent); successor ~300-800 (replay + TEST writer that can continue); Mirror ~500; Switch ~500 (reuses replay); engine + adapter ~1,300; process runner ~800 (uncertain); staff server + CLI ~1,100.
-
 ## Migration (each step leaves a working system; one guarded run per step)
 
 Done: golden baselines; v5/v6 retired (XI.2 record); `commands` table, required
 revision and actor, append-only triggers, FKs; complete-fact events and the
 `apply` reducer (OWNER/CONTINUITY v8); Continuity v8 restore by replay; Switch
-and Mirror reuse the replay. The v7 conversion, `OPENING_BALANCE` and v7 receiver
-were removed 2026-09-25 (decision C3): a non-v8 store fails
-`unsupported_store_version`. Standing rules: one typed decoder per record, no
+and Mirror reuse the replay. Standing rules: one typed decoder per record, no
 re-validating own writes; Python re-derivation of Lean is replaced by read-set
 binding plus a pre-COMMIT per-obligation checker; the checker is replay +
 compare with an incremental mode and all 25 tamper tests still detect.
@@ -318,12 +302,11 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   and reporting remain unchanged. A file with no NEW or OVERLAP
   row must leave durable state identical and make zero SQL changes. Any mismatch rolls
   back the whole file. Publish the receipt only after COMMIT succeeds.
-  Preview is the default: it runs the checked file on a private copy of the live store
-  (SQLite backup; the live file is only read), rolls the copy back and deletes it, and
-  opens no writer on the live file. Explicit apply uses the same checked boundary.
-  Cleanup failures are visible. CLI apply opens only an existing, current store with the
-  reviewed mode/ID (SQLite `mode=rw`; read-only setup checks refuse missing segment/index/
-  append-only metadata instead of migrating it); a missing, empty or disappearing store is refused.
+  Preview (the default) runs the checked file on a private SQLite-backup copy of the live
+  store, rolls it back and deletes it; no writer opens on the live file. Apply uses the same
+  checked boundary; cleanup failures are visible. CLI apply opens only an existing, current
+  store with the reviewed mode/ID (`mode=rw`; setup checks refuse missing segment/index/
+  append-only metadata rather than migrate it); a missing, empty or disappearing store is refused.
 - Scope: local synthetic receiver cash evidence only; Switch's owed
   comparison schema is unchanged; no live transport, source authentication/truth,
   payment or activation claim.
@@ -338,16 +321,15 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   receipt; a new repeat of a reversed payment is DUPLICATE only if dated no later than the reversal, else `conflict`. No intermediate
   owner projection or raw file/error data is exported in this result.
 - Duration: v1 has no implicit legacy migration; changes need a new compatibility decision and fresh evidence.
-- Claims withdrawn: this design is not implementation or verification; the runs that cover
-  it (mutations, retry, reversal, concurrency, crashes, privacy, Continuity) are in `STATUS.md`.
+- Claims withdrawn: this design is not implementation or verification.
 
 ### Cash-file capacity (2026-09-28)
 
 Target: the largest state's hospital-level program, about 600 hospitals with up
 to 3 lines a month (2,000 rows a month, under Lean's `maxRows`). The 8 MiB package
-baseline capped a store near 950 payments; with the manifest baseline (1b) a month is
-four full files and a quarter twelve (measured locks: `STATUS.md`).
-All-provider refund flows need sharding or Phase 2 below and are not claimed.
+baseline capped a store near 950 payments; with the manifest baseline (1b) a month
+is four full files and a quarter twelve (locks: `STATUS.md`). All-provider refund
+flows need sharding or Phase 2 and are not claimed.
 
 - One file is one `run_batch`: at most 500 rows, at most 6 per item (each
   payment re-binds every earlier payment of its item), bounded by the 5 s writer
@@ -432,7 +414,7 @@ still unpaid, and no older engine record can ask for more.
   - Statements changed with it: `CorrectionMutationLinkFacts` (digest and key
     equations dropped; paid-list, kind, claim-amount, amount-rule and
     input-shortfall facts added) and the reuse-independence theorem (no
-    determination-digest parameter). The list is the state at HEAD.
+    determination-digest parameter).
   - Artifacts: `artifacts/engine-correction/` re-pinned, built from `79b6913`
     (`1A7A1833…D3AF`, 6,279,168 bytes); `artifacts/engine-correction-e911/`
     deleted (recoverable at `f1de262`); `RETIRED_PINS` added (E911
@@ -556,9 +538,8 @@ shown on the pack's face.
   takes no caller received time (a retry keeps the first), and a
   `decision_at_ms` after the owner clock is refused (`decision_time_future`;
   Lean needs the same guard, a follow-up). When the host clock steps back (NTP,
-  a restored VM, skew between hosts sharing a store), every write is refused
-  (`event_commit_order`) until the clock passes the last committed time: it
-  fails closed and never reorders or rewrites history. Stores written by trunk
+  a restored VM, host skew), every write is refused (`event_commit_order`) until
+  the clock passes the last committed time; history is never reordered. Stores written by trunk
   `6cccb84` or earlier are not readable (`replay:evidence-received-at`);
   recreate the synthetic workspace. `signer` is null: no PQ signing path exists.
 - **Proposed Lean (not written):** `line_pack_sum_eq_ledger`,
@@ -586,14 +567,11 @@ the `RR/GATE` registry); round 7 changed them and reissued the golden vectors.
 - **CHECKPOINT:** the zero field is now `state_digest` = H(`STATE/v1` NUL ‖
   released pin ‖ unresolved pin), never zero; a first checkpoint has no previous
   digest, a later one must.
-- **Payer:** a non-adjacent previous link is a fork; one certificate per
-  (tenant, epoch); a decision older than 14 days is refused.
-- **Codec:** `encode_line`; `sign_batch(..., state_digest, shard_count)` refuses
-  a leaf routed to another shard. It stays stateless (unbuilt preconditions:
-  target §4-§5, STATUS).
-- **NUL convention:** every domain, including the rules pins and the
-  `TEST-ONLY-SEED`/`TEST-ONLY-MEMBER` keys, is followed by a NUL, not a newline;
-  every `rules_v1` and `demo_zz` pin, synthetic key and signature was reissued.
+- **Payer, codec, NUL:** fork, one-certificate-per-(tenant, epoch), `encode_line`,
+  shard-checked stateless `sign_batch(..., state_digest, shard_count)` (unbuilt
+  preconditions: target §4-§5, STATUS) and the NUL after every domain, including the
+  rules pins and `TEST-ONLY-SEED`/`TEST-ONLY-MEMBER` keys, are specified in target §4-§5.
+  Every `rules_v1` and `demo_zz` pin, synthetic key and signature was reissued.
 
 ## Gate formats round 8 (2026-09-29, XI.2 record)
 
@@ -610,3 +588,17 @@ re-decided, not stranded in review, and no line is paid twice.
 - **Theorems:** `verifyToken_unforked` adds equivocation; `released_iff`,
   `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation` proved.
 - **Withdrawn:** round 7's single 14-day age, FFS_CLAIM-only lines, counts.
+
+## Follow-through decision event (M2, 2026-09-29, XI.2 record)
+
+- **Felt effect.** An auditor sees, for every close or assignment, the official, the role, the reason code and the AI or contractor suggestion that preceded it, side by side, with whether the two agree.
+- **Predicate.** `_EVENT_KINDS["OBLIGATION"]` and `_COMMAND_SOURCES`: the `financial_events.kind` values a Continuity v8 package may carry.
+- **Change.** One kind, `FOLLOWTHROUGH_DECIDED`, on OBLIGATION: before = after = the current revision; the payload has exactly `decision_id`, `item_id`, `act`, `reason_code`, `owner_id`, `suggestion`, `actor_id`, `actor_role`, `authority_id`, `authority_epoch` and `authority_digest`; no row images. One command kind, `FOLLOWTHROUGH_DECISION:<decision_id>`, has the request `{command, key, payload_digest}`.
+- **Invariant.** Every history act is known and fully re-verified; an unknown or forged act cannot change what an auditor reads.
+- **Evidence.** The set has no act for an official's assign or close; the alternatives break other controls: SUPPORT evidence flips `verification_status` to SUPPORTED, so a suggestion would read as proof (I.3); a side file sits outside the hash chain.
+- **Disposition.** Retain the gate: the set stays closed, extended by one kind.
+- **Control.** One `_verify_followthrough_event` checks shape, revision, roster, pack role, authority and suggestion time. It runs before COMMIT (`verify_followthrough_connection`, called by the owner inside the write; `verify_obligation_connection` also runs it on touched obligations) and on open (`_verify_followthrough_decisions`), so no decision the checker rejects can commit. The command row is re-derived from the event. Checkers from before M2 fail closed with `history:event-kind`.
+- **Format.** Unchanged: Continuity v8 and its table columns; the EVENT v2, COMMAND v1 and CONTINUITY v8 digest domains. Stores without a decision are byte-identical.
+- **Scope.** All stores; permanent.
+- **Claims withdrawn.** "Any v8 checker verifies any v8 package" no longer holds: a package that contains a decision needs a checker at or after M2. No Lean theorem covers the decision act; the Lean-controlled claim still covers only the correction transition.
+- **Kill criteria.** Stop if an existing test expectation or digest changes, a table column or digest domain is needed, or the correction follow-up leaves CURRENT.
