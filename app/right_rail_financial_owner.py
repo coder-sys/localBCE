@@ -3934,10 +3934,10 @@ class FinancialOwner:
         with self._write() as connection:
             evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="SUPPORT", common_origin_id=common_origin_id, source_id=source_id, source_version=source_version, local_ref=local_ref or f"support:{evidence_id}", applicable_at_ms=applicable_at_ms, event_at_ms=event_at_ms, received_at_ms=self._now())
             obligation = self._get_obligation_row(connection, item_id)
-            self._check_revision(obligation, expected_revision)
             status = self._insert_evidence(connection, evidence)
             if status == "DUPLICATE":
                 return {"status": "DUPLICATE", **self._projection_for_row(obligation)}
+            self._check_revision(obligation, expected_revision)  # after the retry test (III.3); a stale write rolls the insert back
             self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="SUPPORT_EVIDENCE_RECORDED", payload={"evidence_id": evidence_id, "record_digest": _hex(evidence.record_digest)}, now_ms=self._now())
             return {"status": "RECORDED", **self._current_projection(connection, str(obligation["obligation_id"]))}
 
@@ -4103,7 +4103,6 @@ class FinancialOwner:
         _id(payment_id, "payment_id")
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
-            self._check_revision(obligation, expected_revision)
             payment = connection.execute("SELECT * FROM payments WHERE payment_id=? AND obligation_id=?", (payment_id, obligation["obligation_id"])).fetchone()
             if payment is None:
                 _fail(FinancialIntegrityError, "payment_missing")
@@ -4112,6 +4111,7 @@ class FinancialOwner:
             status = self._insert_evidence(connection, evidence)
             if status == "DUPLICATE":
                 return {"status": "DUPLICATE", **self._projection_for_row(obligation)}
+            self._check_revision(obligation, expected_revision)
             if int(payment["active"]) == 0:
                 _fail(FinancialConflictError, "payment_already_reversed")
             connection.execute("UPDATE payments SET active=0,reversed_by_evidence_id=? WHERE payment_id=? AND active=1", (evidence_id, payment_id))
@@ -4143,10 +4143,10 @@ class FinancialOwner:
             pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, str(obligation["obligation_id"]))
             if owner_role not in pack.authorized_roles:
                 _fail(FinancialAuthorityError, "control_pack_owner_role_not_authorized")
-            self._check_revision(obligation, expected_revision)
             request = {"item_id": item_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "owner_role": owner_role, "deadline_ms": deadline_ms}
             if self._replayed_command(connection, "OFFSET_CLAIM", claim_id, request, "offset_claim_identity_conflict"):
                 return {"status": "DUPLICATE", "claim_id": claim_id, **self._projection_for_row(obligation)}
+            self._check_revision(obligation, expected_revision)
             evidence_status = self._insert_evidence(connection, evidence)
             if evidence_status == "DUPLICATE":
                 _fail(FinancialConflictError, "offset_evidence_reused")
