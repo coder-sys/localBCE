@@ -69,6 +69,10 @@ THEOREM_DECLARATION_RE = re.compile(
 AXIOM_LINE_RE = re.compile(
     r"^'(?P<name>[^']+)' (?:(?:does not depend on any axioms)|(?:depends on axioms: \[(?P<axioms>.*)\]))$"
 )
+# A pinned executable must not import a proof, KAT or vector module, so a proof edit never changes its bytes.
+PINNED_EXE_ROOTS = ("BlindLedger.Financial.CorrectionTransitionCli",)
+PROOF_MODULE_RE = re.compile(r"\.(?:Theorems|KAT|Vectors|CodecLaws\w*|AxiomCheck)(?:\.|$)")
+IMPORT_RE = re.compile(r"(?m)^import\s+(BlindLedger(?:\.\w+)*)")
 HEX_256_RE = re.compile(r"[0-9a-f]{64}\Z")
 HEX_160_RE = re.compile(r"[0-9a-f]{40}\Z")
 LEAN_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
@@ -629,6 +633,22 @@ def _extract_git_tree(root: Path, revision: str, destination: Path) -> None:
         raise AssuranceError(f"could not extract pinned Git archive: {exc}") from exc
 
 
+def _check_pinned_exe_closure(lean_dir: Path, roots: Sequence[str] = PINNED_EXE_ROOTS) -> int:
+    seen: set[str] = set()
+    pending = list(roots)
+    while pending:
+        module = pending.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        if PROOF_MODULE_RE.search(module):
+            raise AssuranceError(f"pinned executable imports proof module {module}")
+        *folders, name = module.split(".")
+        source = (lean_dir.joinpath(*folders) / f"{name}.lean").read_text(encoding="utf-8")
+        pending.extend(IMPORT_RE.findall(source))
+    return len(seen)
+
+
 def _toolchain_paths(manifest: Manifest) -> tuple[dict[str, Path], dict[str, Any]]:
     if platform.system() != "Windows" or platform.machine().lower() not in {"amd64", "x86_64"}:
         raise AssuranceError(
@@ -902,6 +922,7 @@ def _verify_candidate(
     source_scan = _check_forbidden_sources(
         lean_dir, source_files, manifest.forbidden_tokens
     )
+    _check_pinned_exe_closure(lean_dir)
     tool_paths, tool_identities = _toolchain_paths(manifest)
     build_command = [
         str(tool_paths["lake"]),

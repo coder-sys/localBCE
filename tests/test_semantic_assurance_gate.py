@@ -409,6 +409,16 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             result,
         )
 
+    def test_pinned_exe_closure_has_no_proof_module(self) -> None:
+        self.assertGreater(gate._check_pinned_exe_closure(gate.ROOT / "lean"), 10)
+        with tempfile.TemporaryDirectory(prefix="semantic-gate-closure-") as temporary:
+            root = Path(temporary)
+            (root / "BlindLedger").mkdir()
+            (root / "BlindLedger" / "Cli.lean").write_text("import BlindLedger.Mid\n", encoding="utf-8")
+            (root / "BlindLedger" / "Mid.lean").write_text("import BlindLedger.Foo.Theorems\n", encoding="utf-8")
+            with self.assertRaisesRegex(gate.AssuranceError, "imports proof module BlindLedger.Foo.Theorems"):
+                gate._check_pinned_exe_closure(root, ("BlindLedger.Cli",))
+
     def test_source_scan_uses_manifest_token_values(self) -> None:
         with tempfile.TemporaryDirectory(prefix="semantic-gate-source-token-") as temporary:
             root = Path(temporary)
