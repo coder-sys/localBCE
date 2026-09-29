@@ -140,15 +140,14 @@ that scope share a sequence, whatever their program, each names the
 checkpoint ending just before it as its previous, and an epoch's first
 checkpoint has an all-zero previous digest; a previous link to a
 non-adjacent checkpoint is a fork. Unbuilt preconditions (the codec's
-`sign_batch` is stateless; no producer or KEY-CERT exists): the producer
+`sign_batch` is stateless; no producer exists): the producer
 serializes checkpoints per (tenant, shard), persists each before publishing
 it, and checks it against its own stored checkpoints for a fork before
 publishing, with the required test that a crash between sign and persist
 never publishes the unpersisted checkpoint nor reuses its sequence with
-other bytes; the KEY-CERT that carries an epoch key signs every field, the
-tenant's shard count included, and a payer accepts one certificate per
-(tenant, epoch); a second, different one is recorded as equivocation and
-blocks it.
+other bytes. The KEY-CERT (v1, built) signs every field, the shard count
+included; a payer accepts one certificate per (tenant, epoch), and a second,
+different one is recorded as equivocation and blocks it.
 
 Every `RR/GATE` hash or signature input starts with its name, `/v1` and a
 NUL byte:
@@ -160,7 +159,7 @@ NUL byte:
 | MERKLE-NODE, LINES-NODE | token and claim-line Merkle trees |
 | STATE; SNAPSHOT, RELEASED, UNRESOLVED | checkpoint state digest; the rules' read-set pins |
 | SEGMENT | financial history segments |
-| KEY-CERT | epoch key certificate (planned) |
+| KEY-CERT | epoch key certificate (v1, built) |
 | TEST-ONLY-SEED, TEST-ONLY-MEMBER | synthetic test keys, never product |
 
 Checkpoints stream to an independent witness — a separate
@@ -202,8 +201,7 @@ flows, as a standing pre-signed bypass that activates only while the gate
 is down — the analogue of NCPDP Reject 92 with a 420-DK=13 override). There
 is no other fallback: Constitution III.5 makes fail-closed the universal
 default, and an inline block on a $1.8B weekly cycle is a provider cash-flow
-crisis, not an abstract SLA miss (Visa STIP's February 2019 outage shows a
-degrade-gracefully fallback can still end at 0% approval).
+crisis, not an abstract SLA miss.
 
 **Emergency bypass.** Two distinct state officials — the payment authority
 and a program-integrity or CIO official — sign a `BYPASS-GRANT` with keys
@@ -325,23 +323,24 @@ scheduled.
 If `PRIVATE_ZK` is ever selected, its parameters come from one canonical
 source, `zk-spike/params.md`'s P128-R set (128-bit classical soundness,
 ~64-bit under a quantum random oracle, 100-bit under the conjecture-free
-unique-decoding bound), superseding two earlier, inconsistent parameter
-drafts. Salt sizing, custody, and the choice between 7-year retained salts
+unique-decoding bound). Salt sizing, custody, and the choice between 7-year retained salts
 and scheduled destruction are open (§12).
 
 ## 11. Post-quantum cryptography
 
-- **ML-DSA-87**, through AWS-LC in a FIPS 140-3 HSM in the state tenant,
- signs batch and checkpoint bytes — one signature per batch, not per
- payment (§5).
+- **ML-DSA-87** (FIPS 204 algorithm, non-validated AWS-LC build) signs batch and
+ checkpoint bytes, one signature per batch (§5). For synthetic tenants the key
+ is a DPAPI-sealed file behind a pinned worker, and a Lean verifier written
+ from FIPS 204 (`gate_verify`) accepts every signature before it leaves. The
+ M1 root key is ML-DSA-87 in laptop custody, a deviation from the HSM
+ LMS/XMSS root below.
 - **Long-lived root and anchor keys use LMS/XMSS** (SP 800-208), not
  SLH-DSA: no FIPS-140-3-validated cloud HSM offers SLH-DSA today, while
  LMS/XMSS is HSM-backed now (e.g. Thales Luna T7, certificate #5450). SLH-DSA stays available as an optional software-verified second
  signature, never the only one on a root key. LMS/XMSS keys are stateful
  and need the SP 800-208 no-backup-restore operational discipline.
-- **SHA3-512, domain-separated, through AWS-LC** — not the hand-written Lean
- implementation, which is not constant-time and not reviewed like a crypto
- library.
+- **SHA3-512, domain-separated, through AWS-LC**; the Lean verifier's own
+ SHA3 handles public inputs only and is checked against known answers.
 - **Hybrid ML-KEM TLS (X25519MLKEM768)** protects the gate-to-payer and
  gate-to-standby channels. Confirmed available on AWS GovCloud
  load-balancer policies as of late 2025; Azure Government's support is
@@ -354,8 +353,7 @@ machine-checked proofs (HOL Light and CBMC, for ML-KEM and, as it lands,
 ML-DSA), run ACVP/KAT vectors in CI against the exact library build, and
 prove only the binding — that signed bytes name exactly one decision. ML-DSA
 integration into AWS-LC's FIPS-validated path was still landing as of the
-most recent research pass. Certification availability must be checked for
-the selected deployment. Constitution VI.5 forbids RSA/ECDSA fallback
+most recent research pass; check certification for the selected deployment. Constitution VI.5 forbids RSA/ECDSA fallback
 signatures; certification delay does not authorize a downgrade.
 
 ## 12. Evidence and integration

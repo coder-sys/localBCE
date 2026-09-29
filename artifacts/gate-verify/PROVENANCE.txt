@@ -1,0 +1,37 @@
+gate_verify.exe: the payer-side verifier for gate checkpoints (PQ signing M1)
+
+Lean/Lake executable `gate_verify` (root BlindLedger.Gate.VerifyCli), built from
+`lean/` at commit e6455e4 (git tree id of lean/ cacac9bdcb380512425d54c4c2ccb806dafd06e1).
+Stateless: input `root_pk (2592) || u32 BE cert length || KEY-CERT || signed checkpoint`;
+output `GATE_VERIFY=ACCEPT` (exit 0) or `REJECT` (exit 1); exit 2 for malformed input.
+ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
+(Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
+
+- Size: 4,207,616 bytes
+- SHA-256: 559188c3cb024f35dd6af320eff7c799668c36337b59964e7fc13f9495933fe6
+  (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
+- Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
+  -Wl,--no-insert-timestamp (lakefile.toml).
+
+Reproduction (2026-09-29): a clean `git archive e6455e4 lean` was extracted into two
+directories, C:\Users\neers\rrb\gate\pqm1-gv-a\lean and ...\pqm1-gv-b\lean, and built in
+each under the guard; both gave the same SHA-256 (also equal to the in-tree build).
+- Source manifest, 55 files (sha256 and path, sorted): SHA-256
+  054511bfd20be9cb2f9eccf7c4aeaccdafb908920931e207a407492854ed3bcf, 6,023 bytes;
+  copy at C:\Users\neers\rrb\gate\pqm1-gv-manifest.txt.
+- Guard v7 logs (C:\Users\neers\rrb\logs): pqm1-gva-a5 and pqm1-gvb-a1. Each: child exit 0,
+  CLEANUP=PASS, mutex RELEASED; start floor 4,029,372,048; minimum free 3,788,554,240 (a)
+  and 3,748,491,264 (b); peak working set 668,950,528 and 603,078,656.
+- Speed (20 runs each, guard log pqm1-perf1 and pqm1-perf2, median/max ms; one checkpoint
+  of 5 leaves, 404-byte header, 14,892-byte gate_verify input): through app/right_rail_gate_signer.py
+  `sign` 921/961 and `gate_verify` 497/541, over the 250 ms per batch budget. The copy of the
+  pinned exe into a private directory plus its hash costs 433 ms (worker) and 170 ms
+  (gate_verify); the process alone is 66/78 and 73/84 ms (a bare python start is 61/68).
+  Worker size 1,666,560 bytes.
+- The engine pin (../engine-correction) is not rebuilt by this change; lakefile.toml is
+  in the engine source manifest and gained the gate_verify entry, so that manifest hash
+  moves at the next engine release.
+
+Retired pin, not deleted: the seed-file signer worker with a `verify` mode,
+rust/gate_mldsa87 SHA-256 af8743c70690f85a983762f93ad9ded731e514e106bfdb8c9d1c1cd49fed116b
+(replaced by the key-file worker, pin in rust/gate_mldsa87/rr_gate_mldsa87.sha256).

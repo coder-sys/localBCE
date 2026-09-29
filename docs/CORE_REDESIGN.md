@@ -494,9 +494,7 @@ unchecked rows, and a store that rolls back cannot earn ALLOW.
     `isSome_of_mem`; new axiom pins ([propext, Quot.sound]).
 - **Invariant / failure:** X.1-X.2, XI.8, XI.10: no HOLD rests on data not
   checked against the gate's checkpoint, and no rollback or dropped row earns ALLOW.
-- **Evidence:** 78eabc7's message lists the changed vector answers (205-208 and
-  149 gain `*_UNVERIFIED`; 175 and 177 gain the checkpoint's counterpart reason).
-  4bffc1e's "No committed theorem statement's text changes" holds only for it.
+- **Evidence:** the changed vector answers are listed in 78eabc7's message.
 - **Disposition:** replace. Nothing is disabled.
 - **Replacement control:** all proofs compile with pinned axioms; the vectors, demo lines
   and mutants pass (counts: `STATUS.md`); the unittest fails if the runner is older than its sources.
@@ -573,40 +571,49 @@ shown on the pack's face.
   periods, which the Ledger does not hold; there is no per-claim service date,
   so the split uses the obligation period.
 
-## Gate formats round 7 (2026-09-28, XI.2 record)
+## Gate formats rounds 7 and 8 (2026-09-28 and 09-29, XI.2 record)
 
-Formats are not frozen (D1) and are specified once, in target §4-§5 (with
-the `RR/GATE` registry); round 7 changed them and reissued the golden vectors.
+Formats are not frozen (D1) and are specified once, in target §4-§6 (with the
+`RR/GATE` registry); these rounds changed them and reissued the golden vectors
+and every pin, synthetic key and signature. Felt effect: a biweekly or monthly
+payer's stale ALLOW is re-decided, not stranded in review, and no line is paid
+twice.
 
-- **DECIDE-REQUEST:** lines are parsed (at most 569 bytes each) and bound to the
-  request's flow, member key, payee and amount; an FFS_CLAIM request without
-  lines is refused.
-- **TOKEN leaf:** new `decided_at` before `epoch`, `decided_at <= issued_at`,
-  kept across reissues. An FFS_CLAIM leaf needs a nonzero `lines_root`.
-- **CHECKPOINT:** the zero field is now `state_digest` = H(`STATE/v1` NUL ‖
-  released pin ‖ unresolved pin), never zero; a first checkpoint has no previous
-  digest, a later one must.
-- **Payer:** a non-adjacent previous link is a fork; one certificate per
-  (tenant, epoch); a decision older than 14 days is refused.
-- **Codec:** `encode_line`; `sign_batch(..., state_digest, shard_count)` refuses
-  a leaf routed to another shard. It stays stateless (unbuilt preconditions:
-  target §4-§5, STATUS).
-- **NUL convention:** every domain, including the rules pins and the
-  `TEST-ONLY-SEED`/`TEST-ONLY-MEMBER` keys, is followed by a NUL, not a newline;
-  every `rules_v1` and `demo_zz` pin, synthetic key and signature was reissued.
+- **Round 7:** request lines (at most 569 bytes) bound to flow, member key,
+  payee and amount; leaf `decided_at`; a nonzero `lines_root` for FFS_CLAIM;
+  checkpoint `state_digest` = H(`STATE/v1` NUL ‖ released pin ‖ unresolved
+  pin), never zero, and a previous digest only after the first checkpoint; a
+  non-adjacent previous link is a fork; one certificate per (tenant, epoch);
+  `encode_line`; `sign_batch(..., state_digest, shard_count)` refuses a leaf
+  routed to another shard and stays stateless (unbuilt preconditions: target
+  §4-§5, STATUS); every domain and `TEST-ONLY-*` key ends in a NUL.
+- **Round 8:** age per flow (`maxDecisionAge`), replacing round 7's single
+  14-day age; a second certificate for an installed (tenant, epoch) is recorded
+  (`equivocations`) and blocks it; FFS_CYCLE and CAP_820 need lines, SDP and
+  PLAN_PAY leaves are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
+  Rules: `redo`/`own` re-decision; only ALLOW payments' lines are released
+  (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`. Theorems:
+  `verifyToken_unforked` adds equivocation; `released_iff`,
+  `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation`
+  proved. Withdrawn: round 7's FFS_CLAIM-only lines and counts.
 
-## Gate formats round 8 (2026-09-29, XI.2 record)
+## Gate PQ signing M1 (2026-09-29, XI.2 record; R1-R4, laptop root and ACVP download founder-approved 2026-09-29)
 
-The lead's round-7 review decisions, specified in target §4-§6; vectors and
-pins reissued. Felt effect: a biweekly or monthly payer's stale ALLOW is
-re-decided, not stranded in review, and no line is paid twice.
+Felt effect: every checkpoint signature is checked by an independent Lean
+verifier before it can leave the gate, post-quantum only (no RSA/ECDSA path).
 
-- **Payer:** age per flow (`maxDecisionAge`); a second certificate for an
-  installed (tenant, epoch) is recorded (`equivocations`) and blocks it.
-- **Formats:** FFS_CYCLE and CAP_820 need lines too; SDP and PLAN_PAY leaves
-  are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
-- **Rules:** `redo`/`own` re-decision; only ALLOW payments' lines are released
-  (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`.
-- **Theorems:** `verifyToken_unforked` adds equivocation; `released_iff`,
-  `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation` proved.
-- **Withdrawn:** round 7's single 14-day age, FFS_CLAIM-only lines, counts.
+- **R1, KEY-CERT/v1 (the one wire change; new digest domain):** body `KEY-CERT
+  NUL ‖ alg u8 1 ‖ tenant (u16 length, 1..128 ASCII) ‖ epoch u64 ‖ shard_count
+  u32 (at least 1) ‖ public key (2592)`, then `u16 4627 ‖ root signature`; no
+  id; 8 KiB limit; canonical. `certChainOk` (replacing the supplied predicate)
+  holds iff it decodes to the certificate and the tenant's root key verifies the
+  body. Deviation from target §11: the root is ML-DSA-87 in laptop DPAPI
+  custody, not an HSM LMS/XMSS key; synthetic tenants only.
+- **R2:** pure ML-DSA-87, empty context, M' = `00 00 ‖ message`; hedged in
+  product, deterministic (rnd = 0) only in vectors.
+- **R3:** `EpochCert` drops `certId`, gains `signed`; theorem statements and
+  `AXIOMS.txt` are unchanged.
+- **R4:** new `artifacts/gate-verify/` (Lean `gate_verify`) and a new worker pin
+  (no seed modes or `verify`); the old pin `af8743c7...` is retired in its
+  `PROVENANCE.txt`.
+- **Claim:** vector-verified, not proved; payer product not built.
