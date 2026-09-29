@@ -269,7 +269,7 @@ against the reviewed ledger, then records its cash evidence as one transaction:
 no repeated manual entry, exact retries, all-or-nothing. No money moves.
 
 - Predicate: accept only `RR/FINANCIAL/RECEIVER-CASH-FILE/v1`, canonical ASCII
-  JSON of at most 1 MiB, with 1-500 ordered rows, at most 6 per item (more: `cash_file_row_cap`; measured limits in `STATUS.md`). Root fields are exactly
+  JSON of at most 1 MiB, with 1-500 ordered rows, at most 6 per item (more: `cash_file_row_cap`). Root fields are exactly
   `contract`, `source_class`, `scope`, `source`, `row_count`, `total_cents`,
   `rows`; `source_class` is `SYNTHETIC_RECEIVER_CASH`. Scope has exactly the
   existing state/deployment/program/period/currency fields, currency USD.
@@ -374,7 +374,7 @@ All-provider refund flows need sharding or Phase 2 below and are not claimed.
   the original reviewed Continuity bytes", "preview restores B into isolated TEST storage".
 - Visible changes: `--baseline` takes the manifest (a package is `cash_file_format`);
   preview needs `--database`; the CLI prints `ERROR:receiver_cash_file_refused:{code}`, nine
-  fixed classes (below); `duplicate_count` includes OVERLAP rows, which write alias evidence.
+  fixed classes; `duplicate_count` includes OVERLAP rows, which write alias evidence.
 - A row is NEW, RETRY, OVERLAP (a repeat of a stored payment under new ids:
   DUPLICATE, one alias event, no cash), ALIAS (a stored repeat: nothing written)
   or refused. Overlap needs new ids: a row that reuses stored ids must be the

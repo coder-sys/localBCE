@@ -531,7 +531,11 @@ def _verify(pk: bytes, message: bytes, signature: bytes) -> bool:
     return verdict == b"\x01"
 
 
+NEEDS_SIGNER = unittest.skipUnless(signer.BINARY.is_file(), f"ML-DSA VECTORS NOT RUN: {signer.BINARY} is missing; run rust/gate_mldsa87/build.ps1")
+
+
 class GoldenVectorTests(unittest.TestCase):
+    @NEEDS_SIGNER
     def test_python_reproduces_every_vector_byte(self) -> None:
         recorded = {(r[1], r[2]): bytes.fromhex(r[3]) for r in _records() if r[0] == "sig"}
         self.assertEqual(len(recorded), 29)
@@ -543,6 +547,7 @@ class GoldenVectorTests(unittest.TestCase):
         for kind, pin in zip(("released", "unresolved"), PINS):
             self.assertIn(f"\nsnap {kind} 20270315 0 {pin.hex()}\n", rules)
 
+    @NEEDS_SIGNER
     def test_aws_lc_accepts_recorded_signatures_and_rejects_flips(self) -> None:
         triples = [[bytes.fromhex(x) for x in r[1:]] for r in _records() if r[0] == "sig"]
         pks = {signer.public_key(seed(name)) for name in CERTS}
