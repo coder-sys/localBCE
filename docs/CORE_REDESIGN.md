@@ -34,8 +34,7 @@ Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to
   origin, executable pin and retired-pin registry. **Control:** hashes, raw logs
   and exact comparisons stay inspectable; the producer's empty stream/process
   repairs passed a binary I/O regression and independent review.
-- **Scope:** local synthetic build evidence for the recorded source and
-  artifacts; no theorem statement, wire format, decision rule, executable bytes
+- **Scope:** local synthetic build evidence for the recorded source and artifacts; no theorem statement, wire format, decision rule, executable bytes
   or allowed axiom changed. **Claims withdrawn:** no assurance for later source,
   whole-system qualification or all-theorem axiom hygiene; native diagnostic
   axioms and 21 r68 linter warnings remain visible.
@@ -67,8 +66,8 @@ Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to
 
 Felt effect: replacement operators can install and verify the same correction
 engine and history checker, then exercise retry and restore without rebuilding
-missing package contents by hand. Finance staff's cash command now identifies
-the correction it pays; an acknowledgment still has zero cash effect.
+package contents by hand. Finance staff's cash command now names the correction
+it pays; an acknowledgment still has zero cash effect.
 
 ### Kit evidence source binding (2026-09-28, XI.2 record)
 
@@ -83,7 +82,7 @@ the correction it pays; an acknowledgment still has zero cash effect.
 - **Disposition:** append a source-binding paragraph; edit no earlier text.
   **Control:** the comparison script is rerunnable against any commit; a new kit
   is assembled from a clean checkout before any release claim.
-- **Scope:** provenance text only; no pin, digest, vector or gate changes.
+- **Scope:** provenance text only; no pin, digest, vector or gate change.
   **Claims withdrawn:** r80/r84/r85/r88 are not evidence for `86390ab`.
 
 ### Correction follow-up changed dependencies (2026-09-28, XI.2 record)
@@ -394,13 +393,13 @@ Felt effect: staff receiving a busy or lost response recover without a second
 cash/decision write, and read failures disable unsafe commands. The declared
 model states the retained exact-retry bodies and the busy/uncertain responses;
 a read error reaches the declared unavailable state with a working refresh. The
-original command body is preserved after uncertainty, confirmed refusal is
+original command body is kept after uncertainty, confirmed refusal is
 distinguished from unknown outcome, and a fresh verified read precedes a new
 command. Financial API payloads, authority and owner decisions are unchanged.
 The scorecard's simulated DOM does not establish browser conformance: a real
 browser over the same HTTP server exercises each declared role, control,
-response, enabled state, message, destination and recovery. No old model pass is
-inherited as evidence.
+response, enabled state, message, destination and recovery; no old model pass
+is inherited.
 
 ## Correction-v2 protected changes (2026-09-26; XI.2 record written 2026-09-28)
 

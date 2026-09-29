@@ -69,7 +69,7 @@ the missed deadline: H stays 24 hours past due on record.
 
 ## Article XIII violations found
 
-Only open ones remain (answer-first, dead-connection and dead-control items were fixed); the Mirror redesign owns the full interaction model.
+Only open ones remain (answer-first, dead-connection and dead-control items are fixed); the Mirror redesign owns the interaction model.
 
 - **Illogical path.** The approver's reject-offset is enabled in every
  session (observed for analyst, director, auditor); the page has no roles

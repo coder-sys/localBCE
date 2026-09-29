@@ -1,6 +1,6 @@
 # RightRail architecture
 
-How the code in this trunk fits together today. The target is
+How the code fits together today. The target is
 `docs/RIGHTRAIL_FULL_STACK_TARGET.md`; run status is only in `STATUS.md`.
 
 ## Shape
@@ -107,7 +107,7 @@ acknowledgment changes follow-up status without changing cash.
 a fresh owner restores by replay; the older whole-state package (8 MiB)
 remains. Restore runs in a private attempt directory and publishes
 atomically without replacing anything; a foreign destination and its
-`-wal`/`-shm` sidecars are left intact and cleanup failures are reported.
+`-wal`/`-shm` sidecars stay intact and cleanup failures are reported.
 SHADOW opens read-only; TEST is isolated; neither can dispatch, egress,
 become a live writer or replace an identity.
 
