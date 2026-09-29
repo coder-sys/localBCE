@@ -112,14 +112,12 @@ closing at a 150 ms window). A per-payment token is a Merkle-inclusion path
 of a few hundred bytes against that checkpoint's `token_root`, not a
 separately signed token.
 
-This corrects an earlier design that signed every token individually. At New
-York's volume, signing 12.6M tokens a week individually costs ~45–90 TB
-over 7 years of retention and exhausts a shared HSM/KMS signing quota (a
-documented AWS KMS default is 1,000 requests/second per account, shared with
-every other use of that account's keys) — the crypto and engineering
-red-teams independently reached the same correction. Batch signing turns
-that into on the order of hundreds to a few thousand HSM signatures a week,
-per-payment cost reduced to a Merkle path and a hash comparison.
+Signing every token individually would cost ~45–90 TB over 7 years of
+retention at New York's volume (12.6M tokens a week) and exhaust a shared
+HSM/KMS signing quota (a documented AWS KMS default is 1,000 requests/second
+per account, shared with every other use of that account's keys). Batch
+signing needs on the order of hundreds to a few thousand HSM signatures a
+week; per-payment cost is a Merkle path and a hash comparison.
 
 Every batch commit produces a checkpoint (tenant, program, sequence range,
 epoch, previous-checkpoint digest, event-chain head, token/evidence/
@@ -401,11 +399,9 @@ production activation is not granted by local build or test results.
 
 ## 15. Beyond the gate
 
-The gate sits inside the same five-part product described in
-`ARCHITECTURE.md`: the state-approved Control Pack, the Blind Ledger owner
-as the one financial writer, the Mirror staff workspace as the exception
-queue and audit surface, Continuity as the state's exit path, and Switch as
-the pre-cutover shadow comparator. None of those roles changes: the owner
+The gate sits inside the same five-part product (`README.md`,
+`ARCHITECTURE.md`) and none of its roles changes: Mirror is the exception
+queue and audit surface, and the owner
 still commits atomically with integer cents and explicit retry identity — a
 UI, connector, verifier or shadow copy never becomes a second writer.
 Connectors stay allow-listed, bounded and read-only by default; the

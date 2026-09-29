@@ -31,7 +31,7 @@ CORE_FILE_LINES = {
     "app/right_rail_financial_owner_independent.py": 5_092,
     "app/right_rail_financial_semantic_adapter.py": 2_156,
     "app/right_rail_financial_mirror.py": 1_533,
-    "app/right_rail_financial_engine.py": 1_469,
+    "app/right_rail_financial_engine.py": 1_454,
     "app/right_rail_financial_switch.py": 1_334,
     "app/right_rail_financial_line_pack.py": 315,
 }

@@ -302,9 +302,7 @@ domains, theorem statements, and `tests/test_right_rail_financial_constitution_i
    old bytes remain historical evidence and fail the new binding.
 8. Withdrawn claims: old tests and profile/envelope/graph/receipt identities do
    not establish the new rule. FRESH means marker age at synthetic capture time,
-   never current source truth. Independent post-edit review found no remaining
-   source-boundary blocker. Current combined-source regression evidence and
-   outstanding build requirements are recorded only in `STATUS.md`.
+   never current source truth. Current regression evidence and build requirements are in `STATUS.md`.
 
 ## Receiver cash-file boundary (XI.2 design, 2026-09-26)
 
@@ -322,8 +320,7 @@ preserving exact retries and a visible all-or-nothing result. No money moves.
   `captured_at_ms`. Each row has exactly eight fields: `item_id`, `payment_id`,
   `common_origin_id`, `evidence_id`, `amount_cents`, `event_at_ms`,
   `pays_action_id`, `expected_revision`. The action link is explicitly null or
-  an ID. Earlier planning called this nine fields but listed only these eight;
-  eight is the intended exact set, with no implicit extra field.
+  an ID.
 - Invariant/failure: untrusted input never skips a row, turns acknowledgment or
   reporting into cash, substitutes an ID with the same total, or commits a
   partial file. IDs/version use the owner's 128-character grammar. Cents are
@@ -395,17 +392,13 @@ files a quarter, under Lean's `maxRows`). All-provider refund flows need
 sharding or Phase 2 below and are not claimed.
 
 - One file is one `run_batch`: at most 500 rows, at most 6 per item (each
-  payment re-binds every earlier payment of its item). The bound is the 5 s
-  writer busy timeout. Measured locks are in `STATUS.md`.
-- Waste cut, results unchanged: the checker's schema and meta are read once per
-  call, sealing checks only the tables a write inserted into, and the control
-  pack is built and digest-checked once per owner for each exact row.
-- One evaluation per payment is kept (founder, 2026-09-28).
-- Verification moves from each import to each open: the whole-store verify no
-  longer runs twice per import under the lock. The import still checks every
-  obligation it touches, each new event onto the verified chain, and every
-  table by before/after comparison in the same transaction. A corruption that
-  bypassed the owner and its triggers after the open would be caught at the next
+  payment re-binds every earlier payment of its item), bounded by the 5 s writer
+  busy timeout (measured locks: `STATUS.md`). One evaluation per payment is kept
+  (founder, 2026-09-28).
+- The whole-store verify runs at each owner open, not twice per import under the
+  lock. An import still checks every obligation it touches, each new event onto
+  the verified chain, and every table by before/after comparison. Corruption
+  that bypassed the owner and its triggers after the open is caught at the next
   open, by `verify-integrity` or by an export verify.
 - A row is NEW, RETRY, OVERLAP (a new repeat of a stored payment: DUPLICATE, one
   alias event, no cash), ALIAS (a stored repeat: nothing written) or refused.
@@ -417,12 +410,11 @@ sharding or Phase 2 below and are not claimed.
 ### Cash-file refusals
 
 Fixed classes only; no input or error text is ever printed. `input`: the CLI
-could not read an input. `format`: the file is not the contract. `row_cap`:
-split the file. `binding`: the hashes, scope, owner/mode or baseline do not
-match this store. `stale`: prepare against a new baseline. `conflict`: an origin
-is already recorded with another amount or link; investigate. `already_recorded`:
-an id is reused. `busy`: retry later. `failed`: the checker or store refused;
-escalate.
+could not read an input. `format`: not the contract. `row_cap`: split the file.
+`binding`: hashes, scope, owner/mode or baseline do not match this store.
+`stale`: prepare against a new baseline. `conflict`: an origin is recorded with
+another amount or link; investigate. `already_recorded`: an id is reused.
+`busy`: retry later. `failed`: checker or store refused; escalate.
 
 ## Browser conformance correction (2026-09-26)
 
@@ -447,8 +439,7 @@ pass is inherited as evidence for the corrected model or actual browser.
 
 ## Correction-v2 protected changes (2026-09-26; XI.2 record written 2026-09-28)
 
-Original record: STATUS at `d79aceb` (lines 123-127, 130); `b9aa6a2` removed it with no pointer.
-This record replaces it; facts are from `git show` of the commits named.
+This record replaces STATUS at `d79aceb` (lines 123-127, 130); facts are from `git show` of the commits named.
 
 Felt effect: a hospital short part of its claim is asked for exactly what is
 still unpaid, and no older engine record can ask for more.

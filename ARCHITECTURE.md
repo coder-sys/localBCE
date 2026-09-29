@@ -42,9 +42,8 @@ manifest, program funding receipts, decision package v2, the exported
 `RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). Owner and
 independent checker accept v8 stores/packages only; every other version
 (v2-v7, unknown) is rejected without mutation, owner open with
-`unsupported_store_version`. The v7 conversion path was removed 2026-09-25
-(decision C3; only synthetic data ever existed), so a v8 store converted from
-v7 (contains an `OPENING_BALANCE` event) now fails `history:event-kind`.
+`unsupported_store_version`; a store converted from v7 (contains an
+`OPENING_BALANCE` event) fails `history:event-kind`.
 
 The evaluation receipt binds scope, evaluation/obligation/revision, Control
 Pack id/version/digest, sorted evidence id/record-digest pairs, trusted
@@ -144,12 +143,9 @@ server's H labels are fixture data.
 
 ## Direct-state-owned clearance route (parked)
 
-Parked in `parked/state_clearance/`: `app/direct_state_owned_clearance_v1.py`
-evaluates one canonical `BLSDRQ01` request through the State kernel (`lean/`
-StateKernel library, `rust/` process adapter; `app/semantic_kernel_binding.py`)
-and commits through `app/transactional_database_boundary.py`. Only `CLEAR` or a
-valid `EXCEPTION_APPROVED` may advance economic state; `HOLD`, `HUMAN_REVIEW`
-and `BLOCK` cannot.
+Parked in `parked/state_clearance/` (`parked/README.md`): the State `BLSDRQ01`
+route. Only `CLEAR` or a valid `EXCEPTION_APPROVED` may advance economic state;
+`HOLD`, `HUMAN_REVIEW` and `BLOCK` cannot.
 
 ## Mirror Provider Trust Graph
 
@@ -183,16 +179,6 @@ adapter is implied.
 fictional provider facts with `PASS` / `MISSING` / `HUMAN_CHECK` outcomes, an
 independent result checker and a Lean comparison path. See
 `provider_app/README.md`.
-
-## Rules that shape the code
-
-- Lean semantics run in the deployed path or not at all; a Lean failure never
- falls back to a second implementation. Runtime/Lean disagreement fails closed.
-- Money is integer cents; ordering, encodings and identities are canonical.
-- Every input, package, query and process has an explicit bound.
-- No PHI leaves the state boundary. Support uses approved fields and synthetic
- reproductions.
-- Heavy runs go through `native/guard/` only.
 
 ## Path to the payment gate
 
