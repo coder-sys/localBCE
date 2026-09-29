@@ -434,7 +434,6 @@ class StaffWorkflow:
                 local_ref=f"ref:support:{index:02d}",
                 applicable_at_ms=SUPPORT_EVENT_MS,
                 event_at_ms=SUPPORT_EVENT_MS,
-                received_at_ms=SUPPORT_EVENT_MS,
             )
             owner.record_payment_evidence(
                 item_id=item_id,
@@ -1003,8 +1002,8 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 self._respond(409, {"error": {"code": str(exc)}, "changed": False})
             except FinancialAuthorityError as exc:
                 self._respond(403, {"error": {"code": str(exc)}, "changed": False})
-            except (FinancialError, FinancialMirrorError) as exc:
-                self._respond(409, {"error": {"code": str(exc)}})
+            except (FinancialError, FinancialMirrorError) as exc:  # a failed restore also carries its safe support package
+                self._respond(409, {"error": {"code": str(exc), **({"corporate_support": s} if (s := getattr(exc, "corporate_support", None)) else {})}})
             except ValueError:
                 self._respond(400, {"error": {"code": "invalid_request"}})
             except Exception:

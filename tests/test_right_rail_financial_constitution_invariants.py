@@ -481,7 +481,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         store, claim_id, receipt = self._prepare_h_claim()
         release = store.correction_transition_release
         assert isinstance(release, financial_engine.FinancialCorrectionTransitionRelease)
-        clock_value = store.clock.value + 1_000_000  # type: ignore[attr-defined]
+        clock_value = max(store.clock.value + 1_000_000, expected.CORRECTION_AUTH_MS)  # type: ignore[attr-defined]  # not before the decision
 
         crashed = self._run_process_boundary(
             store=store,

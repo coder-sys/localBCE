@@ -137,6 +137,57 @@ the correction it pays; an acknowledgment still has zero cash effect.
   action identity, kind, status, reference or attempt. An acknowledgment no
   longer reopens.
 
+### Safe support package v2 (2026-09-28, XI.2 record)
+
+- **Predicate:** `CORPORATE-SUPPORT/v1` becomes `/v2`, built from approved fields
+  only, never a redacted dump. Fields: software version, rule version, adapter
+  versions, `work_ref_count`, reproduction. Consumers: the correction follow-up
+  (Owner builds, Mirror re-checks) and a failed Continuity restore (Mirror
+  builds in `_restore_continuity` and attaches it to the raised error as
+  `corporate_support`; only the staff endpoint's 409 response returns it, the
+  403, 503 and 400 responses do not).
+- **Sources:** rule version = the pack the correction was decided under,
+  `accepted_basis.control_pack` `{pack_id, version, digest}`, NONE if there is no
+  accepted basis; adapter `population` = the population manifest contract for a
+  follow-up and NONE for a restore failure (nothing was read);
+  `work_ref_count` = 0 when CURRENT, else 1 (this correction), with no work id and
+  no store counter; reproduction = `{vector_file_digest, case_id}` of the
+  published correction vector, only when the artifact is the pinned engine (a
+  test checks the digest and that the case is in the pinned result file).
+  **NONE**: software version (no commit or kit digest is bound to a running
+  owner) and the Trust Graph source profile (the owner has no source of it). A
+  restore failure's `error_class` is its code only when it is a `FinancialError`
+  or `FinancialMirrorError` whose text is in the closed tuple
+  `CONTINUITY_ERROR_CODES` (defined once in the Owner, imported by the Mirror);
+  anything else is `UNCLASSIFIED`; never message text.
+- **Invariant / failure:** Mirror compares the Owner's raw package with the
+  approved one by JSON equality (so `false` is not `0`) before any projection,
+  so an extra key at any level is refused, not dropped; the pack fields must
+  also have fixed shapes (id pattern, positive int version, 128-digit upper hex). Tests run
+  `tools/privacy_artifact_scan.py` on the follow-up and restore packages and
+  require that it reports nothing beyond its unapproved-schema notice; that is
+  what is checked, not a proof that no package can leak.
+- **Raw evidence the old version is unsuitable:** v1 (commit `82a2087`) had no
+  rule, adapter or software version and no affected work, and its reproduction
+  `{scenario: SYNTHETIC_CORRECTION, real_data: false}` held nothing a
+  corporate-support engineer could rerun; the restore failure had no package.
+- **Disposition:** v1 replaced, not versioned alongside: it is derived, synthetic
+  and has no outside consumer. Deleted: the Owner's `_corporate_support` and
+  `continuity_restore_support` builders, its `restore_test_continuity` wrapper
+  (callers use `restore_continuity(restore_mode="TEST")`) and Mirror's restore
+  re-check, which the Owner's package validation already made, and the Mirror's
+  own restore-mode check (the Owner refuses a bad mode first, before it creates
+  anything).
+- **Replacement control:** Mirror, staff-server and acceptance tests, run through
+  the guard.
+- **Scope / follow-ups:** correction follow-up and restore failure only. A
+  failure raised by the staff workflow after a successful restore (package size,
+  decision-package mismatch) carries no package yet. `work_ref_count` is 0/1
+  until the G2 reopened set is cheap to read at build time. Real software and
+  Trust Graph versions need a bound source first.
+- **Claims withdrawn:** `reproduction {SYNTHETIC_CORRECTION, real_data: false}`;
+  the earlier `affected_work {count, ids}` with the event sequence.
+
 The core is ~2.5x larger than the invariants need. Root cause: state lives in
 ~20 editable tables with history as a side log, so every consumer (checker, successor,
 continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:
@@ -357,3 +408,78 @@ each declared role/control/response, actual enabled state, message, destination
 and recovery; distinguish injected HTTP response rendering from actual owner
 refusal and crash tests. Isolate and close only the test browser. No old model
 pass is inherited as evidence for the corrected model or actual browser.
+
+## Line pack: CMS deferral response (2026-09-28, XI.2 record)
+
+Felt effect: when CMS defers a CMS-64.9 line, a state finance lead gets that
+line and quarter reconciled to the cent in minutes, not weeks. Coverage is
+shown on the pack's face.
+
+- **Predicate:** `app/right_rail_financial_line_pack.py` emits canonical
+  `RR/LINE-PACK/CMS-64.9/v1` JSON from a Continuity package that
+  `verify_database` binds row for row to a fully verified store opened
+  read-only (the package digest is public, so package checks alone prove
+  nothing), and a line map. Exactly one `line-map:sha256:<hex>` entry in an
+  approved Control Pack's `source_refs` binds the map, so the schema is
+  unchanged. Verification holds a read transaction that writers wait on (busy
+  timeout): run it on a quiet store or a copy.
+- **What each pack carries:**
+  - rows of payments matching the map's program/source predicate, paid in the
+    federal fiscal quarter (UTC boundaries), recorded before its end and not
+    reversed by a record before its end. "Recorded" is the evidence's
+    owner-clock `received_at_ms`, never a caller's date: the Owner reads its
+    clock once per command (a clock behind the history writes nothing), and
+    the checker requires it to equal the writing event's `committed_at_ms`,
+    commit times never to decrease, and it never to precede `event_at_ms`;
+  - `prior_quarter_adjustments`: each payment, reversal or amount conflict
+    (`CONFLICT`) of an earlier quarter's payment, listed once in the quarter
+    that recorded it, never netted;
+  - every field reads only what was recorded before quarter end, so a closed
+    quarter's pack changes only in `source`, `generated_at_ms` and
+    `supersedes`: the last evaluation before the end, the
+    Control Pack and population whose publish events committed before it, and
+    the manifest bound to that population unless superseded before it (the
+    Owner refuses to supersede a published roster and never changes a pack's
+    status);
+  - each row's evidence digest, evaluation receipt and rule version;
+  - a service-period split, the member-manifest digest and a provenance root;
+  - coverage as integer cents over the reported line.
+- **Invariant/failure:** the pack is documentation only and carries no
+  determination.
+  - A reversed payment, a row not decided under the bound pack, no single
+    unsuperseded published roster at quarter end, a map window short of the
+    quarter, an amount conflict recorded before quarter end, and a cents gap
+    in either direction are each listed in `unavailable`; any gap rules out
+    FULL.
+  - Five never-held items are always listed.
+  - A superseding pack must have the same line, quarter and store (genesis,
+    owner, mode, scope), a later time, and a head that is this history's
+    head at its sequence.
+- **Format:** stays `v1` though its fields changed after 17142e3; no pack
+  built before this record is kept as evidence.
+- **Evidence:** `tests/test_right_rail_financial_line_pack.py`.
+- **Scope:** derived artifact, plus the clock binding above: support
+  evidence no longer takes a caller received time (a retry keeps the first
+  one), and a `decision_at_ms` after the owner clock is refused
+  (`decision_time_future`; Lean needs the same guard, a follow-up). When the
+  host clock steps back (NTP, a restored VM, skew between hosts sharing a
+  store), every write is refused (`event_commit_order`) until the clock passes
+  the last committed time: it fails closed, never reorders or rewrites the
+  history, and nothing is lost. No table, Lean, wire or digest changes. `signer` is null because no
+  PQ signing path exists.
+- **Proposed Lean (not written):**
+  - `line_pack_sum_eq_ledger`
+  - `line_pack_rule_version_bound`
+  - `line_pack_complete_or_declares_gap`
+  - `line_pack_deterministic`
+  - `line_pack_chronology_strict`
+  - `line_pack_documentation_only`
+- **Kill criteria:**
+  1. The synthetic pack does not reconcile to a synthetic 64.9 line to the cent.
+  2. Coverage is under about 50% on lines a state actually had deferred.
+  3. Reviewers mostly ask for allowability evidence the Ledger never holds.
+- **Follow-up:**
+  - The W0 growth breakdown needs units, rates and multiple periods, which the
+    Ledger does not hold.
+  - There is no per-claim service date, so the split uses the obligation
+    period.

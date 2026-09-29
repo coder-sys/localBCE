@@ -1305,6 +1305,8 @@ def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.R
                 rows[key].update({column: _package_import_value(value, f"replay:{table}") for column, value in changes.items()})
             else:
                 _fail(f"replay:image:{table}")
+            if table == "evidence" and (row if "row" in image else changes).get("received_at_ms", event["committed_at_ms"]) != event["committed_at_ms"]:
+                _fail("replay:evidence-received-at")  # received is when the event that wrote it committed
     for table in CAPTURED_TABLES:
         if {str(row[0]): dict(row) for row in _bounded_rows(connection, table)} != state[table]:
             _fail(f"replay:{table}")
@@ -2332,6 +2334,9 @@ def _verify_population_history(
 ) -> None:
     """Reconstruct each population's lifecycle from ordered history events."""
 
+    times = [_time(event["committed_at_ms"], "history:committed-at") for event in events]
+    if any(earlier > later for earlier, later in zip(times, times[1:])):
+        _fail("history:commit-order")  # the clock never runs backward along the history; package and database paths both
     by_population: dict[str, list[sqlite3.Row]] = {population_id: [] for population_id in populations}
     for event in events:
         if event["aggregate_type"] != "POPULATION":
@@ -2378,7 +2383,6 @@ def _verify_population_history(
         source_completed = False
         validated = False
         published = False
-        previous_committed_at: int | None = None
         for event in by_population[population_id]:
             event_sequence = _integer(
                 event["event_sequence"],
@@ -2398,10 +2402,6 @@ def _verify_population_history(
                 )
             ):
                 _fail("history:population-manifest-stale-event")
-            committed_at = _time(event["committed_at_ms"], "history:population-committed-at")
-            if previous_committed_at is not None and committed_at < previous_committed_at:
-                _fail("history:population-chronology")
-            previous_committed_at = committed_at
             before = _integer(event["before_revision"], "history:population-before", maximum=MAX_ROWS)
             after = _integer(event["after_revision"], "history:population-after", maximum=MAX_ROWS)
             payload = _parse_json(event["payload_json"], "history:population-payload", max_bytes=MAX_PACKAGE_BYTES)
@@ -2558,7 +2558,7 @@ def _verify_population_history(
         elif status == "PUBLISHED":
             if not validated or not published:
                 _fail("history:population-status-order")
-        last_committed_at[population_id] = previous_committed_at
+        last_committed_at[population_id] = by_population[population_id][-1]["committed_at_ms"] if by_population[population_id] else None
     if any(populations[population_id]["updated_at_ms"] != at for population_id, at in last_committed_at.items()):
         _fail("history:population-updated-at")
 

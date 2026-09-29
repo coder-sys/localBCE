@@ -166,7 +166,6 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             common_origin_id="support:H",
             applicable_at_ms=10,
             event_at_ms=10,
-            received_at_ms=11,
         )
         self.store.record_payment_evidence(
             item_id="item:H",
@@ -184,6 +183,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             deadline_ms=9_000,
         )
         receipt = self.store.current_evaluation_receipt("item:H")
+        self.clock.value = 1_999  # recorded when decided: a later event never commits before this one
         self.store.authorize_offset(
             item_id="item:H",
             claim_id="claim:H",
@@ -495,6 +495,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         with closing(sqlite3.connect(path, isolation_level=None)) as connection:
             connection.row_factory = sqlite3.Row
             rows = list(connection.execute("SELECT * FROM financial_events ORDER BY event_sequence"))
+            times = [int(row["committed_at_ms"]) for row in rows]  # each position keeps its time: the clock stays in order
             left_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == left_kind]
             right_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == right_kind]
             left_position = left_candidates[left_index]
@@ -503,13 +504,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             offset = 100_000
             _drop_history_triggers(connection)
             connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
-            base_committed_at, registered_at_by_manifest, previous = (
-                IndependentFinancialCheckerTests._history_rehash_context(connection, rows)
-            )
-            for sequence, row in enumerate(rows, start=1):
-                committed_at = base_committed_at + sequence
-                if row["aggregate_type"] == "POPULATION_MANIFEST":
-                    committed_at = registered_at_by_manifest[str(row["aggregate_id"])]
+            _base, _registered, previous = IndependentFinancialCheckerTests._history_rehash_context(connection, rows)
+            for sequence, (row, committed_at) in enumerate(zip(rows, times), start=1):
                 event_id, head = IndependentFinancialCheckerTests._rehashed_event(
                     row, sequence, committed_at, previous, bytes(row["payload_digest"]),
                 )
@@ -520,6 +516,66 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 previous = head
             connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
             _restore_history_triggers(connection)
+
+    @staticmethod
+    def _edit_events_and_rehash(path: Path, edit: object) -> None:
+        """Let ``edit(rows)`` change event dicts (payload_json, committed_at_ms), then rehash the whole chain."""
+        with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = [dict(row) for row in connection.execute("SELECT * FROM financial_events ORDER BY event_sequence")]
+            edit(rows)
+            _drop_history_triggers(connection)
+            _base, _registered, previous = IndependentFinancialCheckerTests._history_rehash_context(connection, rows)
+            for row in rows:
+                payload_digest = independent._digest(independent.EVENT_DOMAIN, str(row["payload_json"]).encode("ascii"))
+                event_id, head = IndependentFinancialCheckerTests._rehashed_event(
+                    row, int(row["event_sequence"]), int(row["committed_at_ms"]), previous, payload_digest,
+                )
+                connection.execute(
+                    "UPDATE financial_events SET event_id=?,previous_head=?,head=?,committed_at_ms=?,payload_json=?,payload_digest=? WHERE event_sequence=?",
+                    (event_id, previous, head, row["committed_at_ms"], row["payload_json"], payload_digest, row["event_sequence"]),
+                )
+                previous = head
+            connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
+            _restore_history_triggers(connection)
+
+    def test_rehashed_history_whose_commit_times_run_backward_fails_database_and_package(self) -> None:
+        def last_event_before_its_predecessor(rows: list[dict[str, object]]) -> None:
+            rows[-1]["committed_at_ms"] = int(rows[-2]["committed_at_ms"]) - 1
+
+        target = self._copy_database("commit-order-tamper.sqlite")
+        self._edit_events_and_rehash(target, last_event_before_its_predecessor)
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
+            self._verify(target)
+        # No Owner can open it; a compromised writer's export must fail the package path too.
+        tampered_owner = owner.FinancialOwner.__new__(owner.FinancialOwner)
+        tampered_owner._initialize(
+            path=target, config=self.config, trusted_authority=self.authority, clock=_Clock(), mode="LIVE",
+            owner_id="financial-owner-v1", correction_transition_release=None, identity_contract=None,
+        )
+        try:
+            with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
+                independent.verify_continuity_package(
+                    tampered_owner.export_continuity(), expected_scope=self.scope, expected_authority=self.authority_binding,
+                )
+        finally:
+            tampered_owner.close()
+
+    def test_rehashed_evidence_received_before_its_event_committed_fails_replay(self) -> None:
+        def skew_support_received(rows: list[dict[str, object]]) -> None:
+            for row in rows:
+                payload = json.loads(str(row["payload_json"]))
+                for image in payload.get("rows", []):
+                    if image.get("table") == "evidence" and image.get("row", {}).get("kind") == "SUPPORT":
+                        image["row"]["received_at_ms"] = int(row["committed_at_ms"]) - 1
+                        row["payload_json"] = independent._canonical(payload, "test:skew-payload").decode("ascii")
+                        return
+            self.fail("no SUPPORT evidence image in the fixture history")
+
+        target = self._copy_database("evidence-received-at-tamper.sqlite")
+        self._edit_events_and_rehash(target, skew_support_received)
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "replay:evidence-received-at"):
+            self._verify(target)
 
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
@@ -1067,11 +1123,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         source_package = self.store.export_continuity()
         restored_path = Path(self.temp_dir.name) / "role-test-restore.sqlite"
-        restored = owner.FinancialOwner.restore_test_continuity(
+        restored = owner.FinancialOwner.restore_continuity(
             package_bytes=source_package,
             recovered_path=restored_path,
             trusted_authority=self.authority,
             clock=self.clock,
+            restore_mode="TEST",
         )
         restored.close()
         altered_source = json.loads(source_package.decode("ascii"))

@@ -27,12 +27,13 @@ MARKDOWN_BYTES = 160_000
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 7_206,
+    "app/right_rail_financial_owner.py": 7_210,
     "app/right_rail_financial_owner_independent.py": 5_093,
     "app/right_rail_financial_semantic_adapter.py": 2_156,
-    "app/right_rail_financial_mirror.py": 1_534,
+    "app/right_rail_financial_mirror.py": 1_533,
     "app/right_rail_financial_engine.py": 1_469,
     "app/right_rail_financial_switch.py": 1_334,
+    "app/right_rail_financial_line_pack.py": 315,
 }
 FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Copy-paste: repeated 6-line windows (>=120 chars) across product Python.

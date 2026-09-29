@@ -22,6 +22,18 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 ## Current verification (latest state; earlier superseded runs collapsed)
 
 - **G2 dependency check** (`dep-check`): correction follow-up reopens only when a derived dependency key moves, named in `changed_dependencies` (XI.2 record in `docs/CORE_REDESIGN.md`). Acknowledgments, the correction's own requested payment and DUPLICATE confirmations do not reopen; new evidence does; an unexplained cancellation needs review. The checker refuses a forged DUPLICATE label (`duplicate-evidence:binding`). Guarded `g2dep-r3-a1-L2` (v6): run=184 passed=184, zero floor kills. On the merged line `int-g2-r2-a1-L1`: 176/177, the only failure the Markdown budget fixed by this merge.
+- **G4 support package v2** (XI.2 record in `docs/CORE_REDESIGN.md`): `CORPORATE-SUPPORT/v2` carries rule version (the pack the correction was decided under), adapter versions, `work_ref_count` (0 or 1, no ids) and a vector reproduction (pinned engine only); software version and Trust Graph profile are NONE (no bound source). A failed Continuity restore is the second consumer: its package rides the raised error and the staff `restore-test` 409, with `error_class` from the closed `CONTINUITY_ERROR_CODES` or UNCLASSIFIED. Mirror refuses any other shape, extra keys included; tests run the privacy scan on the follow-up and restore packages and require only its unapproved-schema notice. Guarded run: see the commit message.
+- **Line pack (B+)**, documentation-only CMS-64.9 pack: builds only from a store
+  that verify_database has fully verified (read-only), with the package as its
+  exact snapshot; quarters go by owner-clock received time, so a backdated
+  payment or reversal leaves a closed quarter's rows unchanged, and reads
+  only what was recorded before quarter end. The Owner reads its clock once
+  per command and refuses a future decision time (Lean needs the same guard);
+  a host clock stepping back stops every write (`event_commit_order`) until it
+  passes the last commit time, never reordering history; the checker binds
+  each evidence received time to its event's commit time and requires commit
+  times in order, for the database and the package. Guarded bplus-fix5d on `deferral-pack` 3656bf5: 221 run, 219 passed, 1 skipped, 1 failed (Markdown budget, fixed on this line). Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
+- **Gate decision rules R1-R5 (Lean, `BlindLedger.Gate.Rules`)**: sound, complete, fail-closed, monotone, arrival-order deterministic; `allow_clear`, `allowed_decideAll`, `later_allow_clear(_many)` and `allow_clear_store` proved over append-only sets checked against the gate's checkpoint (stale reads give `STALE_*`/`*_UNVERIFIED` review, never a HOLD on unusable data). 242/242 vectors and 3,616 demo lines; the unittest fails if the runner is older than its sources. All 194 mutants killed (gate-rules-2 84c2016, gr2-mut-r3/r4a/r4b). Tests only, not the token path: signed checkpoints (gate-v1) and the release path remain unbuilt. Open Low: a CAP copy of a loose row gets no reason code; the unchained path is O(n*m).
 - **Lean build/proof/kit**: r77 freshly reproduced the pinned engine from a
  canonical 46-file source manifest, both fixed vectors matched. r68 built all
  six Lake targets (87 jobs); r69 passed 30 evaluator, 18 decision-package, 42
@@ -206,8 +218,9 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 - Offline kit assemble/verify/extract/scenario passed r80; serve/restart
  passed r84. The archive binds the assembly working tree, including frozen
  connector and browser candidates; these checks do not qualify those other
- tracks. Lean builds need 4,190,433,321 free bytes to start; Python tests
- need 2,400,000,000. Both retain the 2,190,433,321-byte running floor.
+ tracks. Lean builds need 4,029,372,048 free bytes to start; Python tests
+ need 2,200,000,000. Both keep the 2,029,372,048-byte running floor (guard v7;
+ 1 GiB and both starts 955,630,224 lower while the owner's away file is valid).
 - Retired engines are historical verification only, through the append-only,
  digest-pinned registry. A missing, malformed or changed registry refuses
  verification. Only the current engine may decide new corrections.

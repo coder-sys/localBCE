@@ -34,20 +34,31 @@ namespace BlindLedger.Gate.Rules
     - `DUPLICATE_OF_UNRESOLVED`: the exact key (or, for CAP_820, the
       member-month) is claimed by a line of the unresolved set.
       `COLLIDES_WITH_UNRESOLVED_NEAR`: not that, but an FFS near key is.  The
-      decision lists the identities of those unresolved lines.
+      decision lists the identities of the released and unresolved lines it
+      shares a key with (`counterparts`); an earlier line of the same batch is
+      not listed.
+    - `FFS_DUPLICATE_UNVERIFIED`: an FFS line's exact key is that of a row an
+      unchained set shows outside the gate's view (`loose`).  Review only; the
+      row is listed in `counterparts`, as is any loose row sharing a key.
 
     The certain reasons (R1 to R5, the duplicates, `ALREADY_DECIDED`) make the
     line HOLD, whatever else it carries.  R1, R3, R5 and R2's plan overlap
-    fire only on a usable snapshot and a valid service date, so no HOLD rests
-    on unusable data.  The rest make it HUMAN_REVIEW: a near duplicate, a near
-    collision, `SERVICE_DATE_INVALID` (not a calendar date),
-    `SERVICE_DATE_FUTURE` (after today), and `STALE_*`: a reference snapshot
-    that is missing, failing its pin, dated on an invalid day or after an
-    invalid or valid today, older than its maximum age, empty, not holding
-    exactly its declared row count, or with a row whose dates are invalid or
-    reversed; `STALE_RELEASED` / `STALE_UNRESOLVED`: that set is missing, not
-    exactly its declared count, dated on an invalid day, after today or before
-    the gate's checkpoint, or not extending the checkpoint's lines.
+    fire only on a usable snapshot and a valid service date.  The duplicates
+    and `ALREADY_DECIDED` read the gate's view of each set: the set read when
+    it is chained, else the gate's own checkpoint of it, never an unchained
+    set's rows.  So no HOLD rests on unusable data.  The rest make it
+    HUMAN_REVIEW: a near duplicate, a near collision, what an unchained set's
+    own rows show, `SERVICE_DATE_INVALID`
+    (not a calendar date), `SERVICE_DATE_FUTURE` (after today), `STALE_*`: a
+    reference snapshot that is missing, failing its pin, dated on an invalid
+    day or after an invalid or valid today, older than its maximum age, empty,
+    not holding exactly its declared row count, or with a row whose dates are
+    invalid or reversed or a death dated after the snapshot; `STALE_RELEASED` /
+    `STALE_UNRESOLVED`: that set is missing, not exactly its declared count,
+    dated on an invalid day, after today or before the gate's checkpoint, or
+    not extending the checkpoint's lines; and `*_UNVERIFIED`: a present but
+    unusable snapshot still shows R1, R3 or R5's fact for a valid service
+    date, so the reviewer sees it.
     No rule yields BLOCK: blocking stays a human or state action.
 
     The released set is every line already paid by any path, including lines
@@ -55,9 +66,12 @@ namespace BlindLedger.Gate.Rules
     HOLD and HUMAN_REVIEW lines, enrolled or not, until a person releases or
     rejects them; the gate adds each identity to at most one of the two.  Both
     are append-only in v1: each extends the gate's own checkpoint of it
-    (`releasedPrior`, `unresolvedPrior`), a REQUIRED trusted input (the gate's
-    signed checkpoint, gate-v1; a later integration).  Moving a line out of
-    the unresolved set is the release path's (see STATUS).
+    (`releasedPrior`, `unresolvedPrior`), a REQUIRED trusted input that no
+    component supplies yet (see STATUS).  After each batch the
+    next checkpoint is the view plus the batch's own additions (`advance`),
+    whether or not the set read was chained, so a store that rolls back or
+    drops those additions no longer chains.  Moving a line out of the
+    unresolved set is the release path's (see STATUS).
 
     Mapping onto the token (`BlindLedger.Gate.Spec`, gate-v1; not imported):
     `Flow.tag` and the outcome names equal the token's; `reasons` lists the
@@ -82,17 +96,19 @@ inductive Outcome | ALLOW | HOLD | HUMAN_REVIEW deriving DecidableEq, Repr
 
 inductive Reason
   | ALREADY_DECIDED | CAP_MEMBER_MONTH_DUPLICATE | COLLIDES_WITH_UNRESOLVED_NEAR | DUPLICATE_OF_UNRESOLVED
-  | FFS_DUPLICATE_LINE | FFS_NEAR_DUPLICATE | MEMBER_DECEASED | MEMBER_NOT_ENROLLED | PROVIDER_DECEASED
-  | PROVIDER_EXCLUDED | SERVICE_DATE_FUTURE | SERVICE_DATE_INVALID | STALE_DMF | STALE_ENROLLMENT
-  | STALE_EXCLUSION | STALE_PROVIDER_DEATH | STALE_RELEASED | STALE_UNRESOLVED
+  | FFS_DUPLICATE_LINE | FFS_DUPLICATE_UNVERIFIED | FFS_NEAR_DUPLICATE | MEMBER_DECEASED | MEMBER_DECEASED_UNVERIFIED
+  | MEMBER_NOT_ENROLLED | MEMBER_NOT_ENROLLED_UNVERIFIED | PROVIDER_DECEASED | PROVIDER_DECEASED_UNVERIFIED
+  | PROVIDER_EXCLUDED | PROVIDER_EXCLUDED_UNVERIFIED | SERVICE_DATE_FUTURE | SERVICE_DATE_INVALID | STALE_DMF
+  | STALE_ENROLLMENT | STALE_EXCLUSION | STALE_PROVIDER_DEATH | STALE_RELEASED | STALE_UNRESOLVED
   deriving DecidableEq, Repr
 
 /-- Every code once, in ascending byte order of its name (the runner's `#guard` checks the order). -/
 def reasons : List Reason :=
   [.ALREADY_DECIDED, .CAP_MEMBER_MONTH_DUPLICATE, .COLLIDES_WITH_UNRESOLVED_NEAR, .DUPLICATE_OF_UNRESOLVED,
-   .FFS_DUPLICATE_LINE, .FFS_NEAR_DUPLICATE, .MEMBER_DECEASED, .MEMBER_NOT_ENROLLED, .PROVIDER_DECEASED,
-   .PROVIDER_EXCLUDED, .SERVICE_DATE_FUTURE, .SERVICE_DATE_INVALID, .STALE_DMF, .STALE_ENROLLMENT,
-   .STALE_EXCLUSION, .STALE_PROVIDER_DEATH, .STALE_RELEASED, .STALE_UNRESOLVED]
+   .FFS_DUPLICATE_LINE, .FFS_DUPLICATE_UNVERIFIED, .FFS_NEAR_DUPLICATE, .MEMBER_DECEASED, .MEMBER_DECEASED_UNVERIFIED,
+   .MEMBER_NOT_ENROLLED, .MEMBER_NOT_ENROLLED_UNVERIFIED, .PROVIDER_DECEASED, .PROVIDER_DECEASED_UNVERIFIED,
+   .PROVIDER_EXCLUDED, .PROVIDER_EXCLUDED_UNVERIFIED, .SERVICE_DATE_FUTURE, .SERVICE_DATE_INVALID, .STALE_DMF,
+   .STALE_ENROLLMENT, .STALE_EXCLUSION, .STALE_PROVIDER_DEATH, .STALE_RELEASED, .STALE_UNRESOLVED]
 
 /-- For CAP_820, `payee` and `rendering` are the plan and `date` is the first
     day of the service period. -/
@@ -131,6 +147,7 @@ structure Snapshot (α : Type) where
   asOf : Nat
   count : Nat
   entries : List α
+  deriving DecidableEq
 
 /-- The read set: `none` is missing (or failed its pin).  The priors are the
     gate's checkpoints of the two sets (genesis: date 0, no lines). -/
@@ -165,20 +182,21 @@ def dayNum (d : Nat) : Nat :=
   let mp := if m > 2 then m - 3 else m + 9
   y * 365 + y / 4 - y / 100 + y / 400 + (153 * mp + 2) / 5 + d % 100 - 1
 
-def okDeath (d : Death) : Bool := validDate d.date
+/-- A row is well formed on a snapshot dated `asOf`: a death is dated on a valid day not after it. -/
+def okDeath (asOf : Nat) (d : Death) : Bool := validDate d.date && d.date ≤ asOf
 
-def okExclusion (e : Exclusion) : Bool := validDate e.start && validDate e.stop && e.start ≤ e.stop
+def okExclusion (_ : Nat) (e : Exclusion) : Bool := validDate e.start && validDate e.stop && e.start ≤ e.stop
 
-def okSpan (s : Span) : Bool := validDate s.start && validDate s.stop && s.start ≤ s.stop
+def okSpan (_ : Nat) (s : Span) : Bool := validDate s.start && validDate s.stop && s.start ≤ s.stop
 
 /-- Present, dated on a valid day not after a valid today, at most `maxAge`
     days old, holding exactly its declared, nonzero count of well-formed rows
     (a real death, exclusion or enrollment list is never empty). -/
-def usable {α : Type} (today maxAge : Nat) (ok : α → Bool) : Option (Snapshot α) → Bool
+def usable {α : Type} (today maxAge : Nat) (ok : Nat → α → Bool) : Option (Snapshot α) → Bool
   | none => false
   | some s => validDate today && validDate s.asOf && s.asOf ≤ today &&
       dayNum today ≤ dayNum s.asOf + maxAge && s.entries.length == s.count && 0 < s.count &&
-      s.entries.all ok
+      s.entries.all (ok s.asOf)
 
 /-- The released or unresolved set: present with exactly its declared count
     (it may be empty), dated on a valid day not after today nor before the
@@ -187,6 +205,26 @@ def chained (today : Nat) (prior : Snapshot Line) : Option (Snapshot Line) → B
   | none => false
   | some s => s.entries.length == s.count && validDate s.asOf && s.asOf ≤ today && prior.asOf ≤ s.asOf &&
       prior.entries.isPrefixOf s.entries
+
+/-- The gate's view of a set: the set read when it is chained, else the gate's checkpoint of it. -/
+def view (today : Nat) (prior : Snapshot Line) (o : Option (Snapshot Line)) : Snapshot Line :=
+  if chained today prior o then o.getD prior else prior
+
+/-- The gate's next checkpoint of a set: its view, then the batch's own additions, whether or not
+    the set read was chained. -/
+def advance (today : Nat) (prior : Snapshot Line) (o : Option (Snapshot Line)) (adds : List Line) :
+    Snapshot Line :=
+  let v := view today prior o
+  ⟨v.asOf, v.entries.length + adds.length, v.entries ++ adds⟩
+
+/-- The rows a set read shows outside the gate's view: none when it is chained (the view is the set
+    read), else those not in the checkpoint (the view). -/
+def loose (today : Nat) (prior : Snapshot Line) (o : Option (Snapshot Line)) : List Line :=
+  if chained today prior o then [] else (entries o).filter fun x => !prior.entries.contains x
+
+def releasedSet (c : Ctx) : List Line := (view c.today c.releasedPrior c.released).entries
+
+def unresolvedSet (c : Ctx) : List Line := (view c.today c.unresolvedPrior c.unresolved).entries
 
 abbrev Key := List Nat
 
@@ -206,8 +244,25 @@ def covers (l : Line) (s : Span) : Bool :=
 def enrolled (c : Ctx) (l : Line) : Bool := (entries c.enrollment).any (covers l)
 
 /-- A check on this snapshot is certain for the line: the snapshot is usable and the date valid. -/
-def certain {α : Type} (c : Ctx) (maxAge : Nat) (ok : α → Bool) (o : Option (Snapshot α)) (l : Line) : Bool :=
+def certain {α : Type} (c : Ctx) (maxAge : Nat) (ok : Nat → α → Bool) (o : Option (Snapshot α)) (l : Line) :
+    Bool :=
   usable c.today maxAge ok o && validDate l.date
+
+/-- A check on this snapshot is not certain, but the snapshot is present and the date valid. -/
+def unverified {α : Type} (c : Ctx) (maxAge : Nat) (ok : Nat → α → Bool) (o : Option (Snapshot α))
+    (l : Line) : Bool :=
+  o.isSome && !usable c.today maxAge ok o && validDate l.date
+
+def party (l : Line) (id : Nat) : Bool := id == l.payee || id == l.rendering
+
+/-- The facts of R1 and R3 as the rows show them. -/
+def memberDead (c : Ctx) (l : Line) : Bool := (entries c.dmf).any fun d => d.id == l.member && d.date < l.date
+
+def providerDead (c : Ctx) (l : Line) : Bool :=
+  (entries c.providerDeaths).any fun d => party l d.id && d.date < l.date
+
+def excluded (c : Ctx) (l : Line) : Bool :=
+  (entries c.exclusions).any fun e => party l e.id && e.start ≤ l.date && l.date ≤ e.stop
 
 def notEnrolled (c : Ctx) (l : Line) : Bool := certain c 7 okSpan c.enrollment l && !enrolled c l
 
@@ -219,13 +274,15 @@ def overlap (c : Ctx) (l : Line) : Bool :=
   ss.any fun s => ss.any fun t =>
     s.plan != t.plan && max first (max s.start t.start) ≤ min last (min s.stop t.stop)
 
-def party (l : Line) (id : Nat) : Bool := id == l.payee || id == l.rendering
-
 /-- The keys a line claims for the lines after it, whatever its outcome. -/
 def claim (c : Ctx) (l : Line) : List Key := if isCap l && notEnrolled c l then [exactKey l, idKey l] else keys l
 
 /-- The keys claimed by the unresolved set. -/
-def pending (c : Ctx) : List Key := (entries c.unresolved).flatMap (claim c)
+def pending (c : Ctx) : List Key := (unresolvedSet c).flatMap (claim c)
+
+/-- The exact keys of both sets' `loose` rows. -/
+def looseKeys (c : Ctx) : List Key :=
+  (loose c.today c.releasedPrior c.released ++ loose c.today c.unresolvedPrior c.unresolved).map exactKey
 
 /-- The rule table.  Maximum ages: DMF and provider deaths 90 days (H.R.1
     §§71104-71105 quarterly minimum); exclusions 31 days (42 CFR 455.436
@@ -238,14 +295,16 @@ def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
       !isCap l && (pending c).contains (nearKey l) && !(pending c).contains (exactKey l)
   | .DUPLICATE_OF_UNRESOLVED => (pending c).contains (exactKey l) || isCap l && (pending c).contains (nearKey l)
   | .FFS_DUPLICATE_LINE => !isCap l && seen.contains (exactKey l)
+  | .FFS_DUPLICATE_UNVERIFIED => !isCap l && (looseKeys c).contains (exactKey l)
   | .FFS_NEAR_DUPLICATE => !isCap l && seen.contains (nearKey l) && !seen.contains (exactKey l)
-  | .MEMBER_DECEASED => certain c 90 okDeath c.dmf l &&
-      (entries c.dmf).any fun d => d.id == l.member && d.date < l.date
+  | .MEMBER_DECEASED => certain c 90 okDeath c.dmf l && memberDead c l
+  | .MEMBER_DECEASED_UNVERIFIED => unverified c 90 okDeath c.dmf l && memberDead c l
   | .MEMBER_NOT_ENROLLED => notEnrolled c l
-  | .PROVIDER_DECEASED => certain c 90 okDeath c.providerDeaths l &&
-      (entries c.providerDeaths).any fun d => party l d.id && d.date < l.date
-  | .PROVIDER_EXCLUDED => certain c 31 okExclusion c.exclusions l &&
-      (entries c.exclusions).any fun e => party l e.id && e.start ≤ l.date && l.date ≤ e.stop
+  | .MEMBER_NOT_ENROLLED_UNVERIFIED => unverified c 7 okSpan c.enrollment l && !enrolled c l
+  | .PROVIDER_DECEASED => certain c 90 okDeath c.providerDeaths l && providerDead c l
+  | .PROVIDER_DECEASED_UNVERIFIED => unverified c 90 okDeath c.providerDeaths l && providerDead c l
+  | .PROVIDER_EXCLUDED => certain c 31 okExclusion c.exclusions l && excluded c l
+  | .PROVIDER_EXCLUDED_UNVERIFIED => unverified c 31 okExclusion c.exclusions l && excluded c l
   | .SERVICE_DATE_FUTURE => c.today < l.date
   | .SERVICE_DATE_INVALID => !validDate l.date
   | .STALE_DMF => !usable c.today 90 okDeath c.dmf
@@ -255,11 +314,13 @@ def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
   | .STALE_RELEASED => !chained c.today c.releasedPrior c.released
   | .STALE_UNRESOLVED => !chained c.today c.unresolvedPrior c.unresolved
 
-/-- Reasons a person must look at: bad or unusable data, or a near duplicate or collision. -/
+/-- Reasons a person must look at: bad or unusable data, what it still shows, or a near duplicate or
+    collision. -/
 def review : Reason → Bool
   | .COLLIDES_WITH_UNRESOLVED_NEAR | .FFS_NEAR_DUPLICATE | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID
   | .STALE_DMF | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .STALE_RELEASED
-  | .STALE_UNRESOLVED => true
+  | .STALE_UNRESOLVED | .MEMBER_DECEASED_UNVERIFIED | .MEMBER_NOT_ENROLLED_UNVERIFIED
+  | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED_UNVERIFIED | .FFS_DUPLICATE_UNVERIFIED => true
   | _ => false
 
 /-- A certain reason outranks every review reason. -/
@@ -270,14 +331,17 @@ structure Decision where
   line : Line
   outcome : Outcome
   reasons : List Reason
-  /-- Identities of the unresolved lines whose claim shares a key with the line. -/
+  /-- Identities of the released lines sharing a key with the line, then the unresolved lines whose
+      claim does; each set's view first, then its `loose` rows. -/
   counterparts : List Nat
   deriving DecidableEq, Repr
 
 def decideLine (c : Ctx) (seen : List Key) (l : Line) : Decision :=
   let rs := reasons.filter (fires c seen l)
   { line := l, outcome := outcomeOf rs, reasons := rs,
-    counterparts := ((entries c.unresolved).filter fun x => (keys l).any (claim c x).contains).map (·.id) }
+    counterparts := ((releasedSet c ++ loose c.today c.releasedPrior c.released).filter
+      (fun x => (keys l).any (keys x).contains) ++ (unresolvedSet c ++ loose c.today c.unresolvedPrior
+      c.unresolved).filter fun x => (keys l).any (claim c x).contains).map (·.id) }
 
 def decideAll (c : Ctx) : List Key → List Line → List Decision
   | _, [] => []
@@ -298,17 +362,18 @@ def allowedLines (ds : List Decision) : List Line :=
 def unresolvedLines (ds : List Decision) : List Line :=
   (ds.filter fun d => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED).map (·.line)
 
+/-- The decisions and the gate's next checkpoints of the two sets. -/
 structure Result where
   decisions : List Decision
-  released : List Line
-  unresolved : List Line
+  released : Snapshot Line
+  unresolved : Snapshot Line
   deriving DecidableEq
 
 /-- One batch against the read set: ALLOW lines join the released set, the
     other lines with a new identity join the unresolved set. -/
 def decideBatch (c : Ctx) (batch : List Line) : Result :=
-  let ds := decideAll c ((entries c.released).flatMap keys) (canonical batch)
-  { decisions := ds, released := entries c.released ++ allowedLines ds,
-    unresolved := entries c.unresolved ++ unresolvedLines ds }
+  let ds := decideAll c ((releasedSet c).flatMap keys) (canonical batch)
+  { decisions := ds, released := advance c.today c.releasedPrior c.released (allowedLines ds),
+    unresolved := advance c.today c.unresolvedPrior c.unresolved (unresolvedLines ds) }
 
 end BlindLedger.Gate.Rules
