@@ -2605,8 +2605,7 @@ class FinancialOwner:
         request: Mapping[str, Any],
         conflict_code: str,
     ) -> bool:
-        """The one retry rule: True if ``kind:key`` is logged with every field (only optional ones may be None); False if new.
-        ``expected_revision`` guards a first recording only; a retry of support evidence, a reversal, an offset claim, a report or an acknowledgment ignores it."""
+        """The one retry rule: True if ``kind:key`` is logged with every field (only optional ones may be None); False if new. ``expected_revision`` guards a first recording only; a retry of support, reversal, offset, report or acknowledgment ignores it."""
 
         row = connection.execute("SELECT request_json FROM commands WHERE command_id=?", (f"{kind}:{key}",)).fetchone()
         if row is None:
@@ -4107,8 +4106,7 @@ class FinancialOwner:
             payment = connection.execute("SELECT * FROM payments WHERE payment_id=? AND obligation_id=?", (payment_id, obligation["obligation_id"])).fetchone()
             if payment is None:
                 _fail(FinancialIntegrityError, "payment_missing")
-            prior = connection.execute("SELECT event_at_ms FROM evidence WHERE evidence_id=?", (evidence_id,)).fetchone()  # a retry without event_at_ms restates the first recording's time
-            reversal_time = event_at_ms if event_at_ms is not None else self._now() if prior is None else int(prior[0])
+            reversal_time = event_at_ms if event_at_ms is not None else connection.execute("SELECT COALESCE((SELECT event_at_ms FROM evidence WHERE evidence_id=?), ?)", (evidence_id, self._now())).fetchone()[0]  # a retry without event_at_ms restates the first recording's time
             evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="PAYMENT_REVERSAL", common_origin_id=common_origin_id or f"reversal:{payment_id}", source_id="synthetic-payment-source", source_version="fixture-v1", local_ref=f"reversal:{payment_id}", applicable_at_ms=reversal_time, event_at_ms=reversal_time, received_at_ms=self._now(), amount_cents=int(payment["amount_cents"]), reversal_of=payment_id)
             status = self._insert_evidence(connection, evidence)
             if status == "DUPLICATE":
@@ -6783,14 +6781,10 @@ class FinancialOwner:
         if type(package_bytes) is not bytes or not package_bytes or len(package_bytes) > _MAX_PACKAGE_BYTES:
             _fail(FinancialContinuityError, "continuity_package_size")
         try:
-            package = json.loads(package_bytes.decode("ascii"))
+            package = json.loads(package_bytes.decode("ascii"), parse_constant=lambda _: None)  # NaN and Infinity become null, so the canonical comparison below refuses them
         except (UnicodeDecodeError, json.JSONDecodeError):
             _fail(FinancialContinuityError, "continuity_package_json")
-        try:  # json.loads accepts NaN and Infinity; _canonical refuses them
-            canonical = type(package) is dict and _canonical(package) == package_bytes
-        except FinancialIntegrityError:
-            canonical = False
-        if not canonical:
+        if type(package) is not dict or _canonical(package) != package_bytes:
             _fail(FinancialContinuityError, "continuity_package_canonical")
         required = {
             "schema", "version", "scope", "authority", "continuity_epoch", "sequence",
