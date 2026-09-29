@@ -4873,8 +4873,9 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "offset_claim_missing")
         if decision_at_ms is None and decision_time_required:
             _fail(FinancialInputError, "decision_time_required")
-        decision_time = self._now() if decision_at_ms is None else decision_at_ms
-        _time(decision_time, "decision_time")
+        decision_time = self._now() if decision_at_ms is None else _time(decision_at_ms, "decision_time")
+        if decision_time > self._now():  # a future decision would hold the clock ahead of every later write
+            _fail(FinancialInputError, "decision_time_future")
         _evaluation_row, evaluation_receipt, input_result_digest = self._validate_evaluation_reference(
             connection,
             obligation,

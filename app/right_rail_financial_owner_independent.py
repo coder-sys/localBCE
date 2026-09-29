@@ -1231,8 +1231,6 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
     assert isinstance(previous, bytes)
     for index, row in enumerate(rows, start=1):
         previous = _verify_event(row, index, previous)
-    if any(earlier["committed_at_ms"] > later["committed_at_ms"] for earlier, later in zip(rows, rows[1:])):
-        _fail("history:commit-order")  # the clock never runs backward along the history
     if previous != meta["history_head"]:
         _fail("history:meta-head")
     identity = meta["identity"]
@@ -2336,6 +2334,9 @@ def _verify_population_history(
 ) -> None:
     """Reconstruct each population's lifecycle from ordered history events."""
 
+    times = [_time(event["committed_at_ms"], "history:committed-at") for event in events]
+    if any(earlier > later for earlier, later in zip(times, times[1:])):
+        _fail("history:commit-order")  # the clock never runs backward along the history; package and database paths both
     by_population: dict[str, list[sqlite3.Row]] = {population_id: [] for population_id in populations}
     for event in events:
         if event["aggregate_type"] != "POPULATION":

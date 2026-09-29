@@ -377,7 +377,12 @@ shown on the pack's face.
 - **Evidence:** `tests/test_right_rail_financial_line_pack.py`.
 - **Scope:** derived artifact, plus the clock binding above: support
   evidence no longer takes a caller received time (a retry keeps the first
-  one). No table, Lean, wire or digest changes. `signer` is null because no
+  one), and a `decision_at_ms` after the owner clock is refused
+  (`decision_time_future`; Lean needs the same guard, a follow-up). When the
+  host clock steps back (NTP, a restored VM, skew between hosts sharing a
+  store), every write is refused (`event_commit_order`) until the clock passes
+  the last committed time: it fails closed, never reorders or rewrites the
+  history, and nothing is lost. No table, Lean, wire or digest changes. `signer` is null because no
   PQ signing path exists.
 - **Proposed Lean (not written):**
   - `line_pack_sum_eq_ledger`

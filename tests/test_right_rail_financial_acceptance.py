@@ -1255,6 +1255,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         claim_id = self._record_claim(store)
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
         before = receipt["revision"]
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
         with self.assertRaisesRegex(FinancialAuthorityError, expected.UNAUTHORIZED_REJECTION.expected_error):
             store.reject_offset_and_authorize_correction(
                 item_id=expected.H_ITEM_ID,
@@ -1360,6 +1361,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         barrier = threading.Barrier(2)
         outcomes: list[str] = []
         errors: list[tuple[type[BaseException], str]] = []
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
 
         def attempt(action_id: str) -> None:
             try:
@@ -1534,7 +1536,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         process_precommit_package = process_precommit_store.export_continuity()
         process_precommit_summary = process_precommit_store.summary()
         process_precommit_counts = self._durable_counts(process_precommit_store.path)
-        process_precommit_clock = process_precommit_store.clock.value + 1_000_000
+        process_precommit_clock = max(process_precommit_store.clock.value + 1_000_000, expected.CORRECTION_AUTH_MS)  # not before the decision
         process_precommit = self._run_process_boundary(
             store=process_precommit_store,
             claim_id=process_precommit_claim,
@@ -1577,7 +1579,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_cash(process_postcommit_store)
         process_postcommit_claim = self._record_claim(process_postcommit_store)
         process_postcommit_receipt = process_postcommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
-        process_postcommit_clock = process_postcommit_store.clock.value + 1_000_000
+        process_postcommit_clock = max(process_postcommit_store.clock.value + 1_000_000, expected.CORRECTION_AUTH_MS)
         process_postcommit = self._run_process_boundary(
             store=process_postcommit_store,
             claim_id=process_postcommit_claim,
@@ -1594,7 +1596,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
         reopened_process_postcommit = self._make_owner(
             path=process_postcommit_store.path,
-            clock=_Clock(expected.CORRECTION_AUTH_MS),  # the child committed at its decision time
+            clock=_Clock(process_postcommit_clock + 1),
             correction_transition_release=correction_release,
         )
         self._assert_snapshot(reopened_process_postcommit, expected.H_REJECTED_CORRECTION)
@@ -4066,6 +4068,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         self.assertEqual(store.export_continuity(), before)
         self._assert_verified(store)
+        clock.value = low_clock_value + 10_000  # the host clock recovers
         first_determination = next(
             row for row in store.obligation_detail(expected.H_ITEM_ID)["determinations"]
             if row["determination_id"] == first_result["determination_id"]
@@ -4085,11 +4088,36 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 claim_id=first_claim_id,
                 expected_revision=int(first_receipt["revision"]),
                 action_id=first_action_id,
-                decision_at_ms=int(first_determination["decided_at_ms"]) + 1,
+                decision_at_ms=int(first_determination["decided_at_ms"]) - 1,
                 evaluation_id=str(first_receipt["evaluation_id"]),
                 evaluation_result_digest=str(first_receipt["result_digest"]),
             )
         self.assertEqual(store.export_continuity(), before)
+
+    def test_future_decision_time_is_refused_and_a_later_honest_write_succeeds(self) -> None:
+        clock = _Clock()
+        store = self._build_base_for_correction(clock=clock)
+        self._record_cash(store)
+        store.record_offset_claim(
+            item_id=expected.H_ITEM_ID, claim_id="claim:future-decision", amount_cents=200_000,
+            evidence_id="evidence:future-decision", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS,
+        )
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        request = {
+            "item_id": expected.H_ITEM_ID, "claim_id": "claim:future-decision", "expected_revision": int(receipt["revision"]),
+            "action_id": "action:future-decision", "evaluation_id": str(receipt["evaluation_id"]),
+            "evaluation_result_digest": str(receipt["result_digest"]),
+        }
+        before = store.export_continuity()
+        for future in (lambda: clock.value + 2, lambda: 2**63 - 1):  # each write reads the clock once, at value + 1
+            with self.assertRaisesRegex(FinancialInputError, "decision_time_future"):
+                store.authorize_offset(**request, decision_at_ms=future())
+            with self.assertRaisesRegex(FinancialInputError, "decision_time_future"):
+                store.reject_offset_and_authorize_correction(**request, decision_at_ms=future())
+        self.assertEqual(store.export_continuity(), before)
+        self.assertEqual(store.authorize_offset(**request, decision_at_ms=clock.value)["action_id"], "action:future-decision")
+        store.evaluate_obligation(expected.H_ITEM_ID)  # the clock was never held ahead of the honest writes
+        self._assert_verified(store)
 
     def test_c05_independent_package_input_is_bounded_before_database_open(self) -> None:
         store = self._build_base()
@@ -4323,6 +4351,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_cash(store)
         claim_id = self._record_claim(store)
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
         with self.assertRaisesRegex(FinancialInputError, "evaluation_reference_required"):
             store.reject_offset_and_authorize_correction(
                 item_id=expected.H_ITEM_ID,

@@ -25,10 +25,11 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
   exact snapshot; quarters go by owner-clock received time, so a backdated
   payment or reversal leaves a closed quarter's rows unchanged, and reads
   only what was recorded before quarter end. The Owner reads its clock once
-  per command (a clock behind the history writes nothing); the checker binds
+  per command and refuses a future decision time (Lean needs the same guard);
+  a host clock stepping back stops every write (`event_commit_order`) until it
+  passes the last commit time, never reordering history; the checker binds
   each evidence received time to its event's commit time and requires commit
-  times in order. Guarded bplus-fix4-r1: 208 run,
-  207 passed, 1 failed (Markdown budget, over at base). Kill criterion 1 holds (19A 32,345 of 32,345, FULL). No Lean
+  times in order, for the database and the package. Guarded bplus-fix5d: 221 run, 219 passed, 1 skipped, 1 failed (Markdown budget, over at base). Kill criterion 1 holds (19A 32,345 of 32,345, FULL). No Lean
   changes. The unbound-manifest gap is untested.
 - Lean build/proof/kit phase: r77 freshly reproduced the current pinned engine
   with a canonical 46-file source manifest; both fixed vectors matched. r68 built all six Lake
