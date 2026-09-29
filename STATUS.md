@@ -17,7 +17,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification (latest run per claim; raw logs are the record)
 
-- **Full suite** (tree `f22de39`, `cash1a-fix-full-a1-L2`): `SUMMARY run=481 passed=469 failed=0 errors=0 skipped=12`, guard exit 0. The tree lacks only this line. Skips: two gate-rules vector tests (`gate_rules.exe` not built), Windows symlink privilege, absent old accepted-engine artifact, no fresh evaluation-engine handoff, 7 semantic-assurance tests that run only in the external gate. Reviewer probe on the fixed tree (`cash1a-fix-probe-a1`): S1, S4, S5 refused with the store unchanged, S3 commits.
+- **Full suite** (tree `d7c8992`, `cash1a-fix2-full-a1-a1-L1`): `SUMMARY run=482 passed=470 failed=0 errors=0 skipped=12`, guard exit 0. The tree lacks only this line. Skips: two gate-rules vector tests (`gate_rules.exe` not built), Windows symlink privilege, absent old accepted-engine artifact, no fresh evaluation-engine handoff, 7 semantic-assurance tests that run only in the external gate. Reviewer probe (`cash1a-fix2-probeb-a1`): S1 repeat dated at the reversal is DUPLICATE and after it is refused (cash file `cash_file_conflict`, owner `payment_origin_reversed`), store unchanged; S4, S5 refused; S3 commits.
 - **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount; the checker re-checks it before COMMIT. Its `lean/` edit also voids the engine pin until a guarded rebuild.
 - **G2 dependency check** (`g2dep-r3-a1-L2`, 184/184): a correction follow-up reopens only when a derived dependency key moves (XI.2 record).
 - **G4 support package v2** (XI.2 record): software version and Trust Graph profile are NONE (no bound source); Mirror refuses any other package shape.
