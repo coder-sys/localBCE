@@ -602,3 +602,163 @@ re-decided, not stranded in review, and no line is paid twice.
 - **Scope.** All stores; permanent.
 - **Claims withdrawn.** "Any v8 checker verifies any v8 package" no longer holds: a package that contains a decision needs a checker at or after M2. No Lean theorem covers the decision act; the Lean-controlled claim still covers only the correction transition.
 - **Kill criteria.** Stop if an existing test expectation or digest changes, a table column or digest domain is needed, or the correction follow-up leaves CURRENT.
+
+## Lean paid sum (2026-09-29, design and XI.2 record; Lean boundary inventory move 1)
+
+Lean decides a correction's amount from `command.correctionPaid`, per-action
+totals that Python sums (`_correction_paid`) and Lean takes on trust
+(`Transition.lean` `dependencyCorrectionPaid`, `amountRule`). The owner's
+`correction_read_set_binding` and the checker are twins, not proofs. Lean
+already receives every payment row of the obligation (BLFIN02, active and
+reversed); only the row-to-request link is missing.
+
+- **Format.** `BLFCMD03`, version field 3. `correctionPaid` is gone; in its
+  place `paymentLinks`: u16 count, then per link `paymentId` and `actionId`
+  (u16-length strings), strictly ascending by `paymentId` (at most one link per
+  row), one per row whose PAYMENT_RECEIVED event names `pays_action_id`.
+  `paymentLinksWellFormed` joins `commandWellFormed`; the decoder's re-encode
+  check makes order and uniqueness canonical. BLFIN02, BLFCRES3, BLFCRU02/
+  BLFCRV02 and every digest domain are unchanged: `dependencies.correctionPaid`
+  in the result now echoes Lean's derived list (still canonical and positive,
+  so the result self-check at `Codec.lean` ~696 and the Python decoder stand).
+  Keyed links, not a link column on BLFIN02 rows: BLFIN02 is shared with
+  evaluation and embedded in results and reuse, and a keyed link names its row,
+  so a misaligned adapter fails closed (hardness, minimalism).
+- **Version and cut.** Hard cut, no dual read. Nothing stored holds BLFCMD bytes
+  or a paid list: the correction event records only `correction_followup.artifact
+  {contract, version, sha256}`, the link stays in the PAYMENT_RECEIVED payload,
+  and no digest covers the request. The contract string and artifact version
+  stay `.../CORRECTION-TRANSITION/v1`, as at BLFCMD01 to 02 (minimalism).
+- **Lean decides.** At the `INVALID_INPUT` step of preflight, Lean runs
+  `derivedCorrectionPaid input.payments input.actions command.paymentLinks`:
+  a merge walk of the ascending payments against the ascending links (a link
+  naming no row fails) emitting `(actionId, amount if ACTIVE else 0)`, a
+  `mergeSort` by `actionId`, adjacent grouping, a sublist check of the keys
+  against the ascending CORRECTION_PAYMENT_REQUEST ids (a link naming anything
+  else fails), zero entries dropped. `none` is `INVALID_INPUT`; no new reject
+  tag. `ready` carries the derived list; requestable balance, amount and the
+  echoed facts use it. No caller field states an amount paid (hardness, auditability).
+- **Throughput bound.** n payment rows, k ≤ n links, a actions, c correction
+  requests, m ≤ c derived entries: O(n + k log k + a) to derive, the existing
+  O(c·m) outstanding sum, and 6 + two ids wire bytes per link. No quadratic
+  term is added; the existing O(n²) `financialInputWellFormed` (lean-live M1's
+  stop) is untouched. The spec functions `paymentLinksAdmissible` and
+  `linkedActivePaidCents` are O(k·n) and belong in statements only, never in
+  the executable (throughput).
+- **Python.** `encode_correction_transition_request(..., payment_links=[{payment_id,
+  action_id}])` writes BLFCMD03 and checks types only; Lean alone judges order,
+  duplicates and targets (minimalism). The owner reads links with one query
+  (`_payment_links`: PAYMENT_RECEIVED with non-null `pays_action_id`, ORDER BY
+  `payment_id`) and drops `correction_paid` from `correction_read_set_binding`;
+  `_correction_paid` stays only for the payment cap in `record_payment_evidence`.
+  The checker changes only its pins: it still derives paid-so-far from history,
+  now a differential witness against Lean's own derivation.
+
+**Statements.** New, beside the old ones, never by edit:
+`CorrectionTransition/PaidSum.lean` (spec functions; row laws
+`linkedActivePaidCents_reverse`, `_retarget`, `_total_le_active`),
+`CodecLaws/PaymentLinks.lean` (`readPaymentLink_append`,
+`readPaymentLinks_append`, proved) and `CorrectionTransition/PaidSumTheorems.lean`
+(derivation contract `derivedCorrectionPaid_sound`/`_complete`,
+`outstandingCorrectionCents_eq_linked`; on `applyCorrectionTransition`:
+`_links_admissible`, the main theorem `_paid_eq_linked`, the corollary
+`_action_amount_eq_linked`, and `_outstanding_within_shortfall_linked`). The
+request laws P1-P3 keep their text. Obsolete: `applyCorrectionTransition_action_amount_eq_b2`
+and `_outstanding_within_shortfall` (both name `request.command.correctionPaid`),
+the `CorrectionMutationLinkFacts` fields `dependencyCorrectionPaid`, `amountRule`
+and `inputShortfall` that `applyCorrectionTransition_mutation_links` carries,
+and the `correctionPaid` clause of `commandWireAdmissible`.
+
+**XI.2 record.**
+- **Felt effect:** the proved engine computes a hospital's correction request
+  from the payment rows themselves; no caller can make a paid request look
+  unpaid, or the reverse, to change what the next hospital is asked for.
+- **Predicate:** the BLFCMD02 wire (`correctionPaid`, version 2); the obsolete
+  statements above; the manifest pins of `_amount_eq_b2`,
+  `_outstanding_within_shortfall` and `_mutation_links`; the protected literal
+  `BLFCMD02` at `tests/test_right_rail_financial_constitution_invariants.py:338`.
+- **Invariant / failure:** a correction never requests more than the unpaid
+  shortfall less what open requests still ask (II, III.4); the failure is a
+  wrong or forged paid total silently moving the request amount.
+- **Evidence:** `Transition.lean:142` makes Lean's paid list equal the command's;
+  B2 and H1 quantify over that list, so they hold for whatever list the caller
+  sends, and the only checks are Python twins (`owner.py:4595`, the checker's
+  `paid_at`). `ARCHITECTURE.md` "Lean decides" overstated this.
+- **Disposition:** replace. BLFCMD03 and the new statements replace BLFCMD02 and
+  the obsolete ones; `CorrectionMutationLinkFacts` swaps its three fields for
+  `derivedPaid : derivedCorrectionPaid request.currentInput.payments
+  request.currentInput.actions request.command.paymentLinks = some
+  mutation.dependencies.correctionPaid` and `amountRule`/`inputShortfall` over
+  `mutation.dependencies.correctionPaid`.
+- **Replacement control:** the main theorem and corollary; the derivation's
+  soundness and completeness; the tests `test_lean_receives_payment_links_and_no_paid_totals`,
+  `test_forged_links_move_the_lean_request_exactly_as_the_theorem_says`,
+  `test_lean_paid_sum_matches_the_rows_and_the_independent_checker` and
+  `test_correction_request_vector_is_blfcmd03_and_its_mutants_are_refused`;
+  the checker's `action:payload-binding` and `action:requestable`, unchanged.
+- **Scope / duration:** the synthetic correction path, until the next re-pin.
+- **Claims withdrawn:** B2 and H1 as stated over a caller list; the
+  `1A7A1833...D3AF` engine as decider of new corrections (history only, rule
+  `h1-v1`). Still not claimed: reuse ignores the paid list; the payment cap in
+  `record_payment_evidence` is Python only.
+- **Kill criteria:** stop if a stored row, digest domain or BLFIN02/BLFCRES3
+  byte must change, if completeness needs more than a well-formed input that
+  evaluates, or if the derivation needs a quadratic step.
+
+**Builder handoff (rr-eng, in order).**
+1. Recheck the worktree, branch `lean-paid-sum` and a clean status. Statement
+   status: `PaidSum.lean` and `CodecLaws/PaymentLinks.lean` type-check (guarded
+   run `lps-lean3-a1`: three expected `sorry` warnings, nothing else new).
+   `PaidSumTheorems.lean` is UNCHECKED: it names `CorrectionCommand.paymentLinks`
+   and `derivedCorrectionPaid`, which do not exist yet. Type-check it first once
+   they do; any statement you must change is an XI.2 amendment here, never silent.
+2. `CorrectionTransition/Types.lean`: import `PaidSum`; magic `BLFCMD03`;
+   `CorrectionCommand.correctionPaid` becomes `paymentLinks : List PaymentLink := []`;
+   add `derivedCorrectionPaid : List Payment → List ActionRecord →
+   List PaymentLink → Option (List CorrectionPaid)` as specified above.
+3. `CorrectionTransition/Codec.lean`: `commandWellFormed` uses
+   `paymentLinksWellFormed`; `encodeInputBody` writes `natBE 2 3` and
+   `encodeList encodePaymentLink`; `parseCorrectionTransitionRequest` requires
+   version 3 and reads `readList readPaymentLink`. The `CorrectionPaid` codec
+   stays for the facts.
+4. `CorrectionTransition/Transition.lean`: derive at the `INVALID_INPUT` step;
+   `ready` carries `paid` and its derivation equation; `buildAccepted`,
+   `hRequestable` and the facts use `paid`; `CorrectionMutationLinkFacts` as in
+   the disposition. `KAT.lean` ~455: state the paid KAT as payment rows plus
+   links; add KATs for a reversed linked row, a dangling link and a link to a
+   non-request (`INVALID_INPUT`).
+5. `CorrectionTransition/Theorems.lean`: delete `_action_amount_eq_b2` and
+   `_outstanding_within_shortfall` (withdrawn above) and re-prove
+   `_amounts_conserved` from `_action_amount_eq_linked`. Fill the three `sorry`
+   in `PaidSum.lean` and the seven in `PaidSumTheorems.lean`; import
+   `PaidSumTheorems` from `AxiomCheck.lean`.
+6. `CodecLaws/CorrectionRecords.lean` imports `CodecLaws.PaymentLinks`, and
+   `commandWireAdmissible` ends with `wireListAdmissible command.paymentLinks
+   paymentLinkWireAdmissible`; the P1 proof in `CodecLaws/Correction.lean` uses
+   `readPaymentLinks_append` and `readNatBE_natBE_append 2 3`.
+7. Statement pins: the `#print axioms` lists in `Theorems/Manifest.lean` and
+   `AxiomCheck.lean`; `tools/semantic_assurance_manifest.json` statement texts,
+   declaration sources and `source_files` (add the three new files);
+   `Cli.lean:112` and manifest line ~291 read `BLFCMD03/BLFCRES3`.
+8. One guarded exclusive Lean build of the default targets and the correction
+   exe (`-MinFree 4029372048`; from PowerShell pass `-ExeArgs @(...)` as an
+   array with an absolute `-d` path, because the child does not start in the
+   worktree): no `sorry`, standard axioms only.
+9. Python: in `app/right_rail_financial_engine.py`, the encoder and the
+   `BLFCMD03` prefix check; in `app/right_rail_financial_owner.py`,
+   `_payment_links` at the correction call and the binding change.
+10. Re-pin: `tools/build_financial_correction_release.ps1` with two
+    byte-identical builds; regenerate `artifacts/engine-correction/vectors`
+    (base scenario, no links) and `PROVENANCE.md`; append
+    `1A7A1833...D3AF<TAB>h1-v1` to `RETIRED_PINS`; update the checker's artifact
+    and `RETIRED_PINS_SHA256` constants, with rule `h1-v1` for the new pin; the
+    engine size, SHA and vector pins; `_EXPECTED_*` in the acceptance and engine
+    tests; `native/guard/pins.json`; `conformance/CORRECTION_TRANSITION_WIRE.md`
+    §3 and `conformance/MANIFEST.sha256`.
+11. Protected test line 338: `BLFCMD02` to `BLFCMD03` and nothing else, under this record.
+12. Guarded targeted runs: `tests.test_right_rail_financial_acceptance`,
+    `tests.test_right_rail_financial_engine`, `tests.test_semantic_assurance_gate`,
+    `tests.test_right_rail_financial_constitution_invariants` and
+    `tests.test_right_rail_financial_mirror`; then the full suite once.
+13. One line each in `ARCHITECTURE.md` (~67, ~181) and `STATUS.md` (pin line ~40);
+    add the run names to this record.

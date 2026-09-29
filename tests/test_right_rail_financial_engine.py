@@ -65,6 +65,26 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         actual = engine._run_pinned(release, ("--assess-correction-reuse",), request, failure_code="reuse_vector_failed")
         self.assertEqual((actual.exit_code, actual.stdout, actual.stderr), (0, expected_result, b""))
 
+    def test_correction_request_vector_is_blfcmd03_and_its_mutants_are_refused(self) -> None:
+        # Lean paid sum (docs/CORE_REDESIGN.md): the request carries payment links, never paid totals.
+        vectors = REPO_ROOT / "artifacts" / "engine-correction" / "vectors"
+        request, expected_result = (vectors / "request.bin").read_bytes(), (vectors / "result.expected.bin").read_bytes()
+        self.assertEqual(request[:10], b"BLFCMD03\x00\x03")
+        links_at = request.index(b"BLFIN02") - 6  # the vector's empty link list sits right before the sized input
+        self.assertEqual(request[links_at:links_at + 2], b"\x00\x00")
+        release = _correction_transition_test_release(workspace=Path(self.release_dir.name) / "cmd03")
+        actual = engine._run_pinned(release, engine.CORRECTION_TRANSITION_ARGUMENTS, request, failure_code="cmd03_vector")
+        self.assertEqual((actual.exit_code, actual.stdout, actual.stderr), (0, expected_result, b""))
+        mutants = {
+            "old-magic": b"BLFCMD02" + request[8:],
+            "old-version": request[:8] + b"\x00\x02" + request[10:],
+            "trailing-byte": request + b"\x00",
+            "phantom-link": request[:links_at] + b"\x00\x01" + request[links_at + 2:],
+        }
+        for name, mutant in mutants.items():
+            with self.subTest(name), self.assertRaises(engine.FinancialEngineError):
+                engine._run_pinned(release, engine.CORRECTION_TRANSITION_ARGUMENTS, mutant, failure_code="cmd03_mutant")
+
     def setUp(self) -> None:
         self.fixture = semantic_tests.RightRailFinancialSemanticAdapterTests("runTest")
         self.fixture.setUp()

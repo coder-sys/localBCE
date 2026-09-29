@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from contextlib import closing, contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from dataclasses import replace
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -5235,6 +5236,127 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(resend("p2", None, ":bank")["status"], "DUPLICATE")
         self.assertEqual(resend("p3", None, ":bank")["status"], "DUPLICATE")
         self._assert_verified(store)
+
+    # Lean paid sum (docs/CORE_REDESIGN.md): Lean derives paid-so-far from the payment rows and links it receives.
+
+    @staticmethod
+    @contextmanager
+    def _lean_paid_probe(rewrite: object = None) -> Iterator[dict]:
+        """Records the links, request and Lean result of one correction; ``rewrite`` forges the links first."""
+        seen: dict = {}
+        real_encode, real_run = financial_engine.encode_correction_transition_request, financial_engine.run_correction_transition_v1
+
+        def encode(**options: object) -> bytes:
+            if rewrite is not None:
+                options["payment_links"] = rewrite(list(options["payment_links"]))
+            seen["links"] = options["payment_links"]
+            seen["request"] = real_encode(**options)
+            return seen["request"]
+
+        def run(release: object, *, request: bytes) -> object:
+            execution = real_run(release, request=request)
+            seen["result"] = execution.result
+            return execution
+
+        with patch.object(financial_engine, "encode_correction_transition_request", encode), patch.object(financial_engine, "run_correction_transition_v1", run):
+            yield seen
+
+    @staticmethod
+    def _stored_links(path: Path) -> list[dict[str, str]]:
+        with closing(sqlite3.connect(str(path))) as connection:
+            return [{"payment_id": payment, "action_id": action} for payment, action in connection.execute(
+                "SELECT json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events "
+                "WHERE kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL ORDER BY 1")]
+
+    @staticmethod
+    def _theorem_prediction(store: FinancialOwner, links: list[dict[str, str]], claim_cents: int) -> tuple[dict[str, int], int]:
+        """``applyCorrectionTransition_paid_eq_linked`` and ``_action_amount_eq_linked`` evaluated on the store's rows."""
+        with closing(sqlite3.connect(str(store.path))) as connection:
+            active = dict(connection.execute("SELECT payment_id,amount_cents FROM payments WHERE active=1"))
+            requests = list(connection.execute("SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions WHERE kind='CORRECTION_PAYMENT_REQUEST' AND status!='CANCELLED'"))
+        paid: dict[str, int] = {}
+        for link in links:
+            paid[link["action_id"]] = paid.get(link["action_id"], 0) + active.get(link["payment_id"], 0)
+        paid = {action: cents for action, cents in sorted(paid.items()) if cents}
+        outstanding = sum(max(cents - paid.get(action, 0), 0) for action, cents in requests)
+        shortfall = store.current_evaluation_receipt(expected.H_ITEM_ID)["shortfall_cents"]
+        return paid, min(claim_cents, shortfall - outstanding)
+
+    @staticmethod
+    def _lean_paid(seen: dict) -> dict[str, int]:
+        return {entry["action_id"]: entry["paid_cents"] for entry in seen["result"]["mutation"]["dependencies"]["correction_paid"]}
+
+    def test_lean_receives_payment_links_and_no_paid_totals(self) -> None:
+        self.assertNotIn("correction_paid", inspect.signature(financial_engine.encode_correction_transition_request).parameters)
+        store, reject_b = self._two_claim_corrections(300_000, 400_000, unpaid_cents=600_000)
+        self._pay_a(store, 100_000)
+        with self._lean_paid_probe() as seen:
+            reject_b()
+        request = seen["request"]
+        self.assertEqual(request[:10], b"BLFCMD03\x00\x03")
+        # Vector: u16 count, then per link u16-length payment_id and u16-length action_id, right before the sized BLFIN02 input.
+        links = b"\x00\x01" + b"\x00\x0cpayment:h:p2" + b"\x00\x26" + expected.ACTION_CORRECTION_ID.encode("ascii")
+        at = request.index(b"BLFIN02") - 4 - len(links)
+        self.assertEqual(request[at:at + len(links)], links)
+        self.assertEqual(seen["links"], [{"payment_id": "payment:h:p2", "action_id": expected.ACTION_CORRECTION_ID}])
+        self._assert_verified(store)
+
+    def test_forged_links_move_the_lean_request_exactly_as_the_theorem_says(self) -> None:
+        # 600,000 unpaid; A requests 300,000, 100,000 of it paid by p2 (linked to A); B claims 400,000. Honest: B requests
+        # 500,000 less A's unpaid 200,000. Lean sums the rows the links name, so a forged list moves B's request by
+        # exactly the linked active cents; the checker's own derivation from the store refuses it before commit.
+        a = expected.ACTION_CORRECTION_ID
+        cash, p2 = {"payment_id": "payment:h:cash", "action_id": a}, {"payment_id": "payment:h:p2", "action_id": a}
+        moved = (("unlinked", lambda links: [], 200_000), ("cash-linked", lambda links: [cash, *links], 400_000))
+        refused = (
+            ("new-request", lambda links: [{**p2, "action_id": _ACTION_B}], "correction_input_invalid"),
+            ("unknown-request", lambda links: [{**p2, "action_id": "action:obligation-item-h:none"}], "correction_input_invalid"),
+            ("unknown-payment", lambda links: [{"payment_id": "payment:h:ghost", "action_id": a}, *links], "correction_input_invalid"),
+            ("duplicate", lambda links: [p2, p2], "correction_transition_failed"),
+            ("unordered", lambda links: [p2, cash], "correction_transition_failed"),
+        )
+        for name, rewrite, outcome in moved + refused:
+            with self.subTest(name):
+                store, reject_b = self._two_claim_corrections(300_000, 400_000, unpaid_cents=600_000)
+                self._pay_a(store, 100_000)
+                forged = rewrite(self._stored_links(store.path))
+                before = store.path.read_bytes()
+                with self._lean_paid_probe(rewrite) as seen, self.assertRaises(FinancialIntegrityError) as caught:
+                    reject_b()
+                self.assertEqual(seen["links"], forged)
+                if type(outcome) is int:
+                    paid, amount = self._theorem_prediction(store, forged, 400_000)
+                    self.assertEqual(self._lean_paid(seen), paid)
+                    self.assertEqual(seen["result"]["mutation"]["action"]["amount_cents"], amount)
+                    self.assertEqual(amount, outcome)
+                    self.assertEqual(str(caught.exception), "correction_verification:action:payload-binding")
+                else:
+                    self.assertEqual(str(caught.exception), outcome)
+                self.assertEqual(store.path.read_bytes(), before)
+                self._assert_verified(store)
+
+    def test_lean_paid_sum_matches_the_rows_and_the_independent_checker(self) -> None:
+        # Differential: Lean's derived paid-so-far and request against the theorem over the stored rows; the checker
+        # then derives the same request from history on its own. A reversed row pays nothing though its link stays.
+        for pay, linked, reversed_, b_cents, requested in (
+            (300_000, True, False, 300_000, 300_000), (300_000, True, True, 400_000, 300_000),
+            (100_000, True, False, 400_000, 300_000), (100_000, False, False, 400_000, 200_000),
+        ):
+            with self.subTest(pay=pay, linked=linked, reversed=reversed_):
+                store, reject_b = self._two_claim_corrections(300_000, b_cents, unpaid_cents=600_000)
+                self._pay_a(store, pay, linked=linked)
+                if reversed_:
+                    store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+                links = self._stored_links(store.path)
+                paid, amount = self._theorem_prediction(store, links, b_cents)
+                with self._lean_paid_probe() as seen:
+                    reject_b()
+                self.assertEqual((seen["links"], self._lean_paid(seen)), (links, paid))
+                self.assertEqual(seen["result"]["mutation"]["action"]["amount_cents"], amount)
+                self.assertEqual(amount, requested)
+                self.assertEqual(self._requested_and_claimed(store)[0], [300_000, requested])
+                self._assert_verified(store)
+                self._make_owner(path=store.path)
 
     def test_a_forged_duplicate_label_cannot_hide_a_new_payment(self) -> None:
         # rr-review H1: a PAYMENT_DUPLICATE_EVIDENCE event appended over a real new payment's confirmation
