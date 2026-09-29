@@ -296,13 +296,13 @@ def _owner(args: argparse.Namespace) -> FinancialOwner:
     )
 
 
-def _read_package(path: Path, max_bytes: int = MAX_PACKAGE_BYTES) -> bytes:
+def _read_package(path: Path, max_bytes: int = MAX_PACKAGE_BYTES, label: str = "continuity_package") -> bytes:
     if path.is_symlink() or not path.is_file():
-        raise FinancialMirrorError("continuity_package_missing")
+        raise FinancialMirrorError(f"{label}_missing")
     with path.open("rb") as stream:
         package = stream.read(max_bytes + 1)
     if len(package) > max_bytes:
-        raise FinancialMirrorError("continuity_package_size")
+        raise FinancialMirrorError(f"{label}_size")
     return package
 
 
@@ -609,7 +609,7 @@ def _run(args: argparse.Namespace) -> Any:
     if args.command == "followthrough-pack":
         pack = build_followthrough_pack(
             args.database, _read_package(args.package), trusted_authority=_trusted_authority(args), expected_scope=_scope(args),
-            rules_bytes=_read_package(args.rules, MAX_RULES_BYTES), generated_at_ms=args.generated_at_ms,
+            rules_bytes=_read_package(args.rules, MAX_RULES_BYTES, "followthrough_rules"), generated_at_ms=args.generated_at_ms,
         )
         _write_new(args.output, pack)
         return {"contract": PACK_CONTRACT, "followthrough_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "followthrough_pack_path": str(args.output)}

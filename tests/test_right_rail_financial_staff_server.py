@@ -392,10 +392,10 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
         workflow.acknowledge_correction_action(self._revision_body(workflow))
         workflow.record_cash_correction(self._cash_body(workflow))
-        (evaluated,) = query(f"SELECT evaluated_at_ms FROM evaluations WHERE obligation_id='{h['obligation_id']}' AND amount_satisfied=1 ORDER BY revision LIMIT 1")
+        (collected,) = query(f"SELECT MAX(event_at_ms) FROM payments WHERE obligation_id='{h['obligation_id']}' AND active=1")  # the collection date, not the evaluation's recording time
         done = items(query("SELECT MAX(committed_at_ms) FROM financial_events")[0] + 1)
         (clock,) = done[H_ITEM_ID]["clocks"]
-        self.assertEqual((done[H_ITEM_ID]["status"], done[H_ITEM_ID]["federal_share"], clock["status"], clock["satisfied"]["at_ms"]), ("SATISFIED", None, "MET", evaluated))
+        self.assertEqual((done[H_ITEM_ID]["status"], done[H_ITEM_ID]["federal_share"], clock["status"], clock["satisfied"]["at_ms"]), ("SATISFIED", None, "MET", collected))
         self.assertEqual({clock["status"] for item in done.values() if item["item_id"] != H_ITEM_ID for clock in item["clocks"]}, {"NOT_ANCHORED"})
         self.assertEqual(len(done), 20)
 

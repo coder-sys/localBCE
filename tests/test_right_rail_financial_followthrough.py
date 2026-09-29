@@ -6,6 +6,7 @@ The "R" store is built with public Owner commands only; every build verifies it 
 from __future__ import annotations
 
 from contextlib import closing, redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -15,7 +16,7 @@ import tempfile
 import unittest
 
 from app.right_rail_financial_derived import NOT_HELD, DerivedError
-from app.right_rail_financial_followthrough import _add, _cms64_due, build_followthrough_pack
+from app.right_rail_financial_followthrough import MAX_RULES_BYTES, _add, _cms64_due, build_followthrough_pack
 from app.right_rail_financial_owner import (
     ControlPack, FinancialOwner, FinancialOwnerConfig, PopulationItem, PopulationManifest, SyntheticTrustedAuthority,
 )
@@ -33,6 +34,7 @@ FEDERAL_ENDS = 1_831_507_200_000  # 2028-01-15
 COLLECTED_DUE = 1_809_129_600_000  # 2027-05-01
 FEDERAL_DUE = 1_840_752_000_000  # 2028-05-01
 GENERATED = 1_843_430_400_000  # 2028-06-01
+DAY_MS = lambda year, month, day: int(datetime(year, month, day, tzinfo=timezone.utc).timestamp()) * 1000
 DIGEST_HEX = lambda blob: bytes(blob).hex().upper()
 
 
@@ -50,7 +52,7 @@ def _ref(rules: bytes) -> str:
     return "followthrough-rules:sha256:" + hashlib.sha256(rules).hexdigest().upper()
 
 
-def _build_r_store(directory: Path, rules_bytes: bytes, *, extra_refs: tuple[str, ...] = ()) -> FinancialOwner:
+def _build_r_store(directory: Path, rules_bytes: bytes, *, extra_refs: tuple[str, ...] = (), paid: tuple[int, int] = (PAID_R1, PAID_R1), credit: int | None = CREDIT_R1) -> FinancialOwner:
     authority = SyntheticTrustedAuthority()
     owner = FinancialOwner(path=directory / "recovery.sqlite3", config=FinancialOwnerConfig(**SCOPE), trusted_authority=authority, clock=_Clock())
     owner.publish_control_pack(ControlPack(
@@ -74,9 +76,10 @@ def _build_r_store(directory: Path, rules_bytes: bytes, *, extra_refs: tuple[str
     owner.publish_population("population:recovery-v1")
     for name in ("r1", "r2"):
         _support(owner, name, f"evidence:notice:{name}", "state-demand-letters", NOTICE, NOTICE)
-    owner.clock.value = PAID_R1
-    owner.record_payment_evidence(item_id="item-r1", payment_id="payment:r1", common_origin_id="origin:r1", amount_cents=1_000_000, evidence_id="evidence:payment:r1", event_at_ms=PAID_R1, source_id="state-collections")
-    _support(owner, "r1", "evidence:credit:r1", "state-cms64", CREDIT_R1, CREDIT_R1, local_ref="cms64:FFY2027Q2:64.9C1:9C")
+    owner.clock.value = paid[1]  # paid[0] is the collection date, paid[1] the day it was recorded
+    owner.record_payment_evidence(item_id="item-r1", payment_id="payment:r1", common_origin_id="origin:r1", amount_cents=1_000_000, evidence_id="evidence:payment:r1", event_at_ms=paid[0], source_id="state-collections")
+    if credit is not None:
+        _support(owner, "r1", "evidence:credit:r1", "state-cms64", credit, credit, local_ref="cms64:FFY2027Q2:64.9C1:9C")
     return owner
 
 
@@ -201,6 +204,7 @@ class FollowthroughTests(unittest.TestCase):
             ("unit", lambda v: clock(v)["add"].update(unit="MONTH"), "rules-clock"),
             ("count", lambda v: clock(v)["add"].update(count=0), "rules-clock"),
             ("summary line", lambda v: clock(v)["report"]["collected"].update(summary_line="9c"), "rules-clock"),
+            ("one party starts and satisfies", lambda v: v["parties"][3].update(purposes=["DISCOVERY_NOTICE", "FEDERAL_SHARE_CREDIT"]), "rules-party-both-ends"),
             ("stops", lambda v: v["closure_reasons"][0].update(stops=["no-such-clock"]), "rules-stops"),
             ("reason code", lambda v: v["closure_reasons"][0].update(reason_code="bankrupt"), "rules-reason"),
             ("basis points", lambda v: v["fmap_basis_points"][0].update(basis_points=10_001), "rules-fmap"),
@@ -230,6 +234,39 @@ class FollowthroughTests(unittest.TestCase):
         self.assertEqual(_add(1_835_395_200_000, {"count": 4, "unit": "YEAR"}), 1_961_625_600_000)  # 2032-02-29
         self.assertEqual(_add(NOTICE, {"count": 60, "unit": "DAY"}), RECOVERY_DUE)
 
+    def test_recovery_date_is_the_collection_date_not_the_recording_date(self) -> None:
+        # (name, (collected, recorded), credit filed, generated, federal quarter/due/status, recovery-action collected-at/status)
+        for name, paid, credit, generated, federal, action in (
+            ("credit filed after the collection quarter's due date", (DAY_MS(2027, 3, 30), DAY_MS(2027, 4, 2)), DAY_MS(2027, 5, 15), GENERATED, ("FFY2027Q2", "64.9C1", COLLECTED_DUE, "MET_LATE"), (DAY_MS(2027, 3, 30), "MET_LATE")),
+            ("collected, no credit, due date passed", (DAY_MS(2027, 3, 30), DAY_MS(2027, 4, 2)), None, DAY_MS(2027, 6, 1), ("FFY2027Q2", "64.9C1", COLLECTED_DUE, "MISSED"), (DAY_MS(2027, 3, 30), "MET_LATE")),
+            ("collected before the year end, recorded after it", (DAY_MS(2028, 1, 10), DAY_MS(2028, 1, 20)), None, GENERATED, ("FFY2028Q2", "64.9C1", FEDERAL_DUE, "MISSED"), (DAY_MS(2028, 1, 10), "MET_LATE")),
+            ("collected on time, recorded late", (DAY_MS(2027, 3, 10), DAY_MS(2027, 3, 20)), CREDIT_R1, GENERATED, ("FFY2027Q2", "64.9C1", COLLECTED_DUE, "MET"), (DAY_MS(2027, 3, 10), "MET")),
+        ):
+            with self.subTest(name), tempfile.TemporaryDirectory(prefix="rr-followthrough-lag-") as tmp:
+                owner = _build_r_store(Path(tmp), RULES, paid=paid, credit=credit)
+                item = next(i for i in json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=generated, **self.trust))["items"] if i["item_id"] == "item-r1")
+                credit_clock, action_clock = item["clocks"]
+                self.assertEqual((credit_clock["report"]["quarter"], credit_clock["report"]["form"], credit_clock["due_ms"], credit_clock["status"]), federal)
+                self.assertEqual((action_clock["satisfied"]["at_ms"], action_clock["status"]), action)
+
+    def test_finder_not_typed_is_a_declared_gap(self) -> None:
+        rules = _mutated(lambda value: value.update(parties=[party for party in value["parties"] if party["party_id"] != "rac-contractor-1"]))
+        with tempfile.TemporaryDirectory(prefix="rr-followthrough-finder-") as tmp:
+            owner = _build_r_store(Path(tmp), rules)
+            pack = json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=rules, generated_at_ms=GENERATED, **self.trust))
+        self.assertEqual({(item["found"]["party"], item["found"]["kind"]) for item in pack["items"]}, {(None, None)})
+        self.assertIn("gap:finder-not-typed:rac-contractor-1", pack["unavailable"])
+
+    def test_a_clock_date_past_year_9999_is_refused_with_the_module_code(self) -> None:
+        for unit in ("YEAR", "DAY"):
+            with self.subTest(unit), self.assertRaisesRegex(DerivedError, "^clock-date-range$"):
+                _add(DAY_MS(9999, 12, 1), {"count": 1 if unit == "YEAR" else 60, "unit": unit})
+        with tempfile.TemporaryDirectory(prefix="rr-followthrough-far-") as tmp:
+            owner = _build_r_store(Path(tmp), RULES)
+            _support(owner, "r3", "evidence:notice:r3", "state-demand-letters", DAY_MS(9999, 12, 1), DAY_MS(9999, 12, 1))
+            with self.assertRaisesRegex(DerivedError, "^followthrough:clock-date-range$"):
+                build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=DAY_MS(9999, 12, 1), **self.trust)
+
     def test_pack_is_deterministic_and_documentation_only(self) -> None:
         raw = self._raw()
         self.assertEqual(self._raw(), raw)
@@ -258,6 +295,12 @@ class FollowthroughTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             self.assertEqual(financial_cli.main(args), 2)  # the output file exists: never replaced
         self.assertEqual(output.read_bytes(), self._raw())
+        for name, contents, code in (("absent.json", None, "followthrough_rules_missing"), ("big.json", b"x" * (MAX_RULES_BYTES + 1), "followthrough_rules_size")):
+            if contents is not None:
+                (directory / name).write_bytes(contents)
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as refusal:
+                self.assertEqual(financial_cli.main([*args[:-5], str(directory / name), *args[-4:]]), 2)
+            self.assertEqual(refusal.getvalue(), f"ERROR:{code}\n")
 
 
 if __name__ == "__main__":

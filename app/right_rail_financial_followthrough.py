@@ -93,6 +93,9 @@ def _rules(raw: bytes, state_id: str) -> dict:
         _id(clock["clock_id"], "rules-clock")
         _listed(clock["anchors"], "rules-anchor", _ANCHOR_EVENTS, purposes)
         _listed(clock["satisfied_by"], "rules-clock", {"SATISFIED"}, purposes)
+        starts, ends = ({name[9:] for name in clock[key] if name.startswith("EVIDENCE:")} for key in ("anchors", "satisfied_by"))
+        if any(starts & set(party["purposes"]) and ends & set(party["purposes"]) for party in parties):
+            _fail("rules-party-both-ends")  # one party's document could start the clock and satisfy it
         _text(clock["citation"], "rules-citation", maximum=256)
         add = _keys(clock["add"], {"unit", "count"}, "rules-clock")
         report = clock["report"]
@@ -134,11 +137,12 @@ def _rules(raw: bytes, state_id: str) -> dict:
 
 def _add(at_ms: int, add: dict) -> int:
     """``at_ms`` plus the clock's period; a 29 February anniversary in a common year is 28 February."""
-    if add["unit"] == "DAY":
-        return at_ms + add["count"] * _DAY
-    moment = _EPOCH + timedelta(milliseconds=at_ms)
-    year = moment.year + add["count"]
-    later = moment.replace(year=year, day=28 if (moment.month, moment.day) == (2, 29) and not calendar.isleap(year) else moment.day)
+    try:
+        moment = _EPOCH + timedelta(milliseconds=at_ms)
+        year = moment.year + add["count"]
+        later = moment + timedelta(days=add["count"]) if add["unit"] == "DAY" else moment.replace(year=year, day=28 if (moment.month, moment.day) == (2, 29) and not calendar.isleap(year) else moment.day)
+    except (OverflowError, ValueError):
+        _fail("clock-date-range")  # past year 9999
     return (later - _EPOCH) // timedelta(milliseconds=1)
 
 
@@ -186,6 +190,8 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
     support = _by(rows["evidence"], "item_id", lambda row: row["kind"] == "SUPPORT")
     events = _by(rows["financial_events"], "aggregate_id", lambda row: row["aggregate_type"] == "OBLIGATION")
     evaluations = _by(sorted(rows["evaluations"], key=lambda row: row["revision"]), "obligation_id")
+    payments = _by(rows["payments"], "obligation_id", lambda row: row["active"] == 1)
+    received = {row["evidence_id"]: row["received_at_ms"] for row in rows["evidence"]}
     gaps, items = set(), []
     for obligation in sorted(rows["obligations"], key=lambda row: row["item_id"]):
         manifest = finders[obligation["population_id"]]
@@ -196,6 +202,9 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
         satisfied_row = None
         if obligation["amount_satisfied"] == 1:  # the first evaluation after the last unsatisfied one
             satisfied_row = history[1 + max((n for n, row in enumerate(history) if row["amount_satisfied"] == 0), default=-1)]
+        recovered_at = None  # the collection date (433.320(a)(2)(i)), never the recording time; a satisfaction with no payment has only its recording time
+        if satisfied_row is not None:
+            recovered_at = max((row["event_at_ms"] for row in payments.get(obligation["obligation_id"], []) if received[row["evidence_id"]] <= satisfied_row["evaluated_at_ms"]), default=satisfied_row["evaluated_at_ms"])
         share = None
         if fmap is not None:
             if obligation["period_id"] in fmap:
@@ -217,13 +226,13 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
             done = [((row["received_at_ms"], name, row["evidence_id"]), _fact(name, row["received_at_ms"], row, evaluation_id=None))
                     for name in clock["satisfied_by"] if name.startswith("EVIDENCE:") for row in support.get(obligation["item_id"], []) if row["source_id"] in holders[name[9:]]]
             if satisfied_row is not None and "SATISFIED" in clock["satisfied_by"]:
-                done.append(((satisfied_row["evaluated_at_ms"], "SATISFIED", ""), _fact("SATISFIED", satisfied_row["evaluated_at_ms"], None, evaluation_id=satisfied_row["evaluation_id"])))
+                done.append(((recovered_at, "SATISFIED", ""), _fact("SATISFIED", recovered_at, None, evaluation_id=satisfied_row["evaluation_id"])))
             satisfied = min(done, key=lambda fact: fact[0])[1] if done else None
             ends = due = report = None
             if anchor is not None:
                 ends = due = _add(anchor["at_ms"], clock["add"])
                 if clock["report"]["kind"] == "CMS64_QUARTER":
-                    quarter, due, collected = _cms64_due(ends, None if satisfied_row is None else satisfied_row["evaluated_at_ms"], clock["report"]["due_days"])
+                    quarter, due, collected = _cms64_due(ends, recovered_at, clock["report"]["due_days"])
                     report = {"quarter": quarter, **clock["report"]["collected" if collected else "uncollected"]}
             if anchor is None:
                 status = "NOT_ANCHORED"
