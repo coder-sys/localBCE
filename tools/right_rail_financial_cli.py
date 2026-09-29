@@ -132,7 +132,7 @@ def _parser() -> argparse.ArgumentParser:
     cash.add_argument("--source-context", nargs=5, required=True,
                       metavar=("SOURCE", "VERSION", "RECEIVER", "CAPTURE", "CAPTURED_AT_MS"))
     cash.add_argument("--owner-id", required=True)
-    cash.add_argument("--mode", choices=("LIVE", "TEST", "SHADOW"), required=True)
+    cash.add_argument("--mode", choices=("LIVE", "TEST"), required=True)
     cash.add_argument("--apply", action="store_true", help="record checked evidence; default is isolated preview")
 
     report = subparsers.add_parser("record-reporting-correction", aliases=("reporting-correction",))
@@ -147,6 +147,11 @@ def _parser() -> argparse.ArgumentParser:
 
     export = subparsers.add_parser("export-continuity")
     export.add_argument("--output", type=Path, required=True)
+
+    segments = subparsers.add_parser("export-history", help="write sealed history segments and the manifest a cash file is prepared against")
+    segments.add_argument("--output", type=Path, required=True)
+    segments.add_argument("--owner-id", required=True)
+    segments.add_argument("--mode", choices=("LIVE", "TEST"), required=True)
 
     validate = subparsers.add_parser("validate-continuity")
     validate.add_argument("--package", type=Path, required=True)
@@ -292,7 +297,7 @@ def _owner(args: argparse.Namespace) -> FinancialOwner:
         trusted_authority=_trusted_authority(args),
         correction_transition_release=_correction_release(args),
         **({"mode": args.mode, "owner_id": args.owner_id, "existing_only": True}
-           if args.command == "receiver-cash-file" else {}),
+           if args.command in ("receiver-cash-file", "export-history") else {}),
     )
 
 
@@ -586,7 +591,7 @@ def _run(args: argparse.Namespace) -> Any:
         )
         if args.apply:
             return _owner(args).run_batch(commands, cash_file_context=context)
-        return cash_file.preview_cash_file(commands, context, trusted_authority=authority)
+        return cash_file.preview_cash_file(commands, context, path=_existing_database(args.database), trusted_authority=authority)
     if args.command == "switch-prepare":
         return _switch_prepare(args)
     if args.command == "switch-compare":
@@ -692,6 +697,9 @@ def _run(args: argparse.Namespace) -> Any:
         package = mirror.export_continuity()
         _write_new(args.output, package)
         return {"schema": "RR/FINANCIAL/MIRROR/v1", "status": "EXPORTED", "path": str(args.output), "package_bytes": len(package)}
+    if command == "export-history":
+        manifest = owner.export_history(args.output)
+        return {"schema": "RR/FINANCIAL/MIRROR/v1", "status": "EXPORTED", "path": str(args.output), "manifest_sha256": hashlib.sha256(manifest).hexdigest().upper()}
     if command == "validate-continuity":
         return mirror.validate_owner_continuity_package(_read_package(args.package))
     if command == "restore-continuity":

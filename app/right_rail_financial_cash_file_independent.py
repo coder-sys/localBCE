@@ -32,13 +32,17 @@ _ROW = {"item_id", "payment_id", "common_origin_id", "evidence_id", "amount_cent
 _CONTEXT = {
     "source_bytes", "baseline_bytes", "expected_source_sha256", "expected_baseline_sha256",
     "expected_scope", "expected_source", "expected_authority", "expected_owner_id",
-    "expected_mode", "execution_owner_id",
+    "expected_mode", "preview",
 }
 _EVALUATION = {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
 
 
 class CashFileError(ValueError):
     """A fixed refusal class from REFUSALS, with no input value or underlying error text."""
+
+
+class CashFilePreview(Exception):
+    """Raised by finish when a preview's checks pass, so its owner transaction rolls back; args[0] is the receipt."""
 
 
 def _require(condition: bool, code: str) -> None:
@@ -51,7 +55,7 @@ def _fixed_errors(method):
     def checked(*args, **kwargs):
         try:
             return method(*args, **kwargs)
-        except CashFileError:
+        except (CashFileError, CashFilePreview):
             raise
         except Exception:
             raise CashFileError("cash_file_failed") from None
@@ -183,7 +187,7 @@ class CashFileCheck:
         source = _source(context["source_bytes"])
         for field in ("expected_source_sha256", "expected_baseline_sha256"):
             _require(type(context[field]) is str and _SHA.fullmatch(context[field]) is not None, "cash_file_binding")
-        _require(type(context["baseline_bytes"]) is bytes and 0 < len(context["baseline_bytes"]) <= ledger.MAX_PACKAGE_BYTES, "cash_file_format")
+        _require(type(context["baseline_bytes"]) is bytes and 0 < len(context["baseline_bytes"]) <= ledger.MAX_JSON_BYTES, "cash_file_format")
         self._source_sha = hashlib.sha256(context["source_bytes"]).hexdigest().upper()
         self._baseline_sha = hashlib.sha256(context["baseline_bytes"]).hexdigest().upper()
         _require(self._source_sha == context["expected_source_sha256"] and self._baseline_sha == context["expected_baseline_sha256"], "cash_file_binding")
@@ -192,17 +196,20 @@ class CashFileCheck:
         for actual, expected in ((source["scope"], context["expected_scope"]), (source["source"], context["expected_source"])):
             _require(all(type(expected[key]) is type(value) and expected[key] == value for key, value in actual.items()), "cash_file_binding")
         _id(context["expected_owner_id"])
-        _require(type(context["expected_mode"]) is str and context["expected_mode"] in ("LIVE", "TEST", "SHADOW"), "cash_file_binding")
+        _require(type(context["expected_mode"]) is str and context["expected_mode"] in ("LIVE", "TEST") and type(context["preview"]) is bool, "cash_file_binding")
         self._context = _freeze(context)
         self._source = _freeze(source)
-        baseline = ledger.verify_continuity_package(context["baseline_bytes"], expected_scope=self._context["expected_scope"], expected_authority=self._context["expected_authority"], _include_rows=True)
-        meta = baseline["_decoded_rows"]["financial_meta"][0]
-        _require(meta["owner_id"] == context["expected_owner_id"] and meta["mode"] == context["expected_mode"], "cash_file_binding")
-        self._anchor = (list(baseline["_decoded_rows"]["financial_identity"]), baseline["sequence"], bytes.fromhex(baseline["history_head"]))
-        self._epoch = baseline["continuity_epoch"]
-        self._preview = context["execution_owner_id"] is not None
-        if self._preview:
-            _id(context["execution_owner_id"])
+        manifest = json.loads(context["baseline_bytes"].decode("ascii"), object_pairs_hook=_unique)  # B: the owner's history-export manifest (docs/CORE_REDESIGN.md "History segments")
+        _require(context["baseline_bytes"] == ledger._canonical(manifest), "cash_file_format")
+        try:  # the export verifier's own manifest checks: shape, digest, meta, authority, scope, identity
+            meta = ledger._verify_manifest(manifest, context["expected_authority"], context["expected_scope"])[0]
+        except ledger.IndependentFinancialError as error:
+            raise CashFileError("cash_file_format" if str(error) in ("history:manifest", "history:manifest-digest") else "cash_file_binding") from None
+        _require((meta["owner_id"], meta["mode"]) == (context["expected_owner_id"], context["expected_mode"]) and type(meta["sequence"]) is int and type(meta["history_head"]) is bytes
+                 and type(manifest["segment_count"]) is int and manifest["segment_count"] >= 0 and type(manifest["last_segment_digest"]) is str, "cash_file_binding")
+        self._anchor = (ledger._verify_package_rows([manifest["identity"]], "financial_identity"), meta["sequence"], meta["history_head"], manifest["segment_count"], manifest["last_segment_digest"])
+        self._epoch = meta["continuity_epoch"]
+        self._preview = context["preview"]
         _require(type(commands) is list and len(commands) == source["row_count"], "cash_file_binding")
         frozen_commands = []
         for entry, row in zip(commands, source["rows"]):
@@ -219,24 +226,20 @@ class CashFileCheck:
         return {
             "expected_scope": self._context["expected_scope"],
             "expected_authority": self._context["expected_authority"],
-            "expected_mode": "TEST" if self._preview else self._context["expected_mode"],
-            "expected_owner_id": self._context["execution_owner_id"] if self._preview else self._context["expected_owner_id"],
+            "expected_mode": self._context["expected_mode"],
+            "expected_owner_id": self._context["expected_owner_id"],
             "expected_continuity_epoch": self._epoch,
         }
 
     @_fixed_errors
     def begin(self, connection: sqlite3.Connection) -> None:
         _require(self._connection is None and not self._finished and isinstance(connection, sqlite3.Connection) and connection.in_transaction, "cash_file_failed")
-        _require(self._preview or self._context["expected_mode"] in ("LIVE", "TEST"), "cash_file_binding")
         rows = ledger._database_snapshot_rows(connection)
-        identity, sequence, head = self._anchor
+        identity, sequence, head, count, last = self._anchor
         meta = rows["financial_meta"][0]
-        if self._preview:  # a new TEST restore of the baseline, bound to it whole (Phase 1b previews a copy of the live store)
-            ledger.verify_database_connection(connection, restore_source_package=self._context["baseline_bytes"], **self._expectations())
-            _require((meta["sequence"], meta["history_head"]) == (sequence, head), "cash_file_binding")
-        else:  # the store descends from the reviewed baseline: the same identity, and the same event head at its sequence
-            ancestor = rows["financial_identity"][0]["genesis_head"] if sequence == 0 else _index(rows, "financial_events", "event_sequence").get(sequence, {}).get("head")
-            _require(rows["financial_identity"] == identity and ancestor == head, "cash_file_binding")
+        ancestor = rows["financial_identity"][0]["genesis_head"] if sequence == 0 else _index(rows, "financial_events", "event_sequence").get(sequence, {}).get("head")
+        sealed = connection.execute("SELECT last_sequence,segment_digest FROM history_segments WHERE segment_index=?", (count - 1,)).fetchone()  # the manifest's last segment is the store's, sealed at the baseline's sequence
+        _require(rows["financial_identity"] == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else (sealed[0], bytes(sealed[1]).hex().upper()) == (sequence, last)), "cash_file_binding")  # the store descends from the reviewed baseline: the same identity, event head and last sealed segment
         self._stale = meta["sequence"] != sequence
         self._received, self._aliases = _payment_events(rows["financial_events"])
         self._plan = self._classify(rows)
@@ -326,7 +329,7 @@ class CashFileCheck:
         recorded_cents = sum(deltas.values())
         cash_before = sum(row["received_cash_cents"] for row in before["obligations"])
         self.receipt = {
-            "contract": "RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v1",
+            "contract": "RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2",
             "mode": "PREVIEW" if self._preview else "APPLIED",
             "source_sha256": self._source_sha, "baseline_sha256": self._baseline_sha,
             "row_count": len(self.commands), "recorded_count": len(recorded),
@@ -337,3 +340,6 @@ class CashFileCheck:
             "cash_delta_cents": recorded_cents, "proofSuiteId": None,
             "production_usable": False, "activation": False,
         }
+        if self._preview:  # never committed: the owner rolls the copy back (docs/CORE_REDESIGN.md "Cash-file capacity")
+            _require(not connection.execute("PRAGMA foreign_key_check").fetchall(), "cash_file_failed")  # the deferred keys COMMIT would check
+            raise CashFilePreview(self.receipt)

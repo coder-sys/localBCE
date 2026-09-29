@@ -10,7 +10,7 @@ import os
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build"}
+SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 
 # Founder 2026-09-28 split the old single 80,000 total so the budget stops charging
@@ -19,7 +19,7 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 PRODUCT_CODE_LINES = 44_000
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
-EVIDENCE_CODE_LINES = 40_198
+EVIDENCE_CODE_LINES = 40_312
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling.
@@ -27,8 +27,8 @@ MARKDOWN_BYTES = 160_000
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 7_192,
-    "app/right_rail_financial_owner_independent.py": 5_116,
+    "app/right_rail_financial_owner.py": 7_189,
+    "app/right_rail_financial_owner_independent.py": 5_120,
     "app/right_rail_financial_semantic_adapter.py": 2_156,
     "app/right_rail_financial_mirror.py": 1_533,
     "app/right_rail_financial_engine.py": 1_454,

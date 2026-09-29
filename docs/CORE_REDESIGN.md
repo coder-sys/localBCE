@@ -269,7 +269,7 @@ against the reviewed ledger, then records its cash evidence as one transaction:
 no repeated manual entry, exact retries, all-or-nothing. No money moves.
 
 - Predicate: accept only `RR/FINANCIAL/RECEIVER-CASH-FILE/v1`, canonical ASCII
-  JSON of at most 1 MiB, with 1-500 ordered rows, at most 6 per item (more: `cash_file_row_cap`; measured limits in `STATUS.md`). Root fields are exactly
+  JSON of at most 1 MiB, with 1-500 ordered rows, at most 6 per item (more: `cash_file_row_cap`). Root fields are exactly
   `contract`, `source_class`, `scope`, `source`, `row_count`, `total_cents`,
   `rows`; `source_class` is `SYNTHETIC_RECEIVER_CASH`. Scope has exactly the
   existing state/deployment/program/period/currency fields, currency USD.
@@ -277,7 +277,7 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   `captured_at_ms`. Each row has exactly eight fields: `item_id`, `payment_id`,
   `common_origin_id`, `evidence_id`, `amount_cents`, `event_at_ms`,
   `pays_action_id`, `expected_revision`. The action link is explicitly null or
-  an ID. Eight is the exact set; no implicit extra field.
+  an ID.
 - Invariant/failure: untrusted input never skips a row, turns acknowledgment or
   reporting into cash, substitutes an ID with the same total, or commits a
   partial file. IDs/version use the owner's 128-character grammar. Cents are
@@ -296,64 +296,62 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   commands, cash rules, existing wire/digest domains, expected answers and
   limits. No caller-provided callback or success flag authorizes acceptance.
 - Replacement control: the caller separately supplies trusted scope, source
-  context, source SHA-256, original baseline SHA-256, owner ID/mode and authority.
-  Let F be exact file bytes and B the ORIGINAL reviewed Continuity bytes.
+  context, source SHA-256, baseline SHA-256, owner ID/mode and authority.
+  Let F be exact file bytes and B the exact `manifest.json` bytes `export-history`
+  wrote (the owner's history manifest, about 1.9 KB whatever the history).
   Every derived command binds `local_ref = UPPER(SHA256(F)) || UPPER(SHA256(B))`.
-  A retry never replaces B with a fresh snapshot. Producer and verifier parse
+  A retry never replaces B with a fresh export. Producer and verifier parse
   and reconstruct independently; the verifier does not import the producer.
+  It accepts B only if canonical and it passes the export verifier's manifest checks
+  (`_verify_manifest`: digest, meta and identity against the trusted scope, owner, mode
+  LIVE or TEST and authority; no null sequence or head).
   Freeze commands before comparison. Under the same BEGIN IMMEDIATE, bind the
   store to B: the same identity row and event head at B's sequence (the owner
-  verified the whole store at open; later history is append-only). New work
-  requires the store still at B's sequence; on an older baseline only rows that
-  write nothing (RETRY, ALIAS) are allowed.
+  verified the whole store at open; later history is append-only), and B's
+  `segment_count` and `last_segment_digest` equal to the live `history_segments`
+  row sealed at B's sequence (none: 0 and the zero digest). New work requires the store still at B's sequence; on an
+  older baseline only rows that write nothing (RETRY, ALIAS) are allowed.
   After final sealing the checker verifies row/command order, each new event
   onto the chain, payment/evidence/action links, revisions, every table's
   before/after difference and per-item cash deltas, then runs its own rules on
   the touched obligations (see Cash-file capacity); other cash, acknowledgments
-  and reporting remain unchanged. It does not re-verify the whole store. A file with no NEW or OVERLAP
+  and reporting remain unchanged. A file with no NEW or OVERLAP
   row must leave durable state identical and make zero SQL changes. Any mismatch rolls
   back the whole file. Publish the receipt only after COMMIT succeeds.
-  Preview is the default: independently verify B and restore it into isolated
-  TEST storage, bind the restore to B's sequence and head, use that restore's
-  snapshot as execution baseline, and run the file there, retaining F and
-  original B as retry identity. Preview never opens an incumbent writer.
-  Explicit apply uses the same checked boundary. Cleanup failures are visible.
-  CLI apply opens only an existing, current store with the reviewed mode/ID
-  (SQLite `mode=rw`; read-only setup checks refuse missing segment/index/
-  append-only metadata instead of migrating it); a missing, empty or
-  disappearing store is refused.
+  Preview is the default: it runs the checked file on a private copy of the live store
+  (SQLite backup; the live file is only read), rolls the copy back and deletes it, and
+  opens no writer on the live file. Explicit apply uses the same checked boundary.
+  Cleanup failures are visible. CLI apply opens only an existing, current store with the
+  reviewed mode/ID (SQLite `mode=rw`; read-only setup checks refuse missing segment/index/
+  append-only metadata instead of migrating it); a missing, empty or disappearing store is refused.
 - Scope: local synthetic receiver cash evidence only; Switch's owed
   comparison schema is unchanged; no live transport, source authentication/truth,
   payment or activation claim.
-- Receipt: `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v1` has exactly `contract`,
+- Receipt: `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2` (v1 receipts stay valid) has exactly `contract`,
   `mode` (PREVIEW or APPLIED), `source_sha256`, `baseline_sha256`, `row_count`,
   `recorded_count`, `duplicate_count`, `file_total_cents`, `recorded_cents`,
   `duplicate_cents`, `cash_before_cents`, `cash_after_cents`, `cash_delta_cents`,
   `proofSuiteId` (null), `production_usable` (false), `activation` (false).
   Amounts are the checker's sums of the rows before the write and the per-item
-  cash deltas it proved; totals are not re-verified over the whole store.
+  cash deltas it proved.
   RETRY and ALIAS rows add zero cash, including payments reversed after their
   receipt; a new repeat of a reversed payment is DUPLICATE only if dated no later than the reversal, else `conflict`. No intermediate
   owner projection or raw file/error data is exported in this result.
 - Duration: v1 has no implicit legacy migration; changes need a new compatibility decision and fresh evidence.
-- Claims withdrawn: this design is not implementation or verification. Required
-  evidence covers field/context/identity mutations, altered command order, exact
-  bounds, original-baseline retry and reversal, stale/concurrent/mixed batches,
-  overlap, alias/conflict rollback and reuse, action limits, crashes/lost
-  responses, no ACK/report effects, source preservation, privacy and cleanup,
-  independent verification, Continuity and existing consumers; the runs that
-  cover it are recorded in `STATUS.md`.
+- Claims withdrawn: this design is not implementation or verification; the runs that cover
+  it (mutations, retry, reversal, concurrency, crashes, privacy, Continuity) are in `STATUS.md`.
 
 ### Cash-file capacity (2026-09-28)
 
 Target: the largest state's hospital-level program, about 600 hospitals with up
-to 3 lines a month (2,000 rows a month, under Lean's `maxRows`). Not met per rr-review: the
-8 MiB package cap on the baseline binds first (`STATUS.md`). All-provider
-refund flows need sharding or Phase 2 below and are not claimed.
+to 3 lines a month (2,000 rows a month, under Lean's `maxRows`). The 8 MiB package
+baseline capped a store near 950 payments; with the manifest baseline (1b) a month is
+four full files and a quarter twelve (measured locks: `STATUS.md`).
+All-provider refund flows need sharding or Phase 2 below and are not claimed.
 
 - One file is one `run_batch`: at most 500 rows, at most 6 per item (each
   payment re-binds every earlier payment of its item), bounded by the 5 s writer
-  busy timeout (measured locks: `STATUS.md`). One evaluation per payment is kept
+  busy timeout. One evaluation per payment is kept
   (founder, 2026-09-28).
 - Art. XI.2 record. Disposition: the whole-store verify no longer runs twice per
   import under the lock (it runs at each open). Replacement control, before
@@ -364,11 +362,19 @@ refund flows need sharding or Phase 2 below and are not claimed.
   whole-store rule not run before COMMIT with its reason. Claims withdrawn: that the store, or
   a cash file's totals, is independently verified before COMMIT. Corruption
   that bypassed the owner is caught at the next open or by `verify-integrity`.
-- Visible changes: the CLI prints `ERROR:receiver_cash_file_refused:{code}`; older
-  per-cause refusal codes collapsed into nine fixed classes (below); a repeat of a
-  reversed payment's origin is DUPLICATE only when dated no later than the
-  reversal, else `conflict` (owner and cash file share the rule); `duplicate_count` includes OVERLAP
-  rows, which write alias evidence.
+- Art. XI.2 record, Phase 1b (2026-09-29). Felt effect: a reviewer hashes a 1.9 KB
+  manifest, not a 2.4 to 15.7 MB package. Disposition: B is the `export-history` manifest (it prints its SHA-256); the
+  receipt is v2 (same 16 keys); a SHADOW store is no longer a target
+  (`cash_file_binding`; `--mode` is LIVE or TEST). No stored format, digest or `local_ref`
+  construction changes (a `local_ref` prefix is declined: the 128-char grammar bounds it).
+  Review fixes: B's segment fields bind to the live row; a preview refuses a copy whose
+  deferred keys COMMIT would refuse; `export-history` replaces `manifest.json` only with a
+  later export of the same identity whose old last segment matches this store's at that
+  index; the preview copy lives in `<store>.cash-preview`, swept hourly. Withdrawn: "B is
+  the original reviewed Continuity bytes", "preview restores B into isolated TEST storage".
+- Visible changes: `--baseline` takes the manifest (a package is `cash_file_format`);
+  preview needs `--database`; the CLI prints `ERROR:receiver_cash_file_refused:{code}`, nine
+  fixed classes; `duplicate_count` includes OVERLAP rows, which write alias evidence.
 - A row is NEW, RETRY, OVERLAP (a repeat of a stored payment under new ids:
   DUPLICATE, one alias event, no cash), ALIAS (a stored repeat: nothing written)
   or refused. Overlap needs new ids: a row that reuses stored ids must be the
@@ -492,9 +498,8 @@ unchecked rows, and a store that rolls back cannot earn ALLOW.
   149 gain `*_UNVERIFIED`; 175 and 177 gain the checkpoint's counterpart reason).
   4bffc1e's "No committed theorem statement's text changes" holds only for it.
 - **Disposition:** replace. Nothing is disabled.
-- **Replacement control:** all proofs compile with pinned axioms; 242/242 vectors
-  and 3,616 demo lines; 194/194 mutants killed; the unittest fails if the runner
-  is older than its sources.
+- **Replacement control:** all proofs compile with pinned axioms; the vectors, demo lines
+  and mutants pass (counts: `STATUS.md`); the unittest fails if the runner is older than its sources.
 - **Scope:** decision rules R1-R5 as tests; not the token path (no signed
   checkpoints or release path). **Duration:** until the gate-v1 token path lands.
 - **Claims withdrawn:** the earlier statements above and the vector and mutant

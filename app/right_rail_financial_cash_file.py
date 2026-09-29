@@ -1,13 +1,17 @@
 """Bounded synthetic receiver-file proposal and isolated preview, with one owner writer."""
 
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
+import sqlite3
 import tempfile
+import time
 
-from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialOwner, FinancialRevisionError, _checker_authority
-from app.right_rail_financial_cash_file_independent import MAX_ROWS, REFUSALS, CashFileCheck, CashFileError
+from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialOwner, FinancialOwnerConfig, FinancialRevisionError, _checker_authority
+from app.right_rail_financial_cash_file_independent import MAX_ROWS, REFUSALS, CashFileCheck, CashFileError, CashFilePreview
 
 
 MAX_FILE_BYTES = 1_048_576
@@ -39,7 +43,7 @@ def _integer(value, low, high):
 
 
 def _propose(source_bytes, baseline_bytes):
-    if type(baseline_bytes) is not bytes or not 0 < len(baseline_bytes) <= 8 * 1024 * 1024 or type(source_bytes) is not bytes or not 0 < len(source_bytes) <= MAX_FILE_BYTES:
+    if type(baseline_bytes) is not bytes or not 0 < len(baseline_bytes) <= MAX_FILE_BYTES or type(source_bytes) is not bytes or not 0 < len(source_bytes) <= MAX_FILE_BYTES:
         raise CashFileError("cash_file_format")
     try:
         value = json.loads(source_bytes.decode("ascii"), object_pairs_hook=_object)
@@ -103,23 +107,31 @@ def prepare_cash_file(source_bytes, baseline_bytes, *, expected_source_sha256,
         "expected_scope": expected_scope, "expected_source": expected_source,
         "expected_authority": _checker_authority(trusted_authority),
         "expected_owner_id": expected_owner_id, "expected_mode": expected_mode,
-        "execution_owner_id": None,
+        "preview": False,
     }
     checked = CashFileCheck(commands, context)
     return list(checked.commands), context
 
 
-def preview_cash_file(commands, context, *, trusted_authority, clock=None):
-    """Exercise the full transaction on a new TEST restore; publish only after cleanup."""
+def preview_cash_file(commands, context, *, path, trusted_authority, clock=None):
+    """Run the checked file on a private copy of the live store and roll it back; publish only after the copy is removed."""
     try:
-        with tempfile.TemporaryDirectory(prefix="rightrail-cash-preview-") as directory:
-            owner = FinancialOwner.restore_continuity(
-                package_bytes=context["baseline_bytes"], recovered_path=Path(directory) / "preview.sqlite",
-                trusted_authority=trusted_authority, restore_mode="TEST", clock=clock,
-            )
-            return owner.run_batch(commands, cash_file_context={**context, "execution_owner_id": owner.owner_id})
+        folder = Path(path).resolve().with_name(Path(path).name + ".cash-preview")  # owner-controlled, beside the store, not the system temp folder
+        folder.mkdir(exist_ok=True)
+        for stale in folder.iterdir():  # a copy a crash left behind is swept by the next preview
+            if time.time() - stale.stat().st_mtime > 3600:
+                shutil.rmtree(stale, ignore_errors=True)
+        with tempfile.TemporaryDirectory(dir=folder) as directory:
+            store = Path(directory) / "preview.sqlite"
+            with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as live, closing(sqlite3.connect(store)) as target:
+                live.backup(target)  # a consistent snapshot; the live file is only read
+            FinancialOwner(path=store, config=FinancialOwnerConfig(**context["expected_scope"]), trusted_authority=trusted_authority, clock=clock,
+                           mode=context["expected_mode"], owner_id=context["expected_owner_id"], existing_only=True).run_batch(commands, cash_file_context={**context, "preview": True})
+    except CashFilePreview as preview:
+        return preview.args[0]
     except Exception as error:
         raise CashFileError(refusal(error)) from None
+    raise CashFileError("cash_file_failed")  # a preview that finished without its checked receipt
 
 
 def refusal(error):

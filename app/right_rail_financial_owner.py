@@ -1886,7 +1886,8 @@ _SEGMENT_SCHEMA: Final[str] = """
 
 def _replace_file(path: Path, data: bytes) -> None:
     temporary = path.with_name(f"{path.name}.tmp")
-    with temporary.open("wb") as handle:
+    temporary.unlink(missing_ok=True)  # a leftover, or a planted link, is removed itself, never written through
+    with temporary.open("xb") as handle:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
@@ -2705,9 +2706,6 @@ class FinancialOwner:
         )
         return "INSERTED"
 
-    def _evidence_for(self, connection: sqlite3.Connection, item_id: str) -> tuple[str, ...]:
-        return tuple(str(row[0]) for row in connection.execute("SELECT evidence_id FROM evidence WHERE item_id=? ORDER BY evidence_id", (item_id,)))
-
     def _case_status(self, connection: sqlite3.Connection, obligation_id: str) -> str:
         row = connection.execute("SELECT status FROM cases WHERE obligation_id=? ORDER BY case_id DESC LIMIT 1", (obligation_id,)).fetchone()
         return "OPEN" if row is None else str(row[0])
@@ -2768,16 +2766,11 @@ class FinancialOwner:
         owed = int(old["owed_cents"])
         shortfall = max(owed - total, 0)
         overage = max(total - owed, 0)
-        evidence_ids = self._evidence_for(connection, str(old["item_id"]))
-        future_evidence = connection.execute(
-            "SELECT 1 FROM evidence WHERE item_id=? AND received_at_ms>? LIMIT 1",
-            (old["item_id"], now_ms),
-        ).fetchone()
-        if future_evidence is not None:
+        evidence = connection.execute("SELECT evidence_id,record_digest,event_at_ms,received_at_ms FROM evidence WHERE item_id=? ORDER BY evidence_id", (old["item_id"],)).fetchall()  # read once: the evaluation's inputs
+        if any(int(row["received_at_ms"]) > now_ms for row in evidence):
             _fail(FinancialIntegrityError, "evaluation_evidence_chronology")
         conflict_count = int(connection.execute("SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?", (obligation_id,)).fetchone()[0])
-        evidence_count = int(connection.execute("SELECT COUNT(*) FROM evidence WHERE item_id=?", (old["item_id"],)).fetchone()[0])
-        verification = "CONFLICT_VISIBLE" if conflict_count else ("SUPPORTED" if evidence_count else "MISSING_EVIDENCE")
+        verification = "CONFLICT_VISIBLE" if conflict_count else ("SUPPORTED" if evidence else "MISSING_EVIDENCE")
         completion = self._completion_time(connection, obligation_id, owed, lawful)
         timely = int(completion is not None and completion <= int(old["due_at_ms"]))
         amount_satisfied = int(total >= owed)
@@ -2801,7 +2794,7 @@ class FinancialOwner:
             "obligation_id": obligation_id,
             "revision": after_revision,
             "rule_version": int(old["rule_version"]),
-            "evidence_ids": list(evidence_ids),
+            "evidence_ids": [str(row["evidence_id"]) for row in evidence],
             "authority_id": self.trusted_authority.authority_id,
             "evaluated_at_ms": now_ms,
             "owed_cents": owed,
@@ -2823,9 +2816,10 @@ class FinancialOwner:
             connection,
             result=result,
             pack=pack,
-            evidence_bindings=self._evidence_bindings(connection, evidence_ids),
+            evidence_bindings=[{"evidence_id": str(row["evidence_id"]), "record_digest": _hex(bytes(row["record_digest"]))} for row in evidence],
             authority_epoch=self.trusted_authority.epoch,
             authority_digest=self.trusted_authority.digest,
+            evidence=evidence,
         )
         updated = connection.execute(
             "UPDATE obligations SET revision=?,claimed_adjustment_cents=?,lawful_adjustment_cents=?,received_cash_cents=?,shortfall_cents=?,overage_cents=?,cash_satisfied=?,amount_satisfied=?,timely=?,verification_status=?,case_status=?,delivery_status=?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?",
@@ -3576,24 +3570,13 @@ class FinancialOwner:
             "currency": self.config.currency,
         }
 
-    def _evidence_bindings(self, connection: sqlite3.Connection, evidence_ids: Iterable[str]) -> list[dict[str, str]]:
-        ordered = list(evidence_ids)
-        if ordered != sorted(ordered) or len(set(ordered)) != len(ordered):
-            _fail(FinancialIntegrityError, "evaluation_evidence_order")
-        bindings: list[dict[str, str]] = []
-        for evidence_id in ordered:
-            row = connection.execute("SELECT record_digest FROM evidence WHERE evidence_id=?", (evidence_id,)).fetchone()
-            if row is None:
-                _fail(FinancialIntegrityError, "evaluation_evidence_missing")
-            bindings.append({"evidence_id": evidence_id, "record_digest": _hex(bytes(row[0]))})
-        return bindings
-
     def _evaluation_input_snapshot(
         self,
         connection: sqlite3.Connection,
         *,
         obligation_id: str,
         pre_revision: int,
+        evidence: list[sqlite3.Row] | None = None,
     ) -> dict[str, Any]:
         obligation = connection.execute(
             "SELECT obligation_id,item_id,revision,rule_version,owed_cents,due_at_ms,reporting_complete FROM obligations WHERE obligation_id=?",
@@ -3622,10 +3605,10 @@ class FinancialOwner:
                     "event_at_ms": int(row["event_at_ms"]),
                     "received_at_ms": int(row["received_at_ms"]),
                 }
-                for row in connection.execute(
+                for row in (evidence if evidence is not None else connection.execute(
                     "SELECT evidence_id,record_digest,event_at_ms,received_at_ms FROM evidence WHERE item_id=? ORDER BY evidence_id",
                     (item_id,),
-                )
+                ))
             ],
             "payments": [
                 {
@@ -3698,6 +3681,7 @@ class FinancialOwner:
         evidence_bindings: list[dict[str, str]],
         authority_epoch: int,
         authority_digest: bytes,
+        evidence: list[sqlite3.Row] | None = None,  # the item's evidence rows when the caller already read them
     ) -> dict[str, Any]:
         result_body = _evaluation_result_body(result)
         result_digest = _digest(_EVALUATION_RESULT_DOMAIN, _canonical(result_body))
@@ -3708,6 +3692,7 @@ class FinancialOwner:
             connection,
             obligation_id=str(result["obligation_id"]),
             pre_revision=pre_revision,
+            evidence=evidence,
         )
         input_snapshot_bytes = _canonical(input_snapshot)
         input_snapshot_digest = _digest(_EVALUATION_INPUT_DOMAIN, input_snapshot_bytes)
@@ -6896,16 +6881,28 @@ class FinancialOwner:
 
         The manifest is read in the sealing transaction; sealed segments are append-only,
         so their files may be written after it. A segment file already in ``directory``
-        is never rewritten, only compared byte for byte (IX.3).
+        is never rewritten, only compared byte for byte (IX.3); ``manifest.json`` is replaced only by a
+        later export of the same history: a cash file's baseline is these exact bytes (III.3).
         """
         with self._write() as connection:
             self._seal_segment(connection, force=True)
             rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
             count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
         body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
+        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
         directory.mkdir(exist_ok=True)
+        target = directory / "manifest.json"
         with self._read_snapshot() as connection:
-            for segment in connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall():
+            segments = connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall()
+            if target.exists():
+                try:  # an older manifest of this identity whose last segment is this store's segment at that index
+                    old = json.loads(target.read_bytes())
+                    replaceable = old["identity"] == body["identity"] and old["segment_count"] >= 0 and old["last_segment_digest"] == (_hex(bytes(segments[old["segment_count"] - 1]["segment_digest"])) if old["segment_count"] else _hex(_ZERO_DIGEST))
+                except (ValueError, KeyError, TypeError, IndexError):
+                    replaceable = False
+                if not replaceable and target.read_bytes() != manifest:
+                    _fail(FinancialContinuityError, "history_export_mismatch")
+            for segment in segments:
                 events = connection.execute("SELECT * FROM financial_events WHERE event_sequence BETWEEN ? AND ? ORDER BY event_sequence", (segment["first_sequence"], segment["last_sequence"]))
                 data = _canonical({"events": [self._segment_record("financial_events", tuple(row)) for row in events], "rows": json.loads(segment["rows_json"]), "seal": _segment_seal(*tuple(segment)[:6]), "segment_digest": _hex(bytes(segment["segment_digest"])), "signature": None})
                 path = directory / f"segment-{segment['segment_index']:08d}.json"
@@ -6915,8 +6912,8 @@ class FinancialOwner:
                     with path.open("rb") as handle:
                         if handle.read(len(data) + 1) != data:
                             _fail(FinancialContinuityError, "history_export_mismatch")
-        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
-        _replace_file(directory / "manifest.json", manifest)
+        if not target.exists() or target.read_bytes() != manifest:
+            _replace_file(target, manifest)
         return manifest
 
     def _replay_segment(self, connection: sqlite3.Connection, path: Path) -> None:
