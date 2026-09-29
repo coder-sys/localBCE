@@ -6,140 +6,75 @@ import BlindLedger.Financial.CorrectionTransition.Theorems
 
 namespace BlindLedger.Financial
 
-/-! Pins what the financial proofs rest on.  `#guard_msgs` fails this build if a
-    theorem's dependency set changes (`lake build blind_financial_axioms`). -/
+/-! The guarded dependency-report target is source-based.  It does not consume
+    a cached manifest or generated artifact. -/
+-- 29 of these rest on a `native_decide` axiom (`authorized_kat_is_correct` through `evaluator_corresponds_to_independent_specification`); the gate's --trust=0 stage decides which axioms are allowed.
 
-/-- info: 'BlindLedger.Financial.evaluation_deterministic' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluation_deterministic
-/-- info: 'BlindLedger.Financial.evaluateWellFormed_matches_specification' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluateWellFormed_matches_specification
-/-- info: 'BlindLedger.Financial.evaluate_rejects_not_well_formed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluate_rejects_not_well_formed
-/-- info: 'BlindLedger.Financial.evaluate_satisfies_specification' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluate_satisfies_specification
-/-- info: 'BlindLedger.Financial.accepted_evaluation_contract' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.accepted_evaluation_contract
-/-- info: 'BlindLedger.Financial.evaluate_rejects_total_overflow' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluate_rejects_total_overflow
-/-- info: 'BlindLedger.Financial.evalAdd_rejects_left_out_of_bounds' depends on axioms: [propext] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evalAdd_rejects_left_out_of_bounds
-/-- info: 'BlindLedger.Financial.evalAdd_rejects_right_out_of_bounds' depends on axioms: [propext] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evalAdd_rejects_right_out_of_bounds
-/-- info: 'BlindLedger.Financial.authorized_kat_is_correct' depends on axioms: [propext, Classical.choice, Quot.sound, authorized_kat_is_correct._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.authorized_kat_is_correct
-/-- info: 'BlindLedger.Financial.missing_evidence_requires_support' depends on axioms: [propext, Classical.choice, Quot.sound, missing_evidence_requires_support._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.missing_evidence_requires_support
-/-- info: 'BlindLedger.Financial.conflict_precedence_is_visible' depends on axioms: [propext, Classical.choice, Quot.sound, conflict_precedence_is_visible._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.conflict_precedence_is_visible
-/-- info: 'BlindLedger.Financial.acknowledgement_is_not_cash' depends on axioms: [propext, Classical.choice, Quot.sound, acknowledgement_is_not_cash._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.acknowledgement_is_not_cash
-/-- info: 'BlindLedger.Financial.late_completion_is_deterministic' depends on axioms: [propext, Classical.choice, Quot.sound, late_completion_is_deterministic._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.late_completion_is_deterministic
-/-- info: 'BlindLedger.Financial.overflow_is_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, overflow_is_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.overflow_is_rejected
-/-- info: 'BlindLedger.Financial.malformed_order_is_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, malformed_order_is_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.malformed_order_is_rejected
-/-- info: 'BlindLedger.Financial.scope_mutation_is_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, scope_mutation_is_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.scope_mutation_is_rejected
-/-- info: 'BlindLedger.Financial.authority_mutation_is_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, authority_mutation_is_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.authority_mutation_is_rejected
-/-- info: 'BlindLedger.Financial.actor_role_mutation_is_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, actor_role_mutation_is_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.actor_role_mutation_is_rejected
-/-- info: 'BlindLedger.Financial.terminal_authorization_requires_determination' depends on axioms: [propext, Classical.choice, Quot.sound, terminal_authorization_requires_determination._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.terminal_authorization_requires_determination
-/-- info: 'BlindLedger.Financial.duplicate_confirmation_is_preserved' depends on axioms: [propext, Classical.choice, Quot.sound, duplicate_confirmation_is_preserved._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.duplicate_confirmation_is_preserved
-/-- info: 'BlindLedger.Financial.active_reversal_evidence_is_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, active_reversal_evidence_is_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.active_reversal_evidence_is_rejected
-/-- info: 'BlindLedger.Financial.reversed_payment_excludes_cash' depends on axioms: [propext, Classical.choice, Quot.sound, reversed_payment_excludes_cash._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.reversed_payment_excludes_cash
-/-- info: 'BlindLedger.Financial.repeated_reversal_evidence_is_preserved' depends on axioms: [propext, Classical.choice, Quot.sound, repeated_reversal_evidence_is_preserved._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.repeated_reversal_evidence_is_preserved
-/-- info: 'BlindLedger.Financial.pack_source_refs_and_roles_keep_owner_order' depends on axioms: [propext, Classical.choice, Quot.sound, pack_source_refs_and_roles_keep_owner_order._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.pack_source_refs_and_roles_keep_owner_order
-/-- info: 'BlindLedger.Financial.repeated_pack_source_refs_preserve_wire_and_digest' depends on axioms: [propext, Classical.choice, Quot.sound, repeated_pack_source_refs_preserve_wire_and_digest._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.repeated_pack_source_refs_preserve_wire_and_digest
-/-- info: 'BlindLedger.Financial.lawful_completion_fallback_is_preserved' depends on axioms: [propext, Classical.choice, Quot.sound, lawful_completion_fallback_is_preserved._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.lawful_completion_fallback_is_preserved
-/-- info: 'BlindLedger.Financial.historical_revision_binding_is_checked' depends on axioms: [propext, Classical.choice, Quot.sound, historical_revision_binding_is_checked._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.historical_revision_binding_is_checked
-/-- info: 'BlindLedger.Financial.latest_delivery_uses_timestamp_then_id' depends on axioms: [propext, Classical.choice, Quot.sound, latest_delivery_uses_timestamp_then_id._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.latest_delivery_uses_timestamp_then_id
-/-- info: 'BlindLedger.Financial.direct_add_operands_are_bounded' depends on axioms: [direct_add_operands_are_bounded._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.direct_add_operands_are_bounded
-/-- info: 'BlindLedger.Financial.codec_roundtrip_kat' depends on axioms: [propext, Classical.choice, Quot.sound, codec_roundtrip_kat._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codec_roundtrip_kat
-/-- info: 'BlindLedger.Financial.codec_trailing_bytes_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, codec_trailing_bytes_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codec_trailing_bytes_rejected
-/-- info: 'BlindLedger.Financial.codec_mutation_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, codec_mutation_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codec_mutation_rejected
-/-- info: 'BlindLedger.Financial.codec_enum_mutation_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, codec_enum_mutation_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codec_enum_mutation_rejected
-/-- info: 'BlindLedger.Financial.codec_count_overflow_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, codec_count_overflow_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codec_count_overflow_rejected
-/-- info: 'BlindLedger.Financial.result_codec_roundtrip_kat' depends on axioms: [propext, Classical.choice, Quot.sound, result_codec_roundtrip_kat._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.result_codec_roundtrip_kat
-/-- info: 'BlindLedger.Financial.result_codec_trailing_bytes_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, result_codec_trailing_bytes_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.result_codec_trailing_bytes_rejected
-/-- info: 'BlindLedger.Financial.result_codec_mutation_rejected' depends on axioms: [propext, Classical.choice, Quot.sound, result_codec_mutation_rejected._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.result_codec_mutation_rejected
-/-- info: 'BlindLedger.Financial.evaluator_corresponds_to_independent_specification' depends on axioms: [propext, Classical.choice, Quot.sound, evaluator_corresponds_to_independent_specification._native.native_decide.ax_1_1] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluator_corresponds_to_independent_specification
-/-- info: 'BlindLedger.Financial.exportedEvaluate_is_evaluate' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.exportedEvaluate_is_evaluate
-/-- info: 'BlindLedger.Financial.codecLawsProofManifest' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codecLawsProofManifest
-/-- info: 'BlindLedger.Financial.codecLawsNoTrailingManifest' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codecLawsNoTrailingManifest
-/-- info: 'BlindLedger.Financial.codecLawsWholeWireManifest' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codecLawsWholeWireManifest
-/-- info: 'BlindLedger.Financial.CorrectionTransition.canonicalActionPayload_dispatch_is_synthetic_record_only' depends on axioms: [propext] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.canonicalActionPayload_dispatch_is_synthetic_record_only
-/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_mutation_links' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_mutation_links
-/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_nonaccepted_has_no_mutation' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_nonaccepted_has_no_mutation
-/-- info: 'BlindLedger.Financial.CorrectionTransition.rejectedCorrectionTransition_has_no_mutation' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.rejectedCorrectionTransition_has_no_mutation
-/-- info: 'BlindLedger.Financial.CorrectionTransition.duplicateCorrectionTransition_has_no_mutation' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.duplicateCorrectionTransition_has_no_mutation
-/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_action_amount_eq_b2' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_action_amount_eq_b2
-/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_outstanding_within_shortfall' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_outstanding_within_shortfall
-/-- info: 'BlindLedger.Financial.CorrectionTransition.outstandingCorrectionCents_eq_uncancelled' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.outstandingCorrectionCents_eq_uncancelled
-/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_zero_shortfall_has_no_mutation' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_zero_shortfall_has_no_mutation
-/-- info: 'BlindLedger.Financial.CorrectionTransition.evaluate_positive_shortfall_balance' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.evaluate_positive_shortfall_balance
-/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_amounts_conserved' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_amounts_conserved
-/-- info: 'BlindLedger.Financial.CorrectionTransition.executionDenial_none_implies_valid_axes' depends on axioms: [propext] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.executionDenial_none_implies_valid_axes
-/-- info: 'BlindLedger.Financial.CorrectionTransition.assessAcceptedCorrectionReuse_allowed_implies_valid_axes' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.assessAcceptedCorrectionReuse_allowed_implies_valid_axes
-/-- info: 'BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_allowed_implies_valid_axes' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_allowed_implies_valid_axes
-/-- info: 'BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_calculation_independent_of_approval_and_execution_observations' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_calculation_independent_of_approval_and_execution_observations
-/-- info: 'BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations
-/-- info: 'BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_local_permission_matches_denial' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_local_permission_matches_denial
-/-- info: 'BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_never_permits_external_dispatch' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_never_permits_external_dispatch
-/-- info: 'BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionRequest_of_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionRequest_of_encode
-/-- info: 'BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionRequest_of_decode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionRequest_of_decode
-/-- info: 'BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionRequest_rejects_trailing' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionRequest_rejects_trailing
-/-- info: 'BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_of_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_of_encode
-/-- info: 'BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionResult_of_decode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionResult_of_decode
-/-- info: 'BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_rejects_trailing' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_rejects_trailing
+#print axioms BlindLedger.Financial.evaluation_deterministic
+#print axioms BlindLedger.Financial.evaluateWellFormed_matches_specification
+#print axioms BlindLedger.Financial.evaluate_rejects_not_well_formed
+#print axioms BlindLedger.Financial.evaluate_satisfies_specification
+#print axioms BlindLedger.Financial.accepted_evaluation_contract
+#print axioms BlindLedger.Financial.evaluate_rejects_total_overflow
+#print axioms BlindLedger.Financial.evalAdd_rejects_left_out_of_bounds
+#print axioms BlindLedger.Financial.evalAdd_rejects_right_out_of_bounds
+#print axioms BlindLedger.Financial.authorized_kat_is_correct
+#print axioms BlindLedger.Financial.missing_evidence_requires_support
+#print axioms BlindLedger.Financial.conflict_precedence_is_visible
+#print axioms BlindLedger.Financial.acknowledgement_is_not_cash
+#print axioms BlindLedger.Financial.late_completion_is_deterministic
+#print axioms BlindLedger.Financial.overflow_is_rejected
+#print axioms BlindLedger.Financial.malformed_order_is_rejected
+#print axioms BlindLedger.Financial.scope_mutation_is_rejected
+#print axioms BlindLedger.Financial.authority_mutation_is_rejected
+#print axioms BlindLedger.Financial.actor_role_mutation_is_rejected
+#print axioms BlindLedger.Financial.terminal_authorization_requires_determination
+#print axioms BlindLedger.Financial.duplicate_confirmation_is_preserved
+#print axioms BlindLedger.Financial.active_reversal_evidence_is_rejected
+#print axioms BlindLedger.Financial.reversed_payment_excludes_cash
+#print axioms BlindLedger.Financial.repeated_reversal_evidence_is_preserved
+#print axioms BlindLedger.Financial.pack_source_refs_and_roles_keep_owner_order
+#print axioms BlindLedger.Financial.repeated_pack_source_refs_preserve_wire_and_digest
+#print axioms BlindLedger.Financial.lawful_completion_fallback_is_preserved
+#print axioms BlindLedger.Financial.historical_revision_binding_is_checked
+#print axioms BlindLedger.Financial.latest_delivery_uses_timestamp_then_id
+#print axioms BlindLedger.Financial.direct_add_operands_are_bounded
+#print axioms BlindLedger.Financial.codec_roundtrip_kat
+#print axioms BlindLedger.Financial.codec_trailing_bytes_rejected
+#print axioms BlindLedger.Financial.codec_mutation_rejected
+#print axioms BlindLedger.Financial.codec_enum_mutation_rejected
+#print axioms BlindLedger.Financial.codec_count_overflow_rejected
+#print axioms BlindLedger.Financial.result_codec_roundtrip_kat
+#print axioms BlindLedger.Financial.result_codec_trailing_bytes_rejected
+#print axioms BlindLedger.Financial.result_codec_mutation_rejected
+#print axioms BlindLedger.Financial.evaluator_corresponds_to_independent_specification
+#print axioms BlindLedger.Financial.exportedEvaluate_is_evaluate
+#print axioms BlindLedger.Financial.codecLawsProofManifest
+#print axioms BlindLedger.Financial.codecLawsNoTrailingManifest
+#print axioms BlindLedger.Financial.codecLawsWholeWireManifest
+#print axioms BlindLedger.Financial.CorrectionTransition.canonicalActionPayload_dispatch_is_synthetic_record_only
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_mutation_links
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_nonaccepted_has_no_mutation
+#print axioms BlindLedger.Financial.CorrectionTransition.rejectedCorrectionTransition_has_no_mutation
+#print axioms BlindLedger.Financial.CorrectionTransition.duplicateCorrectionTransition_has_no_mutation
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_action_amount_eq_b2
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_outstanding_within_shortfall
+#print axioms BlindLedger.Financial.CorrectionTransition.outstandingCorrectionCents_eq_uncancelled
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_zero_shortfall_has_no_mutation
+#print axioms BlindLedger.Financial.CorrectionTransition.evaluate_positive_shortfall_balance
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_amounts_conserved
+#print axioms BlindLedger.Financial.CorrectionTransition.executionDenial_none_implies_valid_axes
+#print axioms BlindLedger.Financial.CorrectionTransition.assessAcceptedCorrectionReuse_allowed_implies_valid_axes
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_allowed_implies_valid_axes
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_calculation_independent_of_approval_and_execution_observations
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_local_permission_matches_denial
+#print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_never_permits_external_dispatch
+#print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionRequest_of_encode
+#print axioms BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionRequest_of_decode
+#print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionRequest_rejects_trailing
+#print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_of_encode
+#print axioms BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionResult_of_decode
+#print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_rejects_trailing
 
 end BlindLedger.Financial

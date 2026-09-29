@@ -19,7 +19,7 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 PRODUCT_CODE_LINES = 37_063
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
-EVIDENCE_CODE_LINES = 41_331
+EVIDENCE_CODE_LINES = 41_266
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling.
