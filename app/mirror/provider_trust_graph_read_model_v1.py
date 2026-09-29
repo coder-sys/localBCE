@@ -724,22 +724,5 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
 
-__all__ = [
-    "MAX_RESPONSE_BYTES",
-    "MAX_PAGE_SIZE",
-    "ProviderTrustGraphReadModelV1Error",
-    "ProviderTrustGraphReadSelectionV1",
-    "RESPONSE_DOMAIN",
-    "SCHEMA",
-    "VERSION",
-    "build_read_model_v1",
-    "build_read_model_page_v1",
-    "build_read_model_detail_v1",
-    "compare_read_models_v1",
-    "load_selection",
-    "main",
-]
-
-
 if __name__ == "__main__":
     raise SystemExit(main())

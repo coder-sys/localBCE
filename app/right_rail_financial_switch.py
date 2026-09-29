@@ -1312,23 +1312,3 @@ def run_shadow_replay(
         report["comparison_status"] = "MATCHED"
     report["reasons"] = []
     return report
-
-
-__all__ = (
-    "COHORT_APPROVAL_CONTRACT",
-    "CURRENT_OWNER_SCHEMA_VERSION",
-    "CandidateSpec",
-    "CohortApproval",
-    "DecodedReplayInput",
-    "DifferencePolicy",
-    "FinancialSwitchError",
-    "REPLAY_INPUT_CONTRACT",
-    "ReferenceSpec",
-    "RESULT_CONTRACT",
-    "RUN_REPORT_CONTRACT",
-    "SnapshotFacts",
-    "decode_replay_input",
-    "inspect_shadow_snapshot",
-    "prepare_shadow_replay_input",
-    "run_shadow_replay",
-)

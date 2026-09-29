@@ -1473,7 +1473,7 @@ def _load_claims(
     evidence: Mapping[str, Mapping[str, Any]],
     evaluation_time_ms: int,
     limit: int,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+) -> list[dict[str, Any]]:
     rows = _bounded_rows(
         connection,
         "SELECT claim_id,obligation_id,evidence_id,amount_cents,owner_role,deadline_ms,status,created_at_ms,updated_at_ms FROM claimed_adjustments WHERE obligation_id=? ORDER BY claim_id",
@@ -1482,7 +1482,6 @@ def _load_claims(
         limit=limit,
     )
     result: list[dict[str, Any]] = []
-    by_id: dict[str, dict[str, Any]] = {}
     for row in rows:
         claim_id = _id(row["claim_id"], "claim_id")
         if str(row["obligation_id"]) != obligation_id:
@@ -1512,9 +1511,8 @@ def _load_claims(
             "created_at_ms": created,
             "updated_at_ms": updated,
         }
-        by_id[claim_id] = body
         result.append(body)
-    return result, by_id
+    return result
 
 
 def _load_cases(
@@ -1524,7 +1522,7 @@ def _load_cases(
     pack: owner.ControlPack,
     evaluation_time_ms: int,
     limit: int,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+) -> list[dict[str, Any]]:
     rows = _bounded_rows(
         connection,
         "SELECT case_id,obligation_id,reason,contractual_accountability,next_action_owner,due_at_ms,completion_conditions_json,status,updated_at_ms FROM cases WHERE obligation_id=? ORDER BY case_id",
@@ -1533,7 +1531,6 @@ def _load_cases(
         limit=limit,
     )
     result: list[dict[str, Any]] = []
-    by_id: dict[str, dict[str, Any]] = {}
     for row in rows:
         case_id = _id(row["case_id"], "case_id")
         owner_role = _role(row["next_action_owner"], "case_owner_role")
@@ -1557,11 +1554,10 @@ def _load_cases(
             "status": status,
             "updated_at_ms": updated,
         }
-        by_id[case_id] = body
         result.append(body)
     if not result:
         _fail(SemanticAdapterIntegrityError, "case_missing")
-    return result, by_id
+    return result
 
 
 def _load_actions(
@@ -1836,7 +1832,6 @@ def _load_determinations(
     connection: sqlite3.Connection,
     *,
     obligation_id: str,
-    evidence: Mapping[str, Mapping[str, Any]],
     authority_context: TrustedAuthorityContext,
     evaluation_time_ms: int,
     limit: int,
@@ -1994,14 +1989,14 @@ def build_locked_semantic_snapshot(
             evaluation_time_ms=evaluation_time_ms,
             limit=max_fact_rows,
         )
-        claims_body, claims_by_id = _load_claims(
+        claims_body = _load_claims(
             connection,
             obligation_id=obligation_id,
             evidence=evidence_by_id,
             evaluation_time_ms=evaluation_time_ms,
             limit=max_fact_rows,
         )
-        cases_body, cases_by_id = _load_cases(
+        cases_body = _load_cases(
             connection,
             obligation_id=obligation_id,
             pack=pack,
@@ -2037,7 +2032,6 @@ def build_locked_semantic_snapshot(
         determinations_raw = _load_determinations(
             connection,
             obligation_id=obligation_id,
-            evidence=evidence_by_id,
             authority_context=authority_context,
             evaluation_time_ms=evaluation_time_ms,
             limit=max_fact_rows,
@@ -2130,27 +2124,3 @@ def bind_resulting_state(
     if encode_blfin02_input(post) != mutation["resulting_input_wire"]:
         _fail(SemanticAdapterIntegrityError, "resulting_input")
     _bind_result_context(mutation["resulting_result"], post.data)
-
-
-__all__ = [
-    "BLFIN02_MAGIC",
-    "BLFRES02_MAGIC",
-    "DecodedLeanResult",
-    "LockedSemanticSnapshot",
-    "MAX_FACT_ROWS",
-    "MAX_WIRE_BYTES",
-    "MAX_WIRE_LIST",
-    "SEMANTIC_INPUT_SCHEMA",
-    "SEMANTIC_INPUT_VERSION",
-    "SemanticAdapterAuthorityError",
-    "SemanticAdapterCodecError",
-    "SemanticAdapterError",
-    "SemanticAdapterInputError",
-    "SemanticAdapterIntegrityError",
-    "TrustedAuthorityContext",
-    "bind_resulting_state",
-    "build_locked_semantic_snapshot",
-    "decode_blfres02_result",
-    "encode_blfin02_input",
-    "encode_blfres02_result",
-]

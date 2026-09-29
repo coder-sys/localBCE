@@ -11,18 +11,14 @@ production_usable=false, activation=false.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import re
 
-from app.right_rail_financial_owner_independent import (
-    IndependentFinancialError,
-    MAX_CENTS,
-    MAX_PACKAGE_BYTES,
-    verify_continuity_package,
-    verify_database,
+from app.right_rail_financial_derived import (  # NOT_HELD and quarter_window stay importable from here
+    NOT_HELD, DerivedError, bound_control_pack, cents as _cents, hex_upper as _hex, quarter_of as _quarter_of, quarter_window, verified_rows,
 )
+from app.right_rail_financial_owner_independent import IndependentFinancialError, MAX_PACKAGE_BYTES
 from app.right_rail_financial_switch import FinancialSwitchError, _canonical_json, _decode_canonical_json, _id
 
 
@@ -33,16 +29,8 @@ PAYMENT_DATE_BASIS = "PAYMENT_EVENT_AT"  # CMS-64 reports by payment date; the o
 MAX_LINE_PACK_BYTES = 2 * MAX_PACKAGE_BYTES
 MAX_LINE_MAP_BYTES = 64 * 1024
 LINE_MAP_SOURCE_REF = "line-map:sha256:"  # the approved Control Pack lists this ref plus the map's SHA-256
-NOT_HELD = (  # never in the Ledger; stated on every pack
-    "not-held:clinical-and-medical-necessity-records",
-    "not-held:eligibility-and-immigration-status",
-    "not-held:mco-encounter-detail",
-    "not-held:per-claim-service-date",
-    "not-held:waiver-and-spa-coverage-determination",
-)
 _SOURCE_STATE = {"sequence", "history_head", "package_digest", "package_sha256"}  # the rest names the store
 _LINE_RE = re.compile(r"[0-9]{1,2}[A-Z]{1,2}\Z")
-_QUARTER_RE = re.compile(r"FFY([0-9]{4})Q([1-4])\Z")
 
 
 class LinePackError(ValueError):
@@ -51,34 +39,6 @@ class LinePackError(ValueError):
 
 def _fail(code: str) -> None:
     raise LinePackError(f"line-pack:{code}")
-
-
-def _cents(value: object, label: str, *, minimum: int = 0) -> int:
-    if type(value) is not int or not minimum <= value <= MAX_CENTS:
-        _fail(label)
-    return value
-
-
-def _hex(value: bytes) -> str:
-    return value.hex().upper()
-
-
-def quarter_window(quarter: str) -> tuple[int, int]:
-    """[start, end) in UTC milliseconds for a federal fiscal quarter "FFYyyyyQn" (Q1 starts 1 October)."""
-    match = _QUARTER_RE.fullmatch(quarter) if type(quarter) is str else None
-    if match is None:
-        _fail("quarter")
-    year, number = int(match.group(1)), int(match.group(2))
-    if not 1971 <= year <= 9998:
-        _fail("quarter")
-    months = [(year - 1, 10), (year, 1), (year, 4), (year, 7), (year, 10)]
-    start, end = (datetime(y, m, 1, tzinfo=timezone.utc) for y, m in months[number - 1:number + 1])
-    return int(start.timestamp()) * 1000, int(end.timestamp()) * 1000
-
-
-def _quarter_of(at_ms: int) -> str:
-    moment = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=at_ms)
-    return f"FFY{moment.year + (moment.month >= 10)}Q{(moment.month + 2) % 12 // 3 + 1}"
 
 
 def _line_entry(line_map_bytes: bytes, line: str, state_id: str) -> dict:
@@ -152,7 +112,7 @@ def build_line_pack(database: object, package_bytes: bytes, **inputs: object) ->
     """
     try:
         return _build(database, package_bytes, **inputs)
-    except (FinancialSwitchError, IndependentFinancialError) as error:
+    except (DerivedError, FinancialSwitchError, IndependentFinancialError) as error:
         raise LinePackError(f"line-pack:{error}") from None
 
 
@@ -171,33 +131,21 @@ def _build(
 ) -> bytes:
     start_ms, end_ms = quarter_window(quarter)
     denominator = _cents(reported_line_cents, "reported-line-cents", minimum=1)
-    generated_at_ms = _cents(generated_at_ms, "generated-at")
-    trust = {"expected_scope": expected_scope, "expected_authority": trusted_authority}
-    store = verify_database(database, current_snapshot_package=package_bytes, **trust)
-    rows = verify_continuity_package(package_bytes, **trust, _include_rows=True)["_decoded_rows"]
-    last_ms = max([e["committed_at_ms"] for e in rows["financial_events"]] + [e["received_at_ms"] for e in rows["evidence"]], default=0)
-    if generated_at_ms < last_ms:
-        _fail("generated-before-package")
+    store, rows, source = verified_rows(database, package_bytes, trusted_authority=trusted_authority, expected_scope=expected_scope, generated_at_ms=generated_at_ms)
     scope = store["scope"]
     entry = _line_entry(line_map_bytes, line, scope["state_id"])
     line_map_sha256 = hashlib.sha256(line_map_bytes).hexdigest().upper()
 
-    # Publish commit times give what held at quarter end (a pack's status and a published import never change after).
-    published = {(e["aggregate_type"], e["aggregate_id"]): e["committed_at_ms"] for e in rows["financial_events"] if e["kind"] in ("CONTROL_PACK_PUBLISHED", "POPULATION_PUBLISHED")}
-    # The map is Control Pack data by reference: exactly one approved pack of the map's version lists it, once.
-    bound_packs = [pack for pack in rows["control_packs"] if pack["status"] == "APPROVED" and published["CONTROL_PACK", pack["pack_id"]] < end_ms
-                   and pack["version"] == entry["pack_version"] and LINE_MAP_SOURCE_REF + line_map_sha256 in json.loads(pack["source_refs_json"])["values"]]
-    if len(bound_packs) != 1:
-        _fail("line-map-not-in-approved-control-pack")
-    pack = bound_packs[0]
-    if sum(ref.startswith(LINE_MAP_SOURCE_REF) for ref in json.loads(pack["source_refs_json"])["values"]) != 1:
-        _fail("line-map-ref-not-unique")
+    # The map is Control Pack data by reference: exactly one approved pack of the map's version, published by quarter end, lists it.
+    pack = bound_control_pack(rows, LINE_MAP_SOURCE_REF, line_map_sha256, version=entry["pack_version"], before_ms=end_ms, label="line-map")
     pack_digest = _hex(pack["pack_digest"])
+    # Publish commit times give what held at quarter end (a published import never changes after).
+    published = {e["aggregate_id"]: e["committed_at_ms"] for e in rows["financial_events"] if e["kind"] == "POPULATION_PUBLISHED"}
 
     unavailable = set(NOT_HELD)
     if not (pack["effective_start_ms"] <= start_ms and end_ms <= pack["effective_end_ms"]):
         unavailable.add("gap:line-map-window-does-not-cover-quarter")
-    complete = [p for p in rows["population_imports"] if p["status"] == "PUBLISHED" and p["source_complete"] == 1 and published["POPULATION", p["population_id"]] < end_ms]
+    complete = [p for p in rows["population_imports"] if p["status"] == "PUBLISHED" and p["source_complete"] == 1 and published[p["population_id"]] < end_ms]
     superseded = {row["supersedes_manifest_id"] for row in rows["population_manifests"] if row["registered_at_ms"] < end_ms}
     bindings = {row["population_id"]: row["manifest_id"] for row in rows["population_manifest_bindings"]}
     manifests = {row["manifest_id"]: row for row in rows["population_manifests"]}
@@ -269,16 +217,6 @@ def _build(
     elif total > denominator:
         unavailable.add(f"gap:ledger-cents-above-reported:{total - denominator}")
     status = "EXCEEDS_REPORTED" if total > denominator else ("PARTIAL" if any(item.startswith("gap:") for item in unavailable) else "FULL")
-    source = {
-        "owner_id": store["owner_id"],
-        "mode": store["mode"],
-        "genesis_head": _hex(rows["financial_identity"][0]["genesis_head"]),
-        "sequence": store["sequence"],
-        "history_head": store["history_head"],
-        "package_digest": store["continuity"]["package_digest"],
-        "package_sha256": hashlib.sha256(package_bytes).hexdigest().upper(),
-        **{key: scope[key] for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")},
-    }
     record = {
         "contract": LINE_PACK_CONTRACT,
         "documentation_only": True,

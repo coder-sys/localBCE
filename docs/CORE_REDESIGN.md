@@ -573,9 +573,9 @@ shown on the pack's face.
 
 ## Gate formats rounds 7 and 8 (2026-09-28 and 09-29, XI.2 record)
 
-Formats are not frozen (D1) and are specified once, in target §4-§6 (with the
-`RR/GATE` registry); these rounds changed them and reissued the golden vectors
-and every pin, synthetic key and signature. Felt effect: a biweekly or monthly
+Formats are not frozen (D1) and are specified once, in target §4-§6; these
+rounds changed them and reissued the golden vectors and every pin, synthetic
+key and signature. Felt effect: a biweekly or monthly
 payer's stale ALLOW is re-decided, not stranded in review, and no line is paid
 twice.
 
@@ -605,15 +605,13 @@ verifier before it can leave the gate, post-quantum only (no RSA/ECDSA path).
 - **R1, KEY-CERT/v1 (the one wire change; new digest domain):** body `KEY-CERT
   NUL ‖ alg u8 1 ‖ tenant (u16 length, 1..128 ASCII) ‖ epoch u64 ‖ shard_count
   u32 (at least 1) ‖ public key (2592)`, then `u16 4627 ‖ root signature`; no
-  id; 8 KiB limit; canonical. `certChainOk` (replacing the supplied predicate)
-  holds iff it decodes to the certificate and the tenant's root key verifies the
-  body. Deviation from target §11: the root is ML-DSA-87 in laptop DPAPI
-  custody, not an HSM LMS/XMSS key; synthetic tenants only.
-- **R2:** pure ML-DSA-87, empty context, M' = `00 00 ‖ message`; hedged in
-  product, deterministic (rnd = 0) only in vectors.
-- **R3:** `EpochCert` drops `certId`, gains `signed`; theorem statements and
-  `AXIOMS.txt` are unchanged.
-- **R4:** new `artifacts/gate-verify/` (Lean `gate_verify`) and a new worker pin
-  (no seed modes or `verify`); the old pin `af8743c7...` is retired in its
-  `PROVENANCE.txt`.
+  id; 8 KiB; canonical. `certChainOk` holds iff it decodes to the certificate
+  and the tenant's root key verifies the body. Deviation from target §11: the
+  root is ML-DSA-87 in laptop DPAPI custody, not an HSM LMS/XMSS key.
+- **R2:** pure ML-DSA-87, empty context; hedged in product, rnd = 0 only in vectors.
+- **R3:** `EpochCert` drops `certId`, gains `signed`; theorems and `AXIOMS.txt` unchanged.
+- **R4:** new `artifacts/gate-verify/` (Lean `gate_verify`) and a new worker pin;
+  the old pin `af8743c7...` is retired in its `PROVENANCE.txt`.
+- **Speed:** a pinned exe is copied once per process and re-hashed before every
+  run (a fresh copy cost 0.4 s); timings are in the M1 commit.
 - **Claim:** vector-verified, not proved; payer product not built.

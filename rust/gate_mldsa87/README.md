@@ -16,11 +16,9 @@ It prints the SHA-256 to pin. The inputs that fix the bytes:
 
 Two builds (2026-09-29; this directory and a copy under `C:\Users\neers\rrb\gate\`) were
 byte-identical, SHA-256 `34047d3391ba6f6e898b2e5e59010db4c7715a435886a9b9e71d12b8ef15d887`
-(`pqm1-cargoA-a1`, `pqm1-cargoB-a2`). Retired pin: `af8743c70690f85a983762f93ad9ded731e514e106bfdb8c9d1c1cd49fed116b`.
+(`pqm1-cargoA-a1`, `pqm1-cargoB-a2`). The retired pin is in `artifacts/gate-verify/PROVENANCE.txt`.
 
 Known limit: aws-lc-sys compiles C with `__FILE__` paths under CARGO_HOME (long and
-8.3 forms); rustc's remap cannot reach them. A matching rebuild needs what this build
-used: CARGO_HOME at `C:\Users\neers\.cargo` on a volume that generates the same 8.3
-short names (a volume with 8.3 names off, or another short-name assignment, changes
-the bytes), MSVC 14.44.35207, and Windows SDK/UCRT 10.0.26100.0. aws-lc-sys used its
-cc builder (prebuilt assembly objects, no CMake). Other machines are untested.
+8.3 forms) that rustc's remap cannot reach. A matching rebuild needs CARGO_HOME at
+`C:\Users\neers\.cargo` on a volume with the same 8.3 short names, MSVC 14.44.35207 and
+Windows SDK/UCRT 10.0.26100.0 (cc builder, no CMake). Other machines are untested.

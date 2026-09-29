@@ -611,6 +611,21 @@ class GoldenVectorTests(unittest.TestCase):
                 with self.subTest(name), mock.patch.object(signer, name, value), self.assertRaises(signer.GateSignerError):
                     signer.checked(str(Path(tmp) / "k"), bytes(2592), b"")(b"header")
 
+    @NEEDS_SIGNER
+    def test_the_cached_private_copy_is_rehashed_on_every_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handle = str(Path(tmp) / "k")
+            signer.keygen(handle)
+            copy = signer._COPIES[signer.BINARY]
+            good = copy.read_bytes()
+            copy.write_bytes(good + b"\x00")
+            try:
+                with self.assertRaisesRegex(signer.GateSignerError, "pin_mismatch"):
+                    signer.public_key(handle)
+            finally:
+                copy.write_bytes(good)
+            self.assertEqual(len(signer.public_key(handle)), 2592)
+
 
 class CheckedSigningTests(unittest.TestCase):
     """The ``checked`` callback signs through custody and releases the signature only on GATE_VERIFY=ACCEPT."""
@@ -630,7 +645,7 @@ class CheckedSigningTests(unittest.TestCase):
             handle, root_pk, cert = self._custody(tmp, "e7")
             cp, signature, tokens = _batch([_leaf(n, 40 + n) for n in range(5)], signer.checked(handle, root_pk, cert))
             self.assertEqual(len(signature), gate.ML_DSA_87_SIGNATURE)
-            one = lambda **change: _batch([replace(_leaf(0, 0), **change)], signer.checked(handle, root_pk, cert))  # noqa: E731
+            one = lambda **change: _batch([replace(_leaf(0, 1), **change)], signer.checked(handle, root_pk, cert))  # noqa: E731
             real = signer.sign  # a faulty signature never leaves
             with mock.patch.object(signer, "sign", lambda h, m: _flip(real(h, m), 100)), self.assertRaises(signer.GateSignerError):
                 one()
@@ -644,7 +659,7 @@ class CheckedSigningTests(unittest.TestCase):
                 signer.checked(handle, root_pk, _flip(cert, len(cert) - 1, 0x01))(b"header")
             old = self._custody(tmp, "e6", "e6")  # an epoch 6 key and certificate cannot sign an epoch 7 header
             with self.assertRaises(signer.GateSignerError):
-                _batch([_leaf(0, 0)], signer.checked(*old))
+                _batch([_leaf(0, 1)], signer.checked(*old))
 
 
 class AxiomRecordTests(unittest.TestCase):

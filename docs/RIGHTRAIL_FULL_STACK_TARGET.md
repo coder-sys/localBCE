@@ -329,18 +329,17 @@ and scheduled destruction are open (§12).
 ## 11. Post-quantum cryptography
 
 - **ML-DSA-87** (FIPS 204 algorithm, non-validated AWS-LC build) signs batch and
- checkpoint bytes, one signature per batch (§5). For synthetic tenants the key
- is a DPAPI-sealed file behind a pinned worker, and a Lean verifier written
- from FIPS 204 (`gate_verify`) accepts every signature before it leaves. The
- M1 root key is ML-DSA-87 in laptop custody, a deviation from the HSM
+ checkpoint bytes, one signature per batch (§5). Synthetic tenants: a
+ DPAPI-sealed key behind a pinned worker, every signature accepted by the Lean
+ `gate_verify` first; the M1 root is ML-DSA-87 in laptop custody, not the HSM
  LMS/XMSS root below.
 - **Long-lived root and anchor keys use LMS/XMSS** (SP 800-208), not
  SLH-DSA: no FIPS-140-3-validated cloud HSM offers SLH-DSA today, while
  LMS/XMSS is HSM-backed now (e.g. Thales Luna T7, certificate #5450). SLH-DSA stays available as an optional software-verified second
  signature, never the only one on a root key. LMS/XMSS keys are stateful
  and need the SP 800-208 no-backup-restore operational discipline.
-- **SHA3-512, domain-separated, through AWS-LC**; the Lean verifier's own
- SHA3 handles public inputs only and is checked against known answers.
+- **SHA3-512, domain-separated, through AWS-LC**; the Lean verifier's own SHA3
+ sees public inputs only.
 - **Hybrid ML-KEM TLS (X25519MLKEM768)** protects the gate-to-payer and
  gate-to-standby channels. Confirmed available on AWS GovCloud
  load-balancer policies as of late 2025; Azure Government's support is

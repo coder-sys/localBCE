@@ -21,7 +21,7 @@ import re
 import sys
 import stat
 import time
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from app.mirror.error_boundary import raise_redacted
 
