@@ -1,4 +1,4 @@
-import BlindLedger.Financial.Codec
+import BlindLedger.Financial.FastDecode
 import BlindLedger.Financial.Evaluation
 
 namespace BlindLedger.Financial
@@ -6,7 +6,8 @@ namespace BlindLedger.Financial
 /-! Evaluator worker frames. On the pipe each frame is a u32 big-endian length
     and its bytes. A request frame is one BLFIN02 input. A response frame is one
     outcome: tag 0 then the BLFRES02 result, or the single byte 1 (decode),
-    2 (evaluation) or 3 (encoding) rejection. The worker adds no policy. -/
+    2 (evaluation) or 3 (encoding) rejection. The worker adds no policy; it decodes with the length-free twin
+    `Fast.decodeFinancialInput`, proved equal to `decodeFinancialInput`. -/
 
 inductive WorkerOutcome where
   | evaluated (result : Bytes)
@@ -16,7 +17,7 @@ inductive WorkerOutcome where
 deriving DecidableEq, Repr
 
 def evaluateWire (wire : Bytes) : WorkerOutcome :=
-  match decodeFinancialInput wire with
+  match Fast.decodeFinancialInput wire with
   | none => .decodeRejected
   | some input =>
       match evaluate input with

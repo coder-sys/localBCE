@@ -82,6 +82,7 @@ theorem evaluateWire_evaluated {wire result : Bytes}
       decodeFinancialResult result = some decided ∧
       result.length ≤ maxTotalEncodedBytes := by
   unfold evaluateWire at h
+  rw [Fast.decodeFinancialInputFast_eq] at h
   cases hIn : decodeFinancialInput wire with
   | none => simp [hIn] at h
   | some input =>

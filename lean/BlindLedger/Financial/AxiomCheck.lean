@@ -40,6 +40,7 @@ namespace BlindLedger.Financial
 #print axioms BlindLedger.Financial.latest_delivery_uses_timestamp_then_id
 #print axioms BlindLedger.Financial.direct_add_operands_are_bounded
 #print axioms BlindLedger.Financial.decodeWorkerOutcome_encodeWorkerOutcome
+#print axioms BlindLedger.Financial.Fast.decodeFinancialInputFast_eq
 #print axioms BlindLedger.Financial.evaluateWire_evaluated
 #print axioms BlindLedger.Financial.workerRespond_length_le
 #print axioms BlindLedger.Financial.maxWorkerFrameBytes_fits_u32
