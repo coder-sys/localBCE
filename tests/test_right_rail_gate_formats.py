@@ -36,7 +36,7 @@ CERTS = {"e7": (EPOCH, TENANT, SHARDS), "e6": (EPOCH - 1, TENANT, SHARDS), "othe
          "bad": (EPOCH, TENANT, SHARDS), "reshard": (EPOCH - 2, TENANT, 2 * SHARDS), "other8": (EPOCH + 1, OTHER, OTHER_SHARDS),
          "e8": (EPOCH + 1, TENANT, SHARDS), "reshard-e9": (EPOCH + 2, TENANT, 2 * SHARDS),
          "reshard-other9": (EPOCH + 2, OTHER, 2 * OTHER_SHARDS), "twin": (EPOCH + 1, OTHER, OTHER_SHARDS),
-         "sb1": (1, STANDBY, OTHER_SHARDS), "sb2": (2, STANDBY, OTHER_SHARDS)}
+         "sb1": (1, STANDBY, OTHER_SHARDS), "sb2": (2, STANDBY, OTHER_SHARDS), "eq5": (5, STANDBY, OTHER_SHARDS)}
 CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "redecide",
            "decision-id", "input", "lines-root", "state")
 # The rules' empty released and unresolved sets, pinned as tests/gate_rules/rules_v1.vectors pins them
@@ -525,6 +525,12 @@ def build_vectors() -> str:
     token("accept", "standby-reissued-e2", "p41", e2_t)
     add(f"release accept standby-e2 p41 {h(gate.encode_token(e2_t))}")
     add(f"release reject standby-e2-again p41 {h(gate.encode_token(e2_t))}")
+    # Equivocation by shard count alone: epoch 5's same key with 8 shards, root-signed, is recorded and blocks epoch 5
+    cert("eq5")
+    shards_at = len(gate.KEY_CERT) + 1 + 2 + len(STANDBY) + 8
+    add(f"cert reject {h(key_cert('eq5', edit=lambda b: b[:shards_at] + (2 * OTHER_SHARDS).to_bytes(4, 'big') + b[shards_at + 4 :]))}")
+    eq5_cp = _batch([standby(44, 0, 5)], lambda m: sign("eq5", m), gate.ZERO_DIGEST)[0]
+    add(f"checkpoint reject eq5-after-shard-count-equivocation {h(signed(eq5_cp, 'eq5'))}")
 
     # #2 DECIDE-RESPONSE/v1, each judged against the request it answers
     requests = {"r0": _request("FFS_CYCLE", 0, _lines(0, "FFS_CYCLE")), "r1": _request("FFS_CLAIM", 1, _lines(1)),
@@ -625,6 +631,12 @@ class GoldenVectorTests(unittest.TestCase):
         manifest = "".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  lean/{f.relative_to(lean).as_posix()}\n" for f in files)
         recorded = re.search(r"Source manifest.{0,90}?([0-9a-f]{64})", (signer.VERIFY.parent / "PROVENANCE.txt").read_text("utf-8"), re.S)
         self.assertEqual(recorded and recorded.group(1), hashlib.sha256(manifest.encode()).hexdigest())
+        built = lean / ".lake" / "build" / "bin" / "gate_verify.exe"  # this tree's build is the pinned exe
+        self.assertEqual(hashlib.sha256(built.read_bytes()).hexdigest(), signer.VERIFY_PIN.read_text("ascii").strip())
+
+    def test_only_the_signer_makes_a_checked_signer(self) -> None:
+        for source in (signer.ROOT / "app").rglob("*.py"):
+            self.assertEqual(source.read_text("utf-8").count("CheckedSigner("), int(source.name == "right_rail_gate_signer.py"), source.name)
 
     def test_sign_batch_takes_only_a_checked_signer(self) -> None:
         with self.assertRaisesRegex(gate.GateCodecError, "signer"):

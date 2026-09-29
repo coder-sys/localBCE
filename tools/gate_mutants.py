@@ -92,8 +92,10 @@ MUTANTS = [
     ("install: shard count fixed per tenant", "x.shardCount == e.shardCount && ", ""),
     ("install: one certificate per tenant and epoch", " && x.epoch != e.epoch", ""),
     ("install: equivocation unrecorded", "(s.certs.filter fun x => x.tenantId == e.tenantId && x.epoch == e.epoch &&\n"
-     "                x != e).map (·, e) ++ s.equivocations", "s.equivocations"),
-    ("install: same certificate is equivocation", " &&\n                x != e)", ")"),
+     "                (x.publicKey != e.publicKey || x.shardCount != e.shardCount)).map (·, e) ++ s.equivocations", "s.equivocations"),
+    ("install: same body is equivocation", " &&\n                (x.publicKey != e.publicKey || x.shardCount != e.shardCount))", ")"),
+    ("install: equivocation ignores public key", "(x.publicKey != e.publicKey || x.shardCount != e.shardCount)", "(x.shardCount != e.shardCount)"),
+    ("install: equivocation ignores shard count", "(x.publicKey != e.publicKey || x.shardCount != e.shardCount)", "(x.publicKey != e.publicKey)"),
     ("install: equivocation across tenants", "fun x => x.tenantId == e.tenantId && x.epoch", "fun x => x.epoch"),
     ("install: equivocation across epochs", "x.tenantId == e.tenantId && x.epoch == e.epoch &&\n",
      "x.tenantId == e.tenantId &&\n"),

@@ -1,7 +1,7 @@
 # rr_gate_mldsa87: build recipe
 
 ML-DSA-87 signer (FIPS 204 algorithm, non-validated AWS-LC): `keygen|public-key|sign <file>`
-on a DPAPI-sealed seed (`sign` verifies its own signature before output), and `kat-*` modes for the ACVP vectors. `app/right_rail_gate_signer.py`
+on a DPAPI-sealed seed (`sign` self-verifies), and `kat-*` modes for the ACVP vectors. `app/right_rail_gate_signer.py`
 runs `target/release/rr_gate_mldsa87.exe` only if it hashes to `rr_gate_mldsa87.sha256`.
 
 Build: `powershell -NoProfile -File build.ps1` (under the guard, `-MinFree 4029372048`).

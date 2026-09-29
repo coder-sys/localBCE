@@ -554,16 +554,14 @@ shown on the pack's face.
 
 ## Gate formats rounds 7 and 8 (2026-09-28 and 09-29, XI.2 record)
 
-Formats are not frozen (D1); target §4-§6 specifies them once. These rounds
-reissued the golden vectors, every pin, key and signature. Felt effect: a biweekly or monthly payer's stale
-ALLOW is re-decided, not stranded in review, and no line is paid twice.
+These rounds reissued the golden vectors, pins, keys and signatures. Felt effect: a biweekly or
+monthly payer's stale ALLOW is re-decided, not stranded in review, and no line is paid twice.
 
 - **Round 7:** request lines (at most 569 bytes) bound to flow, member key,
   payee and amount; leaf `decided_at`; nonzero `lines_root` for FFS_CLAIM;
   checkpoint `state_digest` (never zero), previous digest only after the first,
   a non-adjacent link is a fork; one certificate per (tenant, epoch);
-  `encode_line`; `sign_batch` refuses a leaf routed to another shard and stays
-  stateless (unbuilt: target §4-§5, STATUS); every domain and `TEST-ONLY-*` key ends in a NUL.
+  `sign_batch` refuses a leaf routed to another shard, stateless (unbuilt: STATUS).
 - **Round 8:** age per flow (`maxDecisionAge`), replacing round 7's single
   14-day age; a second certificate for an installed (tenant, epoch) is recorded
   (`equivocations`) and blocks it; FFS_CYCLE and CAP_820 need lines, SDP and
@@ -572,26 +570,34 @@ ALLOW is re-decided, not stranded in review, and no line is paid twice.
   (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`. Theorems:
   `verifyToken_unforked` adds equivocation; `released_iff`,
   `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation`
-  proved.
+  proved. Withdrawn: round 7's FFS_CLAIM-only lines and counts.
 
-## Gate PQ signing M1 (2026-09-29, XI.2 record; R1-R4, laptop root and ACVP download founder-approved 2026-09-29)
+## Gate PQ signing M1 (2026-09-29, XI.2 record; founder-approved R1-R4, laptop root, ACVP download)
 
 Felt effect: every checkpoint signature is checked by an independent Lean
-verifier before it can leave the gate, post-quantum only (no RSA/ECDSA path).
+verifier before it can leave the gate, post-quantum only.
 
 - **R1, KEY-CERT/v1 (the one wire change; new digest domain):** `KEY-CERT NUL ‖
   alg u8 1 ‖ tenant ‖ epoch u64 ‖ shard_count u32 ‖ public key (2592)`, then
-  `u16 4627 ‖ root signature`; no id; 8 KiB; canonical. `certChainOk` holds iff it decodes and
-  the tenant's root key verifies the body. Deviation from target §11: the
-  root is ML-DSA-87 in laptop DPAPI custody, not an HSM LMS/XMSS key.
-- **R2:** pure ML-DSA-87, empty context; hedged in product, rnd = 0 only in vectors.
-- **R3:** `EpochCert` drops `certId`, gains `signed`. `installCert_equivocation` changes meaning: an
-  equivocation was any different certificate (`x ≠ e`, so a hedged re-signature of the same body blocked the
-  epoch); it is now a different public key or shard count for the tenant and epoch. `AXIOMS.txt` unchanged.
-- **R4:** new `artifacts/gate-verify/` (Lean `gate_verify`, the signer's self-check) and a new worker pin; retired pins are in its `PROVENANCE.txt`.
-- **Speed:** a pinned exe is copied once per process, held open (no write or delete) and
-  hashed; the hash is checked against the pin on every run. The worker self-verifies each signature.
-- **Claim:** vector-verified, not proved; payer product not built.
+  `u16 4627 ‖ root signature`; no id; 8 KiB. `certChainOk` holds iff it decodes and
+  the root key verifies the body. Unlike target §11, the
+  root is ML-DSA-87 in laptop DPAPI custody, not HSM LMS/XMSS.
+- **R2:** pure ML-DSA-87, empty context; hedged (rnd = 0 in vectors only).
+- **R3:** `EpochCert` drops `certId`, gains `signed`; `AXIOMS.txt` unchanged. Statement change: below.
+- **R4:** `artifacts/gate-verify/` (Lean `gate_verify`, the signer's self-check) and a new worker pin.
+- **Speed:** each pinned exe is copied once per process, held open and hash-checked per run.
+- **Claim:** vector-verified, not proved.
+
+**Certificate equivocation (XI.2 record).**
+- **Predicate:** `installCert_equivocation` and the `installCert` filter:
+  a second chain-valid certificate for an installed (tenant, epoch) was equivocation if it differed at all
+  (`x ≠ e`); now only if its public key or shard count differs.
+- **Invariant / failure:** one key and shard count per (tenant, epoch); a hedged re-signature has new
+  bytes, so re-issuing blocked its own epoch.
+- **Evidence and replacement control:** vectors `other8` re-signed (not flagged), `twin` (other key), `eq5`
+  (same key, 8 shards; both flagged, block); 256/256, build `pqm1-lean4-a1`; four `gate__mutants` mutants.
+- **Disposition:** weaken. **Scope:** the spec-level payer model until M2 persists `PayerState`.
+- **Claims withdrawn:** that any second, different certificate is equivocation (round 8).
 
 ## Follow-through decision event (M2, 2026-09-29, XI.2 record)
 

@@ -24,9 +24,9 @@ each under the guard; both gave the same SHA-256 (also equal to the in-tree buil
 - Guard v7 logs (C:\Users\neers\rrb\logs): pqm1-gv3a-a1 and pqm1-gv3b-a1. Each: child exit 0;
   start floor 4,029,372,048; minimum free 4,300,939,264 (a) and 4,425,465,856 (b); peak working
   set 587,255,808 and 611,164,160.
-- The engine pin (../engine-correction) is not rebuilt by this change; lakefile.toml is
-  in the engine source manifest and its gate_verify comment changed, so that manifest hash
-  moves at the next engine release.
+- The engine pin (../engine-correction) is not rebuilt: lakefile.toml is in its source
+  manifest and gained the gate_verify entry before this change (its comment was relabelled
+  later), so that manifest already differs; the engine pin is void on this tree until re-pin.
 
 Retired pins, not deleted (each replaced by the pin file named):
 - gate_verify SHA-256 559188c3cb024f35dd6af320eff7c799668c36337b59964e7fc13f9495933fe6
