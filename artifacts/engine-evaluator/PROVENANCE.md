@@ -1,10 +1,11 @@
 # Provenance: blind_financial_worker.exe
 
-Lake build of `lean/` at commit `1786e5c29140a21bbb8fd99d48a35ccd49fa1c62` (tree
-`e4a0ed382236dc94ba6ba190e0a3f0be58e12902`), toolchain `leanprover/lean4:v4.33.1`.
+Lake build of `lean/` at commit `a5cd1e43cef71105010bde6ac3afceeacdfff8e2` (tree
+`1f0b6ba1db039da0032030cb5e9397d2ea76ade9`), toolchain `leanprover/lean4:v4.33.1`.
 
-- 5,707,776 bytes; SHA-256 `BE5EB80EB4BD43A97846A4FB6CAA54FAF4E1DB6629B43B9705D0657C7E8AE891`;
+- 5,709,312 bytes; SHA-256 `D4B675EE325FEABCAC98B9E0ACAFC66DDC9F5C71F7D71B1FB30834FA2B7185B4`;
   the engine module pins both.
-- Guarded fresh-stage build (`C:/Users/neers/rrb/logs/m1-stage2-a4.guard.log`); it reproduced
-  `blind_financial_correction.exe` byte for byte, so that pin is unchanged.
+- Guarded stage build in a `git archive` of that commit: worker `m1-stage4`, correction exe
+  `m1-stage4b` (`C:/Users/neers/rrb/logs/`). It reproduced `blind_financial_correction.exe`
+  byte for byte, so that pin is unchanged.
 - Worker laws use `propext`, `Classical.choice`, `Quot.sound` only. Record: `docs/CORE_REDESIGN.md`.

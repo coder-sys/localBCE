@@ -1284,9 +1284,9 @@ def run_correction_transition_v1(
 # --- Live evaluator: one long-lived Lean worker decides every owner evaluation ---
 
 EVALUATOR_PATH: Final[Path] = Path(__file__).resolve().parents[1] / "artifacts" / "engine-evaluator" / "blind_financial_worker.exe"
-EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 5_707_776
+EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 5_709_312
 EVALUATOR_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "BE5EB80EB4BD43A97846A4FB6CAA54FAF4E1DB6629B43B9705D0657C7E8AE891"
+    "D4B675EE325FEABCAC98B9E0ACAFC66DDC9F5C71F7D71B1FB30834FA2B7185B4"
 )
 EVALUATOR_JOB_MEMORY_CAP_BYTES: Final[int] = 1_000_000_000
 EVALUATOR_TIMEOUT_SECONDS: Final[float] = 5.0
