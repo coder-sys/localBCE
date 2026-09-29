@@ -447,7 +447,7 @@ def _correction_paid(connection: sqlite3.Connection, obligation_id: str) -> list
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
     try:
-        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
     except (TypeError, ValueError, UnicodeError):
         _fail(FinancialIntegrityError, "canonical_json")
 

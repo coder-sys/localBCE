@@ -1,5 +1,5 @@
 """Constitution III.3: an exact retry that carries the original expected_revision is DUPLICATE and writes
-nothing; a different payload at a stale revision still conflicts."""
+nothing; a different payload at a stale revision still conflicts. Also: canonical JSON never hashes NaN or Infinity."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from app.right_rail_financial_owner import FinancialRevisionError
+from app.right_rail_financial_owner import FinancialIntegrityError, FinancialRevisionError, _canonical
 from tests.test_right_rail_financial_followthrough import RULES, _build_r_store, _history
 
 
@@ -34,6 +34,11 @@ class RetryOrderTests(unittest.TestCase):
                     with self.assertRaisesRegex(FinancialRevisionError, "^obligation_revision_conflict$"):
                         write(item, "b", original)
                     self.assertEqual((_history(store), store.obligation_detail(item)), (before, detail))
+
+    def test_canonical_json_rejects_nan_and_infinity(self) -> None:
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaisesRegex(FinancialIntegrityError, "^canonical_json$"):
+                _canonical({"amount": value})
 
 
 if __name__ == "__main__":
