@@ -1,9 +1,9 @@
 name = "RightRail"
 version = "0.1.0"
-defaultTargets = ["BlindLedger", "blind_semantic_kernel", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules"]
+defaultTargets = ["BlindLedger", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules"]
 
 # One Lake workspace (Constitution IX.1).  `BlindLedger` holds the financial
-# correction transition, the Semantic kernel and the shared `BlindLedger.Sha3`.
+# correction transition, the gate and the shared `BlindLedger.Sha3`.
 # `blind_financial_axioms` is a default target so a plain `lake build` compiles
 # every proof the semantic assurance gate checks (`CorrectionTransition.Theorems`,
 # the codec laws) and prints their axioms; the product executables import none
@@ -13,11 +13,6 @@ defaultTargets = ["BlindLedger", "blind_semantic_kernel", "blind_financial_axiom
 
 [[lean_lib]]
 name = "BlindLedger"
-
-[[lean_exe]]
-name = "blind_semantic_kernel"
-root = "BlindLedger.SemanticCli"
-moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 [[lean_exe]]
 name = "blind_financial"
