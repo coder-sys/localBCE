@@ -7,8 +7,11 @@ defaultTargets = ["BlindLedger", "blind_financial_axioms", "gate_vectors", "gate
 # `blind_financial_axioms` is a library, not an executable, and a default target:
 # a plain `lake build` compiles every proof the semantic assurance gate checks
 # (`CorrectionTransition.Theorems`, the codec laws) and prints their axioms
-# without generating or linking any native code.  A pinned executable imports
-# none of them (`tools/semantic_assurance_gate.py`).
+# without generating or linking any native code.  The gate refuses a pinned
+# executable whose import closure holds a Theorems, KAT, Vectors, CodecLaws or
+# *Check module, or a `#print axioms` / `#guard_msgs` command
+# (`lean/tools/semantic_assurance_gate.py`).  Theorem statements that live in
+# the closure itself, such as `CorrectionTransition.Transition`, stay.
 # Parked, not built: the State kernel (`parked/state_clearance/lean`), the retired
 # Semantic kernel (`parked/lean_retired_kernel`) and the unbuilt Kernel-series/System
 # modules (`parked/lean_unbuilt`).
