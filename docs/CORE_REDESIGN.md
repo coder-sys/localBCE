@@ -205,7 +205,6 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 - Every staff read runs the full checker over the whole database (IX.3).
 - Two canonical encodings (SHA3/ASCII and SHA-256/UTF-8 staff snapshot).
 - The successor verifies and views but cannot continue the work (VII.2).
-- v5/v6 store versions cannot hold obligations and no such store exists (speculative).
 
 ## Target sizes
 
@@ -230,10 +229,9 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 4. Stop re-validating own writes; one typed decoder per record; version staff snapshot id.
 5. Remove Python re-derivation of Lean (replacement: read-set binding + pre-COMMIT
    per-obligation checker).
-6. Complete-fact events + `apply` reducer: new OWNER/CONTINUITY v8 contract with explicit
-   v7->v8 conversion on owner open. Removed 2026-09-25 (decision C3): the conversion, the
-   `OPENING_BALANCE` event and the v7 receiver are gone; a non-v8 store fails
-   `unsupported_store_version`.
+6. Complete-fact events + `apply` reducer: OWNER/CONTINUITY v8. The v7 conversion,
+   `OPENING_BALANCE` event and v7 receiver were removed 2026-09-25 (decision C3); a
+   non-v8 store fails `unsupported_store_version`.
 7. Checker becomes replay + compare with an incremental mode; all 25 tamper tests still detect.
 8. Continuity v8, restore by replay, successor that can continue.
 9. Switch and Mirror reuse the replay.
@@ -447,6 +445,109 @@ and recovery; distinguish injected HTTP response rendering from actual owner
 refusal and crash tests. Isolate and close only the test browser. No old model
 pass is inherited as evidence for the corrected model or actual browser.
 
+## Correction-v2 protected changes (2026-09-26; XI.2 record written 2026-09-28)
+
+Original record: STATUS at `d79aceb` (lines 123-127, 130); `b9aa6a2` removed it with no pointer.
+This record replaces it; facts are from `git show` of the commits named.
+
+Felt effect: a hospital short part of its claim is asked for exactly what is
+still unpaid, and no older engine record can ask for more.
+
+- **Predicate:**
+  - Lean `actionBindingWellFormed` (`Financial/Types.lean`) required the action
+    amount `=` the determination amount; it now requires `≤` for
+    `OFFSET_REJECTED_CORRECTION_AUTHORIZED` and still `=` otherwise. The amount
+    is pinned instead by `applyCorrectionTransition_action_amount_eq_b2`:
+    min(claim, shortfall less what unpaid earlier requests still ask). New:
+    `_outstanding_within_shortfall`, `_zero_shortfall_has_no_mutation`,
+    `_amounts_conserved`, `evaluate_positive_shortfall_balance`, `CodecLaws/Correction*.lean`.
+  - Wire: BLFCMD01 to 02 (adds the paid-request list), BLFCRES1 to 3, BLFCRU01 to
+    02, BLFCRV01 to 02. Lean no longer computes the determination digest, the
+    action idempotency key, the outbox digest and key or the event base payload
+    (BLFCRES3 has no slot for them; reuse lost `DETERMINATION_DIGEST_CHANGED`).
+    The owner and checker still compute them under the same domains
+    (`RR/FINANCIAL/ACTION/v1`, `RR/FINANCIAL/IDEMPOTENCY/v1`); Lean still
+    computes the action payload digest.
+  - Statements changed with it: `CorrectionMutationLinkFacts` (digest and key
+    equations dropped; paid-list, kind, claim-amount, amount-rule and
+    input-shortfall facts added) and the reuse-independence theorem (no
+    determination-digest parameter). The list is the state at HEAD.
+  - Artifacts: `artifacts/engine-correction/` re-pinned, built from `79b6913`
+    (`1A7A1833…D3AF`, 6,279,168 bytes); `artifacts/engine-correction-e911/`
+    deleted (recoverable at `f1de262`); `RETIRED_PINS` added (E911
+    `correction-rule-v1`, 88D8 `b2-v1`), its SHA-256 pinned in the checker;
+    `native/guard/pins.json` now names the current executable and vectors (the
+    guard runner is unchanged). New checker rules: `action:requestable`,
+    `action:engine-order`, `action:event-amount`, `payment:link`,
+    `history:correction-retired-pins`.
+  - Protected test `tests/test_right_rail_financial_constitution_invariants.py`:
+    `11ff5ee` (BLFCRES2 magic literals, a `NO_SHORTFALL` rejection row, new test
+    `test_correction_requests_only_the_unpaid_balance`), `c10106b` (artifact path
+    in docstrings), `7722e23` (literals to BLFCMD02/BLFCRES3), `3656bf5` (a setup clock only,
+    so the crash test cannot start before the fixed decision time; no assertion
+    changed). Expectations changed only where they name a changed format.
+- **Invariant / failure:** a correction never requests more than the unpaid
+  shortfall (II, III.4). The old equality requested the whole claim.
+- **Evidence:** subtest `e911-whole-claim` (300,000 requested on 100,000 unpaid)
+  was flipped to refused on purpose; rr-review
+  round 3 (#1, #2, #4-#6, #8) and H1/M1/M3 found the rest.
+- **Disposition:** weaken (`=` to `≤`, for corrections only) and replace (exact
+  amount theorem, wire formats, engine pin). The E911 and 88D8 engines stay only as
+  history.
+- **Replacement control:** the theorem above; KATs at B2-1, B2+1 and full
+  shortfall (42/42, `cv2-r3-kat-clean-a1`); the checker bound `action:requestable`
+  on every correction whatever engine decided it; `action:engine-order` refuses a
+  store whose corrections name an older engine after a newer one. It is checked
+  across the whole store in event order, stricter than
+  `artifacts/engine-correction/PROVENANCE.md` ("an obligation's corrections"); that
+  file is protected and stays unedited, and this record is the correction.
+  Mutants without the bound or the order check fail as intended
+  (`cv2-r3-mut-universal-a6`, `cv2-r3-mut-order-a1`).
+- **Scope:** the synthetic correction path. **Duration:** until the next re-pin.
+- **Claims withdrawn:** the old exact-amount statement and the E911/88D8 pins as
+  deciders of new corrections; any claim that Lean checks the determination digest
+  or idempotency key (the checker's `determination:digest`, `outbox:binding` and
+  `action:idempotency` do). Reuse still trusts the recorded shortfall and ignores
+  the paid list.
+
+## Gate decision rules: statement changes (2026-09-28, XI.2 record)
+
+Baseline trunk `6cccb84`; changes in `78eabc7` and `4bffc1e` (merged as
+gate-rules-2). No record existed. Felt effect: an analyst sees an unusable source
+as a review item with the fact it still lists, never a hold or allow resting on
+unchecked rows, and a store that rolls back cannot earn ALLOW.
+
+- **Predicate:** `lean/BlindLedger/Gate/Rules/Theorems.lean`.
+  - `usable_iff` and `Usable`: the row check takes the snapshot's `asOf`
+    (`ok : Nat → α → Bool`), so a death dated after its snapshot's `asOf` makes
+    the snapshot unusable.
+  - `ids_disjoint`: hypothesis and conclusion move from the sets read to the
+    gate's views (`releasedSet c`, `unresolvedSet c`) and next checkpoints
+    (`.released.entries`, `.unresolved.entries`). Restated over the views the same
+    way: `seenAt`, `decideBatch_get`, `fail_closed`, `allow_clear`, `decided_kept`.
+  - `later_allow_clear` assumed `entries c₂.released = (decideBatch c b₁).released`;
+    it now assumes `c₂.releasedPrior` (and unresolved) is the checkpoint the batch
+    produced. `Fact` and `fires_iff` gain `MEMBER_DECEASED_UNVERIFIED`,
+    `MEMBER_NOT_ENROLLED_UNVERIFIED`, `PROVIDER_DECEASED_UNVERIFIED`,
+    `PROVIDER_EXCLUDED_UNVERIFIED` and `FFS_DUPLICATE_UNVERIFIED`.
+  - Added: `allow_clear_store`, `later_allow_clear_many`, `view_chained`,
+    `prior_view`, `prior_advance`, `mem_iterate`, `looseKeys_grows`,
+    `isSome_of_mem`; new axiom pins ([propext, Quot.sound]).
+- **Invariant / failure:** X.1-X.2, XI.8, XI.10: no HOLD rests on data the gate
+  has not checked against its checkpoint, and no rollback or dropped row earns ALLOW.
+- **Evidence:** 78eabc7's message lists the vector answers that changed and why
+  (205-208 and 149 gain `*_UNVERIFIED`; 175 and 177 gain the checkpoint's
+  counterpart reason; released counterparts added to `with=`). 4bffc1e's message
+  ("No committed theorem statement's text changes") holds only for that commit.
+- **Disposition:** replace. Nothing is disabled.
+- **Replacement control:** all proofs compile with pinned axioms; 242/242 vectors
+  and 3,616 demo lines; 194/194 mutants killed; the unittest fails if the runner
+  is older than its sources.
+- **Scope:** decision rules R1-R5 as tests; not the token path (no signed
+  checkpoints or release path). **Duration:** until the gate-v1 token path lands.
+- **Claims withdrawn:** the earlier statements above and the vector and mutant
+  counts taken before these commits; STATUS names only the new counts.
+
 ## Line pack: CMS deferral response (2026-09-28, XI.2 record)
 
 Felt effect: when CMS defers a CMS-64.9 line, a state finance lead gets that
@@ -503,8 +604,9 @@ shown on the pack's face.
   host clock steps back (NTP, a restored VM, skew between hosts sharing a
   store), every write is refused (`event_commit_order`) until the clock passes
   the last committed time: it fails closed, never reorders or rewrites the
-  history, and nothing is lost. No table, Lean, wire or digest changes. `signer` is null because no
-  PQ signing path exists.
+  history, and nothing is lost. Stores written before this line (trunk `6cccb84`
+  or earlier) are not readable (`replay:evidence-received-at`), so recreate the
+  synthetic workspace. `signer` is null because no PQ signing path exists.
 - **Proposed Lean (not written):**
   - `line_pack_sum_eq_ledger`
   - `line_pack_rule_version_bound`

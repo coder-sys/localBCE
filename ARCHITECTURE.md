@@ -57,17 +57,12 @@ Missing, stale, malformed or unauthorized input raises a typed error and
 changes nothing. The independent checker enforces actor roles against a
 digest-bound roster.
 
-Every outer write now checks current funding projections against their
-immutable receipts, indexed funding events, successor status and root
-coverage under the same SQLite lock, before executing and before
-committing; the funding summary checks within its read snapshot. This
-bounded check scans current funding sources, not the complete event
-history, and runs twice per batch rather than per nested command — it
-detects current-projection drift, while independent full replay still
-checks historical rows, digests and the whole store. Felt effect: finance
-staff cannot continue recording work or read a funding total once its current
-stored values have drifted from the recorded receipts. No new persistent
-format or trust root.
+Every outer write checks current funding projections against their immutable
+receipts, indexed funding events, successor status and root coverage under the
+same SQLite lock, before executing and before committing; the funding summary
+checks within its read snapshot. This bounded check scans current funding
+sources twice per batch and detects current-projection drift; independent full
+replay still checks historical rows, digests and the whole store.
 
 ## Lean decides, the owner commits
 
@@ -95,10 +90,9 @@ format or trust root.
  the owner's evaluation against Lean. It never writes.
 - **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
  `BlindLedger`: financial types, codec, evaluation, correction transition,
- decision package, theorems, semantic kernel; executables `blind_financial`,
- `blind_financial_correction`, `blind_financial_axioms`,
- `blind_semantic_kernel`). `tools/semantic_assurance_gate.py` checks the
- correction transition's pinned theorem statements, proofs and axioms.
+ decision package, gate rules, theorems, semantic kernel; four executables).
+ `tools/semantic_assurance_gate.py` checks the correction transition's pinned
+ theorem statements, proofs and axioms.
 
 ## Mirror, Continuity and Switch
 
@@ -133,26 +127,20 @@ paths and the exact v4 guard records with either LF or Windows CRLF line
 endings; raw log bytes remain digest-bound. Current exercised archives are
 recorded in provenance. Staff cash evidence names the correction request it
 pays; acknowledgment alone never provides that credit. The synthetic staff
-clock advances to the explicit decision time before issuing the correction.
-New demo acknowledgments therefore follow the action they acknowledge,
-including after a lost response; existing history stays intact.
+clock advances to the explicit decision time before issuing the correction, so
+new demo acknowledgments follow their action, even after a lost response.
 
 The HTTP adapter accepts exactly one length and content-type header, no
 transfer encoding, and at most 8,192 bytes within a five-second total body
 deadline before dispatch. Refusals flush their response, then drain at most
 8,193 unread bytes for 100 ms before closing; HEAD sends no body — this
 preserves ordinary Windows refusal responses without letting a slow sender
-hold the refusal path open. Felt effect: staff get a defined refusal and
-can retry from the current record; malformed or incomplete requests cannot
-reach an owner command.
+hold the refusal path open.
 
-Second-state reuse still needs coordinated owner, checker and Lean changes:
-`Types.lean:controlPackRulesWellFormed` also pins the Hospital H test
-labels. The proposed Python-only policy-table edit would disagree with the
-pinned engine. Keep approved rule/version/role checks, bounded local test
-labels and digest binding together, then rebuild and test a distinct state
-through correction and Continuity before claiming reuse. The staff server's
-H labels are fixture data.
+Second-state reuse needs owner, checker and Lean changed together, because
+`Types.lean:controlPackRulesWellFormed` also pins the Hospital H test labels; a
+Python-only policy-table edit would disagree with the pinned engine. The staff
+server's H labels are fixture data.
 
 ## Direct-state-owned clearance route (parked)
 
@@ -170,7 +158,7 @@ Carolina FHIR source adapter with an independent verifier, source admission, the
 trust graph and its read model, and `MIRROR_PROVIDER_EVIDENCE_EXPORT_V1` (an
 allowlist-only aggregate export with a separately written verifier). It never
 creates a financial determination, clearance or action. Raw source bytes,
-identifiers, paths and error text do not cross its boundary; failures use fixed
+identifiers, paths and error text never cross its boundary; failures use fixed
 codes. `tools/provider_trust_graph_view.py` is a loopback browser view over it.
 
 The source-intake connection takes a bounded captured envelope and independently
@@ -180,17 +168,14 @@ before admission. Only the admitted graph reaches the existing read-model and
 export verification gates; the served projection keeps freshness and source
 truth unknown. Failed capture or context mismatch opens no server. This path
 has no writes, network fetch, cache or financial authority; retry recomputes the
-same verified projection. Felt effect: the implementation lead can inspect a
-capture directly during onboarding, removing the manual graph-file handoff and
-its troubleshooting. Raw captures and identities remain outside HTTP responses.
+same verified projection.
 Both CLIs accept `--source-envelope PATH --capture-context SUBJECT CREDENTIAL
-ENROLLMENT LOCATOR OBSERVED FETCHED` instead of `--artifact PATH`, alongside the
-existing `--request`, `--operation-ref` and `--now`. The four identities are
-opaque 128-character hex values from the capture configuration. Comparison uses
-the same options with the existing `compare-` (browser) or `left-`/`right-`
-(read-model CLI) prefixes. Context must come from that configuration, not from
-parsing the untrusted envelope. This is file intake for the fixed synthetic
-profile; no authenticated live-fetch or financial-file adapter is implied.
+ENROLLMENT LOCATOR OBSERVED FETCHED` instead of `--artifact PATH`; the four
+identities are opaque 128-character hex values from the capture configuration,
+never parsed from the untrusted envelope. Comparison uses the same options with
+the `compare-` (browser) or `left-`/`right-` (read-model CLI) prefix. This is
+file intake for the fixed synthetic profile; no live fetch or financial-file
+adapter is implied.
 
 ## Provider App
 
@@ -228,20 +213,16 @@ What exists today toward it:
 - There is no batch decide API, no ML-DSA-87 checkpoint signing, no
  Merkle-inclusion token, no independent witness, no member-key sharding, no
  fenced primary/standby, and no Bypass outcome.
-- The subprocess-per-decision path
- (`app/minimal_clearance_verifier_process.py`, one Windows process per
- call, serialized to one core) is disqualifying for gate throughput; it
- needs replacing with a long-lived worker pool, not optimizing in place. No
- warm-worker throughput benchmark has been run.
-- There is no CI, on-call rotation, or tested failover drill; `native/guard/`
- runs one heavy job at a time on one laptop.
+- The subprocess-per-decision path (`app/minimal_clearance_verifier_process.py`,
+ one Windows process per call) is disqualifying for gate throughput and needs a
+ long-lived worker pool; no warm-worker benchmark has been run.
+- There is no CI, on-call rotation or tested failover drill.
 
-See the target document for the authority ladder, gate points, batch
-signing, fail policy and bypass, sharding, the proof boundary, evidence
-modes, and post-quantum crypto choices, and for which of those are still
-unresolved at their authority and recovery boundaries. The separate `gate-v1`
-branch contains format, signature and Lean verification work; it has not been
-connected here to signed grant admission, durable payer state or the rules path.
+The target document holds the authority ladder, gate points, batch signing,
+fail policy, sharding, proof boundary, evidence modes and post-quantum choices,
+and which are unresolved. The separate `gate-v1` branch has format, signature
+and Lean verification work not connected here to signed grant admission,
+durable payer state or the rules path.
 
 ## Rejected directions
 
