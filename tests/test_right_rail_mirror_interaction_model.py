@@ -66,22 +66,25 @@ class InteractionModelStructureTests(unittest.TestCase):
     def test_every_rejected_transition_code_is_named_in_the_model(self) -> None:
         """Every code the Lean correction-transition can reject with (Art. XIII.4.d)."""
         owner_src = (Path(__file__).resolve().parents[1] / "app" / "right_rail_financial_owner.py").read_text(encoding="utf-8")
-        start = owner_src.index("def reject_offset_and_authorize_correction")
-        body = owner_src[start:owner_src.index("\n    def ", start + 40)]
-        codes = set(re.findall(r'_fail\(\s*\w+\s*,\s*"([a-z_]+)"', body))
-        codes |= set(re.findall(r'"[A-Z_]+":\s*\([A-Za-z]+,\s*"([a-z_]+)"\)', body))
-        declared = set(_MODEL["controls"]["reject-offset"]["responses"])
-        self.assertTrue(codes, "scanner found nothing: check the source has moved")
-        missing = codes - declared
-        self.assertFalse(missing, f"server can emit {missing} but the model does not name it")
+        for method, control in (("reject_offset_and_authorize_correction", "reject-offset"), ("authorize_offset", "authorize-offset")):
+            start = owner_src.index(f"def {method}")
+            body = owner_src[start:owner_src.index("\n    def ", start + 40)]
+            codes = set(re.findall(r'_fail\(\s*\w+\s*,\s*"([a-z_]+)"', body))
+            codes |= set(re.findall(r'"[A-Z_]+":\s*\([A-Za-z]+,\s*"([a-z_]+)"\)', body))
+            self.assertTrue(codes, "scanner found nothing: check the source has moved")
+            missing = codes - set(_MODEL["controls"][control]["responses"])
+            self.assertFalse(missing, f"{method} can emit {missing} but the model does not name it")
 
 class InteractionModelPageTests(unittest.TestCase):
     """The served page must offer exactly what the model declares, nothing else."""
 
     def test_action_grid_controls_match_the_model_exactly(self) -> None:
         served = set(re.findall(r'data-action="([a-z-]+)"', _HTML))
-        declared = {name for name, control in _MODEL["controls"].items() if control["route"].startswith("POST")}
+        declared = {name for name, control in _MODEL["controls"].items() if control["screen"] == "decision"}
         self.assertEqual(served, declared)
+        for radio in ("sheet-accept", "sheet-reject"):  # each outcome is one named radio leading to a declared control
+            self.assertIn(_MODEL["local_controls"][radio]["target"], _MODEL["controls"])
+            self.assertIn(_MODEL["local_controls"][radio]["name"], _HTML)
 
     def test_decision_screen_access_matches_the_open_package_gate(self) -> None:
         open_roles = set(_MODEL["controls"]["open-package"]["roles"])
@@ -134,6 +137,12 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
 
     def _open(self, role: str, server: Any = None) -> scorecard._Browser:
         return self._open_path(f"/role/{role}", server)
+
+    @staticmethod
+    def _cancel_sheet(browser: scorecard._Browser) -> None:
+        """The sheet is modal: leave it by its own Cancel before touching the page behind."""
+        if browser.last_view["screens"]["decide"]:
+            browser.role("button", _MODEL["local_controls"]["sheet-cancel"]["name"], "click")
 
     def test_each_role_sees_exactly_its_declared_controls(self) -> None:
         for role in _MODEL["roles"]:
@@ -260,14 +269,88 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         try:
             browser = self._open("approver", server)
             browser.click("open-package")
-            for commit, words in ((False, "recorded nothing"), (True, "may have committed")):
+            for commit, words in ((False, "nothing was saved"), (True, "can't confirm")):
                 workflow.reject_offset_and_authorize_correction = busy_after(commit)
                 self.assertTrue(browser.action("reject-offset"))
                 self.assertIn(words, browser.last_view["texts"]["command-status"])
-                self.assertFalse(browser.last_view["buttons"]["reject-offset"]["disabled"])  # the held body, offered again
+                self.assertEqual(browser.role("button", "Check now")["disabled"], False)  # the held body, offered again
             self.assertTrue(browser.action("reject-offset"))
             self.assertIn(_MODEL["controls"]["reject-offset"]["responses"]["success"]["message"].split(".")[0], browser.last_view["texts"]["command-status"])
             self.assertEqual(workflow.decision_view()["decision_package"]["current_action"]["status"], "READY")
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
+    def test_the_decide_sheet_starts_with_nothing_chosen_and_asks_before_it_records(self) -> None:
+        """Every sheet control, in every state it can be in before a decision, found by role and name only."""
+        controls = _MODEL["local_controls"]
+        names, errors = controls["sheet-confirm"]["names"], controls["sheet-confirm"]["errors"]
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "sheet-states")
+        try:
+            for role in ("analyst", "auditor", "operator", "director"):  # only the approver decides
+                self.assertEqual(self._open(role, server).role("button", "Decide Hospital H")["found"], 0, role)
+            browser = self._open("approver", server)
+            self.assertTrue(browser.role("button", "Decide Hospital H")["disabled"])  # nothing to decide on until the package is open
+            browser.click("open-package")
+            self.assertEqual(browser.role("dialog")["found"], 0)
+            browser.role("button", "Decide Hospital H", "click")
+            sheet = browser.role("dialog", "Decide Hospital H's $3,000.00 offset")
+            self.assertEqual(sheet["found"], 1)
+            for phrase in ("Evidence", "no supporting evidence", "Rule check (automatic)", "Your decision (required; nothing selected)"):
+                self.assertIn(phrase, sheet["text"])
+            for radio in ("sheet-accept", "sheet-reject"):
+                found = browser.role("radio", controls[radio]["name"])
+                self.assertEqual((found["found"], found["checked"], found["disabled"]), (1, False, False), radio)
+            before = workflow.mirror.owner.export_continuity()
+            self.assertEqual(browser.role("alert")["text"], "")
+            browser.role("button", names["idle"], "click")  # nothing chosen: the button answers, it does not send
+            self.assertEqual(browser.role("alert")["text"], errors["no_choice"])
+            browser.role("radio", controls["sheet-accept"]["name"], "check")
+            browser.role("button", names["accept"], "click")  # chosen, no reason
+            self.assertEqual(browser.role("alert")["text"], errors["no_reason"])
+            browser.role("radio", controls["sheet-reject"]["name"], "check")
+            self.assertEqual(browser.role("button", names["reject"])["found"], 1)  # the button names verb and amount
+            self.assertEqual(browser.last_view["posts"], [])
+            self.assertEqual(workflow.mirror.owner.export_continuity(), before)
+            browser.role("button", controls["sheet-cancel"]["name"], "click")
+            self.assertEqual(browser.role("dialog")["found"], 0)
+            browser.role("button", "Decide Hospital H", "click")
+            self.assertFalse(browser.role("radio", controls["sheet-reject"]["name"])["checked"])  # a reopened sheet starts empty
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
+    def test_each_outcome_takes_three_steps_and_a_page_gone_stale_is_told_to_review(self) -> None:
+        controls = _MODEL["local_controls"]
+        for outcome, (radio, confirm) in {"reject-offset": ("sheet-reject", "reject"), "authorize-offset": ("sheet-accept", "accept")}.items():
+            with self.subTest(outcome=outcome):
+                workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"sheet-{outcome}")
+                declared = _MODEL["controls"][outcome]["responses"]
+                button = controls["sheet-confirm"]["names"][confirm]
+                try:
+                    browser = self._open("approver", server)
+                    browser.click("open-package")
+                    browser.role("button", "Decide Hospital H", "click")
+                    browser.role("radio", controls[radio]["name"], "check")  # step 1: choose
+                    browser.role("textbox", controls["sheet-reason"]["name"], "fill", "Plan A gave no approval reference.")  # step 2: reason
+                    self.assertEqual(browser.last_view["posts"], [])  # neither step sends anything
+                    workflow.mirror.owner.record_support_evidence(
+                        item_id=scorecard.staff.H_ITEM_ID, evidence_id="evidence:stale-sheet", common_origin_id="origin:stale-sheet")
+                    browser.role("button", button, "click")  # step 3 on facts that have moved
+                    self.assertEqual(browser.role("alert")["text"], declared["obligation_revision_conflict"]["message"])
+                    self.assertIn("(changed)", browser.role("dialog")["text"])
+                    self.assertIsNone(workflow.decision_view()["decision_package"]["current_determination"])
+                    browser.role("button", button, "click")  # the choice and reason are kept: confirm again on the new facts
+                    self.assertTrue(browser.last_view["texts"]["command-status"].startswith(declared["success"]["message"]))
+                    self.assertEqual(browser.role("dialog")["found"], 0)
+                    self.assertTrue(browser.role("button", "Decide Hospital H")["disabled"])  # a finished decision cannot repeat
+                    self.assertEqual(workflow.decision_view()["decision_package"]["current_determination"]["decision"], _DECISIONS[outcome])
+                    self.assertEqual(len(browser.last_view["posts"]), 2)
+                finally:
+                    self._stop_workflow(workflow, server, thread)
+
+    def test_accepting_the_offset_walks_a_shorter_journey(self) -> None:
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-accept-walk")
+        try:
+            self._walk(workflow, server, (("approver", "authorize-offset"), ("analyst", "record-report")))
         finally:
             self._stop_workflow(workflow, server, thread)
 
@@ -287,7 +370,8 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 with self.subTest(check="contrast", theme=theme, pair=f"{fg}/{bg}"):
                     self.assertGreaterEqual(contrast(tokens[fg], tokens[bg]), minimum)
         always_reachable = _MODEL["accessibility"]["always_reachable_controls"]
-        markers = {n: (f'id="{n}"' if n in always_reachable else f'data-action="{n}"') for n in _MODEL["controls"]}
+        markers = {n: (f'id="{n}"' if n in always_reachable else f'data-action="{n}"') for n, c in _MODEL["controls"].items() if c["screen"] != "decide"}
+        self.assertRegex(_HTML, r'id="sheet-error"[^>]*role="alert"')  # sheet errors are announced
         for name, marker in markers.items():
             with self.subTest(check="accessible_name", control=name):
                 start = _HTML.index(marker)
@@ -314,7 +398,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                     for code in codes:
                         with self.subTest(role=role, control=name, response=code):
                             browser = self._open(role, server)
-                            if control["screen"] == "decision":
+                            if control["screen"] in ("decision", "decide"):
                                 browser.click("open-package")
                             before = workflow.mirror.owner.export_continuity()
                             package = workflow.decision_view()["decision_package"]
@@ -334,6 +418,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                                 self.assertEqual(workflow.mirror.owner.export_continuity(), before)
                             elif control["route"].startswith("POST"):
                                 self._check_success(workflow, name, package)
+                            self._cancel_sheet(browser)
                             browser.click("refresh-button")
                             self.assertTrue(browser.last_view["screens"]["overview"])
                             if role in _DECISION_ROLES:
@@ -355,7 +440,8 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         outcome = _MODEL["controls"][name]["responses"][code]
         self.assertTrue(view["screens"][outcome["screen"]], (name, code, view["screens"]))
         region = ("connection-status" if name == "refresh-button" or outcome["screen"] == "unavailable"
-                  else "package-staleness" if name == "open-package" and code == "success" else "command-status")
+                  else "package-staleness" if name == "open-package" and code == "success"
+                  else "sheet-hint" if name == "decide" else "command-status")
         if code == "success":
             self.assertTrue(view["texts"][region].startswith(outcome["message"]), view["texts"][region])
         else:
@@ -368,6 +454,8 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         after = workflow.decision_view()["decision_package"]
         if name in ("reject-offset", "acknowledge"):
             self.assertEqual(after["current_action"]["status"], "READY" if name == "reject-offset" else "ACKNOWLEDGED")
+        if name in _DECISIONS:
+            self.assertEqual(after["current_determination"]["decision"], _DECISIONS[name])
         if name == "record-cash":
             self.assertEqual(after["obligation"]["received_cash_cents"] - before["obligation"]["received_cash_cents"], 300000)
             self.assertEqual(after["obligation"]["shortfall_cents"], 0)
@@ -381,7 +469,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         workflow.mirror.owner.verify_integrity()
 
     def test_pending_and_lost_responses_retain_exact_correction_and_cash_bodies(self) -> None:
-        for name, role in (("reject-offset", "approver"), ("record-cash", "analyst")):
+        for name, role in (("reject-offset", "approver"), ("authorize-offset", "approver"), ("record-cash", "analyst")):
             for code in ("transport_failure", "owner_command_unavailable", "command_response_unverified", "store_busy_outcome_unknown"):
                 with self.subTest(control=name, response=code):
                     workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"lost-{name}-{code}")
@@ -398,7 +486,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                         self.assertTrue(entered.wait(5), "command did not reach the HTTP boundary")
                         pending = browser.call({"op": "view", "wait": False})["view"]
                         ns = _state(before, False)
-                        retry_flag = "unresolved_correction_body" if name == "reject-offset" else "unresolved_cash_body"
+                        retry_flag = "unresolved_cash_body" if name == "record-cash" else "unresolved_decision_body"
                         ns.update(reviewed=False, command_pending=True, **{retry_flag: True})
                         self._check_buttons(pending, role, ns)
                         self.assertTrue(pending["disabled"]["refresh-button"])
@@ -408,6 +496,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                         self._check_success(workflow, name, before)
                         committed = workflow.mirror.owner.export_continuity()
                         original = server.fault_requests[0]["body"]
+                        self._cancel_sheet(browser)
                         browser.click("refresh-button")
                         ns = _state(workflow.decision_view()["decision_package"], False)
                         ns.update(reviewed=False, **{retry_flag: True})
@@ -426,15 +515,16 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
 
 _JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
             ("analyst", "record-cash"), ("analyst", "record-report"))
+_DECISIONS = {"reject-offset": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", "authorize-offset": "OFFSET_AUTHORIZED"}
 _DECISION_ROLES = ("analyst", "approver", "auditor", "operator")
 
 def _state(pkg: dict[str, Any], test_mode: bool) -> dict[str, Any]:
     action = pkg.get("current_action") or {}
     return {
         "reviewed": True, "command_pending": False, "test_mode": test_mode,
-        "owner_available": True, "unresolved_correction_body": False, "unresolved_cash_body": False,
+        "owner_available": True, "unresolved_decision_body": False, "unresolved_cash_body": False,
         "decided": pkg.get("current_determination") is not None,
-        "action": SimpleNamespace(status=action.get("status")), "shortfall": pkg["obligation"]["shortfall_cents"],
+        "action": SimpleNamespace(status=action.get("status"), kind=action.get("kind")), "shortfall": pkg["obligation"]["shortfall_cents"],
         "reporting_complete": bool(pkg["obligation"]["reporting_complete"]),
     }
 

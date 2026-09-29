@@ -66,6 +66,7 @@ const { chromium } = require(modulePath);
 let browser = null, context = null, page = null, changedAt = 0;
 let pending = new Set(), diagnostics = [], pageErrors = [];
 let posts = [];
+const SHEET = { "reject-offset": "Reject the offset", "authorize-offset": "Accept the offset" };
 async function settle() {
   const deadline = Date.now() + 30000;
   while (pending.size || Date.now() - changedAt < 150) {
@@ -89,7 +90,7 @@ async function view() {
     }
     const unavailable = document.getElementById("connection-status").classList.contains("unavailable");
     const screens = { picker: !hidden["role-picker"], overview: !hidden["workspace-root"] && !unavailable,
-      decision: !hidden["decision-panel"] && !unavailable, unavailable };
+      decision: !hidden["decision-panel"] && !unavailable, decide: document.getElementById("decide-sheet").open, unavailable };
     return { texts, tables, hidden, disabled, buttons, screens, path: location.pathname,
       hash: location.hash, focus_in_main: Boolean(document.activeElement.closest("main")) };
   });
@@ -132,32 +133,36 @@ async function handle(m) {
     browser = null;
     return { closed: true };
   }
-  if (m.op === "inventory") {
-    const controls = await page.evaluate((selectors) => [...document.querySelectorAll("a,button,summary")].map((el) => ({
-      matches: Object.entries(selectors).filter(([, selector]) => el.matches(selector)).map(([name]) => name),
-      text: el.textContent.trim(), hidden: !el.getClientRects().length || getComputedStyle(el).visibility === "hidden",
-      disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"),
-      expanded: el.tagName === "SUMMARY" ? el.parentElement.open : null,
-    })), m.selectors);
-    return { controls, view: await view() };
-  }
-  if (m.op === "local") {
-    const control = page.locator(m.selector);
-    if (m.keyboard) {
-      await control.focus();
-      await control.press("Enter");
-      await page.keyboard.press("Tab");
-    } else {
-      await control.click();
+  if (m.op === "role") {  // a control found by its ARIA role and accessible name only
+    const control = page.getByRole(m.role, { name: m.name ?? undefined, exact: true });
+    if (m.act === "find") {
+      const found = await control.count();
+      const text = found ? await control.first().textContent() : "";
+      return { found, text, disabled: found ? await control.first().isDisabled() : null, checked: found && m.role === "radio" ? await control.first().isChecked() : null, view: await view() };
     }
+    await control[m.act](...(m.text == null ? [] : [m.text]));
   } else if (m.op === "click") {
     await page.locator("#" + m.id).click();
   } else if (m.op === "expand") {
     await page.locator("#" + m.id).locator("..").locator("summary").click();
   } else if (["action", "begin-action"].includes(m.op)) {
-    const button = page.locator('[data-action="' + m.name + '"]');
-    if (!await button.isVisible() || await button.isDisabled()) return { clicked: false };
-    await button.click();
+    if (SHEET[m.name]) {  // the Decide sheet: choose, give a reason, confirm
+      const open = page.getByRole("button", { name: "Decide Hospital H", exact: true });
+      if (!await page.getByRole("dialog").count()) {
+        if (!await open.isVisible() || await open.isDisabled()) return { clicked: false };
+        await open.click();
+      }
+      const radio = page.getByRole("radio", { name: SHEET[m.name], exact: true });
+      if (await radio.isEnabled()) {
+        await radio.check();
+        await page.getByRole("textbox", { name: "Reason (required)", exact: true }).fill("Plan A gave no approval reference.");
+      }
+      await page.getByRole("button", { name: /^(Record (decision|rejection|acceptance)|Check now)/ }).click();
+    } else {
+      const button = page.locator('[data-action="' + m.name + '"]');
+      if (!await button.isVisible() || await button.isDisabled()) return { clicked: false };
+      await button.click();
+    }
   } else if (m.op !== "view") throw new Error("unknown_op:" + m.op);
   if (m.op !== "begin-action" && m.wait !== false) await settle();
   return { clicked: true, view: await view() };
@@ -324,6 +329,9 @@ class _Browser:
         return bool(self.call({"op": "action", "name": name})["clicked"])
     def view(self) -> dict[str, Any]:
         return self.call({"op": "view"})["view"]
+    def role(self, role: str, name: str | None = None, act: str = "find", text: str | None = None) -> dict[str, Any]:
+        """One control by ARIA role and accessible name: act is find, click, check or fill."""
+        return self.call({"op": "role", "role": role, "name": name, "act": act, "text": text})
     def close(self) -> None:
         try:
             if self._process.poll() is None:
@@ -648,7 +656,7 @@ class _Task:
         self.step("click: " + name)
         status = self.browser.last_view["texts"].get("command-status", "")
         # The declared success text (Art. XIII.4) is checked first: a control's own
-        # wording (e.g. reject-offset's "Offset rejected...") may legitimately use a
+        # wording (e.g. reject-offset's "You rejected the offset...") may legitimately use a
         # failure-shaped word, so only fall back to the denylist once it disagrees.
         expected = _MODEL["controls"][name]["responses"]["success"]["message"].split(".")[0]
         if not status or (expected not in status and any(word in status for word in ("rejected", "unresolved", "unavailable", "denied"))):

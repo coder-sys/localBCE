@@ -102,13 +102,36 @@
       <p class="explanation">The overview rereads the Owner every 15 seconds. Opening a package captures its verified snapshot, scope, obligation revision, Control Pack, authority, and evaluation input. A correction command carries those exact displayed bindings. If a response is lost, retry sends the same command identity and bindings.</p>
       <div id="command-status" class="command-status" role="status" aria-live="assertive" tabindex="-1">No operator command sent.</div>
       <div class="action-grid" aria-label="Synthetic workflow commands">
-        <button type="button" data-action="reject-offset" disabled>Reject unsupported offset and authorize correction request</button>
+        <button type="button" id="decide" data-action="decide" disabled>Decide Hospital H</button>
         <button type="button" data-action="acknowledge" disabled>Record action delivery ACK</button>
         <button type="button" data-action="record-cash" disabled>Record synthetic $3,000 cash evidence</button>
         <button type="button" data-action="record-report" disabled>Record separate synthetic reporting evidence</button>
         <button type="button" data-action="restore-test" disabled>Restore current case into Continuity TEST</button>
       </div>
       <p class="explanation">The cash and reporting buttons record synthetic evidence through Owner commands. They do not move money or contact a payment/reporting system. An ACK remains a delivery fact with zero cash effect.</p>
+      <dialog id="decide-sheet" aria-labelledby="sheet-title">
+        <form id="decide-form" novalidate>
+          <h2 id="sheet-title">Decide the offset</h2>
+          <p id="sheet-hint" class="muted"></p>
+          <h3>Evidence</h3>
+          <ul id="sheet-evidence"></ul>
+          <h3>Rule check (automatic)</h3>
+          <p id="sheet-rule"></p>
+          <fieldset>
+            <legend>Your decision (required; nothing selected)</legend>
+            <label><input type="radio" name="outcome" value="authorize-offset"> Accept the offset</label>
+            <label><input type="radio" name="outcome" value="reject-offset"> Reject the offset</label>
+          </fieldset>
+          <label for="sheet-reason">Reason (required)</label>
+          <textarea id="sheet-reason" rows="3" aria-describedby="sheet-reason-note"></textarea>
+          <p id="sheet-reason-note" class="muted">This demo does not store the reason yet.</p>
+          <p id="sheet-error" role="alert"></p>
+          <div class="sheet-buttons">
+            <button type="button" id="sheet-cancel">Cancel</button>
+            <button type="submit" id="sheet-confirm" class="primary">Record decision</button>
+          </div>
+        </form>
+      </dialog>
     </section>
 
     <section id="decision-panel" class="panel decision-panel" aria-labelledby="decision-title" hidden>

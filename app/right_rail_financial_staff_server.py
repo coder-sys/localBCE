@@ -51,6 +51,7 @@ MANIFEST_ID = "population-manifest:fixture-2026-01:v1"
 H_ITEM_ID = "item-h"
 H_CLAIM_ID = "claim:obligation-item-h:offset-v1"
 H_ACTION_ID = "action:obligation-item-h:correction-v1"
+H_OFFSET_ACTION_ID = "action:obligation-item-h:offset-v1"
 H_OBLIGATION_ID = "obligation:item-h:period-01"
 MAX_RESTORE_DESTINATIONS = 1000
 MAX_STAFF_COMMAND_BYTES = 8192
@@ -125,12 +126,14 @@ _READ_ROUTES = {
 }
 # The record only that command writes: its appearance after a busy error proves the command committed.
 _OWN_RECORD = {
+    "authorize_offset": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_OFFSET_ACTION_ID),
     "reject_offset_and_authorize_correction": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_ACTION_ID),
     "acknowledge_correction_action": ("SELECT COUNT(*) FROM action_outbox WHERE action_id=? AND acknowledgment_ref=?", H_ACTION_ID, "ack:correction:h:v1"),
     "record_cash_correction": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", CASH_CORRECTION_COMMAND["evidence_id"]),
     "record_reporting_evidence": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", "evidence:report:h:original"),
 }
 _COMMAND_ROUTES = {
+    "/api/decision/authorize-offset": "authorize_offset",
     "/api/decision/reject-offset": "reject_offset_and_authorize_correction",
     "/api/action/acknowledge": "acknowledge_correction_action",
     "/api/correction/record-cash": "record_cash_correction",
@@ -558,6 +561,24 @@ class StaffWorkflow:
                 evaluation_id=evaluation_id,
                 evaluation_result_digest=result_digest,
                 staff_read_binding=read_binding,
+            )
+            return {"command": result, "workspace": self._workspace_locked()}
+
+    def authorize_offset(self, body: object) -> dict[str, Any]:
+        """Accept Plan A's offset. The Owner's own revision and evaluation binding decide; a resend returns the first result."""
+        revision, evaluation_id, result_digest = self._review_values(body)
+        with self._lock:
+            self._clock.advance_to(DECISION_AT_MS)
+            result = self._mirror.authorize_offset(
+                item_id=H_ITEM_ID,
+                claim_id=H_CLAIM_ID,
+                actor_id="synthetic-official",
+                actor_role="FINANCE_DECISION",
+                expected_revision=revision,
+                action_id=H_OFFSET_ACTION_ID,
+                decision_at_ms=DECISION_AT_MS,
+                evaluation_id=evaluation_id,
+                evaluation_result_digest=result_digest,
             )
             return {"command": result, "workspace": self._workspace_locked()}
 

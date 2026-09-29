@@ -12,7 +12,7 @@
   let snapshot = null;
   let decisionView = null;
   let correctionFollowup = null;
-  let unresolvedCorrectionBody = null;
+  let unresolvedDecision = null; // {name, body}: a decision whose answer was lost, kept for an exact resend
   let unresolvedCashBody = null;
   let decisionOpen = false;
   let ownerAvailable = false;
@@ -40,8 +40,10 @@
     "owner_command_unavailable", "Failed to fetch", "NetworkError", "command_unavailable",
     "command_outcome_uncertain", "command_response_unverified", "store_busy", "store_busy_outcome_unknown", "transport_failure",
   ];
+  const DECISIONS = { "reject-offset": true, "authorize-offset": true };
   const ROUTES = {
     "reject-offset": "/api/decision/reject-offset",
+    "authorize-offset": "/api/decision/authorize-offset",
     acknowledge: "/api/action/acknowledge",
     "record-cash": "/api/correction/record-cash",
     "record-report": "/api/reporting/record",
@@ -89,7 +91,7 @@
     status.replaceChildren(Object.assign(document.createElement("span"), { textContent: "Role: " + model.roles[role] + " · " }));
     const switchRole = Object.assign(document.createElement("a"), { href: "/", textContent: "Switch role" });
     switchRole.addEventListener("click", (event) => {
-      if (commandPending || unresolvedCorrectionBody || unresolvedCashBody) event.preventDefault();
+      if (commandPending || unresolvedDecision || unresolvedCashBody) event.preventDefault();
     });
     status.appendChild(switchRole);
   }
@@ -291,7 +293,7 @@
         decisionOpen = false;
         packageAvailable = false;
         packageStale = true;
-        unresolvedCorrectionBody = null;
+        unresolvedDecision = null;
         unresolvedCashBody = null;
       }
     }
@@ -427,6 +429,14 @@
     list.appendChild(wrapper);
   }
 
+  function offsetOf(pkg) {
+    const page = pkg.references && pkg.references.claims;
+    return {
+      claims: page && Array.isArray(page.items) ? page.items : [],
+      support: decisionView.source_assessment.h_support_status === "MISSING" ? "no supporting evidence" : "support recorded, unverified",
+    };
+  }
+
   function renderDecision() {
     byId("decision-panel").hidden = !decisionOpen; byId("open-package").setAttribute("aria-expanded", String(decisionOpen));
     if (!decisionOpen || !decisionView) {
@@ -444,9 +454,7 @@
     bindings.replaceChildren();
     const plain = (label, value) => appendFact(facts, label, value);
     const fact = (label, value) => appendFact(bindings, label, value);
-    const claimPage = pkg.references && pkg.references.claims;
-    const claims = claimPage && Array.isArray(claimPage.items) ? claimPage.items : [];
-    const support = decisionView.source_assessment.h_support_status === "MISSING" ? "no supporting evidence" : "support recorded, unverified";
+    const { claims, support } = offsetOf(pkg);
     plain("Amount owed", asMoney(h.owed_cents));
     plain("Cash received", asMoney(h.received_cash_cents));
     plain("Offset claimed", claims.length
@@ -588,7 +596,7 @@
   }
 
   function commandBody(name) {
-    if (name === "reject-offset" && unresolvedCorrectionBody) return unresolvedCorrectionBody;
+    if (unresolvedDecision && unresolvedDecision.name === name) return unresolvedDecision.body;
     if (name === "record-cash" && unresolvedCashBody) return unresolvedCashBody;
     const pkg = currentPackage();
     if (!pkg || !pkg.obligation) return null;
@@ -596,12 +604,12 @@
     if (["acknowledge", "record-report"].includes(name)) return revision;
     if (name === "record-cash") return { ...revision, cash_command: { ...CASH_CORRECTION_COMMAND } };
     if (!pkg.evaluation_receipt) return null;
-    return {
+    const decision = {
       ...revision,
       evaluation_id: pkg.evaluation_receipt.evaluation_id,
       evaluation_result_digest: pkg.evaluation_receipt.result_digest,
-      read_binding: staffCommandBinding(decisionView.read_envelope, pkg),
     };
+    return name === "reject-offset" ? { ...decision, read_binding: staffCommandBinding(decisionView.read_envelope, pkg) } : decision;
   }
 
   function applyCommandSnapshot(value, startedAt) {
@@ -636,18 +644,68 @@
     byId("open-package").disabled = !canRetry;
     const switchRole = byId("role-status").querySelector("a");
     if (switchRole) {
-      const disabled = Boolean(commandPending || unresolvedCorrectionBody || unresolvedCashBody);
+      const disabled = Boolean(commandPending || unresolvedDecision || unresolvedCashBody);
       switchRole.setAttribute("aria-disabled", String(disabled));
       switchRole.tabIndex = disabled ? -1 : 0;
     }
-    const correctionRetry = Boolean(unresolvedCorrectionBody && canRetry);
+    const decisionRetry = Boolean(unresolvedDecision && canRetry);
     const cashRetry = Boolean(unresolvedCashBody && canRetry);
-    setButton("reject-offset", correctionRetry ? false : !reviewed || decided, correctionRetry && "Retry exact correction command");
-    setButton("acknowledge", !reviewed || !action || action.status !== "READY");
+    setButton("decide", decisionRetry ? false : !reviewed || decided);
+    setButton("acknowledge", !reviewed || !action || action.status !== "READY" || action.kind !== "CORRECTION_PAYMENT_REQUEST");
     setButton("record-cash", cashRetry ? false : !reviewed || !action || action.status !== "ACKNOWLEDGED" || !h || h.shortfall_cents <= 0,
       cashRetry && "Retry exact cash evidence command");
     setButton("record-report", !reviewed || !h || h.reporting_complete || h.shortfall_cents > 0);
     setButton("restore-test", !reviewed || testMode || !h);
+    renderSheet();
+  }
+
+  // The Decide sheet: evidence, then the automatic rule check, then the person's own choice. Nothing is preselected.
+  const sheet = byId("decide-sheet");
+  const form = byId("decide-form");
+  const chosen = () => { const radio = form.querySelector("input:checked"); return radio ? radio.value : null; };
+  let sheetLines = [];
+  let sheetPrior = null; // the evidence shown before a failed attempt: lines that differ afterwards are marked changed
+
+  function sheetError(code, text = "") {
+    byId("sheet-error").textContent = text;
+    byId("sheet-error").dataset.error = code;
+  }
+
+  function renderSheet() {
+    const pkg = currentPackage();
+    if (sheet.open && !(pkg && ownerAvailable)) sheet.close();
+    if (!sheet.open) return;
+    const h = pkg.obligation;
+    const { claims, support } = offsetOf(pkg);
+    const claim = claims.find((row) => row.status === "CLAIMED") || claims[0];
+    const amount = claim ? asMoney(claim.amount_cents) : "Unknown";
+    sheetLines = [
+      "Paid " + asMoney(h.received_cash_cents) + " of " + asMoney(h.owed_cents) + " owed.",
+      claim ? "Plan A's offset claim: " + amount + " (" + words(claim.status) + "); " + support + "." : "No offset claim on file.",
+      "Plan A's source check: " + words(decisionView.source_assessment.status) + ".",
+    ];
+    byId("sheet-hint").textContent = model.controls.decide.responses.success.message;
+    byId("sheet-title").textContent = "Decide Hospital H's " + amount + " offset";
+    byId("sheet-evidence").replaceChildren(...sheetLines.map((line) => Object.assign(document.createElement("li"), {
+      textContent: line + (sheetPrior && !sheetPrior.includes(line) ? " (changed)" : ""),
+    })));
+    byId("sheet-rule").textContent = "Adjustment rule " + (pkg.control_pack || {}).adjustment_rule_id + ": the offset has " + support + ".";
+    if (unresolvedDecision) form.querySelector('input[value="' + unresolvedDecision.name + '"]').checked = true;
+    const held = commandPending || Boolean(unresolvedDecision);
+    for (const field of [...form.querySelectorAll("input"), byId("sheet-reason")]) field.disabled = held;
+    const names = model.local_controls["sheet-confirm"].names;
+    byId("sheet-confirm").textContent = commandPending ? names.pending : unresolvedDecision ? names.retry
+      : { "reject-offset": names.reject, "authorize-offset": names.accept }[chosen()] || names.idle;
+    byId("sheet-confirm").disabled = commandPending;
+    byId("sheet-cancel").disabled = commandPending;
+  }
+
+  function openSheet() {
+    if (!unresolvedDecision) form.reset();
+    sheetPrior = null;
+    sheetError("");
+    sheet.showModal();
+    renderSheet();
   }
 
   function commandMessage(text, kind) {
@@ -706,7 +764,11 @@
     const body = commandBody(name);
     if (!route || !body) return;
     // Hold the exact body until the Owner answers: a lost response is retried byte for byte.
-    if (name === "reject-offset") unresolvedCorrectionBody = body;
+    const isDecision = name in DECISIONS;
+    if (isDecision) {
+      unresolvedDecision = { name, body };
+      sheetError("");
+    }
     if (name === "record-cash") unresolvedCashBody = body;
     commandPending = true;
     updateActions();
@@ -726,7 +788,10 @@
       if (name === "restore-test") description += " H decision package equality: " + String(result.continuity.decision_package_equal) + ".";
       const applied = applyCommandSnapshot(result.workspace, startedAt);
       commandMessage(description + (applied ? " The package below now shows the result." : " Reopen the package to review the new Owner sequence."), "success");
-      if (name === "reject-offset") unresolvedCorrectionBody = null;
+      if (isDecision) {
+        unresolvedDecision = null;
+        sheet.close();
+      }
       if (name === "record-cash") unresolvedCashBody = null;
       reopenAfter = decisionOpen;
       if (applied) {
@@ -735,12 +800,16 @@
     } catch (error) {
       const code = responseReceived ? "command_response_unverified" : error.message;
       if (!UNCERTAIN_OUTCOMES.includes(code)) {
-        if (name === "reject-offset") unresolvedCorrectionBody = null;
+        if (isDecision) unresolvedDecision = null;
         if (name === "record-cash") unresolvedCashBody = null;
       }
       const message = describeError(code, name);
       const response = model.controls[name].responses[code === "command_unavailable" ? "owner_command_unavailable" : code];
       commandMessage(message, "error");
+      if (isDecision) {
+        sheetPrior = sheetLines;
+        sheetError(code, message);
+      }
       if (response && response.screen === "unavailable") {
         showOwnerUnavailable(message);
       } else {
@@ -749,11 +818,12 @@
           banner("package-staleness", "stale", "STALE REVIEW — Owner rejected the package binding. Reload the overview and reopen H before continuing.");
         }
         refreshAfter = true;
+        reopenAfter = isDecision; // the sheet is modal: show it the new facts instead of stranding it on stale ones
       }
     } finally {
       commandPending = false;
       detectPackageStaleness();
-      renderDecision(); moveFocus("command-status", false);
+      renderDecision(); moveFocus(sheet.open ? "sheet-confirm" : "command-status", false);
       if (refreshAfter) await refreshOverview();
       if (ownerAvailable && (reopenAfter || (decisionWasOpen && !decisionOpen))) await openPackage();
     }
@@ -763,8 +833,22 @@
   byId("open-package").addEventListener("click", openPackage);
   document.querySelector(".action-grid").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
-    if (button && !button.disabled) performAction(button.dataset.action);
+    if (!button || button.disabled) return;
+    if (button.dataset.action === "decide") openSheet();
+    else performAction(button.dataset.action);
   });
+  form.addEventListener("input", () => { sheetError(""); renderSheet(); });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (commandPending) return;
+    const name = unresolvedDecision ? unresolvedDecision.name : chosen();
+    const errors = model.local_controls["sheet-confirm"].errors;
+    if (!name) sheetError("no_choice", errors.no_choice);
+    else if (!unresolvedDecision && !byId("sheet-reason").value.trim()) sheetError("no_reason", errors.no_reason);
+    else performAction(name);
+  });
+  byId("sheet-cancel").addEventListener("click", () => sheet.close());
+  sheet.addEventListener("cancel", (event) => { if (commandPending) event.preventDefault(); });
 
   async function boot() {
     try {

@@ -30,6 +30,7 @@ from app.right_rail_financial_owner import (
     FinancialConflictError,
     FinancialContinuityError,
     FinancialDispatchError,
+    FinancialError,
     FinancialInputError,
     FinancialOwner,
     FinancialRevisionError,
@@ -726,9 +727,10 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         from app import right_rail_financial_staff_server as staff_server
 
         tree = ast.parse(inspect.getsource(staff_server.StaffWorkflow))
-        actor_commands = {"reject_offset_and_authorize_correction", "acknowledge_action", "record_reporting_evidence"}
+        actor_commands = {"reject_offset_and_authorize_correction", "authorize_offset", "acknowledge_action", "record_reporting_evidence"}
         handlers = {
             "reject_offset_and_authorize_correction",
+            "authorize_offset",
             "acknowledge_correction_action",
             "record_cash_correction",
             "record_reporting_evidence",
@@ -752,6 +754,27 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                     self.assertTrue({"actor_id", "actor_role"} <= keywords, function.name)
                 seen.add(function.name)
         self.assertEqual(seen, handlers)
+
+    def test_accepting_the_offset_resends_to_the_same_result_and_shuts_out_the_other_outcome(self) -> None:
+        workflow = self._workflow(with_correction_release=True)
+        owner = workflow.mirror.owner
+        handler_type = _handler_for(workflow)
+        lost = self._lose_first_response(handler_type, "/api/decision/authorize-offset")
+        port = int(self._serve_workflow(workflow, handler_type).server_address[1])
+        review = self._review_body(workflow)
+        body = {key: value for key, value in review.items() if key != "read_binding"}
+        with self.assertRaises(http.client.RemoteDisconnected):  # the answer is lost after the Owner committed
+            self._http_json(port, "/api/decision/authorize-offset", body)
+        self.assertEqual(lost, [True])
+        committed = owner.export_continuity()
+        first_status = workflow.decision_view()["decision_package"]["current_determination"]["decision"]
+        resend = self._http_json(port, "/api/decision/authorize-offset", body)
+        self.assertEqual((first_status, resend["command"]["status"]), ("OFFSET_AUTHORIZED", "DUPLICATE"))
+        self.assertEqual(owner.export_continuity(), committed)
+        self.assertEqual(resend["workspace"]["h"]["obligation"]["shortfall_cents"], 0)
+        with self.assertRaises(FinancialError):  # a decided item cannot be decided the other way
+            workflow.reject_offset_and_authorize_correction(review)
+        self.assertEqual(owner.export_continuity(), committed)
 
     def test_staff_binding_v2_withholds_input_snapshot_and_refuses_the_v1_shape(self) -> None:
         workflow = self._workflow()

@@ -38,7 +38,7 @@ button {
 
 button:hover:not(:disabled) { background: var(--hover-bg); }
 button:disabled { opacity: 0.55; cursor: not-allowed; }
-button:focus-visible, a:focus-visible, summary:focus-visible, #decision-title:focus, #command-status:focus {
+button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, #decision-title:focus, #command-status:focus {
   outline: 3px solid #be6400;
   outline-offset: 3px;
 }
@@ -151,6 +151,14 @@ tbody tr.highlight { background: #fff7e7; }
 .package-details { margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 0.8rem; }
 .package-details summary { font-weight: 700; cursor: pointer; }
 pre { max-height: 32rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f7f8; padding: 1rem; border-radius: 0.5rem; font-size: 0.8rem; }
+
+dialog { width: min(40rem, calc(100vw - 2rem)); padding: 1.25rem 1.5rem; border: 1px solid var(--line); border-radius: 0.5rem; background: var(--surface); color: var(--ink); }
+dialog::backdrop { background: rgb(0 0 0 / 0.5); }
+dialog fieldset { margin: 1rem 0; border: 1px solid var(--line); border-radius: 0.5rem; }
+dialog fieldset label { display: block; padding: 0.4rem 0; }
+dialog textarea { display: block; width: 100%; padding: 0.5rem; font: inherit; color: inherit; background: var(--surface); border: 1px solid #78909c; border-radius: 0.5rem; }
+#sheet-error { min-height: 1.5rem; color: var(--red); font-weight: 650; }
+.sheet-buttons { display: flex; justify-content: flex-end; gap: 0.75rem; }
 
 footer { max-width: 1320px; margin: 0 auto; padding: 0 1rem 1.5rem; color: var(--muted); font-size: 0.9rem; }
 
