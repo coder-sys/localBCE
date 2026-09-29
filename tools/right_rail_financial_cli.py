@@ -620,20 +620,9 @@ def _run(args: argparse.Namespace) -> Any:
         return mirror.history(limit=args.limit, offset=args.offset)
     if command in {"action-payload", "action"}:
         return mirror.action_payload(args.action_id)
-    if command == "authorize-offset":
-        return mirror.authorize_offset(
-            item_id=args.item_id,
-            claim_id=args.claim_id,
-            actor_id=args.actor_id,
-            actor_role=args.actor_role,
-            expected_revision=args.expected_revision,
-            action_id=args.action_id,
-            decision_at_ms=args.decision_at_ms,
-            evaluation_id=args.evaluation_id,
-            evaluation_result_digest=args.evaluation_result_digest,
-        )
-    if command in {"reject-offset-and-authorize-correction", "reject-offset"}:
-        return mirror.reject_offset_and_authorize_correction(
+    if command in {"authorize-offset", "reject-offset-and-authorize-correction", "reject-offset"}:
+        decide = mirror.authorize_offset if command == "authorize-offset" else mirror.reject_offset_and_authorize_correction
+        return decide(
             item_id=args.item_id,
             claim_id=args.claim_id,
             actor_id=args.actor_id,
